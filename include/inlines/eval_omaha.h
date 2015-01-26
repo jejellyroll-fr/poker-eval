@@ -35,7 +35,7 @@
 #include "rules_std.h"
 
 #define OMAHA_MINHOLE 4		/* must be at least 2 */
-#define OMAHA_MAXHOLE 4		/* could be larger */
+#define OMAHA_MAXHOLE 6		/* could be larger */
 #define OMAHA_MINBOARD 3	/* must be at least 3 */
 #define OMAHA_MAXBOARD 5	/* could be larger */
 
