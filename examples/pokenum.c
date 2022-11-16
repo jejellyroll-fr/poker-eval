@@ -35,6 +35,7 @@ $ pokenum [-mc niter] [-t] [-O]
       -h     holdem hi (default)
       -h8    holdem hi/lo 8-or-better
       -o     omaha hi
+      -o5    omaha hi 5cards
       -o8    omaha hi/lo 8-or-better
       -7s    7-card stud hi
       -7s8   7-card stud hi/lo 8-or-better
@@ -136,6 +137,8 @@ parseArgs(int argc, char **argv,
           *game = game_holdem8;
         } else if (strcmp(*argv, "-o") == 0) {
           *game = game_omaha;
+        } else if (strcmp(*argv, "-o5") == 0) {
+          *game = game_omaha5;
         } else if (strcmp(*argv, "-o8") == 0) {
           *game = game_omaha8;
         } else if (strcmp(*argv, "-7s") == 0) {
