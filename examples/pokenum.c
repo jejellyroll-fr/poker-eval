@@ -37,6 +37,7 @@ $ pokenum [-mc niter] [-t] [-O]
       -o     omaha hi
       -o5    omaha hi 5cards
       -o8    omaha hi/lo 8-or-better
+      -o85   omaha 5cards hi/lo 8-or-better
       -7s    7-card stud hi
       -7s8   7-card stud hi/lo 8-or-better
       -7snsq 7-card stud hi/lo no stinking qualifier
@@ -141,6 +142,8 @@ parseArgs(int argc, char **argv,
           *game = game_omaha5;
         } else if (strcmp(*argv, "-o8") == 0) {
           *game = game_omaha8;
+        } else if (strcmp(*argv, "-o85") == 0) {
+          *game = game_omaha85;
         } else if (strcmp(*argv, "-7s") == 0) {
           *game = game_7stud;
         } else if (strcmp(*argv, "-7s8") == 0) {

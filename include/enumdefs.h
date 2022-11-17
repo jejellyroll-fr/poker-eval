@@ -35,6 +35,7 @@ typedef enum {
   game_omaha,
   game_omaha5,
   game_omaha8,
+  game_omaha85,
   game_7stud,
   game_7stud8,
   game_7studnsq,
