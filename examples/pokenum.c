@@ -36,6 +36,7 @@ $ pokenum [-mc niter] [-t] [-O]
       -h8    holdem hi/lo 8-or-better
       -o     omaha hi
       -o5    omaha hi 5cards
+      -o6    omaha hi 6cards
       -o8    omaha hi/lo 8-or-better
       -o85   omaha 5cards hi/lo 8-or-better
       -7s    7-card stud hi
@@ -70,6 +71,9 @@ $ pokenum -h Ac 7c 5s 4s Ks Kd -- 7h 2c 3h
 $ pokenum -o As Kh Qs Jh - 8h 8d 7h 6d
 $ pokenum -o As Kh Qs Jh 8h 8d 7h 6d
 $ pokenum -o As Kh Qs Jh 8h 8d 7h 6d -- 8s Ts Jc
+$ pokenum -mc 1000000 -o85 As Kh Qs Jh Ts - 8h 8d 7h 6d 9c
+$ pokenum -mc 1000000 -o5 As Kh Qs Jh Ts - 8h 8d 7h 6d 9c
+$ pokenum -mc 1000000 -o6 As Kh Qs Jh Ts 9d - 8h 8d 7h 6d 9c 6c
 
 $ pokenum -7s As Ah Ts Th 8h 8d - Kc Qc Jc Td 3c 2d
 $ pokenum -7s As Ah Ts Th 8h 8d - Kc Qc Jc Td 3c 2d / 5c 6c 2s Jh
@@ -140,6 +144,8 @@ parseArgs(int argc, char **argv,
           *game = game_omaha;
         } else if (strcmp(*argv, "-o5") == 0) {
           *game = game_omaha5;
+        } else if (strcmp(*argv, "-o6") == 0) {
+          *game = game_omaha6;
         } else if (strcmp(*argv, "-o8") == 0) {
           *game = game_omaha8;
         } else if (strcmp(*argv, "-o85") == 0) {
@@ -281,7 +287,7 @@ main(int argc, char **argv) {
         printf("ERROR\n");
       } else {
         printf("single usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
-        printf("\t[-h|-h8|-o|-o8|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-l27]\n");
+        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-l27]\n");
         printf("\t<pocket1> - <pocket2> - ... [ -- <board> ] [ / <dead> ] ]\n");
         printf("streaming usage: %s -i < argsfile\n", argv[0]);
       }

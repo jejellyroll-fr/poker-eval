@@ -50,6 +50,7 @@ static enum_gameparams_t enum_gameparams[] = {
   { game_holdem8,   2,  2,  5, 1, 1, "Holdem Hi/Low 8-or-better" },
   { game_omaha,     4,  4,  5, 0, 1, "Omaha Hi" },
   { game_omaha5,    5,  5,  5, 0, 1, "Omaha Hi 5cards" },
+  { game_omaha6,    6,  6,  5, 0, 1, "Omaha Hi 6cards" },
   { game_omaha8,    4,  4,  5, 1, 1, "Omaha Hi/Low 8-or-better" },
   { game_omaha85,   5,  5,  5, 1, 1, "Omaha 5cards Hi/Low 8-or-better" },
   { game_7stud,     3,  7,  0, 0, 1, "7-card Stud Hi" },
@@ -229,6 +230,15 @@ static enum_gameparams_t enum_gameparams[] = {
     loval[i] = LowHandVal_NOTHING;					\
   })
 
+#define INNER_LOOP_OMAHA6						\
+  INNER_LOOP({								\
+    StdDeck_CardMask _finalBoard;					\
+    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);		\
+    err = StdDeck_OmahaHiLow8_EVAL(pockets[i], _finalBoard,		\
+                                   &hival[i], NULL);			\
+    loval[i] = LowHandVal_NOTHING;					\
+  })
+
 #define INNER_LOOP_OMAHA8						\
   INNER_LOOP({								\
     StdDeck_CardMask _finalBoard;					\
@@ -342,6 +352,7 @@ enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     case game_holdem:
     case game_omaha:
     case game_omaha5:
+    case game_omaha6:
     case game_7stud:
     case game_5draw:
       mode = enum_ordering_mode_hi;
@@ -424,6 +435,21 @@ enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     } else if (nboard == 5) {
       StdDeck_CardMask_RESET(sharedCards);
       INNER_LOOP_OMAHA5;
+    } else {
+      return 1;
+    }
+
+  } else if (game == game_omaha6) {
+    StdDeck_CardMask sharedCards;
+    if (nboard == 0) {
+      DECK_ENUMERATE_5_CARDS_D(StdDeck, sharedCards, dead, INNER_LOOP_OMAHA6);
+    } else if (nboard == 3) {
+      DECK_ENUMERATE_2_CARDS_D(StdDeck, sharedCards, dead, INNER_LOOP_OMAHA6);
+    } else if (nboard == 4) {
+      DECK_ENUMERATE_1_CARDS_D(StdDeck, sharedCards, dead, INNER_LOOP_OMAHA6);
+    } else if (nboard == 5) {
+      StdDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_OMAHA6;
     } else {
       return 1;
     }
@@ -586,6 +612,7 @@ enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     case game_holdem:
     case game_omaha:
     case game_omaha5:
+    case game_omaha6:
     case game_7stud:
     case game_5draw:
       mode = enum_ordering_mode_hi;
@@ -656,6 +683,18 @@ enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     } else {
       StdDeck_CardMask_RESET(sharedCards);
       INNER_LOOP_OMAHA5;
+      return 1;
+    }
+
+  } else if (game == game_omaha6) {
+    StdDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0) {
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+                                niter, INNER_LOOP_OMAHA6);
+    } else {
+      StdDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_OMAHA6;
       return 1;
     }
 
