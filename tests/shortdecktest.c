@@ -1,5 +1,6 @@
 #include <assert.h> // Pour assert()
 #include <string.h> // Ajoutez cette ligne
+#include "deck.h"
 #include "deck_short.h"
 #include "rules_short.h"
 #include "inlines/eval_short.h"

@@ -51,7 +51,7 @@ target_link_libraries(enumtest7 poker_lib)
 add_executable(joktest1 tests/joktest1.c)
 target_link_libraries(joktest1 poker_lib)
 
-# # Ajouter le test du shortdeck
-# add_executable(shortdecktest tests/shortdecktest.c)
-# target_link_libraries(shortdecktest poker_lib)
+# Ajouter le test du shortdeck
+add_executable(shortdecktest tests/shortdecktest.c)
+target_link_libraries(shortdecktest poker_lib)
 

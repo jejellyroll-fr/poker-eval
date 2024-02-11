@@ -89,6 +89,10 @@ extern POKEREVAL_EXPORT char ShortDeck_suitChars[ShortDeck_Suit_LAST+1];
 extern POKEREVAL_EXPORT int ShortDeck_cardToString(int cardIndex, char *outString);
 extern POKEREVAL_EXPORT int ShortDeck_stringToCard(char *inString, int *outCard);
 
+extern int ShortDeck_maskToCards(void *mask, int cards[]);
+extern int ShortDeck_NumCards(void *mask);
+
+
 // Macros to access deck-related functions
 #define ShortDeck_cardString(i) GenericDeck_cardString(&ShortDeck, (i))
 #define ShortDeck_printCard(i)  GenericDeck_printCard(&ShortDeck, (i))
