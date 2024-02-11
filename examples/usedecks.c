@@ -27,6 +27,7 @@
 #define TEST_JOKER
 #define TEST_ASTUD
 #define TEST_OMAHA8
+#define TEST_SHORTDECK 
 
 #include "poker_defs.h"
 
@@ -248,6 +249,74 @@ testOmaha8(const char *holestr, const char *boardstr) {
 
 #endif
 
+#ifdef TEST_SHORTDECK
+#include "deck_short.h"    // Include the ShortDeck header files
+#include "rules_short.h"
+#include "inlines/eval_short.h"
+
+// Define ShortDeck_CardMask_SIZE if it's not already defined
+#ifndef ShortDeck_CardMask_SIZE
+#define ShortDeck_CardMask_SIZE 36
+#endif
+
+// Define HandVal_SHIFT if it's not already defined
+#ifndef HandVal_SHIFT
+#define HandVal_SHIFT 16
+#endif
+
+#include <stdio.h>
+#include <string.h>
+
+int 
+testShortDeck(const char *handstr) {
+  ShortDeck_CardMask cards;
+  int ncards = 0;
+  int c = 0;
+  HandVal hival;
+  char str[80];
+  char *p;
+
+  printf("\nShortDeck: %s\n", handstr);
+  ShortDeck_CardMask_RESET(cards);
+  strcpy(str, handstr);
+  p = strtok(str, " ");
+  do {
+    //printf("Processing card: %s\n", p); // Affiche la carte en cours de traitement
+    if (ShortDeck.stringToCard(p, &c) == 0) {
+      printf("Invalid card: %s\n", p); // Affiche une erreur si la carte est invalide
+      goto error;
+    }
+    if (!ShortDeck_CardMask_CARD_IS_SET(cards, c)) {
+      ShortDeck_CardMask_SET(cards, c);
+      ++ncards;
+    } else {
+      printf("Card %s already set, skipping\n", p); // Affiche un message si la carte est déjà définie
+    }
+  } while ((p = strtok(NULL, " ")) != NULL);
+
+  //printf("Evaluating hand...\n");
+  hival = ShortDeck_ShortRules_EVAL_N(cards, ncards);
+  //printf("Evaluated hand value: %d\n", hival); // Affiche la valeur évaluée de la main
+
+  printf("%s: %d: ", DmaskString(ShortDeck, cards), hival);
+  ShortRules_HandVal_print(hival);
+  printf("\n");
+
+  return 0;
+
+ error:
+  printf("ERROR: Failed to process hand %s\n", handstr); // Affiche un message d'erreur détaillé
+  return 1;
+}
+
+#endif
+
+
+
+
+
+
+
 int 
 main(int argc, char **argv) {
 #ifdef TEST_STD
@@ -317,6 +386,27 @@ main(int argc, char **argv) {
   testOmaha8("Ad 2d Th Td", "Ac 2c 3d 4h 5s");
   testOmaha8("4d 5d Th Td", "Ac 2c 3d 4h 5s");
   testOmaha8("Ad 2d Th Td", "5h 7h 8d Ac 2c");
+#endif
+
+#ifdef TEST_SHORTDECK
+  printf("\n================= SHORT DECK NL HOLDEM ===================\n");
+  testShortDeck("Ac Ad Ks Kh Kd");
+  testShortDeck("Ac 7d 8c 9h 6s");
+  testShortDeck("Js 7d 8c 9h Ts");
+  testShortDeck("Js Jd 8c 9h Ts");
+  testShortDeck("Js Jd Jc 9h Ts");
+  testShortDeck("Js Jd Jc Jh Ts");
+  testShortDeck("Ad Td 8d Jd Qd");
+  testShortDeck("Ad Td Kd Jd Qd");
+  testShortDeck("Ac Ad Ks Kh Kd 7s");
+  testShortDeck("Ac Ad Ks Kh Kd 7s 7h");
+  testShortDeck("Ac Ad Ks Kh Kd Js");
+  testShortDeck("Ac Ad Ks Kh Kd Js Qs");
+  testShortDeck("Ac Ad Ks Kh Kd Ts 9s");
+  testShortDeck("Ac Ad Ks Qh Jd Ts 9s");
+  testShortDeck("Ac 8s Ks Qh Jd Ts 9s");
+
+  // Add more ShortDeck test cases here
 #endif
 
   return 0;

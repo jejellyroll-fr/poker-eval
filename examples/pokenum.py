@@ -107,3 +107,7 @@ print(output)
 p = Pokenum(game_type='l27', pockets=['5h', '4h', '3h', '-','9s', '8h', '6d'], dead=['5s', 'Qd', 'Ks', 'Kh'], mc=True, niter=10000)
 output = p.evaluate()
 print(output)
+
+p = Pokenum(game_type='o6', pockets=['As', 'Qs', 'Ts', '9d', 'Kh', 'Jh'])
+output = p.evaluate()
+print(output)

@@ -28,6 +28,9 @@ MAINTAINERCLEANFILES = Makefile.in
 
 INCLUDES = -I$(top_srcdir)/include
 
+INCLUDES = -I$(top_srcdir)/include -I$(top_srcdir)/include/inlines -I$(top_srcdir)/include/rankbits -I$(top_srcdir)/include/handtype -I$(top_srcdir)/include/ai -I$(top_srcdir)/include/game -I$(top_srcdir)/include/joker -I$(top_srcdir)/include/omaha -I$(top_srcdir)/include/standard -I$(top_srcdir)/include/inlines -I$(top_srcdir)/include/rankbits -I$(top_srcdir)/include/handtype -I$(top_srcdir)/include/ai -I$(top_srcdir)/include/eval -I$(top_srcdir)/include/eval_low -I$(top_srcdir)/include/eval_low8 -I$(top_srcdir)/include/eval_joker -I$(top_srcdir)/include/eval_joker_low -I$(top_srcdir)/include/eval_joker_low8 -I$(top_srcdir)/include/eval_astud -I$(top_srcdir)/include/eval_omaha -I$(top_srcdir)/include/game_short
+
+
 EXTRA_DIST = \
 	run.in \
 	razz.c \

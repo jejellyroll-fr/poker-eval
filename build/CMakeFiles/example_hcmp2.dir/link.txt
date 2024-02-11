@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/example_hcmp2.dir/examples/hcmp2.c.o -o example_hcmp2  libpoker_lib.a 

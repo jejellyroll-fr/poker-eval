@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/mktab_lowball.dir/lib/mktab_lowball.c.o -o mktab_lowball  libpoker_lib.a 

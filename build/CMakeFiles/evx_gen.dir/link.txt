@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/evx_gen.dir/lib/evx_generate.c.o -o evx_gen 

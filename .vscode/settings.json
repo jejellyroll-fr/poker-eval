@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "enumdefs.h": "c",
+        "enumord.h": "c",
+        "eval_low.h": "c",
+        "eval_low8.h": "c",
+        "eval_low27.h": "c",
+        "eval_omaha.h": "c",
+        "eval_joker_low.h": "c",
+        "deck_joker.h": "c",
+        "enumerate.h": "c",
+        "pokereval_export.h": "c"
+    }
+}

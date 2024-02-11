@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/example_eval.dir/examples/eval.c.o -o example_eval  libpoker_lib.a 

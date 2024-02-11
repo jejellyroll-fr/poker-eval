@@ -25,19 +25,19 @@
 
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ(2.53)
-AC_INIT(poker-eval, 138.0)
+AC_PREREQ([2.71])
+AC_INIT([poker-eval],[138.0])
 AC_CONFIG_AUX_DIR(config)
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 AM_INIT_AUTOMAKE()
 AM_CONFIG_HEADER([include/config.h include/poker_config.h])
 AC_CONFIG_SRCDIR([lib/deck.c])
 
 # Checks for programs.
 AC_PROG_MAKE_SET
-AC_GNU_SOURCE
+AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_CC
-AC_PROG_LIBTOOL
+LT_INIT
 AC_PATH_PROG([AWK], [awk])
 
 # Mac OS X uses md5 instead of md5sum
@@ -54,8 +54,16 @@ fi
 
 AC_EXEEXT
 AC_OBJEXT
-AC_ISC_POSIX
-AC_HEADER_STDC
+AC_SEARCH_LIBS([strerror],[cposix])
+m4_warn([obsolete],
+[The preprocessor macro `STDC_HEADERS' is obsolete.
+  Except in unusual embedded environments, you can safely include all
+  ISO C90 headers unconditionally.])dnl
+# Autoupdate added the next two lines to ensure that your configure
+# script's behavior did not change.  They are probably safe to remove.
+AC_CHECK_INCLUDES_DEFAULT
+AC_PROG_EGREP
+
 AC_C_INLINE
 
 AC_C_CONST

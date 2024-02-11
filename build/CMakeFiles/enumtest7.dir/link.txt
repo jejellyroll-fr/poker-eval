@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/enumtest7.dir/tests/enumtest7.c.o -o enumtest7  libpoker_lib.a 

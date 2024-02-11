@@ -29,6 +29,7 @@
 #define __DECK_STD_H__
 
 #include "pokereval_export.h"
+#include "poker_defs.h"
 
 /* MUST be lower than STRING_CARDS from lib/deck.c */
 #define StdDeck_N_CARDS      52

@@ -1,0 +1,33 @@
+# Variables
+CC=gcc
+CFLAGS=-Wall -g
+LDFLAGS=
+SOURCES=$(wildcard *.c)
+OBJECTS=$(SOURCES:.c=.o)
+EXECUTABLE=poker_eval
+DEPEND_FILE=.depend
+
+# Cible principale
+all: $(EXECUTABLE)
+
+$(EXECUTABLE): $(OBJECTS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJECTS)
+
+# Inclusion des dépendances
+-include $(DEPEND_FILE)
+
+# Règle pour générer les dépendances
+$(DEPEND_FILE): $(SOURCES)
+	makedepend -- $(CFLAGS) -- -Y $(SOURCES) 2>/dev/null 1> $(DEPEND_FILE)
+
+# Règle générique pour compiler les fichiers source en fichiers objet
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Cible pour nettoyer le projet
+clean:
+	rm -f $(OBJECTS) $(EXECUTABLE) $(DEPEND_FILE)
+
+# Marquer les cibles n'engendrant pas de fichier comme PHONY
+.PHONY: all clean depend
+# DO NOT DELETE

@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/mktab_basic.dir/lib/mktab_basic.c.o -o mktab_basic  libpoker_lib.a 

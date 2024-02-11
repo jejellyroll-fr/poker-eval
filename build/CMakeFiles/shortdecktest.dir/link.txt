@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/shortdecktest.dir/tests/shortdecktest.c.o -o shortdecktest  libpoker_lib.a 

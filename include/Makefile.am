@@ -31,6 +31,7 @@ nobase_pkginclude_HEADERS = \
 	combinations.h \
 	deck.h \
 	deck_astud.h \
+	deck_short.h \
 	deck_joker.h \
 	deck_std.h \
 	deck_undef.h \
@@ -39,12 +40,14 @@ nobase_pkginclude_HEADERS = \
 	enumord.h \
 	evx_defs.h \
 	game_astud.h \
+	game_short.h \
 	game_joker.h \
 	game_std.h \
 	handval.h \
 	handval_low.h \
 	inlines/eval.h \
 	inlines/eval_astud.h \
+	inlines/eval_short.h \
 	inlines/eval_joker.h \
 	inlines/eval_joker_low.h \
 	inlines/eval_joker_low8.h \
@@ -61,6 +64,7 @@ nobase_pkginclude_HEADERS = \
 	poker_defs.h \
 	pokereval_export.h \
 	rules_astud.h \
+	rules_short.h \
 	rules_joker.h \
 	rules_std.h \
 	rules_undef.h \

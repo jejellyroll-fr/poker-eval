@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/example_seven_card_hands.dir/examples/seven_card_hands.c.o -o example_seven_card_hands  libpoker_lib.a 

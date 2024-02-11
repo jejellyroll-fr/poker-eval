@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/example_usedecks.dir/examples/usedecks.c.o -o example_usedecks  libpoker_lib.a 

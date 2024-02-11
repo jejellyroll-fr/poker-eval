@@ -46,6 +46,7 @@ typedef enum {
   game_5drawnsq,
   game_lowball,
   game_lowball27,
+  game_sdholdem,
   game_NUMGAMES
 } enum_game_t;
 

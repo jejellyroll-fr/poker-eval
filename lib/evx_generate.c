@@ -23,6 +23,7 @@
 #include "poker_defs.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -84,24 +85,36 @@ main (int argc, char** argv)
   sprintf(frag_path, "%s/" PREAMBLE_FRAG, argv[1]);
   
   /* Copy the preamble to stdout. */
-  fp = fopen (frag_path, "r");
-  if (fp == NULL) {
-      fprintf (stderr, "Unable to read %s\n", frag_path);
-      return -1;
-    }
+  fp = fopen(frag_path, "r");
+  if (fp == NULL)
+  {
+    fprintf(stderr, "Unable to read %s\n", frag_path);
+    free(frag_path);
+    return -1;
+  }
+
   puts("/* This file is machine-generated -- DO NOT EDIT! */\n");
   {
     struct stat sbuf;
     char *p;
 
-    fstat (fileno(fp), &sbuf);
+    fstat(fileno(fp), &sbuf);
     p = malloc(sbuf.st_size + 1);
-    (void)fread (p, sbuf.st_size, 1, fp);
+    size_t read_result = fread(p, sbuf.st_size, 1, fp);
+    if (read_result != 1)
+    {
+      fprintf(stderr, "Error reading from %s\n", frag_path);
+      free(frag_path);
+      free(p);
+      fclose(fp);
+      return -1;
+    }
+
     p[sbuf.st_size] = 0;
-    printf (p, CARDS_DEALT);
+    printf(p, CARDS_DEALT);
     free(p);
   }
-  fclose (fp);
+  fclose(fp);
 
   /* Compute which cases go where. */
   compute_cases ();

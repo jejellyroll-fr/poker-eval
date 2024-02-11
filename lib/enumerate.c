@@ -38,11 +38,16 @@
 #include "inlines/eval_low27.h"
 #include "inlines/eval_joker_low.h"
 #include "inlines/eval_omaha.h"
+
 #include "deck_std.h"
 #include "rules_std.h"
 
+
 #include "enumerate.h"
 #include "enumdefs.h"
+#include "deck_short.h"
+#include "rules_short.h"
+#include "inlines/eval_short.h"
 
 static enum_gameparams_t enum_gameparams[] = {
   /* must be in same order as enum_game_t */
@@ -61,7 +66,8 @@ static enum_gameparams_t enum_gameparams[] = {
   { game_5draw8,    0,  5,  0, 1, 1, "5-card Draw Hi/Low 8-or-better with joker" },
   { game_5drawnsq,  0,  5,  0, 1, 1, "5-card Draw Hi/Low no qualifier with joker" },
   { game_lowball,   0,  5,  0, 1, 0, "5-card Draw A-5 Lowball with joker" },
-  { game_lowball27, 0,  5,  0, 1, 0, "5-card Draw 2-7 Lowball" }
+  { game_lowball27, 0,  5,  0, 1, 0, "5-card Draw 2-7 Lowball" },
+  { game_sdholdem,  2,  2,  5, 0, 1, "ShortDeck Holdem NL Hi" },
 };
 
 /* INNER_LOOP is executed in every iteration of the combinatorial enumerator
@@ -197,6 +203,17 @@ static enum_gameparams_t enum_gameparams[] = {
     StdDeck_CardMask_OR(_finalBoard, board, sharedCards);		\
     StdDeck_CardMask_OR(_hand, pockets[i], _finalBoard);		\
     hival[i] = StdDeck_StdRules_EVAL_N(_hand, 7);			\
+    loval[i] = LowHandVal_NOTHING;					\
+    err = 0;								\
+  })
+
+#define INNER_LOOP_SDHOLDEM						\
+  INNER_LOOP({								\
+    ShortDeck_CardMask _hand;						\
+    ShortDeck_CardMask _finalBoard;					\
+    ShortDeck_CardMask_OR(_finalBoard, board, sharedCards);		\
+    ShortDeck_CardMask_OR(_hand, pockets[i], _finalBoard);		\
+    hival[i] = ShortDeck_ShortRules_EVAL_N(_hand, 7);			\
     loval[i] = LowHandVal_NOTHING;					\
     err = 0;								\
   })
@@ -355,6 +372,7 @@ enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     case game_omaha6:
     case game_7stud:
     case game_5draw:
+    case game_sdholdem:
       mode = enum_ordering_mode_hi;
       break;
     case game_razz:
@@ -389,6 +407,21 @@ enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     } else if (nboard == 5) {
       StdDeck_CardMask_RESET(sharedCards);
       INNER_LOOP_HOLDEM;
+    } else {
+      return 1;
+    }
+
+  } else if (game == game_sdholdem) {
+    ShortDeck_CardMask sharedCards;
+    if (nboard == 0) {
+      DECK_ENUMERATE_5_CARDS_D(ShortDeck, sharedCards, dead, INNER_LOOP_SDHOLDEM);
+    } else if (nboard == 3) {
+      DECK_ENUMERATE_2_CARDS_D(ShortDeck, sharedCards, dead, INNER_LOOP_SDHOLDEM);
+    } else if (nboard == 4) {
+      DECK_ENUMERATE_1_CARDS_D(ShortDeck, sharedCards, dead, INNER_LOOP_SDHOLDEM);
+    } else if (nboard == 5) {
+      ShortDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_SDHOLDEM;
     } else {
       return 1;
     }
@@ -615,6 +648,7 @@ enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     case game_omaha6:
     case game_7stud:
     case game_5draw:
+    case game_sdholdem:
       mode = enum_ordering_mode_hi;
       break;
     case game_razz:
@@ -647,6 +681,18 @@ enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     } else {
       StdDeck_CardMask_RESET(sharedCards);
       INNER_LOOP_HOLDEM;
+      return 1;
+    }
+
+  } else if (game == game_sdholdem) {
+    ShortDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0) {
+      DECK_MONTECARLO_N_CARDS_D(ShortDeck, sharedCards, dead, numCards,
+                                niter, INNER_LOOP_SDHOLDEM);
+    } else {
+      ShortDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_SDHOLDEM;
       return 1;
     }
 

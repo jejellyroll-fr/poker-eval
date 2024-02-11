@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/mktab_evx.dir/lib/mktab_evx.c.o -o mktab_evx  libpoker_lib.a 

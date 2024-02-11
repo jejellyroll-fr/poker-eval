@@ -30,6 +30,9 @@ MAINTAINERCLEANFILES = \
 
 INCLUDES = -I$(top_srcdir)/include
 
+INCLUDES = -I$(top_srcdir)/include -I$(top_srcdir)/include/inlines -I$(top_srcdir)/include/rankbits -I$(top_srcdir)/include/handtype -I$(top_srcdir)/include/ai -I$(top_srcdir)/include/game -I$(top_srcdir)/include/joker -I$(top_srcdir)/include/omaha -I$(top_srcdir)/include/standard -I$(top_srcdir)/include/inlines -I$(top_srcdir)/include/rankbits -I$(top_srcdir)/include/handtype -I$(top_srcdir)/include/ai -I$(top_srcdir)/include/eval -I$(top_srcdir)/include/eval_low -I$(top_srcdir)/include/eval_low8 -I$(top_srcdir)/include/eval_joker -I$(top_srcdir)/include/eval_joker_low -I$(top_srcdir)/include/eval_joker_low8 -I$(top_srcdir)/include/eval_astud -I$(top_srcdir)/include/eval_omaha -I$(top_srcdir)/include/game_short
+
+
 lib_LTLIBRARIES = libpoker-eval.la
 
 EXTRA_DIST = \
@@ -45,6 +48,7 @@ PACKED_TABLES = \
 EVX_TABLES = \
         t_evx_pairval.c t_evx_strval.c t_evx_tripsval.c t_evx_flushcards.c
 ASTUD_TABLES = t_astudcardmasks.c
+SHORT_TABLES = t_shortdeckcardmasks.c
 LOWBALL_TABLES = t_botfivecards.c t_botcard.c t_botfivecardsj.c
 
 TABLES = \
@@ -53,12 +57,14 @@ TABLES = \
 	$(PACKED_TABLES) \
 	$(EVX_TABLES) \
 	$(ASTUD_TABLES) \
+	$(SHORT_TABLES) \
 	$(LOWBALL_TABLES)
 
 POKER_EVAL_SOURCES = \
 	combinations.c \
 	deck.c \
 	deck_astud.c \
+	deck_short.c \
 	deck_joker.c \
 	deck_std.c \
 	enumerate.c \
@@ -66,6 +72,7 @@ POKER_EVAL_SOURCES = \
 	evx.c \
 	lowball.c \
 	rules_astud.c \
+	rules_short.c \
 	rules_joker.c \
 	rules_std.c \
 	poker_wrapper.c
@@ -86,6 +93,7 @@ noinst_PROGRAMS = \
 	mktab_packed \
 	mktab_evx \
 	mktab_astud \
+	mktab_short \
 	mktab_lowball \
 	evx_gen5 \
 	evx_gen7
@@ -112,8 +120,13 @@ ${EVX_TABLES}: mktab_evx$(EXEEXT)
 
 mktab_astud_SOURCES = mktab_astud.c $(MKTABLE_HELPERS)
 
+mktab_short_SOURCES = mktab_short.c $(MKTABLE_HELPERS)
+
 ${ASTUD_TABLES}: mktab_astud$(EXEEXT) 
 	./mktab_astud
+
+${SHORT_TABLES}: mktab_short$(EXEEXT) 
+	./mktab_short
 
 mktab_lowball_SOURCES = mktab_lowball.c $(MKTABLE_HELPERS)
 

@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/mktab_joker.dir/lib/mktab_joker.c.o -o mktab_joker  libpoker_lib.a 
