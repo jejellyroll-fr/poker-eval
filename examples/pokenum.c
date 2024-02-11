@@ -168,6 +168,8 @@ parseArgs(int argc, char **argv,
           *game = game_lowball;
         } else if (strcmp(*argv, "-l27") == 0) {
           *game = game_lowball27;
+        } else if (strcmp(*argv, "-sd") == 0) {
+          *game = game_sdholdem;
         } else {                                /* unknown option switch */
           return 1;
         }
@@ -287,7 +289,7 @@ main(int argc, char **argv) {
         printf("ERROR\n");
       } else {
         printf("single usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
-        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-l27]\n");
+        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27]\n");
         printf("\t<pocket1> - <pocket2> - ... [ -- <board> ] [ / <dead> ] ]\n");
         printf("streaming usage: %s -i < argsfile\n", argv[0]);
       }
