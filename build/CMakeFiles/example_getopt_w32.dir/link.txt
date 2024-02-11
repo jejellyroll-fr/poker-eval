@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/example_getopt_w32.dir/examples/getopt_w32.c.o -o example_getopt_w32  libpoker_lib.a 

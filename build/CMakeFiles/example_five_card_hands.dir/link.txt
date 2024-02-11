@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/example_five_card_hands.dir/examples/five_card_hands.c.o -o example_five_card_hands  libpoker_lib.a 

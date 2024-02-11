@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/joktest1.dir/tests/joktest1.c.o -o joktest1  libpoker_lib.a 

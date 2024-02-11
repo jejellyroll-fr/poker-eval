@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/example_hcmpn.dir/examples/hcmpn.c.o -o example_hcmpn  libpoker_lib.a 

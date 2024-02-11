@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/example_fish.dir/examples/fish.c.o -o example_fish  libpoker_lib.a 
