@@ -29,12 +29,18 @@ foreach(lib poker_lib poker_lib_static)
 endforeach()
 
 # Compiler les exemples en les liant avec la bibliothèque poker_lib statique
-set(EXAMPLES eval fish five_card_hands getopt_w32 hcmp2 hcmpn pokenum seven_card_hands usedecks)
+set(EXAMPLES eval fish five_card_hands hcmp2 hcmpn pokenum seven_card_hands usedecks)
 foreach(example ${EXAMPLES})
     add_executable("example_${example}" "examples/${example}.c")
     # Lien avec la bibliothèque statique
     target_link_libraries("example_${example}" poker_lib_static)
 endforeach()
+
+# Compiler getopt_w32 uniquement sous Windows
+if(WIN32)
+    add_executable(example_getopt_w32 "examples/getopt_w32.c")
+    target_link_libraries(example_getopt_w32 poker_lib_static)
+endif()
 
 # Compiler les outils de génération de tables comme exécutables distincts
 set(MKTAB_TOOLS astud basic evx joker lowball packed short)
