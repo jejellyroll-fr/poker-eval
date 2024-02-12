@@ -1,7 +1,0 @@
-cdef extern from "pokenum.h":
-
-    int parse_args(list args)
-    
-    int enum_exhaustive(dict params)
-    
-    int enum_sample(dict params)
