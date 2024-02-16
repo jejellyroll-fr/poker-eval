@@ -33,7 +33,7 @@ foreach(lib poker_lib poker_lib_static)
 endforeach()
 
 # Compiler les exemples en les liant avec la bibliothèque poker_lib statique
-set(EXAMPLES eval fish five_card_hands hcmp2 hcmpn pokenum seven_card_hands usedecks)
+set(EXAMPLES eval fish hcmp2 hcmpn pokenum seven_card_hands usedecks)
 foreach(example ${EXAMPLES})
     add_executable("example_${example}" "examples/${example}.c")
     # Lien avec la bibliothèque statique
