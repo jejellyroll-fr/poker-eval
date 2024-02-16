@@ -43,36 +43,35 @@ jobs:
         name: libpoker-eval-amd64.deb
         path: package.deb
 
-  build-and-package-arm:
+  build-and-package-arm64:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
 
-    - name: Install build tools and dependencies (ARM)
-      run: sudo apt-get update && sudo apt-get install -y cmake make gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+    - name: Install build tools and dependencies (ARM64)
+      run: sudo apt-get update && sudo apt-get install -y cmake make gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-    - name: Build the project (ARM)
+    - name: Build the project (ARM64)
       run: |
-        mkdir build-arm
-        cd build-arm
-        cmake -DCMAKE_TOOLCHAIN_FILE=../arm-toolchain.cmake ..
+        mkdir build-arm64
+        cd build-arm64
+        cmake -DCMAKE_TOOLCHAIN_FILE=../arm64-toolchain.cmake ..
         make
 
-    - name: Prepare package files (ARM)
+    - name: Prepare package files (ARM64)
       run: |
-        mkdir -p package-arm/DEBIAN
-        echo "Package: libpoker-eval" > package-arm/DEBIAN/control
-        echo "Version: 140.0.0" >> package-arm/DEBIAN/control
-        echo "Architecture: armhf" >> package-arm/DEBIAN/control
+        mkdir -p package-arm64/DEBIAN
+        echo "Package: libpoker-eval" > package-arm64/DEBIAN/control
+        echo "Version: 140.0.0" >> package-arm64/DEBIAN/control
+        echo "Architecture: arm64" >> package-arm64/DEBIAN/control
+        echo "Description: Poker evaluation library" >> package-arm64/DEBIAN/control
+        mkdir -p package-arm64/usr/lib
+        cp build-arm64/libpoker_lib.so package-arm64/usr/lib/
 
-        echo "Description: Poker evaluation library" >> package-arm/DEBIAN/control
-        mkdir -p package-arm/usr/lib
-        cp build-arm/libpoker_lib.so package-arm/usr/lib/
-
-    - name: Build .deb package (ARM)
-      run: dpkg-deb --build package-arm
+    - name: Build .deb package (ARM64)
+      run: dpkg-deb --build package-arm64
 
     - uses: actions/upload-artifact@v2
       with:
-        name: libpoker-eval-armhf.deb
-        path: package-arm.deb
+        name: libpoker-eval-arm64.deb
+        path: package-arm64.deb
