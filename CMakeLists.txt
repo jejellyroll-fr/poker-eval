@@ -44,7 +44,9 @@ foreach(example ${EXAMPLES})
     # Lien avec la bibliothèque statique
     target_link_libraries("example_${example}" poker_lib_static)
     # Installation des exécutables
-    install(TARGETS "example_${example}" RUNTIME DESTINATION bin)
+    install(TARGETS "example_${example}" 
+            RUNTIME DESTINATION bin
+            CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 # Compiler les outils de génération de tables comme exécutables distincts
@@ -54,7 +56,9 @@ foreach(tool ${MKTAB_TOOLS})
     # Lien avec la bibliothèque statique
     target_link_libraries("mktab_${tool}" poker_lib_static)
     # Installation des outils de génération de tables
-    install(TARGETS "mktab_${tool}" RUNTIME DESTINATION bin)
+    install(TARGETS "mktab_${tool}" 
+            RUNTIME DESTINATION bin
+            CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 # Compiler evx_gen en tant qu'exécutable distinct
@@ -67,7 +71,9 @@ else()
     target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=7)
 endif()
 # Installation de evx_gen
-install(TARGETS evx_gen RUNTIME DESTINATION bin)
+install(TARGETS evx_gen 
+        RUNTIME DESTINATION bin
+        CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 
 # Configuration de CPack pour la génération de l'installateur
 set(CPACK_GENERATOR "NSIS") 
