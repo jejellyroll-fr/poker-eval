@@ -96,6 +96,12 @@ jobs:
         cmake .. -G "Visual Studio 17 2022"  
         cmake --build .  
 
+    - name: Upload installer as artifact (Windows)
+      uses: actions/upload-artifact@v2
+      with:
+        name: poker-eval-windows-installer
+        path: build/*.dll
+
   build-mac-os:
     runs-on: macos-latest
     steps:

@@ -1,4 +1,5 @@
 # Poker-Eval Library
+[![Build and Package](https://github.com/jejellyroll-fr/poker-eval/actions/workflows/ci.yaml/badge.svg?branch=master&event=push)](https://github.com/jejellyroll-fr/poker-eval/actions/workflows/ci.yaml)
 
 poker-eval is a library designed for evaluating poker hands and supporting various poker games. It offers a powerful and flexible API for hand odds calculation and comparison across many poker variants.
 
