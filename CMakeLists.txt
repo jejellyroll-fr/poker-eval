@@ -67,3 +67,11 @@ endif()
 
 # Autres tests
 # Répétez le schéma ci-dessus pour les autres tests que vous souhaitez ajouter
+# Configuration de CPack pour la génération de l'installateur
+
+
+set(CPACK_GENERATOR "NSIS") 
+set(CPACK_PACKAGE_NAME "PokerEval")
+set(CPACK_PACKAGE_VERSION "140.0.0")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "PokerEval")
+include(CPack)
