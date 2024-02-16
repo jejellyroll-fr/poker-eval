@@ -75,10 +75,4 @@ install(TARGETS evx_gen
         RUNTIME DESTINATION bin
         CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 
-# Configuration de CPack pour la génération de l'installateur
-set(CPACK_GENERATOR "NSIS") 
-set(CPACK_PACKAGE_NAME "PokerEval")
-set(CPACK_PACKAGE_VERSION "140.0.0")
-set(CPACK_NSIS_MODIFY_PATH ON)
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "PokerEval")
-include(CPack)
+

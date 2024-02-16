@@ -96,15 +96,6 @@ jobs:
         cmake .. -G "Visual Studio 17 2022"  
         cmake --build .  
 
-    - name: Verify NSIS Installation
-      run: |
-        & 'C:/Program Files (x86)/NSIS/makensis.exe' /VERSION
-
-    - name: Create Installer with CPack
-      run: |
-        cd build
-        cpack -G NSIS || type _CPack_Packages/win64/NSIS/NSISOutput.log
-
   build-mac-os:
     runs-on: macos-latest
     steps:
