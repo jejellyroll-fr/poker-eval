@@ -118,3 +118,19 @@ jobs:
           cd build
           cmake ..
           make
+
+      - name: Create PKG
+        run: |
+          mkdir pkgroot  
+          cp -r build/. pkgroot/  
+          pkgbuild --root pkgroot \
+                   --identifier com.yourcompany.poker-eval \
+                   --version "140.0.0" \
+                   --install-location /Applications \
+                   poker-eval.pkg
+
+      - name: Upload PKG as artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: poker-eval.pkg
+          path: poker-eval.pkg
