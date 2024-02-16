@@ -99,3 +99,22 @@ jobs:
     - name: Create Installer with CPack
       run: |
         cpack
+
+  build-mac-os:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout code
+
+      - name: Setup environment
+        run: |
+          brew update
+          brew install cmake
+          brew install make
+
+      - name: Build the project
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          make

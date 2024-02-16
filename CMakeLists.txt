@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(poker_eval)
 
+# Désactiver les avertissements pour les fonctions non sécurisées
+add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+
+
 # Spécifier la version C standard
 set(CMAKE_C_STANDARD 99)
 
