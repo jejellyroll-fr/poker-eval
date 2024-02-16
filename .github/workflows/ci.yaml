@@ -98,7 +98,8 @@ jobs:
 
     - name: Create Installer with CPack
       run: |
-        cpack
+        cd build
+        cpack -G NSIS
 
   build-mac-os:
     runs-on: macos-latest
