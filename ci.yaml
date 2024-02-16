@@ -1,0 +1,78 @@
+name: Build and Package .deb
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-package-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      name: Check out repository code
+
+    - name: Install build tools and dependencies
+      run: sudo apt-get update && sudo apt-get install -y cmake make
+
+    - name: Build the project (Ubuntu)
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        make
+
+    - name: Prepare package files (Ubuntu)
+      run: |
+        mkdir -p package/DEBIAN
+        echo "Package: libpoker-eval" > package/DEBIAN/control
+        echo "Version: 140.0.0" >> package/DEBIAN/control
+        echo "Architecture: amd64" >> package/DEBIAN/control
+        echo "Description: Poker evaluation library" >> package/DEBIAN/control
+        mkdir -p package/usr/lib
+        cp build/libpoker_lib.so package/usr/lib/
+
+    - name: Build .deb package (Ubuntu)
+      run: dpkg-deb --build package
+
+    - uses: actions/upload-artifact@v2
+      with:
+        name: libpoker-eval-amd64.deb
+        path: package.deb
+
+  build-and-package-arm:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install build tools and dependencies (ARM)
+      run: sudo apt-get update && sudo apt-get install -y cmake make gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+    - name: Build the project (ARM)
+      run: |
+        mkdir build-arm
+        cd build-arm
+        cmake -DCMAKE_TOOLCHAIN_FILE=../arm-toolchain.cmake ..
+        make
+
+    - name: Prepare package files (ARM)
+      run: |
+        mkdir -p package-arm/DEBIAN
+        echo "Package: libpoker-eval" > package-arm/DEBIAN/control
+        echo "Version: 140.0.0" >> package-arm/DEBIAN/control
+        echo "Architecture: armhf" >> package-arm/DEBIAN/control
+
+        echo "Description: Poker evaluation library" >> package-arm/DEBIAN/control
+        mkdir -p package-arm/usr/lib
+        cp build-arm/libpoker_lib.so package-arm/usr/lib/
+
+    - name: Build .deb package (ARM)
+      run: dpkg-deb --build package-arm
+
+    - uses: actions/upload-artifact@v2
+      with:
+        name: libpoker-eval-armhf.deb
+        path: package-arm.deb
