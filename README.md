@@ -100,6 +100,9 @@ After installation, include poker-eval headers in your project and link your app
 
 Refer to the API documentation and provided examples for more details on using poker-eval.
 
+## CI github
+add job for amd64 and armf linux build .deb
+
 ## Known bugs
 - enumerate and evaluate joker games
 - wrong counting scoops on hi-lo games
