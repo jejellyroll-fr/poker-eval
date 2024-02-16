@@ -41,10 +41,10 @@ foreach(example ${EXAMPLES})
 endforeach()
 
 # Compiler getopt_w32 uniquement sous Windows
-if(WIN32)
-    add_executable(example_getopt_w32 "examples/getopt_w32.c")
-    target_link_libraries(example_getopt_w32 poker_lib_static)
-endif()
+# if(WIN32)
+#     add_executable(example_getopt_w32 "examples/getopt_w32.c")
+#     target_link_libraries(example_getopt_w32 poker_lib_static)
+# endif()
 
 # Compiler les outils de génération de tables comme exécutables distincts
 set(MKTAB_TOOLS astud basic evx joker lowball packed short)
