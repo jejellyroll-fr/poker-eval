@@ -4,7 +4,6 @@ project(poker_eval)
 # Désactiver les avertissements pour les fonctions non sécurisées
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
-
 # Spécifier la version C standard
 set(CMAKE_C_STANDARD 99)
 
@@ -20,8 +19,14 @@ list(FILTER LIB_SOURCES EXCLUDE REGEX ".*mktab_.*|.*evx_generate.c$")
 
 # Bibliothèque partagée
 add_library(poker_lib SHARED ${LIB_SOURCES})
+
 # Bibliothèque statique
 add_library(poker_lib_static STATIC ${LIB_SOURCES})
+
+# Installation des bibliothèques
+install(TARGETS poker_lib poker_lib_static
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib)
 
 # Définitions pour la bibliothèque partagée et statique
 foreach(lib poker_lib poker_lib_static)
@@ -38,13 +43,9 @@ foreach(example ${EXAMPLES})
     add_executable("example_${example}" "examples/${example}.c")
     # Lien avec la bibliothèque statique
     target_link_libraries("example_${example}" poker_lib_static)
+    # Installation des exécutables
+    install(TARGETS "example_${example}" RUNTIME DESTINATION bin)
 endforeach()
-
-# Compiler getopt_w32 uniquement sous Windows
-# if(WIN32)
-#     add_executable(example_getopt_w32 "examples/getopt_w32.c")
-#     target_link_libraries(example_getopt_w32 poker_lib_static)
-# endif()
 
 # Compiler les outils de génération de tables comme exécutables distincts
 set(MKTAB_TOOLS astud basic evx joker lowball packed short)
@@ -52,6 +53,8 @@ foreach(tool ${MKTAB_TOOLS})
     add_executable("mktab_${tool}" "lib/mktab_${tool}.c")
     # Lien avec la bibliothèque statique
     target_link_libraries("mktab_${tool}" poker_lib_static)
+    # Installation des outils de génération de tables
+    install(TARGETS "mktab_${tool}" RUNTIME DESTINATION bin)
 endforeach()
 
 # Compiler evx_gen en tant qu'exécutable distinct
@@ -63,17 +66,10 @@ if(USE_FIVE_CARDS)
 else()
     target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=7)
 endif()
+# Installation de evx_gen
+install(TARGETS evx_gen RUNTIME DESTINATION bin)
 
-# Ajouter des tests si nécessaire, en les liant avec la bibliothèque poker_lib statique
-# Exemple:
-# add_executable(enumtest7 tests/enumtest7.c)
-# target_link_libraries(enumtest7 poker_lib_static)
-
-# Autres tests
-# Répétez le schéma ci-dessus pour les autres tests que vous souhaitez ajouter
 # Configuration de CPack pour la génération de l'installateur
-
-
 set(CPACK_GENERATOR "NSIS") 
 set(CPACK_PACKAGE_NAME "PokerEval")
 set(CPACK_PACKAGE_VERSION "140.0.0")
