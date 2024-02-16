@@ -37,12 +37,13 @@ jobs:
         cp build/libpoker_lib.so package/usr/lib/
 
     - name: Build .deb package (Ubuntu)
-      run: dpkg-deb --build  libpoker-eval_140.0.0_amd64
+      run: dpkg-deb --build package
 
     - uses: actions/upload-artifact@v2
       with:
-        name: libpoker-eval_140.0.0_amd64.deb
-        path: libpoker-eval_140.0.0_amd64.deb
+        name: libpoker-eval-amd64.deb
+        path: package/libpoker-eval-amd64.deb
+
 
   build-and-package-arm64:
     runs-on: ubuntu-latest
@@ -70,12 +71,12 @@ jobs:
         cp build-arm64/libpoker_lib.so package-arm64/usr/lib/
 
     - name: Build .deb package (ARM64)
-      run: dpkg-deb --build libpoker-eval_140.0.0_arm64
+      run: dpkg-deb --build package-arm64
 
     - uses: actions/upload-artifact@v2
       with:
-        name: libpoker-eval_140.0.0_arm64.deb
-        path: libpoker-eval_140.0.0_arm64.deb
+        name: libpoker-eval-arm64.deb
+        path: package-arm64/libpoker-eval-arm64.deb
 
   build-windows:
     runs-on: windows-latest
@@ -100,7 +101,7 @@ jobs:
       uses: actions/upload-artifact@v2
       with:
         name: poker-eval-windows-installer
-        path: libpoker-eval.dll
+        path: build/*.dll
 
   build-mac-os:
     runs-on: macos-latest
