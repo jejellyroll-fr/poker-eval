@@ -106,7 +106,7 @@ jobs:
       uses: actions/upload-artifact@v2
       with:
         name: poker-eval-windows-msys2-installer
-        path: build/*.dll
+        path: build/*.*
 
 
   build-mac-os:
