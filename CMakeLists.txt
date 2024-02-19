@@ -15,10 +15,11 @@ option(USE_FIVE_CARDS "Compile with five cards dealt" ON)
 
 # Compiler les bibliothèques poker_lib (partagée et statique)
 file(GLOB_RECURSE LIB_SOURCES "lib/*.c")
-list(FILTER LIB_SOURCES EXCLUDE REGEX ".*mktab_.*|.*evx_generate.c$")
+list(FILTER LIB_SOURCES EXCLUDE REGEX ".*mktab_.*|.*evx_generate.*|.*evx_gen[57].c$")
 
-# Bibliothèque partagée
+# Bibliothèque partagée avec -fPIC pour la position indépendante du code
 add_library(poker_lib SHARED ${LIB_SOURCES})
+target_compile_options(poker_lib PRIVATE -fPIC)
 
 # Bibliothèque statique
 add_library(poker_lib_static STATIC ${LIB_SOURCES})
@@ -61,18 +62,25 @@ foreach(tool ${MKTAB_TOOLS})
             CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
-# Compiler evx_gen en tant qu'exécutable distinct
-add_executable(evx_gen "lib/evx_generate.c")
-# Lien avec la bibliothèque statique
-target_link_libraries(evx_gen poker_lib_static)
-if(USE_FIVE_CARDS)
-    target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=5)
-else()
-    target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=7)
+# Assurez-vous que les fichiers evx_gen5.c et evx_gen7.c sont présents et nécessaires avant de les ajouter comme exécutables
+# Si les fichiers evx_gen5.c et evx_gen7.c sont nécessaires et présents, décommentez les lignes suivantes et assurez-vous que les chemins d'accès sont corrects
+# add_executable(evx_gen5 lib/evx_gen5.c)
+# target_link_libraries(evx_gen5 poker_lib_static)
+# add_executable(evx_gen7 lib/evx_gen7.c)
+# target_link_libraries(evx_gen7 poker_lib_static)
+
+# Compiler evx_gen en tant qu'exécutable distinct, si le fichier existe
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/evx_generate.c")
+    add_executable(evx_gen "lib/evx_generate.c")
+    # Lien avec la bibliothèque statique
+    target_link_libraries(evx_gen poker_lib_static)
+    if(USE_FIVE_CARDS)
+        target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=5)
+    else()
+        target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=7)
+    endif()
+    # Installation de evx_gen
+    install(TARGETS evx_gen 
+            RUNTIME DESTINATION bin
+            CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endif()
-# Installation de evx_gen
-install(TARGETS evx_gen 
-        RUNTIME DESTINATION bin
-        CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
-
-

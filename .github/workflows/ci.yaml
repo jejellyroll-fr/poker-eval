@@ -78,35 +78,30 @@ jobs:
         name: libpoker-eval-arm64.deb
         path: package-arm64/libpoker-eval-arm64.deb
 
-  build-windows-msys2:
+  build-windows:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v2
       name: Checkout code
 
-    - name: Install MSYS2
-      uses: msys2/setup-msys2@v2
-      with:
-        update: true
-        install: >-
-          base-devel
-          mingw-w64-x86_64-toolchain
-          mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-make
-        path-type: inherit
+    - name: Install CMake
+      run: choco install cmake -y
 
-    - name: Configure and Build with CMake (MSYS2)
+    - name: Install Visual Studio Build Tools
+      run: choco install visualstudio2022buildtools -y --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+
+    - name: Configure and Build with CMake
       run: |
-        mkdir build
-        cd build
-        cmake .. -G "MSYS Makefiles"
-        cmake --build .
+        mkdir build  
+        cd build  
+        cmake .. -G "Visual Studio 17 2022"  
+        cmake --build .  
 
-    - name: Upload installer as artifact (Windows MSYS2)
+    - name: Upload installer as artifact (Windows)
       uses: actions/upload-artifact@v2
       with:
-        name: poker-eval-windows-msys2-installer
-        path: build/*.*
+        name: poker-eval-windows-installer
+        path: build/Debug/*.*
 
 
   build-mac-os:
