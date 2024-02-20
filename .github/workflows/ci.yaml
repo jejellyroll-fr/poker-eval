@@ -30,7 +30,7 @@ jobs:
       uses: actions/upload-artifact@v2
       with:
         name: poker-eval-linux-amd64
-        path: build/*.*
+        path: build/*
 
 
 
@@ -46,14 +46,14 @@ jobs:
       run: |
         mkdir build-arm64
         cd build-arm64
-        cmake -DCMAKE_TOOLCHAIN_FILE=../arm64-toolchain.cmake ..
+        cmake ..
         make
 
     - name: Upload installer as artifact 
       uses: actions/upload-artifact@v2
       with:
         name: poker-eval-linux-arm64
-        path: build/*.*
+        path: build-arm64/*
 
   build-windows:
     runs-on: windows-latest
@@ -104,4 +104,4 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: poker-eval-darwin-amd64
-          path: build/*.*
+          path: build/*
