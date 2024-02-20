@@ -1,15 +1,14 @@
 # Poker-Eval Library
-[![Build and Package](https://github.com/jejellyroll-fr/poker-eval/actions/workflows/ci.yaml/badge.svg?branch=master&event=push)](https://github.com/jejellyroll-fr/poker-eval/actions/workflows/ci.yaml)
 
 poker-eval is a library designed for evaluating poker hands and supporting various poker games. It offers a powerful and flexible API for hand odds calculation and comparison across many poker variants.
 
 ## Features
-    
+
 - Supports multiple poker deck, including:
-    - Standard Deck (52 cards)
-    - Asian stud Deck (32 cards)
-    - Joker Deck(53 cards)
-    - Short Deck (36 cards)
+  - Standard Deck (52 cards)
+  - Asian stud Deck (32 cards)
+  - Joker Deck(53 cards)
+  - Short Deck (36 cards)
 - Lookup table generation for optimized evaluations.
 - Tools for odds calculation and game simulation.
 - Fast and efficient poker hand evaluation.
@@ -34,8 +33,8 @@ poker-eval is a library designed for evaluating poker hands and supporting vario
 - 5-card Draw 2-7 Lowball
 - ShortDeck Holdem NL Hi
 
-
 ## Prerequisites
+
 ### Windows
 
     Install Visual Studio (with C++ support).
@@ -46,6 +45,7 @@ poker-eval is a library designed for evaluating poker hands and supporting vario
     Install CMake via package manager (e.g., Homebrew on macOS, apt on Ubuntu).
 
 ## Installation
+
 ### Windows
 
     Open a Command Prompt or PowerShell.
@@ -55,6 +55,7 @@ poker-eval is a library designed for evaluating poker hands and supporting vario
     Create a build directory and navigate into it:
 
 bash
+
 ```
 mkdir build
 cd build
@@ -63,12 +64,15 @@ cd build
 Generate project files with CMake (replace {your version} with your version of Visual Studio):
 
 bash
+
 ```
 cmake .. -G "Visual Studio 17 2022"
 ```
+
 Build the project:
 
 bash
+
 ```
 cmake --build .
 ```
@@ -82,6 +86,7 @@ cmake --build .
     Create a build directory and navigate into it:
 
 bash
+
 ```
 mkdir build
 cd build
@@ -90,6 +95,7 @@ cd build
 Generate the Makefiles and build the project:
 
 bash
+
 ```
 cmake ..
 make
@@ -102,8 +108,10 @@ After installation, include poker-eval headers in your project and link your app
 Refer to the API documentation and provided examples for more details on using poker-eval.
 
 ## CI github
-add job for amd64 and armf linux build .deb
+
+[![Build and Package](https://github.com/jejellyroll-fr/poker-eval/actions/workflows/ci.yaml/badge.svg?branch=master&event=push)](https://github.com/jejellyroll-fr/poker-eval/actions/workflows/ci.yaml)
 
 ## Known bugs
+
 - enumerate and evaluate joker games
 - wrong counting scoops on hi-lo games
