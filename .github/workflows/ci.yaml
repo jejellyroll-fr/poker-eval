@@ -26,23 +26,12 @@ jobs:
         cmake ..
         make
 
-    - name: Prepare package files (Ubuntu)
-      run: |
-        mkdir -p package/DEBIAN
-        echo "Package: libpoker-eval" > package/DEBIAN/control
-        echo "Version: 140.0.0" >> package/DEBIAN/control
-        echo "Architecture: amd64" >> package/DEBIAN/control
-        echo "Description: Poker evaluation library" >> package/DEBIAN/control
-        mkdir -p package/usr/lib
-        cp build/libpoker_lib.so package/usr/lib/
-
-    - name: Build .deb package (Ubuntu)
-      run: dpkg-deb --build package
-
-    - uses: actions/upload-artifact@v2
+    - name: Upload installer as artifact 
+      uses: actions/upload-artifact@v2
       with:
-        name: libpoker-eval-amd64.deb
-        path: package/libpoker-eval-amd64.deb
+        name: poker-eval-linux-amd64
+        path: build/*.*
+
 
 
   build-and-package-arm64:
@@ -60,23 +49,11 @@ jobs:
         cmake -DCMAKE_TOOLCHAIN_FILE=../arm64-toolchain.cmake ..
         make
 
-    - name: Prepare package files (ARM64)
-      run: |
-        mkdir -p package-arm64/DEBIAN
-        echo "Package: libpoker-eval" > package-arm64/DEBIAN/control
-        echo "Version: 140.0.0" >> package-arm64/DEBIAN/control
-        echo "Architecture: arm64" >> package-arm64/DEBIAN/control
-        echo "Description: Poker evaluation library" >> package-arm64/DEBIAN/control
-        mkdir -p package-arm64/usr/lib
-        cp build-arm64/libpoker_lib.so package-arm64/usr/lib/
-
-    - name: Build .deb package (ARM64)
-      run: dpkg-deb --build package-arm64
-
-    - uses: actions/upload-artifact@v2
+    - name: Upload installer as artifact 
+      uses: actions/upload-artifact@v2
       with:
-        name: libpoker-eval-arm64.deb
-        path: package-arm64/libpoker-eval-arm64.deb
+        name: poker-eval-linux-arm64
+        path: build/*.*
 
   build-windows:
     runs-on: windows-latest
@@ -100,7 +77,7 @@ jobs:
     - name: Upload installer as artifact (Windows)
       uses: actions/upload-artifact@v2
       with:
-        name: poker-eval-windows-installer
+        name: poker-eval-windows-amd64
         path: build/Debug/*.*
 
 
@@ -123,18 +100,8 @@ jobs:
           cmake ..
           make
 
-      - name: Create PKG
-        run: |
-          mkdir pkgroot  
-          cp -r build/. pkgroot/  
-          pkgbuild --root pkgroot \
-                   --identifier com.yourcompany.poker-eval \
-                   --version "140.0.0" \
-                   --install-location /Applications \
-                   poker-eval.pkg
-
-      - name: Upload PKG as artifact
+      - name: Upload installer as artifact
         uses: actions/upload-artifact@v2
         with:
-          name: poker-eval.pkg
-          path: poker-eval.pkg
+          name: poker-eval-darwin-amd64
+          path: build/*.*
