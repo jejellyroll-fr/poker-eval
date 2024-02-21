@@ -68,6 +68,8 @@ static enum_gameparams_t enum_gameparams[] = {
   { game_lowball,   0,  5,  0, 1, 0, "5-card Draw A-5 Lowball with joker" },
   { game_lowball27, 0,  5,  0, 1, 0, "5-card Draw 2-7 Lowball" },
   { game_sdholdem,  2,  2,  5, 0, 1, "ShortDeck Holdem NL Hi" },
+  { game_doubleflop_holdem, 2, 2, 10, 0, 1, "Double Flop Holdem Hi" },
+
 };
 
 /* INNER_LOOP is executed in every iteration of the combinatorial enumerator
@@ -206,6 +208,7 @@ static enum_gameparams_t enum_gameparams[] = {
     loval[i] = LowHandVal_NOTHING;					\
     err = 0;								\
   })
+
 
 #define INNER_LOOP_SDHOLDEM						\
   INNER_LOOP({								\
@@ -353,6 +356,75 @@ static enum_gameparams_t enum_gameparams[] = {
     err = 0;								\
   })
 
+
+#define INNER_LOOP_DOUBLEFLOP_HOLDEM(evalwrap1, evalwrap2)                      \
+do {                                                                            \
+    int i;                                                                      \
+    HandVal hival1[ENUM_MAXPLAYERS], hival2[ENUM_MAXPLAYERS];                   \
+    HandVal besthi1 = HandVal_NOTHING, besthi2 = HandVal_NOTHING;               \
+    int hishare1 = 0, hishare2 = 0;                                             \
+    double hipot1, hipot2;                                                      \
+                                                                                \
+    for (i=0; i<npockets; i++) {                                                \
+        int err1, err2;                                                         \
+        /* Evaluate hand for first board */                                     \
+        { evalwrap1 }                                                           \
+        /* Evaluate hand for second board */                                    \
+        { evalwrap2 }                                                           \
+        /* Determine the best hand and share for both boards */                 \
+        if (hival1[i] > besthi1) {                                              \
+            besthi1 = hival1[i];                                                \
+            hishare1 = 1;                                                       \
+        } else if (hival1[i] == besthi1) {                                      \
+            hishare1++;                                                         \
+        }                                                                       \
+        if (hival2[i] > besthi2) {                                              \
+            besthi2 = hival2[i];                                                \
+            hishare2 = 1;                                                       \
+        } else if (hival2[i] == besthi2) {                                      \
+            hishare2++;                                                         \
+        }                                                                       \
+    }                                                                           \
+    /* Pot distribution for each board */                                       \
+    hipot1 = besthi1 != HandVal_NOTHING ? 1.0 / hishare1 : 0;                   \
+    hipot2 = besthi2 != HandVal_NOTHING ? 1.0 / hishare2 : 0;                   \
+                                                                                \
+    for (i=0; i<npockets; i++) {                                                \
+        double potfrac1 = 0, potfrac2 = 0;                                      \
+        if (hival1[i] == besthi1) { potfrac1 += hipot1; }                       \
+        if (hival2[i] == besthi2) { potfrac2 += hipot2; }                       \
+        /* Combine results from both boards */                                  \
+        result->ev[i] += (potfrac1 + potfrac2) / 2;                             \
+        /* Update win/tie/loss and scoop counters */                            \
+        if (hival1[i] == besthi1 && hival2[i] == besthi2) {                     \
+            if (hishare1 == 1 && hishare2 == 1) {                               \
+                result->nscoop[i]++;  /* Scoop counter updated for winning both boards */  \
+            }                                                                   \
+        }                                                                       \
+    }                                                                           \
+    /* Update ordering histogram for hihi mode if applicable */                 \
+    if (result->ordering != NULL && result->ordering->mode == enum_ordering_mode_hihi) { \
+        int hiranks1[ENUM_ORDERING_MAXPLAYERS], hiranks2[ENUM_ORDERING_MAXPLAYERS]; \
+        ENUM_ORDERING_RANK_HI(hival1, HandVal_NOTHING, npockets, hiranks1);     \
+        ENUM_ORDERING_RANK_HI(hival2, HandVal_NOTHING, npockets, hiranks2);     \
+        for (i = 0; i < npockets; i++) {                                        \
+            int rank1 = hiranks1[i], rank2 = hiranks2[i];                       \
+            int combinedRank = rank1 * ENUM_ORDERING_MAXPLAYERS + rank2;        \
+            if (combinedRank < result->ordering->nentries) {                    \
+                result->ordering->hist[combinedRank]++;                         \
+            }                                                                   \
+        }                                                                       \
+    }                                                                           \
+    result->nsamples++;                                                         \
+} while (0)
+
+
+
+
+
+
+
+
 int 
 enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
                StdDeck_CardMask board, StdDeck_CardMask dead,
@@ -389,6 +461,8 @@ enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     case game_5drawnsq:
       mode = enum_ordering_mode_hilo;
       break;
+    case game_doubleflop_holdem:
+      mode = enum_ordering_mode_hihi;
     default:
       return 1;
     }
@@ -425,6 +499,96 @@ enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     } else {
       return 1;
     }
+
+  } else if (game == game_doubleflop_holdem) {
+      StdDeck_CardMask sharedCards1, sharedCards2; 
+      if (nboard == 0) {
+          // Enumérer le premier ensemble de cartes communautaires
+          DECK_ENUMERATE_5_CARDS_D(StdDeck, sharedCards1, dead, {
+              // énumérer le second ensemble de cartes communautaires
+              DECK_ENUMERATE_5_CARDS_D(StdDeck, sharedCards2, dead, {
+                  INNER_LOOP_DOUBLEFLOP_HOLDEM({
+                      StdDeck_CardMask _finalBoard1;
+                      StdDeck_CardMask_OR(_finalBoard1, board, sharedCards1);
+                      StdDeck_CardMask _hand1;
+                      StdDeck_CardMask_OR(_hand1, pockets[i], _finalBoard1);
+                      hival1[i] = StdDeck_StdRules_EVAL_N(_hand1, 7);
+                      err1 = 0;
+                  }, {
+                      StdDeck_CardMask _finalBoard2;
+                      StdDeck_CardMask_OR(_finalBoard2, board, sharedCards2);
+                      StdDeck_CardMask _hand2;
+                      StdDeck_CardMask_OR(_hand2, pockets[i], _finalBoard2);
+                      hival2[i] = StdDeck_StdRules_EVAL_N(_hand2, 7);
+                      err2 = 0;
+                  });
+              });
+          });
+      } else if (nboard == 3) {
+          // Enumérer le premier ensemble de cartes communautaires
+          DECK_ENUMERATE_2_CARDS_D(StdDeck, sharedCards1, dead, {
+              // énumérer le second ensemble de cartes communautaires
+              DECK_ENUMERATE_2_CARDS_D(StdDeck, sharedCards2, dead, {
+                  INNER_LOOP_DOUBLEFLOP_HOLDEM({
+                      StdDeck_CardMask _finalBoard1;
+                      StdDeck_CardMask_OR(_finalBoard1, board, sharedCards1);
+                      StdDeck_CardMask _hand1;
+                      StdDeck_CardMask_OR(_hand1, pockets[i], _finalBoard1);
+                      hival1[i] = StdDeck_StdRules_EVAL_N(_hand1, 7);
+                      err1 = 0;
+                  }, {
+                      StdDeck_CardMask _finalBoard2;
+                      StdDeck_CardMask_OR(_finalBoard2, board, sharedCards2);
+                      StdDeck_CardMask _hand2;
+                      StdDeck_CardMask_OR(_hand2, pockets[i], _finalBoard2);
+                      hival2[i] = StdDeck_StdRules_EVAL_N(_hand2, 7);
+                      err2 = 0;
+                  });
+              });
+          });
+      } else if (nboard == 4) {
+          // Enumérer le premier ensemble de cartes communautaires
+          DECK_ENUMERATE_1_CARDS_D(StdDeck, sharedCards1, dead, {
+              // énumérer le second ensemble de cartes communautaires
+              DECK_ENUMERATE_1_CARDS_D(StdDeck, sharedCards2, dead, {
+                  INNER_LOOP_DOUBLEFLOP_HOLDEM({
+                      StdDeck_CardMask _finalBoard1;
+                      StdDeck_CardMask_OR(_finalBoard1, board, sharedCards1);
+                      StdDeck_CardMask _hand1;
+                      StdDeck_CardMask_OR(_hand1, pockets[i], _finalBoard1);
+                      hival1[i] = StdDeck_StdRules_EVAL_N(_hand1, 7);
+                      err1 = 0;
+                  }, {
+                      StdDeck_CardMask _finalBoard2;
+                      StdDeck_CardMask_OR(_finalBoard2, board, sharedCards2);
+                      StdDeck_CardMask _hand2;
+                      StdDeck_CardMask_OR(_hand2, pockets[i], _finalBoard2);
+                      hival2[i] = StdDeck_StdRules_EVAL_N(_hand2, 7);
+                      err2 = 0;
+                  });
+              });
+          });
+      } else if (nboard == 5) {
+          StdDeck_CardMask board1, board2;
+          INNER_LOOP_DOUBLEFLOP_HOLDEM({
+              StdDeck_CardMask _finalBoard1 = board1; 
+              StdDeck_CardMask _hand1;
+              StdDeck_CardMask_OR(_hand1, pockets[i], _finalBoard1);
+              hival1[i] = StdDeck_StdRules_EVAL_N(_hand1, 7);
+              err1 = 0;
+          }, {
+              StdDeck_CardMask _finalBoard2 = board2; 
+              StdDeck_CardMask _hand2;
+              StdDeck_CardMask_OR(_hand2, pockets[i], _finalBoard2);
+              hival2[i] = StdDeck_StdRules_EVAL_N(_hand2, 7);
+              err2 = 0;
+          });          
+      } else {
+          return 1; 
+      }
+
+
+
 
   } else if (game == game_holdem8) {
     StdDeck_CardMask sharedCards;

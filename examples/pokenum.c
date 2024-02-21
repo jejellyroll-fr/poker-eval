@@ -97,13 +97,14 @@ static int
 parseArgs(int argc, char **argv,
           enum_game_t *game, enum_sample_t *enumType, int *niter,
           StdDeck_CardMask pockets[], StdDeck_CardMask *board,
-          StdDeck_CardMask *dead, int *npockets, int *nboard,
+          StdDeck_CardMask *board2, StdDeck_CardMask *dead, // Ajout d'un second tableau 'board2'
+          int *npockets, int *nboard, int *nboard2, // Ajout d'un compteur pour le second tableau 'nboard2'
           int *orderflag, int *terse) {
   /* we have a type problem: we define the masks here as
      StdDeck_CardMask, which makes it impossible to hold jokers.
      we need to redesign some of the deck typing to make this work... */
   enum_gameparams_t *gameParams = enumGameParams(game_holdem);
-  enum { ST_OPTIONS, ST_POCKET, ST_BOARD, ST_DEAD } state;
+  enum { ST_OPTIONS, ST_POCKET, ST_BOARD, ST_BOARD2, ST_DEAD } state; 
   int ncards;
   int card;
   int i;
@@ -170,6 +171,8 @@ parseArgs(int argc, char **argv,
           *game = game_lowball27;
         } else if (strcmp(*argv, "-sd") == 0) {
           *game = game_sdholdem;
+        } else if (strcmp(*argv, "-dh") == 0) {
+            *game = game_doubleflop_holdem;
         } else {                                /* unknown option switch */
           return 1;
         }
@@ -207,38 +210,48 @@ parseArgs(int argc, char **argv,
       }
       
     } else if (state == ST_BOARD) {
-      if (strcmp(*argv, "/") == 0) {            /* dead card prefix */
-        state = ST_DEAD;
-      } else {
-        if (DstringToCard(StdDeck, *argv, &card) == 0) /* parse error */
-          return 1;
-        if (StdDeck_CardMask_CARD_IS_SET(*dead, card)) /* card already seen */
-          return 1;
-        if (*nboard >= gameParams->maxboard) /* too many board cards */
-          return 1;
-        StdDeck_CardMask_SET(*board, card);
-        StdDeck_CardMask_SET(*dead, card);
-        (*nboard)++;
-      }
-      
-    } else if (state == ST_DEAD) {
-      if (strcmp(*argv, "-") == 0) {            /* player delimiter */
-        if (ncards > 0) {                       /* is a player pending? */
-          if (ncards < gameParams->minpocket)   /* too few pocket cards */
-            return 1;
-          (*npockets)++;
-          ncards = 0;
+        if (strcmp(*argv, "---") == 0) {  // Nouveau séparateur pour le deuxième tableau
+            if (*game == game_doubleflop_holdem) {
+                if (*nboard < gameParams->maxboard) {
+                    state = ST_BOARD2; // Passer à l'état pour traiter le deuxième tableau
+                } else {
+                    return 1; // Erreur si trop de cartes dans le premier tableau
+                }
+            } else {
+                return 1; // Erreur si le séparateur du deuxième tableau est utilisé pour un autre jeu
+            }
+        } else if (strcmp(*argv, "/") == 0) {
+            state = ST_DEAD;
+        } else {
+            if (DstringToCard(StdDeck, *argv, &card) == 0)
+                return 1;
+            if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+                return 1;
+            if (*nboard >= gameParams->maxboard)
+                return 1;
+            StdDeck_CardMask_SET(*board, card);
+            StdDeck_CardMask_SET(*dead, card);
+            (*nboard)++;
         }
-        state = ST_POCKET;
-      } else {
-        if (DstringToCard(StdDeck, *argv, &card) == 0) /* parse error */
-          return 1;
-        if (StdDeck_CardMask_CARD_IS_SET(*dead, card)) /* card already seen */
-          return 1;
-        StdDeck_CardMask_SET(*dead, card);
-      }
-    }
+
+    } else if (state == ST_BOARD2) { // Nouvel état pour traiter le deuxième tableau
+        if (strcmp(*argv, "/") == 0) {
+            state = ST_DEAD;
+        } else {
+            if (DstringToCard(StdDeck, *argv, &card) == 0)
+                return 1;
+            if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+                return 1;
+            // Vous devez définir une nouvelle StdDeck_CardMask pour le deuxième tableau, par exemple board2
+            if (*nboard2 >= gameParams->maxboard) // Vous devez également gérer un compteur pour le deuxième tableau, nboard2
+                return 1;
+            StdDeck_CardMask_SET(*board2, card); // Utiliser board2 pour le deuxième tableau
+            StdDeck_CardMask_SET(*dead, card);
+            (*nboard2)++;
+        }
+      }   
   }
+
   if (ncards > 0) {                             /* is a player pending? */
     if (ncards < gameParams->minpocket)         /* too few pocket cards */
       return 1;
@@ -257,9 +270,10 @@ int
 main(int argc, char **argv) {
   enum_game_t game;
   enum_sample_t enumType;
-  int niter = 0, npockets, nboard, err, terse, orderflag;
+  int niter = 0, npockets, nboard, nboard2, err, terse, orderflag;
   StdDeck_CardMask pockets[ENUM_MAXPLAYERS];
   StdDeck_CardMask board;
+  StdDeck_CardMask board2;
   StdDeck_CardMask dead;
   enum_result_t result;
   int fromStdin;
@@ -283,8 +297,8 @@ main(int argc, char **argv) {
       }
     }
     if (parseArgs(argc, argv, &game, &enumType, &niter,
-                  pockets, &board, &dead, &npockets, &nboard,
-                  &orderflag, &terse)) {
+                  pockets, &board, &board2, &dead, &npockets, &nboard, 
+                  &nboard2, &orderflag, &terse)) {
       if (fromStdin) {
         printf("ERROR\n");
       } else {

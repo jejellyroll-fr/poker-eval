@@ -118,7 +118,8 @@ typedef enum {
   enum_ordering_mode_none = 0,
   enum_ordering_mode_hi,
   enum_ordering_mode_lo,
-  enum_ordering_mode_hilo
+  enum_ordering_mode_hilo,
+  enum_ordering_mode_hihi
 } enum_ordering_mode_t;
 
 typedef struct {
