@@ -12,33 +12,73 @@ documentation of the PokerEval class in the pokereval.py file.
 
 Loic Dachary <loic@dachary.org>
 
-## WIP 2022-2023
+## Prerequisites
 
-update from Tzerjen Wei github https://github.com/tjwei
+### Windows
 
-rework makefiles for python3.8,  ...
+    Install Visual Studio (with C++ support).
+    Install CMake.
 
-work with python3.11 but this is bug to track (manually edit configure file: replace $PYTHON_VERSION per 3.11 in the dedicated code section )
+### macOS and Linux
 
-configure autoconf
-```sh
-autoconf
+    Install CMake via package manager (e.g., Homebrew on macOS, apt on Ubuntu).
+
+## Installation
+
+### Windows
+
+    Open a Command Prompt or PowerShell.
+
+    Navigate to the pypoker-eval project directory.
+
+    Create a build directory and navigate into it:
+
+bash
+
+```
+mkdir build
+cd build
 ```
 
-compiling for python3
-```sh
-./configure
+Generate project files with CMake (replace {your version} with your version of Visual Studio):
+
+bash
+
+```
+cmake .. -G "Visual Studio 17 2022"
+```
+
+Build the project:
+
+bash
+
+```
+cmake --build .
+```
+
+### macOS and Linux
+
+    Open a terminal.
+
+    Navigate to the pypoker-eval project directory.
+
+    Create a build directory and navigate into it:
+
+bash
+
+```
+mkdir build
+cd build
+```
+
+Generate the Makefiles and build the project:
+
+bash
+
+```
+cmake ..
 make
-sudo make install
 ```
-
-Some tips:
-
-The error message "gcc -shared .libs/_pokereval_3_8_la-pypokereval.o -L/home/jd/anaconda3/envs/pypoker-eval3.8/lib/python3.8/config-3.8-x86_64-linux-gnu -lpython3.8 -L/usr/local/lib /usr/local/lib/libpoker-eval.so -Wl,-soname -Wl,_pokereval_3_8.so.1 -o .libs/_pokereval_3_8.so.1.0.0 /usr/bin/ld: cannot find -lpython3.8: No such file or directory"  => think to install  install the development package exemple on ubuntu sudo apt-get install libpython3.8-dev
-
-
-
-
 
 
 

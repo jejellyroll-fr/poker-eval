@@ -1,12 +1,21 @@
 cmake_minimum_required(VERSION 3.10)
 project(PyPokerEvalBinding)
 
+
+# Obtenir le répertoire home de l'utilisateur sous Windows
+if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+    set(HOME_DIR $ENV{USERPROFILE})
+elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin" OR ${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    set(HOME_DIR $ENV{HOME})
+endif()
+
+
 # Détecter le système d'exploitation et définir les chemins pour Python 3.11
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     # Chemins pour Python 3.11 installé par Chocolatey sur Windows
-    set(Python3_EXECUTABLE "C:/Python311/python.exe")
-    set(Python3_LIBRARY "C:/Python311/libs/python311.lib")
-    set(Python3_INCLUDE_DIR "C:/Python311/include")
+    set(Python3_EXECUTABLE "${HOME_DIR}/AppData/Local/Programs/Python/Python311/python.exe")
+    set(Python3_LIBRARY "${HOME_DIR}/AppData/Local/Programs/Python/Python311/libs/python311.lib")
+    set(Python3_INCLUDE_DIR "${HOME_DIR}/AppData/Local/Programs/Python/Python311/include")
 elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
     # Sur macOS, Homebrew installe Python 3.11 dans /usr/local/opt/python@3.11
     set(Python3_EXECUTABLE "/usr/local/opt/python@3.11/bin/python3.11")
@@ -27,18 +36,18 @@ if(Python3_FOUND)
 
     # Chemin vers la bibliothèque poker-eval construite, adapté en fonction de l'OS
     if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-        include_directories("${CMAKE_SOURCE_DIR}/include")
-        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/poker-eval/poker_lib_static.lib")
+        include_directories("${HOME_DIR}/Documents/GitHub/poker-eval/include")
+        set(POKER_EVAL_LIB_PATH "${HOME_DIR}/Documents/GitHub/poker-eval//build/Debug/poker_lib_static.lib")
     elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         include_directories("${CMAKE_SOURCE_DIR}/include")
-        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/poker-eval/libpoker_lib_static.a")
+        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/libpoker_lib_static.a")
     elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
         include_directories("${CMAKE_SOURCE_DIR}/include")
-        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/poker-eval/libpoker_lib_static.a")
+        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/libpoker_lib_static.a")
     endif()
 
     # Incluez les en-têtes de poker-eval si vous les avez
-    include_directories("${CMAKE_SOURCE_DIR}/poker-eval/include")
+    include_directories("${HOME_DIR}/Documents/GitHub/poker-eval/include")
 
     # Définissez le module Python
     add_library(pypokereval MODULE pypokereval.c)
