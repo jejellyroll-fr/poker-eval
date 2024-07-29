@@ -111,7 +111,7 @@ main (int argc, char** argv)
     }
 
     p[sbuf.st_size] = 0;
-    printf(p, CARDS_DEALT);
+    printf("%s", p);
     free(p);
   }
   fclose(fp);
