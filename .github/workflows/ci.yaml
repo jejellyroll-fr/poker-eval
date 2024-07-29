@@ -126,11 +126,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-      
+
       - name: Download all artifacts
         uses: actions/download-artifact@v2
         with:
           path: artifacts
+
+      - name: List artifacts directory
+        run: ls -R ./artifacts
 
       - name: Create Release
         id: create_release
@@ -150,7 +153,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-linux-amd64/poker-eval-linux-amd64 
+          asset_path: ./artifacts/poker-eval-linux-amd64
           asset_name: poker-eval-linux-amd64
           asset_content_type: application/octet-stream
 
@@ -160,29 +163,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-linux-arm64/poker-eval-linux-arm64 
+          asset_path: ./artifacts/poker-eval-linux-arm64
           asset_name: poker-eval-linux-arm64
           asset_content_type: application/octet-stream
-  
+
       - name: Upload Release Asset (Windows)
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-windows-amd64/poker-eval-windows-amd64.exe 
+          asset_path: ./artifacts/poker-eval-windows-amd64
           asset_name: poker-eval-windows-amd64
           asset_content_type: application/octet-stream
-  
+
       - name: Upload Release Asset (MacOS)
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-darwin-amd64/poker-eval-darwin-amd64 
+          asset_path: ./artifacts/poker-eval-darwin-amd64
           asset_name: poker-eval-darwin-amd64
           asset_content_type: application/octet-stream
-
-      - name: List artifacts directory
-        run: ls -R ./artifacts
