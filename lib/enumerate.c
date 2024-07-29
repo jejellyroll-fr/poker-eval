@@ -128,16 +128,16 @@ static enum_gameparams_t enum_gameparams[] = {
       /* now award pot fractions to winning hands */			\
       if (bestlo != LowHandVal_NOTHING &&				\
           besthi != HandVal_NOTHING) {					\
-        hipot = 0.5 / hishare;						\
-        lopot = 0.5 / loshare;						\
+        hipot = (hishare != 0) ? 0.5 / hishare : 0;			\
+        lopot = (loshare != 0) ? 0.5 / loshare : 0;			\
       } else if (bestlo == LowHandVal_NOTHING &&			\
                  besthi != HandVal_NOTHING) {				\
-        hipot = 1.0 / hishare;						\
+        hipot = (hishare != 0) ? 1.0 / hishare : 0;			\
         lopot = 0;							\
       } else if (bestlo != LowHandVal_NOTHING &&			\
                  besthi == HandVal_NOTHING) {				\
         hipot = 0;							\
-        lopot = 1.0 / loshare;						\
+        lopot = (loshare != 0) ? 1.0 / loshare : 0;			\
       } else {								\
         hipot = lopot = 0;						\
       }									\
@@ -197,6 +197,7 @@ static enum_gameparams_t enum_gameparams[] = {
       }									\
       result->nsamples++;						\
     } while (0);
+
 
 #define INNER_LOOP_HOLDEM						\
   INNER_LOOP({								\
