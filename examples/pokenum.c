@@ -67,6 +67,7 @@ Examples:
 $ pokenum -h Ac 7c - 5s 4s - Ks Kd
 $ pokenum -h Ac 7c 5s 4s Ks Kd
 $ pokenum -h Ac 7c 5s 4s Ks Kd -- 7h 2c 3h
+$ pokenum -sd Ac 7c - 5s 4s - Ks Kd
 
 $ pokenum -o As Kh Qs Jh - 8h 8d 7h 6d
 $ pokenum -o As Kh Qs Jh 8h 8d 7h 6d
@@ -78,13 +79,13 @@ $ pokenum -mc 1000000 -o6 As Kh Qs Jh Ts 9d - 8h 8d 7h 6d 9c 6c
 $ pokenum -7s As Ah Ts Th 8h 8d - Kc Qc Jc Td 3c 2d
 $ pokenum -7s As Ah Ts Th 8h 8d - Kc Qc Jc Td 3c 2d / 5c 6c 2s Jh
 
-$ pokenum -l 7h 5s 3d Xx / Kd - 9s 8h 6d 4c / 8c
-$ pokenum -l27 5h 4h 3h 2h / 5s - 9s 8h 6d 4c / Kd
-$ pokenum -mc 10000 -l27 5h 4h 3h / 5s Qd - 9s 8h 6d / Ks Kh
+$ pokenum -l 7h 5s 3d Xx - 9s 8h 6d 4c / 8c Kd
+$ pokenum -l27 5h 4h 3h 2h - 9s 8h 6d 4c / Kd 5s
+$ pokenum -mc 10000 -l27 5h 4h 3h - 9s 8h 6d / Ks Kh 5s Qd
 
    Michael Maurer, Apr 2002
+   modified by jejellyroll
 */
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -97,12 +98,9 @@ static int
 parseArgs(int argc, char **argv,
           enum_game_t *game, enum_sample_t *enumType, int *niter,
           StdDeck_CardMask pockets[], StdDeck_CardMask *board,
-          StdDeck_CardMask *board2, StdDeck_CardMask *dead, // Ajout d'un second tableau 'board2'
-          int *npockets, int *nboard, int *nboard2, // Ajout d'un compteur pour le second tableau 'nboard2'
+          StdDeck_CardMask *board2, StdDeck_CardMask *dead,
+          int *npockets, int *nboard, int *nboard2,
           int *orderflag, int *terse) {
-  /* we have a type problem: we define the masks here as
-     StdDeck_CardMask, which makes it impossible to hold jokers.
-     we need to redesign some of the deck typing to make this work... */
   enum_gameparams_t *gameParams = enumGameParams(game_holdem);
   enum { ST_OPTIONS, ST_POCKET, ST_BOARD, ST_BOARD2, ST_DEAD } state; 
   int ncards;
@@ -110,15 +108,17 @@ parseArgs(int argc, char **argv,
   int i;
 
   state = ST_OPTIONS;
-  *npockets = *nboard = ncards = 0;
+  *npockets = *nboard = *nboard2 = ncards = 0;
   *terse = 0;
   *orderflag = 0;
   *game = game_holdem;
   *enumType = ENUM_EXHAUSTIVE;
   StdDeck_CardMask_RESET(*dead);
   StdDeck_CardMask_RESET(*board);
+  StdDeck_CardMask_RESET(*board2);
   for (i=0; i<ENUM_MAXPLAYERS; i++)
     StdDeck_CardMask_RESET(pockets[i]);
+
   while (++argv, --argc) {
     if (state == ST_OPTIONS) {
       if (argv[0][0] != '-') {
@@ -132,7 +132,7 @@ parseArgs(int argc, char **argv,
           *niter = strtol(argv[1], NULL, 0);
           if (*niter <= 0 || errno != 0)
             return 1;
-          argv++; argc--;                       /* put card back in list */
+          argv++; argc--;
         } else if (strcmp(*argv, "-t") == 0) {
           *terse = 1;
         } else if (strcmp(*argv, "-O") == 0) {
@@ -172,93 +172,138 @@ parseArgs(int argc, char **argv,
         } else if (strcmp(*argv, "-sd") == 0) {
           *game = game_sdholdem;
         } else if (strcmp(*argv, "-dh") == 0) {
-            *game = game_doubleflop_holdem;
-        } else {                                /* unknown option switch */
+          *game = game_doubleflop_holdem;
+        } else {
           return 1;
         }
         if ((gameParams = enumGameParams(*game)) == NULL)
           return 1;
       }
-      
     } else if (state == ST_POCKET) {
-      if (strcmp(*argv, "-") == 0) {            /* player delimiter */
-        if (ncards > 0) {                       /* is a player pending? */
-          if (ncards < gameParams->minpocket)   /* too few pocket cards */
+      if (strcmp(*argv, "-") == 0) {
+        if (ncards > 0) {
+          if (ncards < gameParams->minpocket)
             return 1;
           (*npockets)++;
           ncards = 0;
         }
         state = ST_POCKET;
-      } else if (strcmp(*argv, "--") == 0) {    /* board prefix */
+      } else if (strcmp(*argv, "--") == 0) {
         state = ST_BOARD;
-      } else if (strcmp(*argv, "/") == 0) {     /* dead card prefix */
-        state = ST_DEAD;
+      } else if (strcmp(*argv, "/") == 0 || strstr(*argv, "/") != NULL) {
+        char *lastSlash = strrchr(*argv, '/');
+        if (lastSlash != NULL && *(lastSlash + 1) == '\0') {
+          state = ST_DEAD;
+        } else {
+          char *cardStr = lastSlash ? lastSlash + 1 : *argv;
+          if (DstringToCard(StdDeck, cardStr, &card) == 0)
+            return 1;
+          if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+            return 1;
+          StdDeck_CardMask_SET(pockets[*npockets], card);
+          StdDeck_CardMask_SET(*dead, card);
+          ncards++;
+          if (ncards == gameParams->maxpocket) {
+            (*npockets)++;
+            ncards = 0;
+          }
+        }
       } else {
-        if (*npockets >= ENUM_MAXPLAYERS)           /* too many players */
+        if (*npockets >= ENUM_MAXPLAYERS)
           return 1;
-        if (DstringToCard(StdDeck, *argv, &card) == 0) /* parse error */
+        if (DstringToCard(StdDeck, *argv, &card) == 0)
           return 1;
-        if (StdDeck_CardMask_CARD_IS_SET(*dead, card)) /* card already seen */
+        if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
           return 1;
         StdDeck_CardMask_SET(pockets[*npockets], card);
         StdDeck_CardMask_SET(*dead, card);
         ncards++;
-        if (ncards == gameParams->maxpocket) {  /* implicit player delimiter */
+        if (ncards == gameParams->maxpocket) {
           (*npockets)++;
           ncards = 0;
         }
       }
-      
     } else if (state == ST_BOARD) {
-        if (strcmp(*argv, "---") == 0) {  // Nouveau séparateur pour le deuxième tableau
-            if (*game == game_doubleflop_holdem) {
-                if (*nboard < gameParams->maxboard) {
-                    state = ST_BOARD2; // Passer à l'état pour traiter le deuxième tableau
-                } else {
-                    return 1; // Erreur si trop de cartes dans le premier tableau
-                }
-            } else {
-                return 1; // Erreur si le séparateur du deuxième tableau est utilisé pour un autre jeu
-            }
-        } else if (strcmp(*argv, "/") == 0) {
-            state = ST_DEAD;
+      if (strcmp(*argv, "---") == 0) {
+        if (*game == game_doubleflop_holdem) {
+          if (*nboard < gameParams->maxboard) {
+            state = ST_BOARD2;
+          } else {
+            return 1;
+          }
         } else {
-            if (DstringToCard(StdDeck, *argv, &card) == 0)
-                return 1;
-            if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
-                return 1;
-            if (*nboard >= gameParams->maxboard)
-                return 1;
-            StdDeck_CardMask_SET(*board, card);
-            StdDeck_CardMask_SET(*dead, card);
-            (*nboard)++;
+          return 1;
         }
-
-    } else if (state == ST_BOARD2) { // Nouvel état pour traiter le deuxième tableau
-        if (strcmp(*argv, "/") == 0) {
-            state = ST_DEAD;
+      } else if (strcmp(*argv, "/") == 0 || strstr(*argv, "/") != NULL) {
+        char *lastSlash = strrchr(*argv, '/');
+        if (lastSlash != NULL && *(lastSlash + 1) == '\0') {
+          state = ST_DEAD;
         } else {
-            if (DstringToCard(StdDeck, *argv, &card) == 0)
-                return 1;
-            if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
-                return 1;
-            // Vous devez définir une nouvelle StdDeck_CardMask pour le deuxième tableau, par exemple board2
-            if (*nboard2 >= gameParams->maxboard) // Vous devez également gérer un compteur pour le deuxième tableau, nboard2
-                return 1;
-            StdDeck_CardMask_SET(*board2, card); // Utiliser board2 pour le deuxième tableau
-            StdDeck_CardMask_SET(*dead, card);
-            (*nboard2)++;
+          char *cardStr = lastSlash ? lastSlash + 1 : *argv;
+          if (DstringToCard(StdDeck, cardStr, &card) == 0)
+            return 1;
+          if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+            return 1;
+          if (*nboard >= gameParams->maxboard)
+            return 1;
+          StdDeck_CardMask_SET(*board, card);
+          StdDeck_CardMask_SET(*dead, card);
+          (*nboard)++;
         }
-      }   
+      } else {
+        if (DstringToCard(StdDeck, *argv, &card) == 0)
+          return 1;
+        if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+          return 1;
+        if (*nboard >= gameParams->maxboard)
+          return 1;
+        StdDeck_CardMask_SET(*board, card);
+        StdDeck_CardMask_SET(*dead, card);
+        (*nboard)++;
+      }
+    } else if (state == ST_BOARD2) {
+      if (strcmp(*argv, "/") == 0 || strstr(*argv, "/") != NULL) {
+        char *lastSlash = strrchr(*argv, '/');
+        if (lastSlash != NULL && *(lastSlash + 1) == '\0') {
+          state = ST_DEAD;
+        } else {
+          char *cardStr = lastSlash ? lastSlash + 1 : *argv;
+          if (DstringToCard(StdDeck, cardStr, &card) == 0)
+            return 1;
+          if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+            return 1;
+          if (*nboard2 >= gameParams->maxboard)
+            return 1;
+          StdDeck_CardMask_SET(*board2, card);
+          StdDeck_CardMask_SET(*dead, card);
+          (*nboard2)++;
+        }
+      } else {
+        if (DstringToCard(StdDeck, *argv, &card) == 0)
+          return 1;
+        if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+          return 1;
+        if (*nboard2 >= gameParams->maxboard)
+          return 1;
+        StdDeck_CardMask_SET(*board2, card);
+        StdDeck_CardMask_SET(*dead, card);
+        (*nboard2)++;
+      }
+    } else if (state == ST_DEAD) {
+      if (DstringToCard(StdDeck, *argv, &card) == 0)
+        return 1;
+      if (StdDeck_CardMask_CARD_IS_SET(*dead, card))
+        return 1;
+      StdDeck_CardMask_SET(*dead, card);
+    }
   }
 
-  if (ncards > 0) {                             /* is a player pending? */
-    if (ncards < gameParams->minpocket)         /* too few pocket cards */
+  if (ncards > 0) {
+    if (ncards < gameParams->minpocket)
       return 1;
     (*npockets)++;
-    ncards = 0;
   }
-  if (*npockets == 0)                           /* no players seen */
+  if (*npockets == 0)
     return 1;
   return 0;
 }
