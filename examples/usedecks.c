@@ -52,7 +52,8 @@ testStdDeck(const char *handstr) {
   printf("\nStandard Deck: %s\n", handstr);
   StdDeck_CardMask_RESET(cards);
   strcpy(str, handstr);strncpy(str, handstr, sizeof(str) - 1);
-  str[sizeof(str) - 1] = '\0';  p = strtok(str, " ");
+  str[sizeof(str) - 1] = '\0';
+  p = strtok(str, " ");
   do {
     if (DstringToCard(StdDeck, p, &c) == 0)
       goto error;
@@ -106,7 +107,8 @@ testJokerDeck(const char *handstr) {
 
   printf("\nJoker Deck: %s\n", handstr);
   JokerDeck_CardMask_RESET(cards);
-  strcpy(str, handstr);
+  strncpy(str, handstr, sizeof(str) - 1);
+  str[sizeof(str) - 1] = '\0'; 
   p = strtok(str, " ");
   do {
     if (JokerDeck.stringToCard(p, &c) == 0)
