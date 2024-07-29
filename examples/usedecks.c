@@ -51,8 +51,8 @@ testStdDeck(const char *handstr) {
 
   printf("\nStandard Deck: %s\n", handstr);
   StdDeck_CardMask_RESET(cards);
-  strcpy(str, handstr);
-  p = strtok(str, " ");
+  strcpy(str, handstr);strncpy(str, handstr, sizeof(str) - 1);
+  str[sizeof(str) - 1] = '\0';  p = strtok(str, " ");
   do {
     if (DstringToCard(StdDeck, p, &c) == 0)
       goto error;
