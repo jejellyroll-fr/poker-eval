@@ -135,6 +135,18 @@ jobs:
       - name: List artifacts directory
         run: ls -R ./artifacts
 
+      - name: Compress Linux AMD64 artifacts
+        run: zip -r ./artifacts/poker-eval-linux-amd64.zip ./artifacts/poker-eval-linux-amd64
+
+      - name: Compress ARM64 artifacts
+        run: zip -r ./artifacts/poker-eval-linux-arm64.zip ./artifacts/poker-eval-linux-arm64
+
+      - name: Compress Windows artifacts
+        run: zip -r ./artifacts/poker-eval-windows-amd64.zip ./artifacts/poker-eval-windows-amd64
+
+      - name: Compress MacOS artifacts
+        run: zip -r ./artifacts/poker-eval-darwin-amd64.zip ./artifacts/poker-eval-darwin-amd64
+
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -153,9 +165,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-linux-amd64
-          asset_name: poker-eval-linux-amd64
-          asset_content_type: application/octet-stream
+          asset_path: ./artifacts/poker-eval-linux-amd64.zip
+          asset_name: poker-eval-linux-amd64.zip
+          asset_content_type: application/zip
 
       - name: Upload Release Asset (ARM64)
         uses: actions/upload-release-asset@v1
@@ -163,9 +175,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-linux-arm64
-          asset_name: poker-eval-linux-arm64
-          asset_content_type: application/octet-stream
+          asset_path: ./artifacts/poker-eval-linux-arm64.zip
+          asset_name: poker-eval-linux-arm64.zip
+          asset_content_type: application/zip
 
       - name: Upload Release Asset (Windows)
         uses: actions/upload-release-asset@v1
@@ -173,9 +185,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-windows-amd64
-          asset_name: poker-eval-windows-amd64
-          asset_content_type: application/octet-stream
+          asset_path: ./artifacts/poker-eval-windows-amd64.zip
+          asset_name: poker-eval-windows-amd64.zip
+          asset_content_type: application/zip
 
       - name: Upload Release Asset (MacOS)
         uses: actions/upload-release-asset@v1
@@ -183,6 +195,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/poker-eval-darwin-amd64
-          asset_name: poker-eval-darwin-amd64
-          asset_content_type: application/octet-stream
+          asset_path: ./artifacts/poker-eval-darwin-amd64.zip
+          asset_name: poker-eval-darwin-amd64.zip
+          asset_content_type: application/zip
