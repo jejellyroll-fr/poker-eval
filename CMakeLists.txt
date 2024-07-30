@@ -1,35 +1,38 @@
 cmake_minimum_required(VERSION 3.10)
 project(poker_eval)
 
-# Désactiver les avertissements pour les fonctions non sécurisées
+# Disable warnings for non-secure functions
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
-# Spécifier la version C standard
+# Specify the standard C version
 set(CMAKE_C_STANDARD 99)
 
-# Inclure les répertoires des en-têtes
-include_directories(include)
+# Include header directories
+include_directories(include inlines)  # 
 
-# Option pour choisir le mode de compilation
+#  Option to choose the compilation mode
 option(USE_FIVE_CARDS "Compile with five cards dealt" ON)
 
-# Compiler les bibliothèques poker_lib (partagée et statique)
+# Compile the poker_lib libraries (shared and static)
 file(GLOB_RECURSE LIB_SOURCES "lib/*.c")
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*mktab_.*|.*evx_generate.*|.*evx_gen[57].c$")
 
-# Bibliothèque partagée avec -fPIC pour la position indépendante du code
+# Add Card.c and CardConverter.c to the list of sources
+list(APPEND LIB_SOURCES "lib/Card.c" "lib/CardConverter.c" "lib/HoldemAgnosticHand.c")
+
+# Library shared with -fPIC for code-independent positioning
 add_library(poker_lib SHARED ${LIB_SOURCES})
 target_compile_options(poker_lib PRIVATE -fPIC)
 
-# Bibliothèque statique
+# Static library
 add_library(poker_lib_static STATIC ${LIB_SOURCES})
 
-# Installation des bibliothèques
+# Installing libraries
 install(TARGETS poker_lib poker_lib_static
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 
-# Définitions pour la bibliothèque partagée et statique
+# Definitions for the shared and static library
 foreach(lib poker_lib poker_lib_static)
     if(USE_FIVE_CARDS)
         target_compile_definitions(${lib} PRIVATE CARDS_DEALT=5)
@@ -38,49 +41,64 @@ foreach(lib poker_lib poker_lib_static)
     endif()
 endforeach()
 
-# Compiler les exemples en les liant avec la bibliothèque poker_lib statique
+# Compile the examples by linking them with the static poker_lib library
 set(EXAMPLES eval fish hcmp2 hcmpn pokenum seven_card_hands usedecks)
 foreach(example ${EXAMPLES})
-    add_executable("example_${example}" "examples/${example}.c")
-    # Lien avec la bibliothèque statique
+    add_executable("${example}" "examples/${example}.c")
+    # Link with the static library
     target_link_libraries("example_${example}" poker_lib_static)
-    # Installation des exécutables
-    install(TARGETS "example_${example}" 
+    # Installing executables
+    install(TARGETS "${example}" 
             RUNTIME DESTINATION bin
             CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
-# Compiler les outils de génération de tables comme exécutables distincts
+# Compile table generation tools as separate executables
 set(MKTAB_TOOLS astud basic evx joker lowball packed short)
 foreach(tool ${MKTAB_TOOLS})
     add_executable("mktab_${tool}" "lib/mktab_${tool}.c")
-    # Lien avec la bibliothèque statique
+    # Link with the static library
     target_link_libraries("mktab_${tool}" poker_lib_static)
-    # Installation des outils de génération de tables
+    # Installation of table generation tools
     install(TARGETS "mktab_${tool}" 
             RUNTIME DESTINATION bin
             CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
-# Assurez-vous que les fichiers evx_gen5.c et evx_gen7.c sont présents et nécessaires avant de les ajouter comme exécutables
-# Si les fichiers evx_gen5.c et evx_gen7.c sont nécessaires et présents, décommentez les lignes suivantes et assurez-vous que les chemins d'accès sont corrects
+# Make sure that the evx_gen5.c and evx_gen7.c files are present and required before adding them as executables.
+# If the evx_gen5.c and evx_gen7.c files are required and present, uncomment the following lines and ensure that the paths are correct
 # add_executable(evx_gen5 lib/evx_gen5.c)
 # target_link_libraries(evx_gen5 poker_lib_static)
 # add_executable(evx_gen7 lib/evx_gen7.c)
 # target_link_libraries(evx_gen7 poker_lib_static)
 
-# Compiler evx_gen en tant qu'exécutable distinct, si le fichier existe
+# Compile evx_gen as a separate executable, if the file exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/evx_generate.c")
     add_executable(evx_gen "lib/evx_generate.c")
-    # Lien avec la bibliothèque statique
+    # Link with the static library
     target_link_libraries(evx_gen poker_lib_static)
     if(USE_FIVE_CARDS)
         target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=5)
     else()
         target_compile_definitions(evx_gen PRIVATE CARDS_DEALT=7)
     endif()
-    # Installation de evx_gen
+    # Installing evx_gen
     install(TARGETS evx_gen 
             RUNTIME DESTINATION bin
             CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endif()
+
+# Compiling a test executable 
+add_executable(test_card tests/test_card.c)
+target_link_libraries(test_card poker_lib_static)
+
+add_executable(test_cardconverter tests/test_cardconverter.c)
+target_link_libraries(test_cardconverter poker_lib_static)
+
+add_executable(test_handagnostichand tests/test_handagnostichand.c)
+target_link_libraries(test_handagnostichand poker_lib_static)
+
+# Installing test executables
+install(TARGETS test_card test_cardconverter test_handagnostichand
+        RUNTIME DESTINATION bin
+        CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)

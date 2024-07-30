@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2013 Atin Malaviya
+// Copyright (c) 2009 James Devlin
 //
 // DISCLAIMER OF WARRANTY
 //
@@ -15,20 +15,49 @@
 // this source code may be used, no warranty of fitness for a particular purpose
 // is offered. The user is advised to test the source code thoroughly before 
 // relying on it. The user must assume the entire risk of using the source code.
+// 
+//       rewrite in c by jejellyroll
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-#pragma once
+#ifndef CARD_H
+#define CARD_H
 
-#include <cstdint>
-#include <cstring>
-#include <list>
-#include <vector>
-#include <algorithm>
-#include <cassert>
-using namespace std;
+enum Rank {
+    UnknownRank = -1,
+    Two = 0,
+    Three,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Nine,
+    Ten,
+    Jack,
+    Queen,
+    King,
+    Ace = 12
+};
 
-#ifndef NDEBUG
-#define TRACE(...) do { printf(__VA_ARGS__); } while (0)
-#define ASSERT assert
-#endif
+enum Suit {
+    UnknownSuit = -1,
+    Hearts,
+    Diamonds,
+    Clubs,
+    Spades
+};
+
+typedef struct {
+    const char* rankChars;
+    const char* suitChars;
+} Card;
+
+void Card_init(Card* card);
+void Card_destroy(Card* card);
+int CharToRank(const char c);
+int CharToSuit(const char s);
+char RankToChar(int rank);
+char SuitToChar(int suit);
+
+#endif // CARD_H
