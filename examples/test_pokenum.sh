@@ -17,9 +17,9 @@ OS=$(detect_os)
 
 # Définition de la commande pokenum en fonction de l'OS
 if [ "$OS" = "Windows" ]; then
-    POKENUM="../build/Debug/example_pokenum.exe"
+    POKENUM="../build/Debug/pokenum.exe"
 else
-    POKENUM="../build/Debug/pokenum"
+    POKENUM="../build/pokenum"
 fi
 
 echo "Detected OS: $OS"

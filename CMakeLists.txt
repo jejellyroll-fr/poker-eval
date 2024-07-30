@@ -46,7 +46,7 @@ set(EXAMPLES eval fish hcmp2 hcmpn pokenum seven_card_hands usedecks)
 foreach(example ${EXAMPLES})
     add_executable("${example}" "examples/${example}.c")
     # Link with the static library
-    target_link_libraries("example_${example}" poker_lib_static)
+    target_link_libraries("${example}" poker_lib_static)
     # Installing executables
     install(TARGETS "${example}" 
             RUNTIME DESTINATION bin
