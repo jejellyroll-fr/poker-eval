@@ -8,9 +8,9 @@ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 set(CMAKE_C_STANDARD 99)
 
 # Include header directories
-include_directories(include inlines)  # 
+include_directories(include inlines)
 
-#  Option to choose the compilation mode
+# Option to choose the compilation mode
 option(USE_FIVE_CARDS "Compile with five cards dealt" ON)
 
 # Compile the poker_lib libraries (shared and static)
@@ -23,6 +23,9 @@ list(APPEND LIB_SOURCES "lib/Card.c" "lib/CardConverter.c" "lib/HoldemAgnosticHa
 # Library shared with -fPIC for code-independent positioning
 add_library(poker_lib SHARED ${LIB_SOURCES})
 target_compile_options(poker_lib PRIVATE -fPIC)
+
+# add def for shared lib
+target_compile_definitions(poker_lib PRIVATE POKERVAL_DLL POKEREVAL_LIBRARY)
 
 # Static library
 add_library(poker_lib_static STATIC ${LIB_SOURCES})
@@ -88,7 +91,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/evx_generate.c")
             CONFIGURATIONS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-# Compiling a test executable 
+# Compiling test executables
 add_executable(test_card tests/test_card.c)
 target_link_libraries(test_card poker_lib_static)
 
