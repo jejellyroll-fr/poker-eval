@@ -71,7 +71,15 @@ jobs:
         run: choco install cmake -y
 
       - name: Install Visual Studio Build Tools
-        run: choco install visualstudio2022buildtools -y --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+        run: |
+          choco install visualstudio2022buildtools -y --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+          $LASTEXITCODE = $?
+          if ($LASTEXITCODE -eq 3010) {
+            Write-Host "Reboot is required, continuing without reboot."
+          } elseif ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
 
       - name: Configure and Build with CMake
         run: |
