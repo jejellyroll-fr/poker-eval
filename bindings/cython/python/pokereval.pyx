@@ -2,6 +2,8 @@
 from libc.stdlib cimport rand, srand
 from time import time
 from libc.string cimport memcpy
+from libc.stdlib cimport malloc, free
+from libc.string cimport memset
 
 from itertools import combinations
 
@@ -40,8 +42,12 @@ cdef bint is_seed_initialized = False
 
 # Définition de la classe PokerEval
 cdef class PokerEval:
+
+    cdef list available_cards
+
     def __cinit__(self):
-        pass
+        # Initialiser la liste des cartes disponibles
+        self.available_cards = [i for i in range(StdDeck_N_CARDS)]
 
     def string2card(self, cards):
         """Convertit une chaîne de caractères représentant une carte en son entier numérique."""
@@ -94,22 +100,39 @@ cdef class PokerEval:
 
     def best_hand(self, game, side, hand, board=None):
         """Retourne la meilleure main en termes de cartes (combinaison)."""
+        # Liste des jeux supportés
+        supported_games = ["holdem", "omaha", "omaha8", "7stud", "7stud8", "razz", "lowball", "ace_to_five_lowball"]
+        
+        # Vérification du jeu supporté
+        if game not in supported_games:
+            raise ValueError(f"Jeu non supporté : {game}")
+
         if board is None:
             board = []
-        if len(hand) + len(board) < 5:
-            return False
 
-        # S'assurer que hand et board sont bien des listes
+        # Vérification que hand et board sont des listes
         if not isinstance(hand, list) or not isinstance(board, list):
-            raise TypeError("Hand and board must be lists.")
+            raise TypeError("Les mains et le tableau doivent être des listes.")
 
+        # Vérification du nombre de cartes minimum
+        if len(hand) + len(board) < 5:
+            raise ValueError("Il faut au moins 5 cartes pour évaluer une main (combinaison de hand et board).")
+
+        # Créer la structure pour stocker le résultat
         cdef EvalResult result
+
+        # Utiliser la méthode spécifique pour Omaha si nécessaire
         if game in ["omaha", "omaha8"]:
+            if len(hand) != 4:
+                raise ValueError(f"Omaha nécessite exactement 4 cartes en main, mais {len(hand)} ont été fournies.")
             result = self.eval_omaha_hand_cdef(game, side, hand, board)
         else:
+            # Sinon, utiliser la méthode d'évaluation exhaustive pour les autres jeux
             result = self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
+        # Retourner les détails de la main
         return self._get_hand_details(result.handval, &result.combined_mask, include_description=False)
+
 
     def best_hand_value(self, game, side, hand, board=None):
         """Retourne la valeur numérique de la meilleure main."""
@@ -132,13 +155,30 @@ cdef class PokerEval:
 
     cdef EvalResult eval_hand_cdef(self, str game, str side, list hand, list board):
         """Évalue une main spécifique et retourne les résultats dans une structure C."""
+        
+        # Vérification du nombre de cartes en fonction du jeu
+        if game == "holdem" and len(hand) != 2:
+            raise ValueError(f"Hold'em nécessite exactement 2 cartes en main, mais {len(hand)} ont été fournies.")
+        if game in ["omaha", "omaha8"] and len(hand) != 4:
+            raise ValueError(f"Omaha nécessite exactement 4 cartes en main, mais {len(hand)} ont été fournies.")
+        if game in ["7stud", "7stud8", "razz"] and len(hand) != 7:
+            raise ValueError(f"{game} nécessite exactement 7 cartes en main, mais {len(hand)} ont été fournies.")
+        if game in ["lowball", "ace_to_five_lowball"] and len(hand) != 5:
+            raise ValueError(f"{game} nécessite exactement 5 cartes en main, mais {len(hand)} ont été fournies.")
+
+        # Si le jeu est Omaha ou Omaha Hi/Lo, évaluer avec la méthode spécifique pour Omaha
         if game in ["omaha", "omaha8"]:
             return self.eval_omaha_hand_cdef(game, side, hand, board)
         else:
             return self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
+
     cdef EvalResult eval_best_hand_exhaustive_cdef(self, str game, str side, list hand, list board):
         """Évalue la meilleure main de cinq cartes pour les jeux non-Omaha en utilisant une recherche exhaustive."""
+        
+        # Vérifier que la somme de la main et du tableau fait au moins 5 cartes
+        if len(hand) + len(board) < 5:
+            raise ValueError(f"Le jeu {game} nécessite au moins 5 cartes, mais {len(hand)} en main et {len(board)} sur le tableau ont été fournies.")
         
         cdef list all_cards = hand + board
         cdef HandVal best_val
@@ -151,7 +191,7 @@ cdef class PokerEval:
         if side == 'hi':
             best_val = 0
         elif side == 'low':
-            best_val = 0xFFFFFFFF  # On initialise à la plus haute valeur pour minimiser ensuite.
+            best_val = 0xFFFFFFFF  
 
         # Générer toutes les combinaisons possibles de cinq cartes
         for combo in combinations(all_cards, 5):
@@ -186,8 +226,6 @@ cdef class PokerEval:
         return result
 
 
-
-
     cdef EvalResult eval_omaha_hand_cdef(self, str game, str side, list hand, list board):
         """Évalue une main Omaha spécifique et retourne les résultats dans une structure C."""
         cdef EvalResult result
@@ -195,7 +233,7 @@ cdef class PokerEval:
         cdef list hole_cards = []
         cdef list board_cards = []
         cdef HandVal best_hi = 0
-        cdef LowHandVal best_lo = 0xFFFFFFFF  # Valeur maximale pour la main basse
+        cdef LowHandVal best_lo = 0xFFFFFFFF 
         cdef HandVal hi_val
         cdef LowHandVal lo_val
         cdef StdDeck_CardMask best_hi_mask, best_lo_mask, hand_mask, board_mask, combined_mask
@@ -212,7 +250,7 @@ cdef class PokerEval:
             if card_num != 255:
                 hole_cards.append(card_num)
         if len(hole_cards) != 4:
-            raise ValueError("Omaha nécessite exactement 4 cartes en main.")
+            raise ValueError(f"Omaha nécessite exactement 4 cartes en main, mais {len(hole_cards)} ont été fournies.")
 
         # Préparer les cartes du board (exactement 5 cartes sur le board)
         for card in board:
@@ -223,7 +261,7 @@ cdef class PokerEval:
             if card_num != 255:
                 board_cards.append(card_num)
         if len(board_cards) != 5:
-            raise ValueError("Omaha nécessite exactement 5 cartes sur le board.")
+            raise ValueError(f"Omaha nécessite exactement 5 cartes sur le board, mais {len(board_cards)} ont été fournies.")
 
         # Générer les combinaisons de cartes de la main (2 cartes)
         cdef list hole_combinations = []
@@ -265,7 +303,6 @@ cdef class PokerEval:
                         best_lo = lo_val
                         memcpy(&best_lo_mask, &combined_mask, sizeof(StdDeck_CardMask))
 
-
         if side == 'hi':
             result.handval = best_hi
             result.combined_mask = best_hi_mask
@@ -280,20 +317,46 @@ cdef class PokerEval:
     def eval_hand(self, game, side, hand, board):
         """Évalue une main spécifique et retourne les résultats sous forme de liste Python."""
         cdef EvalResult result = self.eval_hand_cdef(game, side, hand, board)
-        hand_details = self._get_hand_details(result.handval, &result.combined_mask, include_description=True, low=(side == 'low'))
+        cdef list hand_details = self._get_hand_details(result.handval, &result.combined_mask, include_description=True, low=(side == 'low'))
         return [result.handval, hand_details]
 
     cdef list _get_hand_details(self, HandVal handval, StdDeck_CardMask* hand_mask, bint include_description=True, bint low=False):
         """Récupère les détails de la main pour l'affichage."""
-        cdef list all_cards = self.card2string(self._cardmask_to_list(hand_mask))
-        cdef str hand_description = self.hand_type(handval)
-        # Tri des cartes pour extraire les 5 meilleures
-        cdef list sorted_cards = sorted(all_cards, key=lambda card: self._string2card(card), reverse=not low)
+        
+        # Déclaration des variables 
+        cdef list all_cards = self._cardmask_to_list(hand_mask) 
+        cdef int j, k, temp
+        cdef list sorted_cards = []
+        cdef str description
+
+        if low:
+            # Trier les cartes par ordre croissant
+            for j in range(len(all_cards) - 1):
+                for k in range(j + 1, len(all_cards)):
+                    if all_cards[j] > all_cards[k]:
+                        temp = all_cards[j]
+                        all_cards[j] = all_cards[k]
+                        all_cards[k] = temp
+        else:
+            # Trier les cartes par ordre décroissant
+            for j in range(len(all_cards) - 1):
+                for k in range(j + 1, len(all_cards)):
+                    if all_cards[j] < all_cards[k]:
+                        temp = all_cards[j]
+                        all_cards[j] = all_cards[k]
+                        all_cards[k] = temp
+
+        # Extraire les 5 meilleures cartes après tri
+        for j in range(min(5, len(all_cards))):
+            sorted_cards.append(self.card2string(all_cards[j]))
 
         if include_description:
-            return [hand_description] + sorted_cards[:5]
+            description = self.hand_type(handval) 
+            return [description] + sorted_cards
         else:
-            return sorted_cards[:5]
+            return sorted_cards
+
+
 
     cdef list _cardmask_to_list(self, StdDeck_CardMask* mask):
         """Convertit un StdDeck_CardMask en une liste de cartes."""
@@ -304,7 +367,7 @@ cdef class PokerEval:
                 cards.append(i)
         return cards
 
-    cdef str hand_type(self, HandVal handval):
+    def hand_type(self, HandVal handval):
         """Décrit la force d'une main."""
         hand_types = {
             0: "Nothing",
@@ -320,112 +383,333 @@ cdef class PokerEval:
         }
         return hand_types.get(handval >> 26, "Unknown")
 
-    def poker_eval(self, game, pockets, board=None, dead=None, iterations=0):
+    cpdef dict poker_eval(self, game, pockets, board=None, dead=None, int iterations=0, bint return_distributed=False):
         """Évalue l'état du jeu de poker basé sur différentes variantes et calcule l'EV."""
-        if game not in ["holdem", "holdem8", "omaha", "omaha8", "7stud", "7stud8", "razz"]:
-            raise ValueError(f"Unsupported game type: {game}")
+        
+        # Vérifier le type de jeu
+        if game not in ["holdem", "holdem8", "omaha", "omaha8", "7stud", "7stud8", "razz", "lowball", "ace_to_five_lowball"]:
+            raise ValueError(f"Type de jeu non supporté : {game}")
 
         if board is None:
             board = []
         if dead is None:
             dead = []
 
-        # Remplissage des poches pour Monte Carlo, si nécessaire
-        filled_pockets = self.fill_pockets(pockets) if iterations > 0 else pockets
-        results = []
-        
-        # Initialisation des compteurs
-        win_counts_hi = [0] * len(filled_pockets)
-        win_counts_lo = [0] * len(filled_pockets)
-        tie_counts = [0] * len(filled_pockets)
-        loss_counts = [0] * len(filled_pockets)
+        # Déclarations des variables
+        cdef int num_players = len(pockets)
+        cdef set all_distributed = set()
+        cdef int i, j, _  # Variables pour les boucles
+        cdef list pocket
+        cdef int expected_hole_cards
+        cdef bint has_low
+        cdef HandVal best_value_hi = 0
+        cdef int num_best_hi = 0
+        cdef LowHandVal best_value_lo = 0
+        cdef int num_best_lo = 0
+        cdef int total_samples = iterations if iterations > 0 else 1
+        cdef double pot_fraction
+        cdef double hipot = 1.0
+        cdef double lopot = 0.0
+        cdef list losehi_results = [0] * num_players
+        cdef list winhi, losehi, tiehi, winlo, loselo, tielo, scoop, ev
+        cdef list distributed_cards_all
+        cdef list filled_board
+        cdef list filled_pockets
+        cdef list eval_results_hi
+        cdef list eval_results_lo
+        cdef HandVal best_value_hi_local
+        cdef LowHandVal best_value_lo_local
+        cdef int num_best_hi_local
+        cdef int num_best_lo_local
+        cdef int card_num
+        cdef dict result_dict
 
-        # Gérer les mains vides
-        for i, pocket in enumerate(filled_pockets):
-            if all(card == '__' or card == 255 for card in pocket):
-                # Si la main est vide, la classer immédiatement comme perdante
-                loss_counts[i] = 1
-                continue
+        # Ajouter les cartes connues du tableau à all_distributed
+        for card in board:
+            if card != '__' and card != 255:
+                all_distributed.add(self._string2card(card))
 
-        # Simulation Monte Carlo ou évaluation directe
-        if iterations > 0:
-            # Simulation Monte Carlo
-            for _ in range(iterations):
-                filled_pocket = self.fill_pockets(pockets)
-                eval_results_hi = [self.eval_hand(game, 'hi', pocket, board) for pocket in filled_pocket]
-                eval_results_lo = [self.eval_hand(game, 'low', pocket, board) for pocket in filled_pocket]
-                
-                best_value_hi = max(eval_results_hi, key=lambda x: x[0])[0]
-                best_value_lo = min(eval_results_lo, key=lambda x: x[0])[0]
+        # Ajouter les cartes connues des pocket à all_distributed
+        for pocket in pockets:
+            for card in pocket:
+                if card != '__' and card != 255:
+                    all_distributed.add(self._string2card(card))
 
-                # Comparer les valeurs de mains et calculer win/tie/loss
-                for i, (result_hi, result_lo) in enumerate(zip(eval_results_hi, eval_results_lo)):
-                    if result_hi[0] == best_value_hi:
-                        win_counts_hi[i] += 1
-                    if result_lo[0] == best_value_lo:
-                        win_counts_lo[i] += 1
-                    else:
-                        loss_counts[i] += 1
-            total = sum(win_counts_hi) + sum(loss_counts)
-        else:
-            # Énumération exhaustive
-            eval_results_hi = [self.eval_hand(game, 'hi', pocket, board) for pocket in filled_pockets]
-            eval_results_lo = [self.eval_hand(game, 'low', pocket, board) for pocket in filled_pockets]
-            
-            best_value_hi = max(eval_results_hi, key=lambda x: x[0])[0]
-            best_value_lo = min(eval_results_lo, key=lambda x: x[0])[0]
-
-            # Comparer les valeurs de mains et calculer win/tie/loss
-            for i, (result_hi, result_lo) in enumerate(zip(eval_results_hi, eval_results_lo)):
-                if result_hi[0] == best_value_hi:
-                    win_counts_hi[i] += 1
-                if result_lo[0] == best_value_lo:
-                    win_counts_lo[i] += 1
-                else:
-                    loss_counts[i] += 1
-            total = len(filled_pockets)
-
-        # Calcul de l'EV en fonction des victoires et des égalités
-        ev_values = [win / total for win in win_counts_hi]
-
-        return {
-            'info': [iterations, 1 if game.endswith('8') or game == 'razz' else 0, 1],
-            'eval': [
-                {
-                    'scoop': 0,
-                    'winhi': win_counts_hi[i],
-                    'winlo': win_counts_lo[i],
-                    'losehi': loss_counts[i],
-                    'tiehi': tie_counts[i],
-                    'ev': int(ev_values[i] * 1000)
-                }
-                for i in range(len(filled_pockets))
-            ]
+        # Définir le nombre requis de cartes par poche en fonction du jeu
+        cdef dict game_hole_cards = {
+            "holdem": 2,
+            "holdem8": 2,
+            "omaha": 4,
+            "omaha8": 4,
+            "7stud": 7,
+            "7stud8": 7,
+            "razz": 7,
+            "lowball": 5,
+            "ace_to_five_lowball": 5,
         }
 
+        # Assignation de expected_hole_cards et vérification du jeu supporté
+        expected_hole_cards = game_hole_cards.get(game, -1)
+        if expected_hole_cards == -1:
+            raise ValueError(f"Jeu non supporté : {game}")
+
+        # Calcul de has_low en fonction du jeu
+        has_low = game.endswith('8') or game in ["razz", "lowball", "ace_to_five_lowball"]
+
+        # Vérifier les mains vides et les traiter comme perdantes
+        for i in range(num_players):
+            pocket = pockets[i]
+            for j in range(len(pocket)):
+                if pocket[j] == "__" or pocket[j] == 255:
+                    losehi_results[i] = total_samples  # Considérer la main vide comme perdante
+                    break
+
+        # Initialisation des listes pour les résultats
+        winhi = [0] * num_players
+        losehi = losehi_results  # Utiliser les résultats de perte modifiés
+        tiehi = [0] * num_players
+        winlo = [0] * num_players
+        loselo = [0] * num_players
+        tielo = [0] * num_players
+        scoop = [0] * num_players
+        ev = [0.0] * num_players
+        distributed_cards_all = [[] for _ in range(num_players)]  # Initialiser chaque élément
+
+        # Simulation Monte Carlo ou évaluation exhaustive
+        for _ in range(total_samples):
+            # Réinitialiser le deck et exclure les cartes déjà distribuées
+            self.reset_deck()
+            for card_num in all_distributed:
+                if card_num in self.available_cards:
+                    self.available_cards.remove(card_num)
+
+            # Remplir les cartes manquantes du tableau
+            filled_board = self.fill_board_cdef(board, all_distributed.copy())
+
+            # Remplir les pocket manquantes
+            filled_pockets = self.fill_pockets_cdef(pockets, expected_hole_cards, already_distributed=all_distributed.copy())
+
+            # Évaluer les mains hautes
+            eval_results_hi = []
+            for current_pocket in filled_pockets:
+                eval_results_hi.append(self.eval_hand(game, 'hi', current_pocket, filled_board))
+
+            # Si le jeu supporte les mains basses, évaluer les mains basses
+            if has_low:
+                eval_results_lo = []
+                for current_pocket in filled_pockets:
+                    eval_results_lo.append(self.eval_hand(game, 'low', current_pocket, filled_board))
+            else:
+                eval_results_lo = [None] * num_players
+
+            # Trouver la meilleure valeur haute
+            best_value_hi_local = 0
+            for result in eval_results_hi:
+                if result[0] > best_value_hi_local:
+                    best_value_hi_local = result[0]
+
+            # Compter le nombre de joueurs ayant la meilleure valeur haute
+            num_best_hi_local = 0
+            for result in eval_results_hi:
+                if result[0] == best_value_hi_local:
+                    num_best_hi_local += 1
+
+            # Trouver la meilleure valeur basse
+            if has_low:
+                best_value_lo_local = 0xFFFFFFFF
+                for result in eval_results_lo:
+                    if result and result[0] < best_value_lo_local:
+                        best_value_lo_local = result[0]
+
+                # Compter le nombre de joueurs ayant la meilleure valeur basse
+                num_best_lo_local = 0
+                for result in eval_results_lo:
+                    if result and result[0] == best_value_lo_local:
+                        num_best_lo_local += 1
+            else:
+                num_best_lo_local = 0
+
+            # Calculer les gains pour chaque joueur
+            for i in range(num_players):
+                # Si la main a été marquée comme perdante, passer
+                if losehi_results[i] == total_samples:
+                    continue
+
+                # Main haute
+                if eval_results_hi[i][0] == best_value_hi_local:
+                    if num_best_hi_local == 1:
+                        winhi[i] += 1
+                    else:
+                        tiehi[i] += 1
+                else:
+                    losehi[i] += 1
+
+                # Main basse
+                if has_low:
+                    if eval_results_lo[i] and eval_results_lo[i][0] == best_value_lo_local:
+                        if num_best_lo_local == 1:
+                            winlo[i] += 1
+                        else:
+                            tielo[i] += 1
+                    else:
+                        loselo[i] += 1
+
+                # Calculer l'EV
+                pot_fraction = 0.0
+                if has_low:
+                    hipot = 0.5
+                    lopot = 0.5
+
+                # Part du pot haute
+                if eval_results_hi[i][0] == best_value_hi_local:
+                    hi_share = hipot / num_best_hi_local
+                    pot_fraction += hi_share
+
+                # Part du pot basse
+                if has_low and eval_results_lo[i] and eval_results_lo[i][0] == best_value_lo_local:
+                    lo_share = lopot / num_best_lo_local
+                    pot_fraction += lo_share
+
+                ev[i] += pot_fraction
+
+                # Comptage des scoops
+                if has_low:
+                    if eval_results_hi[i][0] == best_value_hi_local and eval_results_lo[i] and eval_results_lo[i][0] == best_value_lo_local:
+                        if num_best_hi_local == 1 and num_best_lo_local == 1:
+                            scoop[i] += 1
+
+                # Stocker les cartes distribuées si nécessaire
+                if return_distributed and iterations > 0:
+                    for card in filled_pockets[i]:
+                        if card != '__' and card != 255:
+                            distributed_cards_all[i].append(card)
+
+                    for card in filled_board:
+                        if card != '__' and card != 255:
+                            distributed_cards_all[i].append(card)
+
+        # Calculer les moyennes sur le total des échantillons
+        for i in range(num_players):
+            ev[i] = ev[i] / total_samples
+
+        # Préparer le résultat
+        result_dict = {}
+        result_dict['info'] = [total_samples, int(has_low), 1]
+        result_dict['eval'] = []
+        for i in range(num_players):
+            result_dict['eval'].append({
+                'scoop': scoop[i],
+                'winhi': winhi[i],
+                'losehi': losehi[i],
+                'tiehi': tiehi[i],
+                'winlo': winlo[i] if has_low else 0,
+                'loselo': loselo[i] if has_low else 0,
+                'tielo': tielo[i] if has_low else 0,
+                'ev': int(ev[i] * 1000)
+            })
+
+        if return_distributed and iterations > 0:
+            result_dict['distributed_cards'] = distributed_cards_all
+
+        return result_dict
 
 
 
 
     def fill_pockets(self, pockets):
-        """Remplit les poches avec des cartes manquantes pour une simulation Monte Carlo."""
-        filled_pockets = []
+        """Méthode publique pour remplir les pocket avec les cartes manquantes."""
+        cdef set already_distributed = set()
+        cdef int expected_hole_cards = 2  # ou 4 pour Omaha, selon le jeu
+        return self.fill_pockets_cdef(pockets, expected_hole_cards, already_distributed)
+
+    cdef list fill_pockets_cdef(self, list pockets, int expected_cards_per_pocket=2, set already_distributed=None):
+        """Remplit les pocket avec les cartes manquantes, en excluant les cartes déjà distribuées."""
+
+        # Déclarations des variables Cython au début de la fonction
+        cdef list filled_pockets = []
+        cdef int card_num
+        cdef int selected_card
+        cdef list filled  
+        cdef int j
+        cdef str card
+        cdef list pocket
+
+        if already_distributed is None:
+            already_distributed = set()
+
         for pocket in pockets:
-            # Remplir une poche vide par des cartes aléatoires
-            if not pocket:
-                filled = [self.card2string(self.random_card()), self.card2string(self.random_card())]
-            else:
-                filled = [self.card2string(self.random_card()) if card == '__' or card == 255 else card for card in pocket]
+            filled = []  # Initialiser la liste à l'intérieur de la boucle
+
+
+            for j in range(len(pocket)):
+                card = pocket[j]
+                if card == '__' or card == '255':
+                    if not self.available_cards:
+                        self.reset_deck()
+                    selected_card = self.random_card()
+                    while selected_card in already_distributed:
+                        selected_card = self.random_card()
+                    filled.append(self.card2string(selected_card))
+                    already_distributed.add(selected_card)
+                else:
+                    filled.append(card)
+                    try:
+                        card_num = self._string2card(card)
+                        already_distributed.add(card_num)
+                        if card_num in self.available_cards:
+                            self.available_cards.remove(card_num)
+                    except ValueError:
+                        pass  # Ignorer les cartes invalides
+            # Remplir les placeholders restants si nécessaire
+            while len(filled) < expected_cards_per_pocket:
+                if not self.available_cards:
+                    self.reset_deck()
+                selected_card = self.random_card()
+                while selected_card in already_distributed:
+                    selected_card = self.random_card()
+                filled.append(self.card2string(selected_card))
+                already_distributed.add(selected_card)
             filled_pockets.append(filled)
         return filled_pockets
 
+
+    cdef list fill_board_cdef(self, list board, set already_distributed):
+        """Remplit les cartes manquantes sur le tableau, en excluant les cartes déjà distribuées."""
+        
+        # Déclarations des variables 
+        cdef list filled_board = board.copy()
+        cdef int card_num
+        cdef int selected_card
+        cdef int i
+        cdef str card
+
+        for i in range(len(filled_board)):
+            card = filled_board[i]  # Affectation simple
+            if card == '__' or card == '255':
+                if not self.available_cards:
+                    self.reset_deck()
+                selected_card = self.random_card()
+                while selected_card in already_distributed:
+                    selected_card = self.random_card()
+                filled_board[i] = self.card2string(selected_card)
+                already_distributed.add(selected_card)
+        return filled_board
+
+
+
+    def reset_deck(self):
+        """Réinitialise la liste des cartes disponibles."""
+        self.available_cards = [i for i in range(StdDeck_N_CARDS)]
+
+
     def random_card(self):
-        """Retourne une carte aléatoire du jeu."""
-        global is_seed_initialized
-        if not is_seed_initialized:
-            srand(<unsigned int>time())
-            is_seed_initialized = True
-        return rand() % StdDeck_N_CARDS
+        """Retourne une carte aléatoire du jeu non déjà distribuée."""
+        if not self.available_cards:
+            raise ValueError("Plus de cartes disponibles pour la distribution.")
+        cdef int rand_index = rand() % len(self.available_cards)
+        cdef int selected_card = self.available_cards.pop(rand_index)  
+        return selected_card
+
 
     def winners(self, game, pockets, board=None, fill_pockets=False):
         """Détermine les gagnants parmi plusieurs mains fournies."""
@@ -434,22 +718,59 @@ cdef class PokerEval:
         if fill_pockets:
             pockets = self.fill_pockets(pockets)
 
-        results = []
-        for pocket in pockets:
+        # Declarations must be at the top of the function
+        cdef bint has_low = game.endswith('8') or game == 'razz'
+        cdef list results = []
+        cdef int i
+        cdef list pocket
+        cdef list hi_result
+        cdef list low_result
+        cdef HandVal best_hi_value = 0
+        cdef LowHandVal best_lo_value = 0
+        cdef list winners_hi = []
+        cdef list winners_low = []
+        cdef tuple result
+
+        # Evaluate each player's hand
+        for i in range(len(pockets)):
+            pocket = pockets[i]
             hi_result = self.eval_hand(game, 'hi', pocket, board)
-            low_result = self.eval_hand(game, 'low', pocket, board)
+            if has_low:
+                low_result = self.eval_hand(game, 'low', pocket, board)
+            else:
+                low_result = [None, None]
             results.append((hi_result, low_result))
 
-        best_hi_value = max(results, key=lambda x: x[0][0])[0][0]
-        best_low_value = min(results, key=lambda x: x[1][0])[1][0]
+        # Find the best hi hand value
+        best_hi_value = 0
+        for result in results:
+            if result[0][0] > best_hi_value:
+                best_hi_value = result[0][0]
 
-        winners_hi = [i for i, result in enumerate(results) if result[0][0] == best_hi_value]
-        winners_low = [i for i, result in enumerate(results) if result[1][0] == best_low_value]
+        # Identify hi winners
+        for i in range(len(results)):
+            if results[i][0][0] == best_hi_value:
+                winners_hi.append(i)
+
+        # Find the best low hand value
+        if has_low:
+            best_lo_value = 0xFFFFFFFF
+            for result in results:
+                if result[1][0] is not None and result[1][0] < best_lo_value:
+                    best_lo_value = result[1][0]
+
+            # Identify low winners
+            for i in range(len(results)):
+                if results[i][1][0] == best_lo_value:
+                    winners_low.append(i)
+        else:
+            winners_low = []
 
         return {
             'hi': winners_hi,
-            'low': winners_low if best_low_value != 0xFFFFFFFF else []
+            'low': winners_low
         }
+
 
     def deck(self):
         """Retourne la liste de toutes les cartes du jeu."""
