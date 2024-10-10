@@ -32,7 +32,7 @@ jobs:
         run: chmod +x build/*        
 
       - name: Upload installer as artifact 
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: poker-eval-linux-amd64
           path: build/*
@@ -56,7 +56,7 @@ jobs:
         run: chmod +x build-arm64/*
 
       - name: Upload installer as artifact 
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: poker-eval-linux-arm64
           path: build-arm64/*
@@ -81,7 +81,7 @@ jobs:
           cmake --build .  
 
       - name: Upload installer as artifact (Windows)
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: poker-eval-windows-amd64
           path: build/Debug/*.*
@@ -109,7 +109,7 @@ jobs:
         run: chmod +x build/*
 
       - name: Upload installer as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: poker-eval-darwin-amd64
           path: build/*
@@ -137,7 +137,7 @@ jobs:
         run: chmod +x build-arm64/*
 
       - name: Upload installer as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: poker-eval-darwin-arm64
           path: build-arm64/*
