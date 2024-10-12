@@ -1,12 +1,16 @@
-# cython: language_level=3
-from libc.stdlib cimport rand, srand
-from libc.time cimport time  # Ajout de cette ligne pour importer la fonction time
-from time import time as pytime  # Optionnel : pour utiliser time() dans du code Python
-from libc.string cimport memcpy
-from libc.stdlib cimport malloc, free
-from libc.string cimport memset
+# poker_eval.pyx
 
+# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
+from libc.stdlib cimport malloc, free
+from libc.string cimport memset, memcpy
+from cpython cimport bool
 from itertools import combinations
+import logging
+import random  # Utiliser le module random de Python
+from libc.stdint cimport uint32_t, uint64_t
+
+# Configurer le logging
+# logging.basicConfig(level=logging.DEBUG)
 
 # Importation des types et fonctions externes depuis les en-têtes C
 cdef extern from "poker_defs.h":
@@ -39,20 +43,110 @@ cdef struct EvalResult:
     HandVal handval
     StdDeck_CardMask combined_mask
 
-# Variable globale pour indiquer si la graine a été initialisée
-cdef bint is_seed_initialized = False
+# Implémentation du Générateur Aléatoire en Cython en utilisant le module random de Python
+cdef class MT19937:
+    def __cinit__(self):
+        pass  # Aucune initialisation nécessaire avec le module random de Python
 
-# Définition de la classe PokerEval
+    cpdef void seed(self, unsigned int seed_value):
+        """Initialise le générateur avec une graine en utilisant Python's random."""
+        random.seed(seed_value)
+        logging.debug(f"MT19937 seeded with {seed_value}")
+
+    cpdef uint32_t rand_uint32(self):
+        """Génère un entier non signé de 32 bits en utilisant Python's random."""
+        return random.getrandbits(32)
+
+    def rand_double(self):
+        """Génère un nombre flottant en double précision dans l'intervalle [0, 1)."""
+        return random.random()
+
+    cpdef int rand_int(self, int upper_bound):
+        """Génère un entier entre 0 et upper_bound-1 sans biais en utilisant Python's random."""
+        if upper_bound <= 0:
+            raise ValueError("upper_bound doit être positif")
+        if upper_bound == 1:
+            return 0
+        return random.randint(0, upper_bound - 1)
+
+# Définir la classe PokerEval
 cdef class PokerEval:
-
     cdef list available_cards
+    cdef MT19937 rng  # Générateur RNG
 
     def __cinit__(self):
-        self.available_cards = [i for i in range(StdDeck_N_CARDS)]
+        self.rng = MT19937()
+        self.available_cards = list(range(StdDeck_N_CARDS))
+        logging.debug(f"Deck initialisé sans mélange: {self.available_cards}")
 
-    def reset_seed(self):
-        """Réinitialiser la seed pour la simulation Monte Carlo."""
-        srand(<unsigned int>time(NULL))
+    cpdef int get_num_cards(self):
+        """Retourne le nombre total de cartes dans le deck."""
+        return StdDeck_N_CARDS
+
+    cpdef list get_available_cards(self):
+        """Retourne une copie de la liste des cartes disponibles."""
+        return self.available_cards[:]
+
+    cpdef remove_card_from_deck(self, int card_num):
+        """Supprime une carte du deck si elle est présente."""
+        if card_num in self.available_cards:
+            self.available_cards.remove(card_num)
+
+
+    def check_deck_integrity(self):
+        """
+        Vérifie que le deck contient exactement StdDeck_N_CARDS cartes uniques.
+        Retourne True si l'intégrité est maintenue, False sinon.
+        """
+        current_num_cards = len(self.available_cards)
+        unique_cards = len(set(self.available_cards))
+        expected_num_cards = self.get_num_cards()
+
+        if current_num_cards != expected_num_cards:
+            logging.error(f"Deck contient {current_num_cards} cartes, attendu {expected_num_cards}.")
+            return False
+
+        if unique_cards != expected_num_cards:
+            logging.error("Deck contient des cartes dupliquées.")
+            return False
+
+        return True
+
+
+    cpdef int rand_int(self, int upper_bound):
+        return self.rng.rand_int(upper_bound)
+
+    cpdef uint32_t get_rand_uint32(self):
+        """Expose rand_uint32 via une méthode publique."""
+        return self.rng.rand_uint32()
+
+    cpdef reset_deck(self):
+        """Réinitialise le deck à l'état initial et le mélange."""
+        self.available_cards = list(range(StdDeck_N_CARDS))  # Toutes les cartes doivent être présentes
+        logging.debug(f"Deck reset: {self.available_cards}")  # Vérification que toutes les cartes sont là
+        
+        # Vérification de l'intégrité du deck après reset
+        if not self.check_deck_integrity():
+            logging.error("Intégrité du deck échouée après reset_deck!")
+            raise ValueError("Intégrité du deck compromise après reset_deck.")
+        
+        self.shuffle_deck()
+
+
+    def shuffle_deck(self):
+        """Mélange le deck en utilisant l'algorithme Fisher-Yates sans biais."""
+        cdef int i, j, temp
+        for i in range(len(self.available_cards) - 1, 0, -1):
+            j = self.rng.rand_int(i + 1)  # Génère un indice aléatoire entre 0 et i inclus
+            temp = self.available_cards[i]
+            self.available_cards[i] = self.available_cards[j]
+            self.available_cards[j] = temp
+            logging.debug(f"Swapped index {i} ({temp}) with index {j} ({self.available_cards[j]})")
+
+    cpdef reset_seed(self, unsigned int seed):
+        """Initialise le générateur RNG avec une graine spécifique."""
+        self.rng.seed(seed)
+        logging.debug(f"Seed set to: {seed}")
 
     def string2card(self, cards):
         """Convertit une chaîne de caractères représentant une carte en son entier numérique."""
@@ -64,7 +158,7 @@ cdef class PokerEval:
     cdef int _string2card(self, str card):
         cdef int card_num
         cdef bytes card_bytes = card.encode('utf-8')
-        cdef const char* card_cstr = card_bytes
+        cdef const char* card_cstr = <const char*>card_bytes
         if StdDeck_stringToCard(card_cstr, &card_num) != 0:
             # Succès
             return card_num
@@ -238,8 +332,6 @@ cdef class PokerEval:
             elif side == 'low':
                 if game == 'razz' or game == 'lowball27':
                     current_val = py_Hand_EVAL_LOW(&current_mask, 5)
-                elif game == 'lowball':
-                    current_val = py_Hand_EVAL_LOW8(&current_mask, 5)
                 else:
                     current_val = py_Hand_EVAL_LOW8(&current_mask, 5)
                 if current_val < best_val:
@@ -396,8 +488,15 @@ cdef class PokerEval:
         }
         return hand_types.get(handval >> 26, "Unknown")
 
-    cpdef dict poker_eval(self, game, pockets, board=None, dead=None, int iterations=0, bint return_distributed=False):
+    cpdef dict poker_eval(self, game, pockets, board=None, dead=None, int iterations=0, bint return_distributed=False, int seed=-1):
         """Évalue l'état du jeu de poker basé sur différentes variantes et calcule l'EV."""
+        # Réinitialiser la seed aléatoire pour la simulation Monte Carlo
+        self.reset_seed(seed)
+        logging.debug(f"Seed set to: {seed}")
+
+        # Réinitialiser le deck
+        self.reset_deck()
+        logging.debug(f"Deck après réinitialisation dans poker_eval: {self.available_cards}")
 
         # Vérifier le type de jeu
         supported_games = [
@@ -409,7 +508,7 @@ cdef class PokerEval:
             "5draw", "5draw8", "5drawnsq"
         ]
         if game not in supported_games:
-            raise ValueError(f"Type de jeu non supporté : {game}")
+            raise ValueError(f"Type de jeu non supporté : {game}")
 
         if board is None:
             board = []
@@ -433,7 +532,8 @@ cdef class PokerEval:
         cdef double lopot = 0.0
         cdef list losehi_results = [0] * num_players
         cdef list winhi, losehi, tiehi, winlo, loselo, tielo, scoop, ev
-        cdef list distributed_cards_all
+        cdef list distributed_cards_players
+        cdef list distributed_cards_board
         cdef list filled_board
         cdef list filled_pockets
         cdef list eval_results_hi
@@ -499,15 +599,18 @@ cdef class PokerEval:
         tielo = [0] * num_players
         scoop = [0] * num_players
         ev = [0.0] * num_players
-        distributed_cards_all = [[] for _ in range(num_players)]  # Initialiser chaque élément
+        distributed_cards_players = [[] for _ in range(num_players)]  # Initialiser chaque élément
+        distributed_cards_board = []  # Liste pour les cartes du tableau
 
         # Simulation Monte Carlo ou évaluation exhaustive
         for _ in range(total_samples):
             # Réinitialiser le deck et exclure les cartes déjà distribuées
             self.reset_deck()
+            logging.debug(f"Deck avant distribution: {self.available_cards}")
             for card_num in all_distributed:
                 if card_num in self.available_cards:
                     self.available_cards.remove(card_num)
+                    logging.debug(f"Deck après distribution: {self.available_cards}")
 
             # Remplir les cartes manquantes du tableau
             filled_board = self.fill_board_cdef(board, all_distributed.copy())
@@ -604,15 +707,18 @@ cdef class PokerEval:
                         if num_best_hi_local == 1 and num_best_lo_local == 1:
                             scoop[i] += 1
 
-                # Stocker les cartes distribuées si nécessaire
-                if return_distributed and iterations > 0:
+            # Stocker les cartes distribuées si nécessaire
+            if return_distributed and total_samples > 0:
+                # Stocker les cartes des joueurs
+                for i in range(num_players):
                     for card in filled_pockets[i]:
                         if card != '__' and card != 255:
-                            distributed_cards_all[i].append(card)
+                            distributed_cards_players[i].append(card)
 
-                    for card in filled_board:
-                        if card != '__' and card != 255:
-                            distributed_cards_all[i].append(card)
+                # Ajouter les cartes du tableau une seule fois par itération
+                for card in filled_board:
+                    if card != '__' and card != 255:
+                        distributed_cards_board.append(card)
 
         # Calculer les moyennes sur le total des échantillons
         for i in range(num_players):
@@ -634,8 +740,10 @@ cdef class PokerEval:
                 'ev': int(ev[i] * 1000)
             })
 
-        if return_distributed and iterations > 0:
-            result_dict['distributed_cards'] = distributed_cards_all
+        if return_distributed and total_samples > 0:
+            # Séparer les cartes distribuées en privées et tableau
+            result_dict['distributed_cards_players'] = distributed_cards_players
+            result_dict['distributed_cards_board'] = distributed_cards_board
 
         return result_dict
 
@@ -645,31 +753,22 @@ cdef class PokerEval:
         cdef int expected_hole_cards = 2  # ou 4 pour Omaha, selon le jeu
         return self.fill_pockets_cdef(pockets, expected_hole_cards, already_distributed)
 
-    cdef list fill_pockets_cdef(self, list pockets, int expected_cards_per_pocket=2, set already_distributed=None):
-        """Remplit les pockets avec les cartes manquantes, en excluant les cartes déjà distribuées."""
-
+    cpdef list fill_pockets_cdef(self, list pockets, int expected_cards_per_pocket=2, set already_distributed=None):
+        if already_distributed is None:
+            already_distributed = set()
         cdef list filled_pockets = []
-        cdef int card_num
         cdef int selected_card
         cdef list filled
         cdef int j
-        cdef str card
-        cdef list pocket
-
-        if already_distributed is None:
-            already_distributed = set()
 
         for pocket in pockets:
             filled = []
-
             for j in range(len(pocket)):
                 card = pocket[j]
                 if card == '__' or card == '255':
                     if not self.available_cards:
                         self.reset_deck()
                     selected_card = self.random_card()
-                    while selected_card in already_distributed:
-                        selected_card = self.random_card()
                     filled.append(self.card2string(selected_card))
                     already_distributed.add(selected_card)
                 else:
@@ -680,24 +779,24 @@ cdef class PokerEval:
                         if card_num in self.available_cards:
                             self.available_cards.remove(card_num)
                     except ValueError:
-                        pass  # Ignorer les cartes invalides
-            # Remplir les placeholders restants si nécessaire
+                        pass  # Ignore invalid cards
+            # Remplir les cartes manquantes si nécessaire
             while len(filled) < expected_cards_per_pocket:
                 if not self.available_cards:
                     self.reset_deck()
                 selected_card = self.random_card()
-                while selected_card in already_distributed:
-                    selected_card = self.random_card()
                 filled.append(self.card2string(selected_card))
                 already_distributed.add(selected_card)
             filled_pockets.append(filled)
         return filled_pockets
 
-    cdef list fill_board_cdef(self, list board, set already_distributed):
-        """Remplit les cartes manquantes sur le tableau, en excluant les cartes déjà distribuées."""
 
+    def get_random_card(self):
+        """Returns a random card from the deck that hasn't been distributed yet."""
+        return self.random_card()
+
+    cdef list fill_board_cdef(self, list board, set already_distributed):
         cdef list filled_board = board.copy()
-        cdef int card_num
         cdef int selected_card
         cdef int i
         cdef str card
@@ -706,24 +805,24 @@ cdef class PokerEval:
             card = filled_board[i]
             if card == '__' or card == '255':
                 if not self.available_cards:
-                    self.reset_deck()
+                    raise ValueError("Plus de cartes disponibles pour la distribution.")
                 selected_card = self.random_card()
-                while selected_card in already_distributed:
-                    selected_card = self.random_card()
                 filled_board[i] = self.card2string(selected_card)
                 already_distributed.add(selected_card)
         return filled_board
 
-    def reset_deck(self):
-        """Réinitialise la liste des cartes disponibles."""
-        self.available_cards = [i for i in range(StdDeck_N_CARDS)]
 
-    def random_card(self):
-        """Retourne une carte aléatoire du jeu non déjà distribuée."""
+    cpdef int random_card(self):
+        """Retourne une carte aléatoire du deck qui n'a pas encore été distribuée."""
         if not self.available_cards:
             raise ValueError("Plus de cartes disponibles pour la distribution.")
-        cdef int rand_index = rand() % len(self.available_cards)
-        cdef int selected_card = self.available_cards.pop(rand_index)
+        cdef int upper_bound = len(self.available_cards)
+        cdef int selected_index = self.rng.rand_int(upper_bound)
+        cdef int selected_card = self.available_cards.pop(selected_index)
+        card_str = self.card2string(selected_card)
+        logging.debug(f"Random index: {selected_index}, selected_card: {selected_card} ({card_str})")
+        #if card_str == "5c":
+            #logging.warning("La carte 5c a été distribuée.")
         return selected_card
 
     def winners(self, game, pockets, board=None, fill_pockets=False):

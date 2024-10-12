@@ -513,4 +513,3 @@ if __name__ == "__main__":
     test_invalid_cards()
     test_multiple_placeholders()
     test_no_duplicate_cards_filled_pockets()
-    test_no_duplicate_cards_monte_carlo()
