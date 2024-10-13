@@ -28,7 +28,9 @@ def test_string2card_and_card2string():
 def test_best_hand():
     hand = ["As", "Kd"]
     board = ["Qc", "Jh", "Ts", "3d", "7h"]  # Tableau avec Quinte à l'as
-    best_hand = poker_eval.best_hand("holdem", "hi", hand, board)
+    best_hand = poker_eval.best_hand(
+        "holdem", "hi", hand, board, include_description=False
+    )
     print(f"Test 3 - Best hand (As, Kd with board): {best_hand}")
     assert best_hand is not False, "Erreur, aucune main n'a été retournée"
     assert len(best_hand) == 5, "Erreur, la meilleure main ne contient pas 5 cartes"
@@ -71,10 +73,32 @@ def test_winners():
         "holdem", hands, board
     )  # Ajout de 'holdem' comme type de jeu
     print(f"Test 6 - Winning hand(s): {winners}")
+
+    # Structure attendue de `winners` :
+    # {
+    #     "info": [total_samples, has_low, something],
+    #     "eval": [
+    #         {"scoop": 0, "winhi": X, "losehi": Y, "tiehi": Z, ...},
+    #         {"scoop": 0, "winhi": X, "losehi": Y, "tiehi": Z, ...},
+    #     ]
+    # }
+
+    # Vérifiez que "hi" est une clé dans le dictionnaire et qu'elle contient des résultats
     assert (
-        "hi" in winners and len(winners["hi"]) > 0
-    ), "Erreur dans la détermination des gagnants"
-    assert winners["hi"] == [1], "La quinte flush devrait être la main gagnante"
+        "eval" in winners and len(winners["eval"]) > 0
+    ), "Erreur dans la structure des résultats des gagnants"
+
+    # Selon le tableau, la main ["As", "Ac"] a une paire d'As, et la main ["Ks", "Qs"] a une quinte flush.
+    # Donc, la seconde main devrait gagner.
+
+    # Vérifiez que la seconde main a gagné
+    assert (
+        winners["eval"][0]["winhi"] == 0 and winners["eval"][0]["losehi"] == 1
+    ), "Erreur : La première main devrait perdre"
+
+    assert (
+        winners["eval"][1]["winhi"] == 1 and winners["eval"][1]["losehi"] == 0
+    ), "Erreur : La deuxième main devrait gagner"
 
 
 # Test 7 : Obtenir toutes les cartes du deck
