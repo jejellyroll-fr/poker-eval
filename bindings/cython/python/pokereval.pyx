@@ -1,4 +1,4 @@
-# poker_eval.pyx
+# pokereval.pyx
 
 # cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
 from libc.stdlib cimport malloc, free
@@ -10,12 +10,32 @@ import random  # Utiliser le module random de Python
 from libc.stdint cimport uint32_t, uint64_t
 
 # Configurer le logging
-# logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 # Importation des types et fonctions externes depuis les en-têtes C
 cdef extern from "poker_defs.h":
     ctypedef unsigned int HandVal
     ctypedef unsigned int LowHandVal
+
+cdef extern from "handval_low.h":
+    cdef int LowHandVal_TOP_CARD_SHIFT
+    cdef int LowHandVal_CARD_MASK
+    cdef int LowHandVal_SECOND_CARD_SHIFT
+    cdef int LowHandVal_THIRD_CARD_SHIFT
+    cdef int LowHandVal_FOURTH_CARD_SHIFT
+    cdef int LowHandVal_FIFTH_CARD_SHIFT
+    cdef int LowHandVal_HANDTYPE_SHIFT
+    cdef int LowHandVal_HANDTYPE_MASK
+
+cdef extern from "handval.h":
+    cdef int HandVal_TOP_CARD_SHIFT
+    cdef int HandVal_CARD_MASK
+    cdef int HandVal_SECOND_CARD_SHIFT
+    cdef int HandVal_THIRD_CARD_SHIFT
+    cdef int HandVal_FOURTH_CARD_SHIFT
+    cdef int HandVal_FIFTH_CARD_SHIFT
+    cdef int HandVal_HANDTYPE_SHIFT
+    cdef int HandVal_HANDTYPE_MASK
 
 cdef extern from "deck_std.h":
     ctypedef struct StdDeck_CardMask:
@@ -38,6 +58,10 @@ cdef extern from "pokereval_wrapper.h":
     LowHandVal py_Hand_EVAL_LOW8(StdDeck_CardMask* hand, int n)
     LowHandVal py_Hand_EVAL_LOWBALL(StdDeck_CardMask* hand, int n)  # Pour lowball27
 
+cdef extern from "rules_std.h":
+    int StdRules_HandVal_print(HandVal handval)
+
+
 # Définir une structure pour les résultats d'évaluation
 cdef struct EvalResult:
     HandVal handval
@@ -52,7 +76,6 @@ cdef class MT19937:
         """Initialise le générateur avec une graine en utilisant Python's random."""
         random.seed(seed_value)
         logging.debug(f"MT19937 seeded with {seed_value}")
-
 
     cpdef uint32_t rand_uint32(self):
         """Génère un entier non signé de 32 bits en utilisant Python's random."""
@@ -146,7 +169,6 @@ cdef class PokerEval:
         self.rng.seed(seed)
         logging.debug(f"Seed set to: {seed}")
 
-
     def string2card(self, cards):
         """Convertit une chaîne de caractères représentant une carte en son entier numérique."""
         if isinstance(cards, (list, tuple)):
@@ -197,7 +219,8 @@ cdef class PokerEval:
         return py_Hand_EVAL_N(&hand, len(cards))
 
     def best_hand(self, game, side, hand, board=None, include_description=False):
-        """Retourne la meilleure main en termes de cartes (combinaison)."""
+        """Retourne la meilleure main en termes de cartes (combinaison), incluant les mains hautes et basses."""
+        
         # Liste des jeux supportés
         supported_games = [
             "holdem", "holdem8",
@@ -226,6 +249,9 @@ cdef class PokerEval:
         # Créer la structure pour stocker le résultat
         cdef EvalResult result
 
+        # Déterminer si nous devons évaluer une main basse (low)
+        is_low = (side == 'low')
+
         # Utiliser la méthode spécifique pour Omaha si nécessaire
         if game in ["omaha", "omaha8"]:
             if len(hand) != 4:
@@ -235,8 +261,8 @@ cdef class PokerEval:
             # Sinon, utiliser la méthode d'évaluation exhaustive pour les autres jeux
             result = self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
-        # Retourner les détails de la main
-        return self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description)
+        # Retourner les détails de la main en fonction du type high/low
+        return self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description, low=is_low)
 
     def best_hand_value(self, game, side, hand, board=None):
         """Retourne la valeur numérique de la meilleure main."""
@@ -438,29 +464,53 @@ cdef class PokerEval:
         return [result.handval, hand_details]
 
     cdef list _get_hand_details(self, HandVal handval, StdDeck_CardMask* hand_mask, bint include_description=False, bint low=False):
-        """Récupère les détails de la main pour l'affichage."""
-
-        cdef list all_cards = self._cardmask_to_list(hand_mask)
-        cdef int j, k, temp
+        """Récupère les détails de la main pour l'affichage, en tenant compte du type high/low."""
+        
         cdef list sorted_cards = []
-        cdef str description
+        cdef int top_card, second_card, third_card, fourth_card, fifth_card
+        cdef int hand_type_value
 
         if low:
-            # Trier les cartes par ordre croissant
-            all_cards.sort()
+            # Extraction des cartes pour une main basse (LowHandVal)
+            top_card = (handval >> LowHandVal_TOP_CARD_SHIFT) & LowHandVal_CARD_MASK
+            second_card = (handval >> LowHandVal_SECOND_CARD_SHIFT) & LowHandVal_CARD_MASK
+            third_card = (handval >> LowHandVal_THIRD_CARD_SHIFT) & LowHandVal_CARD_MASK
+            fourth_card = (handval >> LowHandVal_FOURTH_CARD_SHIFT) & LowHandVal_CARD_MASK
+            fifth_card = (handval >> LowHandVal_FIFTH_CARD_SHIFT) & LowHandVal_CARD_MASK
+            # Extraire le type de main basse
+            hand_type_value = (handval >> LowHandVal_HANDTYPE_SHIFT) & LowHandVal_HANDTYPE_MASK
         else:
-            # Trier les cartes par ordre décroissant
-            all_cards.sort(reverse=True)
+            # Extraction des cartes pour une main haute (HandVal)
+            top_card = (handval >> HandVal_TOP_CARD_SHIFT) & HandVal_CARD_MASK
+            second_card = (handval >> HandVal_SECOND_CARD_SHIFT) & HandVal_CARD_MASK
+            third_card = (handval >> HandVal_THIRD_CARD_SHIFT) & HandVal_CARD_MASK
+            fourth_card = (handval >> HandVal_FOURTH_CARD_SHIFT) & HandVal_CARD_MASK
+            fifth_card = handval & HandVal_CARD_MASK
+            # Extraire le type de main haute
+            hand_type_value = (handval >> HandVal_HANDTYPE_SHIFT) & HandVal_HANDTYPE_MASK
 
-        # Extraire les 5 meilleures cartes après tri
-        for j in range(min(5, len(all_cards))):
-            sorted_cards.append(self.card2string(all_cards[j]))
-
+        # Utiliser HandVal_print pour afficher le contenu du HandVal
+        StdRules_HandVal_print(handval)
+        
+        # Convertir les indices des cartes en chaînes
+        sorted_cards.append(self.card2string(top_card))
+        sorted_cards.append(self.card2string(second_card))
+        sorted_cards.append(self.card2string(third_card))
+        sorted_cards.append(self.card2string(fourth_card))
+        sorted_cards.append(self.card2string(fifth_card))
+        
+        # Inclure la description si nécessaire
         if include_description:
-            description = self.hand_type(handval)
+            if low:
+                description = self.low_hand_type(handval)  # Nouvelle fonction pour low
+            else:
+                description = self.hand_type(handval)  # Fonction existante pour high
             return [description] + sorted_cards
         else:
             return sorted_cards
+
+
+
 
     cdef list _cardmask_to_list(self, StdDeck_CardMask* mask):
         """Convertit un StdDeck_CardMask en une liste de cartes."""
@@ -473,19 +523,29 @@ cdef class PokerEval:
 
     def hand_type(self, HandVal handval):
         """Décrit la force d'une main."""
-        hand_types = {
-            0: "Nothing",
-            1: "NoPair",
-            2: "OnePair",
-            3: "TwoPair",
-            4: "Trips",
-            5: "Straight",
-            6: "Flush",
-            7: "FullHouse",
-            8: "Quads",
-            9: "StFlush"
-        }
-        return hand_types.get(handval >> 26, "Unknown")
+        hand_types = [
+            "NoPair", "OnePair", "TwoPair", "Trips", "Straight", "Flush", "FullHouse", "Quads", "StFlush"
+        ]
+
+        # Extraire le type de la main haute
+        hand_type_value = (handval >> HandVal_HANDTYPE_SHIFT) & HandVal_HANDTYPE_MASK
+        if 0 <= hand_type_value < len(hand_types):
+            return hand_types[hand_type_value]
+        else:
+            return "Unknown"
+
+    def low_hand_type(self, LowHandVal handval):
+        """Décrit la force d'une main basse."""
+        low_hand_types = [
+            "NoPair", "OnePair", "TwoPair", "Trips", "Straight", "Flush", "FullHouse", "Quads", "StFlush"
+        ]
+        
+        # Extraire le type de main basse
+        low_hand_type_value = (handval >> LowHandVal_HANDTYPE_SHIFT) & LowHandVal_HANDTYPE_MASK
+        if 0 <= low_hand_type_value < len(low_hand_types):
+            return low_hand_types[low_hand_type_value]
+        else:
+            return "Unknown"
 
     def poker_eval(self, game, pockets, board=None, dead=None, iterations=0, return_distributed=False, seed=-1):
         """Évalue l'état du jeu de poker basé sur différentes variantes et calcule l'EV."""
@@ -611,9 +671,6 @@ cdef class PokerEval:
                 if pocket[j] == "__" or pocket[j] == 255:
                     losehi_results[i] = total_samples  # Considérer la main vide comme perdante
                     break
-
-        # Initialisation des listes pour les résultats
-        # (Déjà initialisé ci-dessus)
 
         # Simulation Monte Carlo ou évaluation exhaustive
         for _ in range(total_samples):
@@ -743,7 +800,6 @@ cdef class PokerEval:
         filled_pockets_str = [self.card2string(pocket) for pocket in filled_pockets_int]
         return filled_pockets_str
 
-
     cpdef list fill_pockets_cdef(self, list pockets, int expected_cards_per_pocket=2, set already_distributed=None):
         if already_distributed is None:
             already_distributed = set()
@@ -787,10 +843,6 @@ cdef class PokerEval:
             filled_pockets.append(filled)
         return filled_pockets
 
-
-
-
-
     def get_random_card(self):
         """Returns a random card from the deck that hasn't been distributed yet."""
         return self.random_card()
@@ -811,18 +863,7 @@ cdef class PokerEval:
                 already_distributed.add(selected_card)
         return filled_board
 
-    cpdef int random_card(self):
-        """Retourne une carte aléatoire du deck qui n'a pas encore été distribuée."""
-        if not self.available_cards:
-            raise ValueError("Plus de cartes disponibles pour la distribution.")
-        cdef int upper_bound = len(self.available_cards)
-        cdef int selected_index = self.rng.rand_int(upper_bound)
-        cdef int selected_card = self.available_cards.pop(selected_index)
-        card_str = self.card2string(selected_card)
-        logging.debug(f"Random index: {selected_index}, selected_card: {selected_card} ({card_str})")
-        #if card_str == "5c":
-            #logging.warning("La carte 5c a été distribuée.")
-        return selected_card
+
 
     def winners(self, game, pockets, board=None, dead=None, fill_pockets=False, return_distributed=False):
         """Détermine les gagnants parmi plusieurs mains fournies, en tenant compte des cartes mortes si nécessaire."""
@@ -1009,8 +1050,8 @@ cdef class PokerEval:
                 # Calculer l'EV
                 pot_fraction = 0.0
                 if has_low:
-                    hipot = 0.5
-                    lopot = 0.5
+                    hipot = 1.0
+                    lopot = 1.0
 
                     # Part du pot haute
                     if eval_results_hi[i][0] == best_hi_value:
@@ -1058,8 +1099,39 @@ cdef class PokerEval:
 
         return result_dict
 
+    def fill_pockets(self, pockets):
+        """Méthode publique pour remplir les pockets avec les cartes manquantes."""
+        cdef set already_distributed = set()
+        cdef int expected_hole_cards = 2  # ou 4 pour Omaha, selon le jeu
+        filled_pockets_int = self.fill_pockets_cdef(pockets, expected_hole_cards, already_distributed)
+        # Convertir les numéros de cartes en chaînes
+        filled_pockets_str = [self.card2string(pocket) for pocket in filled_pockets_int]
+        return filled_pockets_str
 
 
+
+    def get_random_card(self):
+        """Returns a random card from the deck that hasn't been distributed yet."""
+        return self.random_card()
+
+
+
+    cpdef int random_card(self):
+        """Retourne une carte aléatoire du deck qui n'a pas encore été distribuée."""
+        if not self.available_cards:
+            raise ValueError("Plus de cartes disponibles pour la distribution.")
+        cdef int upper_bound = len(self.available_cards)
+        cdef int selected_index = self.rng.rand_int(upper_bound)
+        cdef int selected_card = self.available_cards.pop(selected_index)
+        card_str = self.card2string(selected_card)
+        logging.debug(f"Random index: {selected_index}, selected_card: {selected_card} ({card_str})")
+        return selected_card
+
+    def winners(self, game, pockets, board=None, dead=None, fill_pockets=False, return_distributed=False):
+        """Détermine les gagnants parmi plusieurs mains fournies, en tenant compte des cartes mortes si nécessaire."""
+        # Cette méthode est similaire à `poker_eval` et peut être optimisée
+        # Pour l'instant, je vais me concentrer sur la correction des erreurs actuelles
+        pass
 
     def deck(self):
         """Retourne la liste de toutes les cartes du jeu."""
