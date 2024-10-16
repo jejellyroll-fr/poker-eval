@@ -33,6 +33,7 @@ cdef extern from "handval_low.h":
     cdef int LowHandVal_FIFTH_CARD_SHIFT
     cdef int LowHandVal_HANDTYPE_SHIFT
     cdef int LowHandVal_HANDTYPE_MASK
+    cdef int LowHandVal_CARD_WIDTH
     const unsigned int LowHandVal_NOTHING
 
 cdef extern from "handval.h":
@@ -44,6 +45,7 @@ cdef extern from "handval.h":
     cdef int HandVal_FIFTH_CARD_SHIFT
     cdef int HandVal_HANDTYPE_SHIFT
     cdef int HandVal_HANDTYPE_MASK
+    cdef int HandVal_CARD_WIDTH
     const unsigned int HandVal_NOTHING
 
 cdef extern from "deck_std.h":
@@ -62,10 +64,11 @@ cdef extern from "pokereval_wrapper.h":
     void py_StdDeck_CardMask_UNSET(StdDeck_CardMask* mask, int index)
     int py_StdDeck_CardMask_CARD_IS_SET(StdDeck_CardMask* cm, int index)
 
-    HandVal py_Hand_EVAL_N(StdDeck_CardMask* hand, int n)
-    LowHandVal py_Hand_EVAL_LOW(StdDeck_CardMask* hand, int n)
-    LowHandVal py_Hand_EVAL_LOW8(StdDeck_CardMask* hand, int n)
-    LowHandVal py_Hand_EVAL_LOWBALL(StdDeck_CardMask* hand, int n)  # Pour lowball27
+    HandVal py_Hand_EVAL_N(StdDeck_CardMask* hand, int n)   # EVAL_N
+    LowHandVal py_Hand_EVAL_LOW(StdDeck_CardMask* hand, int n)  # EVAL_Lowball
+    LowHandVal py_Hand_EVAL_LOW8(StdDeck_CardMask* hand, int n) # EVAL_Lowball8
+    LowHandVal py_Hand_EVAL_DEUCE_TO_SEVEN_LOW(StdDeck_CardMask* hand, int n) # EVAL_Low27
+
 
 cdef extern from "rules_std.h":
     int StdRules_HandVal_print(HandVal handval)
@@ -190,14 +193,15 @@ cdef class PokerEval:
         cdef int card_num
         cdef char card_cstr[3]
 
+        # Vérifier si la carte est un placeholder
+        if card == '__':
+            logging.debug(f"Carte placeholder: {card} -> 255")
+            return 255
+
         # Vérifier la longueur de la chaîne de carte
         if len(card) != 2:
-            if card == '__':
-                logging.debug(f"Carte placeholder: {card} -> 255")
-                return 255
-            else:
-                logging.error(f"Carte invalide par longueur: {card}")
-                raise ValueError(f"Carte invalide : {card}")
+            logging.error(f"Carte invalide par longueur: {card}")
+            raise ValueError(f"Carte invalide : {card}")
 
         # Convertir les deux caractères en majuscule
         card_cstr[0] = card[0].upper().encode('ascii')[0]
@@ -217,6 +221,7 @@ cdef class PokerEval:
         else:
             logging.error(f"StdDeck_stringToCard a échoué pour la carte: {card}")
             raise ValueError(f"Carte invalide : {card}")
+
 
 
 
@@ -354,26 +359,28 @@ cdef class PokerEval:
         else:
             return self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
+
     cdef EvalResult eval_best_hand_exhaustive_cdef(self, str game, str side, list hand, list board):
         """Évalue la meilleure main de cinq cartes pour les jeux non-Omaha en utilisant une recherche exhaustive."""
-        
+
         # Vérifier que la somme de la main et du tableau fait au moins 5 cartes
         if len(hand) + len(board) < 5:
             raise ValueError(f"Le jeu {game} nécessite au moins 5 cartes, mais {len(hand)} en main et {len(board)} sur le tableau ont été fournies.")
-        
+
         cdef list all_cards = hand + board
         cdef HandVal best_val
-        cdef HandVal current_val  # Pour stocker l'évaluation actuelle
+        cdef HandVal current_val
+        cdef LowHandVal best_lo_val
+        cdef LowHandVal current_lo_val
         cdef StdDeck_CardMask best_mask, current_mask
         cdef int card_num
         py_StdDeck_CardMask_RESET(&best_mask)
-        
-        # Initialiser la meilleure valeur pour les variantes 'hi' et 'low'
+
         if side == 'hi':
             best_val = 0
         elif side == 'low':
-            best_val = 0xFFFFFFFF
-        
+            best_lo_val = 0xFFFFFFFF
+
         # Générer toutes les combinaisons possibles de cinq cartes
         for combo in combinations(all_cards, 5):
             py_StdDeck_CardMask_RESET(&current_mask)
@@ -385,7 +392,7 @@ cdef class PokerEval:
                 if card_num != 255:
                     py_StdDeck_CardMask_SET(&current_mask, card_num)
 
-            # Évaluation de la main pour 'hi' ou 'low'
+            # Évaluation de la combinaison
             if side == 'hi':
                 current_val = py_Hand_EVAL_N(&current_mask, 5)
                 if current_val > best_val:
@@ -393,18 +400,26 @@ cdef class PokerEval:
                     # Copier les masques actuels dans best_mask
                     memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
             elif side == 'low':
-                if game == 'razz' or game == 'lowball27':
-                    current_val = py_Hand_EVAL_LOW(&current_mask, 5)
+                if game == 'razz' or game == 'lowball' or game == 'ace_to_five_lowball':
+                    current_lo_val = py_Hand_EVAL_LOW(&current_mask, 5)
+                elif game == 'lowball27':
+                    current_lo_val = py_Hand_EVAL_DEUCE_TO_SEVEN_LOW(&current_mask, 5)
+                elif game.endswith('8'):
+                    current_lo_val = py_Hand_EVAL_LOW8(&current_mask, 5)
                 else:
-                    current_val = py_Hand_EVAL_LOW8(&current_mask, 5)
-                if current_val < best_val:
-                    best_val = current_val
+                    raise ValueError(f"Jeu low non supporté : {game}")
+
+                if current_lo_val < best_lo_val:
+                    best_lo_val = current_lo_val
                     # Copier les masques actuels dans best_mask
                     memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
-        
+
         # Retourner la meilleure main trouvée
         cdef EvalResult result
-        result.handval = best_val
+        if side == 'hi':
+            result.handval = best_val
+        elif side == 'low':
+            result.handval = best_lo_val
         result.combined_mask = best_mask
         return result
 
@@ -414,23 +429,20 @@ cdef class PokerEval:
         """Évalue une main Omaha spécifique et retourne les résultats dans une structure C."""
         cdef EvalResult best_result
         cdef HandVal best_val
-        cdef HandVal current_val
-        cdef LowHandVal current_lo_val
+        cdef LowHandVal best_lo_val
         cdef int res
         cdef tuple hand_combo
         cdef tuple board_combo
         cdef tuple full_combo
-        cdef list all_cards = hand + board
         cdef list best_combo = []
-
-        # Construire les masques complets pour la main et le tableau
         cdef StdDeck_CardMask hole_mask
         cdef StdDeck_CardMask board_mask
         cdef StdDeck_CardMask best_mask, current_mask
+        cdef int card_num
+
         py_StdDeck_CardMask_RESET(&hole_mask)
         py_StdDeck_CardMask_RESET(&board_mask)
         py_StdDeck_CardMask_RESET(&best_mask)
-        cdef int card_num
 
         # Convertir les cartes de la main en masque
         for card in hand:
@@ -444,30 +456,27 @@ cdef class PokerEval:
             if card_num != 255:
                 py_StdDeck_CardMask_SET(&board_mask, card_num)
 
-        logging.debug(f"Masque main complet: {hole_mask}, Masque board complet: {board_mask}")
-
-        # Appeler les fonctions C pour évaluer la main
         if side == 'hi':
-            res = StdDeck_OmahaHi_EVAL(hole_mask, board_mask, &current_val)
+            res = StdDeck_OmahaHi_EVAL(hole_mask, board_mask, &best_val)
             if res != 0:
                 logging.warning(f"Évaluation hi échouée avec res={res} pour hole_mask={hand} et board_mask={board}")
                 best_result.handval = HandVal_NOTHING
                 return best_result
-            best_val = current_val
         elif side == 'low':
-            res = StdDeck_OmahaHiLow8_EVAL(hole_mask, board_mask, NULL, &current_lo_val)
-            if res != 0:
-                logging.warning(f"Évaluation low échouée avec res={res} pour hole_mask={hand} et board_mask={board}")
-                best_result.handval = LowHandVal_NOTHING
-                return best_result
-            best_val = current_lo_val
+            if game == 'omaha8':
+                res = StdDeck_OmahaHiLow8_EVAL(hole_mask, board_mask, NULL, &best_lo_val)
+                logging.debug(f"StdDeck_OmahaHiLow8_EVAL returned low_val={best_lo_val}")
+                if res != 0:
+                    logging.warning(f"Évaluation low échouée avec res={res} pour hole_mask={hand} et board_mask={board}")
+                    best_result.handval = LowHandVal_NOTHING
+                    return best_result
         else:
             raise ValueError("Le paramètre 'side' doit être 'hi' ou 'low'.")
 
         # Déterminer les meilleures combinaisons de deux cartes de la main et trois du tableau
         for hand_combo in combinations(hand, 2):
             for board_combo in combinations(board, 3):
-                full_combo = hand_combo + board_combo  # Assignment sans 'cdef'
+                full_combo = hand_combo + board_combo
 
                 # Créer un masque pour la combinaison actuelle
                 py_StdDeck_CardMask_RESET(&current_mask)
@@ -479,39 +488,32 @@ cdef class PokerEval:
                 # Évaluer la combinaison
                 if side == 'hi':
                     current_val = py_Hand_EVAL_N(&current_mask, 5)
-                    if current_val == best_val:
-                        best_combo = list(full_combo)  # Conversion en liste
-                        break
+                    if current_val > best_val:
+                        best_val = current_val
+                        # Copier les masques actuels dans best_mask
+                        memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
                 elif side == 'low':
-                    if game == 'razz' or game == 'lowball27':
-                        current_val = py_Hand_EVAL_LOW(&current_mask, 5)
+                    if game == 'omaha8':
+                        current_lo_val = py_Hand_EVAL_LOW8(&current_mask, 5)
                     else:
-                        current_val = py_Hand_EVAL_LOW8(&current_mask, 5)
-                    if current_val == best_val:
-                        best_combo = list(full_combo)  # Conversion en liste
-                        break
-            if best_combo:
-                break  # Sortir des boucles si une combinaison est trouvée
+                        raise ValueError(f"Jeu low non supporté pour Omaha : {game}")
 
-        if not best_combo:
-            logging.warning("Aucune combinaison de deux cartes de la main et trois du tableau ne correspond à la meilleure valeur évaluée.")
-            best_result.handval = HandVal_NOTHING if side == 'hi' else LowHandVal_NOTHING
-            return best_result
+                    logging.debug(f"Evaluating combination {full_combo}: current_lo_val={current_lo_val}, best_lo_val={best_lo_val}")
 
-        # Remplir best_mask avec les cartes de best_combo
-        py_StdDeck_CardMask_RESET(&best_mask)
-        for card in best_combo:
-            card_num = self._string2card(card)
-            if card_num != 255:
-                py_StdDeck_CardMask_SET(&best_mask, card_num)
+                    if current_lo_val < best_lo_val:
+                        best_lo_val = current_lo_val
+                        # Copier les masques actuels dans best_mask
+                        memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
 
-        # Stocker les résultats dans la structure EvalResult
-        best_result.handval = best_val
-        # Copier le best_mask dans combined_mask pour ne garder que les 5 meilleures cartes
-        memcpy(&best_result.combined_mask, &best_mask, sizeof(StdDeck_CardMask))
-        logging.debug(f"Main évaluée: handval={best_val}, combined_mask={self._cardmask_to_sorted_list(&best_result.combined_mask)}")
+        # Retourner la meilleure main trouvée
+        cdef EvalResult result
+        if side == 'hi':
+            result.handval = best_val
+        elif side == 'low':
+            result.handval = best_lo_val
+        result.combined_mask = best_mask
+        return result
 
-        return best_result
 
 
 
@@ -541,7 +543,9 @@ cdef class PokerEval:
         for i in range(StdDeck_N_CARDS):
             if py_StdDeck_CardMask_CARD_IS_SET(mask, i):
                 StdDeck_cardToString(i, card_str)
-                cards.append(card_str.decode('utf-8'))
+                card = card_str.decode('utf-8')
+                cards.append(card)
+                logging.debug(f"Carte extraite du masque: {card}")
 
         # Assurez-vous qu'il y a exactement 5 cartes
         if len(cards) != 5:
@@ -560,27 +564,34 @@ cdef class PokerEval:
 
 
 
-    def eval_hand(self, game, side, hand, board):
+
+    def eval_hand(self, game, side, hand, board=None):
         """Évalue une main spécifique et retourne les résultats sous forme de liste Python."""
+        if board is None:
+            board = []
         cdef EvalResult result = self.eval_hand_cdef(game, side, hand, board)
         cdef list hand_details = self._get_hand_details(result.handval, &result.combined_mask, include_description=True, low=(side == 'low'))
         return [result.handval, hand_details]
 
+
+
     cdef list _get_hand_details(self, HandVal handval, StdDeck_CardMask* hand_mask, bint include_description=False, bint low=False):
         """Récupère les détails de la main pour l'affichage, en tenant compte du type high/low."""
-        
+
         cdef list sorted_cards = []
         cdef char hand_str[80]
 
-        # Utilisation de StdRules_HandVal_toString pour obtenir la meilleure main sous forme de chaîne
-        StdRules_HandVal_toString(handval, hand_str)
-        hand_description = hand_str.decode('utf-8')
-        
-        logging.debug(f"Main évaluée (avec cartes) : {hand_description}")
-        
+        if low:
+            # Pour les mains basses, utiliser une fonction pour convertir LowHandVal en chaîne
+            hand_description = self.low_hand_description(handval)
+        else:
+            # Main haute
+            StdRules_HandVal_toString(handval, hand_str)
+            hand_description = hand_str.decode('utf-8')
+
         # Extraire les cartes du masque StdDeck_CardMask triées par ordre de rang
         sorted_cards = self._cardmask_to_sorted_list(hand_mask)
-        
+
         if not sorted_cards:
             logging.warning("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
 
@@ -589,6 +600,57 @@ cdef class PokerEval:
             return [hand_description] + sorted_cards
 
         return sorted_cards
+
+    cdef str low_hand_description(self, LowHandVal handval):
+        """Convertit un LowHandVal en une description lisible de la main basse."""
+        cdef int card_nums[5]
+        cdef int ranks[5]
+        cdef int i
+        cdef int shift = LowHandVal_TOP_CARD_SHIFT
+        cdef int mask = LowHandVal_CARD_MASK
+        cdef list card_names = []
+        cdef str hand_description
+
+        if handval == LowHandVal_NOTHING:
+            return "No Low Hand"
+        else:
+            # Extraire les card_num de la main basse
+            for i in range(5):
+                card_nums[i] = (handval >> shift) & mask
+                shift -= LowHandVal_CARD_WIDTH
+                logging.debug(f"Extracted card_num {i}: {card_nums[i]}")
+
+            # Convertir les card_num en ranks, traiter l'As comme 1
+            for i in range(5):
+                temp_rank = (card_nums[i] % 13) + 2
+                if temp_rank == 14:
+                    ranks[i] = 1  # Traiter l'As comme 1 pour les mains basses
+                else:
+                    ranks[i] = temp_rank
+                logging.debug(f"Converted card_num {card_nums[i]} to rank {ranks[i]}")
+            
+            # Convertir les ranks en noms de cartes
+            rank_to_str = {
+                1: 'A', 2: '2', 3: '3', 4: '4', 5: '5',
+                6: '6', 7: '7', 8: '8', 9: '9', 10: 'T',
+                11: 'J', 12: 'Q', 13: 'K'
+            }  # Supprimer la duplication pour l'As
+            for rank in ranks:
+                card_names.append(rank_to_str.get(rank, str(rank)))
+
+            # Vérifier si c'est un A-5 wheel
+            sorted_ranks = sorted(ranks)
+            if sorted_ranks == [1, 2, 3, 4, 5]:  # A-5 low
+                hand_description = "A-5 low"
+            else:
+                hand_description = "Low Hand (" + ''.join(card_names) + ")"
+
+            logging.debug(f"Low hand description: {hand_description}")
+            return hand_description
+
+
+
+
 
 
 
@@ -880,14 +942,6 @@ cdef class PokerEval:
 
         return result_dict
 
-    def fill_pockets(self, pockets):
-        """Méthode publique pour remplir les pockets avec les cartes manquantes."""
-        cdef set already_distributed = set()
-        cdef int expected_hole_cards = 2  # ou 4 pour Omaha, selon le jeu
-        filled_pockets_int = self.fill_pockets_cdef(pockets, expected_hole_cards, already_distributed)
-        # Convertir les numéros de cartes en chaînes
-        filled_pockets_str = [self.card2string(pocket) for pocket in filled_pockets_int]
-        return filled_pockets_str
 
     cpdef list fill_pockets_cdef(self, list pockets, int expected_cards_per_pocket=2, set already_distributed=None):
         if already_distributed is None:
@@ -932,9 +986,7 @@ cdef class PokerEval:
             filled_pockets.append(filled)
         return filled_pockets
 
-    def get_random_card(self):
-        """Returns a random card from the deck that hasn't been distributed yet."""
-        return self.random_card()
+
 
     cdef list fill_board_cdef(self, list board, set already_distributed):
         cdef list filled_board = board.copy()
@@ -1216,11 +1268,6 @@ cdef class PokerEval:
         logging.debug(f"Random index: {selected_index}, selected_card: {selected_card} ({card_str})")
         return selected_card
 
-    def winners(self, game, pockets, board=None, dead=None, fill_pockets=False, return_distributed=False):
-        """Détermine les gagnants parmi plusieurs mains fournies, en tenant compte des cartes mortes si nécessaire."""
-        # Cette méthode est similaire à `poker_eval` et peut être optimisée
-        # Pour l'instant, je vais me concentrer sur la correction des erreurs actuelles
-        pass
 
     def deck(self):
         """Retourne la liste de toutes les cartes du jeu."""

@@ -30,6 +30,7 @@
 #undef Hand_EVAL_N
 #undef Hand_EVAL_LOW
 #undef Hand_EVAL_LOW8
+#undef Hand_EVAL_DEUCE_TO_SEVEN_LOW 
 
 #define Hand_EVAL_N     StdDeck_StdRules_EVAL_N
 #define Hand_EVAL_TYPE  StdDeck_StdRules_EVAL_TYPE
@@ -38,6 +39,7 @@
 
 #define Hand_EVAL_LOW   StdDeck_Lowball_EVAL
 #define Hand_EVAL_LOW8  StdDeck_Lowball8_EVAL
+#define Hand_EVAL_DEUCE_TO_SEVEN_LOW StdDeck_Lowball27_EVAL_N
 
 #undef  DECK_STANDARD
 #undef  RULES_STANDARD

@@ -4,6 +4,7 @@
 #include "inlines/eval_low.h"
 #include "inlines/eval_low8.h"
 #include "inlines/eval_omaha.h"
+#include "inlines/eval_low27.h"
 
 void py_StdDeck_CardMask_RESET(StdDeck_CardMask* cm) {
     StdDeck_CardMask_RESET(*cm);
@@ -36,4 +37,8 @@ LowHandVal py_Hand_EVAL_LOW(StdDeck_CardMask* hand, int n) {
 
 LowHandVal py_Hand_EVAL_LOW8(StdDeck_CardMask* hand, int n) {
     return Hand_EVAL_LOW8(*hand, n);
+}
+
+LowHandVal py_Hand_EVAL_DEUCE_TO_SEVEN_LOW(StdDeck_CardMask* hand, int n) {
+    return Hand_EVAL_DEUCE_TO_SEVEN_LOW(*hand, n);
 }

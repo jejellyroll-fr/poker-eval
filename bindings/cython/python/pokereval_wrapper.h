@@ -13,5 +13,6 @@ int py_StdDeck_CardMask_CARD_IS_SET(StdDeck_CardMask* cm, int index);
 HandVal py_Hand_EVAL_N(StdDeck_CardMask* hand, int n);
 LowHandVal py_Hand_EVAL_LOW(StdDeck_CardMask* hand, int n);
 LowHandVal py_Hand_EVAL_LOW8(StdDeck_CardMask* hand, int n);
+LowHandVal py_Hand_EVAL_DEUCE_TO_SEVEN_LOW(StdDeck_CardMask* hand, int n); 
 
 #endif // POKEREVAL_WRAPPER_H
