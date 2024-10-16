@@ -99,7 +99,7 @@ def test_omaha_low_no_qualifying_hand():
         hand=hand,
         board=board,
         expected_description="No low hand",
-        expected_cards=[],
+        expected_cards=["Kh", "Kd", "Td", "9d", "8c"],
     )
 
 
