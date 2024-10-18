@@ -33,7 +33,7 @@ def test_omaha_low_best_hand():
         game="omaha8",
         hand=hand,
         board=board,
-        expected_description="A-5 low",
+        expected_description="Ah-2h-3c-4d-5s low",
         expected_cards=["Ah", "2h", "3c", "4d", "5s"],
     )
 
@@ -46,7 +46,7 @@ def test_omaha_ace_to_six_low():
         game="omaha8",
         hand=hand,
         board=board,
-        expected_description="A-6 low",
+        expected_description="Ah-2c-3s-4h-6d low",
         expected_cards=["Ah", "2c", "3s", "4h", "6d"],
     )
 
@@ -59,7 +59,7 @@ def test_omaha_ace_to_five_low():
         game="omaha8",
         hand=hand,
         board=board,
-        expected_description="A-5 low",
+        expected_description="Ah-2d-3h-4c-5d low",
         expected_cards=["Ah", "2d", "3h", "4c", "5d"],
     )
 
@@ -72,7 +72,7 @@ def test_omaha_wheel():
         game="omaha8",
         hand=hand,
         board=board,
-        expected_description="A-5 low",
+        expected_description="Ah-2s-3d-4c-5h low",
         expected_cards=["Ah", "2s", "3d", "4c", "5h"],
     )
 
@@ -85,7 +85,7 @@ def test_omaha_low_with_duplicates():
         game="omaha8",
         hand=hand,
         board=board,
-        expected_description="A-6 low",
+        expected_description="Ah-2c-3s-4h-6d low",
         expected_cards=["Ah", "2c", "3s", "4h", "6d"],
     )
 

@@ -116,6 +116,35 @@ cdef class PokerEval:
         self.available_cards = list(range(StdDeck_N_CARDS))
         logging.debug(f"Deck initialisé sans mélange: {self.available_cards}")
 
+    cdef StdDeck_CardMask create_cardmask(self, list cards):
+        """
+        Crée un StdDeck_CardMask à partir d'une liste de cartes.
+        
+        Parameters:
+            cards (list): Liste des cartes sous forme d'entiers ou de chaînes de caractères.
+        
+        Returns:
+            StdDeck_CardMask: Masque de cartes combiné.
+        """
+        cdef StdDeck_CardMask mask
+        py_StdDeck_CardMask_RESET(&mask)  # Réinitialise le masque
+
+        cdef int card_num
+
+        for card in cards:
+            if isinstance(card, str):
+                card_num = self._string2card(card)
+            elif isinstance(card, int):
+                card_num = card
+            else:
+                raise TypeError(f"Type de carte invalide: {card}")
+
+            if card_num != 255:
+                py_StdDeck_CardMask_SET(&mask, card_num)
+
+        return mask
+
+
     cpdef int get_num_cards(self):
         """Retourne le nombre total de cartes dans le deck."""
         return StdDeck_N_CARDS
@@ -302,7 +331,7 @@ cdef class PokerEval:
             result = self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
         # Retourner les détails de la main en fonction du type high/low
-        return self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description, low=is_low)
+        return self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description, low=is_low, game=game)
 
 
 
@@ -346,18 +375,68 @@ cdef class PokerEval:
             "5drawnsq": 5
         }
 
-        expected_hole_cards = game_hole_cards.get(game, -1)
+        cdef HandVal hi_val, lo_val  # Déclaration cdef en premier dans le bloc
+        cdef int expected_hole_cards = game_hole_cards.get(game, -1)
+
         if expected_hole_cards == -1:
             raise ValueError(f"Jeu non supporté : {game}")
 
         if len(hand) != expected_hole_cards:
             raise ValueError(f"{game} nécessite exactement {expected_hole_cards} cartes en main, mais {len(hand)} ont été fournies.")
 
-        # Si le jeu est Omaha ou Omaha Hi/Lo, évaluer avec la méthode spécifique pour Omaha
-        if game in ["omaha", "omaha8"]:
-            return self.eval_omaha_hand_cdef(game, side, hand, board)
+        # Déclarations des variables cdef en haut
+        cdef StdDeck_CardMask mask
+        cdef EvalResult result
+        cdef StdDeck_CardMask board_mask  # Déclaration déplacée ici
+
+        # Créer le masque de cartes
+        mask = self.create_cardmask(hand + board)
+
+        if side == "low":
+            if game == "lowball27":
+                # Utiliser la fonction C pour évaluer la main basse
+                result.handval = py_Hand_EVAL_DEUCE_TO_SEVEN_LOW(&mask, 5)
+                if result.handval == LowHandVal_NOTHING:
+                    # Main basse invalide
+                    pass
+                else:
+                    # Main basse valide
+                    pass
+            elif game in ["ace_to_five_lowball8", "omaha8", "7stud8"]:
+                result.handval = py_Hand_EVAL_LOW8(&mask, 5)
+                if result.handval == LowHandVal_NOTHING:
+                    # Main basse invalide
+                    pass
+                else:
+                    # Main basse valide
+                    pass
+            else:
+                result.handval = py_Hand_EVAL_LOW(&mask, 5)
+                if result.handval == LowHandVal_NOTHING:
+                    # Main basse invalide
+                    pass
+                else:
+                    # Main basse valide
+                    pass
         else:
-            return self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
+            # Évaluation haute ou autres types de lowball
+            if game in ["omaha", "omaha8"]:
+                if side == "hi":
+                    # Utiliser l'évaluation Omaha Hi
+                    board_mask = self.create_cardmask(board)  # Assignation sans déclaration
+                    StdDeck_OmahaHiLow8_EVAL(mask, board_mask, &hi_val, &lo_val)
+                    result.handval = hi_val
+            else:
+                # Utiliser l'évaluation haute standard
+                result.handval = py_Hand_EVAL_N(&mask, 5)
+
+        return result
+
+
+
+
+
+
 
 
     cdef EvalResult eval_best_hand_exhaustive_cdef(self, str game, str side, list hand, list board):
@@ -368,18 +447,33 @@ cdef class PokerEval:
             raise ValueError(f"Le jeu {game} nécessite au moins 5 cartes, mais {len(hand)} en main et {len(board)} sur le tableau ont été fournies.")
 
         cdef list all_cards = hand + board
-        cdef HandVal best_val
+        cdef HandVal best_val = 0
         cdef HandVal current_val
-        cdef LowHandVal best_lo_val
+        cdef LowHandVal best_lo_val = 0xFFFFFFFF  # Initialisé à une valeur élevée
         cdef LowHandVal current_lo_val
-        cdef StdDeck_CardMask best_mask, current_mask
+        cdef StdDeck_CardMask best_mask
+        cdef StdDeck_CardMask current_mask
         cdef int card_num
-        py_StdDeck_CardMask_RESET(&best_mask)
+        cdef str sort_type
+        cdef EvalResult result
 
         if side == 'hi':
             best_val = 0
         elif side == 'low':
-            best_lo_val = 0xFFFFFFFF
+            best_lo_val = 0xFFFFFFFF  # Réinitialiser pour l'évaluation basse
+
+        # Déterminer le type de tri pour l'évaluation basse
+        if side == 'low':
+            if game == "lowball27":
+                sort_type = "low27"
+            elif game in ["ace_to_five_lowball8", "omaha8", "7stud8"]:
+                sort_type = "low8"
+            elif game in ["razz", "lowball", "ace_to_five_lowball"]:
+                sort_type = "low"
+            else:
+                raise ValueError(f"Jeu low non supporté : {game}")
+        else:
+            sort_type = "hi"
 
         # Générer toutes les combinaisons possibles de cinq cartes
         for combo in combinations(all_cards, 5):
@@ -400,28 +494,44 @@ cdef class PokerEval:
                     # Copier les masques actuels dans best_mask
                     memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
             elif side == 'low':
-                if game == 'razz' or game == 'lowball' or game == 'ace_to_five_lowball':
-                    current_lo_val = py_Hand_EVAL_LOW(&current_mask, 5)
-                elif game == 'lowball27':
+                if game == 'lowball27':
                     current_lo_val = py_Hand_EVAL_DEUCE_TO_SEVEN_LOW(&current_mask, 5)
-                elif game.endswith('8'):
+                elif game in ['ace_to_five_lowball8', 'omaha8', '7stud8']:
                     current_lo_val = py_Hand_EVAL_LOW8(&current_mask, 5)
+                    if current_lo_val == LowHandVal_NOTHING:
+                        continue  # Main non qualifiée pour le low
                 else:
-                    raise ValueError(f"Jeu low non supporté : {game}")
+                    current_lo_val = py_Hand_EVAL_LOW(&current_mask, 5)
 
-                if current_lo_val < best_lo_val:
-                    best_lo_val = current_lo_val
-                    # Copier les masques actuels dans best_mask
-                    memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
+                if game == 'lowball27':
+                    # Pour lowball27, vérifier explicitement si la main est valide
+                    if current_lo_val == LowHandVal_NOTHING:
+                        continue  # Main non qualifiée pour le low
+                    # Sinon, comparer pour trouver le meilleur low_val
+                    if current_lo_val < best_lo_val:
+                        best_lo_val = current_lo_val
+                        # Copier les masques actuels dans best_mask
+                        memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
+                else:
+                    # Pour d'autres types de lowball, la logique peut différer
+                    if current_lo_val < best_lo_val:
+                        best_lo_val = current_lo_val
+                        # Copier les masques actuels dans best_mask
+                        memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
 
-        # Retourner la meilleure main trouvée
-        cdef EvalResult result
+        # Préparer la meilleure main trouvée
         if side == 'hi':
             result.handval = best_val
         elif side == 'low':
-            result.handval = best_lo_val
+            if best_lo_val == 0xFFFFFFFF:
+                # Aucune main basse valide trouvée
+                result.handval = LowHandVal_NOTHING
+            else:
+                result.handval = best_lo_val
         result.combined_mask = best_mask
         return result
+
+
 
 
 
@@ -429,7 +539,7 @@ cdef class PokerEval:
         """Évalue une main Omaha spécifique et retourne les résultats dans une structure C."""
         cdef EvalResult result
         cdef HandVal best_val
-        cdef LowHandVal best_lo_val
+        cdef LowHandVal best_lo_val = 0xFFFFFFFF
         cdef HandVal current_val
         cdef LowHandVal current_lo_val
         cdef StdDeck_CardMask best_mask, current_mask
@@ -487,6 +597,7 @@ cdef class PokerEval:
 
 
 
+
     cpdef int rank_card(self, str card):
         """Retourne l'ordre de tri basé sur le rang d'une carte."""
         rank_order = {
@@ -497,34 +608,89 @@ cdef class PokerEval:
         rank = card[0].upper()  # Convertir le rang en majuscule
         return rank_order.get(rank, 0)
 
+    def sort_key_high(self, card):
+        """Clé de tri pour les mains hautes."""
+        return self.rank_card(card)
+
+    def sort_key_low_ace_to_five(self, card):
+        """Clé de tri pour Ace-to-Five Lowball (Razz)."""
+        return self.low_rank_card(card, "ace_to_five")
+
+    def sort_key_low_lowball8(self, card):
+        """Clé de tri pour Ace-to-Five Lowball 8 or Better (Omaha8, 7stud8)."""
+        return self.low_rank_card(card, "ace_to_five_lowball8")
+
+    def sort_key_low_lowball27(self, card):
+        """Clé de tri pour Deuce-to-Seven Lowball."""
+        return self.low_rank_card(card, "lowball27")
 
 
 
-    cdef list _cardmask_to_sorted_list(self, StdDeck_CardMask* mask):
-        """Convertit un StdDeck_CardMask en une liste de chaînes de caractères représentant les cartes triées."""
-        cdef list cards = []
-        cdef int i
-        cdef char card_str[16]
-
-        for i in range(StdDeck_N_CARDS):
-            if py_StdDeck_CardMask_CARD_IS_SET(mask, i):
-                StdDeck_cardToString(i, card_str)
-                card = card_str.decode('utf-8')
-                cards.append(card)
-                logging.debug(f"Carte extraite du masque: {card}")
-
-        # Assurez-vous qu'il y a exactement 5 cartes
-        if len(cards) != 5:
-            logging.warning(f"Nombre de cartes extraites : {len(cards)} (attendu 5)")
-            # Optionnel : Vous pouvez gérer cela en levant une exception ou en ajustant la liste
-            # raise ValueError(f"Nombre de cartes extraites incorrect : {len(cards)} au lieu de 5")
-
-        # Tri des cartes par rang (ordre décroissant)
-        sorted_cards = sorted(cards, key=lambda card: self.rank_card(card), reverse=True)
+    def _cardmask_to_sorted_list(self, list cards, str sort_type="hi"):
+        """
+        Trie une liste de cartes en fonction du type d'évaluation : 'hi', 'low', 'low8', 'low27'.
         
+        Parameters:
+            cards (list): Liste des cartes sous forme de chaînes de caractères.
+            sort_type (str): Type de tri à appliquer.
+        
+        Returns:
+            list: Liste des cartes triées.
+        """
+        # Déterminer la fonction de clé et l'ordre de tri
+        if sort_type == "hi":
+            key_func = self.sort_key_high
+            reverse = True
+        elif sort_type == "low":
+            key_func = self.sort_key_low_ace_to_five
+            reverse = False
+        elif sort_type == "low8":
+            key_func = self.sort_key_low_lowball8
+            reverse = False
+        elif sort_type == "low27":
+            key_func = self.sort_key_low_lowball27
+            reverse = False
+        else:
+            key_func = None
+
+        # Trier les cartes en fonction du type d'évaluation
+        if key_func is not None:
+            sorted_cards = sorted(cards, key=key_func, reverse=reverse)
+        else:
+            sorted_cards = cards
+
         logging.debug(f"Cartes extraites et triées du masque : {sorted_cards}")
-        
         return sorted_cards
+
+
+
+
+    cpdef int low_rank_card(self, str card, str game_type):
+        """
+        Retourne la valeur de rang d'une carte pour le tri dans les mains basses.
+        - Pour 'ace_to_five' et 'ace_to_five_lowball8', l'As est traité comme 1.
+        - Pour 'lowball27', l'As est traité comme 14.
+        """
+        cdef dict rank_to_value_ace_to_five = {
+            'A': 1, '2': 2, '3': 3, '4': 4, '5': 5,
+            '6': 6, '7': 7, '8': 8, '9': 9, 'T': 10,
+            'J': 11, 'Q': 12, 'K': 13
+        }
+        cdef dict rank_to_value_lowball27 = {
+            'A': 14, '2': 2, '3': 3, '4': 4, '5': 5,
+            '6': 6, '7': 7, '8': 8, '9': 9, 'T': 10,
+            'J': 11, 'Q': 12, 'K': 13
+        }
+        # Convertir le premier caractère en majuscule
+        cdef str rank_char = card[0].upper()
+        if game_type in ['ace_to_five', 'ace_to_five_lowball8']:
+            return rank_to_value_ace_to_five.get(rank_char, 0)
+        elif game_type == 'lowball27':
+            return rank_to_value_lowball27.get(rank_char, 0)
+        else:
+            # Default to high rank
+            return self.rank_card(card)
+
 
 
 
@@ -541,21 +707,40 @@ cdef class PokerEval:
 
 
 
-    cdef list _get_hand_details(self, HandVal handval, StdDeck_CardMask* hand_mask, bint include_description=False, bint low=False):
+    cdef list _get_hand_details(self, HandVal handval, StdDeck_CardMask* hand_mask, bint include_description=False, bint low=False, str game=""):
         """Récupère les détails de la main pour l'affichage, en tenant compte du type high/low."""
-        cdef list sorted_cards = []
+        cdef list sorted_cards
         cdef char hand_str[80]
+        cdef str hand_description
+        cdef list cards
 
+        sorted_cards = []
         if low:
             # Pour les mains basses, utiliser le masque de cartes
-            hand_description = self.low_hand_description(handval, hand_mask)
+            hand_description = self.low_hand_description(handval, hand_mask, game)
         else:
             # Main haute
             StdRules_HandVal_toString(handval, hand_str)
             hand_description = hand_str.decode('utf-8')
 
-        # Extraire les cartes du masque StdDeck_CardMask triées par ordre de rang
-        sorted_cards = self._cardmask_to_sorted_list(hand_mask)
+        # Convertir le masque de cartes en une liste de cartes
+        cards = self._cardmask_to_list(hand_mask)
+
+        # Déterminer le type de tri pour l'évaluation
+        if game == "lowball27":
+            sort_type = "low27"
+        elif game in ["ace_to_five_lowball8", "omaha8", "7stud8"]:
+            sort_type = "low8"
+        elif game in ["razz", "lowball", "ace_to_five_lowball"]:
+            sort_type = "low"
+        else:
+            sort_type = "hi"
+
+        # Trier les cartes en fonction du type d'évaluation
+        sorted_cards = self._cardmask_to_sorted_list(
+            cards, 
+            sort_type=sort_type
+        )
 
         if not sorted_cards:
             logging.warning("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
@@ -571,38 +756,48 @@ cdef class PokerEval:
 
 
 
-    cdef str low_hand_description(self, LowHandVal handval, StdDeck_CardMask* hand_mask):
-        """Convertit un LowHandVal en une description lisible de la main basse."""
+
+
+
+
+    cdef str low_hand_description(self, LowHandVal handval, StdDeck_CardMask* hand_mask, str game=""):
+        """Convertit un LowHandVal en une description lisible de la main basse, en fonction du jeu."""
+        cdef str sort_type
+        cdef list cards
+        cdef list sorted_cards
+        cdef str hand_description       
         if handval == LowHandVal_NOTHING:
             return "No low hand"
         else:
-            # Extraire les cartes du masque
-            cards = self._cardmask_to_sorted_list(hand_mask)
-            # Convertir les cartes en rangs, traiter l'As comme 1
-            ranks = []
-            rank_to_value = {'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, 'T':10, 'J':11, 'Q':12, 'K':13}
-            rank_to_str = {
-                1: 'A', 2: '2', 3: '3', 4: '4', 5: '5',
-                6: '6', 7: '7', 8: '8', 9: '9', 10: 'T',
-                11: 'J', 12: 'Q', 13: 'K'
-            }
-            for card in cards:
-                rank_char = card[0]
-                rank = rank_to_value.get(rank_char.upper(), 0)
-                if rank == 14:
-                    rank = 1  # Traiter l'As comme 1
-                ranks.append(rank)
-            sorted_ranks = sorted(ranks)
-            # Déterminer le rang le plus élevé de la main basse
-            highest_rank = max(sorted_ranks)
-            # Construire la description
-            if sorted_ranks == [1, 2, 3, 4, 5]:
-                hand_description = "A-5 low"
+
+
+            # Déterminer le type de lowball
+            if game == "lowball27":
+                sort_type = "low27"
+            elif game in ["ace_to_five_lowball8", "omaha8", "7stud8"]:
+                sort_type = "low8"
+            elif game in ["razz", "lowball", "ace_to_five_lowball"]:
+                sort_type = "low"
             else:
-                high_card_str = rank_to_str.get(highest_rank, str(highest_rank))
-                hand_description = f"A-{high_card_str} low"
+                # Par défaut, traiter comme high si inconnu
+                sort_type = "hi"
+
+            # Convertir le masque de cartes en une liste de cartes
+            cards = self._cardmask_to_list(hand_mask)
+
+            # Trier les cartes en fonction du type d'évaluation
+            sorted_cards = self._cardmask_to_sorted_list(cards, sort_type=sort_type)
+
+            # Construire la description
+            hand_description = '-'.join(sorted_cards) + ' low'
             logging.debug(f"Low hand description: {hand_description}")
-            return hand_description
+
+        if not sorted_cards:
+            logging.warning("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
+
+        return hand_description
+
+
 
 
 
