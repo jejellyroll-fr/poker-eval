@@ -10,7 +10,7 @@ import random  # Utiliser le module random de Python
 from libc.stdint cimport uint32_t, uint64_t
 
 # Configurer le logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # Importation des types et fonctions externes depuis les en-têtes C
 
@@ -743,7 +743,7 @@ cdef class PokerEval:
         )
 
         if not sorted_cards:
-            logging.warning("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
+            logging.debug("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
 
         if include_description:
             # Retourner la chaîne complète, qui inclut le type de main et les cartes
@@ -793,7 +793,7 @@ cdef class PokerEval:
             logging.debug(f"Low hand description: {hand_description}")
 
         if not sorted_cards:
-            logging.warning("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
+            logging.debug("Le masque de cartes est vide ou l'extraction des cartes a échoué.")
 
         return hand_description
 
