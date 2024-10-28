@@ -287,7 +287,7 @@ cdef class PokerEval:
 
 
 
-    def best_hand(self, game, side, hand, board=None, include_description=False):
+    def best_hand(self, game, side, hand, board=None, include_description=False, retro=False):
         """Retourne la meilleure main en termes de cartes (combinaison), incluant les mains hautes et basses."""
         
         # Liste des jeux supportés
@@ -330,8 +330,19 @@ cdef class PokerEval:
             # Sinon, utiliser la méthode d'évaluation exhaustive pour les autres jeux
             result = self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
-        # Retourner les détails de la main en fonction du type high/low
-        return self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description, low=is_low, game=game)
+        # Obtenir les détails de la main
+        hand_details = self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description, low=is_low, game=game)
+
+        if retro:
+            # Transformer le résultat en format rétro
+            description = hand_details[0].split(' (')[0]  # 'Flush (K Q J T 2)' -> 'Flush'
+            # Convertir les cartes en indices entiers
+            card_indices = [self._string2card(card) for card in hand_details[1:]]
+            return [description] + card_indices
+        else:
+            # Retourner le résultat dans le format nouveau
+            return hand_details
+
 
 
 

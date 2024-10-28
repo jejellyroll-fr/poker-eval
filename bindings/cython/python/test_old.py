@@ -123,17 +123,50 @@ print(
 )
 
 # Fonction Utilitaire pour Afficher best_hand avec Gestion des Exceptions
-def print_best_hand(hand, game, side, board=None):
+def print_best_hand(hand, game, side, board=None, retro=False):
+    """
+    Affiche la meilleure main pour une combinaison donnée de cartes.
+
+    Parameters:
+        hand (list): Liste des cartes de la main.
+        game (str): Type de jeu de poker (e.g., "holdem", "7stud", "omaha8", etc.).
+        side (str): Type d'évaluation de la main ("hi" ou "low").
+        board (list, optional): Liste des cartes communes sur le tableau. Par défaut, None.
+        retro (bool, optional): Si True, utilise le format rétro. Par défaut, False.
+    """
     try:
-        best_hand = pokereval.best_hand(game, side, to_lower(hand), to_lower(board) if board else None, include_description=True)
-        print(f'best hand from {hand} = {best_hand}')
-        print(f"best hand from {hand} = ({best_hand[0]}) {best_hand[1:]} \n")
+        best_hand = pokereval.best_hand(
+            game,
+            side,
+            to_lower(hand),
+            to_lower(board) if board else None,
+            include_description=True,
+            retro=retro
+        )
+        
+        if retro:
+            # Format Rétro : ['Flush', 11, 10, 9, 8, 0]
+            description = best_hand[0]
+            card_indices = best_hand[1:]
+            print(f'best hand from {hand} (retro=True) = {best_hand}')
+            print(f"best hand from {hand} (retro=True) = ({description}) {card_indices}\n")
+        else:
+            # Format Nouveau : ['Flush (K Q J T 2)', 'kh', 'qh', 'jh', 'th', '2h']
+            description = best_hand[0]
+            cards = best_hand[1:]
+            print(f'best hand from {hand} = {best_hand}')
+            print(f"best hand from {hand} = ({description}) {cards}\n")
+            
     except ValueError as ve:
         print(f"Erreur lors de l'évaluation de la main {hand} pour {game} {side}: {ve}\n")
 
 # Tests de best_hand
 print_best_hand(
     ["AC", "AS", "TD", "7S", "7H", "3S", "2C"], "holdem", "hi"
+)
+
+print_best_hand(
+    ["AC", "AS", "TD", "7S", "7H", "3S", "2C"], "holdem", "hi", retro=True
 )
 
 print_best_hand(
