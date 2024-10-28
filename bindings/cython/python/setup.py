@@ -17,7 +17,7 @@ elif sys.platform.startswith("linux"):
     extra_compile_args = ["-g"]
     extra_link_args = ["-g"]
     libraries = ["poker_lib_static"]
-    library_dirs = ["../../../build/Debug", "../../../lib"]
+    library_dirs = ["../../../build", "../../../lib"]
 
 extensions = [
     Extension(

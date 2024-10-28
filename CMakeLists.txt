@@ -7,6 +7,13 @@ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 # Specify the standard C version
 set(CMAKE_C_STANDARD 99)
 
+# case linux
+if(UNIX AND NOT APPLE)
+    set(LINUX TRUE)
+else()
+    set(LINUX FALSE)
+endif()
+
 # Include header directories
 include_directories(include inlines)
 
@@ -29,6 +36,9 @@ target_compile_definitions(poker_lib PRIVATE POKERVAL_DLL POKEREVAL_LIBRARY)
 
 # Static library
 add_library(poker_lib_static STATIC ${LIB_SOURCES})
+if(LINUX)
+    set_target_properties(poker_lib_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 
 # Installing libraries
 install(TARGETS poker_lib poker_lib_static

@@ -27,7 +27,10 @@ cd build
 if [[ "$OS" == "Windows" ]]; then
     cmake .. -G "Visual Studio 17 2022"
     cmake --build .
-elif [[ "$OS" == "Linux" || "$OS" == "MacOS" ]]; then
+elif [[ "$OS" == "MacOS" ]]; then
+    cmake ..
+    make
+elif [[ "$OS" == "Linux" ]]; then
     cmake ..
     make
 fi
