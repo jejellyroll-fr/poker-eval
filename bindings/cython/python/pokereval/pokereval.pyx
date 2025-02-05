@@ -290,80 +290,68 @@ cdef class PokerEval:
     def best_hand(self, game, side, hand, board=None, include_description=False, retro=False):
         """Retourne la meilleure main en termes de cartes (combinaison), incluant les mains hautes et basses."""
         
-        # Liste des jeux supportés
         supported_games = [
             "holdem", "holdem8",
             "omaha", "omaha8",
+            "omaha5", "omaha5hi8",
+            "omaha6",
             "7stud", "7stud8", "7studnsq",
             "razz",
             "lowball", "ace_to_five_lowball", "lowball27",
             "5draw", "5draw8", "5drawnsq"
         ]
 
-        # Vérification du jeu supporté
         if game not in supported_games:
             raise ValueError(f"Jeu non supporté : {game}")
 
         if board is None:
             board = []
 
-        # Vérification que hand et board sont des listes
         if not isinstance(hand, list) or not isinstance(board, list):
             raise TypeError("Les mains et le tableau doivent être des listes.")
 
-        # Vérification du nombre de cartes minimum
         if len(hand) + len(board) < 5:
-            raise ValueError("Il faut au moins 5 cartes pour évaluer une main (combinaison de hand et board).")
+            raise ValueError("Il faut au moins 5 cartes pour évaluer une main.")
 
-        # Créer la structure pour stocker le résultat
         cdef EvalResult result
-
-        # Déterminer si nous devons évaluer une main basse (low)
         is_low = (side == 'low')
 
-        # Utiliser la méthode spécifique pour Omaha si nécessaire
-        if game in ["omaha", "omaha8"]:
-            if len(hand) != 4:
-                raise ValueError(f"Omaha nécessite exactement 4 cartes en main, mais {len(hand)} ont été fournies.")
+        if game in ["omaha", "omaha8", "omaha5", "omaha5hi8", "omaha6"]:
             result = self.eval_omaha_hand_cdef(game, side, hand, board)
         else:
-            # Sinon, utiliser la méthode d'évaluation exhaustive pour les autres jeux
             result = self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
-        # Obtenir les détails de la main
         hand_details = self._get_hand_details(result.handval, &result.combined_mask, include_description=include_description, low=is_low, game=game)
 
         if retro:
-            # Transformer le résultat en format rétro
-            description = hand_details[0].split(' (')[0]  # 'Flush (K Q J T 2)' -> 'Flush'
-            # Convertir les cartes en indices entiers
+            description = hand_details[0].split(' (')[0]
             card_indices = [self._string2card(card) for card in hand_details[1:]]
             return [description] + card_indices
         else:
-            # Retourner le résultat dans le format nouveau
             return hand_details
 
 
 
 
+
     def best_hand_value(self, game, side, hand, board=None):
-        """Retourne la valeur numérique de la meilleure main."""
+        """Retourne la valeur numérique de la meilleure main pour un jeu donné."""
         if board is None:
             board = []
         if len(hand) + len(board) < 5:
             return False
 
-        # S'assurer que hand et board sont bien des listes
         if not isinstance(hand, list) or not isinstance(board, list):
-            raise TypeError("Hand and board must be lists.")
+            raise TypeError("Les mains et le tableau doivent être des listes.")
 
         cdef EvalResult result
-        if game in ["omaha", "omaha8"]:
+        if game in ["omaha", "omaha8", "omaha5", "omaha5hi8", "omaha6"]:
             result = self.eval_omaha_hand_cdef(game, side, hand, board)
         else:
             result = self.eval_best_hand_exhaustive_cdef(game, side, hand, board)
 
         return result.handval
+
 
     cdef EvalResult eval_hand_cdef(self, str game, str side, list hand, list board):
         """Évalue une main spécifique et retourne les résultats dans une structure C."""
@@ -374,6 +362,9 @@ cdef class PokerEval:
             "holdem8": 2,
             "omaha": 4,
             "omaha8": 4,
+            "omaha5": 5,
+            "omaha5hi8": 5,
+            "omaha6": 6,
             "7stud": 7,
             "7stud8": 7,
             "7studnsq": 7,
@@ -547,24 +538,33 @@ cdef class PokerEval:
 
 
     cdef EvalResult eval_omaha_hand_cdef(self, str game, str side, list hand, list board):
-        """Évalue une main Omaha spécifique et retourne les résultats dans une structure C."""
+        """Évalue une main Omaha spécifique (4, 5 ou 6 cartes) et retourne les résultats."""
+
         cdef EvalResult result
-        cdef HandVal best_val
-        cdef LowHandVal best_lo_val = 0xFFFFFFFF
+        cdef HandVal best_val = 0
+        cdef LowHandVal best_lo_val = 0xFFFFFFFF  # Valeur initiale pour Low
         cdef HandVal current_val
         cdef LowHandVal current_lo_val
         cdef StdDeck_CardMask best_mask, current_mask
         cdef int card_num
 
-        # Initialiser les meilleures valeurs
+        if game not in ["omaha", "omaha8", "omaha5", "omaha5hi8", "omaha6"]:
+            raise ValueError(f"Jeu non supporté pour Omaha : {game}")
+
+        # Vérifier le nombre de cartes en main pour les différentes variantes d’Omaha
+        expected_hole_cards = {"omaha": 4, "omaha8": 4, "omaha5": 5, "omaha5hi8": 5, "omaha6": 6}[game]
+        if len(hand) != expected_hole_cards:
+            raise ValueError(f"{game} nécessite exactement {expected_hole_cards} cartes en main, mais {len(hand)} ont été fournies.")
+
+        # Initialiser les valeurs maximales/minimales
         if side == 'hi':
             best_val = 0
         elif side == 'low':
             best_lo_val = 0xFFFFFFFF
 
-        # Parcourir toutes les combinaisons possibles
+        # Parcourir toutes les combinaisons de **2 cartes parmi les 5 ou 6 cartes en main**
         for hand_combo in combinations(hand, 2):
-            for board_combo in combinations(board, 3):
+            for board_combo in combinations(board, 3):  # Choisir 3 cartes du board
                 full_combo = hand_combo + board_combo
 
                 # Créer un masque pour la combinaison actuelle
@@ -574,22 +574,18 @@ cdef class PokerEval:
                     if card_num != 255:
                         py_StdDeck_CardMask_SET(&current_mask, card_num)
 
-                # Évaluer la combinaison
+                # Évaluation de la main haute
                 if side == 'hi':
                     current_val = py_Hand_EVAL_N(&current_mask, 5)
                     if current_val > best_val:
                         best_val = current_val
-                        # Copier le masque actuel dans best_mask
                         memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
-                elif side == 'low':
-                    if game == 'omaha8':
-                        current_lo_val = py_Hand_EVAL_LOW8(&current_mask, 5)
-                    else:
-                        raise ValueError(f"Jeu low non supporté pour Omaha : {game}")
 
+                # Évaluation de la main basse si Omaha Hi-Lo
+                elif side == 'low' and game in ["omaha8", "omaha5hi8"]:
+                    current_lo_val = py_Hand_EVAL_LOW8(&current_mask, 5)
                     if current_lo_val < best_lo_val:
                         best_lo_val = current_lo_val
-                        # Copier le masque actuel dans best_mask
                         memcpy(&best_mask, &current_mask, sizeof(StdDeck_CardMask))
 
         # Retourner la meilleure main trouvée
@@ -599,6 +595,7 @@ cdef class PokerEval:
             result.handval = best_lo_val
         result.combined_mask = best_mask
         return result
+
 
 
 

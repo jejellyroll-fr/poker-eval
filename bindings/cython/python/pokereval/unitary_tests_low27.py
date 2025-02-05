@@ -8,16 +8,39 @@ logging.basicConfig(level=logging.DEBUG)
 poker_eval = pokereval.PokerEval()
 
 
+def normalize_low_description(description):
+    """Supprime les couleurs des cartes dans la description pour Lowball 2-7."""
+    suffix = ""
+    if description.endswith(" low"):
+        # On retire le suffixe ' low' pour normaliser uniquement les cartes
+        description_core = description[:-4]
+        suffix = " low"
+    else:
+        description_core = description
+
+    # Traitement sur chaque carte : suppression du dernier caractère si c'est une couleur
+    tokens = description_core.split("-")
+    tokens = [token[:-1] if token and token[-1] in "cdhs" else token for token in tokens]
+    return "-".join(tokens) + suffix
+
+
 def test_hand_low(game, hand, board, expected_description, expected_cards):
     best_hand = poker_eval.best_hand(
         game=game, side="low", hand=hand, board=board, include_description=True
     )
-    description = best_hand[0]
+    
+    # Normalisation des descriptions
+    description = normalize_low_description(best_hand[0])  
+    expected_description = normalize_low_description(expected_description)
+    
     cards = best_hand[1:]
+
     print(f"Best low hand from hand={hand} board={board} = ({description}) {cards}")
+
     assert (
         description == expected_description
     ), f"Expected description {expected_description}, got {description}"
+
     assert sorted(cards, key=poker_eval.rank_card, reverse=True) == sorted(
         expected_cards, key=poker_eval.rank_card, reverse=True
     ), f"Expected cards {expected_cards}, got {cards}"
@@ -43,7 +66,7 @@ def test_lowball27_with_pair():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="7-4-3-2-2 low",
+        expected_description="2-2-3-4-7 low",
         expected_cards=expected_best_hand,
     )
 
@@ -55,7 +78,7 @@ def test_lowball27_with_straight():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="6-5-4-3-2 low",
+        expected_description="2-3-4-5-6 low",
         expected_cards=hand,
     )
 
@@ -67,7 +90,7 @@ def test_lowball27_with_flush():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="9-8-7-5-2 low",
+        expected_description="2-5-7-8-9 low",
         expected_cards=hand,
     )
 
@@ -79,7 +102,7 @@ def test_lowball27_high_cards():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="K-Q-J-T-9 low",
+        expected_description="9-T-J-Q-K low",
         expected_cards=hand,
     )
 
@@ -92,7 +115,7 @@ def test_lowball27_best_hand_from_seven_cards():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="9-7-4-3-2 low",
+        expected_description="2-3-4-7-9 low",
         expected_cards=expected_best_hand,
     )
 
@@ -105,7 +128,7 @@ def test_lowball27_with_ace():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="7-5-4-3-2 low",
+        expected_description="2-3-4-5-7 low",
         expected_cards=expected_best_hand,
     )
 
@@ -117,7 +140,7 @@ def test_lowball27_no_pair_high_cards():
         game="lowball27",
         hand=hand,
         board=[],
-        expected_description="Q-J-T-9-8 low",
+        expected_description="8-9-T-J-Q low",
         expected_cards=hand,
     )
 

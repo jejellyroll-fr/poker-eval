@@ -1,5 +1,5 @@
 import sys
-from setuptools import setup, Extension
+from setuptools import setup, Extension, find_packages
 from Cython.Build import cythonize
 
 # Configuration spécifique par plateforme
@@ -21,11 +21,11 @@ elif sys.platform.startswith("linux"):
 
 extensions = [
     Extension(
-        "pokereval",
-        ["pokereval.pyx", "pokereval_wrapper.c"],
+        "pokereval.pokereval",
+        ["pokereval/pokereval.pyx", "pokereval/pokereval_wrapper.c"],
         include_dirs=[
             "../../../include"
-        ],  # Ajustez selon le chemin de vos fichiers d'en-tête
+        ],
         libraries=libraries,
         library_dirs=library_dirs,
         extra_compile_args=extra_compile_args,
@@ -35,5 +35,9 @@ extensions = [
 
 setup(
     name="pokereval",
+    version="0.1.0",
+    packages=find_packages(),
+    package_dir={"": "."},  # Ajout pour préciser où chercher le package
     ext_modules=cythonize(extensions),
+    zip_safe=False,
 )

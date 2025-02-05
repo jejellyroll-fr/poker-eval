@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools", "Cython"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pokereval"
+version = "0.1.0"
+description = "A Cython wrapper for a poker evaluation library"
+authors = [{ name = "Your Name", email = "your@email.com" }]
+license = { file = "LICENSE" }
+dependencies = [
+    "cython",
+    "setuptools"
+]
+
+[tool.setuptools]
+packages = ["pokereval"]
