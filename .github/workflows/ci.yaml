@@ -208,6 +208,7 @@ jobs:
           usesh: true
           mem: 2048
           release: "14.1"
+          copyback: true
           prepare: |
             pkg install -y cmake gmake gcc
           run: |
@@ -216,14 +217,23 @@ jobs:
             cmake ..
             gmake
             chmod +x *
-            tar -czf freebsd-artifacts.tar.gz *
+            cd ..
+            tar -czf freebsd-artifacts.tar.gz build/*
 
       - name: Extract FreeBSD artifacts
         run: |
           mkdir -p artifacts-freebsd
-          mv freebsd-artifacts.tar.gz artifacts-freebsd/ || true
-          cd artifacts-freebsd
-          tar -xzf freebsd-artifacts.tar.gz || true
+          if [ -f freebsd-artifacts.tar.gz ]; then
+            tar -xzf freebsd-artifacts.tar.gz -C artifacts-freebsd --strip-components=1
+          else
+            echo "freebsd-artifacts.tar.gz not found, looking for build directory..."
+            if [ -d build ]; then
+              cp -r build/* artifacts-freebsd/
+            else
+              echo "No artifacts found"
+              ls -la
+            fi
+          fi
 
       - name: Upload installer as artifact (FreeBSD)
         uses: actions/upload-artifact@v4
