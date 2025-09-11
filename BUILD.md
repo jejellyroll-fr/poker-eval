@@ -184,6 +184,8 @@ make
 
 ## Installation
 
+### Basic Installation
+
 ```bash
 make install
 ```
@@ -191,6 +193,219 @@ make install
 This installs:
 - Executables to `${CMAKE_INSTALL_PREFIX}/bin`
 - Libraries to `${CMAKE_INSTALL_PREFIX}/lib`
+
+### Installing on Target Systems
+
+#### Using Pre-built Artifacts
+
+1. **Download the appropriate artifact** for your target architecture from the GitHub releases or CI artifacts
+2. **Extract the archive** to a temporary directory
+3. **Copy files to system directories**:
+
+##### Linux/FreeBSD
+```bash
+# Extract artifact
+unzip poker-eval-linux-amd64.zip
+cd poker-eval-linux-amd64
+
+# Install system-wide (requires root)
+sudo mkdir -p /usr/local/bin /usr/local/lib /usr/local/include
+sudo cp eval fish pokenum hcmp2 hcmpn seven_card_hands usedecks /usr/local/bin/
+sudo cp libpoker_lib.so /usr/local/lib/
+sudo cp -r ../include/* /usr/local/include/
+
+# Update library cache
+sudo ldconfig
+
+# Or install to user directory
+mkdir -p $HOME/.local/bin $HOME/.local/lib
+cp eval fish pokenum hcmp2 hcmpn seven_card_hands usedecks $HOME/.local/bin/
+cp libpoker_lib.so $HOME/.local/lib/
+export PATH="$HOME/.local/bin:$PATH"
+export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
+```
+
+##### macOS
+```bash
+# Extract artifact
+unzip poker-eval-darwin-amd64.zip
+cd poker-eval-darwin-amd64
+
+# Install system-wide (requires admin)
+sudo mkdir -p /usr/local/bin /usr/local/lib /usr/local/include
+sudo cp eval fish pokenum hcmp2 hcmpn seven_card_hands usedecks /usr/local/bin/
+sudo cp libpoker_lib.dylib /usr/local/lib/
+sudo cp -r ../include/* /usr/local/include/
+
+# Or install to user directory
+mkdir -p $HOME/.local/bin $HOME/.local/lib
+cp eval fish pokenum hcmp2 hcmpn seven_card_hands usedecks $HOME/.local/bin/
+cp libpoker_lib.dylib $HOME/.local/lib/
+export PATH="$HOME/.local/bin:$PATH"
+export DYLD_LIBRARY_PATH="$HOME/.local/lib:$DYLD_LIBRARY_PATH"
+```
+
+##### Windows
+```powershell
+# Extract artifact
+Expand-Archive poker-eval-windows-amd64.zip
+cd poker-eval-windows-amd64
+
+# Install system-wide (requires Administrator)
+# Create directories if they don't exist
+New-Item -ItemType Directory -Force -Path "C:\Program Files\PokerEval\bin"
+New-Item -ItemType Directory -Force -Path "C:\Program Files\PokerEval\lib"
+New-Item -ItemType Directory -Force -Path "C:\Program Files\PokerEval\include"
+
+# Copy files
+Copy-Item *.exe "C:\Program Files\PokerEval\bin\"
+Copy-Item poker_lib.dll "C:\Program Files\PokerEval\lib\"
+Copy-Item ..\include\* "C:\Program Files\PokerEval\include\" -Recurse
+
+# Add to system PATH (requires restart or logout/login)
+# Add "C:\Program Files\PokerEval\bin" to your system PATH environment variable
+
+# Or install to user directory
+$userPath = "$env:USERPROFILE\.local"
+New-Item -ItemType Directory -Force -Path "$userPath\bin"
+New-Item -ItemType Directory -Force -Path "$userPath\lib"
+Copy-Item *.exe "$userPath\bin\"
+Copy-Item poker_lib.dll "$userPath\lib\"
+
+# Add to user PATH
+$env:PATH = "$userPath\bin;$env:PATH"
+```
+
+#### Using Package Managers (if available)
+
+##### Linux - Create .deb Package
+```bash
+# Install packaging tools
+sudo apt-get install build-essential devscripts debhelper
+
+# Create package structure
+mkdir -p poker-eval-1.0/DEBIAN
+mkdir -p poker-eval-1.0/usr/local/bin
+mkdir -p poker-eval-1.0/usr/local/lib
+mkdir -p poker-eval-1.0/usr/local/include
+
+# Copy files
+cp build/* poker-eval-1.0/usr/local/bin/
+cp *.so poker-eval-1.0/usr/local/lib/
+cp -r include/* poker-eval-1.0/usr/local/include/
+
+# Create control file
+cat > poker-eval-1.0/DEBIAN/control << EOF
+Package: poker-eval
+Version: 1.0
+Section: games
+Priority: optional
+Architecture: amd64
+Maintainer: Your Name <your.email@example.com>
+Description: Poker hand evaluation library
+ A library for evaluating poker hands and related utilities.
+EOF
+
+# Build package
+dpkg-deb --build poker-eval-1.0
+sudo dpkg -i poker-eval-1.0.deb
+```
+
+##### macOS - Using Homebrew
+```bash
+# Create a Homebrew formula (for local tap)
+# This is for advanced users who want to create their own tap
+```
+
+##### Windows - Using Chocolatey
+```powershell
+# Advanced: Create a Chocolatey package
+# This requires creating a .nuspec file and packaging scripts
+```
+
+### Development Integration
+
+#### CMake Integration
+To use poker-eval in your CMake project:
+
+```cmake
+# Find the library
+find_library(POKER_EVAL_LIB poker_lib PATHS /usr/local/lib ~/.local/lib)
+find_path(POKER_EVAL_INCLUDE poker_defs.h PATHS /usr/local/include ~/.local/include)
+
+# Link to your target
+target_link_libraries(your_target ${POKER_EVAL_LIB})
+target_include_directories(your_target PRIVATE ${POKER_EVAL_INCLUDE})
+```
+
+#### pkg-config Integration
+Create a pkg-config file for easier integration:
+
+```bash
+# Create poker-eval.pc
+sudo tee /usr/local/lib/pkgconfig/poker-eval.pc << EOF
+prefix=/usr/local
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: poker-eval
+Description: Poker hand evaluation library
+Version: 1.0
+Libs: -L\${libdir} -lpoker_lib
+Cflags: -I\${includedir}
+EOF
+
+# Use in your project
+pkg-config --cflags --libs poker-eval
+```
+
+#### Docker Integration
+Create a Docker image with poker-eval pre-installed:
+
+```dockerfile
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    cmake make gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and build poker-eval
+COPY . /poker-eval
+WORKDIR /poker-eval
+RUN mkdir build && cd build && \
+    cmake .. && make && make install
+
+# Set library path
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+CMD ["eval"]
+```
+
+### Verification
+
+After installation, verify it works:
+
+```bash
+# Test executables
+eval --help
+pokenum --help
+
+# Test library (C example)
+cat > test.c << EOF
+#include <stdio.h>
+#include "poker_defs.h"
+
+int main() {
+    printf("Poker-eval library loaded successfully!\n");
+    return 0;
+}
+EOF
+
+gcc -o test test.c -lpoker_lib
+./test
+```
 
 ## Troubleshooting
 
