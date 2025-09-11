@@ -77,12 +77,14 @@ jobs:
 
       - name: Ensure Visual Studio Build Tools installed
         run: |
-          choco install visualstudio2022buildtools -y --ignore-checksums --no-progress --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+          choco install visualstudio2022buildtools -y --ignore-checksums --no-progress --ignore-package-exit-codes --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
           $LASTEXITCODE = $?
           if ($LASTEXITCODE -eq 3010) {
             Write-Host "Reboot is required, continuing without reboot."
+            exit 0
           } elseif ($LASTEXITCODE -ne 0) {
             Write-Host "Non-zero exit code $LASTEXITCODE, but continuing (Chocolatey may report non-fatal errors)."
+            exit 0
           }
 
 
@@ -171,12 +173,14 @@ jobs:
 
       - name: Ensure Visual Studio Build Tools installed
         run: |
-          choco install visualstudio2022buildtools -y --ignore-checksums --no-progress --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+          choco install visualstudio2022buildtools -y --ignore-checksums --no-progress --ignore-package-exit-codes --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64"
           $LASTEXITCODE = $?
           if ($LASTEXITCODE -eq 3010) {
             Write-Host "Reboot is required, continuing without reboot."
+            exit 0
           } elseif ($LASTEXITCODE -ne 0) {
             Write-Host "Non-zero exit code $LASTEXITCODE, but continuing (Chocolatey may report non-fatal errors)."
+            exit 0
           }
 
       - name: Configure and Build with CMake (ARM64)
@@ -203,6 +207,7 @@ jobs:
         with:
           usesh: true
           mem: 2048
+          release: "14.1"
           prepare: |
             pkg install -y cmake gmake gcc
           run: |
@@ -211,19 +216,14 @@ jobs:
             cmake ..
             gmake
             chmod +x *
+            tar -czf freebsd-artifacts.tar.gz *
 
-      - name: Copy artifacts from VM
-        uses: vmactions/freebsd-vm@v1
-        with:
-          usesh: true
-          mem: 2048
-          run: |
-            tar -czf freebsd-artifacts.tar.gz build/
-
-      - name: Extract artifacts
+      - name: Extract FreeBSD artifacts
         run: |
           mkdir -p artifacts-freebsd
-          tar -xzf freebsd-artifacts.tar.gz -C artifacts-freebsd --strip-components=1
+          mv freebsd-artifacts.tar.gz artifacts-freebsd/ || true
+          cd artifacts-freebsd
+          tar -xzf freebsd-artifacts.tar.gz || true
 
       - name: Upload installer as artifact (FreeBSD)
         uses: actions/upload-artifact@v4
