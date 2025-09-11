@@ -5,11 +5,13 @@ on:
   push:
     branches:
       - master
+      - development
     tags:
       - '*'
   pull_request:
     branches:
       - master
+      - development
 
 jobs:
   build-and-package-ubuntu:
