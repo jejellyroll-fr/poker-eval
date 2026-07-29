@@ -19,11 +19,43 @@
  */
 
 #include <stdio.h>
+#include <stddef.h>
+#include <stdarg.h>
 #include <string.h>
 #include <poker_eval/games/badugi_eval.h>
 #include <poker_eval/games/rules_badugi.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/low_eval.h>
+
+/*
+ * Append to outString, never past size, and report how many bytes were really
+ * written. snprintf returns what it *would* have written, so accumulating its
+ * return value directly walks the cursor past the buffer on truncation.
+ */
+static int append_bounded(char *outString, size_t size, int length,
+                          const char *fmt, ...)
+#if defined(__GNUC__)
+    __attribute__((format(printf, 4, 5)))
+#endif
+    ;
+
+static int append_bounded(char *outString, size_t size, int length,
+                          const char *fmt, ...) {
+    va_list args;
+    int written;
+
+    if (length < 0 || (size_t)length >= size) return 0;
+
+    va_start(args, fmt);
+    written = vsnprintf(outString + length, size - (size_t)length, fmt, args);
+    va_end(args);
+
+    if (written < 0) return 0;
+    if ((size_t)written >= size - (size_t)length) {
+        return (int)(size - (size_t)length) - 1;   /* truncated */
+    }
+    return written;
+}
 
 /*
  * Get the best Badugi hand from a set of cards
@@ -347,21 +379,23 @@ HandVal StdDeck_BadeucyRules_EVAL_5(StdDeck_CardMask cards)
 /*
  * Convert Badugi hand value to string
  */
-int BadugiHandVal_toString(BadugiHandVal hv, char *outString)
+int BadugiHandVal_toString_n(BadugiHandVal hv, char *outString, size_t size)
 {
     int handType = BadugiHandVal_HANDTYPE(hv);
     int length = 0;
 
     if (hv == BadugiHandVal_NOTHING)
     {
-        strcpy(outString, "Nothing");
+        append_bounded(outString, size, 0, "%s", "Nothing");
         return 7;
     }
+
+
 
     switch (handType)
     {
     case BadugiRules_HandType_BADUGI:
-        length += sprintf(outString + length, "Badugi: %d%d%d%d",
+        length += append_bounded(outString, size, length, "Badugi: %d%d%d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv),
                           BadugiHandVal_THIRD_CARD(hv),
@@ -369,25 +403,25 @@ int BadugiHandVal_toString(BadugiHandVal hv, char *outString)
         break;
 
     case BadugiRules_HandType_THREE:
-        length += sprintf(outString + length, "Three-card: %d%d%d",
+        length += append_bounded(outString, size, length, "Three-card: %d%d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv),
                           BadugiHandVal_THIRD_CARD(hv));
         break;
 
     case BadugiRules_HandType_TWO:
-        length += sprintf(outString + length, "Two-card: %d%d",
+        length += append_bounded(outString, size, length, "Two-card: %d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv));
         break;
 
     case BadugiRules_HandType_ONE:
-        length += sprintf(outString + length, "One-card: %d",
+        length += append_bounded(outString, size, length, "One-card: %d",
                           BadugiHandVal_FIRST_CARD(hv));
         break;
 
     default:
-        strcpy(outString, "Invalid");
+        append_bounded(outString, size, 0, "%s", "Invalid");
         return 7;
     }
 
@@ -403,4 +437,13 @@ int BadugiHandVal_print(BadugiHandVal hv)
     int length = BadugiHandVal_toString(hv, buf);
     printf("%s", buf);
     return length;
+}
+
+/*
+ * Historical entry point: no length, so the caller must supply at least
+ * POKER_EVAL_HANDVAL_STRING_MAX bytes. Kept so the exported API does not break.
+ */
+int BadugiHandVal_toString(BadugiHandVal hv, char *outString)
+{
+    return BadugiHandVal_toString_n(hv, outString, POKER_EVAL_HANDVAL_STRING_MAX);
 }

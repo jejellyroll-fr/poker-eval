@@ -22,6 +22,7 @@
 #define __RULES_BADUGI_H__
 
 #include <poker_eval/core/pokereval_export.h>
+#include <stddef.h>
 #include <poker_eval/core/poker_defs.h>
 
 /* Badugi hand types - for enumeration compatibility, higher is better */
@@ -67,10 +68,19 @@ extern POKEREVAL_EXPORT int BadugiRules_nSigCards[BadugiRules_HandType_COUNT];
 extern POKEREVAL_EXPORT int BadaceyRules_nSigCards[BadaceyRules_HandType_COUNT];
 extern POKEREVAL_EXPORT int BadeucyRules_nSigCards[BadeucyRules_HandType_COUNT];
 
+/* Bounded variant; prefer it. size includes the terminator. */
+extern POKEREVAL_EXPORT int BadugiRules_HandVal_toString_n(HandVal handval, char *outString, size_t size);
+/* Requires a buffer of at least POKER_EVAL_HANDVAL_STRING_MAX bytes. */
 extern POKEREVAL_EXPORT int BadugiRules_HandVal_toString(HandVal handval, char *outString);
 extern POKEREVAL_EXPORT int BadugiRules_HandVal_print(HandVal handval);
+/* Bounded variant; prefer it. size includes the terminator. */
+extern POKEREVAL_EXPORT int BadaceyRules_HandVal_toString_n(HandVal handval, char *outString, size_t size);
+/* Requires a buffer of at least POKER_EVAL_HANDVAL_STRING_MAX bytes. */
 extern POKEREVAL_EXPORT int BadaceyRules_HandVal_toString(HandVal handval, char *outString);
 extern POKEREVAL_EXPORT int BadaceyRules_HandVal_print(HandVal handval);
+/* Bounded variant; prefer it. size includes the terminator. */
+extern POKEREVAL_EXPORT int BadeucyRules_HandVal_toString_n(HandVal handval, char *outString, size_t size);
+/* Requires a buffer of at least POKER_EVAL_HANDVAL_STRING_MAX bytes. */
 extern POKEREVAL_EXPORT int BadeucyRules_HandVal_toString(HandVal handval, char *outString);
 extern POKEREVAL_EXPORT int BadeucyRules_HandVal_print(HandVal handval);
 
