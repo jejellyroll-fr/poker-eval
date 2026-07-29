@@ -773,16 +773,12 @@ static void eedc_process_board_chunk(const StdDeck_CardMask *boards,
     if (worker_count > 1 && count >= worker_count)
     {
         int actual_workers = worker_count;
-        int chunk = eedc_get_chunk_size();
-        int omp_chunk = chunk / actual_workers;
-        if (omp_chunk < 1)
-            omp_chunk = 1;
         int idx;
         if (eedc_should_bind_threads())
 #if defined(_MSC_VER)
-#pragma omp parallel for schedule(dynamic, omp_chunk) num_threads(actual_workers)
+#pragma omp parallel for schedule(static) num_threads(actual_workers)
 #else
-#pragma omp parallel for schedule(dynamic, omp_chunk) num_threads(actual_workers) proc_bind(close)
+#pragma omp parallel for schedule(static) num_threads(actual_workers) proc_bind(close)
 #endif
         for (idx = 0; idx < count; ++idx)
         {
@@ -790,7 +786,7 @@ static void eedc_process_board_chunk(const StdDeck_CardMask *boards,
             eval_fn(boards[idx], userdata, &thread_results[tid]);
         }
         else
-#pragma omp parallel for schedule(dynamic, omp_chunk) num_threads(actual_workers)
+#pragma omp parallel for schedule(static) num_threads(actual_workers)
         for (idx = 0; idx < count; ++idx)
         {
             int tid = omp_get_thread_num();

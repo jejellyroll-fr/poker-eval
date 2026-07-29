@@ -971,12 +971,12 @@ static void mpf_apply_tree_node(mpf_state_t *st, int node_idx)
         }
         node->cache_slots[slot].owner = self;
         node->cache_slots[slot].state = st;
+        node->state_key = (uint64_t)(uintptr_t)st;
         pthread_mutex_unlock(&node->cache_lock);
 #else
         node->state_cache = st;
-#endif
-
         node->state_key = (uint64_t)(uintptr_t)st;
+#endif
 
         mpf_restore_base_bets(st);
         if (node->bet_size_count > 0)
@@ -1406,6 +1406,7 @@ static void mpf_tree_release_cache(mpf_tree_def_t *tree, const mpf_state_t *root
     size_t max_entries = (size_t)tree->node_count;
 #if !defined(_WIN32)
     max_entries *= MPF_NODE_CACHE_SLOTS;
+    pthread_t self = pthread_self();
 #endif
     if (max_entries < 1)
         max_entries = 1;
@@ -1422,7 +1423,7 @@ static void mpf_tree_release_cache(mpf_tree_def_t *tree, const mpf_state_t *root
         for (int s = 0; s < MPF_NODE_CACHE_SLOTS; ++s)
         {
             mpf_state_t *cached = node->cache_slots[s].state;
-            if (cached)
+            if (cached && pthread_equal(node->cache_slots[s].owner, self))
             {
                 if (allow_free && !mpf_state_ptr_seen(seen, seen_count, cached))
                 {
@@ -1435,13 +1436,20 @@ static void mpf_tree_release_cache(mpf_tree_def_t *tree, const mpf_state_t *root
                         seen[seen_count++] = cached;
                 }
                 node->cache_slots[s].state = NULL;
+                node->cache_slots[s].owner = 0;
             }
-            node->cache_slots[s].owner = 0;
         }
+        node->state_key = 0;
+        for (int s = 0; s < MPF_NODE_CACHE_SLOTS; ++s)
+        {
+            if (node->cache_slots[s].state)
+            {
+                node->state_key = (uint64_t)(uintptr_t)node->cache_slots[s].state;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&node->cache_lock);
 #else
-        if (!node->state_cache)
-            continue;
-#endif
         if (node->state_cache && node->state_cache != root)
         {
             if (allow_free && !mpf_state_ptr_seen(seen, seen_count, node->state_cache))
@@ -1457,8 +1465,6 @@ static void mpf_tree_release_cache(mpf_tree_def_t *tree, const mpf_state_t *root
         }
         node->state_cache = NULL;
         node->state_key = 0;
-#if !defined(_WIN32)
-        pthread_mutex_unlock(&node->cache_lock);
 #endif
     }
     free(seen);
