@@ -10,7 +10,8 @@ authors = [{ name = "Your Name", email = "your@email.com" }]
 license = { file = "LICENSE" }
 dependencies = [
     "cython",
-    "setuptools"
+    "setuptools",
+    "defusedxml>=0.7.1"
 ]
 
 [tool.setuptools]

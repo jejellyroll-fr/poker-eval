@@ -1,0 +1,224 @@
+name: CMake Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - name: Linux GCC
+            os: ubuntu-latest
+            compiler: gcc
+            preset: linux-gcc
+          
+          - name: Linux Clang
+            os: ubuntu-latest
+            compiler: clang
+            preset: linux-clang
+          
+          - name: Linux GCC Debug Coverage
+            os: ubuntu-latest
+            compiler: gcc
+            preset: debug
+            coverage: true
+          
+          # macOS builds
+          - name: macOS Clang
+            os: macos-latest
+            compiler: clang
+            preset: macos
+          
+          - name: macOS GCC
+            os: macos-latest
+            compiler: gcc-11
+            preset: default
+          
+          # Windows builds
+          - name: Windows MSVC
+            os: windows-latest
+            compiler: msvc
+            preset: windows-msvc
+          
+          - name: Windows MinGW
+            os: windows-latest
+            compiler: mingw
+            preset: default
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build lcov
+        if [ "${{ matrix.compiler }}" = "clang" ]; then
+          sudo apt-get install -y clang libomp-dev
+        else
+          sudo apt-get install -y gcc g++
+        fi
+    
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install ninja
+        if [ "${{ matrix.compiler }}" = "gcc-11" ]; then
+          brew install gcc@11
+          echo "CC=gcc-11" >> $GITHUB_ENV
+          echo "CXX=g++-11" >> $GITHUB_ENV
+        fi
+    
+    - name: Install dependencies (Windows MinGW)
+      if: runner.os == 'Windows' && matrix.compiler == 'mingw'
+      run: |
+        choco install mingw ninja
+        echo "CC=gcc" >> $env:GITHUB_ENV
+        echo "CXX=g++" >> $env:GITHUB_ENV
+    
+    - name: Configure CMake
+      run: cmake --preset ${{ matrix.preset }}
+    
+    - name: Build
+      run: cmake --build --preset ${{ matrix.preset }} --parallel
+    
+    - name: Test
+      run: ctest --preset ${{ matrix.preset }} --output-on-failure
+    
+    - name: Generate Coverage Report
+      if: matrix.coverage
+      run: |
+        cd build/${{ matrix.preset }}
+        make coverage-report
+    
+    - name: Upload Coverage to Codecov
+      if: matrix.coverage
+      uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457 # v3
+      with:
+        file: ./build/${{ matrix.preset }}/coverage/coverage.info
+        flags: unittests
+        name: codecov-umbrella
+
+  build-with-package-managers:
+    name: Build with ${{ matrix.package-manager }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package-manager: [vcpkg, conan]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup vcpkg
+      if: matrix.package-manager == 'vcpkg'
+      run: |
+        git clone https://github.com/Microsoft/vcpkg.git
+        ./vcpkg/bootstrap-vcpkg.sh
+        echo "VCPKG_ROOT=$PWD/vcpkg" >> $GITHUB_ENV
+    
+    - name: Setup Conan
+      if: matrix.package-manager == 'conan'
+      run: |
+        pip install conan
+        conan profile detect
+    
+    - name: Build with vcpkg
+      if: matrix.package-manager == 'vcpkg'
+      run: |
+        cmake --preset vcpkg
+        cmake --build build/vcpkg
+    
+    - name: Build with Conan
+      if: matrix.package-manager == 'conan'
+      run: |
+        conan install . --build=missing
+        conan build .
+
+  build-cross-compile:
+    name: Cross-compile for ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [arm64, armhf]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install cross-compilation tools
+      run: |
+        sudo apt-get update
+        if [ "${{ matrix.target }}" = "arm64" ]; then
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        else
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+        fi
+    
+    - name: Configure for cross-compilation
+      run: |
+        if [ "${{ matrix.target }}" = "arm64" ]; then
+          cmake -B build -S . \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64
+        else
+          cmake -B build -S . \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm
+        fi
+    
+    - name: Build
+      run: cmake --build build --parallel
+
+  create-packages:
+    name: Create packages
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install packaging tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build rpm
+    
+    - name: Configure
+      run: cmake --preset release
+    
+    - name: Build
+      run: cmake --build --preset release
+    
+    - name: Create packages
+      run: |
+        cd build/release
+        cpack -G TGZ
+        cpack -G DEB
+        cpack -G RPM
+    
+    - name: Upload packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: packages
+        path: |
+          build/release/*.tar.gz
+          build/release/*.deb
+          build/release/*.rpm

@@ -1281,15 +1281,15 @@ static CYTHON_INLINE float __PYX_NAN() {
 #include <stddef.h>
 #include "pythread.h"
 #include <stdint.h>
-#include "poker_defs.h"
-#include "inlines/eval_omaha.h"
-#include "handval_low.h"
-#include "handval.h"
-#include "deck_std.h"
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/games/inlines/eval_omaha.h>
+#include <poker_eval/core/handval_low.h>
+#include <poker_eval/core/handval.h>
+#include <poker_eval/deck/deck_std.h>
 #include "pokereval_wrapper.h"
-#include "rules_std.h"
+#include <poker_eval/games/rules_std.h>
 #ifdef _OPENMP
-#include <omp.h>
+#include "poker_eval/utils/omp_compat.h"
 #endif /* _OPENMP */
 
 #if defined(PYREX_WITHOUT_ASSERTIONS) && !defined(CYTHON_WITHOUT_ASSERTIONS)

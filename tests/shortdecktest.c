@@ -1,13 +1,14 @@
-#include <assert.h> // Pour assert()
-#include <string.h> // Ajoutez cette ligne
-#include "deck.h"
-#include "deck_short.h"
-#include "rules_short.h"
-#include "inlines/eval_short.h"
+#include <assert.h>
+#include <string.h>
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/deck/deck.h>
+#include <poker_eval/deck/deck_short.h>
+#include <poker_eval/games/rules_short.h>
+#include <poker_eval/games/eval_short.h>
 
 
 
-void testCardToString() {
+static void testCardToString(void) {
     char cardStr[3];
     int cardIndex = ShortDeck_MAKE_CARD(ShortDeck_Rank_ACE, ShortDeck_Suit_SPADES);
 
@@ -23,14 +24,16 @@ void testCardToString() {
 
 
 
-void testStringToCard() {
+static void testStringToCard(void) {
     int cardIndex;
-    int result = ShortDeck_stringToCard("As", &cardIndex);
+    char card_str[] = "As";
+    int result = ShortDeck_stringToCard(card_str, &cardIndex);
+    (void)result; /* Suppress unused variable warning */
     assert(result == 2); // Vérifier que deux caractères ont été traités
     assert(cardIndex == ShortDeck_MAKE_CARD(ShortDeck_Rank_ACE, ShortDeck_Suit_SPADES)); // Vérifier que l'indice de carte correspond à As de Pique
 }
 
-void testMaskToCards() {
+static void testMaskToCards(void) {
     ShortDeck_CardMask mask;
     ShortDeck_CardMask_RESET(mask);
     ShortDeck_CardMask_SET(mask, ShortDeck_MAKE_CARD(ShortDeck_Rank_ACE, ShortDeck_Suit_SPADES)); // Ajouter As de Pique
@@ -38,24 +41,28 @@ void testMaskToCards() {
 
     int cards[ShortDeck_N_CARDS];
     int n = ShortDeck_maskToCards(&mask, cards);
+    (void)n; /* Suppress unused variable warning */
 
     assert(n == 2); // Vérifier que deux cartes sont retournées
     assert(cards[0] == ShortDeck_MAKE_CARD(ShortDeck_Rank_ACE, ShortDeck_Suit_SPADES)); // Vérifier la première carte
     assert(cards[1] == ShortDeck_MAKE_CARD(ShortDeck_Rank_KING, ShortDeck_Suit_HEARTS)); // Vérifier la seconde carte
 }
 
-void testNumCards() {
+static void testNumCards(void) {
     ShortDeck_CardMask mask;
     ShortDeck_CardMask_RESET(mask);
     ShortDeck_CardMask_SET(mask, ShortDeck_MAKE_CARD(ShortDeck_Rank_ACE, ShortDeck_Suit_SPADES)); // Ajouter As de Pique
     ShortDeck_CardMask_SET(mask, ShortDeck_MAKE_CARD(ShortDeck_Rank_KING, ShortDeck_Suit_HEARTS)); // Ajouter Roi de Coeur
 
     int ncards = ShortDeck_NumCards(&mask);
+    (void)ncards; /* Suppress unused variable warning */
     assert(ncards == 2); // Vérifier que le nombre de cartes est 2
 }
-void testFlushBeatsFullHouse() {
+static void testFlushBeatsFullHouse(void) {
     ShortDeck_CardMask flushHand, fullHouseHand;
     HandVal flushVal, fullHouseVal;
+    (void)flushVal; /* Suppress unused variable warning */
+    (void)fullHouseVal; /* Suppress unused variable warning */
 
     // Créer une main de Flush
     // Note : Adaptez la création des mains à votre implémentation
@@ -87,9 +94,11 @@ void testFlushBeatsFullHouse() {
     assert(flushVal > fullHouseVal);
 }
 
-void testTripsBeatsStraight() {
+static void testTripsBeatsStraight(void) {
     ShortDeck_CardMask straightHand, tripsHand;
     HandVal straightVal, tripsVal;
+    (void)straightVal; /* Suppress unused variable warning */
+    (void)tripsVal; /* Suppress unused variable warning */
 
     // Créer une main de Straight
     // Note : Adaptez la création des mains à votre implémentation
@@ -121,9 +130,10 @@ void testTripsBeatsStraight() {
     assert(tripsVal > straightVal);
 }
 
-void testStraightIncludingAceLow() {
+static void testStraightIncludingAceLow(void) {
     ShortDeck_CardMask straightHand;
     HandVal straightVal;
+    (void)straightVal; /* Suppress unused variable warning */
 
     // Créer une main de Suite incluant un As comme carte basse (A-6-7-8-9)
     ShortDeck_CardMask_RESET(straightHand);
@@ -141,7 +151,7 @@ void testStraightIncludingAceLow() {
     assert(HandVal_HANDTYPE(straightVal) == ShortRules_HandType_STRAIGHT);
 }
 
-int main() {
+int main(void) {
     testFlushBeatsFullHouse();
     testStraightIncludingAceLow();
     testCardToString();

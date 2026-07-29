@@ -1,0 +1,18 @@
+#pragma once
+
+// Version information
+#define POKER_EVAL_VERSION_MAJOR @poker_eval_VERSION_MAJOR@
+#define POKER_EVAL_VERSION_MINOR @poker_eval_VERSION_MINOR@
+#define POKER_EVAL_VERSION_PATCH @poker_eval_VERSION_PATCH@
+
+// Config
+#cmakedefine BUILD_SHARED_LIBS
+#cmakedefine BUILD_STATIC_LIBS
+
+// SIMD support
+#cmakedefine HAVE_SSE2
+#cmakedefine HAVE_AVX2
+#cmakedefine HAVE_AVX512
+
+// Other features
+#cmakedefine HAVE_OPENMP

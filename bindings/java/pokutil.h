@@ -3,10 +3,10 @@
 #ifndef POKUTIL_H
 #define POKUTIL_H
 #include <jni.h>	/* for JNI types */
-#include "poker_defs.h"	/* for *_CardMask types */
-#include "deck_std.h"
-#include "deck_joker.h"
-#include "deck_astud.h"
+#include <poker_eval/core/poker_defs.h>	/* for *_CardMask types */
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/deck/deck_joker.h>
+#include <poker_eval/deck/deck_astud.h>
 
 extern int numCardsStandard(StdDeck_CardMask mask);
 extern int numCardsJoker(JokerDeck_CardMask mask);

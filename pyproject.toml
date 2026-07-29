@@ -1,0 +1,47 @@
+[build-system]
+requires = ["scikit-build-core>=0.11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pypoker-eval"
+version = "1.0.0"
+description = "Fast poker hand evaluation library with Python bindings"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+license-files = ["LICENCE", "LICENSE"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Libraries",
+]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+wheel.packages = []
+install.components = ["python"]
+cmake.build-type = "Release"
+sdist.exclude = [
+    ".github/",
+    "docs/",
+    "notebooks/",
+    "scripts/",
+    "tests/",
+]
+
+[tool.scikit-build.cmake.define]
+BUILD_BINDINGS = true
+BUILD_C_API = false
+BUILD_CSHARP_BINDING = false
+BUILD_CXX_BINDING = false
+BUILD_CYTHON_BINDING = false
+BUILD_DOCUMENTATION = false
+BUILD_EXAMPLES = false
+BUILD_GPU = false
+BUILD_JAVA_BINDING = false
+BUILD_PYTHON_BINDING = true
+BUILD_SHARED_LIBS = false
+BUILD_STATIC_LIBS = true
+BUILD_TESTS = false

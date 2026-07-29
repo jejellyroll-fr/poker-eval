@@ -1,58 +1,76 @@
-cmake_minimum_required(VERSION 3.10)
-project(PyPokerEvalBinding)
+# Python binding
+find_package(Python3 COMPONENTS Interpreter Development.Module)
 
-
-# Obtenir le répertoire home de l'utilisateur sous Windows
-if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-    set(HOME_DIR $ENV{USERPROFILE})
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin" OR ${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-    set(HOME_DIR $ENV{HOME})
-endif()
-
-
-# Détecter le système d'exploitation et définir les chemins pour Python 3.11
-if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-    # Chemins pour Python 3.11 installé par Chocolatey sur Windows
-    set(Python3_EXECUTABLE "${HOME_DIR}/AppData/Local/Programs/Python/Python311/python.exe")
-    set(Python3_LIBRARY "${HOME_DIR}/AppData/Local/Programs/Python/Python311/libs/python311.lib")
-    set(Python3_INCLUDE_DIR "${HOME_DIR}/AppData/Local/Programs/Python/Python311/include")
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    # Sur macOS, Homebrew installe Python 3.11 dans /usr/local/opt/python@3.11
-    set(Python3_EXECUTABLE "/usr/local/opt/python@3.11/bin/python3.11")
-    set(Python3_LIBRARY "/usr/local/opt/python@3.11/lib/libpython3.11.dylib")
-    set(Python3_INCLUDE_DIR "/usr/local/opt/python@3.11/include/python3.11")
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-    # Sur Linux, le PPA deadsnakes permet l'installation de Python 3.11
-    set(Python3_EXECUTABLE "/usr/bin/python3.11")
-    set(Python3_LIBRARY "/usr/lib/x86_64-linux-gnu/libpython3.11.so")
-    set(Python3_INCLUDE_DIR "/usr/include/python3.11")
-endif()
-
-# Essayez de trouver une installation de Python 3.x
-find_package(Python3 COMPONENTS Interpreter Development)
 if(Python3_FOUND)
-    message(STATUS "Python 3.x trouvé : Version ${Python3_VERSION}, Librairies : ${Python3_LIBRARIES}, Include : ${Python3_INCLUDE_DIRS}")
-    include_directories(${Python3_INCLUDE_DIRS})
+    message(STATUS "Python ${Python3_VERSION} found")
 
-    # Chemin vers la bibliothèque poker-eval construite, adapté en fonction de l'OS
-    if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-        include_directories("${HOME_DIR}/Documents/GitHub/poker-eval/include")
-        set(POKER_EVAL_LIB_PATH "${HOME_DIR}/Documents/GitHub/poker-eval//build/Debug/poker_lib_static.lib")
-    elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-        include_directories("${CMAKE_SOURCE_DIR}/include")
-        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/libpoker_lib_static.a")
-    elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-        include_directories("${CMAKE_SOURCE_DIR}/include")
-        set(POKER_EVAL_LIB_PATH "${CMAKE_SOURCE_DIR}/libpoker_lib_static.a")
+    # Create Python module
+    Python3_add_library(pypokereval MODULE pypokereval.c)
+
+    # Link with poker-eval library
+    if(TARGET poker_eval_modular)
+        target_link_libraries(pypokereval PRIVATE poker_eval_modular)
+    elseif(TARGET poker-eval)
+        target_link_libraries(pypokereval PRIVATE poker-eval)
+    else()
+        target_link_libraries(pypokereval PRIVATE poker-eval-static)
     endif()
 
-    # Incluez les en-têtes de poker-eval si vous les avez
-    include_directories("${HOME_DIR}/Documents/GitHub/poker-eval/include")
+    # Include directories
+    target_include_directories(pypokereval PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/include/inlines
+        ${Python3_INCLUDE_DIRS}
+    )
 
-    # Définissez le module Python
-    add_library(pypokereval MODULE pypokereval.c)
-    target_link_libraries(pypokereval ${Python3_LIBRARIES} ${POKER_EVAL_LIB_PATH})
-    set_target_properties(pypokereval PROPERTIES PREFIX "")
+    # Set properties for Python module
+    set_target_properties(pypokereval PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "pypokereval"
+    )
+
+    # Platform-specific settings
+    if(WIN32)
+        set_target_properties(pypokereval PROPERTIES SUFFIX ".pyd")
+    endif()
+
+    # Keep the extension and its compatibility wrapper together. scikit-build-core
+    # provides an absolute staging directory while regular CMake installs use a
+    # prefix-relative site-packages path.
+    if(SKBUILD)
+        set(_python_install_dir "${SKBUILD_PLATLIB_DIR}")
+    elseif(DEFINED PYTHON_INSTALL_DIR AND NOT PYTHON_INSTALL_DIR STREQUAL "")
+        set(_python_install_dir "${PYTHON_INSTALL_DIR}")
+    else()
+        set(_python_install_dir
+            "lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages"
+        )
+    endif()
+
+    install(TARGETS pypokereval
+        LIBRARY DESTINATION "${_python_install_dir}"
+        COMPONENT python
+        RUNTIME DESTINATION "${_python_install_dir}"
+        COMPONENT python
+    )
+
+    install(FILES pokereval.py
+        DESTINATION "${_python_install_dir}"
+        COMPONENT python
+    )
+
+    # Add test for Python binding
+    if(BUILD_TESTS)
+        add_test(NAME test_python_binding
+            COMMAND ${Python3_EXECUTABLE} -c
+                    "import pypokereval; from pokereval import PokerEval; print('Python binding loaded successfully', PokerEval)"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+
+        set_tests_properties(test_python_binding PROPERTIES
+            ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:pypokereval>:${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+    endif()
 else()
-    message(WARNING "Python 3.x n'a pas été trouvé, le binding Python ne sera pas construit.")
+    message(WARNING "Python 3 not found, Python binding will not be built")
 endif()

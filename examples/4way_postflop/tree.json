@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "root": "preflop_p1",
+  "betProfiles": [
+    { "id": "default", "sizes": [3.0], "pot_sizing": false }
+  ],
+  "rangeProfiles": [
+    {
+      "id": "p1_preflop",
+      "player": 1,
+      "street": "PREFLOP",
+      "combos": [
+        { "hand": "AhKh", "weight": 1.0 },
+        { "hand": "AdKd", "weight": 0.5 }
+      ]
+    },
+    {
+      "id": "p0_flop",
+      "player": 0,
+      "street": "FLOP",
+      "combos": [
+        { "hand": "7c7d", "weight": 1.0 }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "preflop_p1",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 1,
+      "bet_profile": "default",
+      "range_profile": "p1_preflop",
+      "actions": [
+        { "type": "call", "next": "flop_chance" },
+        { "type": "raise", "size_index": 0, "next": "terminal_preflop_raise" }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 4,
+        "street": "PREFLOP",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 3.0,
+        "to_call": 1.0,
+        "current_bet": 1.0,
+        "raises_made": 0,
+        "board_revealed": 0,
+        "stacks": [99.5, 99.0, 100.0, 100.0],
+        "invested": [0.5, 1.0, 0.5, 1.0],
+        "round_contrib": [0.5, 0.0, 0.5, 1.0],
+        "active": [1, 1, 1, 1],
+        "acted": [1, 0, 1, 1]
+      }
+    },
+    {
+      "id": "flop_chance",
+      "type": "chance",
+      "street": "PREFLOP",
+      "actions": [
+        { "type": "chance", "next": "flop_p0" }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 4,
+        "street": "FLOP",
+        "to_act": 0,
+        "first_to_act": 0,
+        "pot": 5.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [12, 13, 22],
+        "board_revealed": 3,
+        "stacks": [98.5, 98.0, 99.0, 99.0],
+        "invested": [1.5, 2.0, 1.0, 2.0],
+        "round_contrib": [0.0, 0.0, 0.0, 0.0],
+        "active": [1, 1, 1, 1],
+        "acted": [0, 0, 0, 0]
+      }
+    },
+    {
+      "id": "flop_p0",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "default",
+      "range_profile": "p0_flop",
+      "actions": [
+        { "type": "call", "next": "terminal_flop_check" },
+        { "type": "raise", "size_index": 0, "next": "terminal_flop_bet" }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 4,
+        "street": "FLOP",
+        "to_act": 0,
+        "first_to_act": 0,
+        "pot": 5.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [12, 13, 22],
+        "board_revealed": 3,
+        "stacks": [98.5, 98.0, 99.0, 99.0],
+        "invested": [1.5, 2.0, 1.0, 2.0],
+        "round_contrib": [0.0, 0.0, 0.0, 0.0],
+        "active": [1, 1, 1, 1],
+        "acted": [0, 0, 0, 0]
+      }
+    },
+    {
+      "id": "terminal_flop_check",
+      "type": "terminal",
+      "street": "SHOWDOWN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 4,
+        "street": "SHOWDOWN",
+        "to_act": -1,
+        "first_to_act": -1,
+        "pot": 5.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [12, 13, 22],
+        "board_revealed": 3,
+        "stacks": [98.5, 98.0, 99.0, 99.0],
+        "invested": [1.5, 2.0, 1.0, 2.0],
+        "round_contrib": [0.0, 0.0, 0.0, 0.0],
+        "active": [1, 1, 1, 1],
+        "acted": [1, 1, 1, 1]
+      }
+    },
+    {
+      "id": "terminal_flop_bet",
+      "type": "terminal",
+      "street": "SHOWDOWN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 4,
+        "street": "SHOWDOWN",
+        "to_act": -1,
+        "first_to_act": -1,
+        "pot": 8.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 1,
+        "board": [12, 13, 22],
+        "board_revealed": 3,
+        "stacks": [96.5, 96.0, 99.0, 99.0],
+        "invested": [3.5, 4.0, 1.0, 2.0],
+        "round_contrib": [0.0, 0.0, 0.0, 0.0],
+        "active": [1, 1, 1, 1],
+        "acted": [1, 1, 1, 1]
+      }
+    },
+    {
+      "id": "terminal_preflop_raise",
+      "type": "terminal",
+      "street": "SHOWDOWN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 4,
+        "street": "SHOWDOWN",
+        "to_act": -1,
+        "first_to_act": -1,
+        "pot": 6.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 1,
+        "board_revealed": 0,
+        "stacks": [98.5, 96.0, 98.5, 99.0],
+        "invested": [1.5, 4.0, 1.5, 1.0],
+        "round_contrib": [0.0, 0.0, 0.0, 0.0],
+        "active": [1, 1, 1, 1],
+        "acted": [1, 1, 1, 1]
+      }
+    }
+  ]
+}

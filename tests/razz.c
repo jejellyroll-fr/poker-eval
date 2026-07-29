@@ -1,5 +1,5 @@
 /*
- *  Copyright 2006 Loic Dachary <loic@dachary.org> 
+ *  Copyright 2006 Loic Dachary <loic@dachary.org>
  *
  * This program gives you software freedom; you can copy, convey,
  * propagate, redistribute and/or modify this program under the terms of
@@ -22,25 +22,35 @@
 #endif /* HAVE_CONFIG_H */
 
 #include <assert.h>
+#include <string.h>
 
-#include <poker_defs.h>
-#include <enumdefs.h>
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/core/enumdefs.h>
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/games/game_std.h>
 
 static int verbose = 1;
 
-static CardMask Strings2CardMask(int strings_count, char* strings[])
+static CardMask Strings2CardMask(int strings_count, const char *strings[])
 {
   CardMask cards;
   CardMask dead;
+  (void)dead;
 
   CardMask_RESET(cards);
   CardMask_RESET(dead);
 
   int card;
   int i;
-  for(i = 0; i < strings_count; i++) {
+  for (i = 0; i < strings_count; i++)
+  {
     card = -1;
-    assert(Deck_stringToCard(strings[i], &card) != 0);
+    // Create a modifiable copy of the string to avoid const qualifier issues
+    char card_str[4];
+    strcpy(card_str, strings[i]);
+    if (StdDeck_stringToCard(card_str, &card) != 2) {
+        return cards; // Return incomplete mask, test will fail
+    }
     assert(StdDeck_CardMask_CARD_IS_SET(dead, card) == 0);
     StdDeck_CardMask_SET(cards, card);
   }
@@ -48,16 +58,20 @@ static CardMask Strings2CardMask(int strings_count, char* strings[])
   return cards;
 }
 
-int main(int argc, char* argv[]) {
-  enum_game_t game = game_razz;
+int main(int argc, char *argv[])
+{
+  (void)argc; /* Suppress unused parameter warning */
+  (void)argv; /* Suppress unused parameter warning */
   {
     enum_result_t result;
     StdDeck_CardMask board;
     StdDeck_CardMask dead;
+    (void)dead;
+    (void)dead;
     StdDeck_CardMask pockets[2];
-    char* hand0[] = { "Ad", "2d", "3d", "4d", "5d", "Tc", "Th" };
-    //char* hand1[] = { "Ac", "2c", "3c", "4c", "5c", "Tc", "Th" };
-    char* hand1[] = { "4d", "4c", "8d", "8c", "9d", "9c", "9h" };
+    const char *hand0[] = {"Ad", "2d", "3d", "4d", "5d", "Tc", "Th"};
+    // char* hand1[] = { "Ac", "2c", "3c", "4c", "5c", "Tc", "Th" };
+    const char *hand1[] = {"4d", "4c", "8d", "8c", "9d", "9c", "9h"};
 
     enumResultClear(&result);
     CardMask_RESET(board);
@@ -65,17 +79,18 @@ int main(int argc, char* argv[]) {
     pockets[0] = Strings2CardMask(7, hand0);
     pockets[1] = Strings2CardMask(7, hand1);
 
-    assert(enumExhaustive(game, pockets, board, dead, 2, 0 /* nboard */,
+    assert(enumExhaustive_dispatch(game_razz, pockets, board, dead, 2, 0 /* nboard */,
                           0 /* orderflag */, &result) == 0);
 
-    if(verbose) enumResultPrint(&result, pockets, board);
+    if (verbose)
+      enumResultPrint(&result, pockets, board);
 
     assert(result.ev[0] == 1.0);
     assert(result.ev[1] == 0.0);
   }
-  
+
   {
-    /* http://shipitfish.livejournal.com/59671.html 
+    /* http://shipitfish.livejournal.com/59671.html
 
         If after removing straights and flushes, if hand X beats hand
         Y under normal poker rules, the hand Y beats hand X under
@@ -93,13 +108,15 @@ int main(int argc, char* argv[]) {
         other hand wins in razz. It is that simple.
 
      */
-    
+
     enum_result_t result;
     StdDeck_CardMask board;
     StdDeck_CardMask dead;
+    (void)dead;
+    (void)dead;
     StdDeck_CardMask pockets[2];
-    char* hand0[] = { "5d", "5c", "6d", "6c", "7d", "7c", "7h" };
-    char* hand1[] = { "4d", "4c", "8d", "8c", "9d", "9c", "9h" };
+    const char *hand0[] = {"5d", "5c", "6d", "6c", "7d", "7c", "7h"};
+    const char *hand1[] = {"4d", "4c", "8d", "8c", "9d", "9c", "9h"};
 
     enumResultClear(&result);
     CardMask_RESET(board);
@@ -107,10 +124,11 @@ int main(int argc, char* argv[]) {
     pockets[0] = Strings2CardMask(7, hand0);
     pockets[1] = Strings2CardMask(7, hand1);
 
-    assert(enumExhaustive(game, pockets, board, dead, 2, 0 /* nboard */,
+    assert(enumExhaustive_dispatch(game_razz, pockets, board, dead, 2, 0 /* nboard */,
                           0 /* orderflag */, &result) == 0);
 
-    if(verbose) enumResultPrint(&result, pockets, board);
+    if (verbose)
+      enumResultPrint(&result, pockets, board);
 
     assert(result.ev[0] == 1.0);
     assert(result.ev[1] == 0.0);

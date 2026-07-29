@@ -1,10 +1,10 @@
-#include "deck_std.h"
-#include "poker_defs.h"
-#include "inlines/eval.h"
-#include "inlines/eval_low.h"
-#include "inlines/eval_low8.h"
-#include "inlines/eval_omaha.h"
-#include "inlines/eval_low27.h"
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/core/inlines/eval.h>
+#include <poker_eval/games/inlines/eval_low.h>
+#include <poker_eval/games/inlines/eval_low8.h>
+#include <poker_eval/games/inlines/eval_omaha.h>
+#include <poker_eval/games/inlines/eval_low27.h>
 
 void py_StdDeck_CardMask_RESET(StdDeck_CardMask* cm) {
     StdDeck_CardMask_RESET(*cm);
