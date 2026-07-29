@@ -603,7 +603,7 @@ poker_eval_error_t poker_eval_result_get_description(const poker_eval_result_t* 
     
     const char* type_str = poker_eval_hand_type_string(result->hand_type);
     
-    if (strlen(type_str) >= buffer_size) {
+    if (strnlen(type_str, buffer_size) >= buffer_size) {
         return POKER_EVAL_ERROR_INVALID_ARGUMENT;
     }
 
@@ -678,7 +678,7 @@ poker_eval_error_t poker_eval_parse_card(const char* card_str,
         return POKER_EVAL_ERROR_NULL_POINTER;
     }
     
-    if (strlen(card_str) != 2) {
+    if (strnlen(card_str, 3) != 2) {
         return POKER_EVAL_ERROR_INVALID_CARD;
     }
     
