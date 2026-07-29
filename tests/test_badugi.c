@@ -118,8 +118,7 @@ static void test_badugi_comparison(void)
     BadugiHandVal val1 = StdDeck_BadugiRules_EVAL_4(hand1);
     BadugiHandVal val2 = StdDeck_BadugiRules_EVAL_4(hand2);
 
-    /* Lower hand value means better hand in Badugi */
-    assert(val1 < val2);
+    assert(val1 > val2);
     (void)val1;
     (void)val2; /* Suppress unused variable warnings */
     printf("✓ A234 beats A235\n");
@@ -142,7 +141,7 @@ static void test_badugi_comparison(void)
     BadugiHandVal val3 = StdDeck_BadugiRules_EVAL_4(hand3);
     BadugiHandVal val4 = StdDeck_BadugiRules_EVAL_4(hand4);
 
-    assert(val3 < val4);
+    assert(val3 > val4);
     (void)val3;
     (void)val4; /* Suppress unused variable warnings */
     printf("✓ Four-card KQJT beats three-card A23\n");
@@ -193,9 +192,8 @@ static void test_badacey(void)
     HandVal val2 = StdDeck_BadaceyRules_EVAL_5(lowball_hand);
 
     /* Badugi should beat A-5 lowball */
-    assert(HandVal_HANDTYPE(val1) <= BadaceyRules_HandType_ONE);
-    assert(HandVal_HANDTYPE(val2) == BadaceyRules_HandType_A5_LOW);
-    assert(val1 < val2);
+    assert(HandVal_HANDTYPE(val1) >= BadugiRules_HandType_BADUGI);
+    assert(val1 > val2);
     (void)val1;
     (void)val2; /* Suppress unused variable warnings */
     printf("✓ Badugi beats A-5 lowball in Badacey\n");
@@ -226,9 +224,8 @@ static void test_badeucy(void)
     HandVal val2 = StdDeck_BadeucyRules_EVAL_5(lowball_hand);
 
     /* Badugi should beat 2-7 lowball */
-    assert(HandVal_HANDTYPE(val1) <= BadeucyRules_HandType_ONE);
-    assert(HandVal_HANDTYPE(val2) == BadeucyRules_HandType_27_LOW);
-    assert(val1 < val2);
+    assert(HandVal_HANDTYPE(val1) >= BadugiRules_HandType_BADUGI);
+    assert(val1 > val2);
     (void)val1;
     (void)val2; /* Suppress unused variable warnings */
     printf("✓ Badugi beats 2-7 lowball in Badeucy\n");

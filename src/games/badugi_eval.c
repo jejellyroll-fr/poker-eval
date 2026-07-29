@@ -237,7 +237,7 @@ BadugiHandVal StdDeck_BadugiRules_EVAL_N(StdDeck_CardMask cards, int n_cards)
             card_ranks[i] = StdDeck_Rank_ACE;
         }
         /* Invert rank values: better Badugi cards (lower) become higher values */
-        card_ranks[i] = (StdDeck_Rank_KING - card_ranks[i]);
+        card_ranks[i] = (StdDeck_Rank_KING - card_ranks[i] + StdDeck_Rank_ACE + 1) % (StdDeck_Rank_ACE + 1);
     }
 
     /* Build hand value */

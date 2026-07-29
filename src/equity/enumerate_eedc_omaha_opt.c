@@ -387,9 +387,9 @@ int enumExhaustive_eedc_omaha_opt(enum_game_t game, StdDeck_CardMask pockets[],
         my_result->nsharelo[i][L]++;
         my_result->nshare[i][H][L]++;
 
-        if (bestlo != LowHandVal_NOTHING && besthi != HandVal_NOTHING &&
-            hival[i] == besthi && loval[i] == bestlo && hishare == 1 &&
-            loshare == 1) {
+        if (besthi != HandVal_NOTHING &&
+            hival[i] == besthi && hishare == 1 &&
+            (bestlo == LowHandVal_NOTHING || (loval[i] == bestlo && loshare == 1))) {
           my_result->nscoop[i]++;
         }
 

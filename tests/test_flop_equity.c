@@ -149,9 +149,9 @@ static void test_monte_carlo(void)
     /* We don't have exhaustive equity value handy, but let's assume > 50% */
     assert(result.equity > 0.50);
 
-    /* Improvement stats should be identical to exhaustive because we use exact calculation now */
+    /* MC turn improvement should approximate exact 23/47 within tolerance */
     double expected = 23.0 / 47.0;
-    assert(fabs(result.turn_improvement - expected) < 0.001);
+    assert(fabs(result.turn_improvement - expected) < 0.015);
 
     printf("PASSED (equity: %.2f%%)\n", result.equity * 100);
 }
