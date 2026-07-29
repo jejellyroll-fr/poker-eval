@@ -61,7 +61,7 @@ int main(int argc, char **argv)
         /* Print first 10 */
         if (i < 10) {
             char texture_str[32];
-            flop_texture_to_string(analysis.texture, texture_str);
+            flop_texture_to_string(analysis.texture, texture_str, sizeof(texture_str));
 
             printf("%d. Texture: %s (score: %d)\n", i+1, texture_str, analysis.texture_score);
         }

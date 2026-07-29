@@ -313,7 +313,7 @@ PLOHandCategory PLO_CategorizeHand(StdDeck_CardMask cards, PLOHand* hand_details
         if (hand_details_ptr) {
             memset(hand_details_ptr, 0, sizeof(PLOHand));
             hand_details_ptr->category = PLO_CAT_INVALID;
-            strncpy(hand_details_ptr->notation, "INVALID", sizeof(hand_details_ptr->notation) -1);
+            snprintf(hand_details_ptr->notation, sizeof(hand_details_ptr->notation), "%s", "INVALID");
         }
         return PLO_CAT_INVALID;
     }
@@ -496,7 +496,7 @@ int PLO_ParseHand(const char* hand_str, PLOHand* hand) {
         }
 
         if (!parse_ranks_ok) {
-            strncpy(hand->notation, "INVALID_RANK_IN_PATTERN", sizeof(hand->notation) -1);
+            snprintf(hand->notation, sizeof(hand->notation), "%s", "INVALID_RANK_IN_PATTERN");
             return 0;
         }
 
@@ -511,7 +511,7 @@ int PLO_ParseHand(const char* hand_str, PLOHand* hand) {
         } else if (suffix_len == 2 && ((suffix_ptr[0] == 'd' || suffix_ptr[0] == 'D') && (suffix_ptr[1] == 's' || suffix_ptr[1] == 'S'))) {
             target_suitedness = PLO_SUIT_DOUBLE;
         } else {
-            strncpy(hand->notation, "INVALID_SUFFIX_IN_PATTERN", sizeof(hand->notation) -1);
+            snprintf(hand->notation, sizeof(hand->notation), "%s", "INVALID_SUFFIX_IN_PATTERN");
             return 0;
         }
         
@@ -526,7 +526,7 @@ int PLO_ParseHand(const char* hand_str, PLOHand* hand) {
             hand->notation[sizeof(hand->notation) - 1] = '\0';
             return 1; // Success
         } else {
-            strncpy(hand->notation, "IMPOSSIBLE_PATTERN", sizeof(hand->notation) -1);
+            snprintf(hand->notation, sizeof(hand->notation), "%s", "IMPOSSIBLE_PATTERN");
             return 0;
         }
     }
