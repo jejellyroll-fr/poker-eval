@@ -290,15 +290,6 @@ static const char* GPU_CFR_KERNEL_SOURCE[] = {
 #define GPU_CFR_KERNEL_SOURCE_PARTS \
     (sizeof(GPU_CFR_KERNEL_SOURCE) / sizeof(GPU_CFR_KERNEL_SOURCE[0]))
 
-/* Total length of the concatenated fragments, for diagnostics. */
-static size_t get_embedded_kernel_source_length(void) {
-    size_t total = 0;
-    for (size_t i = 0; i < GPU_CFR_KERNEL_SOURCE_PARTS; i++) {
-        total += strlen(GPU_CFR_KERNEL_SOURCE[i]);
-    }
-    return total;
-}
-
 /* ===== Initialization ===== */
 
 gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
@@ -394,8 +385,8 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
         printf("GPU-CFR OpenCL Device: %s\n", ctx->device_name);
         printf("  Compute Units: %d\n", ctx->compute_units);
         printf("  Max Work Group: %zu\n", ctx->max_work_group_size);
-        printf("  Global Memory: %.2f MB\n", ctx->global_mem_size / (1024.0 * 1024.0));
-        printf("  Local Memory: %.2f KB\n", ctx->local_mem_size / 1024.0);
+        printf("  Global Memory: %.2f MB\n", (double)ctx->global_mem_size / (1024.0 * 1024.0));
+        printf("  Local Memory: %.2f KB\n", (double)ctx->local_mem_size / 1024.0);
     }
 
     /* Create context */
@@ -523,7 +514,8 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
         printf("GPU-CFR OpenCL initialized:\n");
         printf("  Infosets: %d\n", config->num_infosets);
         printf("  Max actions: %d\n", config->max_actions);
-        printf("  GPU Memory: %.2f MB\n", (matrix_size * 5 + counts_size) / (1024.0 * 1024.0));
+        printf("  GPU Memory: %.2f MB\n",
+               (double)(matrix_size * 5 + counts_size) / (1024.0 * 1024.0));
     }
 
     memset(&ctx->stats, 0, sizeof(gpu_cfr_stats_t));
@@ -942,7 +934,8 @@ int gpu_cfr_load_sparse_matrix_opencl(
     if (ctx->config.verbose) {
         printf("Loaded sparse matrix: %d rows, %d nnz (%.2f%% sparse)\n",
                matrix->num_rows, matrix->nnz,
-               100.0 * (1.0 - (double)matrix->nnz / (matrix->num_rows * matrix->num_cols)));
+               100.0 * (1.0 - (double)matrix->nnz /
+                              ((double)matrix->num_rows * (double)matrix->num_cols)));
     }
 
     return 0;

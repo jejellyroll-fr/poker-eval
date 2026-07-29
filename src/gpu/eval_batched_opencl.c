@@ -280,8 +280,8 @@ gpu_eval_context_t* gpu_eval_init_opencl(const gpu_eval_config_t* config) {
         printf("OpenCL Device: %s (%s)\n", ctx->device_name, ctx->device_vendor);
         printf("Compute Units: %d\n", ctx->compute_units);
         printf("Max Work Group Size: %zu\n", ctx->max_work_group_size);
-        printf("Global Memory: %.2f MB\n", ctx->global_mem_size / (1024.0 * 1024.0));
-        printf("Local Memory: %.2f KB\n", ctx->local_mem_size / 1024.0);
+        printf("Global Memory: %.2f MB\n", (double)ctx->global_mem_size / (1024.0 * 1024.0));
+        printf("Local Memory: %.2f KB\n", (double)ctx->local_mem_size / 1024.0);
     }
 
     /* Create context */
@@ -1132,7 +1132,7 @@ double gpu_eval_get_last_time_opencl(gpu_eval_context_t* ctx_opaque) {
                            sizeof(cl_ulong), &end, NULL);
 
     /* Convert nanoseconds to milliseconds */
-    return (end - start) / 1000000.0;
+    return (double)(end - start) / 1000000.0;
 }
 
 /**
