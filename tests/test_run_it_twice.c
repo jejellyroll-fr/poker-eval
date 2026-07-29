@@ -197,16 +197,11 @@ static int test_holdem_headsup_rit2(void) {
         return TEST_FAILED;
     }
 
-    /* AA should have higher equity than KK */
-    if (result.avg_equity[0] <= result.avg_equity[1]) {
-        /* With 2 runouts, variance can lead to ties or losses.
-           We accept >= 50% for regression testing with small samples. */
-        if (result.avg_equity[0] < 0.5) {
-             printf("    AA equity (%.2f%%) should be > KK equity (%.2f%%)\n",
-                result.avg_equity[0] * 100, result.avg_equity[1] * 100);
-             return TEST_FAILED;
-        }
-    }
+    /*
+     * Two randomly selected runouts are not a statistically meaningful equity
+     * sample: either hand can win both boards.  Validate accounting invariants
+     * below instead of asserting that AA must win this particular sample.
+     */
 
     /* Total equity should sum to 1.0 per runout */
     double total_equity = result.avg_equity[0] + result.avg_equity[1];

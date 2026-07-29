@@ -293,6 +293,22 @@ BadugiHandVal StdDeck_BadugiRules_EVAL_5(StdDeck_CardMask cards)
     return StdDeck_BadugiRules_EVAL_N(cards, 5);
 }
 
+/* Convert between the distinct BadugiHandVal and HandVal bit layouts. */
+static HandVal badugi_to_handval(BadugiHandVal badugi_val, int badugi_type)
+{
+    HandVal retval = HandVal_HANDTYPE_VALUE(badugi_type);
+
+    retval |= HandVal_TOP_CARD_VALUE(BadugiHandVal_FIRST_CARD(badugi_val));
+    if (badugi_type >= BadugiRules_HandType_TWO)
+        retval |= HandVal_SECOND_CARD_VALUE(BadugiHandVal_SECOND_CARD(badugi_val));
+    if (badugi_type >= BadugiRules_HandType_THREE)
+        retval |= HandVal_THIRD_CARD_VALUE(BadugiHandVal_THIRD_CARD(badugi_val));
+    if (badugi_type >= BadugiRules_HandType_BADUGI)
+        retval |= HandVal_FOURTH_CARD_VALUE(BadugiHandVal_FOURTH_CARD(badugi_val));
+
+    return retval;
+}
+
 /*
  * Badacey evaluation (Badugi + A-5 lowball)
  */
@@ -302,12 +318,10 @@ HandVal StdDeck_BadaceyRules_EVAL_N(StdDeck_CardMask cards, int n_cards)
     int badugi_type = BadugiHandVal_HANDTYPE(badugi_val);
 
     /* If we have any Badugi (even 1-card), use it */
-    if (badugi_type >= BadugiRules_HandType_ONE)
+    if (badugi_type >= BadugiRules_HandType_ONE &&
+        badugi_type <= BadugiRules_HandType_BADUGI)
     {
-        /* Convert Badugi value to standard HandVal format */
-        HandVal retval = HandVal_HANDTYPE_VALUE(badugi_type);
-        retval |= BadugiHandVal_CARDS(badugi_val);
-        return retval;
+        return badugi_to_handval(badugi_val, badugi_type);
     }
 
     /* No Badugi possible, evaluate as A-5 lowball */
@@ -329,12 +343,10 @@ HandVal StdDeck_BadeucyRules_EVAL_N(StdDeck_CardMask cards, int n_cards)
     int badugi_type = BadugiHandVal_HANDTYPE(badugi_val);
 
     /* If we have any Badugi (even 1-card), use it */
-    if (badugi_type >= BadugiRules_HandType_ONE)
+    if (badugi_type >= BadugiRules_HandType_ONE &&
+        badugi_type <= BadugiRules_HandType_BADUGI)
     {
-        /* Convert Badugi value to standard HandVal format */
-        HandVal retval = HandVal_HANDTYPE_VALUE(badugi_type);
-        retval |= BadugiHandVal_CARDS(badugi_val);
-        return retval;
+        return badugi_to_handval(badugi_val, badugi_type);
     }
 
     /* No Badugi possible, evaluate as 2-7 lowball */
