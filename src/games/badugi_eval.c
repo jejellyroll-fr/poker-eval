@@ -240,6 +240,18 @@ BadugiHandVal StdDeck_BadugiRules_EVAL_N(StdDeck_CardMask cards, int n_cards)
         card_ranks[i] = (StdDeck_Rank_KING - card_ranks[i] + StdDeck_Rank_ACE + 1) % (StdDeck_Rank_ACE + 1);
     }
 
+    /*
+     * Compare Badugis from the highest card down.  The ranks were sorted
+     * low-to-high before inversion, so reverse them before packing the value.
+     */
+    for (i = 0; i < unique_count / 2; i++)
+    {
+        int opposite = unique_count - 1 - i;
+        int temp = card_ranks[i];
+        card_ranks[i] = card_ranks[opposite];
+        card_ranks[opposite] = temp;
+    }
+
     /* Build hand value */
     switch (unique_count)
     {

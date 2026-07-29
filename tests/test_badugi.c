@@ -145,6 +145,29 @@ static void test_badugi_comparison(void)
     (void)val3;
     (void)val4; /* Suppress unused variable warnings */
     printf("✓ Four-card KQJT beats three-card A23\n");
+
+    /* Compare the highest differing card first: six-high beats seven-high. */
+    StdDeck_CardMask seven_high = create_hand(
+        make_card(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
+        make_card(StdDeck_Rank_2, StdDeck_Suit_HEARTS),
+        make_card(StdDeck_Rank_6, StdDeck_Suit_DIAMONDS),
+        make_card(StdDeck_Rank_7, StdDeck_Suit_CLUBS),
+        -1);
+
+    StdDeck_CardMask six_high = create_hand(
+        make_card(StdDeck_Rank_3, StdDeck_Suit_SPADES),
+        make_card(StdDeck_Rank_4, StdDeck_Suit_HEARTS),
+        make_card(StdDeck_Rank_5, StdDeck_Suit_DIAMONDS),
+        make_card(StdDeck_Rank_6, StdDeck_Suit_CLUBS),
+        -1);
+
+    BadugiHandVal seven_high_val = StdDeck_BadugiRules_EVAL_4(seven_high);
+    BadugiHandVal six_high_val = StdDeck_BadugiRules_EVAL_4(six_high);
+
+    assert(six_high_val > seven_high_val);
+    (void)seven_high_val;
+    (void)six_high_val;
+    printf("✓ 3456 beats A267 by comparing the highest card first\n");
 }
 
 /* Test 5-card Badugi (best 4 cards) */

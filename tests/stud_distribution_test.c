@@ -31,6 +31,14 @@ static bool masks_are_equal(StdDeck_CardMask m1, StdDeck_CardMask m2) {
     return StdDeck_CardMask_EQUAL(m1, m2);
 }
 
+static void assert_unique_hands(const StudHandList* hand_list) {
+    for (int i = 0; i < hand_list->count; ++i) {
+        for (int j = i + 1; j < hand_list->count; ++j) {
+            assert(!masks_are_equal(hand_list->hands[i], hand_list->hands[j]));
+        }
+    }
+}
+
 static void card_mask_to_string_static(StdDeck_CardMask mask, char* out_buffer, int buffer_size) {
     if (!out_buffer || buffer_size == 0) return;
     out_buffer[0] = '\0';
@@ -230,6 +238,8 @@ int main(void) {
     // Test S7: (xxx)xxxx for 7-card game, No Dead - Expect MAX_STUD_COMBOS due to C(52,7)
     run_stud_instantiate_test("Instantiate (xxx)xxxx gc=7 NoDead", "(xxx)xxxx", 7, NULL, MAX_STUD_COMBOS, false, 0, NULL);
 
+    // Test S8: One fixed card plus two implicit cards is C(51,2), without duplicates.
+    run_stud_instantiate_test("Instantiate As gc=3 NoDead", "As", 3, NULL, 1275, false, 0, NULL);
 
     printf("\nStudHand_Instantiate tests completed.\n");
     return 0;
@@ -288,6 +298,7 @@ static void run_stud_instantiate_test(const char* test_name,
 
 
     assert(actual_combo_count == expected_combo_count);
+    assert_unique_hands(&generated_hands_list);
 
     if (check_hands_exact) {
         assert(actual_combo_count == num_expected_hands_in_array);
