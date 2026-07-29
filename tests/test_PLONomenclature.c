@@ -119,6 +119,11 @@ static int test_pattern_matching(void) {
     PLO_ParseHand("AsAhKsKh", &hand);  // This is actually double-suited
     TEST_ASSERT(PLO_MatchesPattern(&hand, "AAKKds") == 1, "AsAhKsKh matches AAKKds");
     TEST_ASSERT(PLO_MatchesPattern(&hand, "AAxxds") == 1, "AsAhKsKh matches AAxxds");
+
+    // Invalid lengths must be rejected before reading pattern ranks or suffix.
+    TEST_ASSERT(PLO_MatchesPattern(&hand, "") == 0, "Empty pattern is rejected");
+    TEST_ASSERT(PLO_MatchesPattern(&hand, "AAK") == 0, "Short pattern is rejected");
+    TEST_ASSERT(PLO_MatchesPattern(&hand, "AAKKdss") == 0, "Long pattern is rejected");
     
     return 0;
 }

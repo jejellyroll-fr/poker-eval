@@ -551,8 +551,15 @@ int ARP_InitContext(arp_context_t *ctx, const char *range_string)
         return 0;
 
     memset(ctx, 0, sizeof(arp_context_t));
+    size_t range_length = strnlen(range_string, 8193);
+    if (range_length > 8192) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Range string exceeds maximum length");
+        return 0;
+    }
+
     ctx->input = range_string;
-    ctx->length = strnlen(range_string, 8192);
+    ctx->length = range_length;
     ctx->position = 0;
 
     /* Allocate initial token array */

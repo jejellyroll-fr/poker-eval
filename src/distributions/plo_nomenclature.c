@@ -599,6 +599,7 @@ const char* PLO_CategoryName(PLOHandCategory category) {
 int PLO_MatchesPattern(const PLOHand* hand, const char* pattern) {
     if (!hand || !pattern) return 0;
     size_t len = strnlen(pattern, 32);
+    if (!(len == 5 || len == 6)) return 0;
 
     // 1. Extraire les rangs du pattern et le suffixe
     int pattern_ranks[4];

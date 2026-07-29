@@ -40,14 +40,20 @@ int HoldemAgnosticHand_Parse(const char *handText, const char *deadText)
     StdDeck_CardMask deadCards;
     StdDeck_CardMask_RESET(deadCards);
 
-    if (deadText && strnlen(deadText, 30))
+    size_t dead_len = deadText ? strnlen(deadText, 31) : 0;
+    if (dead_len > 30 || dead_len % 2 != 0)
+        return 0;
+
+    if (dead_len > 0)
     {
         int suit, rank;
         StdDeck_CardMask hand;
-        for (const char *pCard = deadText; *pCard != '\0'; pCard += 2)
+        for (size_t offset = 0; offset < dead_len; offset += 2)
         {
-            rank = CharToRank(*pCard);
-            suit = CharToSuit(*(pCard + 1));
+            rank = CharToRank(deadText[offset]);
+            suit = CharToSuit(deadText[offset + 1]);
+            if (rank < 0 || suit < 0)
+                return 0;
             hand = StdDeck_MASK(StdDeck_MAKE_CARD(rank, suit));
             StdDeck_CardMask_OR(deadCards, deadCards, hand);
         }
@@ -195,14 +201,20 @@ int HoldemAgnosticHand_Instantiate(const char *handText, const char *deadText, H
     StdDeck_CardMask deadCards;
     StdDeck_CardMask_RESET(deadCards);
 
-    if (deadText && strnlen(deadText, 30))
+    size_t dead_len = deadText ? strnlen(deadText, 31) : 0;
+    if (dead_len > 30 || dead_len % 2 != 0)
+        return 0;
+
+    if (dead_len > 0)
     {
         int suit, rank;
         StdDeck_CardMask hand;
-        for (const char *pCard = deadText; *pCard != '\0'; pCard += 2)
+        for (size_t offset = 0; offset < dead_len; offset += 2)
         {
-            rank = CharToRank(*pCard);
-            suit = CharToSuit(*(pCard + 1));
+            rank = CharToRank(deadText[offset]);
+            suit = CharToSuit(deadText[offset + 1]);
+            if (rank < 0 || suit < 0)
+                return 0;
             hand = StdDeck_MASK(StdDeck_MAKE_CARD(rank, suit));
             StdDeck_CardMask_OR(deadCards, deadCards, hand);
         }

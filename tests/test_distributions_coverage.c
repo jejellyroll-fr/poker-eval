@@ -161,6 +161,21 @@ void test_holdem_instantiate_with_dead(void)
     TEST_ASSERT_EQUAL_INT(3, handList.count);
 }
 
+void test_holdem_rejects_invalid_dead_text(void)
+{
+    HandList handList;
+    char too_long[32];
+
+    handList.count = 0;
+    memset(too_long, 'A', sizeof(too_long) - 1);
+    too_long[sizeof(too_long) - 1] = '\0';
+
+    TEST_ASSERT_EQUAL_INT(0, HoldemAgnosticHand_Parse("AA", "AsK"));
+    TEST_ASSERT_EQUAL_INT(0, HoldemAgnosticHand_Parse("AA", "Az"));
+    TEST_ASSERT_EQUAL_INT(0, HoldemAgnosticHand_Parse("AA", too_long));
+    TEST_ASSERT_EQUAL_INT(0, HoldemAgnosticHand_Instantiate("AA", "AsK", &handList));
+}
+
 /*
  * Test instantiating random: "XxXx" (all 2-card combos)
  */
@@ -502,6 +517,7 @@ int main(void)
     RUN_TEST(test_holdem_parse_any);
     RUN_TEST(test_holdem_instantiate_any);
     RUN_TEST(test_holdem_instantiate_with_dead);
+    RUN_TEST(test_holdem_rejects_invalid_dead_text);
     RUN_TEST(test_holdem_instantiate_random);
     RUN_TEST(test_holdem_parse_plus_notation);
     RUN_TEST(test_holdem_instantiate_plus_notation);
