@@ -192,7 +192,7 @@ void preflop_hand_to_string(preflop_hand_t hand, char *out_str)
 
 int preflop_string_to_hand(const char *str)
 {
-    if (!str || strlen(str) < 2)
+    if (!str || strnlen(str, 10) < 2)
         return -1;
 
     static const char *ranks = "AKQJT98765432";
@@ -226,7 +226,7 @@ int preflop_string_to_hand(const char *str)
     }
 
     /* Check suited/offsuit */
-    if (strlen(str) >= 3)
+    if (strnlen(str, 10) >= 3)
     {
         char suit_char = (char)tolower((unsigned char)str[2]);
         if (suit_char == 's')

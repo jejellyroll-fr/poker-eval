@@ -552,7 +552,7 @@ int ARP_InitContext(arp_context_t *ctx, const char *range_string)
 
     memset(ctx, 0, sizeof(arp_context_t));
     ctx->input = range_string;
-    ctx->length = strlen(range_string);
+    ctx->length = strnlen(range_string, 8192);
     ctx->position = 0;
 
     /* Allocate initial token array */
@@ -2528,7 +2528,7 @@ static int parse_hand_string(const char *hand_str, StdDeck_CardMask *hand) {
 
     StdDeck_CardMask_RESET(*hand);
 
-    size_t len = strlen(hand_str);
+    size_t len = strnlen(hand_str, 32);
     if (len < 2 || len > 14 || len % 2 != 0)
         return 0;  /* Invalid length */
 

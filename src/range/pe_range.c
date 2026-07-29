@@ -205,7 +205,7 @@ static int parse_holdem_token(pe_range_t *range, char *token, StdDeck_CardMask d
     }
 
     /* Specific Hand: AsKh (len 4) */
-    if (strlen(token) == 4 && char_to_suit(token[1]) != -1 && char_to_suit(token[3]) != -1) {
+    if (strnlen(token, 16) == 4 && char_to_suit(token[1]) != -1 && char_to_suit(token[3]) != -1) {
         int r1 = char_to_rank(token[0]);
         int s1 = char_to_suit(token[1]);
         int r2 = char_to_rank(token[2]);
@@ -226,8 +226,8 @@ static int parse_holdem_token(pe_range_t *range, char *token, StdDeck_CardMask d
     }
 
     /* Range/Pair/Suited/Offsuit */
-    int len = (int)strlen(token);
-    int is_plus = (token[len-1] == '+');
+    int len = (int)strnlen(token, 16);
+    int is_plus = (len > 0 && token[len-1] == '+');
     if (is_plus) token[len-1] = '\0';
 
     int is_dash = 0;

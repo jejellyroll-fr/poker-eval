@@ -448,7 +448,7 @@ int PLO_ParseHand(const char* hand_str, PLOHand* hand) {
     strncpy(hand->notation, "INVALID_INPUT", sizeof(hand->notation) - 1); // Default error message
     hand->notation[sizeof(hand->notation) - 1] = '\0';
 
-    size_t len = strlen(hand_str);
+    size_t len = strnlen(hand_str, 32);
 
     // 1. Attempt to parse 4 specific cards (e.g., "AsKdQhJc")
     if (len == 8) {
@@ -598,8 +598,7 @@ const char* PLO_CategoryName(PLOHandCategory category) {
 
 int PLO_MatchesPattern(const PLOHand* hand, const char* pattern) {
     if (!hand || !pattern) return 0;
-    size_t len = strlen(pattern);
-    if (!(len == 5 || len == 6)) return 0;
+    size_t len = strnlen(pattern, 32);
 
     // 1. Extraire les rangs du pattern et le suffixe
     int pattern_ranks[4];

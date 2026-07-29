@@ -34,7 +34,7 @@ int HoldemAgnosticHand_Parse(const char* handText, const char* deadText) {
     StdDeck_CardMask deadCards;
     StdDeck_CardMask_RESET(deadCards);
         
-    if (deadText && strlen(deadText)) {
+    if (deadText && strnlen(deadText, 30)) {
         int suit, rank;
         StdDeck_CardMask hand;
         for(const char* pCard = deadText; *pCard != '\0'; pCard += 2) {
@@ -143,7 +143,7 @@ int HoldemAgnosticHand_Instantiate(const char* handText, const char* deadText, H
     StdDeck_CardMask deadCards;
     StdDeck_CardMask_RESET(deadCards);
         
-    if (deadText && strlen(deadText)) {
+    if (deadText && strnlen(deadText, 30)) {
         int suit, rank;
         StdDeck_CardMask hand;
         for(const char* pCard = deadText; *pCard != '\0'; pCard += 2) {
@@ -296,20 +296,20 @@ int HoldemAgnosticHand_IsPair(const char* handText) {
 }
 
 int HoldemAgnosticHand_IsSuited(const char* handText) { 
-    return (strlen(handText) >= 3 && handText[2] == 's');
+    return (strnlen(handText, 10) >= 3 && handText[2] == 's');
 }
 
 int HoldemAgnosticHand_IsOffSuit(const char* handText) { 
-    return (strlen(handText) >= 3 && handText[2] == 'o');
+    return (strnlen(handText, 10) >= 3 && handText[2] == 'o');
 }
 
 int HoldemAgnosticHand_IsInclusive(const char* handText) { 
-    int textlen = (int)strlen(handText);
+    int textlen = (int)strnlen(handText, 10);
     return !HoldemAgnosticHand_IsPair(handText) && ((textlen == 2) || (textlen == 3 && handText[2] == '+'));
 }
 
 int HoldemAgnosticHand_IsSpecificHand(const char* handText) {
-    if (strlen(handText) == 4) {
+    if (strnlen(handText, 10) == 4) {
         return (NULL != strchr("SsHhDdCc", handText[1]) && 
                 NULL != strchr("SsHhDdCc", handText[3]) &&
                 NULL != strchr("23456789TtJjQqKkAa", handText[0]) &&
