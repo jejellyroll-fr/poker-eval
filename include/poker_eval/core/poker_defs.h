@@ -99,4 +99,14 @@ typedef unsigned int   uint32;
 #include <poker_eval/core/handval.h>
 #include <poker_eval/core/handval_low.h>
 
+/*
+ * Buffer size every *_HandVal_toString writes into.
+ *
+ * The historical signature takes a bare char* with no length, so the functions
+ * had no bound to give snprintf. The *_toString_n variants take an explicit
+ * size; the original names remain and require a buffer of at least this many
+ * bytes, terminator included.
+ */
+#define POKER_EVAL_HANDVAL_STRING_MAX 128
+
 #endif

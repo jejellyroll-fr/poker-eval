@@ -109,12 +109,12 @@ MakeTable_outputUInt64(uint64 arg) {
   high = arg >> 32;
   low  = (uint32) arg;
 #if defined(MSDOS)
-  sprintf(buf, " { 0x%08x%08x } ", high, low);
+  snprintf(buf, sizeof(buf), " { 0x%08x%08x } ", high, low);
 #else
 #if defined(WIN32) && !defined(__MINGW32__)
-  sprintf(buf, " { 0x%08x%08xi64 } ", high, low);
+  snprintf(buf, sizeof(buf), " { 0x%08x%08xi64 } ", high, low);
 #else
-  sprintf(buf, " { 0x%08x%08xLL } ", high, low);
+  snprintf(buf, sizeof(buf), " { 0x%08x%08xLL } ", high, low);
 #endif
 #endif
   MakeTable_outputString(buf);
@@ -124,21 +124,21 @@ MakeTable_outputUInt64(uint64 arg) {
 void 
 MakeTable_outputUInt32(uint32 arg) {
   char buf[80];
-  sprintf(buf, "0x%08x", arg);
+  snprintf(buf, sizeof(buf), "0x%08x", arg);
   MakeTable_outputString(buf);
 }
 
 void 
 MakeTable_outputUInt16(uint16 arg) {
   char buf[80];
-  sprintf(buf, "0x%04x", arg);
+  snprintf(buf, sizeof(buf), "0x%04x", arg);
   MakeTable_outputString(buf);
 }
 
 void 
 MakeTable_outputUInt8(uint8 arg) {
   char buf[80];
-  sprintf(buf, "0x%02x", arg);
+  snprintf(buf, sizeof(buf), "0x%02x", arg);
   MakeTable_outputString(buf);
 }
 

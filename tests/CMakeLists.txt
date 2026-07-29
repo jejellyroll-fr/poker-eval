@@ -880,6 +880,18 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/poker_wrapper.c")
     add_test(NAME test_poker_wrapper COMMAND test_poker_wrapper)
 endif()
 
+# Bounded *_toString_n variants
+add_executable(test_handval_tostring_bounds test_handval_tostring_bounds.c)
+target_include_directories(test_handval_tostring_bounds PRIVATE
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include)
+if(TARGET poker_eval_modular)
+    target_link_libraries(test_handval_tostring_bounds PRIVATE poker_eval_modular)
+else()
+    target_link_libraries(test_handval_tostring_bounds PRIVATE poker_games poker_core)
+endif()
+add_test(NAME test_handval_tostring_bounds COMMAND test_handval_tostring_bounds)
+
 # Custom test targets
 add_custom_target(test-quick
     COMMAND ${CMAKE_CTEST_COMMAND} -R "test_card|test_deck|test_hand_evaluation" --output-on-failure

@@ -206,7 +206,7 @@ static int ofc_gpu_compile_cuda_kernels(void) {
     printf("Compiling CUDA kernels...\n");
 
     /* Set up compilation options */
-    sprintf(g_compiler_state.cuda_compile_options,
+    snprintf(g_compiler_state.cuda_compile_options, sizeof(g_compiler_state.cuda_compile_options),
            "-O3 -arch=sm_50 -rdc=true -DCUDA_COMPILATION=1");
 
     /* For Week 3, we'll simulate kernel compilation */
@@ -587,7 +587,7 @@ static int ofc_gpu_load_kernel_source(const char *filename, char **source, size_
 }
 
 static int ofc_gpu_create_cache_dir(void) {
-    sprintf(g_compiler_state.kernel_cache_dir, "/tmp/ofc_gpu_kernels");
+    snprintf(g_compiler_state.kernel_cache_dir, sizeof(g_compiler_state.kernel_cache_dir), "/tmp/ofc_gpu_kernels");
 
     struct stat st = {0};
     if (stat(g_compiler_state.kernel_cache_dir, &st) == -1) {

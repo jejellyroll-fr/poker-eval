@@ -19,10 +19,30 @@
  */
 
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 #include <poker_eval/games/rules_badugi.h>
 #include <poker_eval/games/badugi_eval.h>
 #include <poker_eval/deck/deck_std.h>
+
+/*
+ * Cursor arithmetic for the bounded appends below.
+ *
+ * snprintf reports what it *would* have written, so adding its return value to
+ * the cursor walks past the end of the buffer as soon as the output is
+ * truncated. room_left keeps the pointer in bounds and advance_cursor clamps.
+ */
+static size_t room_left(size_t size, int length) {
+    if (length < 0 || (size_t)length >= size) return 0;
+    return size - (size_t)length;
+}
+
+static int advance_cursor(int length, size_t size, int written) {
+    size_t room = room_left(size, length);
+    if (written < 0 || room == 0) return length;
+    if ((size_t)written >= room) return (int)size - 1;   /* truncated */
+    return length + written;
+}
 
 /* Badugi hand type names */
 const char *BadugiRules_handTypeNames[BadugiRules_HandType_COUNT] = {
@@ -128,44 +148,53 @@ static const char *rank_to_string_ace_low(int rank)
 }
 
 /* Badugi hand value to string */
-int BadugiRules_HandVal_toString(HandVal handval, char *outString)
+int BadugiRules_HandVal_toString_n(HandVal handval, char *outString, size_t size)
 {
     int handType = HandVal_HANDTYPE(handval);
     int length = 0;
 
     if (handType >= BadugiRules_HandType_COUNT)
     {
-        strcpy(outString, "Invalid");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Invalid". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Invalid"));
     }
 
-    length += sprintf(outString + length, "%s", BadugiRules_handTypeNames[handType]);
+
+
+    length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "%s", BadugiRules_handTypeNames[handType]));
 
     if (handType == BadugiRules_HandType_BADUGI)
     {
-        length += sprintf(outString + length, " (%s%s%s%s)",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), " (%s%s%s%s)",
                           rank_to_string_ace_low(HandVal_TOP_CARD(handval)),
                           rank_to_string_ace_low(HandVal_SECOND_CARD(handval)),
                           rank_to_string_ace_low(HandVal_THIRD_CARD(handval)),
-                          rank_to_string_ace_low(HandVal_FOURTH_CARD(handval)));
+                          rank_to_string_ace_low(HandVal_FOURTH_CARD(handval))));
     }
     else if (handType == BadugiRules_HandType_THREE)
     {
-        length += sprintf(outString + length, " (%s%s%s)",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), " (%s%s%s)",
                           rank_to_string_ace_low(HandVal_TOP_CARD(handval)),
                           rank_to_string_ace_low(HandVal_SECOND_CARD(handval)),
-                          rank_to_string_ace_low(HandVal_THIRD_CARD(handval)));
+                          rank_to_string_ace_low(HandVal_THIRD_CARD(handval))));
     }
     else if (handType == BadugiRules_HandType_TWO)
     {
-        length += sprintf(outString + length, " (%s%s)",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), " (%s%s)",
                           rank_to_string_ace_low(HandVal_TOP_CARD(handval)),
-                          rank_to_string_ace_low(HandVal_SECOND_CARD(handval)));
+                          rank_to_string_ace_low(HandVal_SECOND_CARD(handval))));
     }
     else if (handType == BadugiRules_HandType_ONE)
     {
-        length += sprintf(outString + length, " (%s)",
-                          rank_to_string_ace_low(HandVal_TOP_CARD(handval)));
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), " (%s)",
+                          rank_to_string_ace_low(HandVal_TOP_CARD(handval))));
     }
 
     return length;
@@ -181,26 +210,31 @@ int BadugiRules_HandVal_print(HandVal handval)
 }
 
 /* Badacey hand value to string */
-int BadaceyRules_HandVal_toString(HandVal handval, char *outString)
+int BadaceyRules_HandVal_toString_n(HandVal handval, char *outString, size_t size)
 {
     int handType = HandVal_HANDTYPE(handval);
     int length = 0;
 
     if (handType >= BadaceyRules_HandType_COUNT)
     {
-        strcpy(outString, "Invalid");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Invalid". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Invalid"));
     }
 
     if (handType <= BadaceyRules_HandType_ONE)
     {
         /* Badugi portion */
-        return BadugiRules_HandVal_toString(handval, outString);
+        /* Delegate to the bounded variant: the wrapper would assume
+         * POKER_EVAL_HANDVAL_STRING_MAX and ignore the caller's size. */
+        return BadugiRules_HandVal_toString_n(handval, outString, size);
     }
     else
     {
         /* A-5 lowball portion */
-        length += sprintf(outString + length, "%s", BadaceyRules_handTypeNames[handType]);
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "%s", BadaceyRules_handTypeNames[handType]));
         /* Add lowball hand details here if needed */
     }
 
@@ -217,26 +251,31 @@ int BadaceyRules_HandVal_print(HandVal handval)
 }
 
 /* Badeucy hand value to string */
-int BadeucyRules_HandVal_toString(HandVal handval, char *outString)
+int BadeucyRules_HandVal_toString_n(HandVal handval, char *outString, size_t size)
 {
     int handType = HandVal_HANDTYPE(handval);
     int length = 0;
 
     if (handType >= BadeucyRules_HandType_COUNT)
     {
-        strcpy(outString, "Invalid");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Invalid". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Invalid"));
     }
 
     if (handType <= BadeucyRules_HandType_ONE)
     {
         /* Badugi portion */
-        return BadugiRules_HandVal_toString(handval, outString);
+        /* Delegate to the bounded variant: the wrapper would assume
+         * POKER_EVAL_HANDVAL_STRING_MAX and ignore the caller's size. */
+        return BadugiRules_HandVal_toString_n(handval, outString, size);
     }
     else
     {
         /* 2-7 lowball portion */
-        length += sprintf(outString + length, "%s", BadeucyRules_handTypeNames[handType]);
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "%s", BadeucyRules_handTypeNames[handType]));
         /* Add lowball hand details here if needed */
     }
 
@@ -250,4 +289,31 @@ int BadeucyRules_HandVal_print(HandVal handval)
     int length = BadeucyRules_HandVal_toString(handval, buf);
     printf("%s", buf);
     return length;
+}
+
+/*
+ * Historical entry point: no length, so the caller must supply at least
+ * POKER_EVAL_HANDVAL_STRING_MAX bytes. Kept so the exported API does not break.
+ */
+int BadugiRules_HandVal_toString(HandVal handval, char *outString)
+{
+    return BadugiRules_HandVal_toString_n(handval, outString, POKER_EVAL_HANDVAL_STRING_MAX);
+}
+
+/*
+ * Historical entry point: no length, so the caller must supply at least
+ * POKER_EVAL_HANDVAL_STRING_MAX bytes. Kept so the exported API does not break.
+ */
+int BadaceyRules_HandVal_toString(HandVal handval, char *outString)
+{
+    return BadaceyRules_HandVal_toString_n(handval, outString, POKER_EVAL_HANDVAL_STRING_MAX);
+}
+
+/*
+ * Historical entry point: no length, so the caller must supply at least
+ * POKER_EVAL_HANDVAL_STRING_MAX bytes. Kept so the exported API does not break.
+ */
+int BadeucyRules_HandVal_toString(HandVal handval, char *outString)
+{
+    return BadeucyRules_HandVal_toString_n(handval, outString, POKER_EVAL_HANDVAL_STRING_MAX);
 }

@@ -48,7 +48,7 @@ static void doCardMaskTable(void) {
     {
       char buf[80];
       // Output the card mask value (two 32-bit integers) as a string in curly braces format
-      sprintf(buf, " { { 0x%08x, 0x%08x } } ", c.cards_nn.n1, c.cards_nn.n2);
+      snprintf(buf, sizeof(buf), " { { 0x%08x, 0x%08x } } ", c.cards_nn.n1, c.cards_nn.n2);
       MakeTable_outputString(buf);
     };
 #endif
