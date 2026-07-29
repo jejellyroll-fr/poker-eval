@@ -8,6 +8,7 @@
 #include <poker_eval/core/enumeration_adapters.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include <poker_eval/equity/batched_montecarlo.h>
 
@@ -49,11 +50,28 @@ static void pe_apply_env_pair_weights_if_any(void) {
     size_t n = strlen(ev); if (n >= sizeof(buf)) n = sizeof(buf) - 1;
     memcpy(buf, ev, n); buf[n] = '\0';
     for (char* p = buf; *p; ++p) if (*p == ';') *p = ','; /* tolerate ';' */
-    double w0=0.0, w1=0.0, w2=0.0; int ok = 0;
-    /* Try sscanf */
-    if (sscanf(buf, "%lf,%lf,%lf", &w0, &w1, &w2) == 3) ok = 1;
+    /* strtod rather than sscanf: the return value tells how many conversions
+     * succeeded but not where they stopped, so "1,2,3junk" was accepted. */
+    double w[3] = { 0.0, 0.0, 0.0 };
+    const char* cursor = buf;
+    int ok = 1;
+    for (int i = 0; i < 3 && ok; ++i) {
+        char* end = NULL;
+        errno = 0;
+        w[i] = strtod(cursor, &end);
+        if (end == cursor || errno == ERANGE) {
+            ok = 0;
+            break;
+        }
+        cursor = end;
+        if (i < 2) {
+            if (*cursor != ',') ok = 0;
+            else ++cursor;
+        }
+    }
+    while (ok && *cursor == ' ') ++cursor;
+    if (ok && *cursor != '\0') ok = 0;
     if (ok) {
-        double w[3] = { w0, w1, w2 };
         pe_sampling_set_pair_weights(w);
     }
 }
