@@ -19,11 +19,31 @@
  */
 
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 #include <poker_eval/games/badugi_eval.h>
 #include <poker_eval/games/rules_badugi.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/low_eval.h>
+
+/*
+ * Cursor arithmetic for the bounded appends below.
+ *
+ * snprintf reports what it *would* have written, so adding its return value to
+ * the cursor walks past the end of the buffer as soon as the output is
+ * truncated. room_left keeps the pointer in bounds and advance_cursor clamps.
+ */
+static size_t room_left(size_t size, int length) {
+    if (length < 0 || (size_t)length >= size) return 0;
+    return size - (size_t)length;
+}
+
+static int advance_cursor(int length, size_t size, int written) {
+    size_t room = room_left(size, length);
+    if (written < 0 || room == 0) return length;
+    if ((size_t)written >= room) return (int)size - 1;   /* truncated */
+    return length + written;
+}
 
 /*
  * Get the best Badugi hand from a set of cards
@@ -347,48 +367,58 @@ HandVal StdDeck_BadeucyRules_EVAL_5(StdDeck_CardMask cards)
 /*
  * Convert Badugi hand value to string
  */
-int BadugiHandVal_toString(BadugiHandVal hv, char *outString)
+int BadugiHandVal_toString_n(BadugiHandVal hv, char *outString, size_t size)
 {
     int handType = BadugiHandVal_HANDTYPE(hv);
     int length = 0;
 
     if (hv == BadugiHandVal_NOTHING)
     {
-        strcpy(outString, "Nothing");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Nothing". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Nothing"));
     }
+
+
 
     switch (handType)
     {
     case BadugiRules_HandType_BADUGI:
-        length += sprintf(outString + length, "Badugi: %d%d%d%d",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "Badugi: %d%d%d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv),
                           BadugiHandVal_THIRD_CARD(hv),
-                          BadugiHandVal_FOURTH_CARD(hv));
+                          BadugiHandVal_FOURTH_CARD(hv)));
         break;
 
     case BadugiRules_HandType_THREE:
-        length += sprintf(outString + length, "Three-card: %d%d%d",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "Three-card: %d%d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv),
-                          BadugiHandVal_THIRD_CARD(hv));
+                          BadugiHandVal_THIRD_CARD(hv)));
         break;
 
     case BadugiRules_HandType_TWO:
-        length += sprintf(outString + length, "Two-card: %d%d",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "Two-card: %d%d",
                           BadugiHandVal_FIRST_CARD(hv),
-                          BadugiHandVal_SECOND_CARD(hv));
+                          BadugiHandVal_SECOND_CARD(hv)));
         break;
 
     case BadugiRules_HandType_ONE:
-        length += sprintf(outString + length, "One-card: %d",
-                          BadugiHandVal_FIRST_CARD(hv));
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "One-card: %d",
+                          BadugiHandVal_FIRST_CARD(hv)));
         break;
 
     default:
-        strcpy(outString, "Invalid");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Invalid". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Invalid"));
     }
 
     return length;
@@ -403,4 +433,13 @@ int BadugiHandVal_print(BadugiHandVal hv)
     int length = BadugiHandVal_toString(hv, buf);
     printf("%s", buf);
     return length;
+}
+
+/*
+ * Historical entry point: no length, so the caller must supply at least
+ * POKER_EVAL_HANDVAL_STRING_MAX bytes. Kept so the exported API does not break.
+ */
+int BadugiHandVal_toString(BadugiHandVal hv, char *outString)
+{
+    return BadugiHandVal_toString_n(hv, outString, POKER_EVAL_HANDVAL_STRING_MAX);
 }

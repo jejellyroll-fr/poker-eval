@@ -52,69 +52,69 @@ Manila_IsValidStraight(int ranks) {
 
 /* Manila hand value to string */
 int
-ManilaRules_HandVal_toString(HandVal handval, char *outString) {
+ManilaRules_HandVal_toString_n(HandVal handval, char *outString, size_t size) {
     int handType = HandVal_HANDTYPE(handval);
     int topCard = HandVal_TOP_CARD(handval);
     int secondCard = HandVal_SECOND_CARD(handval);
 
     if (handType < 0 || handType >= ManilaRules_HandType_COUNT) {
-        strcpy(outString, "Invalid");
+        snprintf(outString, size, "Invalid");
         return 1;
     }
 
     switch (handType) {
         case ManilaRules_HandType_STFLUSH:
-            sprintf(outString, "StraightFlush (%c high)",
+            snprintf(outString, size, "StraightFlush (%c high)",
                     ManilaDeck_rankChars[topCard]);
             break;
 
         case ManilaRules_HandType_QUADS:
-            sprintf(outString, "FourOfAKind (%cs) with %c kicker",
+            snprintf(outString, size, "FourOfAKind (%cs) with %c kicker",
                     ManilaDeck_rankChars[topCard],
                     ManilaDeck_rankChars[secondCard]);
             break;
 
         case ManilaRules_HandType_FLUSH:
-            sprintf(outString, "Flush (%c high)",
+            snprintf(outString, size, "Flush (%c high)",
                     ManilaDeck_rankChars[topCard]);
             break;
 
         case ManilaRules_HandType_FULLHOUSE:
-            sprintf(outString, "FullHouse (%cs full of %cs)",
+            snprintf(outString, size, "FullHouse (%cs full of %cs)",
                     ManilaDeck_rankChars[topCard],
                     ManilaDeck_rankChars[secondCard]);
             break;
 
         case ManilaRules_HandType_STRAIGHT:
-            sprintf(outString, "Straight (%c high)",
+            snprintf(outString, size, "Straight (%c high)",
                     ManilaDeck_rankChars[topCard]);
             break;
 
         case ManilaRules_HandType_TRIPS:
-            sprintf(outString, "ThreeOfAKind (%cs) with %c kicker",
+            snprintf(outString, size, "ThreeOfAKind (%cs) with %c kicker",
                     ManilaDeck_rankChars[topCard],
                     ManilaDeck_rankChars[secondCard]);
             break;
 
         case ManilaRules_HandType_TWOPAIR:
-            sprintf(outString, "TwoPair (%cs and %cs)",
+            snprintf(outString, size, "TwoPair (%cs and %cs)",
                     ManilaDeck_rankChars[topCard],
                     ManilaDeck_rankChars[secondCard]);
             break;
 
         case ManilaRules_HandType_ONEPAIR:
-            sprintf(outString, "OnePair (%cs) with %c kicker",
+            snprintf(outString, size, "OnePair (%cs) with %c kicker",
                     ManilaDeck_rankChars[topCard],
                     ManilaDeck_rankChars[secondCard]);
             break;
 
         case ManilaRules_HandType_NOPAIR:
-            sprintf(outString, "HighCard (%c)",
+            snprintf(outString, size, "HighCard (%c)",
                     ManilaDeck_rankChars[topCard]);
             break;
 
         default:
-            strcpy(outString, "Unknown");
+            snprintf(outString, size, "%s", "Unknown");
             return 1;
     }
 
@@ -159,4 +159,14 @@ Manila_EvaluateHand(StdDeck_CardMask cards, int num_cards) {
     /* Use the Manila evaluation function */
     /* This would call Manila_StdRules_EVAL_N from eval_manila.h */
     return HandVal_NOTHING; /* Placeholder */
+}
+
+/*
+ * Historical entry point: no length, so the caller must supply at least
+ * POKER_EVAL_HANDVAL_STRING_MAX bytes. Kept so the exported API does not break.
+ */
+int
+ManilaRules_HandVal_toString(HandVal handval, char *outString) {
+    return ManilaRules_HandVal_toString_n(handval, outString,
+                                          POKER_EVAL_HANDVAL_STRING_MAX);
 }

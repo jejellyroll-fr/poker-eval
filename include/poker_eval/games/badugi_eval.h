@@ -93,6 +93,9 @@ extern POKEREVAL_EXPORT int BadugiEval_CountUniqueSuits(StdDeck_CardMask cards, 
 extern POKEREVAL_EXPORT int BadugiEval_CountUniqueRanks(StdDeck_CardMask cards, int n_cards);
 
 /* Utility functions for string representation */
+/* Bounded variant; prefer it. size includes the terminator. */
+extern POKEREVAL_EXPORT int BadugiHandVal_toString_n(BadugiHandVal hv, char *outString, size_t size);
+/* Requires a buffer of at least POKER_EVAL_HANDVAL_STRING_MAX bytes. */
 extern POKEREVAL_EXPORT int BadugiHandVal_toString(BadugiHandVal hv, char *outString);
 extern POKEREVAL_EXPORT int BadugiHandVal_print(BadugiHandVal hv);
 

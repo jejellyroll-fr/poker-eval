@@ -1,6 +1,7 @@
 #ifndef __RULES_MANILA_H__
 #define __RULES_MANILA_H__
 
+#include <stddef.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
 
@@ -56,6 +57,10 @@
 #endif /* RULES_MANILA */
 
 /* Manila-specific evaluation functions */
+/* Bounded variant; prefer it. size includes the terminator. */
+extern int ManilaRules_HandVal_toString_n(HandVal handval, char *outString, size_t size);
+
+/* Requires a buffer of at least POKER_EVAL_HANDVAL_STRING_MAX bytes. */
 extern int ManilaRules_HandVal_toString(HandVal handval, char *outString);
 extern int ManilaRules_HandVal_print(HandVal handval);
 

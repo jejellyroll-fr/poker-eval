@@ -64,7 +64,7 @@ doCardMaskTable(void) {
 #else
     {
       char buf[80];
-      sprintf(buf, " { { 0x%08x, 0x%08x } } ", c.cards_nn.n1, c.cards_nn.n2);
+      snprintf(buf, sizeof(buf), " { { 0x%08x, 0x%08x } } ", c.cards_nn.n1, c.cards_nn.n2);
       MakeTable_outputString(buf);
     };
 #endif
