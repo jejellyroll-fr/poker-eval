@@ -53,7 +53,7 @@ jobs:
       run: |
         cd build
         timeout 60s ./src/examples/omaha_combinations_example --quiet
-        timeout 60s ./src/examples/omaha_canonical_demo --quiet
+        timeout 60s ./bin/bench_7c_hilo_singlepass
 
     - name: Generate Performance Report
       run: |
