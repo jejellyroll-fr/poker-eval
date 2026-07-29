@@ -68,7 +68,7 @@ if(Python3_FOUND)
         )
 
         set_tests_properties(test_python_binding PROPERTIES
-            ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:pypokereval>:${CMAKE_CURRENT_SOURCE_DIR}"
+            ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:pypokereval>"
         )
     endif()
 else()

@@ -477,7 +477,11 @@ main(int argc, char **argv) {
       err = 1;
     } else {
       if (backend_override && *backend_override) {
+#ifdef _WIN32
+        _putenv_s("PE_ENUM_BACKEND", backend_override);
+#else
         setenv("PE_ENUM_BACKEND", backend_override, 1);
+#endif
       }
       if (deckType == UNIVERSAL_DECK_JOKER) {
         // For JokerDeck games, we still use StdDeck_CardMask in the enumeration functions
