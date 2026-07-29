@@ -938,7 +938,7 @@ target_include_directories(test_deterministic_benchmarks PRIVATE
 )
 target_link_libraries(test_deterministic_benchmarks PRIVATE unity)
 target_compile_definitions(test_deterministic_benchmarks PRIVATE UNITY_INCLUDE_DOUBLE)
-if(ENABLE_OPENMP AND OpenMP_C_FOUND)
+if(POKER_EVAL_WITH_OPENMP)
     target_link_libraries(test_deterministic_benchmarks PRIVATE OpenMP::OpenMP_C)
 endif()
 if(UNIX)

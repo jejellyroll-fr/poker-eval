@@ -97,7 +97,7 @@ target_include_directories(poker_equity PRIVATE
     ${CMAKE_SOURCE_DIR}/distributions
 )
 
-if(OpenMP_C_FOUND AND ENABLE_OPENMP)
+if(POKER_EVAL_WITH_OPENMP)
     target_link_libraries(poker_equity OpenMP::OpenMP_C)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(poker_equity PRIVATE -Wno-error=pedantic -Wno-pedantic -Wno-undef)
