@@ -79,11 +79,17 @@ jobs:
 
     - name: Stress Linux crash regressions
       if: runner.os == 'Linux'
-      run: >-
-        ctest --preset ${{ matrix.preset }}
-        --output-on-failure
-        --repeat until-fail:20
-        -R '^(test_mpf_perf_stats|test_enumerate_dispatch)$'
+      run: |
+        if ! ctest --preset "${{ matrix.preset }}" \
+          --output-on-failure \
+          --repeat until-fail:20 \
+          -R '^(test_mpf_perf_stats|test_enumerate_dispatch)$'; then
+          gdb --batch \
+            -ex run \
+            -ex "thread apply all backtrace full" \
+            --args "build/${{ matrix.preset }}/tests/test_mpf_perf_stats"
+          exit 1
+        fi
     
     - name: Test
       run: ctest --preset ${{ matrix.preset }} --output-on-failure
