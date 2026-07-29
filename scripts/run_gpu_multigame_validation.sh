@@ -36,7 +36,6 @@ configure_gpu_build() {
     cmake -S "${ROOT_DIR}" -B "${GPU_BUILD_DIR}" \
         -G "Ninja" \
         -DBUILD_SHARED_LIBS=ON \
-        -DBUILD_STATIC_LIBS=ON \
         -DBUILD_EXAMPLES=ON \
         -DBUILD_TESTS=ON \
         -DCMAKE_BUILD_TYPE=Release \

@@ -14,7 +14,7 @@ set(GAMES_SOURCES
     badugi_eval.c
     triple_draw.c
     deck_manila.c
-    mixed_game.c
+    # mixed_game.c is compiled by the engine module: see src/engine/CMakeLists.txt
     lowball.c
     rules_omaha5.c
     rules_omaha6.c
@@ -49,11 +49,12 @@ set(GAMES_HEADERS
 )
 
 # Add games library
-add_library(poker_games STATIC ${GAMES_SOURCES})
+add_library(poker_games ${GAMES_SOURCES})
 set_property(TARGET poker_games PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-# Link with core module
-target_link_libraries(poker_games poker_core poker_engine)
+# Link with core module. poker_engine is deliberately absent: the dependency ran
+# through mixed_game.c only, which the engine module now compiles.
+target_link_libraries(poker_games poker_core)
 
 # Set include directories
 target_include_directories(poker_games PRIVATE

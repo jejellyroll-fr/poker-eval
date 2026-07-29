@@ -22,11 +22,11 @@ set(DISTRIBUTIONS_HEADERS
 )
 
 # Add distributions library
-add_library(poker_distributions STATIC ${DISTRIBUTIONS_SOURCES})
+add_library(poker_distributions ${DISTRIBUTIONS_SOURCES})
 set_property(TARGET poker_distributions PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # Link with core and games modules
-target_link_libraries(poker_distributions poker_core poker_games)
+target_link_libraries(poker_distributions poker_core poker_equity)
 
 # Set include directories
 target_include_directories(poker_distributions PRIVATE

@@ -14,7 +14,7 @@ set(RANGE_HEADERS
     ../../include/poker_eval/range.h
 )
 
-add_library(poker-eval-range STATIC ${RANGE_SOURCES})
+add_library(poker-eval-range ${RANGE_SOURCES})
 
 target_include_directories(poker-eval-range PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>

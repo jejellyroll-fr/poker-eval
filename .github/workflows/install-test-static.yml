@@ -25,14 +25,21 @@ jobs:
             -DBUILD_BINDINGS=OFF \
             -DBUILD_GPU=OFF \
             -DENABLE_OPENMP=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_STATIC_LIBS=ON
+            -DBUILD_SHARED_LIBS=OFF
 
       - name: Build
         run: cmake --build build -j
 
       - name: Install
         run: cmake --install build --prefix "$RUNNER_TEMP/pokereval"
+
+      - name: Check the installed artifacts are static archives
+        run: |
+          archives=$(find "$RUNNER_TEMP/pokereval/lib" -maxdepth 1 -name '*.a' | wc -l)
+          shared=$(find "$RUNNER_TEMP/pokereval/lib" -maxdepth 1 \( -name '*.so*' -o -name '*.dylib' \) | wc -l)
+          echo "archives=$archives shared=$shared"
+          test "$archives" -gt 0
+          test "$shared" -eq 0
 
       - name: Configure consumer (find_package)
         run: |
