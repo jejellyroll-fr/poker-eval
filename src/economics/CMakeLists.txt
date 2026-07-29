@@ -6,7 +6,7 @@ set(ECONOMICS_SOURCES
     tournament.c
 )
 
-add_library(poker_economics STATIC ${ECONOMICS_SOURCES})
+add_library(poker_economics ${ECONOMICS_SOURCES})
 
 target_include_directories(poker_economics PRIVATE
     ${CMAKE_SOURCE_DIR}/include

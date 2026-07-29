@@ -66,7 +66,7 @@ set(CORE_HEADERS
 )
 
 # Add core library
-add_library(poker_core STATIC ${CORE_SOURCES})
+add_library(poker_core ${CORE_SOURCES})
 set_property(TARGET poker_core PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # Set include directories

@@ -64,8 +64,7 @@ sudo cmake --install build
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `BUILD_SHARED_LIBS` | ON | Build shared libraries |
-| `BUILD_STATIC_LIBS` | ON | Build static libraries |
+| `BUILD_SHARED_LIBS` | ON | Build shared libraries; set to OFF for static archives |
 | `BUILD_EXAMPLES` | ON | Build example programs |
 | `BUILD_TESTS` | ON | Build test programs |
 | `BUILD_BINDINGS` | ON | Build language bindings |
@@ -167,10 +166,9 @@ cmake -B build -S . \
     -DBUILD_TESTS=OFF \
     -DBUILD_BINDINGS=OFF
 
-# Build only static library
+# Build static archives instead of shared libraries
 cmake -B build -S . \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_STATIC_LIBS=ON
+    -DBUILD_SHARED_LIBS=OFF
 ```
 
 ### GPU Acceleration

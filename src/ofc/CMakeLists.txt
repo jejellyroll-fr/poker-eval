@@ -9,7 +9,7 @@ set(OFC_SOURCES
     policy/ofc_rollout_heuristics.c
 )
 
-add_library(poker_ofc STATIC ${OFC_SOURCES})
+add_library(poker_ofc ${OFC_SOURCES})
 
 target_include_directories(poker_ofc PRIVATE
     ${CMAKE_SOURCE_DIR}/include

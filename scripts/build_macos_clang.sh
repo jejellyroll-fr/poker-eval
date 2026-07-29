@@ -84,7 +84,6 @@ else
 
   cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -G "Unix Makefiles" \
     -DBUILD_SHARED_LIBS=ON \
-    -DBUILD_STATIC_LIBS=ON \
     -DBUILD_EXAMPLES=ON \
     -DBUILD_TESTS=ON \
     -DCMAKE_BUILD_TYPE=Release \
