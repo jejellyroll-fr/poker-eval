@@ -83,19 +83,6 @@ jobs:
       # to fail every run - the exclusion is the placeholder, not the fix.
       run: ctest --preset ${{ matrix.preset }} --output-on-failure -E 'test_mpf_perf_stats|test_enumerate_dispatch'
     
-    - name: Generate Coverage Report
-      if: matrix.coverage
-      run: |
-        cd build/${{ matrix.preset }}
-        make coverage-report
-    
-    - name: Upload Coverage to Codecov
-      if: matrix.coverage
-      uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457 # v3
-      with:
-        file: ./build/${{ matrix.preset }}/coverage/coverage.info
-        flags: unittests
-        name: codecov-umbrella
 
 
 # The vcpkg/Conan, cross-compilation and CPack jobs that used to live here

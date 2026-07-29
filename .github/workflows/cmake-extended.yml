@@ -81,6 +81,18 @@ jobs:
     - name: Test
       run: ctest --preset debug --output-on-failure
 
+    # Generator-neutral: the debug preset uses Ninja, so `make coverage-report`
+    # would look for a Makefile that a Ninja tree does not have.
+    - name: Generate coverage report
+      run: cmake --build --preset debug --target coverage-report
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457 # v3
+      with:
+        file: ./build/debug/coverage/coverage.info
+        flags: unittests
+        name: codecov-umbrella
+
   build-with-package-managers:
     name: Build with ${{ matrix.package-manager }}
     runs-on: ubuntu-latest
@@ -182,7 +194,7 @@ jobs:
         cpack -G RPM
     
     - name: Upload packages
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: packages
         path: |
