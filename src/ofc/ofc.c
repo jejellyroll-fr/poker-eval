@@ -1664,8 +1664,9 @@ static int OFC_CalculateMultipleEquityVsRandom(const ofc_player_hand_t *hands,
     num_threads = num_hands;
   }
 
+  int i;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
-  for (int i = 0; i < num_hands; i++) {
+  for (i = 0; i < num_hands; i++) {
     equity_values[i] =
         OFC_CalculateEquityVsRandom(&hands[i], simulations_per_hand);
   }
