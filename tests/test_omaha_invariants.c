@@ -94,7 +94,7 @@ int main(void) {
         assert(hole_count == 4);
 
         for (int i = 0; i < 4; ++i) {
-            assert(count_combos_with_hole_card(seen, count, hole_cards[i]) == 10);
+            assert(count_combos_with_hole_card(seen, count, hole_cards[i]) == 30);
         }
 
         /* Avoid unused variable warnings in Release builds where assert() is disabled */

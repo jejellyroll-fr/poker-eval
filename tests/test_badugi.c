@@ -118,8 +118,7 @@ static void test_badugi_comparison(void)
     BadugiHandVal val1 = StdDeck_BadugiRules_EVAL_4(hand1);
     BadugiHandVal val2 = StdDeck_BadugiRules_EVAL_4(hand2);
 
-    /* Lower hand value means better hand in Badugi */
-    assert(val1 < val2);
+    assert(val1 > val2);
     (void)val1;
     (void)val2; /* Suppress unused variable warnings */
     printf("✓ A234 beats A235\n");
@@ -142,10 +141,33 @@ static void test_badugi_comparison(void)
     BadugiHandVal val3 = StdDeck_BadugiRules_EVAL_4(hand3);
     BadugiHandVal val4 = StdDeck_BadugiRules_EVAL_4(hand4);
 
-    assert(val3 < val4);
+    assert(val3 > val4);
     (void)val3;
     (void)val4; /* Suppress unused variable warnings */
     printf("✓ Four-card KQJT beats three-card A23\n");
+
+    /* Compare the highest differing card first: six-high beats seven-high. */
+    StdDeck_CardMask seven_high = create_hand(
+        make_card(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
+        make_card(StdDeck_Rank_2, StdDeck_Suit_HEARTS),
+        make_card(StdDeck_Rank_6, StdDeck_Suit_DIAMONDS),
+        make_card(StdDeck_Rank_7, StdDeck_Suit_CLUBS),
+        -1);
+
+    StdDeck_CardMask six_high = create_hand(
+        make_card(StdDeck_Rank_3, StdDeck_Suit_SPADES),
+        make_card(StdDeck_Rank_4, StdDeck_Suit_HEARTS),
+        make_card(StdDeck_Rank_5, StdDeck_Suit_DIAMONDS),
+        make_card(StdDeck_Rank_6, StdDeck_Suit_CLUBS),
+        -1);
+
+    BadugiHandVal seven_high_val = StdDeck_BadugiRules_EVAL_4(seven_high);
+    BadugiHandVal six_high_val = StdDeck_BadugiRules_EVAL_4(six_high);
+
+    assert(six_high_val > seven_high_val);
+    (void)seven_high_val;
+    (void)six_high_val;
+    printf("✓ 3456 beats A267 by comparing the highest card first\n");
 }
 
 /* Test 5-card Badugi (best 4 cards) */
@@ -173,7 +195,7 @@ static void test_badacey(void)
 {
     printf("\nTesting Badacey evaluation...\n");
 
-    /* Perfect Badugi should beat any A-5 lowball */
+    /* A four-card Badugi should beat a one-card Badugi */
     StdDeck_CardMask badugi_hand = create_hand(
         make_card(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
         make_card(StdDeck_Rank_2, StdDeck_Suit_HEARTS),
@@ -181,8 +203,8 @@ static void test_badacey(void)
         make_card(StdDeck_Rank_4, StdDeck_Suit_CLUBS),
         make_card(StdDeck_Rank_5, StdDeck_Suit_SPADES));
 
-    /* No Badugi possible - all same suit */
-    StdDeck_CardMask lowball_hand = create_hand(
+    /* All cards share a suit, so only the lowest one-card Badugi remains */
+    StdDeck_CardMask one_card_hand = create_hand(
         make_card(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
         make_card(StdDeck_Rank_2, StdDeck_Suit_SPADES),
         make_card(StdDeck_Rank_3, StdDeck_Suit_SPADES),
@@ -190,15 +212,14 @@ static void test_badacey(void)
         make_card(StdDeck_Rank_5, StdDeck_Suit_SPADES));
 
     HandVal val1 = StdDeck_BadaceyRules_EVAL_5(badugi_hand);
-    HandVal val2 = StdDeck_BadaceyRules_EVAL_5(lowball_hand);
+    HandVal val2 = StdDeck_BadaceyRules_EVAL_5(one_card_hand);
 
-    /* Badugi should beat A-5 lowball */
-    assert(HandVal_HANDTYPE(val1) <= BadaceyRules_HandType_ONE);
-    assert(HandVal_HANDTYPE(val2) == BadaceyRules_HandType_A5_LOW);
-    assert(val1 < val2);
+    assert(HandVal_HANDTYPE(val1) == BadaceyRules_HandType_BADUGI);
+    assert(HandVal_HANDTYPE(val2) == BadaceyRules_HandType_ONE);
+    assert(val1 > val2);
     (void)val1;
     (void)val2; /* Suppress unused variable warnings */
-    printf("✓ Badugi beats A-5 lowball in Badacey\n");
+    printf("✓ Four-card Badugi beats one-card Badugi in Badacey\n");
 }
 
 /* Test Badeucy evaluation */
@@ -206,7 +227,7 @@ static void test_badeucy(void)
 {
     printf("\nTesting Badeucy evaluation...\n");
 
-    /* Perfect Badugi should beat any 2-7 lowball */
+    /* A four-card Badugi should beat a one-card Badugi */
     StdDeck_CardMask badugi_hand = create_hand(
         make_card(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
         make_card(StdDeck_Rank_2, StdDeck_Suit_HEARTS),
@@ -214,8 +235,8 @@ static void test_badeucy(void)
         make_card(StdDeck_Rank_4, StdDeck_Suit_CLUBS),
         make_card(StdDeck_Rank_5, StdDeck_Suit_SPADES));
 
-    /* No Badugi possible - all same suit */
-    StdDeck_CardMask lowball_hand = create_hand(
+    /* All cards share a suit, so only the lowest one-card Badugi remains */
+    StdDeck_CardMask one_card_hand = create_hand(
         make_card(StdDeck_Rank_2, StdDeck_Suit_SPADES),
         make_card(StdDeck_Rank_3, StdDeck_Suit_SPADES),
         make_card(StdDeck_Rank_4, StdDeck_Suit_SPADES),
@@ -223,15 +244,14 @@ static void test_badeucy(void)
         make_card(StdDeck_Rank_7, StdDeck_Suit_SPADES));
 
     HandVal val1 = StdDeck_BadeucyRules_EVAL_5(badugi_hand);
-    HandVal val2 = StdDeck_BadeucyRules_EVAL_5(lowball_hand);
+    HandVal val2 = StdDeck_BadeucyRules_EVAL_5(one_card_hand);
 
-    /* Badugi should beat 2-7 lowball */
-    assert(HandVal_HANDTYPE(val1) <= BadeucyRules_HandType_ONE);
-    assert(HandVal_HANDTYPE(val2) == BadeucyRules_HandType_27_LOW);
-    assert(val1 < val2);
+    assert(HandVal_HANDTYPE(val1) == BadeucyRules_HandType_BADUGI);
+    assert(HandVal_HANDTYPE(val2) == BadeucyRules_HandType_ONE);
+    assert(val1 > val2);
     (void)val1;
     (void)val2; /* Suppress unused variable warnings */
-    printf("✓ Badugi beats 2-7 lowball in Badeucy\n");
+    printf("✓ Four-card Badugi beats one-card Badugi in Badeucy\n");
 }
 
 /* Test string representation */

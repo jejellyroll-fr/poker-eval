@@ -429,12 +429,14 @@ int OFC_ScoreHands(const ofc_player_hand_t *hand1,
 
   if (!hand1_valid) {
     score1->foul_penalty = -6;
+    score1->total_score = -6;
     score2->total_score = 6;
     return 0;
   }
 
   if (!hand2_valid) {
     score2->foul_penalty = -6;
+    score2->total_score = -6;
     score1->total_score = 6;
     return 0;
   }

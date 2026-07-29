@@ -28,10 +28,10 @@ static int stud_char_to_rank(char r) {
 static int stud_char_to_suit(char s) {
     s = (char)tolower(s);
     switch (s) {
-        case 'c': return 0; // StdDeck_Suit_CLUBS
-        case 'd': return 1; // StdDeck_Suit_DIAMONDS
-        case 'h': return 2; // StdDeck_Suit_HEARTS
-        case 's': return 3; // StdDeck_Suit_SPADES
+        case 'c': return StdDeck_Suit_CLUBS;
+        case 'd': return StdDeck_Suit_DIAMONDS;
+        case 'h': return StdDeck_Suit_HEARTS;
+        case 's': return StdDeck_Suit_SPADES;
         default:  return -100; // Error
     }
 }
@@ -108,12 +108,18 @@ int StudHand_Parse(const char* handText, int game_cards, StudHandQuery* query) {
             }
             // A following suit char makes this a specific card; otherwise it is
             // a rank-only card (suit wildcard), e.g. "AA" inside "(AA)xxxxx".
+            // 'x' as a suit char means wildcard suit.
             char next_char = *(p + 1);
             int suit_val = stud_char_to_suit(next_char);
             if (suit_val != -100) {
                 p += 2; // Consume rank + suit
                 query->patterns[pattern_idx].rank = rank_val;
                 query->patterns[pattern_idx].suit = suit_val;
+                query->num_known_cards++;
+            } else if (next_char != '\0' && tolower(next_char) == 'x') {
+                p += 2; // Consume rank + wildcard suit marker 'x'
+                query->patterns[pattern_idx].rank = rank_val;
+                query->patterns[pattern_idx].suit = WILDCARD_CARD_VAL;
                 query->num_known_cards++;
             } else {
                 p += 1; // Consume only the rank
@@ -173,6 +179,7 @@ int StudHand_Parse(const char* handText, int game_cards, StudHandQuery* query) {
 // `used` tracks cards already placed (including dead cards) so hands have no duplicates.
 static void stud_fill_slots(
     int slot,
+    int next_wild_card,
     StdDeck_CardMask used,
     StdDeck_CardMask acc,
     const StudHandQuery* query,
@@ -181,15 +188,32 @@ static void stud_fill_slots(
     if (handList->count >= MAX_STUD_COMBOS) {
         return;
     }
-    if (slot == query->num_pattern_cards) {
+    if (slot == query->game_total_cards) {
         handList->hands[handList->count++] = acc;
+        return;
+    }
+
+    if (slot >= query->num_pattern_cards) {
+        // Wildcard slots are interchangeable, so enumerate combinations.
+        for (int card = next_wild_card; card < StdDeck_N_CARDS; card++) {
+            StdDeck_CardMask c = StdDeck_MASK(card);
+            if (StdDeck_CardMask_ANY_SET(used, c)) {
+                continue;
+            }
+            StdDeck_CardMask nused, nacc;
+            StdDeck_CardMask_OR(nused, used, c);
+            StdDeck_CardMask_OR(nacc, acc, c);
+            stud_fill_slots(slot + 1, card + 1, nused, nacc, query, handList);
+            if (handList->count >= MAX_STUD_COMBOS) {
+                return;
+            }
+        }
         return;
     }
 
     const StudCardPattern* pat = &query->patterns[slot];
 
     if (pat->rank != WILDCARD_CARD_VAL && pat->suit != WILDCARD_CARD_VAL) {
-        // Exact card
         StdDeck_CardMask c = StdDeck_MASK(StdDeck_MAKE_CARD(pat->rank, pat->suit));
         if (StdDeck_CardMask_ANY_SET(used, c)) {
             return;
@@ -197,9 +221,8 @@ static void stud_fill_slots(
         StdDeck_CardMask nused, nacc;
         StdDeck_CardMask_OR(nused, used, c);
         StdDeck_CardMask_OR(nacc, acc, c);
-        stud_fill_slots(slot + 1, nused, nacc, query, handList);
+        stud_fill_slots(slot + 1, next_wild_card, nused, nacc, query, handList);
     } else if (pat->rank != WILDCARD_CARD_VAL && pat->suit == WILDCARD_CARD_VAL) {
-        // Rank-only card: try every suit
         for (int s = 0; s < 4; s++) {
             StdDeck_CardMask c = StdDeck_MASK(StdDeck_MAKE_CARD(pat->rank, s));
             if (StdDeck_CardMask_ANY_SET(used, c)) {
@@ -208,14 +231,13 @@ static void stud_fill_slots(
             StdDeck_CardMask nused, nacc;
             StdDeck_CardMask_OR(nused, used, c);
             StdDeck_CardMask_OR(nacc, acc, c);
-            stud_fill_slots(slot + 1, nused, nacc, query, handList);
+            stud_fill_slots(slot + 1, next_wild_card, nused, nacc, query, handList);
             if (handList->count >= MAX_STUD_COMBOS) {
                 return;
             }
         }
     } else {
-        // Fully wild card: try every remaining deck card
-        for (int card = 0; card < StdDeck_N_CARDS; card++) {
+        for (int card = next_wild_card; card < StdDeck_N_CARDS; card++) {
             StdDeck_CardMask c = StdDeck_MASK(card);
             if (StdDeck_CardMask_ANY_SET(used, c)) {
                 continue;
@@ -223,7 +245,7 @@ static void stud_fill_slots(
             StdDeck_CardMask nused, nacc;
             StdDeck_CardMask_OR(nused, used, c);
             StdDeck_CardMask_OR(nacc, acc, c);
-            stud_fill_slots(slot + 1, nused, nacc, query, handList);
+            stud_fill_slots(slot + 1, card + 1, nused, nacc, query, handList);
             if (handList->count >= MAX_STUD_COMBOS) {
                 return;
             }
@@ -244,7 +266,7 @@ int StudHand_Instantiate(const StudHandQuery* query, StdDeck_CardMask deadCards,
     StdDeck_CardMask_RESET(acc);
     StdDeck_CardMask_OR(used, used, deadCards);
 
-    stud_fill_slots(0, used, acc, query, handList);
+    stud_fill_slots(0, 0, used, acc, query, handList);
 
     return handList->count;
 }
