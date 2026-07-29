@@ -196,7 +196,7 @@ const char* benchmark_get_system_info(void) {
                     sys_info.sysname, sys_info.release, sys_info.machine,
                     compiler_name, compiler_version);
         } else {
-            strncpy(info, "System info unavailable", sizeof(info) - 1);
+            snprintf(info, sizeof(info), "%s", "System info unavailable");
         }
 #endif
         initialized = true;

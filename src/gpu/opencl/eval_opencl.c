@@ -643,7 +643,7 @@ int opencl_gpu_get_device_info(int device_id, char *name, size_t *memory, int *c
     {
         char dev_name[256];
         clGetDeviceInfo(dev, CL_DEVICE_NAME, sizeof(dev_name), dev_name, NULL);
-        strncpy(name, dev_name, 256);
+        snprintf(name, 256, "%s", dev_name);
     }
     if (memory)
     {
