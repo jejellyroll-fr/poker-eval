@@ -27,18 +27,18 @@ add_library(poker_eval_modular INTERFACE)
 if(UNIX AND NOT APPLE)
     # GNU ld supports --start-group/--end-group for circular dependencies
     target_link_libraries(poker_eval_modular INTERFACE
+        -Wl,--start-group
         poker_core
         poker_utils
         poker_games
-        -Wl,--start-group
         poker_distributions
         poker_equity
         poker-eval-range
-        -Wl,--end-group
         poker_engine
         poker_betting
         poker_economics
         poker_ofc
+        -Wl,--end-group
     )
 else()
     # macOS/Apple ld doesn't support --start-group, but handles circular deps differently
