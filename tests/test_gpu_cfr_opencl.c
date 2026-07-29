@@ -23,7 +23,7 @@ void tearDown(void) {}
 
 /* ===== Basic Tests ===== */
 
-void test_gpu_cfr_default_config(void) {
+static void test_gpu_cfr_default_config(void) {
     gpu_cfr_config_t cfg = gpu_cfr_default_config();
 
     TEST_ASSERT_EQUAL_INT(10000, cfg.num_infosets);
@@ -34,7 +34,7 @@ void test_gpu_cfr_default_config(void) {
     TEST_ASSERT_TRUE(cfg.use_sparse);
 }
 
-void test_matrix_storage_create(void) {
+static void test_matrix_storage_create(void) {
     cfr_matrix_storage_t* storage = cfr_matrix_storage_create(1000, 4);
     TEST_ASSERT_NOT_NULL(storage);
 
@@ -49,7 +49,7 @@ void test_matrix_storage_create(void) {
     cfr_matrix_storage_free(storage);
 }
 
-void test_sparse_matrix_create(void) {
+static void test_sparse_matrix_create(void) {
     /* Create simple sparse matrix: 3x3 with 4 non-zeros */
     int from[] = {0, 0, 1, 2};
     int to[] = {0, 1, 2, 0};
@@ -73,7 +73,7 @@ void test_sparse_matrix_create(void) {
 
 #if OPENCL_AVAILABLE
 
-void test_gpu_cfr_opencl_init(void) {
+static void test_gpu_cfr_opencl_init(void) {
     gpu_cfr_config_t cfg = gpu_cfr_default_config();
     cfg.num_infosets = 100;
     cfg.max_actions = 4;
@@ -96,7 +96,7 @@ void test_gpu_cfr_opencl_init(void) {
     gpu_cfr_free_opencl(ctx);
 }
 
-void test_gpu_cfr_opencl_load_state(void) {
+static void test_gpu_cfr_opencl_load_state(void) {
     gpu_cfr_config_t cfg = gpu_cfr_default_config();
     cfg.num_infosets = 100;
     cfg.max_actions = 4;
@@ -144,7 +144,7 @@ void test_gpu_cfr_opencl_load_state(void) {
     gpu_cfr_free_opencl(ctx);
 }
 
-void test_gpu_cfr_opencl_solve(void) {
+static void test_gpu_cfr_opencl_solve(void) {
     gpu_cfr_config_t cfg = gpu_cfr_default_config();
     cfg.num_infosets = 50;
     cfg.max_actions = 3;
@@ -185,7 +185,7 @@ void test_gpu_cfr_opencl_solve(void) {
     gpu_cfr_free_opencl(ctx);
 }
 
-void test_gpu_cfr_opencl_reset(void) {
+static void test_gpu_cfr_opencl_reset(void) {
     gpu_cfr_config_t cfg = gpu_cfr_default_config();
     cfg.num_infosets = 100;
     cfg.max_actions = 4;
@@ -224,7 +224,7 @@ void test_gpu_cfr_opencl_reset(void) {
     gpu_cfr_free_opencl(ctx);
 }
 
-void test_gpu_cfr_opencl_sparse_matrix(void) {
+static void test_gpu_cfr_opencl_sparse_matrix(void) {
     gpu_cfr_config_t cfg = gpu_cfr_default_config();
     cfg.num_infosets = 10;
     cfg.max_actions = 3;
@@ -251,7 +251,7 @@ void test_gpu_cfr_opencl_sparse_matrix(void) {
     gpu_cfr_free_opencl(ctx);
 }
 
-void test_gpu_cfr_opencl_device_count(void) {
+static void test_gpu_cfr_opencl_device_count(void) {
     int count = gpu_cfr_get_device_count_opencl();
     /* Should return 0 or more - just verify it doesn't crash */
     TEST_ASSERT_TRUE(count >= 0);
@@ -259,27 +259,27 @@ void test_gpu_cfr_opencl_device_count(void) {
 
 #else /* !OPENCL_AVAILABLE */
 
-void test_gpu_cfr_opencl_init(void) {
+static void test_gpu_cfr_opencl_init(void) {
     TEST_IGNORE_MESSAGE("OpenCL not available - skipping test");
 }
 
-void test_gpu_cfr_opencl_load_state(void) {
+static void test_gpu_cfr_opencl_load_state(void) {
     TEST_IGNORE_MESSAGE("OpenCL not available - skipping test");
 }
 
-void test_gpu_cfr_opencl_solve(void) {
+static void test_gpu_cfr_opencl_solve(void) {
     TEST_IGNORE_MESSAGE("OpenCL not available - skipping test");
 }
 
-void test_gpu_cfr_opencl_reset(void) {
+static void test_gpu_cfr_opencl_reset(void) {
     TEST_IGNORE_MESSAGE("OpenCL not available - skipping test");
 }
 
-void test_gpu_cfr_opencl_sparse_matrix(void) {
+static void test_gpu_cfr_opencl_sparse_matrix(void) {
     TEST_IGNORE_MESSAGE("OpenCL not available - skipping test");
 }
 
-void test_gpu_cfr_opencl_device_count(void) {
+static void test_gpu_cfr_opencl_device_count(void) {
     TEST_IGNORE_MESSAGE("OpenCL not available - skipping test");
 }
 

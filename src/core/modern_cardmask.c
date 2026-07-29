@@ -8,9 +8,11 @@
 #include <ctype.h>
 #include <time.h>
 
-/* Rank characters for string conversion */
-static const char rank_chars[13] = "23456789TJQKA";
-static const char suit_chars[4] = "cdhs";
+/* Rank characters for string conversion. Sized from the initializer: the
+ * explicit [13]/[4] bounds left no room for the terminating NUL, which Apple
+ * clang and GCC 15 reject. Only ever indexed, never read as a string. */
+static const char rank_chars[] = "23456789TJQKA";
+static const char suit_chars[] = "cdhs";
 
 /* Convert mask to string representation */
 const char *mask_to_string(mask_t mask, char *buffer, size_t buffer_size)

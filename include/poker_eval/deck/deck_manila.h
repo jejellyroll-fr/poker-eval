@@ -60,8 +60,11 @@ typedef uint32 ManilaDeck_RankMask;
 
 /* External declarations */
 extern POKEREVAL_EXPORT ManilaDeck_CardMask ManilaDeck_cardMasksTable[ManilaDeck_N_CARDS];
-extern POKEREVAL_EXPORT char ManilaDeck_rankChars[ManilaDeck_Rank_LAST+1];
-extern POKEREVAL_EXPORT char ManilaDeck_suitChars[ManilaDeck_Suit_LAST+1];
+/* Declared without a size: the definition includes the terminating NUL, so a
+ * [<rank>_LAST + 1] bound made the array one byte too small for its own
+ * initializer. Apple clang and GCC 15 reject that; no caller uses sizeof. */
+extern POKEREVAL_EXPORT char ManilaDeck_rankChars[];
+extern POKEREVAL_EXPORT char ManilaDeck_suitChars[];
 
 /* Function declarations */
 extern POKEREVAL_EXPORT int ManilaDeck_cardToString(int cardIndex, char *outString);

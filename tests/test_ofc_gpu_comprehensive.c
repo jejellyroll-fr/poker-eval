@@ -208,14 +208,16 @@ static int test_gpu_vs_simd_validation(void) {
     ofc_gpu_context_t *ctx = OFC_GPU_Init(-1, 1024, OFC_GPU_BACKEND_AUTO);
     if (!ctx) return 0;
 
-    const int batch_size = 8;
-    ofc_hand_t test_hands[batch_size];
-    int cards[batch_size];
-    ofc_position_t positions[batch_size];
-    float gpu_risks[batch_size];
-    float simd_risks[batch_size];
+    /* #define rather than const int: the latter is not a constant
+     * expression in C, so these were variable-length arrays. */
+#define FOUL_BATCH_SIZE 8
+    ofc_hand_t test_hands[FOUL_BATCH_SIZE];
+    int cards[FOUL_BATCH_SIZE];
+    ofc_position_t positions[FOUL_BATCH_SIZE];
+    float gpu_risks[FOUL_BATCH_SIZE];
+    float simd_risks[FOUL_BATCH_SIZE];
 
-    for (int i = 0; i < batch_size; i++) {
+    for (int i = 0; i < FOUL_BATCH_SIZE; i++) {
         OFC_InitializeHand(&test_hands[i]);
         cards[i] = StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES);
         positions[i] = OFC_TOP;
@@ -223,24 +225,24 @@ static int test_gpu_vs_simd_validation(void) {
 
     ofc_gpu_batch_t gpu_batch;
     memset(&gpu_batch, 0, sizeof(gpu_batch));
-    for (int i = 0; i < batch_size; i++) {
+    for (int i = 0; i < FOUL_BATCH_SIZE; i++) {
         gpu_batch.partial_hands[i] = test_hands[i];
         gpu_batch.cards[i] = cards[i];
         gpu_batch.positions[i] = positions[i];
     }
     gpu_batch.simulations_per_hand = 5000;
-    gpu_batch.batch_size = batch_size;
+    gpu_batch.batch_size = FOUL_BATCH_SIZE;
 
     OFC_GPU_CalculateFoulRiskBatch(ctx, &gpu_batch);
-    memcpy(gpu_risks, gpu_batch.foul_risks, sizeof(float) * batch_size);
+    memcpy(gpu_risks, gpu_batch.foul_risks, sizeof(float) * FOUL_BATCH_SIZE);
 
     OFC_CalculateMultipleFoulRisksSIMD(
-        test_hands, cards, positions, batch_size, 5000, simd_risks);
+        test_hands, cards, positions, FOUL_BATCH_SIZE, 5000, simd_risks);
 
     int passed = 1;
     float tolerance = 0.05f;
 
-    for (int i = 0; i < batch_size; i++) {
+    for (int i = 0; i < FOUL_BATCH_SIZE; i++) {
         float diff = fabsf(gpu_risks[i] - simd_risks[i]);
         if (diff > tolerance) {
             printf("  ✗ Hand %d: GPU=%.4f, SIMD=%.4f, diff=%.4f\n",
@@ -259,6 +261,7 @@ static int test_gpu_vs_simd_validation(void) {
     OFC_GPU_Cleanup(ctx);
     return passed;
 }
+#undef FOUL_BATCH_SIZE
 
 /* Category 4: Edge Cases */
 static int test_edge_cases(void) {
