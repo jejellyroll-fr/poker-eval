@@ -45,11 +45,11 @@
     {
       "name": "windows-msvc",
       "displayName": "Windows MSVC",
-      "description": "Windows build with MSVC",
+      "description": "Windows MSVC build. Static: WINDOWS_EXPORT_ALL_SYMBOLS exports functions but not data symbols, so a shared build leaves the exported tables (StdDeck_rankChars, nBitsTable, ...) unresolved at link time.",
       "generator": "Visual Studio 17 2022",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "BUILD_SHARED_LIBS": "ON",
+        "BUILD_SHARED_LIBS": "OFF",
         "BUILD_EXAMPLES": "ON",
         "BUILD_TESTS": "ON"
       },
