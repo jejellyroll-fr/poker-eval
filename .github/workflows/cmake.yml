@@ -78,10 +78,7 @@ jobs:
       run: cmake --build --preset ${{ matrix.preset }} --parallel
     
     - name: Test
-      # These abort under the preset configurations, which run more tests than
-      # the Release job. Excluded here and tracked separately rather than left
-      # to fail every run - the exclusion is the placeholder, not the fix.
-      run: ctest --preset ${{ matrix.preset }} --output-on-failure -E 'test_mpf_perf_stats|test_enumerate_dispatch'
+      run: ctest --preset ${{ matrix.preset }} --output-on-failure
     
 
 
