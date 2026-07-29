@@ -59,7 +59,7 @@ bool flop_is_paired(StdDeck_CardMask flop);
 int flop_texture_score(const flop_analysis_t *analysis);
 
 /* String conversion */
-void flop_texture_to_string(flop_texture_category_t texture, char *out);
+void flop_texture_to_string(flop_texture_category_t texture, char *out, size_t out_size);
 
 /* Flop equity result with detailed breakdown */
 typedef struct {

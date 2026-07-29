@@ -19,10 +19,10 @@ static void make_dead_from_pockets(StdDeck_CardMask* dead) {
     StdDeck_CardMask p1, p2; StdDeck_CardMask_RESET(p1); StdDeck_CardMask_RESET(p2);
     int c;
     char buf[8];
-    strcpy(buf, "As"); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p1, c);
-    strcpy(buf, "Ah"); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p1, c);
-    strcpy(buf, "Kd"); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p2, c);
-    strcpy(buf, "Kh"); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p2, c);
+    memcpy(buf, "As", 3); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p1, c);
+    memcpy(buf, "Ah", 3); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p1, c);
+    memcpy(buf, "Kd", 3); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p2, c);
+    memcpy(buf, "Kh", 3); StdDeck_stringToCard(buf, &c); StdDeck_CardMask_SET(p2, c);
     StdDeck_CardMask_RESET(*dead);
     StdDeck_CardMask_OR(*dead, *dead, p1);
     StdDeck_CardMask_OR(*dead, *dead, p2);
