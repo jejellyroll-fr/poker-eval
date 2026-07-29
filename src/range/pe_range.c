@@ -235,10 +235,10 @@ static int parse_holdem_token(pe_range_t *range, char *token, StdDeck_CardMask d
     char p1[16] = {0}, p2[16] = {0};
     if (dash) {
         is_dash = 1;
-        strncpy(p1, token, (size_t)(dash - token));
-        strcpy(p2, dash + 1);
+        snprintf(p1, sizeof(p1), "%.*s", (int)(dash - token), token);
+        snprintf(p2, sizeof(p2), "%s", dash + 1);
     } else {
-        strcpy(p1, token);
+        snprintf(p1, sizeof(p1), "%s", token);
     }
 
     /* Parse part 1 */

@@ -161,7 +161,7 @@ testAStudDeck(const char *handstr) {
 
   printf("\nAsian Stud Deck: %s\n", handstr);
   AStudDeck_CardMask_RESET(cards);
-  strcpy(str, handstr);
+  snprintf(str, sizeof(str), "%s", handstr);
   p = strtok(str, " ");
   do {
     if (AStudDeck.stringToCard(p, &c) == 0)
@@ -203,7 +203,7 @@ testOmaha8(const char *holestr, const char *boardstr) {
   printf("\nOmaha Hi/Lo8: %s | %s\n", holestr, boardstr);
 
   StdDeck_CardMask_RESET(hole);
-  strcpy(str, holestr);
+  snprintf(str, sizeof(str), "%s", holestr);
   p = strtok(str, " ");
   do {
     if (DstringToCard(StdDeck, p, &c) == 0)
@@ -214,7 +214,7 @@ testOmaha8(const char *holestr, const char *boardstr) {
   } while ((p = strtok(NULL, " ")) != NULL);
 
   StdDeck_CardMask_RESET(board);
-  strcpy(str, boardstr);
+  snprintf(str, sizeof(str), "%s", boardstr);
   p = strtok(str, " ");
   do {
     if (DstringToCard(StdDeck, p, &c) == 0)
@@ -225,8 +225,8 @@ testOmaha8(const char *holestr, const char *boardstr) {
   } while ((p = strtok(NULL, " ")) != NULL);
 
   ret = StdDeck_OmahaHiLow8_EVAL(hole, board, &hival, &loval);
-  strcpy(hstr, DmaskString(StdDeck, hole));
-  strcpy(bstr, DmaskString(StdDeck, board));
+  snprintf(hstr, sizeof(hstr), "%s", DmaskString(StdDeck, hole));
+  snprintf(bstr, sizeof(bstr), "%s", DmaskString(StdDeck, board));
   printf("%s | %s:\n", hstr, bstr);
   if (ret == 0) {
     printf("  HI %d: ", hival);
@@ -275,7 +275,7 @@ testShortDeck(const char *handstr) {
 
   printf("\nShortDeck: %s\n", handstr);
   ShortDeck_CardMask_RESET(cards);
-  strcpy(str, handstr);
+  snprintf(str, sizeof(str), "%s", handstr);
   p = strtok(str, " ");
   do {
     //printf("Processing card: %s\n", p); // Affiche la carte en cours de traitement

@@ -48,8 +48,7 @@ MakeTable_begin(const char *tableName,
   gLineCount = 0;
   gHeaderDone = 0;
 
-  strcpy(fnBuf, fileName);
-  strcat(fnBuf, ".c");
+  snprintf(fnBuf, sizeof(fnBuf), "%s.c", fileName);
   gCFile = fopen(fnBuf, "w");
   if (!gCFile) 
     fprintf(stderr, "Could not open %s for writing\n", fnBuf);

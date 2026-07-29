@@ -98,7 +98,7 @@ int Universal_StringToCard(const char *str, int *card, deck_type_t *type) {
 /* Convert card to string */
 int Universal_CardToString(int card, char *str, deck_type_t type) {
   if (type == UNIVERSAL_DECK_JOKER && card == JokerDeck_JOKER) {
-    strcpy(str, "Xx");
+    memcpy(str, "Xx", 3);
     return 1;
   } else if (type == UNIVERSAL_DECK_STANDARD) {
     return StdDeck_cardToString(card, str);

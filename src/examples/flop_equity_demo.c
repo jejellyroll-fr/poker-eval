@@ -63,7 +63,7 @@ int main(int argc, char **argv)
     analyze_flop_texture(flop, &texture);
 
     char texture_str[32];
-    flop_texture_to_string(texture.texture, texture_str);
+    flop_texture_to_string(texture.texture, texture_str, sizeof(texture_str));
 
     printf("Flop Texture: %s (score: %d/100)\n", texture_str, texture.texture_score);
     printf("  Monotone: %s\n", texture.is_monotone ? "Yes" : "No");

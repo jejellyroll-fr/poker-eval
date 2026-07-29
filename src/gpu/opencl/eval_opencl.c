@@ -725,12 +725,15 @@ static char* load_multi_kernel_sources(const char** filenames, int num_files)
         return NULL;
     }
 
-    combined[0] = '\0';
+    size_t offset = 0;
     for (int i = 0; i < num_files; i++) {
-        strcat(combined, sources[i]);
-        strcat(combined, "\n");
+        size_t slen = strlen(sources[i]);
+        memcpy(combined + offset, sources[i], slen);
+        offset += slen;
+        combined[offset++] = '\n';
         free(sources[i]);
     }
+    combined[offset] = '\0';
 
     opencl_debug_log("Combined %d kernel source files into %zu bytes", num_files, total_size);
     return combined;

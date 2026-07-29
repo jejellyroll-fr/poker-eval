@@ -401,7 +401,7 @@ void preflop_range_to_string(const preflop_range_t *range, char *out_str, size_t
             size_t len = strlen(hand_str);
             if (pos + len < max_len - 1)
             {
-                strcpy(out_str + pos, hand_str);
+                memcpy(out_str + pos, hand_str, len + 1);
                 pos += len;
             }
         }

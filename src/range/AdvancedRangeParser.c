@@ -2683,7 +2683,9 @@ int ARP_ParseRangeWithError(
     if (!ARP_InitContext(&ctx, range_string)) {
         if (error_details) {
             error_details->error_code = ARP_ERROR_MEMORY_ALLOCATION;
-            strcpy(error_details->error_message, "Failed to initialize parser");
+            snprintf(error_details->error_message,
+                     sizeof(error_details->error_message),
+                     "Failed to initialize parser");
         }
         return 0;
     }

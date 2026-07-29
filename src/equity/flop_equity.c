@@ -288,16 +288,18 @@ int analyze_flop_texture(StdDeck_CardMask flop, flop_analysis_t *analysis)
 }
 
 /* Convert texture to string */
-void flop_texture_to_string(flop_texture_category_t texture, char *out)
+void flop_texture_to_string(flop_texture_category_t texture, char *out, size_t out_size)
 {
+    const char *label;
     switch (texture) {
-        case FLOP_TEXTURE_DRY:         strcpy(out, "Dry"); break;
-        case FLOP_TEXTURE_WET:         strcpy(out, "Wet"); break;
-        case FLOP_TEXTURE_COORDINATED: strcpy(out, "Coordinated"); break;
-        case FLOP_TEXTURE_PAIRED:      strcpy(out, "Paired"); break;
-        case FLOP_TEXTURE_TRIPS:       strcpy(out, "Trips"); break;
-        default:                       strcpy(out, "Unknown"); break;
+        case FLOP_TEXTURE_DRY:         label = "Dry"; break;
+        case FLOP_TEXTURE_WET:         label = "Wet"; break;
+        case FLOP_TEXTURE_COORDINATED: label = "Coordinated"; break;
+        case FLOP_TEXTURE_PAIRED:      label = "Paired"; break;
+        case FLOP_TEXTURE_TRIPS:       label = "Trips"; break;
+        default:                       label = "Unknown"; break;
     }
+    snprintf(out, out_size, "%s", label);
 }
 
 static int flop_calc_equity_monte_carlo(
