@@ -243,8 +243,10 @@ static int test_gpu_vs_simd_validation(void) {
     ofc_gpu_context_t *ctx = OFC_GPU_Init(-1, 1024, OFC_GPU_BACKEND_AUTO);
     if (!ctx) return 0;
 
-    /* Create test batch */
-    const int batch_size = 8;
+    /* Create test batch. #define rather than const int: in C the latter is
+     * not a constant expression, so the arrays below were variable-length
+     * arrays, which clang rejects here. */
+#define batch_size 8
     ofc_hand_t test_hands[batch_size];
     int cards[batch_size];
     ofc_position_t positions[batch_size];
@@ -296,6 +298,7 @@ static int test_gpu_vs_simd_validation(void) {
     OFC_GPU_Cleanup(ctx);
     return passed;
 }
+#undef batch_size
 
 static int test_gpu_error_handling(void) {
     int passed = 1;
