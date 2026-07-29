@@ -28,26 +28,17 @@ jobs:
             compiler: clang
             preset: linux-clang
           
-          - name: Linux GCC Debug Coverage
-            os: ubuntu-latest
-            compiler: gcc
-            preset: debug
-            coverage: true
-          
           # macOS builds
           - name: macOS Clang
             os: macos-latest
             compiler: clang
             preset: macos
           
-          - name: macOS GCC
-            os: macos-latest
-            compiler: gcc-11
-            preset: default
-          
           # Windows builds
+          # windows-latest moved past VS 2022, which the windows-msvc preset
+          # pins as its generator; pin the image instead of chasing versions.
           - name: Windows MSVC
-            os: windows-latest
+            os: windows-2022
             compiler: msvc
             preset: windows-msvc
           

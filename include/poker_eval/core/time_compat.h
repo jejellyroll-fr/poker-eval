@@ -14,16 +14,13 @@
 #define CLOCK_MONOTONIC 1
 #endif
 
-#if !defined(_MSC_VER)
-#ifndef _TIMESPEC_DEFINED
-#define _TIMESPEC_DEFINED
-struct timespec
-{
-    time_t tv_sec;
-    long tv_nsec;
-};
-#endif
-#endif
+/*
+ * Only MSVC needs the shim. MinGW-w64 declares clock_gettime and struct
+ * timespec in its own <time.h>, so defining them here made every MinGW build
+ * fail with "redefinition of 'clock_gettime'" - on every translation unit that
+ * includes this header.
+ */
+#if defined(_MSC_VER)
 
 static __inline int clock_gettime(int clk_id, struct timespec *ts)
 {
@@ -39,6 +36,8 @@ static __inline int clock_gettime(int clk_id, struct timespec *ts)
     ts->tv_nsec = (long)((seconds - (double)ts->tv_sec) * 1e9);
     return 0;
 }
-#endif
+#endif /* _MSC_VER */
+
+#endif /* _WIN32 */
 
 #endif /* POKER_EVAL_TIME_COMPAT_H */

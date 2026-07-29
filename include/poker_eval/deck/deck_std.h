@@ -252,8 +252,11 @@ extern POKEREVAL_EXPORT uint8 bottomCardTable[StdDeck_N_RANKMASKS];
 extern POKEREVAL_EXPORT StdDeck_CardMask
     StdDeck_cardMasksTable[StdDeck_N_CARDS];
 
-extern POKEREVAL_EXPORT char StdDeck_rankChars[StdDeck_Rank_LAST + 1];
-extern POKEREVAL_EXPORT char StdDeck_suitChars[StdDeck_Suit_LAST + 1];
+/* Declared without a size: the definition includes the terminating NUL, so a
+ * [<rank>_LAST + 1] bound made the array one byte too small for its own
+ * initializer. Apple clang and GCC 15 reject that; no caller uses sizeof. */
+extern POKEREVAL_EXPORT char StdDeck_rankChars[];
+extern POKEREVAL_EXPORT char StdDeck_suitChars[];
 
 extern POKEREVAL_EXPORT int StdDeck_cardToString(int cardIndex,
                                                  char *outString);
