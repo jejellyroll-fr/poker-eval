@@ -3,6 +3,11 @@
 set(ENGINE_SOURCES
     game_engine.c
     engine_api.c
+    # mixed_game.c lives under games/ but belongs to the engine layer: it is the
+    # only games source calling into the engine, while engine_api.c calls its
+    # mixed_game_* API. Compiling it here breaks the poker_games <-> poker_engine
+    # target cycle, which CMake only tolerates between static archives.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../games/mixed_game.c
     policy/nn_policy.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_storage.c
@@ -22,7 +27,7 @@ set(ENGINE_SOURCES
     solvers/ismcts/ismcts_poker.c
 )
 
-add_library(poker_engine STATIC ${ENGINE_SOURCES})
+add_library(poker_engine ${ENGINE_SOURCES})
 set_property(TARGET poker_engine PROPERTY POSITION_INDEPENDENT_CODE ON)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(poker_engine PRIVATE -Wno-error)
@@ -34,7 +39,7 @@ target_include_directories(poker_engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(poker_engine PUBLIC poker_core poker_games m)
+target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity m)
 
 install(TARGETS poker_engine
         EXPORT poker-eval-targets
@@ -47,7 +52,7 @@ set(BETTING_SOURCES
     betting_engine.c
 )
 
-add_library(poker_betting STATIC ${BETTING_SOURCES})
+add_library(poker_betting ${BETTING_SOURCES})
 set_property(TARGET poker_betting PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(poker_betting PRIVATE
