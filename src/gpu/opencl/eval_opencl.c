@@ -727,13 +727,19 @@ static char* load_multi_kernel_sources(const char** filenames, int num_files)
 
     size_t offset = 0;
     for (int i = 0; i < num_files; i++) {
-        size_t slen = strlen(sources[i]);
-        memcpy(combined + offset, sources[i], slen);
-        offset += slen;
-        combined[offset++] = '\n';
+        size_t remaining = total_size + 1 - offset;
+        int written = snprintf(combined + offset, remaining, "%s\n", sources[i]);
         free(sources[i]);
+        if (written < 0 || (size_t)written >= remaining) {
+            for (int j = i + 1; j < num_files; j++) {
+                free(sources[j]);
+            }
+            free(combined);
+            opencl_debug_log("Failed to combine OpenCL kernel sources");
+            return NULL;
+        }
+        offset += (size_t)written;
     }
-    combined[offset] = '\0';
 
     opencl_debug_log("Combined %d kernel source files into %zu bytes", num_files, total_size);
     return combined;
