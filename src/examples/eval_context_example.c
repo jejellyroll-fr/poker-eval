@@ -125,7 +125,7 @@ static void demo_combo_integration(void) {
             char combo_str[256];
             mask_to_string(combination, combo_str, sizeof(combo_str));
             hand_class_t hand_class = eval_get_hand_class(eval_result);
-            printf("  %2d. %s -> %s (%u)\n",
+            printf("  %2u. %s -> %s (%u)\n",
                    combo_count, combo_str, eval_hand_class_name(hand_class), eval_result);
             top_combos_shown++;
         }

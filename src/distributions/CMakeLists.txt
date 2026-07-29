@@ -38,9 +38,6 @@ target_include_directories(poker_distributions PRIVATE
     ${CMAKE_SOURCE_DIR}/games/inlines
 )
 
-# Install headers
-install(FILES ${DISTRIBUTIONS_HEADERS} DESTINATION include/poker/distributions)
-
 # Install library
 install(TARGETS poker_distributions
         EXPORT poker-eval-targets

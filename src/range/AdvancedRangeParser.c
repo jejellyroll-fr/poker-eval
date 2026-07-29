@@ -3751,13 +3751,13 @@ token_complete:
             size_t weight_start = ctx->position + 1;
             char *endptr = NULL;
             double value = strtod(&ctx->input[weight_start], &endptr);
-            if (!endptr || endptr == &ctx->input[weight_start])
+            if (endptr == &ctx->input[weight_start])
             {
                 snprintf(ctx->error_message, sizeof(ctx->error_message),
                          "Invalid weight at position %zu", ctx->position);
                 return 0;
             }
-            while (endptr && isspace((unsigned char)*endptr))
+            while (isspace((unsigned char)*endptr))
             {
                 endptr++;
             }
@@ -3765,7 +3765,7 @@ token_complete:
             {
                 value /= 100.0;
                 endptr++;
-                while (endptr && isspace((unsigned char)*endptr))
+                while (isspace((unsigned char)*endptr))
                 {
                     endptr++;
                 }

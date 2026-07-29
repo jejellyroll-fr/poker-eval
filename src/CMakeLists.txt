@@ -61,16 +61,17 @@ endif()
 
 # Set include directories for the combined library
 target_include_directories(poker_eval_modular INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils
-    ${CMAKE_CURRENT_SOURCE_DIR}/games
-    ${CMAKE_CURRENT_SOURCE_DIR}/distributions
-    ${CMAKE_CURRENT_SOURCE_DIR}/equity
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
 
 # Install the combined library
 install(TARGETS poker_eval_modular
-        EXPORT poker_eval_modular-targets)
+        EXPORT poker-eval-targets)
+
+set_target_properties(poker_eval_modular PROPERTIES
+    EXPORT_NAME poker-eval)
 
 # Create an alias for backward compatibility
 add_library(poker_eval ALIAS poker_eval_modular)

@@ -18,6 +18,7 @@ typedef struct
 {
     HANDLE handle;
     unsigned int id;
+    void **result;
 } pthread_t;
 
 typedef CRITICAL_SECTION pthread_mutex_t;
@@ -27,6 +28,7 @@ typedef struct
 {
     void *(*start_routine)(void *);
     void *arg;
+    void **result;
 } pe_pthread_start_t;
 
 static unsigned __stdcall pe_pthread_start(void *arg)
@@ -37,8 +39,12 @@ static unsigned __stdcall pe_pthread_start(void *arg)
     {
         ret = start->start_routine(start->arg);
     }
+    if (start && start->result)
+    {
+        *start->result = ret;
+    }
     free(start);
-    return (unsigned)(uintptr_t)ret;
+    return 0;
 }
 
 static int pthread_create(pthread_t *thr, const void *attr,
@@ -50,11 +56,21 @@ static int pthread_create(pthread_t *thr, const void *attr,
     pe_pthread_start_t *start = (pe_pthread_start_t *)malloc(sizeof(*start));
     if (!start)
         return -1;
+    thr->result = (void **)malloc(sizeof(*thr->result));
+    if (!thr->result)
+    {
+        free(start);
+        return -1;
+    }
+    *thr->result = NULL;
     start->start_routine = start_routine;
     start->arg = arg;
+    start->result = thr->result;
     uintptr_t handle = _beginthreadex(NULL, 0, pe_pthread_start, start, 0, &thr->id);
     if (!handle)
     {
+        free(thr->result);
+        thr->result = NULL;
         free(start);
         return -1;
     }
@@ -71,13 +87,10 @@ static int pthread_join(pthread_t thr, void **ret)
         return -1;
     if (ret)
     {
-        DWORD code = 0;
-        if (GetExitCodeThread(thr.handle, &code))
-            *ret = (void *)(uintptr_t)code;
-        else
-            *ret = NULL;
+        *ret = thr.result ? *thr.result : NULL;
     }
     CloseHandle(thr.handle);
+    free(thr.result);
     return 0;
 }
 
@@ -86,6 +99,7 @@ static pthread_t pthread_self(void)
     pthread_t self;
     self.handle = NULL;
     self.id = GetCurrentThreadId();
+    self.result = NULL;
     return self;
 }
 

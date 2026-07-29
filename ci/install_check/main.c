@@ -1,6 +1,4 @@
-#include <poker_eval/game_engine.h>
-#include <poker_eval/enumerate.h>
-#include <poker_eval/enumdefs.h>
+#include <poker_eval/poker_eval.h>
 
 int main(void) {
   /* Simple compile-only sanity: declare a few types/symbols */
@@ -8,4 +6,3 @@ int main(void) {
   (void)g;
   return 0;
 }
-

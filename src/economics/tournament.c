@@ -109,17 +109,15 @@ void tournament_structure_create_regular(tournament_structure_t *structure,
   /* Regular: 10-15 minute levels */
   /* Levels 1-4: No ante */
   tournament_structure_add_level(structure, sb, sb * 2, 0, 0, 600);
-  tournament_structure_add_level(structure, (int64_t)(sb * 1.5), sb * 3, 0, 0,
-                                 600);
+  tournament_structure_add_level(structure, sb * 3 / 2, sb * 3, 0, 0, 600);
   tournament_structure_add_level(structure, sb * 2, sb * 4, 0, 0, 600);
-  tournament_structure_add_level(structure, (int64_t)(sb * 2.5), sb * 5, 0, 0,
-                                 600);
+  tournament_structure_add_level(structure, sb * 5 / 2, sb * 5, 0, 0, 600);
 
   /* Levels 5-8: Antes begin */
   tournament_structure_add_level(structure, sb * 3, sb * 6, sb, 0, 600);
   tournament_structure_add_level(structure, sb * 4, sb * 8, sb, 0, 600);
-  tournament_structure_add_level(structure, sb * 5, sb * 10,
-                                 (int64_t)(sb * 1.5), 0, 600);
+  tournament_structure_add_level(structure, sb * 5, sb * 10, sb * 3 / 2, 0,
+                                 600);
   tournament_structure_add_level(structure, sb * 6, sb * 12, sb * 2, 0, 600);
 
   /* Break */
@@ -148,13 +146,11 @@ void tournament_structure_create_deep_stack(tournament_structure_t *structure,
   /* Deep stack: 20-30 minute levels, slow progression */
   /* Levels 1-6: No ante, gentle increases */
   tournament_structure_add_level(structure, sb, sb * 2, 0, 0, 1200);
-  tournament_structure_add_level(structure, (int64_t)(sb * 1.25),
-                                 (int64_t)(sb * 2.5), 0, 0, 1200);
-  tournament_structure_add_level(structure, (int64_t)(sb * 1.5), sb * 3, 0, 0,
+  tournament_structure_add_level(structure, sb * 5 / 4, sb * 5 / 2, 0, 0,
                                  1200);
+  tournament_structure_add_level(structure, sb * 3 / 2, sb * 3, 0, 0, 1200);
   tournament_structure_add_level(structure, sb * 2, sb * 4, 0, 0, 1200);
-  tournament_structure_add_level(structure, (int64_t)(sb * 2.5), sb * 5, 0, 0,
-                                 1200);
+  tournament_structure_add_level(structure, sb * 5 / 2, sb * 5, 0, 0, 1200);
   tournament_structure_add_level(structure, sb * 3, sb * 6, 0, 0, 1200);
 
   /* Break */
@@ -661,7 +657,8 @@ double tournament_calculate_equity(const tournament_state_t *state,
     return 0.0;
 
   /* Simple chip-proportional equity (ChipEV) */
-  double chip_fraction = (double)player_chips / state->total_chips;
+  double chip_fraction =
+      (double)player_chips / (double)state->total_chips;
 
   /* Apply bubble adjustment if applicable */
   if (state->on_bubble || state->in_the_money) {
@@ -672,7 +669,7 @@ double tournament_calculate_equity(const tournament_state_t *state,
     }
   }
 
-  return chip_fraction * state->prize_pool;
+  return chip_fraction * (double)state->prize_pool;
 }
 
 /* ============================================================================
@@ -695,7 +692,7 @@ int64_t tournament_get_chip_leader_estimate(const tournament_state_t *state) {
   int64_t avg = tournament_get_average_stack(state);
   double multiplier = 2.0 + log10((double)state->players_remaining) * 0.5;
 
-  return (int64_t)(avg * multiplier);
+  return (int64_t)((double)avg * multiplier);
 }
 
 int64_t tournament_get_orbit_cost(const tournament_state_t *state,

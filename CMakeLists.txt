@@ -494,12 +494,12 @@ include(GNUInstallDirs)
 
 # Install headers
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/poker_eval/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/poker-eval
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/poker_eval
     FILES_MATCHING PATTERN "*.h"
 )
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/poker_config.h
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/poker-eval
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/poker_eval/core
 )
 
 # Package configuration

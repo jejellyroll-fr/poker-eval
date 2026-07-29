@@ -201,8 +201,6 @@ static uint64_t s8_infoset_key(const void *s)
     {
         return (act << 16) | (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
     }
-    /* No public board; use board_cls=0 */
-    int b_cls = 0;
     /* Private class from 7-card hi value */
     eval_t p_eval = pe_eval_7c(st->ctx, (p == 0) ? st->seven0 : st->seven1);
     hand_class_t pcl = eval_get_hand_class(p_eval);
@@ -275,9 +273,13 @@ static uint64_t s8_infoset_key(const void *s)
             if (coarse >= bins)
                 coarse = bins - 1;
         }
-        return ((uint64_t)b_cls << 56) | ((uint64_t)p_cls << 52) | ((uint64_t)coarse << 48) | (act << 16) | (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
+        return ((uint64_t)p_cls << 52) | ((uint64_t)coarse << 48) |
+               (act << 16) | (uint64_t)(st->raises_left & 0xF) |
+               ((uint64_t)(p & 1) << 4);
     }
-    return ((uint64_t)b_cls << 56) | ((uint64_t)p_cls << 52) | (act << 16) | (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
+    return ((uint64_t)p_cls << 52) | (act << 16) |
+           (uint64_t)(st->raises_left & 0xF) |
+           ((uint64_t)(p & 1) << 4);
 }
 
 void s8_build_game(const EvalContext *ctx, mask_t seven0, mask_t seven1, cfr_game_t *out_game, s8_state_t *out_state)

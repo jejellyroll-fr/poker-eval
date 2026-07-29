@@ -1,7 +1,7 @@
 import re
-import xml.etree.ElementTree as ET
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
+from defusedxml.ElementTree import fromstring
 from .base import HandHistoryParser
 from .dtos import ParserResult, CreateHandDTO, HandPlayerDTO, HandActionDTO
 
@@ -21,7 +21,7 @@ class IPokerParser(HandHistoryParser):
 
             for raw_game in raw_games:
                 try:
-                    root = ET.fromstring(raw_game)
+                    root = fromstring(raw_game)
                     hand_dto = self._parse_single_hand_xml(root)
                     if hand_dto:
                         result.hands.append(hand_dto)
@@ -37,7 +37,7 @@ class IPokerParser(HandHistoryParser):
             content = f.read()
         return self.parse_content(content)
 
-    def _parse_single_hand_xml(self, game_el: ET.Element) -> Optional[CreateHandDTO]:
+    def _parse_single_hand_xml(self, game_el: Any) -> Optional[CreateHandDTO]:
         hand_id = game_el.get("gamecode")
 
         # Date
@@ -46,7 +46,8 @@ class IPokerParser(HandHistoryParser):
         if start_date is not None:
              try:
                  game_date = datetime.strptime(start_date.text, "%Y-%m-%d %H:%M:%S")
-             except: pass
+             except (TypeError, ValueError):
+                 pass
 
         # Players
         players = []

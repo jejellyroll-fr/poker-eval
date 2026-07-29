@@ -74,7 +74,7 @@ static void demo_omaha_generation(void) {
         mask_t hole_part = mask_intersect(combination, hole);
         mask_t board_part = mask_intersect(combination, board);
 
-        printf("  %2d. %s (hole: %d, board: %d)\n",
+        printf("  %2u. %s (hole: %d, board: %d)\n",
                count + 1, combo_str,
                mask_popcount(hole_part), mask_popcount(board_part));
 
@@ -99,7 +99,8 @@ static void demo_omaha_generation(void) {
         }
     }
 
-    printf("  ... (showing first 10 and last few of %d shown combinations)\n", count);
+    printf("  ... (showing first 10 and last few of %u shown combinations)\n",
+           count);
 
     /* Use the real emitted count from generator stats for authoritative reporting */
     omaha_stats_t stats;
@@ -235,7 +236,8 @@ static void demo_performance_comparison(void) {
     mask_t board = string_to_mask("Js Tc 9d 8s 7c");
     uint32_t iterations = 1000;
 
-    printf("Comparing constrained vs filtered generation (%d iterations):\n\n", iterations);
+    printf("Comparing constrained vs filtered generation (%u iterations):\n\n",
+           iterations);
 
     /* Method 1: Constrained generation (new approach) */
     printf("Method 1: Constrained generation (native 2+3):\n");

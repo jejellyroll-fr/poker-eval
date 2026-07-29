@@ -28,3 +28,9 @@ target_link_libraries(poker-eval-range PRIVATE poker_distributions)
 
 # Position independent code for shared library linkage
 set_target_properties(poker-eval-range PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS poker-eval-range
+        EXPORT poker-eval-targets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin)

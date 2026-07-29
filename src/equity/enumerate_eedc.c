@@ -766,8 +766,6 @@ static void eedc_process_board_chunk(const StdDeck_CardMask *boards,
     if (worker_count > 1 && count >= worker_count)
     {
         int actual_workers = worker_count;
-        if (count < actual_workers)
-            actual_workers = count;
         int chunk = eedc_get_chunk_size();
         int omp_chunk = chunk / actual_workers;
         if (omp_chunk < 1)

@@ -885,6 +885,8 @@ static void holdem_sample_opponent_cards(
                 }
             }
             
+            if (card < 0) break;
+
             state->hole_cards[p][c] = card;
             deck &= ~(1ULL << card);
         }

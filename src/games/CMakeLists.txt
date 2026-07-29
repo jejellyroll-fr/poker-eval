@@ -64,11 +64,6 @@ target_include_directories(poker_games PRIVATE
     ${CMAKE_SOURCE_DIR}/core/inlines
 )
 
-# Install headers
-install(FILES ${GAMES_HEADERS} DESTINATION include/poker/games)
-install(DIRECTORY inlines/ DESTINATION include/poker/games/inlines
-        FILES_MATCHING PATTERN "*.h")
-
 # Install library
 install(TARGETS poker_games
         EXPORT poker-eval-targets

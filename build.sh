@@ -16,7 +16,6 @@ BUILD_TYPE="Release"
 BUILD_DIR="build"
 PRESET=""
 CLEAN=0
-VERBOSE=0
 PARALLEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # New modular structure options
@@ -233,7 +232,6 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -v|--verbose)
-            VERBOSE=1
             CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_VERBOSE_MAKEFILE=ON"
             shift
             ;;

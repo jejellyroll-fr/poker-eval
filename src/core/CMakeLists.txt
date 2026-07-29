@@ -80,11 +80,6 @@ target_include_directories(poker_core PRIVATE
     ${CMAKE_SOURCE_DIR}/src/utils
 )
 
-# Install headers
-install(FILES ${CORE_HEADERS} DESTINATION include/poker/core)
-install(DIRECTORY inlines/ DESTINATION include/poker/core/inlines
-        FILES_MATCHING PATTERN "*.h")
-
 # Install library
 install(TARGETS poker_core
         EXPORT poker-eval-targets

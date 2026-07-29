@@ -104,9 +104,6 @@ if(OpenMP_C_FOUND AND ENABLE_OPENMP)
     endif()
 endif()
 
-# Install headers
-install(FILES ${EQUITY_HEADERS} DESTINATION include/poker/equity)
-
 # Install library
 install(TARGETS poker_equity
         EXPORT poker-eval-targets

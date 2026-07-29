@@ -131,7 +131,11 @@ static inline void weightedAggregationFinalizePlayer(
     int player_index,
     unsigned int target_samples
 ) {
-    if (!agg || !aggregated_results || agg->total_weighted_samples <= 0.0 || target_samples == 0) {
+    if (!aggregated_results) {
+        return;
+    }
+
+    if (!agg || agg->total_weighted_samples <= 0.0 || target_samples == 0) {
         aggregated_results->nwinhi[player_index] = 0;
         aggregated_results->ntiehi[player_index] = 0;
         aggregated_results->nlosehi[player_index] = 0;
