@@ -69,6 +69,11 @@ set(CORE_HEADERS
 add_library(poker_core ${CORE_SOURCES})
 set_property(TARGET poker_core PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+# A shared library has to resolve libm itself on Linux; macOS gets it from
+# libSystem, which is why a static-only build never needed this. Windows has a
+# no-op m target created by the root CMakeLists.
+target_link_libraries(poker_core m)
+
 # Set include directories
 target_include_directories(poker_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

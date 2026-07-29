@@ -14,7 +14,7 @@ target_include_directories(poker_economics PRIVATE
 )
 
 # Link with core for basic definitions if needed
-target_link_libraries(poker_economics PUBLIC poker_core)
+target_link_libraries(poker_economics PUBLIC poker_core m)
 
 install(TARGETS poker_economics
         EXPORT poker-eval-targets

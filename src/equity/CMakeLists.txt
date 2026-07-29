@@ -91,7 +91,7 @@ endif()
 # The declared dependency on poker_distributions was backwards: equity defines
 # CalculateEquityForRanges, which distributions consumes, not the reverse. The
 # false edge is what made the module graph look circular.
-target_link_libraries(poker_equity poker_core poker_games poker_utils)
+target_link_libraries(poker_equity poker_core poker_games poker_utils m)
 
 # Set include directories
 target_include_directories(poker_equity PRIVATE
