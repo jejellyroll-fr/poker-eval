@@ -31,10 +31,10 @@ void init_aligned_tables(void)
 {
   if (aligned_tables_initialized)
     return;
-  memcpy(aligned_straightTable, straightTable, sizeof(straightTable));
-  memcpy(aligned_topFiveCardsTable, topFiveCardsTable, sizeof(topFiveCardsTable));
-  memcpy(aligned_nBitsTable, nBitsTable, sizeof(nBitsTable));
-  memcpy(aligned_topCardTable, topCardTable, sizeof(topCardTable));
+  memcpy(aligned_straightTable, straightTable, sizeof(aligned_straightTable));
+  memcpy(aligned_topFiveCardsTable, topFiveCardsTable, sizeof(aligned_topFiveCardsTable));
+  memcpy(aligned_nBitsTable, nBitsTable, sizeof(aligned_nBitsTable));
+  memcpy(aligned_topCardTable, topCardTable, sizeof(aligned_topCardTable));
   aligned_tables_initialized = 1;
 }
 
