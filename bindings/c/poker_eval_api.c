@@ -203,7 +203,9 @@ static HandVal best_five_cards(const uint8_t* cards, int num_cards,
         if (!found || hv > best) {
             best = hv;
             found = 1;
-            memcpy(best_cards, picked, sizeof(picked));
+            for (int i = 0; i < 5; i++) {
+                best_cards[i] = picked[i];
+            }
         }
     }
 
@@ -240,7 +242,9 @@ pe_error_t pe_evaluate_hand(pe_handle_t handle,
     HandVal hv;
     if (num_cards == 5) {
         hv = StdDeck_StdRules_EVAL_N(hand, 5);
-        memcpy(result->cards, cards, 5);
+        for (int i = 0; i < 5; i++) {
+            result->cards[i] = cards[i];
+        }
     } else {
         hv = best_five_cards(cards, num_cards, result->cards);
     }
@@ -386,9 +390,9 @@ pe_error_t pe_calculate_equity_holdem(pe_handle_t handle,
 
     result->samples = total;
     if (total > 0) {
-        result->win_pct = (double)wins / total;
-        result->tie_pct = (double)ties / total;
-        result->lose_pct = (double)losses / total;
+        result->win_pct = (double)wins / (double)total;
+        result->tie_pct = (double)ties / (double)total;
+        result->lose_pct = (double)losses / (double)total;
         result->equity = result->win_pct + (result->tie_pct / 2.0);
     } else {
         result->win_pct = 0;
