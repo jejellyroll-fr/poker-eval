@@ -530,7 +530,7 @@ int cuda_backend_get_device_info(void* context, gpu_device_info_t* info) {
 
     info->backend = GPU_BACKEND_CUDA;
     info->device_id = ctx->device_id;
-    strncpy(info->device_name, prop.name, sizeof(info->device_name) - 1);
+    snprintf(info->device_name, sizeof(info->device_name), "%s", prop.name);
     info->global_mem_size = prop.totalGlobalMem;
     info->shared_mem_per_block = prop.sharedMemPerBlock;
     info->max_threads_per_block = prop.maxThreadsPerBlock;

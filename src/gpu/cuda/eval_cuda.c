@@ -425,7 +425,7 @@ int cuda_gpu_get_device_info(int device_id, char* name, size_t* memory, int* com
     }
     
     if (name) {
-        strncpy(name, prop.name, 256);
+        snprintf(name, 256, "%s", prop.name);
     }
     
     if (memory) {
