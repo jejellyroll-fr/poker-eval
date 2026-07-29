@@ -551,8 +551,15 @@ int ARP_InitContext(arp_context_t *ctx, const char *range_string)
         return 0;
 
     memset(ctx, 0, sizeof(arp_context_t));
+    size_t range_length = strnlen(range_string, 8193);
+    if (range_length > 8192) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Range string exceeds maximum length");
+        return 0;
+    }
+
     ctx->input = range_string;
-    ctx->length = strlen(range_string);
+    ctx->length = range_length;
     ctx->position = 0;
 
     /* Allocate initial token array */
@@ -2528,7 +2535,7 @@ static int parse_hand_string(const char *hand_str, StdDeck_CardMask *hand) {
 
     StdDeck_CardMask_RESET(*hand);
 
-    size_t len = strlen(hand_str);
+    size_t len = strnlen(hand_str, 32);
     if (len < 2 || len > 14 || len % 2 != 0)
         return 0;  /* Invalid length */
 
