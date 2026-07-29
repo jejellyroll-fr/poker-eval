@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
 #include <time.h>
 #include <math.h>
 #include <sys/time.h>
@@ -424,6 +426,28 @@ static void print_usage(const char *prog) {
     printf("  --help                        Show this message\n");
 }
 
+/*
+ * Parse a strictly positive integer argument.
+ *
+ * atoi cannot tell "0" from a parse failure and has undefined behaviour on
+ * overflow, so a typo silently became 0 and disabled the option instead of
+ * being reported.
+ */
+static int parse_positive_int(const char *text, int *out) {
+    char *end = NULL;
+    long value;
+
+    errno = 0;
+    value = strtol(text, &end, 10);
+    if (end == text || !end || *end != '\0' || errno == ERANGE ||
+        value <= 0 || value > INT_MAX) {
+        return 0;
+    }
+
+    *out = (int)value;
+    return 1;
+}
+
 int main(int argc, char **argv) {
     int run_suite = 1;
 
@@ -441,20 +465,32 @@ int main(int argc, char **argv) {
                 g_cli_backend = OFC_GPU_BACKEND_AUTO;
             }
         } else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc) {
-            int value = atoi(argv[++i]);
-            g_cli_batch_override = value > 0 ? value : 0;
+            if (!parse_positive_int(argv[++i], &g_cli_batch_override)) {
+                printf("Invalid value for --batch: %s\n", argv[i]);
+                print_usage(argv[0]);
+                return 1;
+            }
             run_suite = 0;
         } else if (strcmp(argv[i], "--sims") == 0 && i + 1 < argc) {
-            int value = atoi(argv[++i]);
-            g_cli_sims_override = value > 0 ? value : 0;
+            if (!parse_positive_int(argv[++i], &g_cli_sims_override)) {
+                printf("Invalid value for --sims: %s\n", argv[i]);
+                print_usage(argv[0]);
+                return 1;
+            }
             run_suite = 0;
         } else if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
-            int value = atoi(argv[++i]);
-            g_cli_iterations_override = value > 0 ? value : 0;
+            if (!parse_positive_int(argv[++i], &g_cli_iterations_override)) {
+                printf("Invalid value for --iterations: %s\n", argv[i]);
+                print_usage(argv[0]);
+                return 1;
+            }
             run_suite = 0;
         } else if (strcmp(argv[i], "--stress") == 0 && i + 1 < argc) {
-            int value = atoi(argv[++i]);
-            g_cli_stress_minutes = value > 0 ? value : 0;
+            if (!parse_positive_int(argv[++i], &g_cli_stress_minutes)) {
+                printf("Invalid value for --stress: %s\n", argv[i]);
+                print_usage(argv[0]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--suite") == 0) {
             run_suite = 1;
         } else {
