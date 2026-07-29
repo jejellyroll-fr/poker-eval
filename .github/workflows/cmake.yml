@@ -35,6 +35,15 @@ jobs:
             preset: macos
           
           # Windows builds
+          - name: Windows MSVC
+            os: windows-2022
+            compiler: msvc
+            preset: windows-msvc
+
+          - name: Windows MinGW
+            os: windows-latest
+            compiler: mingw
+            preset: default
     steps:
     - uses: actions/checkout@v4
     
