@@ -9,14 +9,14 @@ set(OFC_SOURCES
     policy/ofc_rollout_heuristics.c
 )
 
-add_library(poker_ofc STATIC ${OFC_SOURCES})
+add_library(poker_ofc ${OFC_SOURCES})
 
 target_include_directories(poker_ofc PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/include
 )
 
-target_link_libraries(poker_ofc PRIVATE poker_engine poker_utils poker_core)
+target_link_libraries(poker_ofc PRIVATE poker_engine poker_utils poker_core m)
 
 # SIMD selection for OFC
 if(ENABLE_OFC_SIMD AND (HAS_AVX512 OR HAS_AVX2 OR HAS_SSE2))

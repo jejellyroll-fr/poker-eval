@@ -12,13 +12,21 @@ set(UTILS_SOURCES
     compressed_tables.c
     mktable.c
     mktable_utils.c
-    mktab_astud.c
-    mktab_basic.c
-    mktab_evx.c
-    mktab_joker.c
-    mktab_lowball.c
-    mktab_packed.c
-    mktab_short.c
+)
+
+# Standalone table generators. Each defines its own main(), so linking them into
+# the library produces seven duplicate _main symbols in a shared build - harmless
+# in a static archive only because the objects are never pulled in. They are
+# built on demand (cmake --build . --target poker_table_generators) to regenerate
+# the committed tables under tables/ and src/core.
+set(TABLE_GENERATORS
+    mktab_astud
+    mktab_basic
+    mktab_evx
+    mktab_joker
+    mktab_lowball
+    mktab_packed
+    mktab_short
 )
 
 # Table generation source files
@@ -43,7 +51,7 @@ file(GLOB INLINE_HEADERS "inlines/*.h")
 set(UTILS_HEADERS ${UTILS_HEADERS} ${INLINE_HEADERS})
 
 # Add utils library
-add_library(poker_utils STATIC ${UTILS_SOURCES})
+add_library(poker_utils ${UTILS_SOURCES})
 set_property(TARGET poker_utils PROPERTY POSITION_INDEPENDENT_CODE ON)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(poker_utils PRIVATE -Wno-error=conversion -Wno-error=array-bounds -Wno-error=float-equal)
@@ -80,3 +88,20 @@ target_link_libraries(generate_preflop_table
 target_include_directories(generate_preflop_table PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
+
+# Table generators, excluded from the default build (see TABLE_GENERATORS above).
+add_custom_target(poker_table_generators)
+foreach(generator IN LISTS TABLE_GENERATORS)
+    add_executable(${generator} EXCLUDE_FROM_ALL ${generator}.c mktable.c mktable_utils.c)
+    target_include_directories(${generator} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/inlines
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/core
+        ${CMAKE_SOURCE_DIR}/core/inlines
+    )
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${generator} PRIVATE -Wno-error)
+    endif()
+    add_dependencies(poker_table_generators ${generator})
+endforeach()

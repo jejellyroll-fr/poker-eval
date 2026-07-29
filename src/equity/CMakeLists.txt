@@ -79,7 +79,7 @@ if(POKER_EVAL_WITH_OPENMP)
 endif()
 
 # Add equity library
-add_library(poker_equity STATIC ${EQUITY_SOURCES})
+add_library(poker_equity ${EQUITY_SOURCES})
 set_property(TARGET poker_equity PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # Disable treating warnings as errors for equity module (has many optimization-related warnings)
@@ -88,7 +88,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # Link with core, games, and distributions modules
-target_link_libraries(poker_equity poker_core poker_games poker_distributions)
+# The declared dependency on poker_distributions was backwards: equity defines
+# CalculateEquityForRanges, which distributions consumes, not the reverse. The
+# false edge is what made the module graph look circular.
+target_link_libraries(poker_equity poker_core poker_games poker_utils m)
 
 # Set include directories
 target_include_directories(poker_equity PRIVATE

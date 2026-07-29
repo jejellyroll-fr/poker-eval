@@ -32,6 +32,17 @@ jobs:
       - name: Install
         run: cmake --install build --prefix "$RUNNER_TEMP/pokereval"
 
+      # BUILD_SHARED_LIBS defaults to ON, so this job must produce shared
+      # libraries. Without this check it installed the same archives as the
+      # static job and the two were indistinguishable.
+      - name: Check the installed artifacts are shared libraries
+        run: |
+          shared=$(find "$RUNNER_TEMP/pokereval/lib" -maxdepth 1 \( -name '*.so*' -o -name '*.dylib' \) | wc -l)
+          archives=$(find "$RUNNER_TEMP/pokereval/lib" -maxdepth 1 -name '*.a' | wc -l)
+          echo "shared=$shared archives=$archives"
+          test "$shared" -gt 0
+          test "$archives" -eq 0
+
       - name: Configure consumer (find_package)
         run: |
           cmake -S ci/install_check -B ci/build \

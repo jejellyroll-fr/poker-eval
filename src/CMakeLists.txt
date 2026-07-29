@@ -16,6 +16,35 @@ add_subdirectory(gpu)
 add_subdirectory(examples)
 add_subdirectory(ofc)
 
+# The modular libraries above are declared without an explicit type, so they
+# follow BUILD_SHARED_LIBS. Apply the properties a shared build needs in one
+# place rather than in each module.
+set(POKER_EVAL_MODULES
+    poker_core
+    poker_utils
+    poker_games
+    poker_distributions
+    poker_equity
+    poker-eval-range
+    poker_engine
+    poker_betting
+    poker_economics
+    poker_ofc
+)
+
+foreach(module IN LISTS POKER_EVAL_MODULES)
+    set_target_properties(${module} PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        # The C sources carry no dllexport annotations, so without this a
+        # Windows shared build would produce DLLs exporting nothing.
+        WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    if(BUILD_SHARED_LIBS)
+        set_target_properties(${module} PROPERTIES
+            VERSION ${PROJECT_VERSION}
+            SOVERSION ${PROJECT_VERSION_MAJOR})
+    endif()
+endforeach()
+
 # Create a combined interface library that includes all modules
 add_library(poker_eval_modular INTERFACE)
 
@@ -23,8 +52,11 @@ add_library(poker_eval_modular INTERFACE)
 # Note: There is a circular dependency between poker_equity and poker_distributions:
 # - plo_integration.c (distributions) calls CalculateEquityForRanges (equity)
 # - AdvancedRangeParser.c (equity) uses symbols from distributions
-# We use linker groups to resolve circular dependencies in static libraries (Linux only)
-if(UNIX AND NOT APPLE)
+# Shared libraries resolve this at load time, so the linker workarounds below are
+# only needed for static archives.
+if(BUILD_SHARED_LIBS)
+    target_link_libraries(poker_eval_modular INTERFACE ${POKER_EVAL_MODULES})
+elseif(UNIX AND NOT APPLE)
     # GNU ld supports --start-group/--end-group for circular dependencies
     target_link_libraries(poker_eval_modular INTERFACE
         -Wl,--start-group
