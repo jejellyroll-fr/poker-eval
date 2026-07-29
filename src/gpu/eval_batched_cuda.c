@@ -8,6 +8,7 @@
  */
 
 #include <poker_eval/gpu/eval_batched_gpu.h>
+#include "eval_batched_backends.h"
 #include "gpu_table_loader.h"
 #include <stdio.h>
 #include <stdlib.h>
