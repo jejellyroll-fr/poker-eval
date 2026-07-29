@@ -104,8 +104,13 @@ set(EXAMPLES
     nn_policy_demo
 )
 
-# Remove OpenMP-dependent examples when OpenMP is disabled
-if(NOT ENABLE_OPENMP)
+# Remove OpenMP-dependent examples when OpenMP is unavailable.
+#
+# This has to test POKER_EVAL_WITH_OPENMP, not ENABLE_OPENMP: when the root
+# check rejects a detected OpenMP (ARM64 macOS without native libomp), the
+# option stays ON while src/equity skips the MT v2-v5 sources, and these
+# examples then fail to link against CalculateEquityForRanges_MT_v2 and friends.
+if(NOT POKER_EVAL_WITH_OPENMP)
     list(REMOVE_ITEM EXAMPLES
         range_equity_mt_example
         benchmark_all_versions

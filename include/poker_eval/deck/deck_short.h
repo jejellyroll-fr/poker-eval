@@ -83,8 +83,11 @@ do {                                            \
 extern POKEREVAL_EXPORT ShortDeck_CardMask ShortDeck_cardMasksTable[ShortDeck_N_CARDS];
 
 // Define characters for ranks and suits
-extern POKEREVAL_EXPORT char ShortDeck_rankChars[ShortDeck_Rank_LAST+1];
-extern POKEREVAL_EXPORT char ShortDeck_suitChars[ShortDeck_Suit_LAST+1];
+/* Declared without a size: the definition includes the terminating NUL, so a
+ * [<rank>_LAST + 1] bound made the array one byte too small for its own
+ * initializer. Apple clang and GCC 15 reject that; no caller uses sizeof. */
+extern POKEREVAL_EXPORT char ShortDeck_rankChars[];
+extern POKEREVAL_EXPORT char ShortDeck_suitChars[];
 
 // Functions to convert card index to string and vice versa
 extern POKEREVAL_EXPORT int ShortDeck_cardToString(int cardIndex, char *outString);

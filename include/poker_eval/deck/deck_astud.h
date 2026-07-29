@@ -97,8 +97,11 @@ do {                                            \
 
 extern POKEREVAL_EXPORT AStudDeck_CardMask AStudDeck_cardMasksTable[AStudDeck_N_CARDS];
 
-extern POKEREVAL_EXPORT const char AStudDeck_rankChars[AStudDeck_Rank_LAST+1];
-extern POKEREVAL_EXPORT const char AStudDeck_suitChars[AStudDeck_Suit_LAST+1];
+/* Declared without a size: the definition includes the terminating NUL, so a
+ * [<rank>_LAST + 1] bound made the array one byte too small for its own
+ * initializer. Apple clang and GCC 15 reject that; no caller uses sizeof. */
+extern POKEREVAL_EXPORT const char AStudDeck_rankChars[];
+extern POKEREVAL_EXPORT const char AStudDeck_suitChars[];
 
 extern POKEREVAL_EXPORT int AStudDeck_cardToString(int cardIndex, char *outString);
 extern POKEREVAL_EXPORT int AStudDeck_stringToCard(char *inString, int *outCard);
