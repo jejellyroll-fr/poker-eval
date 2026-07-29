@@ -76,6 +76,14 @@ jobs:
     
     - name: Build
       run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+    - name: Stress Linux crash regressions
+      if: runner.os == 'Linux'
+      run: >-
+        ctest --preset ${{ matrix.preset }}
+        --output-on-failure
+        --repeat until-fail:20
+        -R '^(test_mpf_perf_stats|test_enumerate_dispatch)$'
     
     - name: Test
       run: ctest --preset ${{ matrix.preset }} --output-on-failure
