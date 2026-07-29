@@ -126,17 +126,29 @@ function(add_poker_example name)
             ${CMAKE_SOURCE_DIR}/include
             ${CMAKE_BINARY_DIR}/include)
 
-        # Link with appropriate library
-        # Note: poker_utils and poker_equity appear twice to resolve circular dependencies
-        target_link_libraries(${name} PRIVATE
-            poker_utils
-            poker_equity
-            poker_core
-            poker_games
-            poker_distributions
-            poker-eval-range
-            poker_equity
-            poker_utils)
+        # Link with appropriate libraries. GNU ld needs an explicit rescan group
+        # for the equity/distributions/range dependency cycle.
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(${name} PRIVATE
+                poker_utils
+                poker_core
+                poker_games
+                -Wl,--start-group
+                poker_distributions
+                poker_equity
+                poker-eval-range
+                -Wl,--end-group)
+        else()
+            target_link_libraries(${name} PRIVATE
+                poker_utils
+                poker_equity
+                poker_core
+                poker_games
+                poker_distributions
+                poker-eval-range
+                poker_equity
+                poker_utils)
+        endif()
 
         # Disable treating warnings as errors for examples
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
