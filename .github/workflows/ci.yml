@@ -49,6 +49,20 @@ jobs:
         cd build
         ctest --output-on-failure
 
+    - name: Run Stable C API Tests
+      run: |
+        cmake -S . -B build-c-api \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=ON \
+          -DBUILD_C_API=ON \
+          -DBUILD_PYTHON_BINDING=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF
+        cmake --build build-c-api --target test_c_api_best_five -j"$(nproc)"
+        ctest --test-dir build-c-api --output-on-failure -R test_c_api_best_five
+
     - name: Performance Benchmark (Quiet Mode)
       run: |
         cd build

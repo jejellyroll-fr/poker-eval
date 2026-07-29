@@ -170,6 +170,46 @@ static const char* hand_type_names[] = {
     "Straight", "Flush", "FullHouse", "Quads", "StFlush"
 };
 
+/*
+ * Find the highest-valued 5-card combination among num_cards inputs.
+ *
+ * Enumerates the C(num_cards,5) subsets - 6 for six cards, 21 for seven - and
+ * keeps the best one, so that best_cards always matches the returned HandVal.
+ * Callers must pass 5 to 7 distinct cards.
+ */
+static HandVal best_five_cards(const uint8_t* cards, int num_cards,
+                               uint8_t best_cards[5]) {
+    HandVal best = 0;
+    int found = 0;
+
+    for (unsigned subset = 0; subset < (1u << num_cards); subset++) {
+        uint8_t picked[5];
+        int count = 0;
+
+        for (int i = 0; i < num_cards; i++) {
+            if (!(subset & (1u << i))) continue;
+            if (count == 5) { count = 6; break; }
+            picked[count++] = cards[i];
+        }
+        if (count != 5) continue;
+
+        StdDeck_CardMask combo;
+        StdDeck_CardMask_RESET(combo);
+        for (int i = 0; i < 5; i++) {
+            StdDeck_CardMask_SET(combo, picked[i]);
+        }
+
+        HandVal hv = StdDeck_StdRules_EVAL_N(combo, 5);
+        if (!found || hv > best) {
+            best = hv;
+            found = 1;
+            memcpy(best_cards, picked, sizeof(picked));
+        }
+    }
+
+    return best;
+}
+
 pe_error_t pe_evaluate_hand(pe_handle_t handle,
                             const uint8_t* cards,
                             int num_cards,
@@ -189,17 +229,20 @@ pe_error_t pe_evaluate_hand(pe_handle_t handle,
             set_error(handle, "Invalid card number");
             return PE_ERROR_INVALID_ARGUMENT;
         }
+        if (StdDeck_CardMask_CARD_IS_SET(hand, cards[i])) {
+            set_error(handle, "Duplicate card");
+            return PE_ERROR_INVALID_ARGUMENT;
+        }
         StdDeck_CardMask_SET(hand, cards[i]);
     }
 
-    /* Evaluate */
+    /* Evaluate, keeping hand_value and the reported cards consistent */
     HandVal hv;
     if (num_cards == 5) {
         hv = StdDeck_StdRules_EVAL_N(hand, 5);
-    } else if (num_cards == 6) {
-        hv = StdDeck_StdRules_EVAL_N(hand, 6);
+        memcpy(result->cards, cards, 5);
     } else {
-        hv = StdDeck_StdRules_EVAL_N(hand, 7);
+        hv = best_five_cards(cards, num_cards, result->cards);
     }
 
     result->hand_value = hv;
@@ -210,11 +253,6 @@ pe_error_t pe_evaluate_hand(pe_handle_t handle,
                 sizeof(result->hand_name) - 1);
     } else {
         strncpy(result->hand_name, "Unknown", sizeof(result->hand_name) - 1);
-    }
-
-    /* Extract best 5 cards (simplified - just copy first 5) */
-    for (int i = 0; i < 5 && i < num_cards; i++) {
-        result->cards[i] = cards[i];
     }
 
     return PE_OK;
