@@ -52,7 +52,7 @@
 #include <poker_eval/core/string_compat.h>
 #include <poker_eval/core/time_compat.h>
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
 #include <stdlib.h>
 static __inline int setenv(const char *name, const char *value, int overwrite)
 {
