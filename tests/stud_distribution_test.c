@@ -31,6 +31,14 @@ static bool masks_are_equal(StdDeck_CardMask m1, StdDeck_CardMask m2) {
     return StdDeck_CardMask_EQUAL(m1, m2);
 }
 
+static void assert_unique_hands(const StudHandList* hand_list) {
+    for (int i = 0; i < hand_list->count; ++i) {
+        for (int j = i + 1; j < hand_list->count; ++j) {
+            assert(!masks_are_equal(hand_list->hands[i], hand_list->hands[j]));
+        }
+    }
+}
+
 static void card_mask_to_string_static(StdDeck_CardMask mask, char* out_buffer, int buffer_size) {
     if (!out_buffer || buffer_size == 0) return;
     out_buffer[0] = '\0';
@@ -145,7 +153,7 @@ int main(void) {
 
     // Test 1: Specific 7-card hand
     // Ranks: A=12, K=11, Q=10, J=9, T=8, 9=7
-    // Suits: s=3, h=2, d=1, c=0
+    // Suits: c=2, d=1, h=0, s=3
     StudCardPattern pats1[] = {
         {12, StdDeck_Suit_SPADES,   false}, // As (in hole)
         {11, StdDeck_Suit_DIAMONDS, false}, // Kd (in hole)
@@ -165,35 +173,11 @@ int main(void) {
     };
     run_stud_parse_test("3rd Street (AA)K", "(AsAd)Kc", 7, true, 3, 3, 0, 2, 1, pats2, 3);
 
-    // Test 3: Partial with wildcards (AhKh)QhJx x for 7-card game (5 cards in pattern)
-    // Assuming "Jx" means Rank J, Suit Wildcard. And "x" means Rank Wildcard, Suit Wildcard.
-    // My current StudHand_Parse treats 'x' as a full wildcard only.
-    // For this test to pass as written, StudHand_Parse would need modification
-    // to handle "Rx" (Rank R, wildcard suit).
-    // The test definition implies this: {9,WILDCARD_CARD_VAL,true} for Jx.
-    // As of Turn 25, StudHand_Parse does not support "Jx" (rank J, wildcard suit).
-    // It would try to parse 'x' as a suit for J and fail.
-    // For now, I will write the test as specified in the prompt.
-    // If StudHand_Parse is not updated, this test will fail.
-    // Let's assume for the purpose of this test that 'x' as a suit char implies WILDCARD_CARD_VAL for suit.
-    // The parser logic from Turn 25 would need adjustment:
-    // if tolower(suit_char) == 'x' then suit_val = WILDCARD_CARD_VAL.
-    // Otherwise, this test should be written as "(AhKh)Qh x x" if 'x' must be standalone.
-    // Given the prompt's `pats3` structure, it expects "Jx" to be J, wildcard suit.
-    // The current parser expects "Jx" -> J, then 'x' as suit -> error.
-    // Let's define a new pattern string that the current parser *can* handle,
-    // by making the wildcard suit implicit, or using 'x' for the whole card.
-    // Prompt: "(AhKh)QhJx x"
-    // My parser: "(AhKh)Qh x x" if Jx means J is a wildcard.
-    // If Jx means Rank J, Suit Wildcard, then the parser needs an update.
-    // The `pats3` definition from prompt: {{12,2,false},{11,2,false},{10,2,true},{9,WILDCARD_CARD_VAL,true},{WILDCARD_CARD_VAL,WILDCARD_CARD_VAL,true}}
-    // This corresponds to: Ah Kh Qh J(wild suit) X(wild rank & suit)
-    // This requires parser to handle "Rx" where x is suit.
-    // For this test, I will use a string that my current parser handles, by making the 'Jx' a full wildcard 'x'
-    // and adjusting expectations, or note that this test expects advanced parsing.
-    // Test 3: Partial with wildcards (AhKh)QhJx x for 7-card game (5 cards in pattern)
-    // This test assumes StudHand_Parse handles "Jx" as Rank J, Suit Wildcard.
-    // Expected counts: pattern_cards=5, known=3 (Ah,Kh,Qh), wild_pattern=2 (Jx counts as wild for summary, plus 'x'), down=2, up=3.
+    // Test 3: Partial with wildcards (AhKh)QhJx x for 7-card game
+    // "Jx" = Rank J, Suit Wildcard. "x" = Full Wildcard.
+    // Known: Ah, Kh, Qh (specific), Jx (rank known, suit wildcard) = 4 known
+    // Wild: x (full wildcard) = 1 wild
+    // Total patterns: 5
     StudCardPattern pats3[] = {
         {12, StdDeck_Suit_HEARTS,   false}, // Ah
         {11, StdDeck_Suit_HEARTS,   false}, // Kh
@@ -201,7 +185,7 @@ int main(void) {
         {9,  WILDCARD_CARD_VAL,     true},  // Jx (Rank J, Suit Wildcard)
         {WILDCARD_CARD_VAL, WILDCARD_CARD_VAL, true}   // x (Full Wildcard Up)
     };
-    run_stud_parse_test("Partial (AhKh)QhJx x", "(AhKh)QhJx x", 7, true, 5, 3, 2, 2, 3, pats3, 5);
+    run_stud_parse_test("Partial (AhKh)QhJx x", "(AhKh)QhJx x", 7, true, 5, 4, 1, 2, 3, pats3, 5);
 
     // Test 4: Invalid - unmatched parenthesis
     run_stud_parse_test("Unmatched Paren", "(AsKdQc", 7, false, 0,0,0,0,0, NULL, 0);
@@ -254,6 +238,8 @@ int main(void) {
     // Test S7: (xxx)xxxx for 7-card game, No Dead - Expect MAX_STUD_COMBOS due to C(52,7)
     run_stud_instantiate_test("Instantiate (xxx)xxxx gc=7 NoDead", "(xxx)xxxx", 7, NULL, MAX_STUD_COMBOS, false, 0, NULL);
 
+    // Test S8: One fixed card plus two implicit cards is C(51,2), without duplicates.
+    run_stud_instantiate_test("Instantiate As gc=3 NoDead", "As", 3, NULL, 1275, false, 0, NULL);
 
     printf("\nStudHand_Instantiate tests completed.\n");
     return 0;
@@ -312,6 +298,7 @@ static void run_stud_instantiate_test(const char* test_name,
 
 
     assert(actual_combo_count == expected_combo_count);
+    assert_unique_hands(&generated_hands_list);
 
     if (check_hands_exact) {
         assert(actual_combo_count == num_expected_hands_in_array);

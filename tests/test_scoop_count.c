@@ -44,9 +44,11 @@ int main(void)
   int err = enumExhaustive_dispatch(game_omaha8, pockets, board, dead, 2, 5, 0, &res);
   (void)err; /* Suppress unused variable warning */
   assert(err == 0);
-  /* Expect player1 to scoop */
-  assert(res.nscoop[0] > 0);
-  assert(res.nscoop[1] == 0);
+  /* Expect player2 (K♠Q♠J♠T♠) to scoop: makes 9-to-K straight using K♠Q♠(hole)+9cJhTh(board).
+   * Player1 (A♠2♠3♠4♠) only has Ace-high — Omaha requires exactly 2 hole cards, preventing the wheel.
+   * No low qualifies on board 5h7d9cThJh (only 2 cards ≤ 8). */
+  assert(res.nscoop[1] > 0);
+  assert(res.nscoop[0] == 0);
   printf("Scoop test passed.\n");
   return 0;
 }

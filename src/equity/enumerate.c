@@ -230,9 +230,8 @@ static enum_gameparams_t enum_gameparams[] = {
       result->nsharehi[i][H]++;                                              \
       result->nsharelo[i][L]++;                                              \
       result->nshare[i][H][L]++;                                             \
-      if (bestlo != LowHandVal_NOTHING && besthi != HandVal_NOTHING &&       \
-          hival[i] == besthi && loval[i] == bestlo &&                        \
-          hishare == 1 && loshare == 1)                                      \
+      if (besthi != HandVal_NOTHING && hival[i] == besthi && hishare == 1 &&       \
+          (bestlo == LowHandVal_NOTHING || (loval[i] == bestlo && loshare == 1)))  \
       {                                                                      \
         result->nscoop[i]++;                                                 \
       }                                                                      \

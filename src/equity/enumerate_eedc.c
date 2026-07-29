@@ -154,9 +154,9 @@ static void eedc_accumulate_results(enum_result_t *result,
         result->nsharehi[i][H]++;
         result->nsharelo[i][L]++;
         result->nshare[i][H][L]++;
-        if (bestlo != LowHandVal_NOTHING && besthi != HandVal_NOTHING &&
-            hival[i] == besthi && loval[i] == bestlo &&
-            hishare == 1 && loshare == 1)
+        if (besthi != HandVal_NOTHING &&
+            hival[i] == besthi && hishare == 1 &&
+            (bestlo == LowHandVal_NOTHING || (loval[i] == bestlo && loshare == 1)))
         {
             result->nscoop[i]++;
         }
@@ -1203,7 +1203,8 @@ int enumExhaustive_eedc(
                 if (hival1[i] == besthi1) potfrac1 += hipot1;
                 if (hival2[i] == besthi2) potfrac2 += hipot2;
                 result->ev[i] += (potfrac1 + potfrac2) / 2;
-                if (hival1[i] == besthi1 && hival2[i] == besthi2 && hishare1 == 1 && hishare2 == 1) result->nscoop[i]++;
+                if (hival1[i] == besthi1 && hishare1 == 1 &&
+                    (besthi2 == HandVal_NOTHING || (hival2[i] == besthi2 && hishare2 == 1))) result->nscoop[i]++;
             }
             result->nsamples++;
         } while (next_combination(indices, n_needed, ndeck));
