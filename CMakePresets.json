@@ -80,7 +80,8 @@
       "description": "Linux build with GCC",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
+        "CMAKE_CXX_COMPILER": "g++",
+        "ENABLE_NATIVE_ARCH": "OFF"
       },
       "condition": {
         "type": "equals",
@@ -95,7 +96,8 @@
       "description": "Linux build with Clang",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++"
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ENABLE_NATIVE_ARCH": "OFF"
       },
       "condition": {
         "type": "equals",

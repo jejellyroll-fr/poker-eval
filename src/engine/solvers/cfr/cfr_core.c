@@ -28,6 +28,14 @@
 
 #define CFR_MAX_PLAYERS 8
 
+#if defined(_MSC_VER)
+#define CFR_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#define CFR_THREAD_LOCAL __thread
+#else
+#define CFR_THREAD_LOCAL _Thread_local
+#endif
+
 // Forward declaration for recursive traversal
 static void cfr_traverse_recursive(
     cfr_game_t *game,
@@ -40,12 +48,12 @@ static void cfr_traverse_recursive(
     double *out_util,
     void *user_data);
 
-static int g_cfr_current_iter = 0;
-static int g_cfr_recursion_depth = 0;
-static int g_cfr_max_depth = 0;
-static long g_cfr_node_count = 0;
-static int g_cfr_use_flow_focus = 0;
-static double g_cfr_flow_pow = 1.0;
+static CFR_THREAD_LOCAL int g_cfr_current_iter = 0;
+static CFR_THREAD_LOCAL int g_cfr_recursion_depth = 0;
+static CFR_THREAD_LOCAL int g_cfr_max_depth = 0;
+static CFR_THREAD_LOCAL long g_cfr_node_count = 0;
+static CFR_THREAD_LOCAL int g_cfr_use_flow_focus = 0;
+static CFR_THREAD_LOCAL double g_cfr_flow_pow = 1.0;
 
 struct cfr_metrics_buffer_t
 {
