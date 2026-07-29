@@ -606,8 +606,8 @@ poker_eval_error_t poker_eval_result_get_description(const poker_eval_result_t* 
     if (strlen(type_str) >= buffer_size) {
         return POKER_EVAL_ERROR_INVALID_ARGUMENT;
     }
-    
-    strcpy(buffer, type_str);
+
+    snprintf(buffer, buffer_size, "%s", type_str);
     return POKER_EVAL_SUCCESS;
 }
 
