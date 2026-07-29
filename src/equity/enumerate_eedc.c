@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <poker_eval/core/string_compat.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -745,9 +746,15 @@ static int eedc_resolve_worker_count(uint64_t total_boards)
     const char *env = getenv("PE_EEDC_THREADS");
     if (env && *env)
     {
-        int requested = atoi(env);
-        if (requested > 0 && requested < max_threads)
-            max_threads = requested;
+        /* strtol: atoi returns 0 for unparseable input, which was
+         * indistinguishable from an explicit 0 and silently ignored. */
+        char *end = NULL;
+        long requested;
+        errno = 0;
+        requested = strtol(env, &end, 10);
+        if (end != env && *end == '\0' && errno != ERANGE &&
+            requested > 0 && requested < (long)max_threads)
+            max_threads = (int)requested;
     }
     if (total_boards < eedc_get_parallel_threshold())
         return 1;

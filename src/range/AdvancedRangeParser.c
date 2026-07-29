@@ -23,6 +23,7 @@
 #include <poker_eval/distributions/plo_integration.h>
 #include <poker_eval/range/StudRangeParser.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -881,8 +882,14 @@ static int arp_lookup_plo_category(const char *str, size_t len, PLOHandCategory 
 
     if (all_digits)
     {
-        int value = atoi(normalized);
-        if (value >= (int)PLO_CAT_UNPAIRED_DS && value <= (int)PLO_CAT_RAGGED_RB)
+        /* The digits were validated above, but atoi is undefined on overflow:
+         * a long run of digits would not merely fall outside the range test. */
+        char *end = NULL;
+        long value;
+        errno = 0;
+        value = strtol(normalized, &end, 10);
+        if (end != normalized && *end == '\0' && errno != ERANGE &&
+            value >= (long)PLO_CAT_UNPAIRED_DS && value <= (long)PLO_CAT_RAGGED_RB)
         {
             *category = (PLOHandCategory)value;
             return 1;
