@@ -55,8 +55,10 @@ set(EQUITY_MT_SOURCES
     RangeEquity_MT_Batched.c
 )
 
-# Add OpenMP support if available
-find_package(OpenMP)
+# OpenMP is looked up once by the root CMakeLists, which also decides whether it
+# is actually usable. Calling find_package(OpenMP) again here would repopulate
+# OpenMP_C_FOUND in this scope and silently override that decision, so the module
+# reads POKER_EVAL_WITH_OPENMP instead.
 
 # CalculateEquityForRanges_Auto (defined in RangeEquity_MT.c) is part of the public
 # API and is called unconditionally by tests and downstream code. Always compile it;
@@ -64,8 +66,10 @@ find_package(OpenMP)
 list(APPEND EQUITY_SOURCES RangeEquity_MT.c)
 
 # The remaining MT variants rely on real OpenMP for any benefit, so only compile
-# them when OpenMP is available.
-if(OpenMP_C_FOUND AND ENABLE_OPENMP)
+# them when OpenMP is available. This must use the same decision as the link step
+# below: compiling them without OpenMP::OpenMP_C would fall back to the
+# omp_compat.h stubs and make explicitly multithreaded APIs run sequentially.
+if(POKER_EVAL_WITH_OPENMP)
     list(APPEND EQUITY_SOURCES
         RangeEquity_MT_v2.c
         RangeEquity_MT_v3.c
@@ -97,7 +101,7 @@ target_include_directories(poker_equity PRIVATE
     ${CMAKE_SOURCE_DIR}/distributions
 )
 
-if(OpenMP_C_FOUND AND ENABLE_OPENMP)
+if(POKER_EVAL_WITH_OPENMP)
     target_link_libraries(poker_equity OpenMP::OpenMP_C)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(poker_equity PRIVATE -Wno-error=pedantic -Wno-pedantic -Wno-undef)
