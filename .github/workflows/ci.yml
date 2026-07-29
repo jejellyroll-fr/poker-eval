@@ -2,9 +2,12 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
 
 jobs:
   test-release:
@@ -23,12 +26,18 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=ON \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF
 
     - name: Build
       run: |
         cd build
-        make -j$(nproc)
+        make -j"$(nproc)"
 
     - name: Run Core Regression Tests
       run: |
@@ -43,22 +52,24 @@ jobs:
     - name: Performance Benchmark (Quiet Mode)
       run: |
         cd build
-        timeout 60s ./examples/omaha_combinations_example --quiet || true
-        timeout 60s ./examples/omaha_canonical_demo --quiet || true
+        timeout 60s ./src/examples/omaha_combinations_example --quiet
+        timeout 60s ./src/examples/omaha_canonical_demo --quiet
 
     - name: Generate Performance Report
       run: |
         cd build
-        echo "# Performance Report - $(date)" > performance_report.md
-        echo "## Build: Release -O3 -DNDEBUG" >> performance_report.md
-        echo "## Test Results:" >> performance_report.md
-        echo "- Core regression tests: ✅ Passed" >> performance_report.md
-        echo "- Full test suite: ✅ Passed" >> performance_report.md
-        echo "## Sample Performance:" >> performance_report.md
-        timeout 30s ./examples/omaha_combinations_example --quiet >> performance_report.md 2>&1 || echo "Benchmark timeout (expected)" >> performance_report.md
+        {
+          echo "# Performance Report - $(date)"
+          echo "## Build: Release -O3 -DNDEBUG"
+          echo "## Test Results:"
+          echo "- Core regression tests: ✅ Passed"
+          echo "- Full test suite: ✅ Passed"
+          echo "## Sample Performance:"
+          timeout 30s ./src/examples/omaha_combinations_example --quiet
+        } > performance_report.md 2>&1
 
     - name: Upload Performance Report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-report-release
         path: build/performance_report.md
@@ -81,12 +92,18 @@ jobs:
       run: |
         mkdir build
         cd build
-        CC=clang cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON -DBUILD_TESTS=ON
+        CC=clang cmake .. \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DENABLE_SANITIZERS=ON \
+          -DBUILD_TESTS=ON \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF
 
     - name: Build with Sanitizers
       run: |
         cd build
-        make -j$(nproc)
+        make -j"$(nproc)"
 
     - name: Run Tests with Sanitizers
       run: |
@@ -97,6 +114,7 @@ jobs:
   benchmark-performance:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
     - uses: actions/checkout@v4
@@ -110,46 +128,46 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=ON
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DENABLE_LTO=ON \
+          -DBUILD_TESTS=OFF \
+          -DBUILD_EXAMPLES=ON \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF
 
     - name: Build
       run: |
         cd build
-        make -j$(nproc)
+        make -j"$(nproc)"
 
     - name: Run 7→5 Performance Test
       run: |
-        cd build
-        gcc -O3 -DNDEBUG -I.. ../test_7to5_performance.c lib/libpoker-eval.a -o test_7to5_perf
-        ./test_7to5_perf > 7to5_benchmark.txt
+        ./build/bin/bench_7c_simd_micro > build/7to5_benchmark.txt
 
     - name: Run Hi/Lo Optimization Test
       run: |
-        cd build
-        gcc -O3 -DNDEBUG -I.. ../test_hilo_optimization.c lib/libpoker-eval.a -o test_hilo_opt
-        ./test_hilo_opt > hilo_benchmark.txt
+        ./build/bin/bench_7c_hilo_singlepass > build/hilo_benchmark.txt
 
     - name: Create Benchmark Report
       run: |
         cd build
-        echo "# Benchmark Results - $(date)" > benchmark_report.md
-        echo "## 7→5 Combination Generator Performance" >> benchmark_report.md
-        echo '```' >> benchmark_report.md
-        cat 7to5_benchmark.txt >> benchmark_report.md
-        echo '```' >> benchmark_report.md
-        echo "" >> benchmark_report.md
-        echo "## Hi/Lo Optimization Performance" >> benchmark_report.md
-        echo '```' >> benchmark_report.md
-        cat hilo_benchmark.txt >> benchmark_report.md
-        echo '```' >> benchmark_report.md
+        {
+          echo "# Benchmark Results - $(date)"
+          echo "## 7→5 Combination Generator Performance"
+          echo '```'
+          cat 7to5_benchmark.txt
+          echo '```'
+          echo
+          echo "## Hi/Lo Optimization Performance"
+          echo '```'
+          cat hilo_benchmark.txt
+          echo '```'
+        } > benchmark_report.md
 
     - name: Upload Benchmark Report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: benchmark-report
         path: build/benchmark_report.md
-
-# Schedule weekly sanitizer runs
-on:
-  schedule:
-    - cron: '0 2 * * 1'  # Every Monday at 2 AM UTC
