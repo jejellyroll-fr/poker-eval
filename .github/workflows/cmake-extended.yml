@@ -1,0 +1,122 @@
+name: CMake Extended (manual)
+
+# Jobs extracted from cmake.yml, which was dead for the whole life of the repo:
+# it triggered on main/develop, two branches this repository never had. None of
+# these has ever been observed to pass, so they run on demand only. Promote a
+# job back into cmake.yml once it is green.
+
+on:
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-with-package-managers:
+    name: Build with ${{ matrix.package-manager }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package-manager: [vcpkg, conan]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup vcpkg
+      if: matrix.package-manager == 'vcpkg'
+      run: |
+        git clone https://github.com/Microsoft/vcpkg.git
+        ./vcpkg/bootstrap-vcpkg.sh
+        echo "VCPKG_ROOT=$PWD/vcpkg" >> $GITHUB_ENV
+    
+    - name: Setup Conan
+      if: matrix.package-manager == 'conan'
+      run: |
+        pip install conan
+        conan profile detect
+    
+    - name: Build with vcpkg
+      if: matrix.package-manager == 'vcpkg'
+      run: |
+        cmake --preset vcpkg
+        cmake --build build/vcpkg
+    
+    - name: Build with Conan
+      if: matrix.package-manager == 'conan'
+      run: |
+        conan install . --build=missing
+        conan build .
+
+  build-cross-compile:
+    name: Cross-compile for ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [arm64, armhf]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install cross-compilation tools
+      run: |
+        sudo apt-get update
+        if [ "${{ matrix.target }}" = "arm64" ]; then
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        else
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+        fi
+    
+    - name: Configure for cross-compilation
+      run: |
+        if [ "${{ matrix.target }}" = "arm64" ]; then
+          cmake -B build -S . \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64
+        else
+          cmake -B build -S . \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm
+        fi
+    
+    - name: Build
+      run: cmake --build build --parallel
+
+  create-packages:
+    name: Create packages
+    # The build job it used to depend on stayed in cmake.yml; this one configures
+    # and builds on its own.
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install packaging tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build rpm
+    
+    - name: Configure
+      run: cmake --preset release
+    
+    - name: Build
+      run: cmake --build --preset release
+    
+    - name: Create packages
+      run: |
+        cd build/release
+        cpack -G TGZ
+        cpack -G DEB
+        cpack -G RPM
+    
+    - name: Upload packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: packages
+        path: |
+          build/release/*.tar.gz
+          build/release/*.deb
+          build/release/*.rpm

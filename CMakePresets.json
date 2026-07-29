@@ -15,7 +15,6 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_SHARED_LIBS": "ON",
-        "BUILD_STATIC_LIBS": "ON",
         "BUILD_EXAMPLES": "ON",
         "BUILD_TESTS": "ON",
         "ENABLE_LTO": "ON"
@@ -51,7 +50,6 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "BUILD_SHARED_LIBS": "ON",
-        "BUILD_STATIC_LIBS": "ON",
         "BUILD_EXAMPLES": "ON",
         "BUILD_TESTS": "ON"
       },
@@ -114,7 +112,6 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_SHARED_LIBS": "ON",
-        "BUILD_STATIC_LIBS": "ON",
         "BUILD_EXAMPLES": "ON",
         "BUILD_TESTS": "ON",
         "BUILD_BINDINGS": "OFF",
@@ -174,6 +171,10 @@
       "name": "ci",
       "configurePreset": "ci",
       "jobs": 4
+    },
+    {
+      "name": "macos",
+      "configurePreset": "macos"
     }
   ],
   "testPresets": [
@@ -193,6 +194,49 @@
       "execution": {
         "noTestsAction": "error",
         "stopOnFailure": true
+      }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc",
+      "configurePreset": "windows-msvc",
+      "output": {
+        "outputOnFailure": true
+      },
+      "configuration": "Release"
+    },
+    {
+      "name": "macos",
+      "configurePreset": "macos",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-gcc",
+      "configurePreset": "linux-gcc",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-clang",
+      "configurePreset": "linux-clang",
+      "output": {
+        "outputOnFailure": true
       }
     }
   ]
