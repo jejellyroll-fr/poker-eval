@@ -3,7 +3,12 @@
 include(CMakeFindDependencyMacro)
 
 find_dependency(Threads)
-if(TARGET OpenMP::OpenMP_C)
+
+# Recorded at build time. The exported targets reference OpenMP::OpenMP_C when
+# this is ON, so the dependency has to be resolved before poker-eval-targets is
+# included - a consumer cannot already have that target defined.
+set(POKER_EVAL_WITH_OPENMP @POKER_EVAL_WITH_OPENMP@)
+if(POKER_EVAL_WITH_OPENMP)
     find_dependency(OpenMP)
 endif()
 

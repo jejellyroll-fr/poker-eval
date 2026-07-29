@@ -45,3 +45,43 @@ jobs:
           export DYLD_LIBRARY_PATH="$RUNNER_TEMP/pokereval/lib:$DYLD_LIBRARY_PATH"
           export LD_LIBRARY_PATH="$RUNNER_TEMP/pokereval/lib:$LD_LIBRARY_PATH"
           ./ci/build/install_check
+
+  # The matrix above builds with ENABLE_OPENMP=OFF, so it never exercises the
+  # exported targets that reference OpenMP::OpenMP_C. Consuming an OpenMP build
+  # is what caught the missing find_dependency(OpenMP) in the package config.
+  install-test-openmp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=ON
+
+      - name: Verify OpenMP was actually enabled
+        run: grep -q "POKER_EVAL_WITH_OPENMP ON" build/poker-eval-config.cmake
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Install
+        run: cmake --install build --prefix "$RUNNER_TEMP/pokereval"
+
+      - name: Configure consumer (find_package)
+        run: |
+          cmake -S ci/install_check -B ci/build \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/pokereval"
+
+      - name: Build consumer
+        run: cmake --build ci/build -j
+
+      - name: Run consumer
+        run: |
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/pokereval/lib:$LD_LIBRARY_PATH"
+          ./ci/build/install_check

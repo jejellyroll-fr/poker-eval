@@ -278,6 +278,16 @@ if(NOT OpenMP_FOUND)
     message(WARNING "OpenMP not available, multithreaded features will be disabled")
 endif()
 
+# Single source of truth for OpenMP usage. Subdirectories must test this rather
+# than OpenMP_C_FOUND, which stays true even when the checks above disable
+# OpenMP. It is also baked into the installed package config so that consumers
+# load the dependency before importing targets that reference OpenMP::OpenMP_C.
+if(OpenMP_FOUND)
+    set(POKER_EVAL_WITH_OPENMP ON)
+else()
+    set(POKER_EVAL_WITH_OPENMP OFF)
+endif()
+
 if(BUILD_GPU)
     find_package(OpenCL QUIET)
     if(OpenCL_FOUND)
