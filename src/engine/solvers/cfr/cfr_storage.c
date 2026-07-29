@@ -10,8 +10,16 @@
 #include <errno.h>
 #include <stdint.h>
 
-static int g_use_ecfr = 0;
-static double g_ecfr_lambda = 1.0;
+#if defined(_MSC_VER)
+#define CFR_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#define CFR_THREAD_LOCAL __thread
+#else
+#define CFR_THREAD_LOCAL _Thread_local
+#endif
+
+static CFR_THREAD_LOCAL int g_use_ecfr = 0;
+static CFR_THREAD_LOCAL double g_ecfr_lambda = 1.0;
 
 typedef struct {
     char magic[8];
