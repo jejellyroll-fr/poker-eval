@@ -35,18 +35,6 @@ jobs:
             preset: macos
           
           # Windows builds
-          # windows-latest moved past VS 2022, which the windows-msvc preset
-          # pins as its generator; pin the image instead of chasing versions.
-          - name: Windows MSVC
-            os: windows-2022
-            compiler: msvc
-            preset: windows-msvc
-          
-          - name: Windows MinGW
-            os: windows-latest
-            compiler: mingw
-            preset: default
-
     steps:
     - uses: actions/checkout@v4
     

@@ -12,6 +12,35 @@ env:
   BUILD_TYPE: Release
 
 jobs:
+  # Windows has never compiled. Three distinct portability defects surfaced in
+  # succession once the workflow was revived; see the tracking issue.
+  #   MSVC  - ofc.c:1666 OpenMP 'for' rejected (MSVC implements OpenMP 2.0)
+  #   MinGW - posix_memalign is not declared on Windows
+  windows-msvc:
+    name: Windows MSVC
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v4
+    - name: Configure
+      run: cmake --preset windows-msvc
+    - name: Build
+      run: cmake --build --preset windows-msvc --parallel
+
+  windows-mingw:
+    name: Windows MinGW
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        choco install mingw ninja
+        echo "CC=gcc" >> $env:GITHUB_ENV
+        echo "CXX=g++" >> $env:GITHUB_ENV
+    - name: Configure
+      run: cmake --preset default
+    - name: Build
+      run: cmake --build --preset default --parallel
+
   # Moved out of cmake.yml when it was revived: both fail for reasons that are
   # not about this workflow.
   #
