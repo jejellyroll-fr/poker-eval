@@ -1,0 +1,65 @@
+# canonical_regression.txt — comprehensive oracle corpus
+# Format: <cards>; <expected_class>
+# Classes: HAND_HIGH_CARD, HAND_PAIR, HAND_TWO_PAIR, HAND_THREE_KIND,
+#          HAND_STRAIGHT, HAND_FLUSH, HAND_FULL_HOUSE, HAND_FOUR_KIND,
+#          HAND_STRAIGHT_FLUSH
+
+# === STRAIGHT FLUSHES ===
+As Ks Qs Js Ts; HAND_STRAIGHT_FLUSH   # Royal flush spades
+5h 4h 3h 2h Ah; HAND_STRAIGHT_FLUSH   # Wheel straight flush (5-high)
+9c 8c 7c 6c 5c; HAND_STRAIGHT_FLUSH   # 9-high straight flush
+Kd Qd Jd Td 9d; HAND_STRAIGHT_FLUSH   # King-high straight flush
+
+# === STRAIGHTS & EDGE CASES ===
+Ah 2s 3d 4c 5h; HAND_STRAIGHT         # Wheel straight (5-high)
+Th Jd Qc Kh As; HAND_STRAIGHT         # Broadway straight (A-high)
+2h 3d 4s 5c 6h; HAND_STRAIGHT         # 6-high straight
+8c 9d Th Js Qh; HAND_STRAIGHT         # Queen-high straight
+Ah Kd Qc Jh 9s; HAND_HIGH_CARD        # False straight (missing Ten)
+Ah 2d 3c 4h 6s; HAND_HIGH_CARD        # False wheel (missing Five)
+Ah Kd Qc Jh Ts; HAND_STRAIGHT         # Broadway straight mixed suits
+
+# === FOUR OF A KIND ===
+Ac Ad Ah As Kd; HAND_FOUR_KIND        # Four Aces with King kicker
+2c 2d 2h 2s 3d; HAND_FOUR_KIND        # Four Deuces with Three kicker
+
+# === FULL HOUSES ===
+Kh Kd Kc Qh Qd; HAND_FULL_HOUSE       # Kings full of Queens
+3c 3d 3h Ac Ad; HAND_FULL_HOUSE       # Threes full of Aces
+
+# === FLUSHES & EDGE CASES ===
+2h 5h 7h 9h Kh; HAND_FLUSH            # Heart flush (no straight)
+As 7s 5s 3s 2s; HAND_FLUSH            # Spade flush (no straight)
+Ah 3h 5h 7h 9h; HAND_FLUSH            # Heart flush, not wheel
+Ah Kh Qh Jh 9h; HAND_FLUSH            # Heart flush, not Broadway
+Th 8h 6h 4h 2h; HAND_FLUSH            # Heart flush, mixed ranks
+
+# === THREE OF A KIND ===
+7c 7d 7h 2s 9d; HAND_THREE_KIND       # Trips Sevens
+Ac Ad Ah 2s 3d; HAND_THREE_KIND       # Trips Aces
+
+# === TWO PAIR ===
+8c 8d 2h 2s 9d; HAND_TWO_PAIR         # Eights and Deuces
+Ah Ad Kc Kd 2s; HAND_TWO_PAIR         # Aces and Kings
+
+# === ONE PAIR ===
+9c 9d Kc 2s 3h; HAND_PAIR             # Pair of Nines
+Ac Ad Kc 2s 3h; HAND_PAIR             # Pair of Aces
+
+# === HIGH CARD ===
+Ac Kd 9h 5s 2c; HAND_HIGH_CARD        # High card Ace
+Kc Qd 9h 5s 2c; HAND_HIGH_CARD        # High card King
+7c 5d 4h 3s 2c; HAND_HIGH_CARD        # High card Seven
+
+# === EDGE CASES & FALSE POSITIVES ===
+Ah 2d 3c 4h 7s; HAND_HIGH_CARD        # Almost wheel (missing 5)
+Tc Jd Qc Kh 2s; HAND_HIGH_CARD        # Almost Broadway (missing A)
+Ah Kh Qh Jh 8s; HAND_HIGH_CARD        # 4 to royal flush
+2h 4h 6h 8h Ts; HAND_HIGH_CARD        # 4 to flush
+9c 9d 8c 8s 7h; HAND_TWO_PAIR         # Two pair, not full house
+As Ks Ac Kd Qh; HAND_TWO_PAIR         # Two pair Aces and Kings
+
+# === SHORT DECK SPECIFIC (if applicable) ===
+6c 7d 8h 9s Th; HAND_STRAIGHT         # Short deck straight
+6h 7h 8h 9h Th; HAND_STRAIGHT_FLUSH   # Short deck straight flush
+

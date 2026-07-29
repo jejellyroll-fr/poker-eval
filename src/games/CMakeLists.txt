@@ -1,0 +1,77 @@
+# Games module CMakeLists.txt
+
+# Games source files
+set(GAMES_SOURCES
+    rules_std.c
+    rules_joker.c
+    rules_short.c
+    rules_astud.c
+    rules_manila.c
+    rules_drawmaha.c
+    rules_fusion.c
+    rules_pineapple.c
+    rules_badugi.c
+    badugi_eval.c
+    triple_draw.c
+    deck_manila.c
+    mixed_game.c
+    lowball.c
+    rules_omaha5.c
+    rules_omaha6.c
+)
+
+# Games header files
+set(GAMES_HEADERS
+    rules_std.h
+    rules_joker.h
+    rules_short.h
+    rules_astud.h
+    rules_manila.h
+    rules_omaha5.h
+    rules_omaha6.h
+    rules_undef.h
+    game_std.h
+    game_joker.h
+    game_short.h
+    game_astud.h
+    inlines/eval_manila.h
+    lowball_algorithm.h
+    mixed_game.h
+    inlines/eval_omaha.h
+    inlines/eval_low.h
+    inlines/eval_low8.h
+    inlines/eval_low27.h
+    inlines/eval_joker.h
+    inlines/eval_joker_low.h
+    inlines/eval_joker_low8.h
+    inlines/eval_astud.h
+    inlines/eval_short.h
+)
+
+# Add games library
+add_library(poker_games STATIC ${GAMES_SOURCES})
+set_property(TARGET poker_games PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+# Link with core module
+target_link_libraries(poker_games poker_core poker_engine)
+
+# Set include directories
+target_include_directories(poker_games PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/inlines
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/core
+    ${CMAKE_SOURCE_DIR}/core/inlines
+)
+
+# Install headers
+install(FILES ${GAMES_HEADERS} DESTINATION include/poker/games)
+install(DIRECTORY inlines/ DESTINATION include/poker/games/inlines
+        FILES_MATCHING PATTERN "*.h")
+
+# Install library
+install(TARGETS poker_games
+        EXPORT poker-eval-targets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin)

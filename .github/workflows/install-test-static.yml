@@ -1,0 +1,47 @@
+name: Install Test (Static)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  install-test-static:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (static)
+        run: |
+          cmake -S . -B build \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_STATIC_LIBS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Install
+        run: cmake --install build --prefix "$RUNNER_TEMP/pokereval"
+
+      - name: Configure consumer (find_package)
+        run: |
+          cmake -S ci/install_check -B ci/build \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/pokereval"
+
+      - name: Build consumer
+        run: cmake --build ci/build -j
+
+      - name: Run consumer
+        run: |
+          export DYLD_LIBRARY_PATH="$RUNNER_TEMP/pokereval/lib:$DYLD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/pokereval/lib:$LD_LIBRARY_PATH"
+          ./ci/build/install_check

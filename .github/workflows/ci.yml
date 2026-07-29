@@ -1,0 +1,155 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-release:
+    name: Release Build & Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential libssl-dev
+
+    - name: Configure Release Build
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
+
+    - name: Build
+      run: |
+        cd build
+        make -j$(nproc)
+
+    - name: Run Core Regression Tests
+      run: |
+        cd build
+        ctest --output-on-failure -R "test_canonical_regression|test_canonical_invariants|test_omaha_invariants"
+
+    - name: Run Full Test Suite
+      run: |
+        cd build
+        ctest --output-on-failure
+
+    - name: Performance Benchmark (Quiet Mode)
+      run: |
+        cd build
+        timeout 60s ./examples/omaha_combinations_example --quiet || true
+        timeout 60s ./examples/omaha_canonical_demo --quiet || true
+
+    - name: Generate Performance Report
+      run: |
+        cd build
+        echo "# Performance Report - $(date)" > performance_report.md
+        echo "## Build: Release -O3 -DNDEBUG" >> performance_report.md
+        echo "## Test Results:" >> performance_report.md
+        echo "- Core regression tests: ✅ Passed" >> performance_report.md
+        echo "- Full test suite: ✅ Passed" >> performance_report.md
+        echo "## Sample Performance:" >> performance_report.md
+        timeout 30s ./examples/omaha_combinations_example --quiet >> performance_report.md 2>&1 || echo "Benchmark timeout (expected)" >> performance_report.md
+
+    - name: Upload Performance Report
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-report-release
+        path: build/performance_report.md
+
+  test-debug-sanitizers:
+    name: Debug + Sanitizers (Weekly)
+    runs-on: ubuntu-latest
+    # Run only on schedule or manual trigger
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential clang libssl-dev
+
+    - name: Configure Debug + Sanitizers
+      run: |
+        mkdir build
+        cd build
+        CC=clang cmake .. -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON -DBUILD_TESTS=ON
+
+    - name: Build with Sanitizers
+      run: |
+        cd build
+        make -j$(nproc)
+
+    - name: Run Tests with Sanitizers
+      run: |
+        cd build
+        # Run core tests with AddressSanitizer/UBSan
+        ctest --output-on-failure -R "test_canonical_regression|test_canonical_invariants|test_omaha_invariants"
+
+  benchmark-performance:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential libssl-dev
+
+    - name: Configure Optimized Build
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=ON
+
+    - name: Build
+      run: |
+        cd build
+        make -j$(nproc)
+
+    - name: Run 7→5 Performance Test
+      run: |
+        cd build
+        gcc -O3 -DNDEBUG -I.. ../test_7to5_performance.c lib/libpoker-eval.a -o test_7to5_perf
+        ./test_7to5_perf > 7to5_benchmark.txt
+
+    - name: Run Hi/Lo Optimization Test
+      run: |
+        cd build
+        gcc -O3 -DNDEBUG -I.. ../test_hilo_optimization.c lib/libpoker-eval.a -o test_hilo_opt
+        ./test_hilo_opt > hilo_benchmark.txt
+
+    - name: Create Benchmark Report
+      run: |
+        cd build
+        echo "# Benchmark Results - $(date)" > benchmark_report.md
+        echo "## 7→5 Combination Generator Performance" >> benchmark_report.md
+        echo '```' >> benchmark_report.md
+        cat 7to5_benchmark.txt >> benchmark_report.md
+        echo '```' >> benchmark_report.md
+        echo "" >> benchmark_report.md
+        echo "## Hi/Lo Optimization Performance" >> benchmark_report.md
+        echo '```' >> benchmark_report.md
+        cat hilo_benchmark.txt >> benchmark_report.md
+        echo '```' >> benchmark_report.md
+
+    - name: Upload Benchmark Report
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-report
+        path: build/benchmark_report.md
+
+# Schedule weekly sanitizer runs
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Every Monday at 2 AM UTC

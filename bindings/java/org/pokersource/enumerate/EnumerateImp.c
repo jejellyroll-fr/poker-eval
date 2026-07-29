@@ -6,11 +6,11 @@
 #include <jni.h>
 #include "pokerjni.h"	/* javah output for us to implement */
 #include "jniutil.h"	/* JNI help like exception throwing */
-#include "poker_defs.h"	/* poker-eval basics */
+#include <poker_eval/core/poker_defs.h>	/* poker-eval basics */
 #include "pokutil.h"	/* poker-eval help like card parsing */
 
-#include "poker_defs.h"
-#include "enumdefs.h"
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/core/enumdefs.h>
 
 
 /* copyOrdering()

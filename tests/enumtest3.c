@@ -23,8 +23,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "poker_defs.h"
-#include "enumerate.h"
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/core/enumerate.h>
 
 int main(void) {
   StdDeck_CardMask set_var[2];
