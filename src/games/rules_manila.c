@@ -114,7 +114,7 @@ ManilaRules_HandVal_toString_n(HandVal handval, char *outString, size_t size) {
             break;
 
         default:
-            strcpy(outString, "Unknown");
+            snprintf(outString, size, "%s", "Unknown");
             return 1;
     }
 

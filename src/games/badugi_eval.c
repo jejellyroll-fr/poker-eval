@@ -20,7 +20,6 @@
 
 #include <stdio.h>
 #include <stddef.h>
-#include <stdarg.h>
 #include <string.h>
 #include <poker_eval/games/badugi_eval.h>
 #include <poker_eval/games/rules_badugi.h>
@@ -28,33 +27,22 @@
 #include <poker_eval/core/low_eval.h>
 
 /*
- * Append to outString, never past size, and report how many bytes were really
- * written. snprintf returns what it *would* have written, so accumulating its
- * return value directly walks the cursor past the buffer on truncation.
+ * Cursor arithmetic for the bounded appends below.
+ *
+ * snprintf reports what it *would* have written, so adding its return value to
+ * the cursor walks past the end of the buffer as soon as the output is
+ * truncated. room_left keeps the pointer in bounds and advance_cursor clamps.
  */
-static int append_bounded(char *outString, size_t size, int length,
-                          const char *fmt, ...)
-#if defined(__GNUC__)
-    __attribute__((format(printf, 4, 5)))
-#endif
-    ;
-
-static int append_bounded(char *outString, size_t size, int length,
-                          const char *fmt, ...) {
-    va_list args;
-    int written;
-
+static size_t room_left(size_t size, int length) {
     if (length < 0 || (size_t)length >= size) return 0;
+    return size - (size_t)length;
+}
 
-    va_start(args, fmt);
-    written = vsnprintf(outString + length, size - (size_t)length, fmt, args);
-    va_end(args);
-
-    if (written < 0) return 0;
-    if ((size_t)written >= size - (size_t)length) {
-        return (int)(size - (size_t)length) - 1;   /* truncated */
-    }
-    return written;
+static int advance_cursor(int length, size_t size, int written) {
+    size_t room = room_left(size, length);
+    if (written < 0 || room == 0) return length;
+    if ((size_t)written >= room) return (int)size - 1;   /* truncated */
+    return length + written;
 }
 
 /*
@@ -386,8 +374,10 @@ int BadugiHandVal_toString_n(BadugiHandVal hv, char *outString, size_t size)
 
     if (hv == BadugiHandVal_NOTHING)
     {
-        append_bounded(outString, size, 0, "%s", "Nothing");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Nothing". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Nothing"));
     }
 
 
@@ -395,34 +385,40 @@ int BadugiHandVal_toString_n(BadugiHandVal hv, char *outString, size_t size)
     switch (handType)
     {
     case BadugiRules_HandType_BADUGI:
-        length += append_bounded(outString, size, length, "Badugi: %d%d%d%d",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "Badugi: %d%d%d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv),
                           BadugiHandVal_THIRD_CARD(hv),
-                          BadugiHandVal_FOURTH_CARD(hv));
+                          BadugiHandVal_FOURTH_CARD(hv)));
         break;
 
     case BadugiRules_HandType_THREE:
-        length += append_bounded(outString, size, length, "Three-card: %d%d%d",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "Three-card: %d%d%d",
                           BadugiHandVal_FIRST_CARD(hv),
                           BadugiHandVal_SECOND_CARD(hv),
-                          BadugiHandVal_THIRD_CARD(hv));
+                          BadugiHandVal_THIRD_CARD(hv)));
         break;
 
     case BadugiRules_HandType_TWO:
-        length += append_bounded(outString, size, length, "Two-card: %d%d",
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "Two-card: %d%d",
                           BadugiHandVal_FIRST_CARD(hv),
-                          BadugiHandVal_SECOND_CARD(hv));
+                          BadugiHandVal_SECOND_CARD(hv)));
         break;
 
     case BadugiRules_HandType_ONE:
-        length += append_bounded(outString, size, length, "One-card: %d",
-                          BadugiHandVal_FIRST_CARD(hv));
+        length = advance_cursor(length, size,
+        snprintf(outString + length, room_left(size, length), "One-card: %d",
+                          BadugiHandVal_FIRST_CARD(hv)));
         break;
 
     default:
-        append_bounded(outString, size, 0, "%s", "Invalid");
-        return 7;
+        /* Report what was really written: the caller's buffer may be
+         * shorter than "Invalid". */
+        return advance_cursor(0, size,
+                              snprintf(outString, size, "%s", "Invalid"));
     }
 
     return length;
