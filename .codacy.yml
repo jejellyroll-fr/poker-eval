@@ -10,6 +10,7 @@ exclude_paths:
   - "benchmarks/**"
   - "examples/**"
   - "scripts/**"
+  - "*.ps1"
   - "**/*.ps1"
   - "bindings/python/pypokereval.c"
   - "bindings/cython/python/pokereval/pokereval.c"
