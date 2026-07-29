@@ -1,0 +1,6 @@
+players,p1,p2,board,scenario
+2,As Ah,Kd Kh,Ac 2h 3s,flop_AA_vs_KK
+2,Qs Js,9d 9c,Ac 2h 3s 4d,turn_QJs_vs_99
+2,Ad Kd,Ah Kh,,preflop_AK_vs_AK
+2,7c 7d,As Kd,2c 3c 4c 5d,turn_77_vs_AK_flushdraw
+2,Jc Tc,9c 8c,7c 6d 2h,flop_connectors_vs_connectors

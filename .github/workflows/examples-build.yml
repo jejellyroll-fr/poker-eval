@@ -1,0 +1,42 @@
+name: Examples Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  examples-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15-intel, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (examples)
+        run: |
+          cmake -S . -B build \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF
+
+      - name: Build examples
+        run: cmake --build build --target pineapple_example drawmaha_example pe_minimal pe_round_smoke_test -j
+
+      - name: Run pe_minimal
+        run: |
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/build/lib:$DYLD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="${{ github.workspace }}/build/lib:$LD_LIBRARY_PATH"
+          ./build/src/examples/pe_minimal
+
+      - name: Run pe_round_smoke_test
+        run: |
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/build/lib:$DYLD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="${{ github.workspace }}/build/lib:$LD_LIBRARY_PATH"
+          ./build/src/examples/pe_round_smoke_test

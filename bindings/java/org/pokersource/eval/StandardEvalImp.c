@@ -4,14 +4,14 @@
 #include <jni.h>
 #include "pokerjni.h"	/* javah output for us to implement */
 #include "jniutil.h"	/* JNI help like exception throwing */
-#include "poker_defs.h"	/* poker-eval basics */
+#include <poker_eval/core/poker_defs.h>	/* poker-eval basics */
 #include "pokutil.h"	/* poker-eval help like card parsing */
 
-#include "deck_std.h"
-#include "rules_std.h"
-#include "inlines/eval.h"
-#include "inlines/eval_low.h"
-#include "inlines/eval_low8.h"
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/games/rules_std.h>
+#include <poker_eval/core/inlines/eval.h>
+#include <poker_eval/core/low_eval.h>
+#include <poker_eval/core/low_qualifier.h>
 
 JNIEXPORT jlong JNICALL Java_org_pokersource_eval_StandardEval_EvalHigh
    (JNIEnv *env, jclass class, jintArray ranks, jintArray suits)
@@ -45,7 +45,7 @@ JNIEXPORT jlong JNICALL Java_org_pokersource_eval_StandardEval_EvalLow
     jniThrow(env, "unable to parse input cards");
     return (jlong)0;
   }
-  loval = StdDeck_Lowball_EVAL(mcards, ncards);
+  loval = pe_eval_low_a5(mcards);
 #ifdef DEBUG
   printf("In C: Hand [%s] => Eval: %d ",
          DmaskString(StdDeck, mcards), loval);
@@ -66,7 +66,9 @@ JNIEXPORT jlong JNICALL Java_org_pokersource_eval_StandardEval_EvalLow8
     jniThrow(env, "unable to parse input cards");
     return (jlong)0;
   }
-  lo8val = StdDeck_Lowball8_EVAL(mcards, ncards);
+  lo8val = pe_eval_low_a5(mcards);
+  if (!pe_low_qualify5(lo8val, LOW_QUALIFIER_8))
+    lo8val = LowHandVal_NOTHING;
 #ifdef DEBUG
   printf("In C: Hand [%s] => Eval: %d ",
          DmaskString(StdDeck, mcards), lo8val);
@@ -75,4 +77,3 @@ JNIEXPORT jlong JNICALL Java_org_pokersource_eval_StandardEval_EvalLow8
 #endif
   return (jlong)lo8val;
 }
-

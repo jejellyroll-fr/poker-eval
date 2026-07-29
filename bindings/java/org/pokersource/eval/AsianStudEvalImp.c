@@ -4,12 +4,12 @@
 #include <jni.h>
 #include "pokerjni.h"	/* javah output for us to implement */
 #include "jniutil.h"	/* JNI help like exception throwing */
-#include "poker_defs.h"	/* poker-eval basics */
+#include <poker_eval/core/poker_defs.h>	/* poker-eval basics */
 #include "pokutil.h"	/* poker-eval help like card parsing */
 
-#include "deck_astud.h"
-#include "rules_astud.h"
-#include "inlines/eval_astud.h"	/* must come after above!? */
+#include <poker_eval/deck/deck_astud.h>
+#include <poker_eval/games/rules_astud.h>
+#include <poker_eval/games/inlines/eval_astud.h>	/* must come after above!? */
 
 JNIEXPORT jlong JNICALL Java_org_pokersource_eval_AsianStudEval_EvalHigh
    (JNIEnv *env, jclass class, jintArray ranks, jintArray suits)

@@ -24,7 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "combinations.h"
+#include <poker_eval/utils/combinations.h>
 
 int
 main(int argc, char **argv)
@@ -35,11 +35,14 @@ main(int argc, char **argv)
   Combinations vp;
 
   if (argc != 3) {
-    printf("usage: %s nuniv nelem\n", argv[0]);
-    return 1;
+    /* Use default values for testing */
+    nuniv = 5;
+    nelem = 2;
+    printf("Using default values: nuniv=%d, nelem=%d\n", nuniv, nelem);
+  } else {
+    nuniv = atoi(argv[1]);
+    nelem = atoi(argv[2]);
   }
-  nuniv = atoi(argv[1]);
-  nelem = atoi(argv[2]);
   vp = init_combinations(nuniv, nelem);
   if (vp == NULL) {
     printf("init_combinations failed\n");

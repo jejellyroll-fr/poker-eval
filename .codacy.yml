@@ -1,0 +1,18 @@
+---
+engines:
+  cppcheck:
+    language: c
+
+exclude_paths:
+  - "tests/**"
+  - "src/examples/**"
+  - "src/benchmarks/**"
+  - "benchmarks/**"
+  - "examples/**"
+  - "scripts/**"
+  - "*.ps1"
+  - "**/*.ps1"
+  - "bindings/python/pypokereval.c"
+  - "bindings/cython/python/pokereval/pokereval.c"
+  - "src/core/t_*.c"
+  - "src/utils/tables/**"

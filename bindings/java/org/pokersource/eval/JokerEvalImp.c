@@ -4,14 +4,14 @@
 #include <jni.h>
 #include "pokerjni.h"	/* javah output for us to implement */
 #include "jniutil.h"	/* JNI help like exception throwing */
-#include "poker_defs.h"	/* poker-eval basics */
+#include <poker_eval/core/poker_defs.h>	/* poker-eval basics */
 #include "pokutil.h"	/* poker-eval help like card parsing */
 
-#include "deck_joker.h"
-#include "rules_joker.h"
-#include "inlines/eval_joker.h"
-#include "inlines/eval_joker_low.h"
-#include "inlines/eval_joker_low8.h"
+#include <poker_eval/deck/deck_joker.h>
+#include <poker_eval/games/rules_joker.h>
+#include <poker_eval/games/inlines/eval_joker.h>
+#include <poker_eval/games/inlines/eval_joker_low.h>
+#include <poker_eval/games/inlines/eval_joker_low8.h>
 
 JNIEXPORT jlong JNICALL Java_org_pokersource_eval_JokerEval_EvalHigh
    (JNIEnv *env, jclass class, jintArray ranks, jintArray suits)
@@ -75,4 +75,3 @@ JNIEXPORT jlong JNICALL Java_org_pokersource_eval_JokerEval_EvalLow8
 #endif
   return (jlong)lo8val;
 }
-

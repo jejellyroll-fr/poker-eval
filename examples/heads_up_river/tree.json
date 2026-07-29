@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "root": "river_p0",
+  "betProfiles": [
+    { "id": "default", "sizes": [3.0], "pot_sizing": false }
+  ],
+  "rangeProfiles": [
+    {
+      "id": "p0_river",
+      "player": 0,
+      "street": "RIVER",
+      "combos": [
+        { "hand": "AhKh", "weight": 1.0 },
+        { "hand": "QsQd", "weight": 0.6 },
+        { "hand": "JcTh", "weight": 0.4 }
+      ]
+    },
+    {
+      "id": "p1_response",
+      "player": 1,
+      "street": "RIVER",
+      "combos": [
+        { "hand": "8c8s", "weight": 1.0 },
+        { "hand": "AdQd", "weight": 0.5 },
+        { "hand": "KcJh", "weight": 0.5 }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "river_p0",
+      "type": "player",
+      "street": "RIVER",
+      "player": 0,
+      "bet_profile": "default",
+      "range_profile": "p0_river",
+      "actions": [
+        { "type": "call", "next": "terminal_check" },
+        { "type": "raise", "size_index": 0, "next": "river_p1" }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 0,
+        "first_to_act": 0,
+        "pot": 4.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [12, 25, 27, 30, 44],
+        "board_revealed": 5,
+        "stacks": [98.0, 98.0],
+        "invested": [2.0, 2.0],
+        "round_contrib": [0.0, 0.0],
+        "active": [1, 1],
+        "acted": [0, 0]
+      }
+    },
+    {
+      "id": "river_p1",
+      "type": "player",
+      "street": "RIVER",
+      "player": 1,
+      "bet_profile": "default",
+      "range_profile": "p1_response",
+      "actions": [
+        { "type": "fold", "next": "terminal_bet_fold" },
+        { "type": "call", "next": "terminal_bet_call" }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 7.0,
+        "to_call": 3.0,
+        "current_bet": 3.0,
+        "raises_made": 1,
+        "board": [12, 25, 27, 30, 44],
+        "board_revealed": 5,
+        "stacks": [95.0, 98.0],
+        "invested": [5.0, 2.0],
+        "round_contrib": [3.0, 0.0],
+        "active": [1, 1],
+        "acted": [1, 0]
+      }
+    },
+    {
+      "id": "terminal_check",
+      "type": "terminal",
+      "street": "SHOWDOWN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "SHOWDOWN",
+        "to_act": -1,
+        "first_to_act": -1,
+        "pot": 4.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [12, 25, 27, 30, 44],
+        "board_revealed": 5,
+        "stacks": [98.0, 98.0],
+        "invested": [2.0, 2.0],
+        "round_contrib": [0.0, 0.0],
+        "active": [1, 1],
+        "acted": [1, 1]
+      }
+    },
+    {
+      "id": "terminal_bet_fold",
+      "type": "terminal",
+      "street": "SHOWDOWN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "SHOWDOWN",
+        "to_act": -1,
+        "first_to_act": -1,
+        "pot": 7.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 1,
+        "board": [12, 25, 27, 30, 44],
+        "board_revealed": 5,
+        "stacks": [95.0, 98.0],
+        "invested": [5.0, 2.0],
+        "round_contrib": [3.0, 0.0],
+        "active": [1, 0],
+        "acted": [1, 1]
+      }
+    },
+    {
+      "id": "terminal_bet_call",
+      "type": "terminal",
+      "street": "SHOWDOWN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "SHOWDOWN",
+        "to_act": -1,
+        "first_to_act": -1,
+        "pot": 10.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 1,
+        "board": [12, 25, 27, 30, 44],
+        "board_revealed": 5,
+        "stacks": [95.0, 95.0],
+        "invested": [5.0, 5.0],
+        "round_contrib": [3.0, 3.0],
+        "active": [1, 1],
+        "acted": [1, 1]
+      }
+    }
+  ]
+}

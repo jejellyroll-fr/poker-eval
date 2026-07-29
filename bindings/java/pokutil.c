@@ -2,14 +2,14 @@
 
 #include <jni.h>
 #include "jniutil.h"		/* JNI helpers: throw exceptions */
-#include "poker_defs.h"		/* poker-eval basic definitions */
+#include <poker_eval/core/poker_defs.h>		/* poker-eval basic definitions */
 #include "pokutil.h"
 
 /******************************************************************************
   Standard deck
 ******************************************************************************/
-#include "deck_std.h"
-#include "rules_std.h"
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/games/rules_std.h>
 
 int
 numCardsStandard(StdDeck_CardMask mask)
@@ -78,8 +78,8 @@ parseStandardRanksSuits(JNIEnv *env, jintArray ranks, jintArray suits,
 /******************************************************************************
   Joker deck
 ******************************************************************************/
-#include "deck_joker.h"
-#include "rules_joker.h"
+#include <poker_eval/deck/deck_joker.h>
+#include <poker_eval/games/rules_joker.h>
 
 int
 parseJokerRanksSuits(JNIEnv *env, jintArray ranks, jintArray suits,
@@ -146,8 +146,8 @@ numCardsJoker(JokerDeck_CardMask mask)
 /******************************************************************************
   Asian Stud deck
 ******************************************************************************/
-#include "deck_astud.h"
-#include "rules_astud.h"
+#include <poker_eval/deck/deck_astud.h>
+#include <poker_eval/games/rules_astud.h>
 
 int
 parseAsianStudRanksSuits(JNIEnv *env, jintArray ranks, jintArray suits,
@@ -198,4 +198,3 @@ numCardsAsianStud(AStudDeck_CardMask mask)
   }
   return nbits;
 }
-

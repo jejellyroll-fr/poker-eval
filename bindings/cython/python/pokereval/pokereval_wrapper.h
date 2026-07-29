@@ -1,8 +1,8 @@
 #ifndef POKEREVAL_WRAPPER_H
 #define POKEREVAL_WRAPPER_H
 
-#include "deck_std.h"
-#include "poker_defs.h"
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/core/poker_defs.h>
 
 void py_StdDeck_CardMask_RESET(StdDeck_CardMask* cm);
 void py_StdDeck_CardMask_OR(StdDeck_CardMask* res, StdDeck_CardMask* op1, StdDeck_CardMask* op2);

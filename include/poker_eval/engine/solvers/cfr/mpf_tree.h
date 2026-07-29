@@ -1,0 +1,169 @@
+#ifndef POKER_EVAL_MPF_TREE_H
+#define POKER_EVAL_MPF_TREE_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <poker_eval/engine/solvers/cfr/multiway_postflop_adapter.h>
+
+#if !defined(_WIN32)
+#include <poker_eval/core/pthread_compat.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define MPF_TREE_ACTION_MAX 16
+
+typedef enum
+{
+    MPF_TREE_NODE_PLAYER = 0,
+    MPF_TREE_NODE_CHANCE,
+    MPF_TREE_NODE_TERMINAL
+} mpf_tree_node_type_t;
+
+typedef enum
+{
+    MPF_TREE_ACTION_FOLD = 0,
+    MPF_TREE_ACTION_CALL,
+    MPF_TREE_ACTION_RAISE,
+    MPF_TREE_ACTION_CHANCE,
+    MPF_TREE_ACTION_TERMINAL
+} mpf_tree_action_type_t;
+
+typedef struct mpf_tree_bet_profile_t
+{
+    char *id;
+    double *bet_sizes;
+    int bet_size_count;
+    int use_pot_sizing;
+} mpf_tree_bet_profile_t;
+
+typedef struct mpf_tree_range_combo_t
+{
+    char *hand;
+    double weight;
+} mpf_tree_range_combo_t;
+
+typedef struct mpf_tree_range_profile_t
+{
+    char *id;
+    int player; /* -1 si non spécifié */
+    mpf_street_t street;
+    int street_defined;
+    mpf_tree_range_combo_t *combos;
+    int combo_count;
+    char **aliases;
+    int alias_count;
+} mpf_tree_range_profile_t;
+
+typedef struct mpf_tree_action_t
+{
+    mpf_tree_action_type_t type;
+    int size_index;     /* index into node bet sizes for raises */
+    double weight;      /* used for chance nodes */
+    int next_index;     /* resolved index or -1 */
+    char *next_id;      /* temporary before resolution */
+} mpf_tree_action_t;
+
+typedef struct mpf_tree_snapshot_t
+{
+    int defined;
+    int has_street;
+    int has_num_players;
+    int has_to_act;
+    int has_first_to_act;
+    int has_pot;
+    int has_to_call;
+    int has_current_bet;
+    int has_raises_made;
+    int has_board;
+    int has_board_revealed;
+    int has_stacks;
+    int has_invested;
+    int has_round_contrib;
+    int has_active;
+    int has_acted;
+    int board_len;
+    int stacks_len;
+    int invested_len;
+    int round_contrib_len;
+    int active_len;
+    int acted_len;
+    mpf_street_t street;
+    int num_players;
+    int to_act;
+    int first_to_act;
+    double pot;
+    double to_call;
+    double current_bet;
+    int raises_made;
+    int board_revealed;
+    int board_cards[5];
+    double stacks[MPF_MAX_PLAYERS];
+    double invested[MPF_MAX_PLAYERS];
+    double round_contrib[MPF_MAX_PLAYERS];
+    int active[MPF_MAX_PLAYERS];
+    int acted[MPF_MAX_PLAYERS];
+} mpf_tree_snapshot_t;
+
+typedef struct mpf_tree_node_t
+{
+    char *id;
+    mpf_tree_node_type_t type;
+    mpf_street_t street;
+    int acting_player; /* -1 for chance/terminal */
+    double *bet_sizes; /* owning array */
+    int bet_size_count;
+    int use_pot_sizing;
+    mpf_tree_action_t *actions;
+    int action_count;
+    char *bet_profile_id;
+    char *range_profile_id;
+    const mpf_tree_range_profile_t *range_profile;
+    mpf_tree_snapshot_t snapshot;
+    int has_snapshot;
+    mpf_state_t *state_cache;
+    uint64_t state_key;
+#if !defined(_WIN32)
+    pthread_mutex_t cache_lock;
+    struct
+    {
+        pthread_t owner;
+        mpf_state_t *state;
+    } cache_slots[MPF_NODE_CACHE_SLOTS];
+#endif
+} mpf_tree_node_t;
+
+typedef struct mpf_tree_def_t
+{
+    int version;
+    int node_count;
+    mpf_tree_node_t *nodes;
+    int profile_count;
+    mpf_tree_bet_profile_t *profiles;
+    int range_profile_count;
+    mpf_tree_range_profile_t *range_profiles;
+    int root_index;
+    char *root_id;
+} mpf_tree_def_t;
+
+typedef struct
+{
+    int line;
+    int column;
+    char message[128];
+} mpf_tree_error_t;
+
+mpf_tree_def_t *mpf_tree_load_json(const char *json, size_t len, mpf_tree_error_t *err);
+mpf_tree_def_t *mpf_tree_load_json_file(const char *path, mpf_tree_error_t *err);
+int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err);
+char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len);
+void mpf_tree_free(mpf_tree_def_t *tree);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POKER_EVAL_MPF_TREE_H */

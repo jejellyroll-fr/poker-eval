@@ -1,0 +1,14 @@
+{
+  "holdem":    { "seed": 1337, "samples": 12, "players": 2 },
+  "holdem8":   { "seed": 2025, "samples": 8,  "players": 3 },
+  "omaha4":    { "seed": 4242, "samples": 10, "players": 2 },
+  "omaha5":    { "seed": 4343, "samples": 10, "players": 2 },
+  "omaha6":    { "seed": 4444, "samples": 10, "players": 2 },
+  "omaha8_4":  { "seed": 5150, "samples": 8,  "players": 2 },
+  "omaha8_5":  { "seed": 5252, "samples": 8,  "players": 2 },
+  "omaha8_6":  { "seed": 5353, "samples": 8,  "players": 2 },
+  "stud":      { "seed": 6060, "samples": 8,  "players": 2 },
+  "stud8":     { "seed": 7777, "samples": 6,  "players": 2 },
+  "razz":      { "seed": 8800, "samples": 8,  "players": 2 },
+  "lowball27": { "seed": 9900, "samples": 8,  "players": 2 }
+}

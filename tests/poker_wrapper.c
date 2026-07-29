@@ -1,5 +1,5 @@
 /*
- *  Copyright 2006 Loic Dachary <loic@dachary.org> 
+ *  Copyright 2006 Loic Dachary <loic@dachary.org>
  *
  * This program gives you software freedom; you can copy, convey,
  * propagate, redistribute and/or modify this program under the terms of
@@ -22,11 +22,13 @@
 #endif /* HAVE_CONFIG_H */
 
 #include <assert.h>
+#include <string.h>
 
-#include <poker_defs.h>
-#include <poker_wrapper.h>
+#include <poker_eval/core/poker_defs.h>
+#include <poker_eval/utils/poker_wrapper.h>
 
-int main(void) {
+int main(void)
+{
   {
     assert(wrap_StdDeck_N_CARDS() == 52);
   }
@@ -34,7 +36,8 @@ int main(void) {
   {
     int i;
     StdDeck_CardMask c;
-    for(i = 0; i < StdDeck_N_CARDS; i++) {
+    for (i = 0; i < StdDeck_N_CARDS; i++)
+    {
       int suit = StdDeck_SUIT(i);
       int rank = StdDeck_RANK(i);
 
@@ -48,7 +51,8 @@ int main(void) {
       else if (suit == StdDeck_Suit_SPADES)
         c.cards.spades = (1 << rank);
 
-      assert(StdDeck_CardMask_EQUAL(wrap_StdDeck_MASK(i), c));    
+      assert(StdDeck_CardMask_EQUAL(wrap_StdDeck_MASK(i), c));
+      (void)c; /* Suppress unused variable warning */
     }
   }
 
@@ -73,13 +77,13 @@ int main(void) {
 
   {
     int i;
-    for(i = 0; i < StdDeck_Suit_COUNT; i++)
+    for (i = 0; i < StdDeck_Suit_COUNT; i++)
       assert(wrap_StdDeck_RANK(i * StdDeck_Rank_COUNT) == StdDeck_Rank_2);
   }
 
   {
     int i;
-    for(i = 0; i < StdDeck_Rank_COUNT; i++)
+    for (i = 0; i < StdDeck_Rank_COUNT; i++)
       assert(wrap_StdDeck_SUIT(i + StdDeck_Rank_COUNT * StdDeck_Suit_DIAMONDS) == StdDeck_Suit_DIAMONDS);
   }
 
@@ -113,9 +117,12 @@ int main(void) {
 
   {
     StdDeck_CardMask c, d;
-    int As, Ac;
-    assert(StdDeck_stringToCard("As", &As) == 2);
-    assert(StdDeck_stringToCard("Ac", &Ac) == 2);
+    int As = 0, Ac = 0;
+    char card_str[4];
+    strcpy(card_str, "As");
+    assert(StdDeck_stringToCard(card_str, &As) == 2);
+    strcpy(card_str, "Ac");
+    assert(StdDeck_stringToCard(card_str, &Ac) == 2);
     c = wrap_StdDeck_CardMask_RESET();
     assert(wrap_StdDeck_CardMask_IS_EMPTY(c));
     c = wrap_StdDeck_CardMask_NOT(c);
