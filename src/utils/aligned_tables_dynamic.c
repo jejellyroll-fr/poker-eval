@@ -49,9 +49,9 @@ int init_dynamic_aligned_tables(void) {
     if (ret != 0) { fprintf(stderr, "Failed to alloc topFiveCards: %s\n", strerror(ret)); pe_aligned_free(aligned_straightTable); aligned_straightTable=NULL; return -1; }
     ret = pe_posix_memalign((void**)&aligned_nBitsTable, 64, 8192 * sizeof(uint8_t));
     if (ret != 0) { fprintf(stderr, "Failed to alloc nBits: %s\n", strerror(ret)); pe_aligned_free(aligned_straightTable); pe_aligned_free(aligned_topFiveCardsTable); aligned_straightTable=NULL; aligned_topFiveCardsTable=NULL; return -1; }
-    memcpy(aligned_straightTable, straightTable, 8192 * sizeof(uint8_t));
-    memcpy(aligned_topFiveCardsTable, topFiveCardsTable, 8192 * sizeof(uint32_t));
-    memcpy(aligned_nBitsTable, nBitsTable, 8192 * sizeof(uint8_t));
+    memcpy(aligned_straightTable, straightTable, sizeof(straightTable));
+    memcpy(aligned_topFiveCardsTable, topFiveCardsTable, sizeof(topFiveCardsTable));
+    memcpy(aligned_nBitsTable, nBitsTable, sizeof(nBitsTable));
     tables_initialized = 1;
     return 0;
 }

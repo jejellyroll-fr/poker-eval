@@ -253,10 +253,10 @@ pe_error_t pe_evaluate_hand(pe_handle_t handle,
     result->hand_type = HandVal_HANDTYPE(hv);
 
     if (result->hand_type < 9) {
-        strncpy(result->hand_name, hand_type_names[result->hand_type],
-                sizeof(result->hand_name) - 1);
+        snprintf(result->hand_name, sizeof(result->hand_name), "%s",
+                 hand_type_names[result->hand_type]);
     } else {
-        strncpy(result->hand_name, "Unknown", sizeof(result->hand_name) - 1);
+        snprintf(result->hand_name, sizeof(result->hand_name), "%s", "Unknown");
     }
 
     return PE_OK;

@@ -402,7 +402,8 @@ static int ofc_gpu_detect_hardware(void) {
 
         struct cudaDeviceProp props;
         cudaGetDeviceProperties(&props, best_device);
-        strcpy(g_production_ctx.device_info.device_name, props.name);
+        snprintf(g_production_ctx.device_info.device_name,
+                 sizeof(g_production_ctx.device_info.device_name), "%s", props.name);
 
         size_t free_mem, total_mem;
         cudaMemGetInfo(&free_mem, &total_mem);
@@ -448,7 +449,8 @@ static int ofc_gpu_detect_hardware(void) {
             clGetDeviceInfo(device_id, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(global_mem_size), &global_mem_size, NULL);
             clGetDeviceInfo(device_id, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(max_work_group_size), &max_work_group_size, NULL);
 
-            strcpy(g_production_ctx.device_info.device_name, device_name);
+            snprintf(g_production_ctx.device_info.device_name,
+                     sizeof(g_production_ctx.device_info.device_name), "%s", device_name);
             g_production_ctx.device_info.total_memory_mb = global_mem_size / (1024*1024);
             g_production_ctx.device_info.available_memory_mb = global_mem_size / (1024*1024);
         g_production_ctx.device_info.max_threads_per_block = (int)max_work_group_size;
