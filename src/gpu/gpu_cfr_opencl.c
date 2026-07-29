@@ -83,26 +83,39 @@ struct gpu_cfr_opencl_context_t {
     bool profiling_enabled;
 };
 
-/* Error checking macros */
+/*
+ * Error checking macros.
+ *
+ * The internal variable must not be named err: every caller passes a variable
+ * of that name, so the expansion used to read `cl_int err = (err)`, shadowing
+ * the caller's variable and initialising it from itself. The value tested was
+ * indeterminate and the real OpenCL return codes were never examined.
+ */
 #define CL_CHECK(call) do { \
-    cl_int err = (call); \
-    if (err != CL_SUCCESS) { \
-        fprintf(stderr, "OpenCL error %d at %s:%d\n", err, __FILE__, __LINE__); \
+    cl_int cl_check_status_ = (call); \
+    if (cl_check_status_ != CL_SUCCESS) { \
+        fprintf(stderr, "OpenCL error %d at %s:%d\n", cl_check_status_, __FILE__, __LINE__); \
         return NULL; \
     } \
 } while(0)
 
 #define CL_CHECK_ERR(call, ret_val) do { \
-    cl_int err = (call); \
-    if (err != CL_SUCCESS) { \
-        fprintf(stderr, "OpenCL error %d at %s:%d\n", err, __FILE__, __LINE__); \
+    cl_int cl_check_status_ = (call); \
+    if (cl_check_status_ != CL_SUCCESS) { \
+        fprintf(stderr, "OpenCL error %d at %s:%d\n", cl_check_status_, __FILE__, __LINE__); \
         return ret_val; \
     } \
 } while(0)
 
 /* ===== Embedded Kernel Source ===== */
 
-static const char* GPU_CFR_KERNEL_SOURCE =
+/*
+ * Kernel source, split into fragments. A single literal came to 4770 chars,
+ * over the 4095 ISO C99 guarantees and rejected by -Woverlength-strings.
+ * clCreateProgramWithSource concatenates the fragments in order, which is
+ * exactly what its multi-string signature is for.
+ */
+static const char* GPU_CFR_KERNEL_SOURCE[] = {
 "/* GPU-CFR OpenCL Kernels (embedded) */\n"
 "\n"
 "__kernel void regret_matching_kernel(\n"
@@ -200,6 +213,7 @@ static const char* GPU_CFR_KERNEL_SOURCE =
 "    data[idx] = 0.0f;\n"
 "}\n"
 "\n"
+,
 "__kernel void normalize_strategy_kernel(\n"
 "    __global float* restrict strategy,\n"
 "    __global const uchar* restrict action_counts,\n"
@@ -271,12 +285,10 @@ static const char* GPU_CFR_KERNEL_SOURCE =
 "        output[get_group_id(0)] = scratch[0];\n"
 "    }\n"
 "}\n"
-;
+};
 
-static const char* get_embedded_kernel_source(size_t* length) {
-    if (length) *length = strlen(GPU_CFR_KERNEL_SOURCE);
-    return GPU_CFR_KERNEL_SOURCE;
-}
+#define GPU_CFR_KERNEL_SOURCE_PARTS \
+    (sizeof(GPU_CFR_KERNEL_SOURCE) / sizeof(GPU_CFR_KERNEL_SOURCE[0]))
 
 /* ===== Initialization ===== */
 
@@ -373,8 +385,8 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
         printf("GPU-CFR OpenCL Device: %s\n", ctx->device_name);
         printf("  Compute Units: %d\n", ctx->compute_units);
         printf("  Max Work Group: %zu\n", ctx->max_work_group_size);
-        printf("  Global Memory: %.2f MB\n", ctx->global_mem_size / (1024.0 * 1024.0));
-        printf("  Local Memory: %.2f KB\n", ctx->local_mem_size / 1024.0);
+        printf("  Global Memory: %.2f MB\n", (double)ctx->global_mem_size / (1024.0 * 1024.0));
+        printf("  Local Memory: %.2f KB\n", (double)ctx->local_mem_size / 1024.0);
     }
 
     /* Create context */
@@ -395,12 +407,11 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
         return NULL;
     }
 
-    /* Load and compile kernels from embedded source */
-    size_t source_len;
-    const char* kernel_source = get_embedded_kernel_source(&source_len);
-
-    ctx->program = clCreateProgramWithSource(ctx->context, 1,
-                                             &kernel_source, &source_len, &err);
+    /* Load and compile kernels from embedded source. Passing NULL lengths tells
+     * OpenCL each fragment is NUL-terminated; it concatenates them in order. */
+    ctx->program = clCreateProgramWithSource(ctx->context,
+                                             (cl_uint)GPU_CFR_KERNEL_SOURCE_PARTS,
+                                             GPU_CFR_KERNEL_SOURCE, NULL, &err);
 
     if (err != CL_SUCCESS) {
         fprintf(stderr, "Failed to create program (err=%d)\n", err);
@@ -503,7 +514,8 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
         printf("GPU-CFR OpenCL initialized:\n");
         printf("  Infosets: %d\n", config->num_infosets);
         printf("  Max actions: %d\n", config->max_actions);
-        printf("  GPU Memory: %.2f MB\n", (matrix_size * 5 + counts_size) / (1024.0 * 1024.0));
+        printf("  GPU Memory: %.2f MB\n",
+               (double)(matrix_size * 5 + counts_size) / (1024.0 * 1024.0));
     }
 
     memset(&ctx->stats, 0, sizeof(gpu_cfr_stats_t));
@@ -797,6 +809,30 @@ static double gpu_cfr_compute_exploitability(gpu_cfr_opencl_context_t* ctx) {
 
 /* ===== Main Solve Function ===== */
 
+/*
+ * Device-side timestamp in milliseconds, obtained by profiling a one-byte
+ * write. Returns 0.0 if the event cannot be timed, so a failure degrades the
+ * reported duration instead of the solve itself.
+ */
+static double gpu_cfr_timestamp_ms(gpu_cfr_opencl_context_t* ctx) {
+    cl_event event = NULL;
+    cl_uchar dummy = 0;
+    cl_ulong ns = 0;
+
+    if (clEnqueueWriteBuffer(ctx->queue, ctx->d_action_counts, CL_TRUE,
+                             0, 1, &dummy, 0, NULL, &event) != CL_SUCCESS) {
+        return 0.0;
+    }
+
+    if (clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END,
+                                sizeof(cl_ulong), &ns, NULL) != CL_SUCCESS) {
+        ns = 0;
+    }
+
+    clReleaseEvent(event);
+    return (double)ns / 1000000.0;
+}
+
 int gpu_cfr_solve_opencl(gpu_cfr_opencl_context_t* ctx, int iterations) {
     if (!ctx || iterations <= 0) return -1;
 
@@ -804,17 +840,7 @@ int gpu_cfr_solve_opencl(gpu_cfr_opencl_context_t* ctx, int iterations) {
         printf("Running %d GPU-CFR iterations (OpenCL)...\n", iterations);
     }
 
-    double total_start = 0.0;
-    if (ctx->profiling_enabled) {
-        cl_event start_event;
-        cl_uchar dummy = 0;
-        clEnqueueWriteBuffer(ctx->queue, ctx->d_action_counts, CL_TRUE,
-                             0, 1, &dummy, 0, NULL, &start_event);
-        cl_ulong start;
-        clGetEventProfilingInfo(start_event, CL_PROFILING_COMMAND_END,
-                               sizeof(cl_ulong), &start, NULL);
-        total_start = start / 1000000.0;
-    }
+    double total_start = ctx->profiling_enabled ? gpu_cfr_timestamp_ms(ctx) : 0.0;
 
     for (int iter = 0; iter < iterations; iter++) {
         /* Step 1: Regret matching to compute current strategy */
@@ -848,6 +874,16 @@ int gpu_cfr_solve_opencl(gpu_cfr_opencl_context_t* ctx, int iterations) {
     clFinish(ctx->queue);
 
     ctx->stats.iterations_completed += iterations;
+
+    /* The start timestamp above had no counterpart, so total_time_ms and
+     * avg_iteration_time_ms were never filled in by this backend. */
+    if (ctx->profiling_enabled) {
+        ctx->stats.total_time_ms += gpu_cfr_timestamp_ms(ctx) - total_start;
+        if (ctx->stats.iterations_completed > 0) {
+            ctx->stats.avg_iteration_time_ms =
+                ctx->stats.total_time_ms / ctx->stats.iterations_completed;
+        }
+    }
 
     /* Compute final exploitability */
     ctx->stats.exploitability = gpu_cfr_compute_exploitability(ctx);
@@ -898,7 +934,8 @@ int gpu_cfr_load_sparse_matrix_opencl(
     if (ctx->config.verbose) {
         printf("Loaded sparse matrix: %d rows, %d nnz (%.2f%% sparse)\n",
                matrix->num_rows, matrix->nnz,
-               100.0 * (1.0 - (double)matrix->nnz / (matrix->num_rows * matrix->num_cols)));
+               100.0 * (1.0 - (double)matrix->nnz /
+                              ((double)matrix->num_rows * (double)matrix->num_cols)));
     }
 
     return 0;

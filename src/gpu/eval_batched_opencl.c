@@ -87,19 +87,26 @@ struct gpu_eval_context_opencl_t {
     char device_vendor[256];
 };
 
-/* Error checking macro */
+/*
+ * Error checking macros.
+ *
+ * The internal variable must not be named err: every caller passes a variable
+ * of that name, so the expansion used to read `cl_int err = (err)`, shadowing
+ * the caller's variable and initialising it from itself. The value tested was
+ * indeterminate and the real OpenCL return codes were never examined.
+ */
 #define CL_CHECK(call) do { \
-    cl_int err = (call); \
-    if (err != CL_SUCCESS) { \
-        fprintf(stderr, "OpenCL error %d at %s:%d\n", err, __FILE__, __LINE__); \
+    cl_int cl_check_status_ = (call); \
+    if (cl_check_status_ != CL_SUCCESS) { \
+        fprintf(stderr, "OpenCL error %d at %s:%d\n", cl_check_status_, __FILE__, __LINE__); \
         return NULL; \
     } \
 } while(0)
 
 #define CL_CHECK_ERR(call, ret_val) do { \
-    cl_int err = (call); \
-    if (err != CL_SUCCESS) { \
-        fprintf(stderr, "OpenCL error %d at %s:%d\n", err, __FILE__, __LINE__); \
+    cl_int cl_check_status_ = (call); \
+    if (cl_check_status_ != CL_SUCCESS) { \
+        fprintf(stderr, "OpenCL error %d at %s:%d\n", cl_check_status_, __FILE__, __LINE__); \
         return ret_val; \
     } \
 } while(0)
@@ -273,8 +280,8 @@ gpu_eval_context_t* gpu_eval_init_opencl(const gpu_eval_config_t* config) {
         printf("OpenCL Device: %s (%s)\n", ctx->device_name, ctx->device_vendor);
         printf("Compute Units: %d\n", ctx->compute_units);
         printf("Max Work Group Size: %zu\n", ctx->max_work_group_size);
-        printf("Global Memory: %.2f MB\n", ctx->global_mem_size / (1024.0 * 1024.0));
-        printf("Local Memory: %.2f KB\n", ctx->local_mem_size / 1024.0);
+        printf("Global Memory: %.2f MB\n", (double)ctx->global_mem_size / (1024.0 * 1024.0));
+        printf("Local Memory: %.2f KB\n", (double)ctx->local_mem_size / 1024.0);
     }
 
     /* Create context */
@@ -313,8 +320,11 @@ gpu_eval_context_t* gpu_eval_init_opencl(const gpu_eval_config_t* config) {
         }
     }
 
+    /* clCreateProgramWithSource takes const char**; casting &kernel_source
+     * directly would add const at the inner level only, which is unsafe. */
+    const char* const_kernel_source = kernel_source;
     ctx->program = clCreateProgramWithSource(ctx->context, 1,
-                                             (const char**)&kernel_source, &source_len, &err);
+                                             &const_kernel_source, &source_len, &err);
     free(kernel_source);
 
     if (err != CL_SUCCESS) {
@@ -1122,7 +1132,7 @@ double gpu_eval_get_last_time_opencl(gpu_eval_context_t* ctx_opaque) {
                            sizeof(cl_ulong), &end, NULL);
 
     /* Convert nanoseconds to milliseconds */
-    return (end - start) / 1000000.0;
+    return (double)(end - start) / 1000000.0;
 }
 
 /**

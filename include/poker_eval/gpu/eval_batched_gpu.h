@@ -21,6 +21,7 @@
 #define POKER_EVAL_GPU_EVAL_BATCHED_H
 
 #include <poker_eval/core/pokereval_export.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
