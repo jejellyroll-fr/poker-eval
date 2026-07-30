@@ -157,13 +157,13 @@ jobs:
           usesh: true
           prepare: pkg install -y cmake gmake
           run: |
-            cmake -S . -B build -G "Unix Makefiles" -DCMAKE_MAKE_PROGRAM=gmake -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
-            gmake -C build -j2
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            cmake --build build
             mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
-            cp -r bin/* release_pkg/bin/ || true
-            cp -r include/poker_eval release_pkg/include/ || true
-            cp -r lib/* release_pkg/lib/ || true
-            tar -czvf poker-eval-v1.1.0-freebsd-x86_64.tar.gz -C release_pkg bin include lib
+            cp -R include/poker_eval release_pkg/include/
+            find build -name "*.a" -exec cp {} release_pkg/lib/ \; 2>/dev/null || true
+            find build -name "*.so*" -exec cp {} release_pkg/lib/ \; 2>/dev/null || true
+            tar -czvf poker-eval-v1.1.0-freebsd-x86_64.tar.gz -C release_pkg .
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
