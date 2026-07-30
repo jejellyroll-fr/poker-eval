@@ -303,19 +303,17 @@ static int test_import_export_complete(void) {
 
     printf("   Original range: %zu hands\n", original.count);
 
-    /* Export to temporary file */
-    FILE *f = fopen("/tmp/test_range_complete.txt", "w");
+    /* Export to a portable temporary file. */
+    FILE *f = tmpfile();
     TEST_ASSERT(f != NULL, "Should open file for writing");
 
     int exported = ARP_ExportRange(&original, f, game_holdem);
-    fclose(f);
 
     TEST_ASSERT(exported > 0, "Should export hands");
     printf("   Exported %d hands ✓\n", exported);
 
-    /* Import from file */
-    f = fopen("/tmp/test_range_complete.txt", "r");
-    TEST_ASSERT(f != NULL, "Should open file for reading");
+    /* Import from the same file. */
+    rewind(f);
 
     arp_range_t imported;
     int success = ARP_ImportRange(f, &imported);
@@ -338,9 +336,6 @@ static int test_import_export_complete(void) {
 
     ARP_FreeRange(&original);
     ARP_FreeRange(&imported);
-
-    /* Clean up */
-    remove("/tmp/test_range_complete.txt");
 
     TEST_PASS("Complete import/export tests");
 }

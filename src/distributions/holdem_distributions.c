@@ -66,6 +66,9 @@ int HoldemAgnosticHand_Parse_StdDeck(const char* handText, StdDeck_CardMask dead
     }
 
     char *newstr = strdup(handText);
+    if (!newstr) {
+        return 0;
+    }
     const char *p = newstr;
     int suitOffsuit = 0;
     int seenCards = 0;
@@ -74,10 +77,11 @@ int HoldemAgnosticHand_Parse_StdDeck(const char* handText, StdDeck_CardMask dead
         if (NULL != strchr("23456789TtJjQqKkAaXx", *p)) {
             seenCards++;
             p++; while (*p == ' ') p++;
-            if (NULL != strchr("23456789TtJjQqKkAaXx", *p)) {
+            if (*p != '\0' &&
+                NULL != strchr("23456789TtJjQqKkAaXx", *p)) {
+                seenCards++;
                 p++; while (*p == ' ') p++;
-                if (NULL != strchr("SsOo", *p)) {
-                    seenCards++;
+                if (*p != '\0' && NULL != strchr("SsOo", *p)) {
                     suitOffsuit = 1;
                     p++; while (*p == ' ') p++;
                     if (*p == '+') {
@@ -85,16 +89,15 @@ int HoldemAgnosticHand_Parse_StdDeck(const char* handText, StdDeck_CardMask dead
                     }
                 }
                 else if (*p == '+') {
-                    seenCards++;
                     p++; while (*p == ' ') p++;
                 }
                 else if (*p == '-') {
-                    seenCards--;
                     p++; while (*p == ' ') p++;
-                    if (NULL != strchr("23456789TtJjQqKkAa", *p)) {
-                        p++; while (*p == ' ') p++; seenCards++;
-                        if (NULL != strchr("23456789TtJjQqKkAa", *p)) {
-                            seenCards++;
+                    if (*p != '\0' &&
+                        NULL != strchr("23456789TtJjQqKkAa", *p)) {
+                        p++; while (*p == ' ') p++;
+                        if (*p != '\0' &&
+                            NULL != strchr("23456789TtJjQqKkAa", *p)) {
                             p++; while (*p == ' ') p++;
                             if (*p != '\0') {
                                 if (NULL != strchr("SsOo", *p)) {
@@ -102,14 +105,14 @@ int HoldemAgnosticHand_Parse_StdDeck(const char* handText, StdDeck_CardMask dead
                                         p++; while (*p == ' ') p++;
                                     }
                                     else {
-                                        printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-handText+1));
+                                        printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-newstr+1));
                                         goto error;
                                     }
                                 }
                             }
                         }
                         else {
-                            printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-handText+1));
+                            printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-newstr+1));
                             goto error;
                         }
                     }
@@ -118,12 +121,12 @@ int HoldemAgnosticHand_Parse_StdDeck(const char* handText, StdDeck_CardMask dead
                     continue;
                 }
                 else {
-                    printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-handText+1));
+                    printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-newstr+1));
                     goto error;
                 }
             }
             else {
-                printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-handText+1));
+                printf("%d: Unexpected %c, at %s %lld\n", __LINE__, *p, p, (long long)(p-newstr+1));
                 goto error;
             }
         }
@@ -141,6 +144,7 @@ int HoldemAgnosticHand_Parse_StdDeck(const char* handText, StdDeck_CardMask dead
         goto error;
     }
 
+    free(newstr);
     return 1;
 error:
     if (newstr) free(newstr);

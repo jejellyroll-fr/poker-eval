@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
-#if defined(_MSC_VER)
+#if defined(_WIN32)
 #include <malloc.h>
 #endif
 #include <poker_eval/core/poker_defs.h>
@@ -21,7 +21,7 @@ uint8_t *aligned_nBitsTable = NULL;
 static int tables_initialized = 0;
 
 static int pe_posix_memalign(void **ptr, size_t alignment, size_t size) {
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     if (!ptr) {
         return EINVAL;
     }
@@ -33,7 +33,7 @@ static int pe_posix_memalign(void **ptr, size_t alignment, size_t size) {
 }
 
 static void pe_aligned_free(void *ptr) {
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     _aligned_free(ptr);
 #else
     free(ptr);

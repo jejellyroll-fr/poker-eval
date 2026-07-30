@@ -490,11 +490,16 @@ pe_status_t pe_range_combine(
         return PE_STATUS_OUT_OF_MEMORY;
     }
 
-    pe_range_t *res;
-    pe_range_create(range1->game_type, &res);
+    pe_range_t *res = NULL;
+    pe_status_t status = pe_range_create(range1->game_type, &res);
+    if (status != PE_STATUS_OK) {
+        pe_range_free(c1);
+        pe_range_free(c2);
+        return status;
+    }
 
     size_t i = 0, j = 0;
-    while (i < c1->count || j < c2->count) {
+    while ((i < c1->count || j < c2->count) && status == PE_STATUS_OK) {
         int cmp = 0;
         if (i < c1->count && j < c2->count) {
             cmp = pe_combo_compare(&c1->combos[i], &c2->combos[j]);
@@ -507,13 +512,19 @@ pe_status_t pe_range_combine(
         if (cmp < 0) {
             /* Hand in 1 only */
             if (op == PE_OP_UNION || op == PE_OP_DIFFERENCE) {
-                pe_range_add_combo(res, c1->combos[i].hand, c1->combos[i].weight);
+                if (!pe_range_add_combo(
+                        res, c1->combos[i].hand, c1->combos[i].weight)) {
+                    status = PE_STATUS_OUT_OF_MEMORY;
+                }
             }
             i++;
         } else if (cmp > 0) {
             /* Hand in 2 only */
             if (op == PE_OP_UNION) {
-                pe_range_add_combo(res, c2->combos[j].hand, c2->combos[j].weight);
+                if (!pe_range_add_combo(
+                        res, c2->combos[j].hand, c2->combos[j].weight)) {
+                    status = PE_STATUS_OUT_OF_MEMORY;
+                }
             }
             j++;
         } else {
@@ -524,10 +535,14 @@ pe_status_t pe_range_combine(
                    If weights differ, usually take max or assume consistency.
                    Let's take max for now to avoid >100% implicitly unless weights are additive counts. */
                  double w = (c1->combos[i].weight > c2->combos[j].weight) ? c1->combos[i].weight : c2->combos[j].weight;
-                 pe_range_add_combo(res, c1->combos[i].hand, w);
+                 if (!pe_range_add_combo(res, c1->combos[i].hand, w)) {
+                     status = PE_STATUS_OUT_OF_MEMORY;
+                 }
             } else if (op == PE_OP_INTERSECT) {
                  double w = (c1->combos[i].weight < c2->combos[j].weight) ? c1->combos[i].weight : c2->combos[j].weight;
-                 pe_range_add_combo(res, c1->combos[i].hand, w);
+                 if (!pe_range_add_combo(res, c1->combos[i].hand, w)) {
+                     status = PE_STATUS_OUT_OF_MEMORY;
+                 }
             }
             /* If DIFFERENCE, we exclude it, so do nothing */
             i++;
@@ -537,6 +552,12 @@ pe_status_t pe_range_combine(
 
     pe_range_free(c1);
     pe_range_free(c2);
+
+    if (status != PE_STATUS_OK) {
+        pe_range_free(res);
+        *out_range = NULL;
+        return status;
+    }
 
     *out_range = res;
     return PE_STATUS_OK;
@@ -569,9 +590,11 @@ pe_status_t pe_range_top_percent(
     pe_range_t **out_range
 ) {
     if (!out_range) return PE_STATUS_INVALID_ARG;
+    *out_range = NULL;
 
-    pe_range_t *range;
-    pe_range_create(variant, &range);
+    pe_range_t *range = NULL;
+    pe_status_t status = pe_range_create(variant, &range);
+    if (status != PE_STATUS_OK) return status;
 
     arp_range_t arp_res;
     memset(&arp_res, 0, sizeof(arp_range_t));
@@ -594,7 +617,6 @@ pe_status_t pe_range_top_percent(
     }
 
     pe_range_free(range);
-    *out_range = NULL;
     return PE_STATUS_ERROR;
 }
 
