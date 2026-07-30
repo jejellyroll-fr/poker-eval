@@ -120,7 +120,7 @@ jobs:
       - name: Configure CMake for Windows ARM64
         shell: powershell
         run: |
-          cmake -B build -S . -A ARM64 -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
+          cmake -B build -S . -A ARM64 -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
 
       - name: Build
         shell: powershell
@@ -154,10 +154,10 @@ jobs:
         with:
           usesh: true
           prepare: |
-            pkg install -y cmake gmake
+            env ASSUME_ALWAYS_YES=YES pkg install -y cmake gmake
           run: |
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON
-            cmake --build build -j$(sysctl -n hw.ncpu)
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            gmake -C build -j$(sysctl -n hw.ncpu)
             mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
             cp -r bin/* release_pkg/bin/ 2>/dev/null || true
             cp -r include/poker_eval release_pkg/include/ 2>/dev/null || true
