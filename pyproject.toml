@@ -7,7 +7,7 @@ name = "pypoker-eval"
 version = "1.0.0"
 description = "Fast poker hand evaluation library with Python bindings"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 license-files = ["LICENCE", "LICENSE"]
 classifiers = [
