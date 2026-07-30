@@ -109,4 +109,13 @@ void preflop_lookup_table_set(preflop_lookup_table_t *table,
                               double equity);
 game_t preflop_lookup_table_game(const preflop_lookup_table_t *table);
 
+/* Omaha-specific preflop equity lookup.
+ * Returns hand-vs-random equity (fraction 0.0–1.0) for a 4-card Omaha hand.
+ * Returns 0.5 if the table is not an Omaha table or on error. */
+double preflop_lookup_table_get_omaha(const preflop_lookup_table_t *table,
+                                       StdDeck_CardMask hand);
+
+/* Check if lookup table was created for an Omaha game variant */
+int preflop_lookup_table_is_omaha(const preflop_lookup_table_t *table);
+
 #endif /* POKER_EVAL_PREFLOP_EQUITY_H */

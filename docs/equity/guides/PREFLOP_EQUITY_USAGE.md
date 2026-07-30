@@ -205,7 +205,11 @@ Offset  | Size   | Description
    - Not supported: complex ranges ("JJ+", "ATo+", etc.)
    - To be implemented in a future version
 
-3. **Hold'em only**: Not yet adapted for pre-flop Omaha
+3. **Hold'em optimized, Omaha infrastructure**: The lookup table API is now game-aware.
+   - `preflop_lookup_table_create(game_omaha)` creates an Omaha hand-vs-random table
+   - `preflop_lookup_table_get_omaha(table, cardmask)` returns Omaha equity
+   - `preflop_lookup_table_is_omaha(table)` checks game type
+   - See `include/poker_eval/equity/omaha_preflop.h` for the canonical key API
 
 ## Next Steps
 
