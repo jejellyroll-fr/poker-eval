@@ -12,7 +12,7 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/core/eval_context.h>
 
-#if defined(HAS_AVX2) || defined(HAS_AVX512)
+#if defined(__AVX2__) || defined(__AVX512F__) || defined(HAS_AVX2) || defined(HAS_AVX512)
 #include <immintrin.h>
 #endif
 
