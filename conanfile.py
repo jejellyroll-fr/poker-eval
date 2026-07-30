@@ -5,7 +5,7 @@ import os
 
 class PokerEvalConan(ConanFile):
     name = "poker-eval"
-    version = "1.0.0"
+    version = "1.1.0"
     license = "BSD-3-Clause"
     author = "Poker-eval Project"
     url = "https://github.com/poker-eval/poker-eval"
