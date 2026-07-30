@@ -226,7 +226,7 @@ Aliases like `AA-DS`, `aces_ds`, or uppercase spellings are accepted. Weighted c
 (ss)Ks          Two spades in hole with king of spades showing
 ```
 
-**Note**: Parentheses indicate hole cards (cards 1-2), followed by upcards.
+**Note**: Parentheses indicate hole cards (cards 1-2), followed by upcards (cards 3+). Up to 5 upcards are supported (3rd-7th street), e.g. `(AA)KQJT9`.
 
 ### Card Order in Stud
 
@@ -245,6 +245,12 @@ KsJhTd9c   King-jack hole, ten-nine showing (order matters for upcards)
 | `(KK)x` | Buried kings with any upcard |
 | `(ss)Ks` | Three-flush with king showing |
 | `(xx)RR` | Any hole cards with pair showing |
+| `(AA)KQ` | Aces in the hole, king 3rd, queen 4th |
+| `(AA)KQJT9` | Aces in the hole, up to 7th street |
+| `(AsKh)QdJc` | Specific suits up to 4th street |
+| `(xx)KQ` | Any hole cards, king then queen |
+| `(AA)KQ-J` | Aces in the hole, king 3rd, 4th ranges Q→J |
+| `(AA)KQ+` | Aces in the hole, king 3rd, 4th Q+ (Q→A) |
 
 ---
 
@@ -913,19 +919,17 @@ make test_omaha_range_parser
 
 ### Planned Features
 
-1. **Stud Range Parser**: Full implementation of stud syntax with hole cards and upcards
-2. **Weighted Ranges**: Support for hand weighting (e.g., "AA@100, KK@50")
-3. **Cached Rankings**: Pre-computed hand rankings for faster percentage generation
-4. **Range Visualization**: Export ranges to visual formats
-5. **Range Algebra**: More complex set operations
-6. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
+1. **Weighted Ranges**: Support for hand weighting (e.g., "AA@100, KK@50")
+2. **Cached Rankings**: Pre-computed hand rankings for faster percentage generation
+3. **Range Visualization**: Export ranges to visual formats
+4. **Range Algebra**: More complex set operations
+5. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
 
 ### Known Limitations
 
 1. **Mixed Comma Patterns**: "AAxx, JT98r" may fail in some contexts (under investigation)
-2. **Stud Syntax**: Stud-specific patterns not yet fully implemented
-3. **Maximum Range Size**: Limited to `ARP_MAX_RANGE_SIZE` (2048 hands)
-4. **Percentage Rankings**: Currently only available for Hold'em and Omaha
+2. **Maximum Range Size**: Limited to `ARP_MAX_RANGE_SIZE` (2048 hands)
+3. **Percentage Rankings**: Currently only available for Hold'em and Omaha
 
 ---
 

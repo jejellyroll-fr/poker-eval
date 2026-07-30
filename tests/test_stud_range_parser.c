@@ -570,6 +570,186 @@ static int test_pe_range_stud_top_percent(void)
 }
 
 /* ============================================================================
+ * Multi-Street Tests (4th–7th street)
+ * ============================================================================ */
+
+static int test_multi_is_stud_pattern(void)
+{
+    printf("\n--- Testing ARP_IsStudPattern (Multi-Street) ---\n");
+
+    /* 4th street patterns */
+    TEST_ASSERT(ARP_IsStudPattern("(AA)KQ", 6) == 1, "(AA)KQ is a stud pattern (4th street)");
+    TEST_ASSERT(ARP_IsStudPattern("(AK)QT", 6) == 1, "(AK)QT is a stud pattern (4th street)");
+
+    /* 5th street */
+    TEST_ASSERT(ARP_IsStudPattern("(AA)KQJ", 7) == 1, "(AA)KQJ is a stud pattern (5th street)");
+
+    /* 7th street */
+    TEST_ASSERT(ARP_IsStudPattern("(AA)KQJT9", 9) == 1, "(AA)KQJT9 is a stud pattern (7th street)");
+
+    /* Specific with suits */
+    TEST_ASSERT(ARP_IsStudPattern("(AsKh)QdJc", 11) == 1, "(AsKh)QdJc is a stud pattern (4th street, suited)");
+
+    /* Multi-street with range */
+    TEST_ASSERT(ARP_IsStudPattern("(AA)KQ-J", 8) == 1, "(AA)KQ-J is a stud pattern (range on last)");
+
+    TEST_PASS("Multi-street ARP_IsStudPattern detection");
+}
+
+static int test_4th_street(void)
+{
+    printf("\n--- Testing 4th Street Patterns ---\n");
+
+    StdDeck_CardMask dead = no_dead();
+    arp_range_t range;
+    memset(&range, 0, sizeof(range));
+
+    /* (AA)KQ: 6 AA * 4 K * 4 Q = 96 */
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQ", dead, &range) == 1, "Parse (AA)KQ");
+    TEST_ASSERT_EQ(range.count, 96, "(AA)KQ should have 96 combos (6 AA * 4 K * 4 Q)");
+    ARP_FreeRange(&range);
+
+    /* (AsKh)Qd: specific 4-card hand, 1 combo */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(AsKh)Qd", dead, &range) == 1, "Parse (AsKh)Qd");
+    TEST_ASSERT_EQ(range.count, 1, "(AsKh)Qd should have 1 combo");
+    ARP_FreeRange(&range);
+
+    /* (AA)Kx: 6 AA * 4 K * 48 remaining = 1152 raw.
+     * Dedup: 36 double-K + 8 three-ace = 44 loss. 1152 - 44 = 1108. */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)Kx", dead, &range) == 1, "Parse (AA)Kx");
+    TEST_ASSERT_EQ(range.count, 1108, "(AA)Kx should have 1108 combos (1152 - 44 dedup)");
+    ARP_FreeRange(&range);
+
+    /* (xx)KQ: any hole, K door, Q 4th. Hole: C(52,2)=1326 pairs.
+     * Door K: 4 choices. 4th Q: 4 choices. But cards must be distinct.
+     * If hole contains K or Q, some combos invalid.
+     * Rather than compute manually, just check > 0 */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(xx)KQ", dead, &range) == 1, "Parse (xx)KQ");
+    TEST_ASSERT(range.count > 0, "(xx)KQ generates hands");
+    ARP_FreeRange(&range);
+
+    TEST_PASS("4th street tests");
+}
+
+static int test_5th_street(void)
+{
+    printf("\n--- Testing 5th Street Patterns ---\n");
+
+    StdDeck_CardMask dead = no_dead();
+    arp_range_t range;
+    memset(&range, 0, sizeof(range));
+
+    /* (AA)KQJ: 6 AA * 4 K * 4 Q * 4 J = 384 */
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQJ", dead, &range) == 1, "Parse (AA)KQJ");
+    TEST_ASSERT_EQ(range.count, 384, "(AA)KQJ should have 384 combos");
+    ARP_FreeRange(&range);
+
+    /* (xx)QJT: any hole, Q 3rd, J 4th, T 5th */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(xx)QJT", dead, &range) == 1, "Parse (xx)QJT");
+    TEST_ASSERT(range.count > 0, "(xx)QJT generates hands");
+    ARP_FreeRange(&range);
+
+    TEST_PASS("5th street tests");
+}
+
+static int test_7th_street(void)
+{
+    printf("\n--- Testing 7th Street (Full Hand) ---\n");
+
+    StdDeck_CardMask dead = no_dead();
+    arp_range_t range;
+    memset(&range, 0, sizeof(range));
+
+    /* (AA)KQJT9: 6 AA * 4^5 = 6144 */
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQJT9", dead, &range) == 1, "Parse (AA)KQJT9 (7th street)");
+    TEST_ASSERT_EQ(range.count, 6144, "(AA)KQJT9 should have 6144 combos (6 * 4^5)");
+    ARP_FreeRange(&range);
+
+    /* (xx)AKQJT: any hole, all broadway upcards */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(xx)AKQJT", dead, &range) == 1, "Parse (xx)AKQJT");
+    TEST_ASSERT(range.count > 0, "(xx)AKQJT generates 7-card hands");
+    ARP_FreeRange(&range);
+
+    TEST_PASS("7th street tests");
+}
+
+static int test_multi_range_interval(void)
+{
+    printf("\n--- Testing Multi-Street Range Intervals ---\n");
+
+    StdDeck_CardMask dead = no_dead();
+    arp_range_t range;
+    memset(&range, 0, sizeof(range));
+
+    /* (AA)KQ-J: AA hole, K door, 4th Q→J (2 ranks: Q, J)
+     * 6 * 4 * (4+4) = 192 */
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQ-J", dead, &range) == 1, "Parse (AA)KQ-J");
+    TEST_ASSERT_EQ(range.count, 192, "(AA)KQ-J should have 192 combos (6 * 4 * 8)");
+    ARP_FreeRange(&range);
+
+    /* (AA)KQ-T: AA hole, K door, 4th Q→T (3 ranks: Q, J, T)
+     * 6 * 4 * (4+4+4) = 288 */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQ-T", dead, &range) == 1, "Parse (AA)KQ-T");
+    TEST_ASSERT_EQ(range.count, 288, "(AA)KQ-T should have 288 combos (6 * 4 * 12)");
+    ARP_FreeRange(&range);
+
+    TEST_PASS("Multi-street range interval tests");
+}
+
+static int test_multi_plus_notation(void)
+{
+    printf("\n--- Testing Multi-Street Plus Notation ---\n");
+
+    StdDeck_CardMask dead = no_dead();
+    arp_range_t range;
+    memset(&range, 0, sizeof(range));
+
+    /* (AA)KQ+: AA hole, K door, 4th Q→A (ranks Q=10, K=11, A=12).
+     * Q: 6*4*4 = 96 (no dedup).
+     * K: 6*4*3 = 72 raw → 6*C(4,2) = 36 deduped (36 loss).
+     * A: 6*4*2 = 48 raw → C(4,3)*4 = 16 deduped (32 loss).
+     * Total: 96 + 36 + 16 = 148. */
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQ+", dead, &range) == 1, "Parse (AA)KQ+");
+    TEST_ASSERT_EQ(range.count, 148, "(AA)KQ+ should have 148 combos (accounting dedup)");
+    ARP_FreeRange(&range);
+
+    TEST_PASS("Multi-street plus notation tests");
+}
+
+static int test_multi_dead_cards(void)
+{
+    printf("\n--- Testing Multi-Street Dead Card Filtering ---\n");
+
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+
+    /* Set Ah as dead */
+    StdDeck_CardMask_SET(dead, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_HEARTS));
+
+    arp_range_t range;
+    memset(&range, 0, sizeof(range));
+
+    /* (AA)KQ with Ah dead: 6 AA pairs → 3 (Ah+others excluded) → 3 * 4K * 4Q = 48 */
+    TEST_ASSERT(ARP_ParseStudPattern("(AA)KQ", dead, &range) == 1, "Parse (AA)KQ with Ah dead");
+    TEST_ASSERT_EQ(range.count, 48, "(AA)KQ with Ah dead should have 48 combos");
+    ARP_FreeRange(&range);
+
+    /* (AsKh)QdJc with Ah dead: Ah not used, should still be 1 */
+    memset(&range, 0, sizeof(range));
+    TEST_ASSERT(ARP_ParseStudPattern("(AsKh)QdJc", dead, &range) == 1, "Parse (AsKh)QdJc with Ah dead");
+    TEST_ASSERT_EQ(range.count, 1, "(AsKh)QdJc with Ah dead should still have 1 combo");
+    ARP_FreeRange(&range);
+
+    TEST_PASS("Multi-street dead card tests");
+}
+
+/* ============================================================================
  * Main Test Runner
  * ============================================================================ */
 
@@ -596,6 +776,13 @@ int main(void)
     RUN_TEST(test_dead_cards);
     RUN_TEST(test_pe_range_stud_parse);
     RUN_TEST(test_pe_range_stud_top_percent);
+    RUN_TEST(test_multi_is_stud_pattern);
+    RUN_TEST(test_4th_street);
+    RUN_TEST(test_5th_street);
+    RUN_TEST(test_7th_street);
+    RUN_TEST(test_multi_range_interval);
+    RUN_TEST(test_multi_plus_notation);
+    RUN_TEST(test_multi_dead_cards);
 
     #undef RUN_TEST
 
