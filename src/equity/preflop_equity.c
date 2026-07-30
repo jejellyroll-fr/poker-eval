@@ -9,6 +9,7 @@
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/eval.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/equity/omaha_preflop.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +31,8 @@ static const unsigned int build_preflop_table_bin_len = 0;
 struct preflop_lookup_table
 {
     game_t game;
-    float equity[PREFLOP_LOOKUP_TABLE_SIZE]; /* 169×169 = 28,561 entries */
+    float equity[PREFLOP_LOOKUP_TABLE_SIZE]; /* 169×169 = 28,561 entries (Hold'em) */
+    omaha_preflop_table_t *omaha;             /* Hand-vs-random table (Omaha, NULL for Hold'em) */
 };
 
 /* ===== Canonical Hand Mapping ===== */
@@ -896,6 +898,7 @@ static preflop_lookup_table_t *preflop_lookup_table_load_from_memory(const unsig
         return NULL;
 
     table->game = game;
+    table->omaha = NULL;
 
     /* Copy equity matrix */
     memcpy(table->equity, data + 12, sizeof(table->equity));
@@ -910,7 +913,22 @@ preflop_lookup_table_t *preflop_lookup_table_load_default(void)
 
 preflop_lookup_table_t *preflop_lookup_table_load(const char *filename, game_t game)
 {
-    /* If filename is NULL, try loading default table */
+    /* For Omaha games, use omaha_preflop_table_load() */
+    if (game >= game_omaha && game <= game_omaha86)
+    {
+        preflop_lookup_table_t *table = preflop_lookup_table_create(game);
+        if (!table)
+            return NULL;
+
+        if (!filename || omaha_preflop_table_load(table->omaha, filename) != 0)
+        {
+            /* No file or load failed — return empty table for generation */
+            return table;
+        }
+        return table;
+    }
+
+    /* Hold'em: if filename is NULL, try loading default table */
     if (!filename) {
         return preflop_lookup_table_load_default();
     }
@@ -947,6 +965,7 @@ preflop_lookup_table_t *preflop_lookup_table_load(const char *filename, game_t g
     }
 
     table->game = game;
+    table->omaha = NULL;
 
     /* Read equity matrix */
     if (fread(table->equity, sizeof(table->equity), 1, f) != 1)
@@ -967,7 +986,21 @@ preflop_lookup_table_t *preflop_lookup_table_create(game_t game)
         return NULL;
 
     table->game = game;
-    memset(table->equity, 0, sizeof(table->equity));
+    table->omaha = NULL;
+
+    if (game >= game_omaha && game <= game_omaha86)
+    {
+        table->omaha = omaha_preflop_table_create();
+        if (!table->omaha)
+        {
+            free(table);
+            return NULL;
+        }
+    }
+    else
+    {
+        memset(table->equity, 0, sizeof(table->equity));
+    }
 
     return table;
 }
@@ -976,6 +1009,12 @@ int preflop_lookup_table_save(const preflop_lookup_table_t *table, const char *f
 {
     if (!table || !filename)
         return -1;
+
+    /* Omaha tables use omaha_preflop_table_save() */
+    if (table->omaha)
+    {
+        return omaha_preflop_table_save(table->omaha, filename);
+    }
 
     FILE *f = fopen(filename, "wb");
     if (!f)
@@ -1006,7 +1045,12 @@ int preflop_lookup_table_save(const preflop_lookup_table_t *table, const char *f
 
 void preflop_lookup_table_free(preflop_lookup_table_t *table)
 {
-    free(table);
+    if (table)
+    {
+        if (table->omaha)
+            omaha_preflop_table_free(table->omaha);
+        free(table);
+    }
 }
 
 double preflop_lookup_table_get(
@@ -1043,6 +1087,23 @@ void preflop_lookup_table_set(
 game_t preflop_lookup_table_game(const preflop_lookup_table_t *table)
 {
     return table ? table->game : game_holdem;
+}
+
+double preflop_lookup_table_get_omaha(const preflop_lookup_table_t *table,
+                                       StdDeck_CardMask hand)
+{
+    if (!table || !table->omaha)
+        return 0.5;
+
+    omaha_hand_key_t key = omaha_cards_to_key(hand);
+    return (double)omaha_preflop_table_get(table->omaha, key);
+}
+
+int preflop_lookup_table_is_omaha(const preflop_lookup_table_t *table)
+{
+    if (!table)
+        return 0;
+    return table->game >= game_omaha && table->game <= game_omaha86;
 }
 
 /* ===== Utilities ===== */
