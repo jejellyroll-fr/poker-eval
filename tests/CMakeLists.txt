@@ -28,7 +28,9 @@ endif()
 add_library(unity STATIC unity/src/unity.c)
 target_include_directories(unity PUBLIC unity/src)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(unity PRIVATE -Wno-float-equal -Wno-error=float-equal)
+    # Unity is vendored third-party code; keep project warnings visible without
+    # making compiler-version-specific diagnostics fatal.
+    target_compile_options(unity PRIVATE -Wno-error -Wno-float-equal)
 endif()
 target_compile_definitions(unity PUBLIC UNITY_INCLUDE_DOUBLE)
 

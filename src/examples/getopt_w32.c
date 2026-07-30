@@ -1,3 +1,5 @@
+#include "getopt_w32.h"
+
 #include <stdio.h>
 #include <string.h>
 

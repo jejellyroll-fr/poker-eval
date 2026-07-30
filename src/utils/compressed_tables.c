@@ -3,6 +3,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/utils/compressed_tables.h>
@@ -39,7 +42,7 @@ static inline int popcount64(uint64_t x) {
 static void build_compressed_straight_table(void) {
     int num_non_zero = 0; for (int i = 0; i < 8192; i++) if (straightTable[i] != 0) num_non_zero++;
     size_t size = sizeof(CompressedStraightTable) + num_non_zero * sizeof(uint8_t); size = (size + 63) & ~63;
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     compressed_straight_table = (CompressedStraightTable*)_aligned_malloc(size, 64);
 #else
     if (posix_memalign((void**)&compressed_straight_table, 64, size) != 0) { compressed_straight_table = NULL; return; }
@@ -68,7 +71,7 @@ static inline uint32_t lookup_compressed_topfive(uint16_t index) { return topFiv
 void init_compressed_tables(void) { build_compressed_straight_table(); build_compressed_topfive_table(); }
 void cleanup_compressed_tables(void) {
     if (compressed_straight_table) {
-#if defined(_MSC_VER)
+#if defined(_WIN32)
         _aligned_free(compressed_straight_table);
 #else
         free(compressed_straight_table);
@@ -87,4 +90,3 @@ void get_compression_stats(size_t* original_size, size_t* compressed_size) {
     else *compressed_size += 8192 * sizeof(uint8_t);
     *compressed_size += 8192 * sizeof(uint32_t);
 }
-

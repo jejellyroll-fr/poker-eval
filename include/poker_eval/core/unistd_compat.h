@@ -5,7 +5,9 @@
 #ifndef POKER_EVAL_UNISTD_COMPAT_H
 #define POKER_EVAL_UNISTD_COMPAT_H
 
-#if defined(_WIN32)
+#if defined(__MINGW32__)
+#include <unistd.h>
+#elif defined(_WIN32)
 #include <windows.h>
 #include <io.h>
 
@@ -19,8 +21,9 @@
 #define STDERR_FILENO 2
 #endif
 
-#ifndef ssize_t
-typedef long ssize_t;
+#ifndef _SSIZE_T_DEFINED
+typedef SSIZE_T ssize_t;
+#define _SSIZE_T_DEFINED
 #endif
 
 static __inline int isatty(int fd)

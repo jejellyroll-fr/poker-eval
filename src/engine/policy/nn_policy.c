@@ -12,19 +12,27 @@
 #include <time.h>
 
 #ifdef _WIN32
-    #include <windows.h>
-    /* Compatibility for clock_gettime on Windows */
-    #define CLOCK_MONOTONIC 0
-    static int clock_gettime(int clk_id, struct timespec *ts) {
-        (void)clk_id;
-        LARGE_INTEGER frequency, counter;
-        QueryPerformanceFrequency(&frequency);
-        QueryPerformanceCounter(&counter);
-        ts->tv_sec = (time_t)(counter.QuadPart / frequency.QuadPart);
-        ts->tv_nsec = (long)((counter.QuadPart % frequency.QuadPart) * 1000000000LL / frequency.QuadPart);
-        return 0;
-    }
+#include <windows.h>
 #endif
+
+static int nn_policy_monotonic_time(struct timespec *ts)
+{
+#ifdef _WIN32
+    LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+    if (!ts || !QueryPerformanceFrequency(&frequency) ||
+        !QueryPerformanceCounter(&counter))
+    {
+        return -1;
+    }
+    ts->tv_sec = (time_t)(counter.QuadPart / frequency.QuadPart);
+    ts->tv_nsec = (long)((counter.QuadPart % frequency.QuadPart) *
+                         1000000000LL / frequency.QuadPart);
+    return 0;
+#else
+    return clock_gettime(CLOCK_MONOTONIC, ts);
+#endif
+}
 
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -383,7 +391,7 @@ int nn_policy_evaluate(
         return -1;
 
     struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    nn_policy_monotonic_time(&start);
 
     int num_layers = policy->config.num_layers + 1;
 
@@ -436,7 +444,7 @@ int nn_policy_evaluate(
     }
 
     /* Update stats */
-    clock_gettime(CLOCK_MONOTONIC, &end);
+    nn_policy_monotonic_time(&end);
     double elapsed_ms = (double)(end.tv_sec - start.tv_sec) * 1000.0 +
                         (double)(end.tv_nsec - start.tv_nsec) / 1e6;
 
