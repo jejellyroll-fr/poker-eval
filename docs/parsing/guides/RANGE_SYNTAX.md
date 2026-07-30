@@ -474,8 +474,6 @@ AsAc
 
 #### Import range from file
 
-⚠️ **Note**: Import is currently a placeholder and needs implementation for production use.
-
 ```c
 arp_range_t range;
 
@@ -501,9 +499,7 @@ if (success) {
 | `ARP_IntersectRanges` | Find common hands | O(n·m) |
 | `ARP_ContainsHand` | Check membership | O(1) or O(n) |
 | `ARP_ExportRange` | Save to file | O(n) |
-| `ARP_ImportRange` | Load from file | O(n) ⚠️ |
-
-⚠️ = Currently incomplete, use with caution
+| `ARP_ImportRange` | Load from file | O(n) |
 
 See the [Advanced Range Parser Guide](ADVANCED_RANGE_PARSER_GUIDE.md) for complete documentation.
 
