@@ -1017,76 +1017,46 @@ static int arp_parse_plo_pattern(const char *pattern, StdDeck_CardMask dead_card
 /* Expand Omaha percentage range */
 static int arp_expand_omaha_percentage(float percentage, enum_game_t game_type, StdDeck_CardMask dead_cards, arp_range_t *range)
 {
+    static const char *tiers_pct[] = {
+        /* Tier 1: Top ~2% — ultra-premium */
+        "AAxxds, KKxxds, QQxxds, JJxxds, AAxxss, KKxxss",
+        /* Tier 2: Top ~5% — add premium pairs and top rundowns */
+        "QQxxss, JJxxss, TTxxds, TTxxss, AKQJds, AKQTds, AKJTds, AQJTds, KQJTds",
+        /* Tier 3: Top ~10% — add premium pairs any suit, top rundowns */
+        "AAxx, KKxx, QQxx, JJxx, TTxx, 99xxds, 99xxss, AKQJ, AKQT, AKJT, AQJT, KQJT",
+        /* Tier 4: Top ~15% — add 99, 88, more rundowns */
+        "99xx, 88xxds, 88xxss, AKQ9, AKJ9, AQJ9, KQJ9, AKT9, AQT9, KQT9",
+        /* Tier 5: Top ~20% — add 77, broadway combos */
+        "77xxds, 77xxss, AJT9, KJT9, QJT9, AK98, AQ98, KQ98, AJ98, KJ98, QJ98, AT98, KT98, QT98, JT98",
+        /* Tier 6: Top ~30% — add 55-22, more rundowns, connectors */
+        "66xx, 55xx, 44xx, 33xx, 22xx, AKQx, AKJx, AQJx, KQJx, AKTx, AQTx, KQTx, AJTx, KJTx, QJTx, T9xy, 98xy, 87xy",
+    };
+
     if (!range || percentage <= 0.0f || percentage > 1.0f)
         return 0;
 
     if (!arp_is_omaha_game(game_type))
         return 0;
 
-    /* For Omaha, there are C(52,4) = 270,725 possible starting hands
-     * But we'll use a simplified approach based on PLO hand rankings
-     */
+    arp_range_t tier_range;
+    int tiers_count = (int)(sizeof(tiers_pct) / sizeof(tiers_pct[0]));
+    int pct = (int)(percentage * 100.0f + 0.5f);
 
-    /* This is a simplified implementation - in a full implementation,
-     * you would have a comprehensive ranking of all Omaha hands */
-
-    /* For now, use basic patterns for top percentages */
-    if (percentage >= 0.20f) /* Top 20% */
+    for (int t = 0; t < tiers_count; t++)
     {
-        /* Add premium hands */
-        const char *premium_patterns[] = {
-            "AAxxds", "AAxxss", "KKxxds", "KKxxss", "QQxxds", "QQxxss",
-            "JJxxds", "JJxxss", "TTxxds", "TTxxss", "99xxds", "99xxss",
-            "AKQJds", "AKQTds", "AKJTds", "AQJTds", "KQJTds",
-            NULL
-        };
+        if (pct <= 2 + 3 * t)
+            break;
 
-        for (int i = 0; premium_patterns[i] != NULL; i++)
-        {
-            if (!arp_parse_plo_pattern(premium_patterns[i], dead_cards, range))
-            {
-                return 0;
-            }
-        }
+        memset(&tier_range, 0, sizeof(tier_range));
+        if (!ARP_ParseRange(tiers_pct[t], dead_cards, game_type, &tier_range))
+            continue;
+
+        for (size_t i = 0; i < tier_range.count; i++)
+            arp_add_hand_to_range(range, tier_range.hands[i], 1.0);
+        ARP_FreeRange(&tier_range);
     }
 
-    if (percentage >= 0.10f) /* Top 10% */
-    {
-        /* Add more selective premium hands */
-        const char *top_patterns[] = {
-            "AAxx", "KKxx", "QQxx", "JJxx",
-            "AKQJds", "AKQTds", "AKJTds", "AQJTds",
-            NULL
-        };
-
-        for (int i = 0; top_patterns[i] != NULL; i++)
-        {
-            if (!arp_parse_plo_pattern(top_patterns[i], dead_cards, range))
-            {
-                return 0;
-            }
-        }
-    }
-
-    if (percentage >= 0.05f) /* Top 5% */
-    {
-        /* Only the most premium hands */
-        const char *ultra_premium[] = {
-            "AAxxds", "KKxxds", "QQxxds", "JJxxds",
-            "AKQJds", "AKQTds", "AKJTds",
-            NULL
-        };
-
-        for (int i = 0; ultra_premium[i] != NULL; i++)
-        {
-            if (!arp_parse_plo_pattern(ultra_premium[i], dead_cards, range))
-            {
-                return 0;
-            }
-        }
-    }
-
-    return 1;
+    return range->count > 0 ? 1 : 0;
 }
 
 /* Omaha-specific API functions */
