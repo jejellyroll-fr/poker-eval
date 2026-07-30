@@ -13,7 +13,7 @@
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/equity/enumerate_simd.h>
 
-#if defined(HAS_AVX2) || defined(HAS_AVX512)
+#if defined(__AVX2__) || defined(__AVX512F__) || defined(HAS_AVX2) || defined(HAS_AVX512)
 #include <immintrin.h>
 #endif
 
