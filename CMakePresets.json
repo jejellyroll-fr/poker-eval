@@ -60,6 +60,21 @@
       }
     },
     {
+      "name": "windows-mingw",
+      "inherits": "default",
+      "displayName": "Windows MinGW",
+      "description": "MinGW build without CPython bindings; official Windows CPython extensions use the MSVC ABI.",
+      "cacheVariables": {
+        "BUILD_BINDINGS": "OFF",
+        "ENABLE_NATIVE_ARCH": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
       "name": "macos",
       "inherits": "default",
       "displayName": "macOS Config",
@@ -162,6 +177,10 @@
       "configuration": "Release"
     },
     {
+      "name": "windows-mingw",
+      "configurePreset": "windows-mingw"
+    },
+    {
       "name": "linux-gcc",
       "configurePreset": "linux-gcc"
     },
@@ -219,6 +238,13 @@
         "outputOnFailure": true
       },
       "configuration": "Release"
+    },
+    {
+      "name": "windows-mingw",
+      "configurePreset": "windows-mingw",
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "macos",

@@ -44,7 +44,7 @@ jobs:
           - name: Windows MinGW
             os: windows-latest
             compiler: mingw
-            preset: default
+            preset: windows-mingw
     steps:
     - uses: actions/checkout@v4
     
@@ -91,7 +91,7 @@ jobs:
       if: runner.os == 'Windows' && matrix.compiler == 'mingw'
       shell: pwsh
       run: |
-        Get-ChildItem build/default -Recurse -Filter *.dll |
+        Get-ChildItem "build/${{ matrix.preset }}" -Recurse -Filter *.dll |
           ForEach-Object { $_.DirectoryName } |
           Sort-Object -Unique |
           ForEach-Object { $_ >> $env:GITHUB_PATH }
