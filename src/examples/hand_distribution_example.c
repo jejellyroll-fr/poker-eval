@@ -47,9 +47,8 @@ static void example_holdem_equity(void) {
             // npockets=2, nboard=0 (no board cards dealt yet), orderflag=0
             enumExhaustive_dispatch(game_holdem, pockets, board, dead, 2, 0, 0, &result);
             
-            // ev[0] is already the sum of pot fractions for all samples
-            // We need to divide by nsamples to get the average equity for this matchup
-            total_equity_aa += (result.ev[0] / result.nsamples);
+            double denom = (result.nsamples > 0) ? (double)result.nsamples : 10000.0;
+            total_equity_aa += (result.ev[0] / denom);
             valid_matchups++;
             
             enumResultFree(&result);
@@ -122,8 +121,9 @@ static void example_omaha_equity(void) {
         enumSample(game_omaha, pockets, board, dead_cards, 2, 0, 10000, 0, &result);
         
         // ev[0] is already the sum of pot fractions for all samples
-        // We need to divide by nsamples to get the average equity for this matchup
-        total_equity_aa += (result.ev[0] / result.nsamples);
+        // We need to divide by the total samples to get the average equity
+        double denom = (result.nsamples > 0) ? (double)result.nsamples : 10000.0;
+        total_equity_aa += (result.ev[0] / denom);
         valid_samples++;
         
         enumResultFree(&result);
