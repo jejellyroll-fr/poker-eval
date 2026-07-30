@@ -110,7 +110,7 @@ extern "C"
             } plo;
             struct
             {
-                char pattern[16];         /* Stud pattern string */
+                char pattern[32];         /* Stud pattern string */
             } stud;
             float percentage; /* For 20%: 0.20 */
         } data;
