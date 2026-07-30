@@ -22,6 +22,14 @@
 #ifdef _WIN32
     #include <malloc.h>  /* For _alloca on Windows */
     #define alloca _alloca
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+    #include <stdlib.h>
+#elif defined(__has_include)
+    #if __has_include(<alloca.h>)
+        #include <alloca.h>
+    #else
+        #include <stdlib.h>
+    #endif
 #else
     #include <alloca.h>
 #endif
