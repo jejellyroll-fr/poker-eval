@@ -1,33 +1,33 @@
-# Pre-flop Equity System - Guide d'utilisation
+# Pre-flop Equity System - User Guide
 
-## Vue d'ensemble
+## Overview
 
-Le système de calcul d'équité pré-flop permet de calculer l'équité entre des mains ou ranges de mains au Texas Hold'em en pré-flop.
+The pre-flop equity calculation system allows calculating equity between hands or hand ranges in pre-flop Texas Hold'em.
 
-### Concepts clés
+### Key Concepts
 
-1. **Main canonique** : Représentation unique d'une main (169 possibles)
-   - 13 paires (AA, KK, ..., 22)
-   - 78 mains suited (AKs, AQs, ..., 32s)
-   - 78 mains offsuit (AKo, AQo, ..., 32o)
+1. **Canonical hand**: Unique representation of a hand (169 possible)
+   - 13 pairs (AA, KK, ..., 22)
+   - 78 suited hands (AKs, AQs, ..., 32s)
+   - 78 offsuit hands (AKo, AQo, ..., 32o)
 
-2. **Combinaisons spécifiques** : Cartes concrètes pour une main canonique
-   - Paires : 6 combinaisons (ex: AA = AsAh, AsAd, AsAc, AhAd, AhAc, AdAc)
-   - Suited : 4 combinaisons (ex: AKs = AsKs, AhKh, AdKd, AcKc)
-   - Offsuit : 12 combinaisons (ex: AKo = AsKh, AsKd, etc.)
+2. **Specific combinations**: Concrete cards for a canonical hand
+   - Pairs: 6 combinations (e.g., AA = AsAh, AsAd, AsAc, AhAd, AhAc, AdAc)
+   - Suited: 4 combinations (e.g., AKs = AsKs, AhKh, AdKd, AcKc)
+   - Offsuit: 12 combinations (e.g., AKo = AsKh, AsKd, etc.)
 
-3. **Range** : Ensemble de mains canoniques
-   - Exemple: "AA,KK,QQ" = 3 mains canoniques = 18 combinaisons totales
+3. **Range**: Set of canonical hands
+   - Example: "AA,KK,QQ" = 3 canonical hands = 18 total combinations
 
-## Utilisation
+## Usage
 
-### 1. Calcul exhaustif (100% précis, lent)
+### 1. Exhaustive calculation (100% accurate, slow)
 
 ```bash
 ./bin/preflop_equity_demo "AA" "KK"
 ```
 
-**Sortie :**
+**Output:**
 ```
 Range 1: AA (1 canonical hands = 6 combos)
 Range 2: KK (1 canonical hands = 6 combos)
@@ -39,30 +39,30 @@ Time: ~1-2 seconds
 Boards evaluated: 61,642,944
 ```
 
-**Explication du calcul :**
-- 6 combos AA × 6 combos KK = 36 matchups spécifiques
-- Chaque matchup énumère C(48,5) = 1,712,304 boards
-- Total : 36 × 1,712,304 = 61,642,944 évaluations
-- Temps : ~1-2 secondes pour une main vs une main
+**Calculation breakdown:**
+- 6 combos AA × 6 combos KK = 36 specific matchups
+- Each matchup enumerates C(48,5) = 1,712,304 boards
+- Total: 36 × 1,712,304 = 61,642,944 evaluations
+- Time: ~1-2 seconds for head-to-head hand evaluation
 
-### 2. Calcul avec lookup table (instantané)
+### 2. Lookup table calculation (instant)
 
-**Génération de la table (à faire une seule fois) :**
+**Table generation (one-time process):**
 ```bash
 ./bin/generate_preflop_table holdem_preflop_169x169.dat
 ```
 
-⚠️ **Attention** : Cette opération prend **plusieurs heures** (~3-5h)
-- 14,365 calculs uniques (utilise la symétrie)
-- Chaque calcul = 1-10 secondes selon les mains
-- Fichier résultat : ~114 KB
+⚠️ **Warning**: This operation takes **several hours** (~3-5h)
+- 14,365 unique calculations (utilizes symmetry)
+- Each calculation = 1-10 seconds depending on hands
+- Resulting file: ~114 KB
 
-**Utilisation de la table :**
+**Using the table:**
 ```bash
 ./bin/preflop_with_table_demo "AA" "KK" holdem_preflop_169x169.dat
 ```
 
-**Sortie attendue :**
+**Expected output:**
 ```
 === Method 1: Exhaustive Calculation ===
 Equity 1: 81.95%
@@ -81,7 +81,7 @@ Speedup: 100,000× faster
 ./bin/preflop_equity_demo "AA,KK,QQ" "JJ,TT,99"
 ```
 
-**Sortie :**
+**Output:**
 ```
 Range 1: 3 canonical hands, 18 combinations
 Range 2: 3 canonical hands, 18 combinations
@@ -91,33 +91,33 @@ Range 1 equity: 82.31%
 Range 2 equity: 17.69%
 ```
 
-**Avec lookup table (instantané) :**
+**With lookup table (instant):**
 ```bash
-# Lorsque la table est générée
+# When the table has been generated
 ./bin/preflop_with_table_demo "AA,KK,QQ" "JJ,TT,99" holdem_preflop_169x169.dat
 ```
 
-## API C
+## C API
 
-### Structure de base
+### Basic Structure
 
 ```c
 #include <poker_eval/equity/preflop_equity.h>
 
-/* Parse une range depuis une chaîne */
+/* Parse a range from string */
 preflop_range_t range1;
 preflop_range_parse("AA,KK,QQ", &range1);
 
-/* Compte les combinaisons */
+/* Count combinations */
 int combos = preflop_range_count_combinations(&range1);
 // combos = 18 (6+6+6)
 
-/* Calcul d'équité exhaustif */
+/* Exhaustive equity calculation */
 preflop_equity_input_t input = {
     .range1 = range1,
     .range2 = range2,
-    .num_samples = 0,        /* 0 = exhaustif */
-    .lookup_table = NULL     /* NULL = pas de table */
+    .num_samples = 0,        /* 0 = exhaustive */
+    .lookup_table = NULL     /* NULL = no table */
 };
 
 preflop_equity_result_t result;
@@ -127,15 +127,15 @@ printf("Equity: %.2f%%\n", result.equity1 * 100);
 preflop_equity_result_free(&result);
 ```
 
-### Avec lookup table
+### With Lookup Table
 
 ```c
-/* Charger la table */
+/* Load table */
 preflop_lookup_table_t *table =
     preflop_lookup_table_load("holdem_preflop_169x169.dat", game_holdem);
 
 if (table) {
-    /* Calcul instantané */
+    /* Instant calculation */
     input.lookup_table = table;
     preflop_equity_calculate(&input, &result);
 
@@ -145,79 +145,79 @@ if (table) {
 
 ## Performance
 
-### Temps de calcul (exhaustif)
+### Calculation Time (exhaustive)
 
-| Matchup | Combinaisons | Boards évalués | Temps |
-|---------|-------------|----------------|-------|
+| Matchup | Combinations | Boards Evaluated | Time |
+|---------|-------------|------------------|------|
 | AA vs KK | 6 × 6 = 36 | 61,642,944 | ~1.2s |
 | AKs vs QQ | 4 × 6 = 24 | 41,095,296 | ~0.8s |
-| Range 3×3 | ~324 matchups | ~555M boards | ~10s |
-| Range 10×10 | ~3600 matchups | ~6B boards | ~2min |
+| 3×3 Range | ~324 matchups | ~555M boards | ~10s |
+| 10×10 Range | ~3600 matchups | ~6B boards | ~2min |
 
-### Avec lookup table
+### With Lookup Table
 
-| Matchup | Temps |
-|---------|-------|
+| Matchup | Time |
+|---------|------|
 | 1 vs 1 | ~10 nanoseconds |
-| Range 3×3 | ~100 nanoseconds |
-| Range 10×10 | ~1 microseconde |
-| Range 169×169 | ~30 microsecondes |
+| 3×3 Range | ~100 nanoseconds |
+| 10×10 Range | ~1 microsecond |
+| 169×169 Range | ~30 microseconds |
 
-**Speedup : ~100,000,000× plus rapide**
+**Speedup: ~100,000,000× faster**
 
-## Format de la table
+## Table Format
 
-### Fichier binaire
+### Binary File
 
 ```
-Offset  | Taille | Description
+Offset  | Size   | Description
 --------|--------|------------------
-0x0000  | 4      | Magic : 0x50464C54 ("PFLT")
-0x0004  | 4      | Version : 1
-0x0008  | 4      | Game type : game_holdem
+0x0000  | 4      | Magic: 0x50464C54 ("PFLT")
+0x0004  | 4      | Version: 1
+0x0008  | 4      | Game type: game_holdem
 0x000C  | 114,244| Equity matrix (169×169 floats)
 ```
 
-### Propriétés
+### Properties
 
-- **Taille** : 114 KB
-- **Symétrie** : equity(A,B) + equity(B,A) = 1.0
-- **Précision** : float 32-bit (~6 décimales)
-- **Portabilité** : Binaire natif (endianness dépendante)
+- **Size**: 114 KB
+- **Symmetry**: equity(A,B) + equity(B,A) = 1.0
+- **Precision**: 32-bit float (~6 decimal places)
+- **Portability**: Native binary (endianness dependent)
 
 ## Validation
 
-### Valeurs connues (vs PokerStove)
+### Known Values (vs PokerStove)
 
-| Matchup | Équité attendue | Notre résultat |
-|---------|----------------|----------------|
+| Matchup | Expected Equity | Our Result |
+|---------|-----------------|------------|
 | AA vs KK | 81.95% vs 18.05% | ✅ 81.95% vs 18.05% |
-| AKs vs QQ | 45.93% vs 54.07% | ⏳ À tester |
-| 72o vs AA | ~12% vs ~88% | ⏳ À tester |
+| AKs vs QQ | 45.93% vs 54.07% | ⏳ To be tested |
+| 72o vs AA | ~12% vs ~88% | ⏳ To be tested |
 
-## Limitations actuelles
+## Current Limitations
 
-1. **Génération de table lente** : Prise plusieurs heures au lieu de minutes
-   - Solution possible : Parallélisation avec OpenMP
-   - Solution possible : SIMD pour accélérer les évaluations
+1. **Slow table generation**: Takes several hours instead of minutes
+   - Potential solution: Parallelization with OpenMP
+   - Potential solution: SIMD acceleration for evaluations
 
-2. **Parser de ranges simple** : Supporte uniquement les listes séparées par virgule
-   - Non supporté : ranges complexes ("JJ+", "ATo+", etc.)
-   - À implémenter dans une future version
+2. **Simple range parser**: Supports only comma-separated lists
+   - Not supported: complex ranges ("JJ+", "ATo+", etc.)
+   - To be implemented in a future version
 
-3. **Hold'em uniquement** : Pas encore adapté pour Omaha pré-flop
+3. **Hold'em only**: Not yet adapted for pre-flop Omaha
 
-## Prochaines étapes
+## Next Steps
 
-1. ✅ Implémenter calcul exhaustif
-2. ✅ Créer système de lookup table
-3. ✅ Tester précision (AA vs KK)
-4. ⏳ Optimiser génération de table
-5. ⏳ Valider vs PokerStove/Equilab
-6. ⏳ Implémenter flop equity
-7. ⏳ Parser de ranges avancé
+1. ✅ Implement exhaustive calculation
+2. ✅ Create lookup table system
+3. ✅ Test accuracy (AA vs KK)
+4. ⏳ Optimize table generation
+5. ⏳ Validate vs PokerStove/Equilab
+6. ⏳ Implement flop equity
+7. ⏳ Advanced range parser
 
-## Exemple complet
+## Complete Example
 
 ```c
 #include <poker_eval/equity/preflop_equity.h>
@@ -261,7 +261,8 @@ int main() {
 
 ## Support
 
-Pour des questions ou bugs :
-- Tests : `tests/test_preflop_equity.c`
-- Documentation : `docs/equity/API_REFERENCE.md`
-- Exemples : `src/examples/preflop_*`
+For questions or bugs:
+- Tests: `tests/test_preflop_equity.c`
+- Documentation: `docs/equity/API_REFERENCE.md`
+- Examples: `src/examples/preflop_*`
+

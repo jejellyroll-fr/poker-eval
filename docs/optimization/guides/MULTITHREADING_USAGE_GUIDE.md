@@ -1,112 +1,112 @@
-# Guide d'utilisation du multithreading pour CalculateEquityForRanges
+# Multithreading Usage Guide for CalculateEquityForRanges
 
-## Vue d'ensemble
+## Overview
 
-Ce guide explique comment utiliser les différentes versions multithreadées de `CalculateEquityForRanges` pour optimiser les calculs d'équité de ranges.
+This guide explains how to use the different multithreaded versions of `CalculateEquityForRanges` to optimize range equity calculations.
 
-## Versions disponibles
+## Available Versions
 
-### 1. Version single-thread (baseline)
+### 1. Single-threaded version (baseline)
 ```c
 int CalculateEquityForRanges(...)
 ```
-- Utilisation : Petites ranges (<100 matchups)
-- Avantages : Pas d'overhead, simple
-- Inconvénients : Lent pour grandes ranges
+- Usage: Small ranges (<100 matchups)
+- Advantages: No overhead, simple
+- Disadvantages: Slow for large ranges
 
-### 2. Version MT originale
+### 2. Original MT version
 ```c
 int CalculateEquityForRanges_MT(..., int num_threads)
 ```
-- Utilisation : Ranges moyennes (100-10k matchups)
-- Avantages : Bonne performance générale
-- Inconvénients : Utilise beaucoup de mémoire pour grandes ranges
+- Usage: Medium ranges (100-10k matchups)
+- Advantages: Good general performance
+- Disadvantages: High memory usage for large ranges
 
-### 3. Version MT v2 (optimisée Phase 1)
+### 3. MT v2 version (Phase 1 optimized)
 ```c
 int CalculateEquityForRanges_MT_v2(..., int num_threads)
 ```
-- Utilisation : Ranges moyennes à grandes
-- Avantages : Meilleur scheduling, prefetching
-- Optimisations : Chunk size adaptatif, guided scheduling
+- Usage: Medium to large ranges
+- Advantages: Better scheduling, prefetching
+- Optimizations: Adaptive chunk size, guided scheduling
 
-### 4. Version MT v3 (optimisée Phase 2)
+### 4. MT v3 version (Phase 2 optimized)
 ```c
 int CalculateEquityForRanges_MT_v3(..., int num_threads)
 ```
-- Utilisation : Très grandes ranges (>10k matchups)
-- Avantages : Faible utilisation mémoire, scalable
-- Optimisations : Génération paresseuse des matchups
+- Usage: Very large ranges (>10k matchups)
+- Advantages: Low memory usage, scalable
+- Optimizations: Lazy matchup generation
 
-### 5. Version Auto
+### 5. Auto version
 ```c
 int CalculateEquityForRanges_Auto(...)
 ```
-- Utilisation : Choix automatique de la meilleure version
-- Avantages : Optimal pour tous les cas
+- Usage: Automatic choice of the best version
+- Advantages: Optimal for all cases
 
-## Exemples d'utilisation
+## Usage Examples
 
-### Exemple 1 : Calcul simple
+### Example 1: Simple Calculation
 ```c
 #include <poker_eval/equity/RangeEquity.h>
 
-// Définir les ranges
+// Define ranges
 StdDeck_CardMask hands1[10], hands2[10];
-// ... remplir les mains ...
+// ... fill hands ...
 
 PlayerRange ranges[2] = {
     {.hand_masks = hands1, .count = 10},
     {.hand_masks = hands2, .count = 10}
 };
 
-// Préparer le board et les cartes mortes
+// Prepare board and dead cards
 StdDeck_CardMask board, dead;
 StdDeck_CardMask_RESET(board);
 StdDeck_CardMask_RESET(dead);
 
-// Calculer l'équité
+// Calculate equity
 enum_result_t result;
 enumResultAlloc(&result, 2, enum_ordering_mode_hi);
 
 int matchups = CalculateEquityForRanges_MT_v3(
-    game_holdem,    // Type de jeu
-    ranges,         // Ranges des joueurs
-    2,              // Nombre de joueurs
-    board,          // Board actuel
-    dead,           // Cartes mortes
-    5,              // Cartes à distribuer
-    0,              // Mode exhaustif (pas Monte Carlo)
-    0,              // Iterations (non utilisé en exhaustif)
+    game_holdem,    // Game type
+    ranges,         // Player ranges
+    2,              // Number of players
+    board,          // Current board
+    dead,           // Dead cards
+    5,              // Board cards to deal
+    0,              // Exhaustive mode (not Monte Carlo)
+    0,              // Iterations (unused in exhaustive)
     0,              // Order flag
-    &result,        // Résultats
-    4               // Nombre de threads
+    &result,        // Results
+    4               // Number of threads
 );
 
-// Afficher les résultats
-printf("Joueur 1: %.2f%%\n", result.ev[0] / matchups * 100);
-printf("Joueur 2: %.2f%%\n", result.ev[1] / matchups * 100);
+// Display results
+printf("Player 1: %.2f%%\n", result.ev[0] / matchups * 100);
+printf("Player 2: %.2f%%\n", result.ev[1] / matchups * 100);
 
 enumResultFree(&result);
 ```
 
-### Exemple 2 : Choix automatique
+### Example 2: Automatic Selection
 ```c
-// Utiliser la version Auto pour un choix optimal
+// Use Auto version for optimal selection
 int matchups = CalculateEquityForRanges_Auto(
     game_holdem, ranges, 2, board, dead,
     5, 0, 0, 0, &result
 );
 ```
 
-### Exemple 3 : Grande range avec v3
+### Example 3: Large Range with v3
 ```c
-// Pour des ranges très larges (ex: 200+ mains chacune)
-// Utiliser v3 pour économiser la mémoire
+// For very large ranges (e.g., 200+ hands each)
+// Use v3 to save memory
 
-// Configurer le nombre de threads optimal
+// Configure optimal thread count
 int num_threads = omp_get_max_threads();
-if (num_threads > 8) num_threads = 8; // Limiter à 8 threads
+if (num_threads > 8) num_threads = 8; // Limit to 8 threads
 
 int matchups = CalculateEquityForRanges_MT_v3(
     game_holdem, large_ranges, 2, board, dead,
@@ -114,58 +114,58 @@ int matchups = CalculateEquityForRanges_MT_v3(
 );
 ```
 
-## Recommandations de performance
+## Performance Recommendations
 
-### Choix de la version
+### Version Selection
 
-| Taille de range | Version recommandée | Threads |
-|----------------|-------------------|---------|
+| Range Size | Recommended Version | Threads |
+|------------|---------------------|---------|
 | < 100 matchups | Single-thread | 1 |
-| 100-1000 | MT ou MT_v2 | 2-4 |
+| 100-1000 | MT or MT_v2 | 2-4 |
 | 1000-10000 | MT_v2 | 4-8 |
 | > 10000 | MT_v3 | 4-8 |
 | Variable | Auto | Auto |
 
-### Nombre de threads
+### Thread Count
 
 ```c
-// Détection automatique
+// Automatic detection
 int threads = 0; // 0 = auto-detect
 
-// Basé sur les cores physiques
+// Based on physical cores
 int threads = omp_get_num_procs() / 2;
 
-// Fixe
-int threads = 4; // Bon compromis général
+// Fixed
+int threads = 4; // Good general compromise
 ```
 
-### Optimisation mémoire
+### Memory Optimization
 
-Pour les très grandes ranges :
-- Utilisez MT_v3 (génération paresseuse)
-- Limitez le nombre de threads si mémoire limitée
-- Considérez le mode Monte Carlo pour >100k matchups
+For very large ranges:
+- Use MT_v3 (lazy generation)
+- Limit the thread count if memory is constrained
+- Consider Monte Carlo mode for >100k matchups
 
 ## Compilation
 
 ```bash
-# Avec OpenMP
+# With OpenMP
 gcc -O3 -fopenmp myapp.c -lpoker_equity -lm
-# Ou avec la bibliothèque combinée :
+# Or with combined library:
 # gcc -O3 -fopenmp myapp.c -lpoker_eval -lm
 
-# Flags recommandés
+# Recommended flags
 CFLAGS = -O3 -march=native -fopenmp
 ```
 
-## Debugging et profiling
+## Debugging and Profiling
 
-### Activer les traces
+### Enable Tracing
 ```c
 #define TRACE_RE(...) fprintf(stderr, __VA_ARGS__)
 ```
 
-### Mesurer les performances
+### Measure Performance
 ```c
 #include <sys/time.h>
 
@@ -176,14 +176,14 @@ double get_time() {
 }
 
 double start = get_time();
-// ... calcul ...
+// ... calculation ...
 double elapsed = get_time() - start;
-printf("Temps: %.3f secondes\n", elapsed);
+printf("Time: %.3f seconds\n", elapsed);
 ```
 
-### Variables d'environnement
+### Environment Variables
 ```bash
-# Contrôler OpenMP
+# Control OpenMP
 export OMP_NUM_THREADS=4
 export OMP_PROC_BIND=true
 export OMP_PLACES=cores
@@ -192,29 +192,29 @@ export OMP_PLACES=cores
 export OMP_DISPLAY_ENV=true
 ```
 
-## Résolution de problèmes
+## Troubleshooting
 
-### Performance décevante
-1. Vérifiez la taille des ranges (trop petites ?)
-2. Testez différents nombres de threads
-3. Utilisez la version appropriée
-4. Compilez avec -O3
+### Disappointing Performance
+1. Check range size (are they too small?)
+2. Test different thread counts
+3. Use the appropriate version
+4. Compile with -O3
 
-### Résultats incorrects
-1. Vérifiez l'initialisation des structures
-2. Assurez-vous d'appeler enumResultAlloc
-3. N'oubliez pas enumResultFree
-4. Divisez ev[] par matchups pour %
+### Incorrect Results
+1. Check structure initialization
+2. Ensure enumResultAlloc is called
+3. Do not forget enumResultFree
+4. Divide ev[] by matchups for %
 
-### Utilisation mémoire élevée
-1. Passez à MT_v3 pour grandes ranges
-2. Réduisez le nombre de threads
-3. Utilisez Monte Carlo si approprié
+### High Memory Usage
+1. Switch to MT_v3 for large ranges
+2. Reduce thread count
+3. Use Monte Carlo if appropriate
 
-## Exemples complets
+## Complete Examples
 
-Voir dans `examples/` :
-- `test_mt_optimization.c` : Test simple
-- `benchmark_all_versions.c` : Comparaison complète
-- `benchmark_large_ranges.c` : Test grandes ranges
-- `range_equity_mt_example.c` : Exemples variés
+See under `examples/`:
+- `test_mt_optimization.c`: Simple test
+- `benchmark_all_versions.c`: Full comparison
+- `benchmark_large_ranges.c`: Large range test
+- `range_equity_mt_example.c`: Various examples

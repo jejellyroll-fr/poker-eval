@@ -1,85 +1,85 @@
-# Guide d'utilisation de l'API Advanced Range Parser
+# Advanced Range Parser API Usage Guide
 
-## Vue d'ensemble
+## Overview
 
-L'API Advanced Range Parser permet de parser et manipuler des ranges de mains de poker en utilisant une syntaxe standard et intuitive. Cette API supporte les notations couramment utilisées dans les logiciels de poker modernes.
+The Advanced Range Parser API allows parsing and manipulating poker hand ranges using a standard and intuitive syntax. This API supports notations commonly used in modern poker software.
 
-## Fonctionnalités
+## Features
 
-### ✅ Implémenté (Phase 1 & 2)
-- ✅ **Paires de poche** : `AA`, `KK`, `AA-TT`
-- ✅ **Mains suited/offsuit** : `AKs`, `AKo`, `AK`
-- ✅ **Mains spécifiques** : `AsKh`, `AdQd`
-- ✅ **Combinaisons** : `AA, KK, AKs`
-- ✅ **Pourcentages** : `20%`, `5.5%`
-- ✅ **Validation** de syntaxe
-- ✅ **Conversion** vers PlayerRange
-- ✅ **Gestion des cartes mortes**
+### ✅ Implemented (Phase 1 & 2)
+- ✅ **Pocket pairs**: `AA`, `KK`, `AA-TT`
+- ✅ **Suited/offsuit hands**: `AKs`, `AKo`, `AK`
+- ✅ **Specific hands**: `AsKh`, `AdQd`
+- ✅ **Combinations**: `AA, KK, AKs`
+- ✅ **Percentages**: `20%`, `5.5%`
+- ✅ **Syntax validation**
+- ✅ **Conversion** to PlayerRange
+- ✅ **Dead card handling**
 
-### ✅ Implémenté (Phase 3 - Optimisations)
-- ✅ **Cache de pourcentages** : Accélération 40x+ pour les requêtes répétées
-- ✅ **Optimisation mémoire** : Estimation intelligente de la capacité
-- ✅ **Hash table** : O(1) pour la détection de doublons (O(n) total vs O(n²))
+### ✅ Implemented (Phase 3 - Optimizations)
+- ✅ **Percentage cache**: 40x+ speedup for repeated queries
+- ✅ **Memory optimization**: Intelligent capacity estimation
+- ✅ **Hash table**: O(1) duplicate detection (O(n) total vs O(n²))
 
-### ✅ Implémenté (Phase 4 - API Avancée)
-- ✅ **Ranges étendues** : `AK-AJ`, `AKs-AJs`
-- ✅ **Opérateurs arithmétiques** : `+` (union), `-` (différence), `!` (exclusion)
-- ✅ **Support Stud** : `(AA)K`, `(ss)Ks`
-- ✅ **Messages d'erreurs détaillés** avec `ARP_ParseRangeWithError`
+### ✅ Implemented (Phase 4 - Advanced API)
+- ✅ **Extended ranges**: `AK-AJ`, `AKs-AJs`
+- ✅ **Arithmetic operators**: `+` (union), `-` (difference), `!` (exclusion)
+- ✅ **Stud support**: `(AA)K`, `(ss)Ks`
+- ✅ **Detailed error messages** with `ARP_ParseRangeWithError`
 
-### ✅ Implémenté (Phase 5 - Final Polish)
-- ✅ **API utilitaire complète** : `CountCombinations`, `CloneRange`, `RangesEqual`, `IntersectRanges`, `ContainsHand`
-- ✅ **Import/Export** : Format texte simple pour sauvegarder/charger des ranges
-- ✅ **Tests exhaustifs** : 19+ tests couvrant cache, utils, et parsing
-- ✅ **Benchmarks** : Suite complète de mesure de performance
+### ✅ Implemented (Phase 5 - Final Polish)
+- ✅ **Complete utility API**: `CountCombinations`, `CloneRange`, `RangesEqual`, `IntersectRanges`, `ContainsHand`
+- ✅ **Import/Export**: Simple text format for saving/loading ranges
+- ✅ **Exhaustive tests**: 19+ tests covering cache, utils, and parsing
+- ✅ **Benchmarks**: Full performance measurement suite
 
-## Syntaxe supportée
+## Supported Syntax
 
-Voir le document détaillé [RANGE_SYNTAX.md](./RANGE_SYNTAX.md) pour la spécification complète.
+See the detailed document [RANGE_SYNTAX.md](./RANGE_SYNTAX.md) for the complete specification.
 
-### Mains de base
+### Basic Hands
 
 ```c
-// Paires de poche
-"AA"          // Paire d'As (6 combinaisons)
-"KK"          // Paire de Rois (6 combinaisons)
+// Pocket pairs
+"AA"          // Pair of Aces (6 combinations)
+"KK"          // Pair of Kings (6 combinations)
 
-// Mains suited
-"AKs"         // As-Roi suited (4 combinaisons)
+// Suited hands
+"AKs"         // Ace-King suited (4 combinations)
 
-// Mains offsuit
-"AKo"         // As-Roi offsuit (12 combinaisons)
+// Offsuit hands
+"AKo"         // Ace-King offsuit (12 combinations)
 
-// Mains mixtes (suited + offsuit)
-"AK"          // As-Roi (16 combinaisons)
+// Mixed hands (suited + offsuit)
+"AK"          // Ace-King (16 combinations)
 ```
 
-### Ranges étendues
+### Extended Ranges
 
 ```c
-// Ranges de paires
-"AA-TT"       // Paires d'As à Dix (30 combinaisons)
+// Pair ranges
+"AA-TT"       // Pocket pairs Aces to Tens (30 combinations)
 
-// Ranges de mains non-paires
-"AK-AJ"       // AK, AQ, AJ (48 combinaisons)
-"AKs-AJs"     // AKs, AQs, AJs (12 combinaisons)
+// Non-pair hand ranges
+"AK-AJ"       // AK, AQ, AJ (48 combinations)
+"AKs-AJs"     // AKs, AQs, AJs (12 combinations)
 
-// Opérateurs
-"AA-TT + AK"  // Paires + AK
-"20% - AA"    // Top 20% sans les As
-"!AA"         // Tout sauf les As
+// Operators
+"AA-TT + AK"  // Pairs + AK
+"20% - AA"    // Top 20% excluding Aces
+"!AA"         // Everything except Aces
 ```
 
-### Pourcentages
+### Percentages
 
 ```c
-"20%"         // Top 20% des mains (Hold'em)
+"20%"         // Top 20% of hands (Hold'em)
 "5%"          // Top 5%
 ```
 
-## Utilisation de l'API
+## API Usage
 
-### Parsing de base
+### Basic Parsing
 
 ```c
 #include <poker_eval/range/AdvancedRangeParser.h>
@@ -89,74 +89,74 @@ StdDeck_CardMask dead_cards;
 StdDeck_CardMask_RESET(dead_cards);
 
 if (ARP_ParseRange("AA-TT, AKs", dead_cards, game_holdem, &range)) {
-    printf("Range: %zu mains\n", range.count);
+    printf("Range: %zu hands\n", range.count);
     ARP_FreeRange(&range);
 }
 ```
 
-### Fonctions Utilitaires (Phase 5)
+### Utility Functions (Phase 5)
 
-L'API offre maintenant des outils puissants pour manipuler les ranges sans parsing complexe :
+The API now offers powerful tools for manipulating ranges without complex parsing:
 
 ```c
-// Compter les mains sans générer la range complète
+// Count hands without generating the full range
 size_t count = ARP_CountCombinations("AA-TT", dead_cards, game_holdem);
 
-// Vérifier si une main est dans la range
+// Check if a hand is in the range
 bool has_aces = ARP_ContainsHand(&range, aces_mask);
 
-// Intersection de deux ranges
+// Intersection of two ranges
 arp_range_t intersection;
 ARP_IntersectRanges(&range1, &range2, &intersection);
 
-// Comparer deux ranges
+// Compare two ranges
 bool equal = ARP_RangesEqual(&range1, &range2);
 
-// Cloner une range
+// Clone a range
 arp_range_t clone;
 ARP_CloneRange(&original, &clone);
 ```
 
-### Gestion d'erreurs détaillée
+### Detailed Error Handling
 
 ```c
 arp_error_details_t error;
 if (!ARP_ParseRangeWithError("invalid", dead, game_holdem, &range, &error)) {
     char buffer[256];
     ARP_FormatError(&error, buffer, sizeof(buffer));
-    printf("Erreur: %s\n", buffer);
+    printf("Error: %s\n", buffer);
 }
 ```
 
 ## Performance
 
-### Cache de Pourcentages
+### Percentage Cache
 
-Le parser utilise un cache thread-safe pour les requêtes de pourcentage ("20%", "5%").
+The parser uses a thread-safe cache for percentage queries ("20%", "5%").
 
-- **Premier appel** : ~10-20µs (calcul initial)
-- **Appels suivants** : ~0.2-0.5µs (copie mémoire)
-- **Speedup** : ~40x
+- **First call**: ~10-20µs (initial calculation)
+- **Subsequent calls**: ~0.2-0.5µs (memory copy)
+- **Speedup**: ~40x
 
-Voir [PERFORMANCE_GUIDE.md](../../optimization/guides/PERFORMANCE_GUIDE.md) pour plus de détails.
+See [PERFORMANCE_GUIDE.md](../../optimization/guides/PERFORMANCE_GUIDE.md) for more details.
 
-### Optimisation Mémoire
+### Memory Optimization
 
-- Allocation exacte pour les ranges simples (paires, mains spécifiques)
-- Hash tables pour les grandes ranges (>50 mains) pour éviter les doublons en O(1)
+- Exact allocation for simple ranges (pairs, specific hands)
+- Hash tables for large ranges (≥50 hands) for O(1) duplicate prevention
 
 ## Benchmarks
 
-Les résultats typiques sur une machine moderne :
+Typical results on a modern machine:
 
-| Scénario | Temps (µs) | Mains/sec |
-|----------|------------|-----------|
+| Scenario | Time (µs) | Hands/sec |
+|----------|-----------|-----------|
 | Single pair (AA) | 0.26 | 22M |
 | Top 20% (Cache) | 0.42 | 516M |
 | Top 50% (Cache) | 0.44 | 1.1G |
 
-## Support Multi-Jeux
+## Multi-Game Support
 
-- **Hold'em** : Support complet
-- **Omaha (PLO)** : Support partiel (patterns `AAxxds`, pourcentages basiques)
-- **Stud** : Support des patterns `(AA)K`
+- **Hold'em**: Full support
+- **Omaha (PLO)**: Partial support (patterns `AAxxds`, basic percentages)
+- **Stud**: Support for `(AA)K` patterns

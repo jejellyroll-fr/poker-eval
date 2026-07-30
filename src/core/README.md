@@ -1,46 +1,46 @@
-# Module Core
+# Core Module
 
-Ce module contient les fonctionnalités de base de l'évaluation de poker et la manipulation des cartes, des masques et des combinaisons.
+This module contains the fundamental functionality for poker evaluation and card, mask, and combination manipulation.
 
-## Fichiers Sources (`src/core/`)
+## Source Files (`src/core/`)
 
-### Évaluation et Hand Value
-- `CardConverter.c` - Conversion entre représentations de cartes et chaînes
-- `canonical_5card.c` - Canonisation et équivalence des mains à 5 cartes
-- `card.c` - Représentation de base des cartes et des masques
-- `combo_7to5.c` - Énumération des combinaisons 7 cartes vers 5 cartes
-- `combo_7to5_hilo.c` - Énumération des combinaisons 7 cartes Hi-Lo (high/low)
-- `eval_7c_simd.c` - Évaluation optimisée SIMD à 7 cartes
-- `eval_cache.c` - Cache d'évaluation des mains
-- `eval_context.c` - Contexte et état d'évaluation
-- `evx.c` - Algorithme et évaluation EVX
-- `low_eval.c` - Évaluation des mains basses (Lowball, Razz, 8-or-better)
-- `low_qualifier.c` - Qualification des mains basses (ex: 8-or-better)
-- `modern_cardmask.c` - Masques de cartes modernes et masquage d'indexation
+### Evaluation and Hand Value
+- `CardConverter.c` - Conversion between card representations and strings
+- `canonical_5card.c` - Canonization and equivalence of 5-card hands
+- `card.c` - Base representation of cards and card masks
+- `combo_7to5.c` - Enumeration of 7-card to 5-card combinations
+- `combo_7to5_hilo.c` - Enumeration of 7-card Hi-Lo (high/low) combinations
+- `eval_7c_simd.c` - SIMD-optimized 7-card evaluation
+- `eval_cache.c` - Hand evaluation cache
+- `eval_context.c` - Evaluation context and state
+- `evx.c` - EVX algorithm and evaluation
+- `low_eval.c` - Low hand evaluation (Lowball, Razz, 8-or-better)
+- `low_qualifier.c` - Low hand qualification (e.g., 8-or-better)
+- `modern_cardmask.c` - Modern card masks and indexing bitmasks
 
-### Gestion des Decks (Jeux de Cartes)
-- `deck.c` - Interface générique des jeux de cartes
-- `deck_std.c` - Deck standard (52 cartes)
-- `deck_joker.c` - Deck avec Joker (53 cartes)
-- `deck_short.c` - Short Deck / Six-Plus Hold'em (36 cartes)
-- `deck_astud.c` - Deck Asian Stud (32 cartes)
-- `universal_deck.c` - Abstraction de deck universel pour différents formats de jeux
-- `joker_expansion_controlled.c` - Gestion et expansion contrôlée des cartes Joker
+### Deck Management
+- `deck.c` - Generic card deck interface
+- `deck_std.c` - Standard deck (52 cards)
+- `deck_joker.c` - Joker deck (53 cards)
+- `deck_short.c` - Short Deck / Six-Plus Hold'em (36 cards)
+- `deck_astud.c` - Asian Stud deck (32 cards)
+- `universal_deck.c` - Universal deck abstraction for different game formats
+- `joker_expansion_controlled.c` - Controlled Joker card management and expansion
 
-### Combinaisons et Statut
-- `modern_combinations.c` - Calculs modernes de combinaisons
-- `omaha_combinations.c` - Combinaisons et sous-ensembles spécifiques à l'Omaha
-- `status.c` - Codes de statut, diagnostics et erreurs du module core
-- `deterministic_benchmark.c` - Harness pour benchmarks déterministes core
+### Combinations and Status
+- `modern_combinations.c` - Modern combination calculations
+- `omaha_combinations.c` - Omaha-specific combinations and subsets
+- `status.c` - Core module status codes, diagnostics, and errors
+- `deterministic_benchmark.c` - Harness for core deterministic benchmarks
 
-### Tables de Lookup et Générateurs
-- `t_astudcardmasks.c` - Générateur/table de masques pour Asian Stud
-- `t_botcard.c` - Générateur/table pour la carte la plus basse
-- `t_botfivecards.c` - Générateur/table pour les 5 cartes les plus basses
-- `t_cardmasks.c` - Générateur/table de masques de cartes standards
-- `t_jokercardmasks.c` - Générateur/table de masques de cartes avec Joker
-- `t_nbits.c` - Table et calculs du nombre de bits activés (popcount)
-- `t_shortdeckcardmasks.c` - Générateur/table de masques pour Short Deck
-- `t_straight.c` - Générateur/table pour la détection des quintes (straights)
-- `t_topcard.c` - Générateur/table pour la carte la plus haute
-- `t_topfivecards.c` - Générateur/table pour les 5 cartes les plus hautes
+### Lookup Tables and Generators
+- `t_astudcardmasks.c` - Mask table/generator for Asian Stud
+- `t_botcard.c` - Lowest card table/generator
+- `t_botfivecards.c` - Lowest 5 cards table/generator
+- `t_cardmasks.c` - Standard card mask table/generator
+- `t_jokercardmasks.c` - Joker card mask table/generator
+- `t_nbits.c` - Set bit count table and calculations (popcount)
+- `t_shortdeckcardmasks.c` - Mask table/generator for Short Deck
+- `t_straight.c` - Straight detection table/generator
+- `t_topcard.c` - Highest card table/generator
+- `t_topfivecards.c` - Highest 5 cards table/generator

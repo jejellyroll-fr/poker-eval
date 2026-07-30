@@ -1,11 +1,11 @@
-# Guide Multiway Equity
+# Multiway Equity Guide
 
-## Objectif
-``CalculateMultiwayEquity`` évalue l'équité de ranges pondérées en multiway (side-pots, MC ou exhaustif).
+## Objective
+`CalculateMultiwayEquity` evaluates weighted range equity in multiway pots (side pots, MC or exhaustive).
 
-## Pilier C
+## C Engine
 
-```
+```c
 #include <poker_eval/equity/RangeEquity.h>
 
 MultiwayPotState state = {ranges, stack_sizes, invested, num_players};
@@ -15,11 +15,11 @@ int matchups = CalculateMultiwayEquity(game_holdem, &state, board, dead,
                                       cards_to_deal, &opts, &res);
 ```
 
-Chaque `PlayerRange` porte `hand_masks`, `weights` (optionnel), `count` (nombre de mains dans la range) et `total_weight`. Side-pots calculés par `pe_calculate_sidepots`.
+Each `PlayerRange` contains `hand_masks`, `weights` (optional), `count` (number of hands in the range), and `total_weight`. Side pots are calculated by `pe_calculate_sidepots`.
 
 ## Python
 
-```
+```python
 from pokereval import PokerEval
 pe = PokerEval()
 res = pe.calculate_multiway_equity(
@@ -31,15 +31,16 @@ res = pe.calculate_multiway_equity(
     iterations=5000
 )
 ```
-Résultat : `{ 'matchups': ..., 'total_weighted_samples': ..., 'players': [{'ev':...,'equity':...}] }`.
+Result: `{ 'matchups': ..., 'total_weighted_samples': ..., 'players': [{'ev':...,'equity':...}] }`.
 
-## Pondérations & exclusions
+## Weighting & Exclusions
 
-- Syntaxe `{}` pour poids (decimal ou `%`) – normalisées automatiquement.
-- Combinaison avec `!` pour exclusions ciblées (`AA, !AsAh`).
+- `{}` syntax for weights (decimal or `%`) – automatically normalized.
+- Combined with `!` for targeted exclusions (`AA, !AsAh`).
 
-## Bench & tests
+## Benchmarks & Tests
 
-- `tests/test_multiway_equity.c` (side pot, tie, MC pondéré).
-- `src/examples/bench_multiway_equity.c` : compare exhaustif vs Monte Carlo.
+- `tests/test_multiway_equity.c` (side pot, tie, weighted MC).
+- `src/examples/bench_multiway_equity.c`: compares exhaustive vs Monte Carlo.
+
 

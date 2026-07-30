@@ -1,115 +1,115 @@
-# Guide d'utilisation des jeux avec Joker
+# User Guide for Games with Joker
 
-## Vue d'ensemble
+## Overview
 
-Le support des jeux avec joker est maintenant pleinement intégré dans pokenum. Le joker est représenté par "Xx" et est traité comme la 53ème carte du deck.
+Joker game support is now fully integrated into pokenum. The joker is represented by "Xx" and is treated as the 53rd card in the deck.
 
-## Jeux supportés
+## Supported Games
 
-### 1. Lowball A-5 avec joker (`-l`)
-Le jeu le plus couramment utilisé avec joker. Le joker peut remplacer n'importe quelle carte pour former la meilleure main low possible.
+### 1. A-5 Lowball with joker (`-l`)
+The most commonly used game with joker. The joker can substitute for any card to form the best possible low hand.
 
 ```bash
-# Exemple simple
+# Simple example
 ./pokenum -l 7h 5s 3d Xx - 9s 8h 6d 4c
 
-# Avec plus de joueurs
+# With more players
 ./pokenum -l Ac 2d - 5h 6s - Xx Kh
 ```
 
-### 2. 5-card Draw Hi avec joker (`-5d`)
-Le joker peut remplacer n'importe quelle carte pour former la meilleure main high.
+### 2. 5-card Draw Hi with joker (`-5d`)
+The joker can substitute for any card to form the best high hand.
 
 ```bash
 ./pokenum -5d As Ah Xx - Ks Kh Kd
 ```
 
-### 3. 5-card Draw Hi/Lo 8-or-better avec joker (`-5d8`)
-Le joker peut être utilisé pour le high ou le low.
+### 3. 5-card Draw Hi/Lo 8-or-better with joker (`-5d8`)
+The joker can be used for high or low.
 
 ```bash
 ./pokenum -5d8 Ac 2c 3c - 8h 8d 8s
 ```
 
-### 4. 5-card Draw Hi/Lo no qualifier avec joker (`-5dnsq`)
-Similaire au précédent mais sans qualificateur pour le low.
+### 4. 5-card Draw Hi/Lo no qualifier with joker (`-5dnsq`)
+Similar to the previous game, but without a low qualifier.
 
 ```bash
 ./pokenum -5dnsq 5h 5d - Xx 2c 3d
 ```
 
-## Syntaxe
+## Syntax
 
-### Représentation du joker
-- Toujours utiliser "Xx" (X majuscule suivi de x minuscule)
-- Exemples valides : `Xx`, `xx`, `XX`, `xX` (tous sont acceptés)
+### Joker Representation
+- Always use "Xx" (uppercase X followed by lowercase x)
+- Valid examples: `Xx`, `xx`, `XX`, `xX` (all are accepted)
 
-### Format général
+### General Format
 ```bash
-./pokenum [options] <main1> - <main2> - ... [-- <board>] [/ <cartes mortes>]
+./pokenum [options] <hand1> - <hand2> - ... [-- <board>] [/ <dead cards>]
 ```
 
-### Options utiles
-- `-mc <n>` : Utiliser Monte Carlo avec n itérations (recommandé pour les cas complexes)
-- `-t` : Mode terse (sortie sur une ligne)
-- `-O` : Calculer l'histogramme d'ordonnancement
+### Useful Options
+- `-mc <n>`: Use Monte Carlo with n iterations (recommended for complex cases)
+- `-t`: Terse mode (single-line output)
+- `-O`: Calculate ordering histogram
 
-## Exemples pratiques
+## Practical Examples
 
-### 1. Lowball classique
+### 1. Classic Lowball
 ```bash
-# Joueur 1 a une main presque faite, joueur 2 a le joker
+# Player 1 has a nearly complete hand, player 2 has the joker
 ./pokenum -l Ac 2c 3c 4c - Xx 6h 7h 8h
 ```
 
-### 2. Comparaison multi-joueurs
+### 2. Multi-player Comparison
 ```bash
-# 3 joueurs, un avec le joker
+# 3 players, one with the joker
 ./pokenum -l Xx - Ac 2d 3h - 5s 6s 7s
 ```
 
-### 3. Avec Monte Carlo (recommandé pour les cas complexes)
+### 3. With Monte Carlo (recommended for complex cases)
 ```bash
 # 100,000 simulations
 ./pokenum -mc 100000 -l Xx 2h - 5s 6d - Ac Kh
 ```
 
-### 4. Cartes mortes
+### 4. Dead Cards
 ```bash
-# Le roi de cœur est mort
+# King of hearts is dead
 ./pokenum -l Xx 2d 3h - 5s 6s 7s / Kh
 ```
 
-## Notes importantes
+## Important Notes
 
 ### Performance
-- L'énumération exhaustive avec joker génère beaucoup plus de combinaisons (53 cartes au lieu de 52)
-- Pour les cas avec peu de cartes fixes, préférer Monte Carlo
-- Exemple : avec 2 joueurs ayant chacun 1 carte, l'énumération exhaustive génère des millions de combinaisons
+- Exhaustive enumeration with a joker generates significantly more combinations (53 cards instead of 52)
+- For cases with few fixed cards, Monte Carlo is preferred
+- Example: with 2 players having 1 card each, exhaustive enumeration generates millions of combinations
 
-### Règles du joker
-- En lowball A-5 : le joker est toujours la meilleure carte possible pour compléter une main low
-- En high : le joker complète la meilleure main possible (quinte flush, carré, etc.)
-- Le joker ne peut pas être dupliqué (il n'y a qu'un seul joker dans le deck)
+### Joker Rules
+- In A-5 lowball: the joker is always the best possible card to complete a low hand
+- In high: the joker completes the best possible hand (straight flush, four of a kind, etc.)
+- The joker cannot be duplicated (there is only one joker in the deck)
 
-### Limitations connues
-- Certaines combinaisons très ouvertes peuvent causer des timeouts
-- Solution : utiliser `-mc` avec un nombre raisonnable d'itérations
+### Known Limitations
+- Certain very wide combinations may cause timeouts
+- Workaround: use `-mc` with a reasonable number of iterations
 
-## Dépannage
+## Troubleshooting
 
-### Problème : Timeout ou blocage
-Solution : Utiliser Monte Carlo
+### Problem: Timeout or freeze
+Solution: Use Monte Carlo
 ```bash
-# Au lieu de
+# Instead of
 ./pokenum -l Xx - Ac
 
-# Utiliser
+# Use
 ./pokenum -mc 100000 -l Xx - Ac
 ```
 
-### Problème : "Joker enumeration not yet implemented"
-Solution : Recompiler avec un clean build
+### Problem: "Joker enumeration not yet implemented"
+Solution: Recompile with a clean build
 ```bash
 rm -rf build
 mkdir build
@@ -118,9 +118,9 @@ cmake ..
 make -j4
 ```
 
-## Exemples de résultats
+## Example Results
 
-### Lowball avec joker
+### Lowball with Joker
 ```
 5-card Draw A-5 Lowball with joker: 45540 enumerated outcomes
 cards              win   %win      lose  %lose       tie   %tie        EV
@@ -128,4 +128,4 @@ cards              win   %win      lose  %lose       tie   %tie        EV
 9s 4c 6d 8h      26093  57.30     19447  42.70         0   0.00     0.573
 ```
 
-Le joker donne au premier joueur une main 7-5-3-2-A, mais le second joueur avec 9-8-6-4-x gagne plus souvent.
+The joker gives the first player a 7-5-3-2-A hand, but the second player with 9-8-6-4-x wins more often.

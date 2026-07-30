@@ -651,27 +651,27 @@ typedef enum {
 } arp_token_type_t;
 ```
 
-### Pondérations et exclusions ciblées
+### Hand Weightings and Targeted Exclusions
 
-Chaque plage peut être pondérée via un suffixe `{...}`. Les pondérations peuvent être exprimées en valeur absolue (`0.5`) ou en pourcentage (`50%`).
+Each range can be weighted using a `{...}` suffix. Weights can be expressed as an absolute value (`0.5`) or as a percentage (`50%`).
 
 ```
 AKo{0.5}, AKs{50%}
 AA{75%} + KK{25%}
 ```
 
-Les pondérations sont automatiquement normalisées lors de la conversion en `PlayerRange` (`total_weight` et `weights[]`).
+Weights are automatically normalized when converted to `PlayerRange` (`total_weight` and `weights[]`).
 
-L'opérateur `!` appliqué dans une expression retire uniquement les combos déjà ajoutés. Il est ainsi possible d'exclure précisément certaines combinaisons :
+The `!` operator applied within an expression removes only combinations that have already been added. This allows precise exclusion of specific combinations:
 
 ```
-AA, !AsAh        # Conserve 5 combos d'AA
-(AA,KK) + !AKs   # Ajoute AA/KK puis retire AKs
+AA, !AsAh        # Keeps 5 combos of AA
+(AA,KK) + !AKs   # Adds AA/KK then removes AKs
 ```
 
-Ces fonctionnalités sont disponibles dans les API C et Python (notamment pour `CalculateMultiwayEquity`).
+These features are available in both the C and Python APIs (notably for `CalculateMultiwayEquity`).
 
-Consultez [MULTIWAY_EQUITY_GUIDE.md](../../equity/guides/MULTIWAY_EQUITY_GUIDE.md) pour un exemple complet.
+See [MULTIWAY_EQUITY_GUIDE.md](../../equity/guides/MULTIWAY_EQUITY_GUIDE.md) for a complete example.
 
 
 ### Validation Functions

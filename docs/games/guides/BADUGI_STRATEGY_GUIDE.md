@@ -1,127 +1,127 @@
-# Guide Stratégique Badugi avec pokenum
+# Badugi Strategy Guide with pokenum
 
 ## 📖 Introduction
 
-Ce guide explique comment utiliser `pokenum` pour analyser les stratégies d'échange de cartes en Badugi. Badugi est un jeu de draw lowball où l'objectif est de former la meilleure main de 4 cartes avec des rangs et couleurs uniques.
+This guide explains how to use `pokenum` to analyze card-drawing strategies in Badugi. Badugi is a lowball draw poker game where the objective is to form the best 4-card hand with unique ranks and suits.
 
-## 🎯 Règles Badugi Rappel
+## 🎯 Badugi Rules Recap
 
-- **Objectif** : Main de 4 cartes, rangs et couleurs différents
-- **Classement** : Plus bas = meilleur (A-2-3-4 est la nuts)
-- **Hiérarchie** : 4-card > 3-card > 2-card > 1-card
-- **Échange** : Jusqu'à 3 tours, chaque joueur peut échanger 0-4 cartes
+- **Objective**: 4-card hand with unique ranks and suits
+- **Ranking**: Lower = better (A-2-3-4 is the nuts)
+- **Hierarchy**: 4-card > 3-card > 2-card > 1-card
+- **Draws**: Up to 3 draw rounds, each player can exchange 0-4 cards
 
-## 🚀 Utilisation de base
+## 🚀 Basic Usage
 
 ```bash
-# Format général
-./pokenum -badugi <main_joueur1> - <main_joueur2> [options]
+# General format
+./pokenum -badugi <player1_hand> - <player2_hand> [options]
 
-# Monte Carlo (recommandé pour mains incomplètes)
-./pokenum -mc 100000 -badugi <cartes> - <cartes>
+# Monte Carlo (recommended for incomplete hands)
+./pokenum -mc 100000 -badugi <cards> - <cards>
 ```
 
-## 📊 Analyse Pré-Draw (1er tour)
+## 📊 Pre-Draw Analysis (1st round)
 
-### Scénario 1 : Évaluer une base de départ
+### Scenario 1: Evaluating a starting base
 
 ```bash
-# Vous avez A♠ 2♥, adversaire a K♠ Q♦
+# You have A♠ 2♥, opponent has K♠ Q♦
 ./pokenum -badugi As 2h - Ks Qd
 
-# Résultat : As 2h gagne ~98% du temps
-# Analyse : Excellente base, gardez et échangez 2 cartes
+# Result: As 2h wins ~98% of the time
+# Analysis: Excellent base, keep and draw 2 cards
 ```
 
-### Scénario 2 : Comparer différentes bases
+### Scenario 2: Comparing different bases
 
 ```bash
-# Base basse vs base moyenne
+# Low base vs medium base
 ./pokenum -badugi As 3h - 7s 9d
-# Résultat attendu : A-3 domine largement
+# Expected result: A-3 dominates heavily
 
-# Deux bases moyennes
+# Two medium bases
 ./pokenum -badugi 6s 8h - 7d 9c
-# Résultat : Plus serré, 6-8 légèrement favori
+# Result: Closer matchup, 6-8 slightly favored
 ```
 
-### Scénario 3 : Mains avec duplicates
+### Scenario 3: Hands with duplicates
 
 ```bash
-# Paire vs cartes distinctes
+# Pair vs distinct cards
 ./pokenum -badugi As Ad - 6h 9c
-# La paire doit échanger une carte, désavantage significatif
+# The pair must discard a card, significant disadvantage
 
-# Duplicate couleur vs rangs distincts
+# Suited duplicate vs distinct ranks
 ./pokenum -badugi As 2s - 7h 9d
-# Le duplicate couleur est moins pénalisant qu'un duplicate rang
+# Suited duplicate is less penalizing than a rank duplicate
 ```
 
-## 🔄 Analyse Post-Échange
+## 🔄 Post-Draw Analysis
 
-### Après le 1er échange
+### After the 1st draw
 
 ```bash
-# Vous aviez A♠ 2♥, avez tiré 3♦ J♣ (gardez A-2-3, défaussez J)
+# You had A♠ 2♥, drew 3♦ J♣ (keep A-2-3, discard J)
 ./pokenum -badugi As 2h 3d - Opponent_cards
 
-# Vous aviez paire, avez tiré une carte distincte
+# You had a pair, drew a distinct card
 ./pokenum -badugi 4s 7h 9c - Opponent_cards
 ```
 
-### Analyser les pat hands (mains complètes)
+### Analyzing pat hands (complete hands)
 
 ```bash
-# Votre 4-card Badugi vs adversaire qui échange encore
+# Your 4-card Badugi vs opponent who is still drawing
 ./pokenum -badugi As 2h 3d 4c - 6s 7h
-# Énorme avantage, mais attention aux nuts draws adverses
+# Huge advantage, but watch out for opponent nuts draws
 ```
 
-## 📈 Scénarios Stratégiques Avancés
+## 📈 Advanced Strategic Scenarios
 
-### 1. Décision "Breaking" (casser une main)
+### 1. "Breaking" Decision (breaking a hand)
 
 ```bash
-# Vous avez un 3-card 6-7-8, adversaire semble avoir mieux
+# You have a 3-card 6-7-8, opponent seems to have better
 ./pokenum -mc 50000 -badugi 6s 7h 8d - As 2c
 
-# Vs garder et espérer une bonne 4ème carte
+# Vs keeping and hoping for a good 4th card
 ./pokenum -mc 50000 -badugi 6s 7h 8d - As 2c 3h
 ```
 
-### 2. Analyse des "Smooth" vs "Rough" draws
+### 2. Analysis of "Smooth" vs "Rough" draws
 
 ```bash
-# Smooth draw (A-2-3 + carte quelconque)
+# Smooth draw (A-2-3 + any card)
 ./pokenum -mc 100000 -badugi As 2h 3d - opponent_hand
 
-# Rough draw (7-8-9 + carte quelconque)
+# Rough draw (7-8-9 + any card)
 ./pokenum -mc 100000 -badugi 7s 8h 9d - opponent_hand
 ```
 
-### 3. Situations heads-up critiques
+### 3. Critical Heads-Up Situations
 
 ```bash
-# Dernière carte, vous pat vs adversaire qui échange 1
+# Last card, you pat vs opponent drawing 1
 ./pokenum -badugi As 2h 3d 5c - 4s 6h 7d
 
-# Analyser si votre rough Badugi tient contre un bon draw
+# Analyze if your rough Badugi holds against a good draw
 ./pokenum -mc 75000 -badugi 8s 9h Tc Jd - As 2c 3h
 ```
 
-## 🎲 Monte Carlo vs Énumération Exhaustive
+## 🎲 Monte Carlo vs Exhaustive Enumeration
 
-### Quand utiliser `-mc` :
-- **Mains incomplètes** (< 4 cartes par joueur)
-- **Analyse rapide** (100k échantillons = ~1 seconde)
-- **Situations complexes** avec beaucoup de variables
+### When to use `-mc`:
+- **Incomplete hands** (< 4 cards per player)
+- **Fast analysis** (100k samples = ~1 second)
+- **Complex situations** with many variables
 
-### Quand utiliser l'énumération exhaustive :
-- **Mains complètes** (4 cartes chacun)
-- **Précision absolue** nécessaire
-- **Calculs rapides** (peu de cartes inconnues)
+### When to use exhaustive enumeration:
+- **Complete hands** (4 cards each)
+- **Absolute precision** required
+- **Fast calculations** (few unknown cards)
 
-## 📊 Interprétation des Résultats
+## 📊 Interpreting Results
 
 ```
 Badugi (4-card lowball, unique suits and ranks): 50000 sampled outcomes
@@ -130,67 +130,67 @@ As 2h 3d      47532  95.06      2468   4.94         0   0.00     0.951
 Ks Qh           2468   4.94     47532  95.06         0   0.00     0.049
 ```
 
-### Lecture :
-- **win %** : Pourcentage de victoires
-- **EV** : Valeur espérée (0.951 = récupère 95.1% du pot en moyenne)
-- **tie %** : Égalités (rares en Badugi)
+### Reading:
+- **win %**: Win percentage
+- **EV**: Expected value (0.951 = recovers 95.1% of the pot on average)
+- **tie %**: Ties (rare in Badugi)
 
-## 🏆 Stratégies Optimales par Situation
+## 🏆 Optimal Strategies by Situation
 
-### Position Early Draw :
+### Early Draw Position:
 ```bash
-# Standards d'ouverture : A-2-X, A-3-X, 2-3-X
+# Opening standards: A-2-X, A-3-X, 2-3-X
 ./pokenum -badugi As 2h - random_opponent
-# Seuil : >70% équité pour value bet
+# Threshold: >70% equity for value bet
 ```
 
-### Position Late Draw :
+### Late Draw Position:
 ```bash
-# Calls possibles avec des draws plus larges
+# Callable hands with wider draws
 ./pokenum -badugi 4s 6h - tight_opener_range
-# Seuil : >30% équité pour call défensif
+# Threshold: >30% equity for defensive call
 ```
 
-### All-in Situations :
+### All-in Situations:
 ```bash
-# ICM considerations avec stacks courtes
+# ICM considerations with short stacks
 ./pokenum -mc 200000 -badugi your_hand - opponent_range
-# Besoin >50% pour call neutre, plus selon ICM
+# Need >50% for neutral call, higher depending on ICM
 ```
 
-## 🔧 Commandes Utiles Pré-configurées
+## 🔧 Useful Pre-configured Commands
 
 ```bash
-# Test d'une base A-2 vs opposition aléatoire
+# Test an A-2 base vs random opposition
 alias badugi_a2="./pokenum -mc 100000 -badugi As 2h - "
 
-# Test rapide d'équité
+# Quick equity test
 alias badugi_quick="./pokenum -mc 50000 -badugi "
 
-# Analyse précise (exhaustive quand possible)
+# Precise analysis (exhaustive when possible)
 alias badugi_exact="./pokenum -badugi "
 ```
 
-## 💡 Conseils d'Optimisation
+## 💡 Optimization Tips
 
-1. **Utilisez Monte Carlo** pour les analyses rapides en session
-2. **Sauvegardez les résultats** pour builds un book de références
-3. **Analysez les patterns** : A-2-X vs A-3-X vs 2-3-X
-4. **Étudiez les breakevens** selon la position et les stacks
-5. **Validez vos intuitions** avec les calculs exacts
+1. **Use Monte Carlo** for quick in-session analysis
+2. **Save results** to build a reference database
+3. **Analyze patterns**: A-2-X vs A-3-X vs 2-3-X
+4. **Study breakeven thresholds** based on position and stack sizes
+5. **Validate your intuitions** with exact calculations
 
-## 🚨 Limitations Actuelles
+## 🚨 Current Limitations
 
-- **Ranges complexes** : pokenum évalue main vs main, pas range vs range
-- **Analyse multiway** : Limité à 2 joueurs pour l'instant
-- **Dead cards** : Pas de support explicite pour cartes vues
+- **Complex ranges**: pokenum evaluates hand vs hand, not range vs range
+- **Multiway analysis**: Limited to 2 players for now
+- **Dead cards**: No explicit support for exposed cards
 
-## 📚 Ressources Complémentaires
+## 📚 Additional Resources
 
-- **Tests unitaires** : `./build/tests/test_badugi` pour validation
-- **Code source** : `src/games/badugi_eval.c` (et en-têtes dans `include/poker_eval/games/`) pour détails techniques
-- **Autres variantes** : Support Badacey (-badacey) et Badeucy disponibles
+- **Unit tests**: `./build/tests/test_badugi` for validation
+- **Source code**: `src/games/badugi_eval.c` (and headers in `include/poker_eval/games/`) for technical details
+- **Other variants**: Badacey (-badacey) and Badeucy support available
 
 ---
 
-*Ce guide utilise poker-eval avec support Badugi complet. Pour d'autres variantes de poker, consultez la documentation générale.*
+*This guide uses poker-eval with full Badugi support. For other poker variants, consult the general documentation.*

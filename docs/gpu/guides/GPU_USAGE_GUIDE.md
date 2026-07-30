@@ -1,78 +1,78 @@
-# Guide d'Utilisation de l'Accélération GPU
+# GPU Acceleration Usage Guide
 
-## Vue d'Ensemble
+## Overview
 
-L'accélération GPU pour l'évaluation de mains de poker offre des performances améliorées pour les gros volumes de calculs. Ce guide explique comment utiliser efficacement cette fonctionnalité.
+GPU acceleration for poker hand evaluation provides improved performance for high-volume calculations. This guide explains how to effectively use this feature.
 
-## Installation et Build
+## Installation and Building
 
-### Prérequis
+### Prerequisites
 
-#### Pour OpenCL (Recommandé)
-- **macOS** : Inclus par défaut
-- **Linux** : `sudo apt-get install opencl-headers ocl-icd-opencl-dev`
-- **Windows** : SDK OpenCL du fabricant GPU
+#### For OpenCL (Recommended)
+- **macOS**: Included by default
+- **Linux**: `sudo apt-get install opencl-headers ocl-icd-opencl-dev`
+- **Windows**: OpenCL SDK from the GPU vendor
 
-#### Pour CUDA (GPU NVIDIA uniquement)
+#### For CUDA (NVIDIA GPUs only)
 - CUDA Toolkit 10.0+
-- GPU NVIDIA avec Compute Capability 3.5+
+- NVIDIA GPU with Compute Capability 3.5+
 
 ### Compilation
 
 ```bash
-# Build avec support GPU automatique
+# Build with automatic GPU support
 mkdir build && cd build
 cmake ..
 make
 
-# Ou utiliser le Makefile traditionnel
+# Or use traditional build targets
 make gpu_eval_example test_gpu_acceleration
 ```
 
-## API de Base
+## Basic API
 
-### Initialisation
+### Initialization
 
 ```c
-#include "eval_gpu.h"
+#include <poker_eval/gpu/eval_gpu.h>
 
-// Vérifier la disponibilité GPU
+// Check GPU availability
 int cuda_available = gpu_is_available(0);    // CUDA
 int opencl_available = gpu_is_available(1);  // OpenCL
 
-// Choisir le backend
+// Choose backend
 int backend = cuda_available ? 0 : (opencl_available ? 1 : -1);
 if (backend < 0) {
-    printf("Aucun GPU disponible\n");
+    printf("No GPU available\n");
     return -1;
 }
 
-// Initialiser le contexte GPU
+// Initialize GPU context
 gpu_eval_context_t* ctx = gpu_eval_init(
-    0,           // device_id (0 = premier GPU)
+    0,           // device_id (0 = first GPU)
     100000,      // max_batch_size
     backend      // 0=CUDA, 1=OpenCL
 );
 ```
 
-### Évaluation par Batch
+### Batch Evaluation
 
 ```c
-// Préparer les données
+// Prepare data
 int n_boards = 10000;
 int n_players = 2;
 StdDeck_CardMask* boards = malloc(n_boards * sizeof(StdDeck_CardMask));
 StdDeck_CardMask* hole_cards = malloc(n_boards * n_players * sizeof(StdDeck_CardMask));
 
-// ... remplir boards et hole_cards ...
+// ... fill boards and hole_cards ...
 
-// Évaluer sur GPU
+// Evaluate on GPU
 gpu_eval_result_t result = {0};
 int ret = gpu_eval_batch_boards(ctx, boards, hole_cards, 
                                n_boards, n_players, &result);
 
 if (ret == 0) {
-    // Utiliser result.hand_values[i] pour chaque évaluation
+    // Use result.hand_values[i] for each evaluation
     for (int i = 0; i < n_boards * n_players; i++) {
         printf("Hand %d: %u\n", i, result.hand_values[i]);
     }
@@ -80,10 +80,10 @@ if (ret == 0) {
 }
 ```
 
-### Simulation Monte Carlo
+### Monte Carlo Simulation
 
 ```c
-// Simulation d'équité
+// Equity simulation
 int n_players = 2;
 int n_simulations = 1000000;
 float equities[2];
@@ -97,119 +97,119 @@ if (ret == 0) {
 }
 ```
 
-### Nettoyage
+### Cleanup
 
 ```c
-// Libérer les ressources
+// Free resources
 gpu_eval_cleanup(ctx);
 ```
 
-## Optimisation des Performances
+## Performance Optimization
 
-### Choix de la Taille de Batch
+### Batch Size Selection
 
-#### GPU Dédiés (NVIDIA/AMD)
+#### Dedicated GPUs (NVIDIA/AMD)
 ```c
-// Optimal pour GPU dédiés
+// Optimal for dedicated GPUs
 if (n_evaluations >= 10000) {
-    // Utiliser GPU - bon speedup attendu
+    // Use GPU - good expected speedup
     use_gpu = 1;
     batch_size = min(n_evaluations, 100000);
 } else {
-    // Utiliser CPU - overhead GPU trop important
+    // Use CPU - GPU overhead too high
     use_gpu = 0;
 }
 ```
 
-#### GPU Intégrés (Intel)
+#### Integrated GPUs (Intel)
 ```c
-// Plus conservateur pour GPU intégrés
+// More conservative for integrated GPUs
 if (n_evaluations >= 50000) {
-    // GPU peut être bénéfique
+    // GPU may be beneficial
     use_gpu = 1;
     batch_size = min(n_evaluations, 50000);
 } else {
-    // CPU probablement plus rapide
+    // CPU is likely faster
     use_gpu = 0;
 }
 ```
 
-### Réutilisation du Contexte
+### Context Reuse
 
 ```c
-// ✅ Bon : réutiliser le contexte
+// ✅ Good: Reuse context
 gpu_eval_context_t* ctx = gpu_eval_init(0, 100000, backend);
 
 for (int batch = 0; batch < num_batches; batch++) {
-    gpu_eval_batch_boards(ctx, ...);  // Réutilise le contexte
+    gpu_eval_batch_boards(ctx, ...);  // Reuses context
 }
 
 gpu_eval_cleanup(ctx);
 
-// ❌ Mauvais : recréer le contexte à chaque fois
+// ❌ Bad: Recreate context every time
 for (int batch = 0; batch < num_batches; batch++) {
     gpu_eval_context_t* ctx = gpu_eval_init(0, 1000, backend);
     gpu_eval_batch_boards(ctx, ...);
-    gpu_eval_cleanup(ctx);  // Overhead important
+    gpu_eval_cleanup(ctx);  // High overhead
 }
 ```
 
-### Gestion Mémoire
+### Memory Management
 
 ```c
-// Pré-allouer pour éviter les allocations répétées
+// Pre-allocate to avoid repeated allocations
 StdDeck_CardMask* boards = malloc(MAX_BATCH_SIZE * sizeof(StdDeck_CardMask));
 StdDeck_CardMask* hole_cards = malloc(MAX_BATCH_SIZE * MAX_PLAYERS * sizeof(StdDeck_CardMask));
 
-// Réutiliser les buffers pour plusieurs batches
+// Reuse buffers for multiple batches
 for (int batch = 0; batch < num_batches; batch++) {
-    // Remplir boards et hole_cards pour ce batch
+    // Fill boards and hole_cards for this batch
     fill_batch_data(boards, hole_cards, batch);
     
-    // Évaluer
+    // Evaluate
     gpu_eval_batch_boards(ctx, boards, hole_cards, batch_size, n_players, &result);
     
-    // Traiter les résultats
+    // Process results
     process_results(&result);
     
-    // result.hand_values est réutilisé automatiquement
+    // result.hand_values is automatically reused
 }
 
 free(boards);
 free(hole_cards);
 ```
 
-## Exemples Pratiques
+## Practical Examples
 
-### Exemple 1 : Évaluation de Range vs Range
+### Example 1: Range vs Range Evaluation
 
 ```c
-#include "eval_gpu.h"
-#include "poker_eval/poker_defs.h"
+#include <poker_eval/gpu/eval_gpu.h>
+#include <poker_eval/core/poker_defs.h>
 
 void evaluate_range_vs_range() {
-    // Initialiser GPU
-    int backend = gpu_is_available(1) ? 1 : 0;  // Préférer OpenCL
+    // Initialize GPU
+    int backend = gpu_is_available(1) ? 1 : 0;  // Prefer OpenCL
     gpu_eval_context_t* ctx = gpu_eval_init(0, 50000, backend);
     
     if (!ctx) {
-        printf("GPU non disponible, utiliser CPU\n");
+        printf("GPU unavailable, fallback to CPU\n");
         return;
     }
     
-    // Générer toutes les combinaisons de boards possibles
+    // Generate all possible board combinations
     int n_boards = 10000;
     StdDeck_CardMask* boards = generate_random_boards(n_boards);
     
-    // Range 1: AA (6 combinaisons)
-    // Range 2: KK (6 combinaisons)  
+    // Range 1: AA (6 combinations)
+    // Range 2: KK (6 combinations)  
     StdDeck_CardMask aa_hands[6], kk_hands[6];
     generate_pocket_pairs(RANK_ACE, aa_hands);
     generate_pocket_pairs(RANK_KING, kk_hands);
     
     int total_wins_aa = 0, total_wins_kk = 0, total_ties = 0;
     
-    // Évaluer chaque combinaison
+    // Evaluate each combination
     for (int aa = 0; aa < 6; aa++) {
         for (int kk = 0; kk < 6; kk++) {
             StdDeck_CardMask hole_cards[2] = {aa_hands[aa], kk_hands[kk]};
@@ -219,7 +219,7 @@ void evaluate_range_vs_range() {
                                           n_boards, 2, &result);
             
             if (ret == 0) {
-                // Compter les victoires
+                // Count wins
                 for (int i = 0; i < n_boards; i++) {
                     HandVal aa_val = result.hand_values[i * 2];
                     HandVal kk_val = result.hand_values[i * 2 + 1];
@@ -234,38 +234,38 @@ void evaluate_range_vs_range() {
     }
     
     int total_hands = 6 * 6 * n_boards;
-    printf("AA vs KK sur %d boards:\n", total_hands);
-    printf("AA gagne: %.2f%%\n", (float)total_wins_aa / total_hands * 100);
-    printf("KK gagne: %.2f%%\n", (float)total_wins_kk / total_hands * 100);
-    printf("Égalités: %.2f%%\n", (float)total_ties / total_hands * 100);
+    printf("AA vs KK over %d boards:\n", total_hands);
+    printf("AA wins: %.2f%%\n", (float)total_wins_aa / total_hands * 100);
+    printf("KK wins: %.2f%%\n", (float)total_wins_kk / total_hands * 100);
+    printf("Ties: %.2f%%\n", (float)total_ties / total_hands * 100);
     
     gpu_eval_cleanup(ctx);
     free(boards);
 }
 ```
 
-### Exemple 2 : Benchmark Adaptatif
+### Example 2: Adaptive Benchmark
 
 ```c
 void adaptive_gpu_benchmark() {
     int backend = gpu_is_available(1) ? 1 : 0;
     
-    // Tester différentes tailles pour trouver le point d'équilibre
+    // Test different sizes to find the break-even point
     int test_sizes[] = {100, 1000, 5000, 10000, 50000};
     int n_sizes = sizeof(test_sizes) / sizeof(test_sizes[0]);
     
-    printf("Recherche du point d'équilibre GPU/CPU...\n");
+    printf("Finding GPU/CPU break-even point...\n");
     
     for (int i = 0; i < n_sizes; i++) {
         int batch_size = test_sizes[i];
         
-        // Test CPU
+        // CPU Test
         clock_t cpu_start = clock();
         run_cpu_evaluation(batch_size);
         clock_t cpu_end = clock();
         double cpu_time = (double)(cpu_end - cpu_start) / CLOCKS_PER_SEC;
         
-        // Test GPU
+        // GPU Test
         clock_t gpu_start = clock();
         run_gpu_evaluation(batch_size, backend);
         clock_t gpu_end = clock();
@@ -279,58 +279,58 @@ void adaptive_gpu_benchmark() {
 }
 ```
 
-## Dépannage
+## Troubleshooting
 
-### Problèmes Courants
+### Common Issues
 
-#### 1. GPU Non Détecté
+#### 1. GPU Not Detected
 ```c
 if (!gpu_is_available(0) && !gpu_is_available(1)) {
-    printf("Aucun GPU détecté. Vérifiez:\n");
-    printf("- Drivers GPU installés\n");
-    printf("- OpenCL/CUDA runtime disponible\n");
-    printf("- Permissions d'accès au GPU\n");
+    printf("No GPU detected. Check:\n");
+    printf("- GPU drivers installed\n");
+    printf("- OpenCL/CUDA runtime available\n");
+    printf("- GPU access permissions\n");
 }
 ```
 
-#### 2. Erreur de Compilation Kernel
+#### 2. Kernel Compilation Error
 ```c
 gpu_eval_context_t* ctx = gpu_eval_init(0, 1000, 1);
 if (!ctx) {
-    printf("Échec d'initialisation GPU.\n");
-    printf("Vérifiez les logs de compilation OpenCL.\n");
-    // Fallback vers CPU
+    printf("GPU initialization failed.\n");
+    printf("Check OpenCL compilation logs.\n");
+    // Fallback to CPU
     use_cpu_evaluation();
 }
 ```
 
-#### 3. Performance Décevante
+#### 3. Disappointing Performance
 ```c
-// Vérifier la taille de batch
+// Check batch size
 if (batch_size < 10000) {
-    printf("Batch trop petit pour GPU (overhead important)\n");
-    printf("Recommandation: batch_size >= 10000\n");
+    printf("Batch too small for GPU (high overhead)\n");
+    printf("Recommendation: batch_size >= 10000\n");
 }
 
-// Vérifier le type de GPU
+// Check GPU type
 char device_name[256];
 gpu_get_device_info(0, device_name, NULL, NULL);
 if (strstr(device_name, "Intel")) {
-    printf("GPU intégré détecté: %s\n", device_name);
-    printf("Performance limitée, considérer CPU pour petits batches\n");
+    printf("Integrated GPU detected: %s\n", device_name);
+    printf("Limited performance; consider CPU for small batches\n");
 }
 ```
 
-### Validation des Résultats
+### Result Validation
 
 ```c
 void validate_gpu_accuracy() {
-    // Générer données de test
+    // Generate test data
     StdDeck_CardMask boards[100];
     StdDeck_CardMask hole_cards[200];  // 100 boards * 2 players
     generate_test_data(boards, hole_cards, 100, 2);
     
-    // Évaluation CPU (référence)
+    // CPU Evaluation (reference)
     HandVal cpu_results[200];
     for (int i = 0; i < 100; i++) {
         for (int j = 0; j < 2; j++) {
@@ -340,12 +340,12 @@ void validate_gpu_accuracy() {
         }
     }
     
-    // Évaluation GPU
+    // GPU Evaluation
     gpu_eval_context_t* ctx = gpu_eval_init(0, 1000, 1);
     gpu_eval_result_t gpu_result = {0};
     gpu_eval_batch_boards(ctx, boards, hole_cards, 100, 2, &gpu_result);
     
-    // Comparaison
+    // Comparison
     int mismatches = 0;
     for (int i = 0; i < 200; i++) {
         if (cpu_results[i] != gpu_result.hand_values[i]) {
@@ -363,25 +363,25 @@ void validate_gpu_accuracy() {
 }
 ```
 
-## Recommandations Finales
+## Final Recommendations
 
-### Utilisation Optimale
+### Optimal Usage
 
-1. **Taille de Batch** : ≥ 10,000 évaluations pour GPU dédiés, ≥ 50,000 pour GPU intégrés
-2. **Réutilisation** : Garder le contexte GPU actif pour plusieurs batches
-3. **Fallback** : Toujours implémenter un fallback CPU
-4. **Validation** : Tester l'exactitude sur votre hardware spécifique
+1. **Batch Size**: ≥ 10,000 evaluations for dedicated GPUs, ≥ 50,000 for integrated GPUs
+2. **Reuse**: Keep GPU context active across multiple batches
+3. **Fallback**: Always implement a CPU fallback
+4. **Validation**: Test accuracy on your specific hardware
 
-### Cas d'Usage Recommandés
+### Recommended Use Cases
 
-- **Analyse de ranges** : Millions d'évaluations
-- **Simulations Monte Carlo** : ≥ 100,000 itérations
-- **Preprocessing** : Calcul de tables de lookup
-- **Batch processing** : Traitement de logs de parties
+- **Range analysis**: Millions of evaluations
+- **Monte Carlo simulations**: ≥ 100,000 iterations
+- **Preprocessing**: Lookup table generation
+- **Batch processing**: Hand history log processing
 
-### Cas d'Usage Non Recommandés
+### Non-Recommended Use Cases
 
-- **Évaluations individuelles** : Overhead trop important
-- **Applications temps réel** : Latence imprévisible
-- **Systèmes embarqués** : Consommation énergétique
-- **Petits volumes** : CPU plus efficace
+- **Single hand evaluations**: Overhead too high
+- **Real-time applications**: Unpredictable latency
+- **Embedded systems**: High power consumption
+- **Small volumes**: CPU is more efficient

@@ -1,26 +1,25 @@
-# Module Games
+# Games Module
 
-Ce module contient la logique spécifique à chaque variante de poker.
+This module contains variant-specific logic for each poker game variant.
 
-> **Remarque** : Les fichiers d'en-tête (headers) correspondants se trouvent dans `include/poker_eval/games/`.
+> **Note**: Corresponding header files are located in `include/poker_eval/games/`.
 
-## Fichiers source (`src/games/`)
+## Source Files (`src/games/`)
 
-- `badugi_eval.c` - Évaluation spécialisée Badugi
-- `chinese_poker.c` - Règles et évaluation du Chinese Poker (OFC)
-- `deck_manila.c` - Gestion du paquet Manila
-- `joker_wild.c` - Gestion des variantes avec jokers et wild cards
-- `lowball.c` - Évaluation et règles lowball (A-5, 2-7, Razz)
-- `mixed_game.c` - Gestion des jeux mixtes (H.O.R.S.E., 8-Game, etc.)
-- `omaha.c` - Évaluation et règles Omaha (High / Hi-Lo)
-- `pineapple.c` - Évaluation et règles Pineapple Hold'em
-- `rules_badugi.c` - Règles de base Badugi
-- `rules_drawmaha.c` - Règles Drawmaha
-- `rules_fusion.c` - Règles Irish / Fusion Poker
-- `rules_manila.c` - Règles Manila Poker
-- `rules_omaha5.c` - Règles Omaha 5 cartes
-- `rules_omaha6.c` - Règles Omaha 6 cartes
-- `rules_pineapple.c` - Règles Pineapple
-- `short_deck.c` - Règles et évaluation Short Deck (6+ Hold'em)
-- `stud.c` - Évaluation et règles 7-Card Stud / Razz / Stud Hi-Lo
-- `triple_draw.c` - Règles et évaluation Triple Draw (2-7, A-5)
+- `badugi_eval.c` - Specialized Badugi evaluation algorithms
+- `deck_manila.c` - Manila card deck management
+- `lowball.c` - Lowball rules and evaluation interface (A-5, 2-7, Razz)
+- `lowball_algorithm.c` - Lowball ranking algorithms and rank selection logic
+- `mixed_game.c` - Mixed game rotation and rules management (H.O.R.S.E., 8-Game, etc.)
+- `rules_astud.c` - Asian Stud game rules
+- `rules_badugi.c` - Base Badugi game rules
+- `rules_drawmaha.c` - Drawmaha game rules
+- `rules_fusion.c` - Irish / Fusion Poker game rules
+- `rules_joker.c` - Game rules for variants with Jokers
+- `rules_manila.c` - Manila Poker game rules
+- `rules_omaha5.c` - 5-Card Omaha game rules
+- `rules_omaha6.c` - 6-Card Omaha game rules
+- `rules_pineapple.c` - Pineapple Hold'em game rules
+- `rules_short.c` - Short Deck (6+ Hold'em) game rules
+- `rules_std.c` - Standard Hold'em / Stud / Omaha base game rules
+- `triple_draw.c` - Triple Draw rules and evaluation (2-7, A-5)

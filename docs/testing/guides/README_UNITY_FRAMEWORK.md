@@ -1,35 +1,35 @@
-# Framework de Tests Unifié avec Unity
+# Unified Testing Framework with Unity
 
-## Vue d'ensemble
+## Overview
 
-Ce projet utilise maintenant Unity comme framework de tests unifié, permettant d'organiser et d'exécuter différents types de tests de manière cohérente.
+This project now uses Unity as its unified test framework, allowing different types of tests to be organized and executed consistently.
 
-## Structure des Tests
+## Test Structure
 
-### 1. Tests Unitaires
-- **Fichier**: `test_card_unity.c`
-- **Objectif**: Tester des fonctions individuelles
-- **Exemple**: Tests des fonctions `CharToRank`, `CharToSuit`, etc.
+### 1. Unit Tests
+- **File**: `test_card_unity.c`
+- **Objective**: Test individual functions
+- **Example**: Tests for functions `CharToRank`, `CharToSuit`, etc.
 
-### 2. Tests d'Intégration
-- **Dossier**: `unity_tests/`
-- **Fichier**: `test_integration_example.c`
-- **Objectif**: Tester l'interaction entre plusieurs composants
-- **Exemple**: Intégration entre cartes et deck
+### 2. Integration Tests
+- **Directory**: `unity_tests/`
+- **File**: `test_integration_example.c`
+- **Objective**: Test interaction between multiple components
+- **Example**: Integration between cards and deck
 
-### 3. Tests de Performance/Benchmarks
-- **Fichier**: `test_benchmark_example.c`
-- **Objectif**: Mesurer les performances des fonctions critiques
-- **Exemple**: Benchmark des conversions de cartes
+### 3. Performance Tests / Benchmarks
+- **File**: `test_benchmark_example.c`
+- **Objective**: Measure performance of critical functions
+- **Example**: Benchmark card conversions
 
-## Installation et Configuration
+## Installation and Setup
 
-### Installation d'Unity
+### Unity Installation
 
-Unity sera automatiquement téléchargé lors de la première compilation. Si vous souhaitez l'installer manuellement :
+Unity will be automatically downloaded during the first build. If you want to install it manually:
 
 ```bash
-# Depuis le dossier racine du projet
+# From the root directory of the project
 cd tests
 git clone https://github.com/ThrowTheSwitch/Unity.git unity
 ```
@@ -41,48 +41,48 @@ cmake .. -DBUILD_TESTS=ON
 make test_card_unity test_integration_example test_benchmark_example
 ```
 
-**Note**: Si Unity n'est pas présent, CMake le téléchargera automatiquement.
+**Note**: If Unity is not present, CMake will download it automatically.
 
-### Exécution des tests Unity
+### Executing Unity Tests
 ```bash
-# Exécuter tous les tests Unity
+# Run all Unity tests
 ctest -R "test_.*_unity|test_integration_example|test_benchmark_example" -V
 
-# Exécuter un test spécifique
+# Run a specific test
 ./tests/test_card_unity
 ./tests/test_integration_example
 ./tests/test_benchmark_example
 ```
 
-## Ajouter de Nouveaux Tests
+## Adding New Tests
 
-### 1. Créer un nouveau test unitaire
+### 1. Create a new unit test
 
 ```c
 #include "unity.h"
-#include "VotreModule.h"
+#include "YourModule.h"
 
 void setUp(void) {}
 void tearDown(void) {}
 
-static void test_votre_fonction(void) {
-    TEST_ASSERT_EQUAL_INT(expected_value, votre_fonction(input));
+static void test_your_function(void) {
+    TEST_ASSERT_EQUAL_INT(expected_value, your_function(input));
 }
 
 int main(void) {
     UNITY_BEGIN();
-    RUN_TEST(test_votre_fonction);
+    RUN_TEST(test_your_function);
     return UNITY_END();
 }
 ```
 
-### 2. Ajouter le test au CMakeLists.txt
+### 2. Add the test to CMakeLists.txt
 
 ```cmake
-add_unity_test(nom_du_test fichier_source.c)
+add_unity_test(test_name source_file.c)
 ```
 
-## Assertions Unity Disponibles
+## Available Unity Assertions
 
 - `TEST_ASSERT_EQUAL_INT(expected, actual)`
 - `TEST_ASSERT_EQUAL_CHAR(expected, actual)`
@@ -92,23 +92,23 @@ add_unity_test(nom_du_test fichier_source.c)
 - `TEST_ASSERT_NOT_NULL(pointer)`
 - `TEST_ASSERT_EQUAL_STRING(expected, actual)`
 
-## Avantages du Framework Unity
+## Advantages of the Unity Framework
 
-1. **Uniformité**: Tous les tests utilisent la même syntaxe
-2. **Lisibilité**: Messages d'erreur clairs et informatifs
-3. **Intégration**: Compatible avec CTest et CI/CD
-4. **Performance**: Framework léger et rapide
-5. **Portabilité**: Fonctionne sur toutes les plateformes
+1. **Uniformity**: All tests use the same syntax
+2. **Readability**: Clear and informative error messages
+3. **Integration**: Compatible with CTest and CI/CD
+4. **Performance**: Lightweight and fast framework
+5. **Portability**: Works across all platforms
 
-## Résultats des Tests
+## Test Results
 
-Les tests Unity affichent :
-- Le nombre de tests exécutés
-- Le nombre de tests réussis/échoués
-- Les détails des échecs avec numéros de ligne
-- Les métriques de performance pour les benchmarks
+Unity tests display:
+- The number of tests executed
+- The number of passed/failed tests
+- Failure details with line numbers
+- Performance metrics for benchmarks
 
-## Exemple de Sortie
+## Example Output
 
 ```
 /path/to/test.c:43:test_char_to_rank:PASS
@@ -121,9 +121,9 @@ Les tests Unity affichent :
 OK
 ```
 
-## Migration des Tests Existants
+## Migrating Existing Tests
 
-Les tests existants peuvent être progressivement migrés vers Unity :
-1. Garder les tests existants fonctionnels
-2. Créer des équivalents Unity pour les nouvelles fonctionnalités
-3. Migrer progressivement les tests critiques vers Unity
+Existing tests can be progressively migrated to Unity:
+1. Keep existing tests functional
+2. Create Unity equivalents for new features
+3. Progressively migrate critical tests to Unity
