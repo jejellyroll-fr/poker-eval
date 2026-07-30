@@ -636,7 +636,7 @@ size_t combo_generator_generate_all(combo_generator_t *gen, mask_t **combination
     if (total == 0 || total > SIZE_MAX)
         return 0;
 
-    *combinations = malloc(total * sizeof(mask_t));
+    *combinations = malloc((size_t)total * sizeof(mask_t));
     if (!*combinations)
         return 0;
 
