@@ -9,21 +9,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-binaries:
-    name: Build Binaries (${{ matrix.os }})
+  build-native:
+    name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            artifact_name: poker-eval-v1.1.0-linux-x86_64.tar.gz
+          - name: Linux x86_64
+            os: ubuntu-latest
+            arch: x86_64
             asset_name: poker-eval-v1.1.0-linux-x86_64.tar.gz
-          - os: macos-latest
-            artifact_name: poker-eval-v1.1.0-macos.tar.gz
-            asset_name: poker-eval-v1.1.0-macos.tar.gz
-          - os: windows-latest
-            artifact_name: poker-eval-v1.1.0-windows-x64.zip
-            asset_name: poker-eval-v1.1.0-windows-x64.zip
+          - name: macOS ARM64
+            os: macos-14
+            arch: arm64
+            asset_name: poker-eval-v1.1.0-macos-arm64.tar.gz
+          - name: macOS x86_64
+            os: macos-13
+            arch: x86_64
+            asset_name: poker-eval-v1.1.0-macos-x86_64.tar.gz
+          - name: Windows x86_64
+            os: windows-latest
+            arch: x86_64
+            asset_name: poker-eval-v1.1.0-windows-x86_64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -65,5 +72,108 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         with:
           files: ${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux-arm64:
+    name: Build (Linux ARM64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Configure CMake for Linux ARM64
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_C_API=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Package Linux ARM64
+        run: |
+          mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
+          cp -r bin/* release_pkg/bin/ 2>/dev/null || true
+          cp -r include/poker_eval release_pkg/include/ 2>/dev/null || true
+          cp -r lib/* release_pkg/lib/ 2>/dev/null || true
+          cd release_pkg && tar -czvf ../poker-eval-v1.1.0-linux-arm64.tar.gz *
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        with:
+          files: poker-eval-v1.1.0-linux-arm64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows-arm64:
+    name: Build (Windows ARM64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake for Windows ARM64
+        shell: powershell
+        run: |
+          cmake -B build -S . -A ARM64 -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+
+      - name: Build
+        shell: powershell
+        run: cmake --build build --config Release
+
+      - name: Package Windows ARM64
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path release_pkg\bin, release_pkg\include, release_pkg\lib -Force
+          Copy-Item -Path bin\* -Destination release_pkg\bin\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path include\poker_eval -Destination release_pkg\include\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path lib\* -Destination release_pkg\lib\ -Recurse -ErrorAction SilentlyContinue
+          Compress-Archive -Path release_pkg\* -DestinationPath poker-eval-v1.1.0-windows-arm64.zip
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        with:
+          files: poker-eval-v1.1.0-windows-arm64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-freebsd:
+    name: Build (FreeBSD x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build in FreeBSD VM
+        uses: vmactions/freebsd-runner@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y cmake gmake
+          run: |
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            cmake --build build -j$(sysctl -n hw.ncpu)
+            mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
+            cp -r bin/* release_pkg/bin/ 2>/dev/null || true
+            cp -r include/poker_eval release_pkg/include/ 2>/dev/null || true
+            cp -r lib/* release_pkg/lib/ 2>/dev/null || true
+            cd release_pkg && tar -czvf ../poker-eval-v1.1.0-freebsd-x86_64.tar.gz *
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        with:
+          files: poker-eval-v1.1.0-freebsd-x86_64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
