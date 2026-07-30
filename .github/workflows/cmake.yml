@@ -13,6 +13,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +87,15 @@ jobs:
     - name: Build
       run: cmake --build --preset ${{ matrix.preset }} --parallel
 
+    - name: Add MinGW build DLLs to PATH
+      if: runner.os == 'Windows' && matrix.compiler == 'mingw'
+      shell: pwsh
+      run: |
+        Get-ChildItem build/default -Recurse -Filter *.dll |
+          ForEach-Object { $_.DirectoryName } |
+          Sort-Object -Unique |
+          ForEach-Object { $_ >> $env:GITHUB_PATH }
+
     - name: Stress Linux crash regressions
       if: runner.os == 'Linux'
       run: >-
@@ -95,7 +105,7 @@ jobs:
         -R '^(test_mpf_perf_stats|test_enumerate_dispatch)$'
     
     - name: Test
-      run: ctest --preset ${{ matrix.preset }} --output-on-failure
+      run: ctest --preset ${{ matrix.preset }} --output-on-failure --timeout 60
     
 
 
