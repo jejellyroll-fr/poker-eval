@@ -31,7 +31,7 @@ jobs:
           - name: Windows x86_64
             os: windows-latest
             asset_name: poker-eval-v1.1.0-windows-x86_64.zip
-            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON"
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF"
 
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +90,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_EXAMPLES=ON \
             -DBUILD_TESTS=OFF \
-            -DBUILD_C_API=ON
+            -DBUILD_C_API=ON \
+            -DBUILD_STATIC_LIBS=ON \
+            -DBUILD_SHARED_LIBS=ON
 
       - name: Build
         run: cmake --build build --parallel
@@ -120,7 +122,7 @@ jobs:
       - name: Configure CMake for Windows ARM64
         shell: powershell
         run: |
-          cmake -B build -S . -A ARM64 -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
+          cmake -B build -S . -A ARM64 -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF
 
       - name: Build
         shell: powershell
@@ -153,16 +155,15 @@ jobs:
         uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
-          prepare: |
-            env ASSUME_ALWAYS_YES=YES pkg install -y cmake gmake
+          prepare: pkg install -y cmake gmake
           run: |
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
-            gmake -C build -j$(sysctl -n hw.ncpu)
+            mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON && gmake -j$(sysctl -n hw.ncpu)
+            cd ..
             mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
-            cp -r bin/* release_pkg/bin/ 2>/dev/null || true
-            cp -r include/poker_eval release_pkg/include/ 2>/dev/null || true
-            cp -r lib/* release_pkg/lib/ 2>/dev/null || true
-            cd release_pkg && tar -czvf ../poker-eval-v1.1.0-freebsd-x86_64.tar.gz *
+            cp -r bin/* release_pkg/bin/ || true
+            cp -r include/poker_eval release_pkg/include/ || true
+            cp -r lib/* release_pkg/lib/ || true
+            tar -czvf poker-eval-v1.1.0-freebsd-x86_64.tar.gz -C release_pkg bin include lib
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
