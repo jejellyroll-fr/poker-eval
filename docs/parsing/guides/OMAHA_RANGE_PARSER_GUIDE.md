@@ -6,7 +6,7 @@ L'API Omaha Range Parser étend l'Advanced Range Parser pour supporter les range
 
 ## Fonctionnalités implémentées
 
-### ✅ Phase 1 - Implémentation de base (Complète)
+### ✅ Phase 1 - Implémentation de base
 
 - ✅ **Patterns PLO standards** : `AAxxds`, `JT98r`, `KKxxss`
 - ✅ **Mains spécifiques** : `AsKdQhJc`, `AhKdQsJh`
@@ -16,17 +16,17 @@ L'API Omaha Range Parser étend l'Advanced Range Parser pour supporter les range
 - ✅ **Intégration** avec OmahaHandList
 - ✅ **Support multi-jeux** Omaha (PLO, PLO8, etc.)
 
-### 🚧 Phase 2 - Opérateurs avancés (En développement)
+### ✅ Phase 2 - Opérateurs avancés
 
-- 🚧 **Opérateurs** : `+`, `-`, `!`
-- 🚧 **Expressions complexes** : `20% - AAxx`, `JT98r + JT98ds`
-- 🚧 **Ranges étendues** : Support de patterns plus complexes
+- ✅ **Opérateurs** : `+`, `-`, `!`
+- ✅ **Expressions complexes** : `20% - AAxx`, `JT98r + JT98ds`
+- ✅ **Ranges étendues** : Support de patterns plus complexes
 
-### 📋 Phase 3 - Optimisation (Planifié)
+### 🚧 Phase 3 - Optimisation (En cours)
 
-- 📋 **Rankings complets** des mains Omaha
-- 📋 **Performance** optimisée pour grandes ranges
-- 📋 **Cache** de patterns fréquents
+- 🚧 **Rankings complets** des mains Omaha
+- 🚧 **Performance** optimisée pour grandes ranges
+- 🚧 **Cache** de patterns fréquents
 
 ## Syntaxe supportée
 

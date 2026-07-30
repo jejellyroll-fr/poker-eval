@@ -35,6 +35,7 @@ static void test_omaha_hand_list_integration(void);
 static void test_game_type_detection(void);
 static void test_error_handling(void);
 static void test_plo_pattern_addition(void);
+static void test_omaha_operators(void);
 
 /* Test counter */
 static int tests_run = 0;
@@ -278,6 +279,57 @@ static void test_plo_pattern_addition(void)
     }
 }
 
+/* Test Phase 2 operators (+, -, !) with Omaha patterns */
+static void test_omaha_operators(void)
+{
+    printf("\n=== Testing Omaha Operators ===\n");
+
+    StdDeck_CardMask dead_cards;
+    StdDeck_CardMask_RESET(dead_cards);
+
+    arp_range_t range;
+
+    /* Test Addition (+) with PLO patterns */
+    int result = ARP_ParseOmahaRange("AAxxds + KKxxds", dead_cards, game_omaha, &range);
+    TEST_ASSERT(result == 1, "Parse AAxxds + KKxxds");
+    TEST_ASSERT(range.count > 0, "AAxxds + KKxxds generates hands");
+    if (result)
+        ARP_FreeRange(&range);
+
+    /* Test Subtraction (-)  */
+    result = ARP_ParseOmahaRange("AAxxds - AAxxss", dead_cards, game_omaha, &range);
+    TEST_ASSERT(result == 1, "Parse AAxxds - AAxxss");
+    if (result)
+        ARP_FreeRange(&range);
+
+    /* Test Exclusion (!) */
+    result = ARP_ParseOmahaRange("!AAxx", dead_cards, game_omaha, &range);
+    TEST_ASSERT(result == 1, "Parse !AAxx (complement)");
+    if (result)
+        ARP_FreeRange(&range);
+
+    /* Test Complex Expression with parentheses */
+    result = ARP_ParseOmahaRange("(AAxxds, KKxxds) - (AAxxss)", dead_cards, game_omaha, &range);
+    TEST_ASSERT(result == 1, "Parse (AAxxds, KKxxds) - (AAxxss)");
+    TEST_ASSERT(range.count > 0, "Complex expression generates hands");
+    if (result)
+        ARP_FreeRange(&range);
+
+    /* Test Operator with Percentage */
+    result = ARP_ParseOmahaRange("10% - AAxx", dead_cards, game_omaha, &range);
+    TEST_ASSERT(result == 1, "Parse 10% - AAxx");
+    TEST_ASSERT(range.count > 0, "Subtracting AAxx from 10% leaves hands");
+    if (result)
+        ARP_FreeRange(&range);
+
+    /* Test Mixed rundowns with operators */
+    result = ARP_ParseOmahaRange("JT98ds + JT98r", dead_cards, game_omaha, &range);
+    TEST_ASSERT(result == 1, "Parse JT98ds + JT98r");
+    TEST_ASSERT(range.count > 0, "Union of rundowns generates hands");
+    if (result)
+        ARP_FreeRange(&range);
+}
+
 int main(void)
 {
     printf("Omaha Range Parser Test Suite\n");
@@ -292,6 +344,7 @@ int main(void)
     test_game_type_detection();
     test_error_handling();
     test_plo_pattern_addition();
+    test_omaha_operators();
 
     /* Print results */
     printf("\n=== Test Results ===\n");
