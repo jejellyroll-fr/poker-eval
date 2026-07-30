@@ -2,9 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.1.0] - 2026-07-30
 
-### Added
+### Documentation & Translation
+- Audited all 30+ markdown files across the repository against C source code headers.
+- Synchronized all function signatures, struct fields, enum definitions, header include paths, and binary locations.
+- Translated all French markdown documentation, code comments, and section titles into technical English.
+
+### Fixes & Stability
+- Bound memory operations across API boundaries (`strnlen`, `sizeof` bounds, NUL termination for `strncpy`).
+- Restored MSVC and MinGW compiler portability.
+- Fixed Linux solver race conditions and crash regressions.
+- Corrected Debug assertion failures across evaluators.
+- Fixed Python wheel build requirements (Python >= 3.11).
+- Improved CI CMake preset resolution and GPU tree building.
 - GPU acceleration support (CUDA/OpenCL)
 - SIMD optimizations for batch operations
 - Multi-threaded Monte Carlo simulations
