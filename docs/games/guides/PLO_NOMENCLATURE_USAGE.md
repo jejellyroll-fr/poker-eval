@@ -48,7 +48,7 @@ if (PLO_MatchesPattern(&hand, "AAxxds")) {
 ## Exemple d'utilisation complet
 
 ```c
-#include "PLONomenclature.h"
+#include <poker_eval/distributions/plo_nomenclature.h>
 #include <stdio.h>
 
 int main() {
@@ -135,7 +135,7 @@ typedef struct {
 Le module est automatiquement inclus dans la bibliothèque poker_eval. Pour compiler un programme l'utilisant :
 
 ```bash
-gcc -o mon_programme mon_programme.c -lpoker_lib_static
+gcc -o mon_programme mon_programme.c -lpoker_eval -lpoker_distributions
 ```
 
 ## Notes importantes

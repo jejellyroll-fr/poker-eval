@@ -188,7 +188,7 @@ alias badugi_exact="./pokenum -badugi "
 ## 📚 Ressources Complémentaires
 
 - **Tests unitaires** : `./build/tests/test_badugi` pour validation
-- **Code source** : `lib/badugi_eval.c` pour détails techniques
+- **Code source** : `src/games/badugi_eval.c` (et en-têtes dans `include/poker_eval/games/`) pour détails techniques
 - **Autres variantes** : Support Badacey (-badacey) et Badeucy disponibles
 
 ---

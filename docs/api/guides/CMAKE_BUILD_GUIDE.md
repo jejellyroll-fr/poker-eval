@@ -84,7 +84,9 @@ sudo cmake --install build
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `BUILD_C_API` | ON | Build stable C API |
 | `BUILD_PYTHON_BINDING` | ON | Build Python bindings |
+| `BUILD_CYTHON_BINDING` | OFF | Build Cython bindings |
 | `BUILD_JAVA_BINDING` | OFF | Build Java bindings |
 | `BUILD_CSHARP_BINDING` | OFF | Build C# bindings |
 | `BUILD_CXX_BINDING` | OFF | Build C++ bindings |
@@ -103,6 +105,7 @@ The project includes several predefined configurations in `CMakePresets.json`:
 ### Platform-Specific Presets
 
 - `windows-msvc` - Windows build with Visual Studio
+- `windows-mingw` - Windows build with MinGW
 - `macos` - macOS build with deployment target
 - `linux-gcc` - Linux build with GCC
 - `linux-clang` - Linux build with Clang
@@ -174,12 +177,18 @@ cmake -B build -S . \
 ### GPU Acceleration
 
 ```bash
-# Build with CUDA support
+# Build with GPU acceleration support (CUDA / OpenCL)
 cmake -B build -S . -DBUILD_GPU=ON
 
-# Verify GPU support
-./build/examples/gpu_eval_example
+# Run GPU batched benchmark
+./build/bin/bench_gpu_batched
 ```
+
+Available GPU benchmark targets (output binary directory: `build/bin/`):
+- `bench_gpu_batched` - Batched GPU hand evaluation benchmark
+- `bench_gpu_cfr` - GPU-accelerated CFR solver benchmark
+- `bench_gpu_comprehensive` - Comprehensive GPU performance benchmark
+- `ofc_gpu_benchmark` - Open-Face Chinese Poker GPU benchmark
 
 ### Code Coverage
 

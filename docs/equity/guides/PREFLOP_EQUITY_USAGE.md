@@ -24,7 +24,7 @@ Le système de calcul d'équité pré-flop permet de calculer l'équité entre d
 ### 1. Calcul exhaustif (100% précis, lent)
 
 ```bash
-./src/examples/preflop_equity_demo "AA" "KK"
+./bin/preflop_equity_demo "AA" "KK"
 ```
 
 **Sortie :**
@@ -49,7 +49,7 @@ Boards evaluated: 61,642,944
 
 **Génération de la table (à faire une seule fois) :**
 ```bash
-./src/utils/generate_preflop_table holdem_preflop_169x169.dat
+./bin/generate_preflop_table holdem_preflop_169x169.dat
 ```
 
 ⚠️ **Attention** : Cette opération prend **plusieurs heures** (~3-5h)
@@ -59,7 +59,7 @@ Boards evaluated: 61,642,944
 
 **Utilisation de la table :**
 ```bash
-./src/examples/preflop_with_table_demo "AA" "KK" holdem_preflop_169x169.dat
+./bin/preflop_with_table_demo "AA" "KK" holdem_preflop_169x169.dat
 ```
 
 **Sortie attendue :**
@@ -78,7 +78,7 @@ Speedup: 100,000× faster
 ### 3. Range vs Range
 
 ```bash
-./src/examples/preflop_equity_demo "AA,KK,QQ" "JJ,TT,99"
+./bin/preflop_equity_demo "AA,KK,QQ" "JJ,TT,99"
 ```
 
 **Sortie :**
@@ -94,7 +94,7 @@ Range 2 equity: 17.69%
 **Avec lookup table (instantané) :**
 ```bash
 # Lorsque la table est générée
-./src/examples/preflop_with_table_demo "AA,KK,QQ" "JJ,TT,99" holdem_preflop_169x169.dat
+./bin/preflop_with_table_demo "AA,KK,QQ" "JJ,TT,99" holdem_preflop_169x169.dat
 ```
 
 ## API C
@@ -175,7 +175,7 @@ Offset  | Taille | Description
 0x0000  | 4      | Magic : 0x50464C54 ("PFLT")
 0x0004  | 4      | Version : 1
 0x0008  | 4      | Game type : game_holdem
-0x000C  | 114,444| Equity matrix (169×169 floats)
+0x000C  | 114,244| Equity matrix (169×169 floats)
 ```
 
 ### Propriétés

@@ -179,6 +179,7 @@ typedef struct {
 typedef struct {
     int num_players;
     pe_equity_result_t results[10];
+    pe_hilo_equity_result_t hilo_results[10];
     long samples;     // Number of samples
     int exact;        // 1 if exact, 0 if Monte Carlo
 } pe_equity_result_multi_t;
@@ -219,6 +220,14 @@ Uses exact enumeration for river, Monte Carlo for earlier streets:
 EvalConfig cfg = eval_config_holdem();
 EvalContext *ctx = eval_context_create(&cfg);
 
+StdDeck_CardMask dead;
+StdDeck_CardMask_RESET(dead);
+
+pe_range_t *r1 = NULL, *r2 = NULL;
+pe_range_parse(game_holdem, "AA,KK", dead, NULL, &r1);
+pe_range_parse(game_holdem, "QQ,JJ", dead, NULL, &r2);
+const pe_range_t *ranges[] = {r1, r2};
+
 // Set up flop board
 StdDeck_CardMask board;
 StdDeck_CardMask_RESET(board);
@@ -229,6 +238,8 @@ StdDeck_CardMask_SET(board, StdDeck_MAKE_CARD(StdDeck_Rank_TEN, StdDeck_Suit_HEA
 pe_equity_result_multi_t result;
 pe_equity_multiway(ctx, game_holdem, ranges, 2, board, dead, NULL, &result);
 
+pe_range_free(r1);
+pe_range_free(r2);
 eval_context_destroy(ctx);
 ```
 
@@ -303,6 +314,11 @@ if (st != PE_STATUS_OK) {
 ### Robust Error Handling Pattern
 
 ```c
+const char *range1_str = "AA,KK";
+const char *range2_str = "QQ,JJ";
+StdDeck_CardMask dead;
+StdDeck_CardMask_RESET(dead);
+
 pe_range_t *r1 = NULL, *r2 = NULL;
 pe_equity_result_multi_t result;
 int ret = 0;
@@ -404,7 +420,10 @@ printf("P1 Hi: %.1f%%, Lo: %.1f%%, Scoop: %.1f%%\n",
 ### Multiway Pot
 
 ```c
-pe_range_t *r1, *r2, *r3;
+StdDeck_CardMask dead;
+StdDeck_CardMask_RESET(dead);
+
+pe_range_t *r1 = NULL, *r2 = NULL, *r3 = NULL;
 pe_range_parse(game_holdem, "AA,KK", dead, NULL, &r1);
 pe_range_parse(game_holdem, "QQ,JJ", dead, NULL, &r2);
 pe_range_parse(game_holdem, "TT,99,88", dead, NULL, &r3);
@@ -429,8 +448,19 @@ pe_range_free(r3);
 ### 1. Reuse Contexts
 
 ```c
-// Create once
+EvalConfig cfg = eval_config_holdem();
 EvalContext *ctx = eval_context_create(&cfg);
+
+StdDeck_CardMask dead, board;
+StdDeck_CardMask_RESET(dead);
+StdDeck_CardMask_RESET(board);
+
+pe_range_t *r1 = NULL, *r2 = NULL;
+pe_range_parse(game_holdem, "AA", dead, NULL, &r1);
+pe_range_parse(game_holdem, "KK", dead, NULL, &r2);
+const pe_range_t *ranges[] = {r1, r2};
+pe_equity_result_multi_t result;
+int num_calculations = 10;
 
 // Use multiple times
 for (int i = 0; i < num_calculations; i++) {
@@ -438,6 +468,8 @@ for (int i = 0; i < num_calculations; i++) {
 }
 
 // Destroy once
+pe_range_free(r1);
+pe_range_free(r2);
 eval_context_destroy(ctx);
 ```
 
@@ -468,10 +500,26 @@ pe_range_filter_dead(range, board, &filtered);
 River calculations with small ranges are exact and fast:
 
 ```c
+EvalConfig cfg = eval_config_holdem();
+EvalContext *ctx = eval_context_create(&cfg);
+
+StdDeck_CardMask dead, river_board;
+StdDeck_CardMask_RESET(dead);
+StdDeck_CardMask_RESET(river_board); // 5 cards
+
+pe_range_t *r1 = NULL, *r2 = NULL;
+pe_range_parse(game_holdem, "AA", dead, NULL, &r1);
+pe_range_parse(game_holdem, "KK", dead, NULL, &r2);
+const pe_range_t *ranges[] = {r1, r2};
+pe_equity_result_multi_t result;
+
 // This will use exact enumeration (5-card board)
-StdDeck_CardMask river_board;  // 5 cards
 pe_equity_multiway(ctx, game_holdem, ranges, 2, river_board, dead, NULL, &result);
 // result.exact == 1
+
+pe_range_free(r1);
+pe_range_free(r2);
+eval_context_destroy(ctx);
 ```
 
 ---

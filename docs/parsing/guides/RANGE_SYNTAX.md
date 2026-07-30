@@ -22,8 +22,8 @@ The Advanced Range Parser provides a unified syntax for describing ranges of pok
 
 - Texas Hold'em (game_holdem)
 - Omaha / Omaha Hi-Lo (game_omaha, game_omaha8)
-- 5-Card Omaha (game_omaha5, game_omaha5_8)
-- 6-Card Omaha (game_omaha6, game_omaha6_8)
+- 5-Card Omaha (game_omaha5, game_omaha85)
+- 6-Card Omaha (game_omaha6, game_omaha86)
 - 7-Card Stud (game_7stud, game_7stud8)
 - Razz (game_razz)
 
@@ -347,7 +347,7 @@ The Advanced Range Parser provides utility functions for common operations witho
 Useful for UI display or validation:
 
 ```c
-#include <poker_eval/distributions/AdvancedRangeParser.h>
+#include <poker_eval/range/AdvancedRangeParser.h>
 
 // Count hands in a range without allocating
 size_t count = ARP_CountCombinations("AA-TT + AK-AJ", dead_cards, game_holdem);
@@ -624,6 +624,7 @@ typedef struct {
     bool is_percentage;       // True if defined by percentage
     enum_game_t game_type;    // Game type for this range
     bool is_omaha;            // True if Omaha variant
+    void *internal_data;      // Opaque pointer for internal use (e.g., hash table)
 } arp_range_t;
 ```
 
@@ -633,6 +634,7 @@ typedef struct {
 typedef enum {
     ARP_TOKEN_UNKNOWN = 0,
     ARP_TOKEN_PAIR_RANGE,      // AA-TT
+    ARP_TOKEN_HAND_RANGE,      // AK-AJ, AKs-AJs, etc.
     ARP_TOKEN_SUITED,          // AKs
     ARP_TOKEN_OFFSUIT,         // AKo
     ARP_TOKEN_BOTH,            // AK (both suited and offsuit)
@@ -640,7 +642,11 @@ typedef enum {
     ARP_TOKEN_SPECIFIC_HAND,   // AsKh
     ARP_TOKEN_OPERATION,       // +, -, !
     ARP_TOKEN_COMMA,           // ,
+    ARP_TOKEN_STUD_PATTERN,    // (AA)K, (ss)Ks
     ARP_TOKEN_PLO_PATTERN,     // AAxxds, JT98r
+    ARP_TOKEN_PLO_CATEGORY,    // PLO hand categories
+    ARP_TOKEN_LPAREN,          // (
+    ARP_TOKEN_RPAREN,          // )
     ARP_TOKEN_END
 } arp_token_type_t;
 ```
@@ -665,7 +671,7 @@ AA, !AsAh        # Conserve 5 combos d'AA
 
 Ces fonctionnalités sont disponibles dans les API C et Python (notamment pour `CalculateMultiwayEquity`).
 
-Consultez `docs/guides/MULTIWAY_EQUITY_GUIDE.md` pour un exemple complet.
+Consultez [MULTIWAY_EQUITY_GUIDE.md](../../equity/guides/MULTIWAY_EQUITY_GUIDE.md) pour un exemple complet.
 
 
 ### Validation Functions
@@ -929,8 +935,8 @@ make test_omaha_range_parser
 
 ## References
 
-- **Source Code**: `src/equity/AdvancedRangeParser.c`
-- **Header**: `include/poker_eval/equity/AdvancedRangeParser.h`
+- **Source Code**: `src/range/AdvancedRangeParser.c`
+- **Header**: `include/poker_eval/range/AdvancedRangeParser.h`
 - **Tests**: `tests/test_advanced_range_parser.c`, `tests/test_omaha_range_parser.c`
 - **Examples**: `examples/advanced_range_example.c`
 

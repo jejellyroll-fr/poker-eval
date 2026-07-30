@@ -49,16 +49,15 @@ int CalculateEquityForRanges_Auto(...)
 
 ### Exemple 1 : Calcul simple
 ```c
-#include "RangeEquity.h"
-#include "RangeEquity_MT.h"
+#include <poker_eval/equity/RangeEquity.h>
 
 // Définir les ranges
 StdDeck_CardMask hands1[10], hands2[10];
 // ... remplir les mains ...
 
 PlayerRange ranges[2] = {
-    {hands1, 10},
-    {hands2, 10}
+    {.hand_masks = hands1, .count = 10},
+    {.hand_masks = hands2, .count = 10}
 };
 
 // Préparer le board et les cartes mortes
@@ -151,7 +150,9 @@ Pour les très grandes ranges :
 
 ```bash
 # Avec OpenMP
-gcc -O3 -fopenmp myapp.c -lpoker-eval-mt -lm
+gcc -O3 -fopenmp myapp.c -lpoker_equity -lm
+# Ou avec la bibliothèque combinée :
+# gcc -O3 -fopenmp myapp.c -lpoker_eval -lm
 
 # Flags recommandés
 CFLAGS = -O3 -march=native -fopenmp

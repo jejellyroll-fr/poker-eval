@@ -23,7 +23,7 @@ Typical speedups observed:
 ### Capability Detection
 
 ```c
-#include "simd_card_operations.h"
+#include <poker_eval/utils/simd_card_operations.h>
 
 // Detect available SIMD capabilities
 simd_capability_t cap = simd_detect_capability();
@@ -64,18 +64,17 @@ simd_extract_results_to_array(&results, hand_values);
 ### Range vs Range Equity
 
 ```c
-// Calculate equity between two ranges
+// Evaluate hands in ranges using SIMD batch processing
 StdDeck_CardMask range1[10], range2[10];
-StdDeck_CardMask board;
+HandVal results1[10], results2[10];
 
-// ... populate ranges and board ...
+// ... populate ranges ...
 
-double equity = simd_calculate_range_equity(
-    range1, 10,      // Range 1
-    range2, 10,      // Range 2
-    &board, 5,       // Board cards
-    10000            // Iterations
-);
+// Evaluate range 1 hands in parallel using SIMD
+simd_eval_multiple_hands(range1, 10, results1);
+
+// Evaluate range 2 hands in parallel using SIMD
+simd_eval_multiple_hands(range2, 10, results2);
 ```
 
 ## Example: Tournament Simulation
@@ -125,10 +124,10 @@ To enable SIMD optimizations when compiling manually:
 
 ```bash
 # For AVX2 support
-gcc -mavx2 -O3 -c lib/simd_card_operations.c
+gcc -mavx2 -O3 -c src/utils/simd_card_operations.c
 
 # For AVX-512 support
-gcc -mavx512f -O3 -c lib/simd_card_operations.c
+gcc -mavx512f -O3 -c src/utils/simd_card_operations.c
 ```
 
 ## Testing and Validation

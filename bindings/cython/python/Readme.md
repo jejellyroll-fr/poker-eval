@@ -74,7 +74,7 @@ This will generate a shared object (`.so` file) that you can import directly int
 Once the Cython extension is built, you can use it in your Python code as follows:
 
 ```python
-from pokereval import PokerEval
+from pokereval.pokereval import PokerEval
 
 # Initialize the poker evaluator
 poker_eval = PokerEval()
