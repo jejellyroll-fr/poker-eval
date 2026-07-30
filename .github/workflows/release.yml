@@ -46,9 +46,9 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
-          cp -r bin/* release_pkg/bin/ 2>/dev/null || true
-          cp -r include/poker_eval release_pkg/include/ 2>/dev/null || true
-          cp -r lib/* release_pkg/lib/ 2>/dev/null || true
+          cp -R include/poker_eval release_pkg/include/
+          find build -type f \( -name "*.a" -o -name "*.dylib" -o -name "*.so*" \) -exec cp -p {} release_pkg/lib/ \; 2>/dev/null || true
+          find build -type f -perm +111 ! -name "*.dylib" ! -name "*.so*" ! -name "*.a" ! -name "*.sh" -exec cp -p {} release_pkg/bin/ \; 2>/dev/null || true
           cd release_pkg && tar -czvf ../${{ matrix.asset_name }} *
 
       - name: Package (Windows)
@@ -56,9 +56,9 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path release_pkg\bin, release_pkg\include, release_pkg\lib -Force
-          Copy-Item -Path bin\* -Destination release_pkg\bin\ -Recurse -ErrorAction SilentlyContinue
-          Copy-Item -Path include\poker_eval -Destination release_pkg\include\ -Recurse -ErrorAction SilentlyContinue
-          Copy-Item -Path lib\* -Destination release_pkg\lib\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path include\poker_eval -Destination release_pkg\include\ -Recurse
+          Get-ChildItem -Path build -Recurse -Include *.lib, *.dll, *.a, *.pdb | Copy-Item -Destination release_pkg\lib\ -Force
+          Get-ChildItem -Path build -Recurse -Include *.exe | Copy-Item -Destination release_pkg\bin\ -Force -ErrorAction SilentlyContinue
           Compress-Archive -Path release_pkg\* -DestinationPath ${{ matrix.asset_name }}
 
       - name: Upload Release Asset
@@ -100,9 +100,9 @@ jobs:
       - name: Package Linux ARM64
         run: |
           mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
-          cp -r bin/* release_pkg/bin/ 2>/dev/null || true
-          cp -r include/poker_eval release_pkg/include/ 2>/dev/null || true
-          cp -r lib/* release_pkg/lib/ 2>/dev/null || true
+          cp -R include/poker_eval release_pkg/include/
+          find build -type f \( -name "*.a" -o -name "*.dylib" -o -name "*.so*" \) -exec cp -p {} release_pkg/lib/ \; 2>/dev/null || true
+          find build -type f -executable ! -name "*.dylib" ! -name "*.so*" ! -name "*.a" -exec cp -p {} release_pkg/bin/ \; 2>/dev/null || true
           cd release_pkg && tar -czvf ../poker-eval-v1.1.0-linux-arm64.tar.gz *
 
       - name: Upload Release Asset
@@ -132,9 +132,9 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path release_pkg\bin, release_pkg\include, release_pkg\lib -Force
-          Copy-Item -Path bin\* -Destination release_pkg\bin\ -Recurse -ErrorAction SilentlyContinue
-          Copy-Item -Path include\poker_eval -Destination release_pkg\include\ -Recurse -ErrorAction SilentlyContinue
-          Copy-Item -Path lib\* -Destination release_pkg\lib\ -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path include\poker_eval -Destination release_pkg\include\ -Recurse
+          Get-ChildItem -Path build -Recurse -Include *.lib, *.dll, *.a | Copy-Item -Destination release_pkg\lib\ -Force
+          Get-ChildItem -Path build -Recurse -Include *.exe | Copy-Item -Destination release_pkg\bin\ -Force -ErrorAction SilentlyContinue
           Compress-Archive -Path release_pkg\* -DestinationPath poker-eval-v1.1.0-windows-arm64.zip
 
       - name: Upload Release Asset
@@ -161,8 +161,7 @@ jobs:
             cmake --build build
             mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
             cp -R include/poker_eval release_pkg/include/
-            find build -name "*.a" -exec cp {} release_pkg/lib/ \; 2>/dev/null || true
-            find build -name "*.so*" -exec cp {} release_pkg/lib/ \; 2>/dev/null || true
+            find build -type f \( -name "*.a" -o -name "*.so*" \) -exec cp {} release_pkg/lib/ \; 2>/dev/null || true
             tar -czvf poker-eval-v1.1.0-freebsd-x86_64.tar.gz -C release_pkg .
 
       - name: Upload Release Asset
@@ -170,5 +169,28 @@ jobs:
         with:
           tag_name: v1.1.0
           files: poker-eval-v1.1.0-freebsd-x86_64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-wheels:
+    name: Build Python Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-13, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Wheels via cibuildwheel
+        uses: pypa/cibuildwheel@v2.23.0
+        env:
+          CIBW_BUILD: "cp311-* cp312-* cp313-*"
+
+      - name: Upload Release Wheels
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.1.0
+          files: wheelhouse/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
