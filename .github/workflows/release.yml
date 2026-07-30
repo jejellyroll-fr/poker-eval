@@ -157,11 +157,8 @@ jobs:
           usesh: true
           prepare: pkg install -y cmake gmake
           run: |
-            mkdir -p build
-            cd build
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
-            gmake -j2
-            cd ..
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            cmake --build build
             mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
             cp -r bin/* release_pkg/bin/ || true
             cp -r include/poker_eval release_pkg/include/ || true
