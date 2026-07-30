@@ -1,23 +1,23 @@
-# Module Distributions
+# Distributions Module
 
-Ce module gère la génération et la manipulation des distributions de mains pour les différents variants de poker.
+This module manages the generation and manipulation of hand distributions for various poker variants.
 
-## Fichiers sources (`src/distributions/`)
+## Source Files (`src/distributions/`)
 
-- `HoldemAgnosticHand.c` - Implémentation de la génération de distributions pour Hold'em
-- `holdem_distributions.c` - Fonctions complémentaires de distributions Hold'em
-- `omaha_distributions.c` - Génération et instantiation des distributions de mains Omaha (PLO)
-- `plo_integration.c` - Intégration avancée et expansion des patterns PLO
-- `plo_nomenclature.c` - Parsing et classification des catégories de mains PLO (21 catégories)
-- `stud_distributions.c` - Génération des distributions de mains pour les variants Stud (7-Card Stud, Razz)
+- `HoldemAgnosticHand.c` - Hand distribution generation implementation for Hold'em
+- `holdem_distributions.c` - Complementary Hold'em distribution functions
+- `omaha_distributions.c` - Omaha (PLO) hand distribution generation and instantiation
+- `plo_integration.c` - Advanced integration and expansion of PLO patterns
+- `plo_nomenclature.c` - Parsing and classification of PLO hand categories (21 categories)
+- `stud_distributions.c` - Hand distribution generation for Stud variants (7-Card Stud, Razz)
 
-## En-têtes (`include/poker_eval/distributions/`)
+## Headers (`include/poker_eval/distributions/`)
 
-- `HoldemAgnosticHand.h` - Directives et prototypes pour les distributions Hold'em
-- `card_converter.h` - Fonctions utilitaires de conversion de cartes
-- `hand_distributions.h` - Interface générale pour les distributions de mains
-- `holdem_distributions.h` - En-tête pour les distributions Hold'em
-- `omaha_distributions.h` - En-tête et structures pour les distributions Omaha (`OmahaHandQuery`, `OmahaHandList`)
-- `plo_integration.h` - Prototypes pour l'intégration des patterns PLO
-- `plo_nomenclature.h` - Structures et enums pour la nomenclature PLO (`PLOHandCategory`)
-- `stud_distributions.h` - En-tête pour les distributions Stud
+- `HoldemAgnosticHand.h` - Directives and prototypes for Hold'em distributions
+- `card_converter.h` - Card conversion utility functions
+- `hand_distributions.h` - General interface for hand distributions
+- `holdem_distributions.h` - Header for Hold'em distributions
+- `omaha_distributions.h` - Header and structures for Omaha distributions (`OmahaHandQuery`, `OmahaHandList`)
+- `plo_integration.h` - Prototypes for PLO pattern integration
+- `plo_nomenclature.h` - Structures and enums for PLO nomenclature (`PLOHandCategory`)
+- `stud_distributions.h` - Header for Stud distributions

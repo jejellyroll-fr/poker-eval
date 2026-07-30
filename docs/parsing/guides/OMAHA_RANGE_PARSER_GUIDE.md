@@ -1,112 +1,112 @@
-# Guide d'utilisation de l'API Omaha Range Parser
+# Omaha Range Parser API Usage Guide
 
-## Vue d'ensemble
+## Overview
 
-L'API Omaha Range Parser étend l'Advanced Range Parser pour supporter les ranges de mains Omaha (PLO) avec une syntaxe inspirée des outils professionnels de poker. Cette implémentation supporte les patterns PLO standards, les pourcentages, et les opérateurs de base.
+The Omaha Range Parser API extends the Advanced Range Parser to support Omaha (PLO) hand ranges with a syntax inspired by professional poker tools. This implementation supports standard PLO patterns, percentages, and basic operators.
 
-## Fonctionnalités implémentées
+## Implemented Features
 
-### ✅ Phase 1 - Implémentation de base (Complète)
+### ✅ Phase 1 - Basic Implementation (Complete)
 
-- ✅ **Patterns PLO standards** : `AAxxds`, `JT98r`, `KKxxss`
-- ✅ **Mains spécifiques** : `AsKdQhJc`, `AhKdQsJh`
-- ✅ **Pourcentages Omaha** : `20%`, `5%`, `10%`
-- ✅ **Combinaisons** : `AAxxds, KKxxds, JT98r`
-- ✅ **Validation** de syntaxe PLO
-- ✅ **Intégration** avec OmahaHandList
-- ✅ **Support multi-jeux** Omaha (PLO, PLO8, etc.)
+- ✅ **Standard PLO patterns**: `AAxxds`, `JT98r`, `KKxxss`
+- ✅ **Specific hands**: `AsKdQhJc`, `AhKdQsJh`
+- ✅ **Omaha percentages**: `20%`, `5%`, `10%`
+- ✅ **Combinations**: `AAxxds, KKxxds, JT98r`
+- ✅ **PLO syntax validation**
+- ✅ **Integration** with OmahaHandList
+- ✅ **Multi-game Omaha support** (PLO, PLO8, etc.)
 
-### 🚧 Phase 2 - Opérateurs avancés (En développement)
+### 🚧 Phase 2 - Advanced Operators (In Development)
 
-- 🚧 **Opérateurs** : `+`, `-`, `!`
-- 🚧 **Expressions complexes** : `20% - AAxx`, `JT98r + JT98ds`
-- 🚧 **Ranges étendues** : Support de patterns plus complexes
+- 🚧 **Operators**: `+`, `-`, `!`
+- 🚧 **Complex expressions**: `20% - AAxx`, `JT98r + JT98ds`
+- 🚧 **Extended ranges**: Support for more complex patterns
 
-### 📋 Phase 3 - Optimisation (Planifié)
+### 📋 Phase 3 - Optimization (Planned)
 
-- 📋 **Rankings complets** des mains Omaha
-- 📋 **Performance** optimisée pour grandes ranges
-- 📋 **Cache** de patterns fréquents
+- 📋 **Complete Omaha hand rankings**
+- 📋 **Optimized performance** for large ranges
+- 📋 **Caching** of frequent patterns
 
-## Syntaxe supportée
+## Supported Syntax
 
-### Patterns PLO de base
+### Basic PLO Patterns
 
 ```c
-// Paires avec wildcards
-"AAxx"        // Paire d'As avec deux cartes quelconques
-"KKxx"        // Paire de Rois avec deux cartes quelconques
-"QQxx"        // Paire de Dames avec deux cartes quelconques
+// Pairs with wildcards
+"AAxx"        // Pair of Aces with any two cards
+"KKxx"        // Pair of Kings with any two cards
+"QQxx"        // Pair of Queens with any two cards
 
-// Patterns avec suitedness
-"AAxxds"      // Paire d'As double-suited
-"KKxxss"      // Paire de Rois single-suited
-"QQxxr"       // Paire de Dames rainbow (non implémenté)
+// Patterns with suitedness
+"AAxxds"      // Pair of Aces double-suited
+"KKxxss"      // Pair of Kings single-suited
+"QQxxr"       // Pair of Queens rainbow (unimplemented)
 
 // Rundowns
-"JT98"        // Jack-Ten-Nine-Eight (toutes couleurs)
+"JT98"        // Jack-Ten-Nine-Eight (any suit)
 "JT98r"       // Jack-Ten-Nine-Eight rainbow
 "JT98ds"      // Jack-Ten-Nine-Eight double-suited
 "JT98ss"      // Jack-Ten-Nine-Eight single-suited
 
 // Broadway patterns
-"AKQJds"      // As-Roi-Dame-Valet double-suited
-"AKQTds"      // As-Roi-Dame-Dix double-suited
-"AKJTds"      // As-Roi-Valet-Dix double-suited
+"AKQJds"      // Ace-King-Queen-Jack double-suited
+"AKQTds"      // Ace-King-Queen-Ten double-suited
+"AKJTds"      // Ace-King-Jack-Ten double-suited
 ```
 
-### Mains spécifiques
+### Specific Hands
 
 ```c
-// Mains complètement spécifiées
-"AsKdQhJc"    // As de pique, Roi de carreau, Dame de cœur, Valet de trèfle
-"AhKhQsJs"    // As et Roi de cœur, Dame et Valet de pique
-"AdKdQdJd"    // Couleur complète en carreau
+// Fully specified hands
+"AsKdQhJc"    // Ace of spades, King of diamonds, Queen of hearts, Jack of clubs
+"AhKhQsJs"    // Ace and King of hearts, Queen and Jack of spades
+"AdKdQdJd"    // Monotone diamond hand
 ```
 
-### Pourcentages
+### Percentages
 
 ```c
-// Pourcentages de top hands
-"20%"         // Top 20% des mains Omaha
-"10%"         // Top 10% des mains Omaha
-"5%"          // Top 5% des mains Omaha
-"2.5%"        // Top 2.5% des mains Omaha
+// Top hand percentages
+"20%"         // Top 20% of Omaha hands
+"10%"         // Top 10% of Omaha hands
+"5%"          // Top 5% of Omaha hands
+"2.5%"        // Top 2.5% of Omaha hands
 ```
 
-### Combinaisons
+### Combinations
 
 ```c
-// Virgules pour séparer les patterns
-"AAxxds, KKxxds, QQxxds"          // Paires premium double-suited
-"JT98r, JT98ds, JT98ss"           // Rundown dans différentes couleurs
-"AAxx, KKxx, AKQJds"              // Mix de patterns
-"20%, AAxxds"                     // Pourcentage plus patterns spécifiques
+// Commas to separate patterns
+"AAxxds, KKxxds, QQxxds"          // Premium pairs double-suited
+"JT98r, JT98ds, JT98ss"           // Rundown in different suits
+"AAxx, KKxx, AKQJds"              // Pattern mix
+"20%, AAxxds"                     // Percentage plus specific patterns
 ```
 
-## Utilisation de l'API
+## API Usage
 
-### Exemple de base
+### Basic Example
 
 ```c
 #include <poker_eval/range/AdvancedRangeParser.h>
 
 int main() {
-    // Cartes mortes (optionnel)
+    // Dead cards (optional)
     StdDeck_CardMask dead_cards;
     StdDeck_CardMask_RESET(dead_cards);
     
-    // Parser une range Omaha
+    // Parse an Omaha range
     arp_range_t range;
     if (ARP_ParseOmahaRange("AAxxds, KKxxds", dead_cards, game_omaha, &range)) {
-        printf("Range Omaha parsée: %zu mains\n", range.count);
-        printf("Type de jeu: %s\n", range.is_omaha ? "Omaha" : "Hold'em");
+        printf("Parsed Omaha range: %zu hands\n", range.count);
+        printf("Game type: %s\n", range.is_omaha ? "Omaha" : "Hold'em");
         
-        // Convertir pour utilisation avec PLO
+        // Convert for use with PLO
         OmahaHandList hand_list;
         if (OmahaHandList_Init(&hand_list, range.count)) {
             ARP_ToOmahaHandList(&range, &hand_list);
-            printf("Converti en OmahaHandList: %d mains\n", hand_list.count);
+            printf("Converted to OmahaHandList: %d hands\n", hand_list.count);
             OmahaHandList_Free(&hand_list);
         }
         
@@ -117,43 +117,43 @@ int main() {
 }
 ```
 
-### Validation de syntaxe PLO
+### PLO Syntax Validation
 
 ```c
 char error_buffer[256];
 if (!ARP_ValidateOmahaRangeString("AAxxds, JT98r", error_buffer, sizeof(error_buffer))) {
-    printf("Erreur de syntaxe PLO: %s\n", error_buffer);
+    printf("PLO syntax error: %s\n", error_buffer);
 } else {
-    printf("Syntaxe PLO valide\n");
+    printf("Valid PLO syntax\n");
 }
 ```
 
-### Pourcentages Omaha
+### Omaha Percentages
 
 ```c
 arp_range_t range;
 if (ARP_GetOmahaTopPercentage(0.20f, game_omaha, dead_cards, &range)) {
-    printf("Top 20%% Omaha: %zu mains\n", range.count);
+    printf("Top 20%% Omaha: %zu hands\n", range.count);
     ARP_FreeRange(&range);
 }
 ```
 
-### Ajout de patterns
+### Adding Patterns
 
 ```c
 arp_range_t range;
 ARP_ParseOmahaRange("AAxxds", dead_cards, game_omaha, &range);
 
-// Ajouter un autre pattern
+// Add another pattern
 ARP_AddPLOPattern("KKxxds", dead_cards, &range);
-printf("Range étendue: %zu mains\n", range.count);
+printf("Extended range: %zu hands\n", range.count);
 
 ARP_FreeRange(&range);
 ```
 
-## Exemples pratiques
+## Practical Examples
 
-### Calcul d'équité PLO vs PLO
+### PLO vs PLO Equity Calculation
 
 ```c
 #include <poker_eval/range/AdvancedRangeParser.h>
@@ -163,21 +163,21 @@ void calculate_plo_equity() {
     StdDeck_CardMask dead_cards;
     StdDeck_CardMask_RESET(dead_cards);
     
-    // Parser les ranges des deux joueurs
+    // Parse both players' ranges
     arp_range_t range1, range2;
     ARP_ParseOmahaRange("AAxxds, KKxxds", dead_cards, game_omaha, &range1);
     ARP_ParseOmahaRange("JT98r, JT98ds", dead_cards, game_omaha, &range2);
     
-    // Convertir en PlayerRange pour calculs d'équité
+    // Convert to PlayerRange for equity calculations
     PlayerRange player_ranges[2];
     ARP_ToPlayerRange(&range1, &player_ranges[0]);
     ARP_ToPlayerRange(&range2, &player_ranges[1]);
     
-    // Board vide pour preflop
+    // Empty board for preflop
     StdDeck_CardMask board;
     StdDeck_CardMask_RESET(board);
     
-    // Calculer l'équité (utilise les fonctions existantes)
+    // Calculate equity (uses existing functions)
     enum_result_t results;
     int matchups = CalculateEquityForRanges(
         game_omaha,
@@ -185,17 +185,17 @@ void calculate_plo_equity() {
         2,
         board,
         dead_cards,
-        5,      // 5 cartes de board
+        5,      // 5 board cards to deal
         true,   // Monte Carlo
-        10000,  // 10k itérations
+        10000,  // 10k iterations
         0,
         &results
     );
     
     if (matchups > 0) {
-        printf("Équité premium pairs: %.2f%%\n", 
+        printf("Premium pairs equity: %.2f%%\n", 
                results.ev[0] / results.nsamples * 100.0);
-        printf("Équité rundowns: %.2f%%\n", 
+        printf("Rundowns equity: %.2f%%\n", 
                results.ev[1] / results.nsamples * 100.0);
     }
     
@@ -204,7 +204,7 @@ void calculate_plo_equity() {
 }
 ```
 
-### Analyse de range PLO
+### PLO Range Analysis
 
 ```c
 void analyze_plo_range(const char* range_string) {
@@ -213,20 +213,20 @@ void analyze_plo_range(const char* range_string) {
     
     arp_range_t range;
     if (ARP_ParseOmahaRange(range_string, dead_cards, game_omaha, &range)) {
-        printf("=== Analyse PLO: %s ===\n", range_string);
-        printf("Nombre de mains: %zu\n", range.count);
+        printf("=== PLO Analysis: %s ===\n", range_string);
+        printf("Hand count: %zu\n", range.count);
         
         if (range.is_percentage) {
-            printf("Pourcentage: %.2f%%\n", range.percentage_used * 100.0f);
+            printf("Percentage: %.2f%%\n", range.percentage_used * 100.0f);
         }
         
-        // Convertir pour analyse PLO
+        // Convert for PLO analysis
         OmahaHandList hand_list;
         if (OmahaHandList_Init(&hand_list, range.count)) {
             ARP_ToOmahaHandList(&range, &hand_list);
             
-            // Analyser les types de mains (nécessite PLONomenclature)
-            printf("Mains converties pour analyse PLO\n");
+            // Analyze hand types (requires PLONomenclature)
+            printf("Hands converted for PLO analysis\n");
             
             OmahaHandList_Free(&hand_list);
         }
@@ -236,7 +236,7 @@ void analyze_plo_range(const char* range_string) {
 }
 ```
 
-### Comparaison de ranges
+### Range Comparison
 
 ```c
 void compare_ranges() {
@@ -251,12 +251,12 @@ void compare_ranges() {
         NULL
     };
     
-    printf("=== Comparaison de ranges PLO ===\n");
+    printf("=== PLO Range Comparison ===\n");
     
     for (int i = 0; ranges[i] != NULL; i++) {
         arp_range_t range;
         if (ARP_ParseOmahaRange(ranges[i], dead_cards, game_omaha, &range)) {
-            printf("%-20s: %zu mains", ranges[i], range.count);
+            printf("%-20s: %zu hands", ranges[i], range.count);
             if (range.is_percentage) {
                 printf(" (%.1f%%)", range.percentage_used * 100.0f);
             }
@@ -267,12 +267,12 @@ void compare_ranges() {
 }
 ```
 
-## Types de jeux supportés
+## Supported Game Types
 
-L'API supporte tous les variants Omaha :
+The API supports all Omaha variants:
 
 ```c
-// Types de jeux Omaha supportés
+// Supported Omaha game types
 enum_game_t omaha_games[] = {
     game_omaha,     // PLO High
     game_omaha8,    // PLO Hi/Lo 8-or-better
@@ -281,113 +281,113 @@ enum_game_t omaha_games[] = {
     game_omaha85    // 5-card PLO Hi/Lo
 };
 
-// Utilisation
+// Usage
 for (int i = 0; i < 5; i++) {
     arp_range_t range;
     if (ARP_ParseOmahaRange("AAxxds", dead_cards, omaha_games[i], &range)) {
-        printf("Jeu %d: %zu mains\n", omaha_games[i], range.count);
+        printf("Game %d: %zu hands\n", omaha_games[i], range.count);
         ARP_FreeRange(&range);
     }
 }
 ```
 
-## Gestion d'erreurs
+## Error Handling
 
-### Codes de retour
-- `1` : Succès
-- `0` : Échec
+### Return Codes
+- `1`: Success
+- `0`: Failure
 
-### Messages d'erreur spécifiques PLO
+### PLO-Specific Error Messages
 
 ```c
 char error_buffer[256];
 if (!ARP_ValidateOmahaRangeString("INVALID_PLO", error_buffer, sizeof(error_buffer))) {
-    printf("Erreur PLO: %s\n", error_buffer);
+    printf("PLO Error: %s\n", error_buffer);
 }
 ```
 
-### Erreurs courantes PLO
+### Common PLO Errors
 
-| Erreur | Cause | Solution |
-|--------|-------|----------|
-| `Invalid PLO pattern` | Pattern non reconnu | Vérifier la syntaxe PLO |
-| `Failed to parse PLO pattern` | Erreur dans PLOIntegration | Vérifier les dépendances |
-| `Non-Omaha game type` | Jeu non-Omaha | Utiliser game_omaha, etc. |
-| `Failed to expand Omaha percentage` | Erreur de pourcentage | Vérifier 0.0 < % <= 1.0 |
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `Invalid PLO pattern` | Unrecognized pattern | Check PLO syntax |
+| `Failed to parse PLO pattern` | Error in PLOIntegration | Check dependencies |
+| `Non-Omaha game type` | Non-Omaha game | Use game_omaha, etc. |
+| `Failed to expand Omaha percentage` | Percentage error | Verify 0.0 < % <= 1.0 |
 
 ## Performance
 
-### Complexité pour Omaha
-- **Parsing PLO** : O(n) où n = longueur du pattern
-- **Génération** : O(m) où m = nombre de mains générées
-- **Mémoire** : O(m) pour stocker les mains
+### Complexity for Omaha
+- **PLO Parsing**: O(n) where n = pattern length
+- **Generation**: O(m) where m = number of generated hands
+- **Memory**: O(m) to store hands
 
-### Optimisations PLO
-- Utilisation de PLOIntegration pour génération efficace
-- Cache des patterns fréquents (futur)
-- Allocation dynamique optimisée
+### PLO Optimizations
+- Using PLOIntegration for efficient generation
+- Frequent pattern cache (future)
+- Optimized dynamic allocation
 
-## Limitations actuelles
+## Current Limitations
 
-1. **Opérateurs** : +, -, ! non implémentés (Phase 2)
-2. **Rankings complets** : Utilise patterns simplifiés pour %
-3. **Patterns avancés** : Certains patterns PLO complexes non supportés
-4. **Performance** : Non optimisé pour très grandes ranges
+1. **Operators**: +, -, ! not implemented (Phase 2)
+2. **Full rankings**: Uses simplified patterns for %
+3. **Advanced patterns**: Some complex PLO patterns not supported
+4. **Performance**: Not optimized for very large ranges
 
 ## Roadmap
 
-### Phase 2 (3-5 jours)
-- [ ] Implémentation des opérateurs (`+`, `-`, `!`)
-- [ ] Support des expressions complexes
-- [ ] Amélioration des pourcentages avec rankings complets
-- [ ] Tests de performance
+### Phase 2 (3-5 days)
+- [ ] Operator implementation (`+`, `-`, `!`)
+- [ ] Support for complex expressions
+- [ ] Percentage improvement with full rankings
+- [ ] Performance testing
 
-### Phase 3 (2-3 jours)
-- [ ] Optimisation mémoire et vitesse
-- [ ] Cache intelligent des patterns
-- [ ] Support de patterns PLO avancés
-- [ ] Documentation complète
+### Phase 3 (2-3 days)
+- [ ] Memory and speed optimization
+- [ ] Intelligent pattern caching
+- [ ] Support for advanced PLO patterns
+- [ ] Complete documentation
 
-## Intégration avec l'écosystème
+## Ecosystem Integration
 
-### Compatibilité
-- ✅ **PLONomenclature** : Utilise les structures PLO existantes
-- ✅ **omaha_distributions.h** : Intégration complète
-- ✅ **RangeEquity** : Compatible avec calculs d'équité
-- ✅ **PLOIntegration** : Utilise les fonctions de gén��ration
+### Compatibility
+- ✅ **PLONomenclature**: Uses existing PLO structures
+- ✅ **omaha_distributions.h**: Full integration
+- ✅ **RangeEquity**: Compatible with equity calculations
+- ✅ **PLOIntegration**: Uses generation functions
 
-### Extensions futures
-- Support de nouveaux variants Omaha
-- Intégration avec GPU pour grandes ranges
-- API de manipulation avancée des ranges
-- Export/import de ranges au format standard
+### Future Extensions
+- Support for new Omaha variants
+- GPU integration for large ranges
+- Advanced range manipulation API
+- Standard format range export/import
 
-## Exemples d'utilisation avancée
+## Advanced Usage Examples
 
-### Range building progressif
+### Progressive Range Building
 
 ```c
-// Construire une range progressivement
+// Build a range progressively
 arp_range_t range;
-ARP_ParseOmahaRange("", dead_cards, game_omaha, &range); // Range vide
+ARP_ParseOmahaRange("", dead_cards, game_omaha, &range); // Empty range
 
-// Ajouter des patterns un par un
+// Add patterns one by one
 ARP_AddPLOPattern("AAxxds", dead_cards, &range);
 ARP_AddPLOPattern("KKxxds", dead_cards, &range);
 ARP_AddPLOPattern("QQxxds", dead_cards, &range);
 
-printf("Range construite: %zu mains\n", range.count);
+printf("Built range: %zu hands\n", range.count);
 ARP_FreeRange(&range);
 ```
 
-### Validation en temps réel
+### Real-time Validation
 
 ```c
-// Pour interface utilisateur
+// For user interface
 bool validate_user_input(const char* input) {
     char error[256];
     return ARP_ValidateOmahaRangeString(input, error, sizeof(error));
 }
 ```
 
-Cette implémentation fournit une base solide pour le parsing de ranges Omaha avec une syntaxe professionnelle, prête pour l'extension avec les opérateurs avancés en Phase 2.
+This implementation provides a solid foundation for parsing Omaha ranges with a professional syntax, ready for extension with advanced operators in Phase 2.

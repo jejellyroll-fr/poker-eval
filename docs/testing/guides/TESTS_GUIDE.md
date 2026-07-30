@@ -1,31 +1,31 @@
-# Guide de Tests - Poker-Eval
+# Testing Guide - Poker-Eval
 
-Ce guide présente comment exécuter et gérer les tests du projet.
+This guide explains how to run and manage project tests.
 
 ## Building and Running Tests
 
-Le répertoire `tests/` est directement configuré dans le `CMakeLists.txt` principal à la line 480 (`add_subdirectory(tests)` est activé lorsque la variable `BUILD_TESTS` est activée).
+The `tests/` directory is directly configured in the main `CMakeLists.txt` at line 480 (`add_subdirectory(tests)` is enabled when the `BUILD_TESTS` variable is set).
 
-### Activer et Executer la Suite de Tests
+### Enable and Run the Test Suite
 
-Par défaut ou lors de la configuration CMake, activez `BUILD_TESTS` pour compiler l'ensemble des tests unitaires et d'intégration :
+By default or during CMake configuration, set `BUILD_TESTS=ON` to compile all unit and integration tests:
 
 ```bash
 mkdir -p build
 cd build
 cmake .. -DBUILD_TESTS=ON
-make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+make -j$(nproc 2>/devnull || sysctl -n hw.ncpu)
 
-# Exécuter l'ensemble des tests via CTest
+# Run all tests via CTest
 ctest --output-on-failure
 ```
 
-### Exécution ciblée des executables de tests
+### Targeted Execution of Test Executables
 
-Une fois compilés, vous pouvez exécuter directement les exécutables de test situés dans `build/tests/` :
+Once compiled, you can directly run the test executables located in `build/tests/`:
 
 ```bash
-./tests/test_card_unity              # Tests Unity basiques
+./tests/test_card_unity              # Basic Unity tests
 ./tests/test_holdem                  # Texas Hold'em
 ./tests/test_omaha_simple            # Omaha
 ./tests/test_badugi                  # Badugi
@@ -34,34 +34,35 @@ Une fois compilés, vous pouvez exécuter directement les exécutables de test s
 ./tests/test_icm                     # ICM
 ```
 
-### Exécution par catégorie avec CTest
+### Execution by Category with CTest
 
 ```bash
-# Tests Core
+# Core Tests
 ctest -L core --output-on-failure
 
-# Tests Equity
+# Equity Tests
 ctest -L equity --output-on-failure
 
-# Tests Range
+# Range Tests
 ctest -L range --output-on-failure
 
-# Tests Engine
+# Engine Tests
 ctest -L engine --output-on-failure
 
-# Tests Betting
+# Betting Tests
 ctest -L betting --output-on-failure
 ```
 
-## Exemples et Benchmarks
+## Examples and Benchmarks
 
-En complément de la suite de tests unitaires, le projet fournit :
+In addition to the unit test suite, the project provides:
 
-1. **Exemples d'utilisation** (dans `src/examples/`)
-2. **Benchmarks de performance** (dans `src/benchmarks/` et `bin/`)
+1. **Usage examples** (in `src/examples/`)
+2. **Performance benchmarks** (in `src/benchmarks/` and `bin/`)
 
-Exemples d'exécution des benchmarks :
+Benchmark execution examples:
 ```bash
 ./bin/bench_7c_simd_micro
 ./bin/bench_cfr_holdem_river
 ```
+
