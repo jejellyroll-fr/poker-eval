@@ -36,17 +36,13 @@ int main() {
 
 ### Working with Ranges
 
-The library supports standard range notation, including the `+` suffix for pairs.
+The library supports standard range notation, including the `+` suffix for pairs. Note that `preflop_range_parse` resets the range (by calling `preflop_range_init` internally) at the start of parsing, so sequential calls to `preflop_range_parse` on the same `preflop_range_t` object will overwrite previous content. Multiple hands and range specifications should be passed together in a single comma-separated string.
 
 ```c
 preflop_range_t range;
-preflop_range_init(&range);
 
-// Add specific hands
-preflop_range_parse("AKs, AQs, KQs", &range);
-
-// Add a pair range (QQ, KK, AA)
-preflop_range_parse("QQ+", &range);
+// Parse a range containing specific hands and pair ranges (QQ, KK, AA) in a single string:
+preflop_range_parse("AKs, AQs, KQs, QQ+", &range);
 
 // Check if a hand is in the range
 preflop_hand_t ak_off = preflop_string_to_hand("AKo");

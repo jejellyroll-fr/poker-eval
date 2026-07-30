@@ -6,11 +6,11 @@ can jump directly to the topic you need.
 
 | Guide | Purpose | Status |
 |-------|---------|--------|
-| `../cfr_tree_format.md` | Reference for predefined-tree JSON (profiles, nodes, validation) | ✅ |
-| `../cfr_metrics.md` | Runtime metrics API, snapshots, examples | ✅ |
-| `../cfr_export_results.md` | Post-run result exports (JSON / CSV) | ✅ |
-| `../cfr_performance.md` | Perf counters & instrumentation tips | ✅ |
-| `../cfr_data_pipeline.md` | End-to-end walkthrough: build tree → run → monitor → export | ✅ |
+| CFR Tree Format | Reference for predefined-tree JSON (profiles, nodes, validation) | ✅ |
+| CFR Metrics | Runtime metrics API, snapshots, examples | ✅ |
+| CFR Export Results | Post-run result exports (JSON / CSV) | ✅ |
+| CFR Performance | Perf counters & instrumentation tips | ✅ |
+| CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | ✅ |
 
 ## CLI helpers
 
@@ -21,7 +21,7 @@ Feature 5 introduces two utilities (built in `tools/`):
 - `mpf_dump_results` – reloads the tree + checkpoint + node map and
   exports JSON/CSV summaries using the export API.
 
-See `../cfr_data_pipeline.md` and `examples/4way_postflop/` for concrete
+See the CFR data pipeline documentation and `examples/4way_postflop/` for concrete
 usage.
 
 Additional example: `examples/heads_up_river/` runs a deeper two-player

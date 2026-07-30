@@ -249,42 +249,20 @@ uint8_t Kh = 25;  /* King of Hearts */
 ## Build Configuration
 
 ```bash
-# Enable CUDA support
-cmake .. -DENABLE_CUDA=ON
-
-# Enable OpenCL support
-cmake .. -DENABLE_OPENCL=ON
-
-# Enable both
-cmake .. -DENABLE_CUDA=ON -DENABLE_OPENCL=ON
+# Enable GPU support (CUDA and OpenCL backends)
+cmake .. -DBUILD_GPU=ON
 ```
 
-## Current Status (Phase 1)
+## Current Status (Phase 3 COMPLETE)
 
 ### Implemented ✅
-- API header and types
-- Context management skeleton
-- CUDA kernel structure (21-combo enumeration)
-- Warp-level reductions
-- Memory layout design
-
-### TODO 📋
-- Complete CUDA kernel implementation
-- Add OpenCL kernel (.cl file)
-- Implement device initialization (CUDA runtime/OpenCL platform detection)
-- Load lookup tables to device memory
-- Memory buffer management (allocation/reuse)
-- Kernel launch and synchronization
-- Performance benchmarks
-- Unit tests
-
-## Next Steps
-
-1. **Complete CUDA backend** (device init, memory mgmt, kernel launch)
-2. **Add OpenCL backend** (port kernel to .cl, OpenCL dispatch)
-3. **Load lookup tables** (rank/flush/straight tables to constant memory)
-4. **Add benchmarks** (throughput tests, compare vs CPU)
-5. **Integration** (use from batched Monte Carlo equity calculations)
+- Dual backend support (CUDA and OpenCL)
+- Batched 7→5 evaluation for Hold'em and Omaha
+- Multi-GPU parallel execution and dynamic load balancing
+- Real poker-eval lookup table loader (`gpu_table_loader`)
+- Concurrent CUDA streams and pinned memory transfer
+- Comprehensive benchmarking suite (`bench_gpu_comprehensive`)
+- Transparent Monte Carlo integration (`enumSampleBatched`)
 
 ## References
 
@@ -412,24 +390,31 @@ cd build
 ### File Structure
 
 ```
-gpu/
-├── kernels/
-│   ├── eval_holdem_batch.cu      # CUDA kernel (Phase 1-2)
-│   └── eval_holdem_batch.cl      # OpenCL kernel (Phase 3) ✨
-├── include/
-│   ├── eval_batched_gpu.h        # Main API
-│   └── eval_multi_gpu.h          # Multi-GPU API (Phase 3) ✨
-├── eval_batched_gpu.c            # Unified dispatcher
-├── eval_batched_cuda.c           # CUDA backend (enhanced Phase 3)
-├── eval_batched_opencl.c         # OpenCL backend (Phase 3) ✨
-├── eval_batched_opencl.h         # OpenCL internal header ✨
-├── eval_multi_gpu.c              # Multi-GPU implementation (Phase 3) ✨
-├── gpu_table_loader.c            # Real table loader (Phase 3) ✨
-└── gpu_table_loader.h            # Table loader API ✨
+include/poker_eval/gpu/
+├── eval_batched_gpu.h        # Main API
+└── eval_multi_gpu.h          # Multi-GPU API (Phase 3) ✨
 
-benchmarks/
-├── bench_gpu_batched.c           # Original benchmark (Phase 2)
-└── bench_gpu_comprehensive.c     # Full suite (Phase 3) ✨
+src/gpu/
+├── cuda/                     # CUDA backend kernels & implementation
+│   ├── eval_cuda.c
+│   └── eval_cuda_kernel.cu
+├── opencl/                   # OpenCL backend kernels & implementation
+│   ├── eval_opencl.c
+│   └── eval_kernel.cl
+├── kernels/                  # Batched & CFR kernel files
+│   ├── eval_holdem_batch.cu  # CUDA batched kernel
+│   └── eval_holdem_batch.cl  # OpenCL batched kernel (Phase 3) ✨
+├── eval_batched_gpu.c        # Unified dispatcher
+├── eval_batched_cuda.c       # CUDA backend (enhanced Phase 3)
+├── eval_batched_opencl.c     # OpenCL backend (Phase 3) ✨
+├── eval_batched_opencl.h     # OpenCL internal header ✨
+├── eval_multi_gpu.c          # Multi-GPU implementation (Phase 3) ✨
+├── gpu_table_loader.c        # Real table loader (Phase 3) ✨
+└── gpu_table_loader.h        # Table loader API ✨
+
+src/benchmarks/
+├── bench_gpu_batched.c       # Original benchmark (Phase 2)
+└── bench_gpu_comprehensive.c # Full suite (Phase 3) ✨
 ```
 
 ## Production Readiness

@@ -172,6 +172,11 @@ typedef struct {
     /* Improvement odds */
     double turn_improvement;
     double river_improvement;
+    double runner_runner_improvement;
+
+    /* Outs counting */
+    int made_hand_outs;
+    int draw_outs;
 } flop_equity_result_t;
 ```
 
@@ -179,9 +184,9 @@ typedef struct {
 
 #### Texture Analysis
 
-*   `void analyze_flop_texture(StdDeck_CardMask flop, flop_analysis_t *analysis)`
+*   `int analyze_flop_texture(StdDeck_CardMask flop, flop_analysis_t *analysis)`
     *   Analyzes the flop and populates the `flop_analysis_t` structure.
-*   `const char *flop_texture_to_string(flop_texture_category_t texture)`
+*   `void flop_texture_to_string(flop_texture_category_t texture, char *out, size_t out_size)`
     *   Returns a string representation of the texture category.
 
 #### Equity Calculation
@@ -192,5 +197,5 @@ typedef struct {
 
 #### Utility
 
-*   `int flop_count_outs(StdDeck_CardMask pocket, StdDeck_CardMask board)`
+*   `int flop_count_outs(StdDeck_CardMask pocket, StdDeck_CardMask flop, int *flush_outs, int *straight_outs, int *pair_outs)`
     *   Counts the number of immediate outs to improve the hand.

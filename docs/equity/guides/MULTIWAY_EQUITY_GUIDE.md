@@ -8,14 +8,14 @@
 ```
 #include <poker_eval/equity/RangeEquity.h>
 
-MultiwayPotState state = {ranges, stacks, invested, num_players};
+MultiwayPotState state = {ranges, stack_sizes, invested, num_players};
 MultiwayEquityOptions opts = {use_mc, iterations, orderflag};
 MultiwayEquityResult res;
 int matchups = CalculateMultiwayEquity(game_holdem, &state, board, dead,
                                       cards_to_deal, &opts, &res);
 ```
 
-Chaque `PlayerRange` porte `hand_masks`, `weights` (optionnel) et `total_weight`. Side-pots calculés par `pe_calculate_sidepots`.
+Chaque `PlayerRange` porte `hand_masks`, `weights` (optionnel), `count` (nombre de mains dans la range) et `total_weight`. Side-pots calculés par `pe_calculate_sidepots`.
 
 ## Python
 

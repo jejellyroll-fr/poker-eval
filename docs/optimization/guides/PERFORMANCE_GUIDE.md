@@ -76,7 +76,7 @@ New utility functions in Phase 4 provide efficient ways to manipulate ranges wit
 We provide a benchmark suite to measure performance:
 
 ```bash
-./tests/bench_range_parsing
+bin/bench_range_parsing
 ```
 
 Typical results (Modern CPU):

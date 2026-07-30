@@ -21,7 +21,7 @@ This implementation automatically simulates the optimal discard strategy by eval
 
 ```c
 #include "poker_eval/poker_defs.h"
-#include "rules_pineapple.h"
+#include <poker_eval/games/rules_pineapple.h>
 
 StdDeck_CardMask pocket, board;
 HandVal hand_value;
@@ -44,7 +44,7 @@ hand_value = Pineapple_EVAL(pocket, board);
 ### Finding Optimal Discard
 
 ```c
-#include "rules_pineapple.h"
+#include <poker_eval/games/rules_pineapple.h>
 
 StdDeck_CardMask best_two_cards = Pineapple_FindBestDiscard(pocket, board);
 // Returns the best 2-card combination from the 3 hole cards
@@ -157,7 +157,8 @@ The implementation includes comprehensive tests:
 
 Run tests with:
 ```bash
-./test_pineapple_final
+./build/tests/test_pineapple_basic
+./build/tests/test_pineapple_unity
 ```
 
 ## Future Enhancements

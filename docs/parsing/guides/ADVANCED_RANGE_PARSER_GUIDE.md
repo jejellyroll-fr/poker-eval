@@ -35,7 +35,7 @@ L'API Advanced Range Parser permet de parser et manipuler des ranges de mains de
 
 ## Syntaxe supportée
 
-Voir le document détaillé [RANGE_SYNTAX.md](../RANGE_SYNTAX.md) pour la spécification complète.
+Voir le document détaillé [RANGE_SYNTAX.md](./RANGE_SYNTAX.md) pour la spécification complète.
 
 ### Mains de base
 
@@ -82,7 +82,7 @@ Voir le document détaillé [RANGE_SYNTAX.md](../RANGE_SYNTAX.md) pour la spéci
 ### Parsing de base
 
 ```c
-#include <poker_eval/distributions/AdvancedRangeParser.h>
+#include <poker_eval/range/AdvancedRangeParser.h>
 
 arp_range_t range;
 StdDeck_CardMask dead_cards;
@@ -138,7 +138,7 @@ Le parser utilise un cache thread-safe pour les requêtes de pourcentage ("20%",
 - **Appels suivants** : ~0.2-0.5µs (copie mémoire)
 - **Speedup** : ~40x
 
-Voir [PERFORMANCE_GUIDE.md](../guides/PERFORMANCE_GUIDE.md) pour plus de détails.
+Voir [PERFORMANCE_GUIDE.md](../../optimization/guides/PERFORMANCE_GUIDE.md) pour plus de détails.
 
 ### Optimisation Mémoire
 

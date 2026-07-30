@@ -40,4 +40,4 @@ All notable changes to this project will be documented in this file.
 
 ## Previous Versions
 
-See docs/ChangeLog.md for historical changes.
+See [ChangeLog.md](./ChangeLog.md) for historical changes.

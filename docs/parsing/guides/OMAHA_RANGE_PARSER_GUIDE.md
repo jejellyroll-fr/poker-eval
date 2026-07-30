@@ -89,7 +89,7 @@ L'API Omaha Range Parser étend l'Advanced Range Parser pour supporter les range
 ### Exemple de base
 
 ```c
-#include "AdvancedRangeParser.h"
+#include <poker_eval/range/AdvancedRangeParser.h>
 
 int main() {
     // Cartes mortes (optionnel)
@@ -156,8 +156,8 @@ ARP_FreeRange(&range);
 ### Calcul d'équité PLO vs PLO
 
 ```c
-#include "AdvancedRangeParser.h"
-#include "RangeEquity.h"
+#include <poker_eval/range/AdvancedRangeParser.h>
+#include <poker_eval/equity/RangeEquity.h>
 
 void calculate_plo_equity() {
     StdDeck_CardMask dead_cards;
@@ -352,7 +352,7 @@ if (!ARP_ValidateOmahaRangeString("INVALID_PLO", error_buffer, sizeof(error_buff
 
 ### Compatibilité
 - ✅ **PLONomenclature** : Utilise les structures PLO existantes
-- ✅ **OmahaHandDistribution** : Intégration complète
+- ✅ **omaha_distributions.h** : Intégration complète
 - ✅ **RangeEquity** : Compatible avec calculs d'équité
 - ✅ **PLOIntegration** : Utilise les fonctions de gén��ration
 

@@ -30,10 +30,10 @@ The project builds successfully with the hand distribution feature. Some minor i
 ### 3. Files Modified/Added
 
 **Modified:**
-- `lib/OmahaHandDistribution.c` - Fixed `STD_DECK_N_CARDS` → `StdDeck_N_CARDS`
-- `lib/StudHandDistribution.c` - Fixed `STD_DECK_N_CARDS` → `StdDeck_N_CARDS`
-- `lib/RangeEquity.c` - Fixed `ENUMORD_DEFAULT_MODE` → `enum_ordering_mode_hi`
-- `include/OmahaHandDistribution.h` - Uncommented function declarations
+- `src/distributions/omaha_distributions.c` - Fixed `STD_DECK_N_CARDS` → `StdDeck_N_CARDS`
+- `src/distributions/stud_distributions.c` - Fixed `STD_DECK_N_CARDS` → `StdDeck_N_CARDS`
+- `src/equity/RangeEquity.c` - Fixed `ENUMORD_DEFAULT_MODE` → `enum_ordering_mode_hi`
+- `include/poker_eval/distributions/omaha_distributions.h` - Uncommented function declarations
 - `CMakeLists.txt` - Added new tests and examples
 
 **Added:**
@@ -86,6 +86,7 @@ StdDeck_CardMask dead;
 StdDeck_CardMask_RESET(dead);
 
 OmahaHand_Parse("AAxxds", &query);
+OmahaHandList_Init(&hands, 1000);
 OmahaHand_Instantiate(&query, dead, &hands);
 // hands now contains all double-suited AA combinations
 ```
