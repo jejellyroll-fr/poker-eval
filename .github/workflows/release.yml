@@ -34,7 +34,7 @@ jobs:
             cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure CMake
         run: cmake -S . -B build ${{ matrix.cmake_flags }}
@@ -73,7 +73,7 @@ jobs:
     name: Build (Linux ARM64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install cross-compilation toolchain
         run: |
@@ -117,7 +117,7 @@ jobs:
     name: Build (Windows ARM64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure CMake for Windows ARM64
         shell: powershell
@@ -149,7 +149,7 @@ jobs:
     name: Build (FreeBSD x86_64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build in FreeBSD VM
         uses: vmactions/freebsd-vm@v1
@@ -180,7 +180,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-14, macos-13, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build Wheels via cibuildwheel
         uses: pypa/cibuildwheel@v2.23.0
