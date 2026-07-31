@@ -62,7 +62,7 @@ jobs:
           Compress-Archive -Path release_pkg\* -DestinationPath ${{ matrix.asset_name }}
 
       - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v1.1.0
           files: ${{ matrix.asset_name }}
@@ -106,7 +106,7 @@ jobs:
           cd release_pkg && tar -czvf ../poker-eval-v1.1.0-linux-arm64.tar.gz *
 
       - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v1.1.0
           files: poker-eval-v1.1.0-linux-arm64.tar.gz
@@ -138,7 +138,7 @@ jobs:
           Compress-Archive -Path release_pkg\* -DestinationPath poker-eval-v1.1.0-windows-arm64.zip
 
       - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v1.1.0
           files: poker-eval-v1.1.0-windows-arm64.zip
@@ -165,7 +165,7 @@ jobs:
             tar -czvf poker-eval-v1.1.0-freebsd-x86_64.tar.gz -C release_pkg .
 
       - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v1.1.0
           files: poker-eval-v1.1.0-freebsd-x86_64.tar.gz
@@ -189,7 +189,7 @@ jobs:
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_*"
 
       - name: Upload Release Wheels
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v1.1.0
           files: wheelhouse/*.whl

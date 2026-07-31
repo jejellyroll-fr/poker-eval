@@ -83,7 +83,7 @@ jobs:
         } > performance_report.md 2>&1
 
     - name: Upload Performance Report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: performance-report-release
         path: build/performance_report.md
@@ -200,7 +200,7 @@ jobs:
         } > benchmark_report.md
 
     - name: Upload Benchmark Report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: benchmark-report
         path: build/benchmark_report.md
