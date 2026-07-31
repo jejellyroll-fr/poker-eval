@@ -593,6 +593,14 @@ static int test_multi_is_stud_pattern(void)
     /* Multi-street with range */
     TEST_ASSERT(ARP_IsStudPattern("(AA)KQ-J", 8) == 1, "(AA)KQ-J is a stud pattern (range on last)");
 
+    /* Parenthesised Hold'em groups must not be claimed as Stud: the hole spec
+     * is always 2 or 4 chars and is followed immediately by an upcard. */
+    TEST_ASSERT(ARP_IsStudPattern("(AA,KK)", 7) == 0, "(AA,KK) is a Hold'em group, not stud");
+    TEST_ASSERT(ARP_IsStudPattern("(AA,KK) - (AKs,AQo)", 19) == 0,
+                "(AA,KK) - (AKs,AQo) is a Hold'em expression, not stud");
+    TEST_ASSERT(ARP_IsStudPattern("(AKs,AQo)", 9) == 0, "(AKs,AQo) is a Hold'em group, not stud");
+    TEST_ASSERT(ARP_IsStudPattern("(AA) + (KK)", 11) == 0, "(AA) + (KK) is a Hold'em expression, not stud");
+
     TEST_PASS("Multi-street ARP_IsStudPattern detection");
 }
 
@@ -622,13 +630,13 @@ static int test_4th_street(void)
     TEST_ASSERT_EQ(range.count, 1108, "(AA)Kx should have 1108 combos (1152 - 44 dedup)");
     ARP_FreeRange(&range);
 
-    /* (xx)KQ: any hole, K door, Q 4th. Hole: C(52,2)=1326 pairs.
-     * Door K: 4 choices. 4th Q: 4 choices. But cards must be distinct.
-     * If hole contains K or Q, some combos invalid.
-     * Rather than compute manually, just check > 0 */
+    /* (xx)KQ: any hole, K door, Q 4th. The generated masks are exactly the
+     * 4-card sets holding at least one K and at least one Q, so by
+     * inclusion-exclusion on the missing ranks:
+     *   C(52,4) - 2*C(48,4) + C(44,4) = 270725 - 389160 + 135751 = 17316 */
     memset(&range, 0, sizeof(range));
     TEST_ASSERT(ARP_ParseStudPattern("(xx)KQ", dead, &range) == 1, "Parse (xx)KQ");
-    TEST_ASSERT(range.count > 0, "(xx)KQ generates hands");
+    TEST_ASSERT_EQ(range.count, 17316, "(xx)KQ should have 17316 combos");
     ARP_FreeRange(&range);
 
     TEST_PASS("4th street tests");
@@ -647,10 +655,12 @@ static int test_5th_street(void)
     TEST_ASSERT_EQ(range.count, 384, "(AA)KQJ should have 384 combos");
     ARP_FreeRange(&range);
 
-    /* (xx)QJT: any hole, Q 3rd, J 4th, T 5th */
+    /* (xx)QJT: any hole, Q 3rd, J 4th, T 5th — the 5-card sets holding at
+     * least one Q, J and T:
+     *   C(52,5) - 3*C(48,5) + 3*C(44,5) - C(40,5) = 62064 */
     memset(&range, 0, sizeof(range));
     TEST_ASSERT(ARP_ParseStudPattern("(xx)QJT", dead, &range) == 1, "Parse (xx)QJT");
-    TEST_ASSERT(range.count > 0, "(xx)QJT generates hands");
+    TEST_ASSERT_EQ(range.count, 62064, "(xx)QJT should have 62064 combos");
     ARP_FreeRange(&range);
 
     TEST_PASS("5th street tests");
@@ -669,10 +679,14 @@ static int test_7th_street(void)
     TEST_ASSERT_EQ(range.count, 6144, "(AA)KQJT9 should have 6144 combos (6 * 4^5)");
     ARP_FreeRange(&range);
 
-    /* (xx)AKQJT: any hole, all broadway upcards */
+    /* (xx)AKQJT: any hole, all broadway upcards. This is the largest pattern
+     * the parser can express — the 7-card sets holding at least one of each of
+     * A, K, Q, J, T:
+     *   sum_{j=0..5} (-1)^j * C(5,j) * C(52-4j,7) = 781824
+     * It also guards the insertion path against going quadratic again. */
     memset(&range, 0, sizeof(range));
     TEST_ASSERT(ARP_ParseStudPattern("(xx)AKQJT", dead, &range) == 1, "Parse (xx)AKQJT");
-    TEST_ASSERT(range.count > 0, "(xx)AKQJT generates 7-card hands");
+    TEST_ASSERT_EQ(range.count, 781824, "(xx)AKQJT should have 781824 combos");
     ARP_FreeRange(&range);
 
     TEST_PASS("7th street tests");
