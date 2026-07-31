@@ -507,6 +507,93 @@ static int test_plo_categories(void)
     TEST_PASS("PLO category tests");
 }
 
+/*
+ * Regression tests for the range dedup hash table.
+ *
+ * The table used to fold the four suit fields together with XOR, which is
+ * invariant under suit permutation, and to give up after 20 linear probes.
+ * Suit-permuted Omaha hands therefore piled onto a few buckets, overran the
+ * probe limit and slipped past the duplicate check.
+ */
+static int test_hash_dedup(void)
+{
+    printf("\n--- Testing Range Dedup (hash table) ---\n");
+
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+
+    arp_range_t a, b, u;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    memset(&u, 0, sizeof(u));
+
+    TEST_ASSERT(ARP_ParseOmahaRange("AAxxds", dead, game_omaha, &a), "parse AAxxds");
+    TEST_ASSERT(ARP_ParseOmahaRange("KKxxds", dead, game_omaha, &b), "parse KKxxds");
+    TEST_ASSERT(ARP_ParseOmahaRange("AAxxds + KKxxds", dead, game_omaha, &u),
+                "parse AAxxds + KKxxds");
+
+    /* The two sets overlap in exactly the 6 double-suited AAKK hands (one per
+     * pair of suits), so the union holds 864 + 864 - 6 = 1722 hands. */
+    TEST_ASSERT(a.count == 864, "AAxxds should hold 864 hands");
+    TEST_ASSERT(b.count == 864, "KKxxds should hold 864 hands");
+    TEST_ASSERT(u.count == 1722, "AAxxds + KKxxds should hold 1722 hands, not 1727");
+
+    /* No hand may appear twice in the union. */
+    size_t dups = 0;
+    for (size_t i = 0; i < u.count; i++)
+        for (size_t j = 0; j < i; j++)
+            if (StdDeck_CardMask_EQUAL(u.hands[i], u.hands[j]))
+            {
+                dups++;
+                break;
+            }
+    TEST_ASSERT(dups == 0, "union must not contain duplicate hands");
+
+    /* Every hand of both operands must be reachable through the public lookup;
+     * this is what returned false negatives once a probe chain got long. */
+    for (size_t i = 0; i < a.count; i++)
+        TEST_ASSERT(ARP_ContainsHand(&u, a.hands[i]), "union contains each AAxxds hand");
+    for (size_t i = 0; i < b.count; i++)
+        TEST_ASSERT(ARP_ContainsHand(&u, b.hands[i]), "union contains each KKxxds hand");
+
+    ARP_FreeRange(&a);
+    ARP_FreeRange(&b);
+    ARP_FreeRange(&u);
+
+    TEST_PASS("Hash dedup tests");
+}
+
+/*
+ * The hash table stores positions into range->hands. Removing a hand shifts
+ * the entries below it, so the table has to be dropped — otherwise
+ * ARP_ContainsHand keeps reporting removed hands as present.
+ */
+static int test_contains_after_removal(void)
+{
+    printf("\n--- Testing ARP_ContainsHand After Removal ---\n");
+
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+
+    arp_range_t full, removed;
+    memset(&full, 0, sizeof(full));
+    memset(&removed, 0, sizeof(removed));
+
+    TEST_ASSERT(ARP_ParseOmahaRange("AAxxds", dead, game_omaha, &full), "parse AAxxds");
+    TEST_ASSERT(ARP_ParseOmahaRange("AAxxds - AAxxds", dead, game_omaha, &removed),
+                "parse AAxxds - AAxxds");
+
+    TEST_ASSERT(removed.count == 0, "subtracting a range from itself empties it");
+    for (size_t i = 0; i < full.count; i++)
+        TEST_ASSERT(!ARP_ContainsHand(&removed, full.hands[i]),
+                    "removed hands must not be reported as present");
+
+    ARP_FreeRange(&full);
+    ARP_FreeRange(&removed);
+
+    TEST_PASS("Contains-after-removal tests");
+}
+
 /* Main test runner */
 int main(void)
 {
@@ -555,6 +642,12 @@ int main(void)
         tests_passed++;
     total_tests++;
     if (test_plo_categories())
+        tests_passed++;
+    total_tests++;
+    if (test_hash_dedup())
+        tests_passed++;
+    total_tests++;
+    if (test_contains_after_removal())
         tests_passed++;
 
     /* Summary */
