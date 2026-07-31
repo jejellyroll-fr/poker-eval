@@ -288,13 +288,13 @@ static void evaluate_multiway_matchup(
     StdDeck_CardMask current_selection[],
     double combo_weight)
 {
-    enum_ordering_mode_t mode = agg->ordering_mode;
-    if (mode == enum_ordering_mode_none)
-        mode = enum_ordering_mode_hi;
-
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which memsets the struct and would drop an ordering
+     * allocated here without freeing it. orderflag is forced non-zero further
+     * down, so the enumeration always allocates one itself, with the mode its
+     * own game switch derives. */
     enum_result_t matchup_result;
-    if (enumResultAlloc(&matchup_result, agg->num_players, mode) != 0)
-        return;
+    enumResultClear(&matchup_result);
 
     StdDeck_CardMask effective_dead;
     StdDeck_CardMask_RESET(effective_dead);

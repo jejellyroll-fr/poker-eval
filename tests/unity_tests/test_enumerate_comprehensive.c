@@ -80,7 +80,9 @@ static void test_result_clear(void)
     result.ev[1] = 0.4;
     result.nwinhi[0] = 60;
 
-    /* Clear should reset everything */
+    /* Clear should reset everything. It memsets the struct, so the ordering
+     * has to be released first or its pointer is simply dropped. */
+    enumResultFree(&result);
     enumResultClear(&result);
     TEST_ASSERT_EQUAL_INT(0, result.nsamples);
     TEST_ASSERT_EQUAL_DOUBLE(0.0, result.ev[0]);
