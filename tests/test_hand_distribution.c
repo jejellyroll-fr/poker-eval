@@ -77,12 +77,12 @@ static void test_omaha_distributions(void) {
     printf("\n\n========== TESTING OMAHA HAND DISTRIBUTIONS ==========\n");
     
     OmahaHandQuery query;
-    OmahaHandList handList;
+    OmahaHandList handList = {0};
     StdDeck_CardMask deadCards;
     StdDeck_CardMask_RESET(deadCards);
     
     // Test 1: AAxx (pair of aces with any two cards)
-    memset(&handList, 0, sizeof(OmahaHandList));
+    OmahaHandList_Free(&handList);
     if (OmahaHand_Parse("AAxx", &query)) {
         (void)OmahaHand_Instantiate(&query, deadCards, &handList);
         print_omaha_hands(&handList, "Test 1: AAxx (pair of aces + any 2 cards)");
@@ -92,7 +92,7 @@ static void test_omaha_distributions(void) {
     }
     
     // Test 2: AAxx double-suited
-    memset(&handList, 0, sizeof(OmahaHandList));
+    OmahaHandList_Free(&handList);
     if (OmahaHand_Parse("AAxxds", &query)) {
         (void)OmahaHand_Instantiate(&query, deadCards, &handList);
         print_omaha_hands(&handList, "Test 2: AAxxds (double-suited aces)");
@@ -102,7 +102,7 @@ static void test_omaha_distributions(void) {
     }
     
     // Test 3: Specific hand AsKhQdJc
-    memset(&handList, 0, sizeof(OmahaHandList));
+    OmahaHandList_Free(&handList);
     if (OmahaHand_Parse("AsKhQdJc", &query)) {
         (void)OmahaHand_Instantiate(&query, deadCards, &handList);
         print_omaha_hands(&handList, "Test 3: AsKhQdJc (specific hand)");
@@ -112,7 +112,7 @@ static void test_omaha_distributions(void) {
     }
     
     // Test 4: AKQJds (double-suited broadway)
-    memset(&handList, 0, sizeof(OmahaHandList));
+    OmahaHandList_Free(&handList);
     if (OmahaHand_Parse("AKQJds", &query)) {
         (void)OmahaHand_Instantiate(&query, deadCards, &handList);
         print_omaha_hands(&handList, "Test 4: AKQJds (double-suited broadway)");
@@ -122,7 +122,7 @@ static void test_omaha_distributions(void) {
     }
     
     // Test 5: AAAx (trip aces)
-    memset(&handList, 0, sizeof(OmahaHandList));
+    OmahaHandList_Free(&handList);
     if (OmahaHand_Parse("AAAx", &query)) {
         (void)OmahaHand_Instantiate(&query, deadCards, &handList);
         print_omaha_hands(&handList, "Test 5: AAAx (trip aces + any card)");
@@ -130,6 +130,8 @@ static void test_omaha_distributions(void) {
     } else {
         printf("Failed to parse AAAx\n");
     }
+
+    OmahaHandList_Free(&handList);
 }
 
 int main(void) {

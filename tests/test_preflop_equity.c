@@ -379,6 +379,7 @@ static void test_lookup_table(void)
 
     TEST_ASSERT_TRUE(fabs(result.equity1 - equity_aa_kk) < 0.0001);
 
+    preflop_equity_result_free(&result);
     printf("PASSED\n");
 }
 

@@ -131,8 +131,9 @@ static void test_27_triple_draw_evaluation(void)
     StdDeck_CardMask_RESET(dead);
     StdDeck_CardMask_OR(dead, pockets[0], pockets[1]);
 
-    err = enumResultAlloc(&result, 2, enum_ordering_mode_lo);
-    TEST_ASSERT_EQUAL_INT(0, err);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     /* Complete hands, so exhaustive with 0 draws */
     err = enumExhaustive(game_27_triple_draw, pockets, board, dead, 2, 5, 0, &result);
@@ -196,8 +197,9 @@ static void test_badugi_evaluation(void)
     StdDeck_CardMask_RESET(dead);
     StdDeck_CardMask_OR(dead, pockets[0], pockets[1]);
 
-    err = enumResultAlloc(&result, 2, enum_ordering_mode_lo);
-    TEST_ASSERT_EQUAL_INT(0, err);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     /* Complete hands */
     err = enumExhaustive(game_badugi, pockets, board, dead, 2, 4, 0, &result);
