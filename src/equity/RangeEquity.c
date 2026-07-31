@@ -343,6 +343,9 @@ int CalculateEquityForRanges(
             if (player_ranges[i].count <= 0 || !player_ranges[i].hand_masks)
             {
                 TRACE_RE("Error: Player %d has an empty or invalid range.\n", i);
+                /* Players before this one already have their buffers built. */
+                for (int j = 0; j < i; ++j)
+                    range_combo_buffer_free(&combo_buffers[j]);
                 enumResultClear(aggregated_results);
                 aggregated_results->nplayers = num_players;
                 aggregated_results->game = game;

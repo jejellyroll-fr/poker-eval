@@ -143,11 +143,11 @@ jobs:
         # Serial on purpose — parallel ASan processes are memory hungry for a
         # hosted runner. --timeout bounds a sanitizer hang per test.
         #
-        # The excluded tests below have pre-existing LeakSanitizer failures,
-        # tracked in #56; test_modern_legacy_compatibility asserts on wall-clock
-        # timings, which are meaningless in an instrumented -O0 build.
+        # The leaks tracked in #56 are fixed, so only one exclusion remains:
+        # test_modern_legacy_compatibility asserts on wall-clock timings, which
+        # are meaningless in an instrumented -O0 build. Making that one
+        # assertion conditional would let the list reach empty.
         # A denylist, unlike -R, still runs every test added from now on.
-        # Shrink this list as the leaks are fixed; it should reach empty.
         ctest --output-on-failure --timeout 900 -E '^(test_modern_legacy_compatibility)$'
 
   benchmark-performance:
