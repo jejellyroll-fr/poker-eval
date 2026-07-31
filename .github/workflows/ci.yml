@@ -97,6 +97,13 @@ jobs:
     # Run only on schedule or manual trigger
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
+    env:
+      # UBSan reports and then carries on by default, so undefined behaviour
+      # would be printed into the log while the job still went green. Halt on
+      # the first report so it actually fails, and print a stack trace so the
+      # report names something other than the sanitizer runtime.
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
     steps:
     - uses: actions/checkout@v4
 
