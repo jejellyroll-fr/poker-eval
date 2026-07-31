@@ -204,7 +204,9 @@ void test_range_equity_holdem_aa_vs_kk(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                         1, 0, 0, 0, &result);
@@ -248,7 +250,9 @@ void test_range_equity_holdem_aks_vs_qq(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                         1, 0, 0, 0, &result);
@@ -302,7 +306,9 @@ void test_range_equity_weighted(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                         1, 0, 0, 0, &result);
@@ -362,7 +368,9 @@ void test_range_equity_omaha(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_omaha, ranges, 2, board, dead,
                                         0, 0, 0, 0, &result);
@@ -423,7 +431,9 @@ void test_range_equity_7stud(void)
     StdDeck_CardMask_RESET(board);
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_7stud, ranges, 2, board, dead,
                                         0, 0, 0, 0, &result);
@@ -469,8 +479,12 @@ void test_mt_v1_matches_single_thread(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result_st, 2, enum_ordering_mode_hi);
-    enumResultAlloc(&result_mt, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result_st);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result_mt);
 
     matchups_st = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                            1, 0, 0, 0, &result_st);
@@ -754,7 +768,9 @@ void test_auto_selects_strategy(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges_Auto(game_holdem, ranges, 2, board, dead,
                                               1, 0, 0, 0, &result);
@@ -803,7 +819,9 @@ void test_range_single_hand(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                         1, 0, 0, 0, &result);
@@ -840,7 +858,9 @@ void test_range_empty_returns_zero(void)
     StdDeck_CardMask_RESET(board);
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                         5, 0, 0, 0, &result);
@@ -884,7 +904,9 @@ void test_range_dead_cards_overlap(void)
     StdDeck_CardMask_RESET(dead);
     add_card(&dead, StdDeck_Rank_ACE, StdDeck_Suit_CLUBS);
 
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 2, board, dead,
                                         1, 0, 0, 0, &result);
@@ -974,7 +996,9 @@ void test_range_3player(void)
 
     StdDeck_CardMask_RESET(dead);
 
-    enumResultAlloc(&result, 3, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     matchups = CalculateEquityForRanges(game_holdem, ranges, 3, board, dead,
                                         1, 0, 0, 0, &result);

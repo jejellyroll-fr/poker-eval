@@ -106,12 +106,12 @@ static void range_equity_evaluate_matchup(
     int orderflag,
     WeightedAggregation *weighted_agg)
 {
+    /* Only clear it: both enumSampleBatched() and enumExhaustive_dispatch()
+     * start with enumResultClear(), which memsets the struct and would drop an
+     * ordering pointer allocated here without freeing it. They allocate their
+     * own ordering when orderflag is set. */
     enum_result_t matchup_result;
-    if (enumResultAlloc(&matchup_result, num_players, enum_ordering_mode_hi) != 0)
-    {
-        TRACE_RE("Error allocating matchup_result.\n");
-        return;
-    }
+    enumResultClear(&matchup_result);
 
     StdDeck_CardMask effective_dead_cards;
     StdDeck_CardMask_RESET(effective_dead_cards);
@@ -343,6 +343,9 @@ int CalculateEquityForRanges(
             if (player_ranges[i].count <= 0 || !player_ranges[i].hand_masks)
             {
                 TRACE_RE("Error: Player %d has an empty or invalid range.\n", i);
+                /* Players before this one already have their buffers built. */
+                for (int j = 0; j < i; ++j)
+                    range_combo_buffer_free(&combo_buffers[j]);
                 enumResultClear(aggregated_results);
                 aggregated_results->nplayers = num_players;
                 aggregated_results->game = game;

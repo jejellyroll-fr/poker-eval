@@ -56,7 +56,9 @@ static void test_main_path_with_debug(void)
     StdDeck_CardMask_RESET(dead);
 
     enum_result_t result;
-    enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     int matchups = CalculateEquityForRanges(
         game_holdem, ranges, 2, board, dead, 5, 1, 3000, 0, &result);
