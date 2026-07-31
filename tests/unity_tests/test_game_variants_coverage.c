@@ -368,8 +368,9 @@ static void test_razz_evaluation(void)
     StdDeck_CardMask_RESET(dead);
     StdDeck_CardMask_OR(dead, pockets[0], pockets[1]);
 
-    err = enumResultAlloc(&result, 2, enum_ordering_mode_lo);
-    TEST_ASSERT_EQUAL_INT(0, err);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     /* Complete hands */
     err = enumExhaustive(game_razz, pockets, board, dead, 2, 7, 0, &result);

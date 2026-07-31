@@ -59,8 +59,9 @@ static void test_result_print_helpers(void)
     StdDeck_CardMask_OR(dead, dead, pockets[1]);
     StdDeck_CardMask_OR(dead, dead, board);
 
-    err = enumResultAlloc(&result, 2, enum_ordering_mode_hi);
-    TEST_ASSERT_EQUAL_INT(0, err);
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
 
     err = enumExhaustive(game_holdem, pockets, board, dead, 2, 5, 0, &result);
     TEST_ASSERT_EQUAL_INT(0, err);
