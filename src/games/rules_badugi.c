@@ -204,7 +204,7 @@ int BadugiRules_HandVal_toString_n(HandVal handval, char *outString, size_t size
 int BadugiRules_HandVal_print(HandVal handval)
 {
     char buf[80];
-    int length = BadugiRules_HandVal_toString(handval, buf);
+    int length = BadugiRules_HandVal_toString_n(handval, buf, sizeof(buf));
     printf("%s", buf);
     return length;
 }
@@ -245,7 +245,7 @@ int BadaceyRules_HandVal_toString_n(HandVal handval, char *outString, size_t siz
 int BadaceyRules_HandVal_print(HandVal handval)
 {
     char buf[80];
-    int length = BadaceyRules_HandVal_toString(handval, buf);
+    int length = BadaceyRules_HandVal_toString_n(handval, buf, sizeof(buf));
     printf("%s", buf);
     return length;
 }
@@ -286,7 +286,7 @@ int BadeucyRules_HandVal_toString_n(HandVal handval, char *outString, size_t siz
 int BadeucyRules_HandVal_print(HandVal handval)
 {
     char buf[80];
-    int length = BadeucyRules_HandVal_toString(handval, buf);
+    int length = BadeucyRules_HandVal_toString_n(handval, buf, sizeof(buf));
     printf("%s", buf);
     return length;
 }
