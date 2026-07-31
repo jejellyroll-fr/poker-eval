@@ -91,6 +91,9 @@ jobs:
   test-debug-sanitizers:
     name: Debug + Sanitizers (Weekly)
     runs-on: ubuntu-latest
+    # Instrumented tests are slow; cap the job so a hang cannot sit on a runner
+    # for the 6h default.
+    timeout-minutes: 90
     # Run only on schedule or manual trigger
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
@@ -119,11 +122,20 @@ jobs:
         cd build
         make -j"$(nproc)"
 
-    - name: Run Tests with Sanitizers
+    - name: Run Core Regression Tests with Sanitizers
       run: |
         cd build
-        # Run core tests with AddressSanitizer/UBSan
+        # Fast smoke pass so an obvious breakage fails before the long run
         ctest --output-on-failure -R "test_canonical_regression|test_canonical_invariants|test_omaha_invariants"
+
+    - name: Run Full Test Suite with Sanitizers
+      run: |
+        cd build
+        # Whole suite, not an allowlist: the build already pays to instrument
+        # every subsystem, and an allowlist silently excludes each new test.
+        # Serial on purpose — parallel ASan processes are memory hungry for a
+        # hosted runner. --timeout bounds a sanitizer hang per test.
+        ctest --output-on-failure --timeout 900
 
   benchmark-performance:
     name: Performance Benchmarks
