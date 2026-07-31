@@ -64,6 +64,8 @@ static char arp_rank_to_char(int rank);
 static char arp_suit_to_char(int suit);
 static int arp_tokenize(arp_context_t *ctx);
 static int arp_parse_tokens(arp_context_t *ctx, StdDeck_CardMask dead_cards, enum_game_t game_type, arp_range_t *result);
+typedef struct arp_hash_table_s arp_hash_table_t;
+static void arp_hash_free(arp_hash_table_t *ht);
 static int arp_add_hand_to_range(arp_range_t *range, StdDeck_CardMask hand, double weight);
 static int arp_remove_hand_from_range(arp_range_t *range, StdDeck_CardMask hand);
 static int arp_remove_range(arp_range_t *target, const arp_range_t *to_remove);
@@ -278,8 +280,10 @@ void ARP_ClearCache(void) {
              }
              /* Don't forget hash table if present */
              if (global_cache.entries[i].cached_range.internal_data) {
-                 /* We need access to arp_hash_free or just free the pointer assuming it's opaque */
-                 free(global_cache.entries[i].cached_range.internal_data);
+                 arp_hash_table_t *ht =
+                     (arp_hash_table_t *)global_cache.entries[i].cached_range.internal_data;
+                 arp_hash_free(ht); /* frees the slot array, not just the header */
+                 free(ht);
                  global_cache.entries[i].cached_range.internal_data = NULL;
              }
              global_cache.entries[i].valid = false;
@@ -441,107 +445,149 @@ static char arp_suit_to_char(int suit)
 }
 
 /* Initialize range with specific capacity */
-#define ARP_HASH_TABLE_SIZE 2048
+/* Smallest table we ever allocate (power of two). */
+#define ARP_HASH_MIN_SLOTS 1024
 
 typedef struct {
     StdDeck_CardMask hand;
-    int index;  /* Index in range->hands array */
+    size_t index;  /* Index in range->hands array */
     bool occupied;
 } arp_hash_entry_t;
 
-typedef struct {
-    arp_hash_entry_t table[ARP_HASH_TABLE_SIZE];
-    int num_entries;
-} arp_hash_table_t;
+struct arp_hash_table_s {
+    arp_hash_entry_t *table; /* slots, heap allocated, grows with the range */
+    size_t mask;             /* slots - 1; slots is always a power of two */
+    size_t num_entries;
+};
 
-/* Hash function for CardMask */
+/*
+ * Hash function for CardMask.
+ *
+ * The whole 52-bit mask must take part: a hash folding the four suit fields
+ * together with XOR is invariant under suit permutation, so As-Kh and Ah-Ks —
+ * distinct hands — collide. Omaha patterns such as "AAxxds" are built almost
+ * entirely of suit permutations of one another, which piled thousands of hands
+ * onto a handful of buckets.
+ */
 static uint32_t arp_hash_cardmask(StdDeck_CardMask hand) {
-    /* Simple hash based on card bits */
-    uint32_t hash = 0;
+#ifdef USE_INT64
+    uint64_t key = hand.cards_n;
+#else
+    uint64_t key = ((uint64_t)hand.cards.spades) |
+                   ((uint64_t)hand.cards.clubs << 13) |
+                   ((uint64_t)hand.cards.diamonds << 26) |
+                   ((uint64_t)hand.cards.hearts << 39);
+#endif
 
-    #ifdef USE_INT64_IMPL
-    hash = (uint32_t)(hand.cards_n ^ (hand.cards_n >> 32));
-    #else
-    hash = hand.cards.hearts ^ hand.cards.diamonds ^
-           hand.cards.clubs ^ hand.cards.spades;
-    #endif
+    /* splitmix64 finalizer */
+    key ^= key >> 30;
+    key *= 0xbf58476d1ce4e5b9ULL;
+    key ^= key >> 27;
+    key *= 0x94d049bb133111ebULL;
+    key ^= key >> 31;
 
-    /* Mix bits */
-    hash ^= (hash >> 16);
-    hash *= 0x85ebca6b;
-    hash ^= (hash >> 13);
-    hash *= 0xc2b2ae35;
-    hash ^= (hash >> 16);
-
-    return hash % ARP_HASH_TABLE_SIZE;
+    return (uint32_t)key;
 }
 
-/* Initialize hash table */
-static void arp_hash_init(arp_hash_table_t *ht) {
+/* Free hash table contents (the struct itself is owned by the caller) */
+static void arp_hash_free(arp_hash_table_t *ht) {
     if (!ht)
         return;
-
-    for (int i = 0; i < ARP_HASH_TABLE_SIZE; i++) {
-        ht->table[i].occupied = false;
-    }
+    free(ht->table);
+    ht->table = NULL;
+    ht->mask = 0;
     ht->num_entries = 0;
 }
 
-/* Insert into hash table */
-static bool arp_hash_insert(arp_hash_table_t *ht, StdDeck_CardMask hand, int index) {
-    if (!ht)
-        return false;
-
-    uint32_t hash = arp_hash_cardmask(hand);
-
-    /* Linear probing */
-    for (int i = 0; i < 20; i++) {
-        int idx = (hash + i) % ARP_HASH_TABLE_SIZE;
-
-        if (!ht->table[idx].occupied) {
-            /* Empty slot found */
-            ht->table[idx].hand = hand;
-            ht->table[idx].index = index;
-            ht->table[idx].occupied = true;
-            ht->num_entries++;
-            return true;
-        }
-
-        /* Check if same hand already exists */
-        if (StdDeck_CardMask_EQUAL(ht->table[idx].hand, hand)) {
-            return false;  /* Duplicate */
-        }
-    }
-
-    return false;  /* Table full or too many collisions */
+/* Insert into a table known to have a free slot and not to hold `hand`. */
+static void arp_hash_put(arp_hash_table_t *ht, StdDeck_CardMask hand, size_t index) {
+    size_t i = (size_t)arp_hash_cardmask(hand) & ht->mask;
+    while (ht->table[i].occupied)
+        i = (i + 1) & ht->mask;
+    ht->table[i].hand = hand;
+    ht->table[i].index = index;
+    ht->table[i].occupied = true;
 }
 
-/* Check if hand exists */
-static bool arp_hash_contains(arp_hash_table_t *ht, StdDeck_CardMask hand) {
+/* Grow (or first allocate) the table so it can hold min_entries below 70% load */
+static bool arp_hash_reserve(arp_hash_table_t *ht, size_t min_entries) {
     if (!ht)
         return false;
 
-    uint32_t hash = arp_hash_cardmask(hand);
+    size_t slots = ARP_HASH_MIN_SLOTS;
+    while (slots * 7 < (min_entries + 1) * 10)
+        slots <<= 1;
 
-    for (int i = 0; i < 20; i++) {
-        int idx = (hash + i) % ARP_HASH_TABLE_SIZE;
+    if (ht->table && slots <= ht->mask + 1)
+        return true; /* already large enough */
 
-        if (!ht->table[idx].occupied) {
-            return false;  /* Not found */
+    arp_hash_entry_t *fresh = calloc(slots, sizeof(*fresh));
+    if (!fresh)
+        return false;
+
+    arp_hash_entry_t *old = ht->table;
+    size_t old_slots = old ? ht->mask + 1 : 0;
+    ht->table = fresh;
+    ht->mask = slots - 1;
+
+    for (size_t i = 0; i < old_slots; i++)
+        if (old[i].occupied)
+            arp_hash_put(ht, old[i].hand, old[i].index);
+    free(old);
+    return true;
+}
+
+/* Initialize hash table sized for `expected` entries */
+static bool arp_hash_init(arp_hash_table_t *ht, size_t expected) {
+    if (!ht)
+        return false;
+    ht->table = NULL;
+    ht->mask = 0;
+    ht->num_entries = 0;
+    return arp_hash_reserve(ht, expected);
+}
+
+/*
+ * Look a hand up. On success stores its position in range->hands into
+ * *index_out. Probing runs until an empty slot is reached; the load factor is
+ * held below 70% by arp_hash_insert(), so the walk always terminates.
+ */
+static bool arp_hash_lookup(const arp_hash_table_t *ht, StdDeck_CardMask hand,
+                            size_t *index_out) {
+    if (!ht || !ht->table)
+        return false;
+
+    size_t i = (size_t)arp_hash_cardmask(hand) & ht->mask;
+    while (ht->table[i].occupied) {
+        if (StdDeck_CardMask_EQUAL(ht->table[i].hand, hand)) {
+            if (index_out)
+                *index_out = ht->table[i].index;
+            return true;
         }
-
-        if (StdDeck_CardMask_EQUAL(ht->table[idx].hand, hand)) {
-            return true;  /* Found */
-        }
+        i = (i + 1) & ht->mask;
     }
-
     return false;
 }
 
-/* Free hash table */
-static void arp_hash_free(arp_hash_table_t *ht) {
-    /* Nothing to free for static allocation */
-    (void)ht;
+/* Check if hand exists */
+static bool arp_hash_contains(const arp_hash_table_t *ht, StdDeck_CardMask hand) {
+    return arp_hash_lookup(ht, hand, NULL);
+}
+
+/* Insert into hash table. Returns false if `hand` was already present. */
+static bool arp_hash_insert(arp_hash_table_t *ht, StdDeck_CardMask hand, size_t index) {
+    if (!ht || !ht->table)
+        return false;
+
+    if (arp_hash_contains(ht, hand))
+        return false; /* Duplicate */
+
+    if (!arp_hash_reserve(ht, ht->num_entries + 1))
+        return false; /* Out of memory — caller keeps the linear fallback */
+
+    arp_hash_put(ht, hand, index);
+    ht->num_entries++;
+    return true;
 }
 
 /* Initialize parsing context */
@@ -2701,15 +2747,31 @@ static void arp_range_ensure_hash_table(arp_range_t *range) {
         return;
 
     arp_hash_table_t *ht = malloc(sizeof(arp_hash_table_t));
-    if (ht) {
-        arp_hash_init(ht);
+    if (!ht)
+        return;
 
-        /* Populate with existing hands */
-        for (size_t i = 0; i < range->count; i++) {
-            arp_hash_insert(ht, range->hands[i], (int)i);
-        }
-        range->internal_data = ht;
+    if (!arp_hash_init(ht, range->count)) {
+        free(ht);
+        return; /* caller falls back to the linear scan */
     }
+
+    /* Populate with existing hands */
+    for (size_t i = 0; i < range->count; i++) {
+        arp_hash_insert(ht, range->hands[i], i);
+    }
+    range->internal_data = ht;
+}
+
+/* Drop the hash table; it is rebuilt lazily on the next insertion. Must be
+ * called by anything that reorders or removes entries in range->hands, since
+ * the table stores positions into that array. */
+static void arp_range_invalidate_hash_table(arp_range_t *range) {
+    if (!range || !range->internal_data)
+        return;
+    arp_hash_table_t *ht = (arp_hash_table_t *)range->internal_data;
+    arp_hash_free(ht);
+    free(ht);
+    range->internal_data = NULL;
 }
 
 /* Add a hand to range */
@@ -2728,35 +2790,13 @@ static int arp_add_hand_to_range(arp_range_t *range, StdDeck_CardMask hand, doub
 
         if (range->internal_data) {
             arp_hash_table_t *ht = (arp_hash_table_t *)range->internal_data;
-            /* Fast duplicate check */
-            if (arp_hash_contains(ht, hand)) {
-                /* We found it, but we need to update weight.
-                   Hash table doesn't currently support easy lookup of index without re-hashing logic duplication.
-                   Let's improve hash table or fallback for now if we need to update weights.
-                   Actually, arp_hash_insert returns false if duplicate, but we need the index to update weight.
-                   The current hash table implementation doesn't return the index on found.
-                   Let's modify hash table logic slightly or just accept linear search for update if needed?
-                   Wait, arp_hash_entry_t stores index. We can find it.
-                */
-                /* Linear search fallback for weight update is fine if duplications are rare OR we can improve hash table lookup.
-                   But if we have hash table, we want to avoid linear search.
-                   Let's just do linear search if found in hash, because hash check is fast.
-                   Wait, that defeats the purpose if we have many duplicates.
-                   But duplicates are usually filtered out before or handled.
-                   Let's implement a proper lookup in hash table that returns index.
-                */
-                 /* For now, fallback to linear search if found in hash (to get index) */
-                 /* Or better, iterate linear only if hash says it's there. */
-                 /* But wait, if hash says it's there, we MUST find it. */
-                 for (size_t i = 0; i < range->count; i++) {
-                    if (StdDeck_CardMask_EQUAL(range->hands[i], hand)) {
-                        range->weights[i] += weight;
-                        range->total_weight += weight;
-                        if (fabs(range->weights[i] - 1.0) > 1e-9)
-                            range->has_weights = true;
-                        return 1;
-                    }
-                 }
+            size_t found;
+            if (arp_hash_lookup(ht, hand, &found) && found < range->count) {
+                range->weights[found] += weight;
+                range->total_weight += weight;
+                if (fabs(range->weights[found] - 1.0) > 1e-9)
+                    range->has_weights = true;
+                return 1;
             }
             goto add_hand;
         }
@@ -2803,7 +2843,7 @@ add_hand:
     /* Update hash table */
     if (range->internal_data) {
         arp_hash_table_t *ht = (arp_hash_table_t *)range->internal_data;
-        arp_hash_insert(ht, hand, (int)range->count);
+        arp_hash_insert(ht, hand, range->count);
     }
 
     range->count++;
@@ -2818,6 +2858,9 @@ static int arp_remove_hand_from_range(arp_range_t *range, StdDeck_CardMask hand)
 {
     if (!range || !range->hands || !range->weights)
         return 0;
+
+    /* Entries below shift down, so every stored index would go stale. */
+    arp_range_invalidate_hash_table(range);
 
     for (size_t i = 0; i < range->count; ++i)
     {
