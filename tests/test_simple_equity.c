@@ -34,7 +34,9 @@ int main(void) {
     
     // Calculate equity
     enum_result_t result;
-    if (enumResultAlloc(&result, 2, enum_ordering_mode_hi) != 0) {
+    /* Cleared, not allocated: the enumeration below starts with
+     * enumResultClear(), which would drop an ordering allocated here. */
+    enumResultClear(&result);
         printf("Failed to allocate result\n");
         return 1;
     }
