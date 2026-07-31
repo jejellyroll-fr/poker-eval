@@ -568,6 +568,10 @@ set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_VENDOR "Poker-eval Project")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY ${PROJECT_DESCRIPTION})
+# The DEB generator refuses to build without a maintainer; without this the
+# TGZ is produced and then CPack aborts on "Debian package requires a
+# maintainer for a package".
+set(CPACK_PACKAGE_CONTACT "https://github.com/jejellyroll-fr/poker-eval")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENCE")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 

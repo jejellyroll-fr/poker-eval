@@ -16,6 +16,13 @@ typedef struct {
     double ntielo[ENUM_MAXPLAYERS];
     double nloselo[ENUM_MAXPLAYERS];
     double nscoop[ENUM_MAXPLAYERS];
+    /* Weighted counterparts of enum_result_t's share histograms:
+     * nsharehi[i][H] is how often player i tied for the best high hand with H
+     * players in total (H = 0 meaning no share). Carrying them through the
+     * aggregation is what lets pe_equity report equity_hi / equity_lo for a
+     * range; without them both come out zero. */
+    double nsharehi[ENUM_MAXPLAYERS][ENUM_MAXPLAYERS + 1];
+    double nsharelo[ENUM_MAXPLAYERS][ENUM_MAXPLAYERS + 1];
 } WeightedAggregation;
 
 static inline void weightedAggregationInit(WeightedAggregation* agg, int num_players) {
@@ -30,6 +37,8 @@ static inline void weightedAggregationInit(WeightedAggregation* agg, int num_pla
     memset(agg->ntielo, 0, sizeof(double) * ENUM_MAXPLAYERS);
     memset(agg->nloselo, 0, sizeof(double) * ENUM_MAXPLAYERS);
     memset(agg->nscoop, 0, sizeof(double) * ENUM_MAXPLAYERS);
+    memset(agg->nsharehi, 0, sizeof(agg->nsharehi));
+    memset(agg->nsharelo, 0, sizeof(agg->nsharelo));
 }
 
 static inline void weightedAggregationAccumulate(
@@ -55,6 +64,10 @@ static inline void weightedAggregationAccumulate(
         agg->ntielo[p] += weight * matchup_result->ntielo[p];
         agg->nloselo[p] += weight * matchup_result->nloselo[p];
         agg->nscoop[p] += weight * matchup_result->nscoop[p];
+        for (int h = 0; h <= num_players; ++h) {
+            agg->nsharehi[p][h] += weight * matchup_result->nsharehi[p][h];
+            agg->nsharelo[p][h] += weight * matchup_result->nsharelo[p][h];
+        }
     }
 }
 
@@ -78,6 +91,10 @@ static inline void weightedAggregationMerge(
         dest->ntielo[p] += src->ntielo[p];
         dest->nloselo[p] += src->nloselo[p];
         dest->nscoop[p] += src->nscoop[p];
+        for (int h = 0; h <= num_players; ++h) {
+            dest->nsharehi[p][h] += src->nsharehi[p][h];
+            dest->nsharelo[p][h] += src->nsharelo[p][h];
+        }
     }
 }
 
@@ -94,7 +111,12 @@ static inline void distribute_probabilities(
         return;
     }
 
-    double fractions[8] = {0};
+    /* Sized for the largest caller, the share histogram over 0..num_players
+     * buckets. The scratch used to be a fixed double[8] while the function
+     * already took an arbitrary len. */
+    double fractions[ENUM_MAXPLAYERS + 1] = {0};
+    if (len > (int)(sizeof(fractions) / sizeof(fractions[0])))
+        return;
     unsigned int allocated = 0;
 
     for (int i = 0; i < len; ++i) {
@@ -129,6 +151,7 @@ static inline void weightedAggregationFinalizePlayer(
     const WeightedAggregation* agg,
     enum_result_t* aggregated_results,
     int player_index,
+    int num_players,
     unsigned int target_samples
 ) {
     if (!aggregated_results) {
@@ -143,6 +166,10 @@ static inline void weightedAggregationFinalizePlayer(
         aggregated_results->ntielo[player_index] = 0;
         aggregated_results->nloselo[player_index] = 0;
         aggregated_results->nscoop[player_index] = 0;
+        memset(aggregated_results->nsharehi[player_index], 0,
+               sizeof(aggregated_results->nsharehi[player_index]));
+        memset(aggregated_results->nsharelo[player_index], 0,
+               sizeof(aggregated_results->nsharelo[player_index]));
         return;
     }
 
@@ -179,6 +206,30 @@ static inline void weightedAggregationFinalizePlayer(
         scoop_count = aggregated_results->nwinhi[player_index];
     }
     aggregated_results->nscoop[player_index] = scoop_count;
+
+    /* Share histograms: one bucket per possible number of players sharing the
+     * pot, 0..num_players, so the row sums to the sample count exactly like
+     * the win/tie/lose triples above. */
+    int share_buckets = num_players + 1;
+    double share_probs[ENUM_MAXPLAYERS + 1];
+    unsigned int share_counts[ENUM_MAXPLAYERS + 1];
+
+    memset(aggregated_results->nsharehi[player_index], 0,
+           sizeof(aggregated_results->nsharehi[player_index]));
+    memset(aggregated_results->nsharelo[player_index], 0,
+           sizeof(aggregated_results->nsharelo[player_index]));
+
+    for (int h = 0; h < share_buckets; ++h)
+        share_probs[h] = agg->nsharehi[player_index][h] * inv_total_samples;
+    distribute_probabilities(share_probs, share_counts, share_buckets, target_samples);
+    for (int h = 0; h < share_buckets; ++h)
+        aggregated_results->nsharehi[player_index][h] = share_counts[h];
+
+    for (int h = 0; h < share_buckets; ++h)
+        share_probs[h] = agg->nsharelo[player_index][h] * inv_total_samples;
+    distribute_probabilities(share_probs, share_counts, share_buckets, target_samples);
+    for (int h = 0; h < share_buckets; ++h)
+        aggregated_results->nsharelo[player_index][h] = share_counts[h];
 }
 
 static inline unsigned int weightedAggregationFinalize(
@@ -207,7 +258,7 @@ static inline unsigned int weightedAggregationFinalize(
         target_samples = (unsigned int)rounded_total;
     }
     for (int p = 0; p < num_players; ++p) {
-        weightedAggregationFinalizePlayer(agg, aggregated_results, p, target_samples);
+        weightedAggregationFinalizePlayer(agg, aggregated_results, p, num_players, target_samples);
     }
     return target_samples;
 }

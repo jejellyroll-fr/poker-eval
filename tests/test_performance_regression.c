@@ -62,13 +62,11 @@ static double get_time(void) {
 #  define PE_PERF_ASSERTS 0
 #endif
 
+/* Kept pure: test_performance_regression_detection exercises this function
+ * with synthetic numbers and asserts it flags a regression, so it must behave
+ * identically in every build. Only the verdicts on genuinely measured
+ * throughput are suspended, through PERF_ASSERT below. */
 static bool performance_within_tolerance(double measured, double expected, double tolerance) {
-#if !PE_PERF_ASSERTS
-    (void)measured;
-    (void)expected;
-    (void)tolerance;
-    return true;
-#else
     if (expected <= 0.0)
         return true;
     if (measured >= expected)
@@ -76,8 +74,14 @@ static bool performance_within_tolerance(double measured, double expected, doubl
     double ratio = measured / expected;
     double deviation = (1.0 - ratio) * 100.0;
     return deviation <= tolerance;
-#endif
 }
+
+/* Assert on a measured rate only where the baselines can hold. */
+#if PE_PERF_ASSERTS
+#  define PERF_ASSERT(cond) TEST_ASSERT_TRUE(cond)
+#else
+#  define PERF_ASSERT(cond) ((void)(cond))
+#endif
 
 static void print_performance_result(const char* test_name, double measured, double expected, bool passed) {
     double ratio = measured / expected;
@@ -113,7 +117,7 @@ static void test_mask_operations_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_MASK_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Mask Operations", ops_per_sec, EXPECTED_MASK_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     /* Note: result might be 0 due to XOR operations, which is valid */
 }
 
@@ -136,7 +140,7 @@ static void test_popcount_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_POPCOUNT_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Popcount Operations", ops_per_sec, EXPECTED_POPCOUNT_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     TEST_ASSERT_GREATER_THAN_INT(0, total_bits);  /* Ensure operations weren't optimized away */
 }
 
@@ -169,7 +173,7 @@ static void test_combination_generation_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_COMBO_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Combination Generation", ops_per_sec, EXPECTED_COMBO_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     TEST_ASSERT_GREATER_THAN_UINT64(0, total_combos);
 }
 
@@ -203,7 +207,7 @@ static void test_enumeration_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_ENUM_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Enumeration", ops_per_sec, EXPECTED_ENUM_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     TEST_ASSERT_GREATER_THAN_UINT64(0, total_enums);
 }
 
