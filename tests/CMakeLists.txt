@@ -32,7 +32,15 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     # making compiler-version-specific diagnostics fatal.
     target_compile_options(unity PRIVATE -Wno-error -Wno-float-equal)
 endif()
-target_compile_definitions(unity PUBLIC UNITY_INCLUDE_DOUBLE)
+# UNITY_SUPPORT_64 is auto-detected only when long or pointers are 64-bit, so a
+# 32-bit target such as the armhf cross-build loses it. There the 64-bit
+# assertion macros expand to an unconditional "64-bit support not available"
+# failure that references neither of its arguments, which both breaks the build
+# under -Werror=unused-variable and would fail every such test at runtime.
+# Unity handles 64-bit on a 32-bit target through long long, and this library's
+# card masks are 64-bit throughout, so ask for it explicitly. PUBLIC because the
+# macros live in the header the tests include.
+target_compile_definitions(unity PUBLIC UNITY_INCLUDE_DOUBLE UNITY_SUPPORT_64)
 
 # Helper function to add Unity tests
 function(add_unity_test test_name source_file)
