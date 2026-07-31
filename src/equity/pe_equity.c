@@ -376,11 +376,19 @@ static pe_status_t pe_equity_legacy_fallback(
     int to_deal = (total_board_cards > cards_on_board) ? (total_board_cards - cards_on_board) : 0;
     if (to_deal < 0) to_deal = 0;
 
-    int use_mc = 0;
-    if (opts && opts->is_monte_carlo && to_deal > 0) {
-        use_mc = 1;
-    } else if (to_deal > 0) {
-        use_mc = 1;
+    /* Honour the caller's choice. The previous form had both branches set
+     * use_mc = 1 whenever to_deal > 0, which collapsed to "always sample" and
+     * silently ignored opts->is_monte_carlo == 0 — a caller asking for an
+     * exact result got a sampled one, reported with exact = 0. With no options
+     * at all the old default of sampling is kept. */
+    int use_mc;
+    if (opts) {
+        use_mc = opts->is_monte_carlo ? 1 : 0;
+    } else {
+        use_mc = (to_deal > 0);
+    }
+    if (to_deal == 0) {
+        use_mc = 0; /* nothing left to deal, so nothing to sample */
     }
 
     int ret = CalculateEquityForRanges(

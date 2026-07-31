@@ -193,8 +193,13 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         if(ENABLE_NATIVE_ARCH AND COMPILER_SUPPORTS_MARCH_NATIVE AND NOT APPLE)
             add_compile_options(-march=native)
         elseif(CMAKE_C_COMPILER_ID MATCHES "GNU" AND NOT APPLE)
-            # Use generic tuning for distributable binaries (GCC only)
-            add_compile_options(-mtune=generic)
+            # Use generic tuning for distributable binaries (GCC only).
+            # "generic" is an x86 tuning name; an ARM cross-compiler rejects it
+            # with "unrecognized -mtune target", so probe before adding it.
+            check_c_compiler_flag("-mtune=generic" COMPILER_SUPPORTS_MTUNE_GENERIC)
+            if(COMPILER_SUPPORTS_MTUNE_GENERIC)
+                add_compile_options(-mtune=generic)
+            endif()
         endif()
     endif()
 
@@ -471,6 +476,11 @@ if(BUILD_TESTS)
     endif()
 endif()
 
+# Standard install layout. Must come before add_subdirectory(src): the example
+# targets install into ${CMAKE_INSTALL_BINDIR}/poker-eval-examples, and an
+# undefined CMAKE_INSTALL_BINDIR turns that into the absolute /poker-eval-examples.
+include(GNUInstallDirs)
+
 # Modular sources (core/games/equity/utils/etc.)
 add_subdirectory(src)
 add_subdirectory(tools)
@@ -510,8 +520,7 @@ if(BUILD_DOCUMENTATION)
     endif()
 endif()
 
-# Installation
-include(GNUInstallDirs)
+# Installation (GNUInstallDirs is included above, before add_subdirectory(src))
 
 # Install headers
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/poker_eval/
