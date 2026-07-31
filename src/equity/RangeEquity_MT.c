@@ -353,9 +353,7 @@ int CalculateEquityForRanges_MT(
             /* Cleared, not allocated: the enumeration below starts with
              * enumResultClear(), which would drop an ordering allocated here. */
             enumResultClear(&matchup_result);
-                continue;
-            }
-            
+
             int ret_eval;
             StdDeck_CardMask effective_dead_cards_mt;
             StdDeck_CardMask_RESET(effective_dead_cards_mt);

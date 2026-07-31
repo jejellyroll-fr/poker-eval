@@ -37,10 +37,7 @@ int main(void) {
     /* Cleared, not allocated: the enumeration below starts with
      * enumResultClear(), which would drop an ordering allocated here. */
     enumResultClear(&result);
-        printf("Failed to allocate result\n");
-        return 1;
-    }
-    
+
     int iterations = 50000;
     printf("\nCalculating equity (Monte Carlo, %d iterations)...\n", iterations);
     // npockets=2, nboard=0 (no board cards dealt yet), orderflag=0
