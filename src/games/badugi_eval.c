@@ -454,7 +454,7 @@ int BadugiHandVal_toString_n(BadugiHandVal hv, char *outString, size_t size)
 int BadugiHandVal_print(BadugiHandVal hv)
 {
     char buf[80];
-    int length = BadugiHandVal_toString(hv, buf);
+    int length = BadugiHandVal_toString_n(hv, buf, sizeof(buf));
     printf("%s", buf);
     return length;
 }

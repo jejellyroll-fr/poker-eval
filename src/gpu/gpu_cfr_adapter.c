@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 #ifdef ENABLE_CUDA
 extern int gpu_cfr_cuda_download_state(gpu_cfr_context_t * ctx, cfr_matrix_storage_t * storage);
@@ -245,10 +246,10 @@ int gpu_cfr_adapter_compute_deltas(gpu_cfr_adapter_t *adapter)
     for (int sample = 0; sample < adapter->mc_samples; sample++)
     {
         /* Sample for player 0 */
-        cfr_traverse(adapter, (uint64_t)adapter->game->initial_state, 0, 1.0, 1.0);
+        cfr_traverse(adapter, (uint64_t)(uintptr_t)adapter->game->initial_state, 0, 1.0, 1.0);
 
         /* Sample for player 1 */
-        cfr_traverse(adapter, (uint64_t)adapter->game->initial_state, 1, 1.0, 1.0);
+        cfr_traverse(adapter, (uint64_t)(uintptr_t)adapter->game->initial_state, 1, 1.0, 1.0);
     }
 
     /* Average deltas by visit count */
