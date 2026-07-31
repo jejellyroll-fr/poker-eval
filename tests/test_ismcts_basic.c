@@ -223,8 +223,10 @@ static int test_backpropagation(void) {
     assert(parent->visit_count == 1);
     assert(parent->total_reward == reward);
 
+    /* Setting child->parent does not add the child to the parent's children
+     * list, so freeing the parent does not reach it — free both. */
+    ofc_ismcts_node_free(child);
     ofc_ismcts_node_free(parent);
-    /* child is freed as part of parent tree */
 
     printf("PASS\n");
     return 0;

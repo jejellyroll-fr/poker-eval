@@ -15,6 +15,8 @@ int main(int argc, char *argv[]) {
     int numToDeal[1];
     int count = 0;
     int max_count = 10;
+    int failures = 0;
+    int dead_joker_dealt = 0;
     
     printf("Testing JOKERDECK_ENUMERATE_COMBINATIONS_D directly\n");
     printf("==================================================\n\n");
@@ -56,15 +58,21 @@ int main(int argc, char *argv[]) {
                                              }
                                              printf("\n");
                                          }
-                                         if (count >= max_count) {
-                                             printf("\nStopping after %d combinations\n", max_count);
-                                             goto done;
+                                         if (count == max_count) {
+                                             printf("\nOnly the first %d are printed\n", max_count);
                                          }
                                      });
-    
-done:
+
+    /* No early exit: JOKERDECK_ENUMERATE_COMBINATIONS_D frees its combination
+     * tables after the loop, so jumping out of the action body leaks them.
+     * Running to the end also makes the total checkable: every 5-card
+     * combination of the 53-card joker deck, C(53,5). */
     printf("\nTotal combinations enumerated: %d\n", count);
-    
+    if (count != 2869685) {
+        printf("ERROR: expected C(53,5) = 2869685 combinations, got %d\n", count);
+        failures++;
+    }
+
     // Test 2: With some dead cards including the joker
     printf("\n\nTest 2: 1 player, needs 3 cards, joker is dead\n");
     printf("==============================================\n");
@@ -85,6 +93,13 @@ done:
                                      dead, 
                                      {
                                          count++;
+                                         /* The joker is dead, so it must not appear in any
+                                          * combination — checked on all of them, not just
+                                          * the ones printed below. */
+                                         if (JokerDeck_CardMask_CARD_IS_SET(unsharedCards[0],
+                                                                            JokerDeck_JOKER)) {
+                                             dead_joker_dealt++;
+                                         }
                                          if (count <= max_count) {
                                              printf("Combination %d: ", count);
                                              int card;
@@ -108,14 +123,26 @@ done:
                                              }
                                              printf("\n");
                                          }
-                                         if (count >= max_count) {
-                                             printf("\nStopping after %d combinations\n", max_count);
-                                             goto done2;
+                                         if (count == max_count) {
+                                             printf("\nOnly the first %d are printed\n", max_count);
                                          }
                                      });
-    
-done2:
+
     printf("\nTotal combinations enumerated: %d\n", count);
-    
+    /* 53 cards less the two dead ones, taken 3 at a time: C(51,3). */
+    if (count != 20825) {
+        printf("ERROR: expected C(51,3) = 20825 combinations, got %d\n", count);
+        failures++;
+    }
+    if (dead_joker_dealt != 0) {
+        printf("ERROR: dead joker was dealt in %d combination(s)\n", dead_joker_dealt);
+        failures++;
+    }
+
+    if (failures > 0) {
+        printf("\n%d check(s) FAILED\n", failures);
+        return 1;
+    }
+    printf("\nAll checks passed\n");
     return 0;
 }

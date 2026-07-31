@@ -78,7 +78,9 @@ void test_pokenum_holdem_2p(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem, pockets, board, dead, 2, 5, 0, &result);
 
@@ -121,7 +123,9 @@ void test_pokenum_holdem_3p(void) {
 
   build_dead(&dead, pockets, 3, board);
 
-  enumResultAlloc(&result, 3, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem, pockets, board, dead, 3, 5, 0, &result);
 
@@ -167,7 +171,9 @@ void test_pokenum_omaha_2p(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_omaha, pockets, board, dead, 2, 5, 0, &result);
 
@@ -209,7 +215,9 @@ void test_pokenum_omaha8_hilo(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hilo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_omaha8, pockets, board, dead, 2, 5, 0, &result);
 
@@ -254,7 +262,9 @@ void test_pokenum_7stud_2p(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_7stud, pockets, board, dead, 2, 0, 0, &result);
 
@@ -299,7 +309,9 @@ void test_pokenum_razz_2p(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_lo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_razz, pockets, board, dead, 2, 0, 0, &result);
 
@@ -339,7 +351,9 @@ void test_pokenum_lowball_2p(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_lo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_lowball, pockets, board, dead, 2, 0, 0, &result);
 
@@ -377,7 +391,9 @@ void test_pokenum_lowball27_2p(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_lo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_lowball27, pockets, board, dead, 2, 0, 0, &result);
 
@@ -418,7 +434,9 @@ void test_pokenum_shortdeck_2p(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_sdholdem, pockets, board, dead, 2, 5, 0, &result);
 
@@ -455,7 +473,9 @@ void test_pokenum_with_board(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem, pockets, board, dead, 2, 3, 0, &result);
 
@@ -497,7 +517,9 @@ void test_pokenum_with_dead_cards(void) {
   add_card(&dead, StdDeck_Rank_ACE, StdDeck_Suit_DIAMONDS);
   add_card(&dead, StdDeck_Rank_ACE, StdDeck_Suit_HEARTS);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem, pockets, board, dead, 2, 5, 0, &result);
 
@@ -530,7 +552,9 @@ void test_pokenum_mc_mode(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   /* Monte Carlo with 10000 samples */
   err = enumSample(game_holdem, pockets, board, dead, 2, 0, 10000, 0, &result);
@@ -567,7 +591,9 @@ void test_pokenum_known_equity(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   /* Monte Carlo with high sample count for accuracy */
   err = enumSample(game_holdem, pockets, board, dead, 2, 0, 50000, 0, &result);
@@ -612,7 +638,9 @@ void test_pokenum_pineapple_2p(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_pineapple, pockets, board, dead, 2, 5, 0, &result);
 
@@ -651,8 +679,12 @@ void test_pokenum_dispatch_integration(void) {
 
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&dispatch_result, 2, enum_ordering_mode_hi);
-  enumResultAlloc(&classic_result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&dispatch_result);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&classic_result);
 
   /* Dispatch version */
   dispatch_err = enumExhaustive_dispatch(game_holdem, pockets, board, dead, 2,
@@ -706,7 +738,9 @@ void test_pokenum_plo5_2p(void) {
   add_card(&board, StdDeck_Rank_6, StdDeck_Suit_CLUBS);
 
   build_dead(&dead, pockets, 2, board);
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_omaha5, pockets, board, dead, 2, 5, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -749,7 +783,9 @@ void test_pokenum_plo6_2p(void) {
   add_card(&board, StdDeck_Rank_6, StdDeck_Suit_CLUBS);
 
   build_dead(&dead, pockets, 2, board);
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_omaha6, pockets, board, dead, 2, 5, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -790,7 +826,9 @@ void test_pokenum_courchevel_2p(void) {
   add_card(&board, StdDeck_Rank_6, StdDeck_Suit_CLUBS);
 
   build_dead(&dead, pockets, 2, board);
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_courchevel, pockets, board, dead, 2, 5, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -828,7 +866,9 @@ void test_pokenum_7stud8_hilo(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hilo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_7stud8, pockets, board, dead, 2, 0, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -862,7 +902,9 @@ void test_pokenum_27_triple_draw(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_lo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_27_triple_draw, pockets, board, dead, 2, 0, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -898,7 +940,9 @@ void test_pokenum_a5_triple_draw(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_lo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_a5_triple_draw, pockets, board, dead, 2, 0, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -932,7 +976,9 @@ void test_pokenum_badugi_2p(void) {
   StdDeck_CardMask_RESET(board);
   build_dead(&dead, pockets, 2, board);
 
-  enumResultAlloc(&result, 2, enum_ordering_mode_hi);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_badugi, pockets, board, dead, 2, 0, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -973,7 +1019,9 @@ void test_pokenum_omaha85_2p(void) {
   add_card(&board, StdDeck_Rank_9, StdDeck_Suit_CLUBS);
 
   build_dead(&dead, pockets, 2, board);
-  enumResultAlloc(&result, 2, enum_ordering_mode_hilo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_omaha85, pockets, board, dead, 2, 5, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -1007,7 +1055,9 @@ void test_pokenum_holdem8_2p(void) {
   add_card(&board, StdDeck_Rank_8, StdDeck_Suit_CLUBS);
 
   build_dead(&dead, pockets, 2, board);
-  enumResultAlloc(&result, 2, enum_ordering_mode_hilo);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem8, pockets, board, dead, 2, 5, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);

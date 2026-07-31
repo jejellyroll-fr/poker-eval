@@ -350,10 +350,10 @@ int CalculateEquityForRanges_MT(
             if (!item->valid) continue;
             
             enum_result_t matchup_result;
-            if (enumResultAlloc(&matchup_result, num_players, enum_ordering_mode_hi) != 0) {
-                continue;
-            }
-            
+            /* Cleared, not allocated: the enumeration below starts with
+             * enumResultClear(), which would drop an ordering allocated here. */
+            enumResultClear(&matchup_result);
+
             int ret_eval;
             StdDeck_CardMask effective_dead_cards_mt;
             StdDeck_CardMask_RESET(effective_dead_cards_mt);

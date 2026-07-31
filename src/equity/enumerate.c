@@ -2183,6 +2183,15 @@ void enumResultClear(enum_result_t *result)
   memset(result, 0, sizeof(enum_result_t));
 }
 
+/* NOTE: this memsets the struct, which drops result->ordering without freeing
+ * it. That is deliberate — it doubles as the initializer for a fresh, still
+ * uninitialized enum_result_t, so it cannot dereference the old pointer. Call
+ * enumResultFree() first if the result may already own an ordering. The
+ * enumeration entry points below clear the caller's result on entry and
+ * allocate their own ordering, so callers should hand them a cleared struct
+ * rather than a pre-allocated one. */
+void enumResultClear(enum_result_t *result);
+
 void enumResultFree(enum_result_t *result)
 {
   if (result->ordering != NULL)

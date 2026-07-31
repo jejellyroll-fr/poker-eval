@@ -254,21 +254,13 @@ int enumExhaustive_eedc_omaha_opt(enum_game_t game, StdDeck_CardMask pockets[],
   enum_result_t **local_results = malloc(max_threads * sizeof(enum_result_t *));
   for (int i = 0; i < max_threads; i++) {
     local_results[i] = malloc(sizeof(enum_result_t));
-    enumResultAlloc(local_results[i], npockets,
-                    result->ordering ? result->ordering->mode
-                                     : 0); // Hack: need proper mode
-    // Wait, enumResultAlloc might fail. And we need to copy the mode from
-    // somewhere. Actually, result is already allocated by caller. We can copy
-    // structure. Better: use enumResultAlloc with correct parameters. We need
-    // 'mode' which is not passed directly but inside result->ordering if it
-    // exists. If result->ordering is NULL, mode doesn't matter much for
-    // allocation except for histograms which won't be used. But enumResultAlloc
-    // does allocate histograms based on mode. Let's check orderflag.
-    enum_ordering_mode_t mode = enum_ordering_mode_hi; // Default
-    if (result->ordering)
-      mode = result->ordering->mode;
-    enumResultAlloc(local_results[i], npockets, mode);
+    /* Clear before allocating: enumResultClear() memsets the struct, so an
+     * ordering allocated first is dropped without being freed — and the
+     * histogram merge below then finds a NULL ordering and skips. */
     enumResultClear(local_results[i]);
+    enum_ordering_mode_t mode =
+        result->ordering ? result->ordering->mode : enum_ordering_mode_hi;
+    enumResultAlloc(local_results[i], npockets, mode);
     local_results[i]->game = game;
     local_results[i]->nplayers = npockets;
   }

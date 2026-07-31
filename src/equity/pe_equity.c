@@ -360,11 +360,11 @@ static pe_status_t pe_equity_legacy_fallback(
     int iter = opts ? (int)opts->iterations : PE_EQUITY_DEFAULT_ITERATIONS;
     if (iter <= 0) iter = PE_EQUITY_DEFAULT_ITERATIONS;
 
+    /* Cleared, not allocated: CalculateEquityForRanges() below reaches an
+     * enumeration that starts with enumResultClear(), so an ordering allocated
+     * here would be dropped without being freed. */
     enum_result_t agg_res;
-    if (enumResultAlloc(&agg_res, num_players, enum_ordering_mode_hi) != 0) {
-        free_conversion_buffers(&conv_buffers);
-        return PE_STATUS_OUT_OF_MEMORY;
-    }
+    enumResultClear(&agg_res);
 
     int cards_on_board = StdDeck_numCards(board);
     int total_board_cards = 5;

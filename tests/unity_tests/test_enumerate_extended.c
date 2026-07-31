@@ -150,8 +150,9 @@ static void test_result_print_hi_game(void) {
   StdDeck_CardMask_OR(dead, dead, pockets[1]);
   StdDeck_CardMask_OR(dead, dead, board);
 
-  err = enumResultAlloc(&result, 2, enum_ordering_mode_hi);
-  TEST_ASSERT_EQUAL_INT(0, err);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem, pockets, board, dead, 2, 5, 1, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -194,8 +195,9 @@ static void test_result_print_hilo_game(void) {
   StdDeck_CardMask_OR(dead, dead, pockets[1]);
   StdDeck_CardMask_OR(dead, dead, board);
 
-  err = enumResultAlloc(&result, 2, enum_ordering_mode_hilo);
-  TEST_ASSERT_EQUAL_INT(0, err);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_omaha8, pockets, board, dead, 2, 5, 1, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -320,8 +322,9 @@ static void test_short_deck_holdem(void) {
   StdDeck_CardMask_OR(dead, dead, pockets[1]);
   StdDeck_CardMask_OR(dead, dead, board);
 
-  err = enumResultAlloc(&result, 2, enum_ordering_mode_hi);
-  TEST_ASSERT_EQUAL_INT(0, err);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_sdholdem, pockets, board, dead, 2, 5, 0, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
@@ -362,8 +365,9 @@ static void test_three_player_ordering(void) {
   StdDeck_CardMask_OR(dead, dead, pockets[2]);
   StdDeck_CardMask_OR(dead, dead, board);
 
-  err = enumResultAlloc(&result, 3, enum_ordering_mode_hi);
-  TEST_ASSERT_EQUAL_INT(0, err);
+  /* Cleared, not allocated: the enumeration below starts with
+   * enumResultClear(), which would drop an ordering allocated here. */
+  enumResultClear(&result);
 
   err = enumExhaustive(game_holdem, pockets, board, dead, 3, 5, 1, &result);
   TEST_ASSERT_EQUAL_INT(0, err);
