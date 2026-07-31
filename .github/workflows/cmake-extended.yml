@@ -26,7 +26,7 @@ jobs:
     name: macOS GCC (unpinned)
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - name: Install dependencies
       run: |
         brew install ninja gcc
@@ -40,7 +40,7 @@ jobs:
     name: Linux GCC Debug Coverage
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -72,7 +72,7 @@ jobs:
         package-manager: [vcpkg, conan]
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Setup vcpkg
       if: matrix.package-manager == 'vcpkg'
@@ -107,7 +107,7 @@ jobs:
         target: [arm64, armhf]
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Install cross-compilation tools
       run: |
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Install packaging tools
       run: |
