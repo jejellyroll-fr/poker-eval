@@ -22,9 +22,11 @@ The Omaha Range Parser API extends the Advanced Range Parser to support Omaha (P
 - ✅ **Complex expressions**: `20% - AAxx`, `JT98r + JT98ds`
 - ✅ **Extended ranges**: Support for more complex patterns
 
-### 🚧 Phase 3 - Optimization (In Progress)
+### 🚧 Phase 3 - Optimization (Planned)
 
-- 🚧 **Complete Omaha hand rankings**
+- 🚧 **Complete Omaha hand rankings** — percentages currently resolve through
+  tiered pattern sets (see [Percentages](#percentages)), not a full ranking of
+  all 270725 starting hands
 - 🚧 **Optimized performance** for large ranges
 - 🚧 **Caching** of frequent patterns
 
@@ -41,7 +43,7 @@ The Omaha Range Parser API extends the Advanced Range Parser to support Omaha (P
 // Patterns with suitedness
 "AAxxds"      // Pair of Aces double-suited
 "KKxxss"      // Pair of Kings single-suited
-"QQxxr"       // Pair of Queens rainbow (unimplemented)
+"QQxxr"       // Pair of Queens rainbow
 
 // Rundowns
 "JT98"        // Jack-Ten-Nine-Eight (any suit)
@@ -329,20 +331,21 @@ if (!ARP_ValidateOmahaRangeString("INVALID_PLO", error_buffer, sizeof(error_buff
 
 ## Current Limitations
 
-1. **Operators**: +, -, ! not implemented (Phase 2)
-2. **Full rankings**: Uses simplified patterns for %
-3. **Advanced patterns**: Some complex PLO patterns not supported
-4. **Performance**: Not optimized for very large ranges
+1. **Full rankings**: percentages are approximated by tiered pattern sets rather
+   than a complete ranking of every Omaha starting hand, so a given `N%` is a
+   close approximation of the top N% and not an exact cut
+2. **Advanced patterns**: Some complex PLO patterns not supported
+3. **Performance**: Not optimized for very large ranges
 
 ## Roadmap
 
-### Phase 2 (3-5 days)
-- [ ] Operator implementation (`+`, `-`, `!`)
-- [ ] Support for complex expressions
-- [ ] Percentage improvement with full rankings
-- [ ] Performance testing
+### Phase 2 — done
+- [x] Operator implementation (`+`, `-`, `!`)
+- [x] Support for complex expressions
+- [x] Percentage tiers driven by parsed pattern strings
 
 ### Phase 3 (2-3 days)
+- [ ] Percentage improvement with full hand rankings
 - [ ] Memory and speed optimization
 - [ ] Intelligent pattern caching
 - [ ] Support for advanced PLO patterns
@@ -390,4 +393,6 @@ bool validate_user_input(const char* input) {
 }
 ```
 
-This implementation provides a solid foundation for parsing Omaha ranges with a professional syntax, ready for extension with advanced operators in Phase 2.
+This implementation parses Omaha ranges with a professional syntax and supports
+the Phase 2 operators. Phase 3 — full hand rankings, caching and large-range
+performance — is still open; see issue #33.
