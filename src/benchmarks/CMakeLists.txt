@@ -98,7 +98,10 @@ foreach(BENCHMARK ${BENCHMARK_PROGRAMS})
         ${CMAKE_SOURCE_DIR}/include
     )
 
-    if(APPLE)
+    # Clang takes a path for -fuse-ld; GCC expects a linker name (bfd, gold,
+    # lld) and rejects the path with "unrecognized command-line option", which
+    # broke every benchmark link under Homebrew GCC on macOS.
+    if(APPLE AND CMAKE_C_COMPILER_ID MATCHES "Clang")
         target_link_options(${BENCHMARK} PRIVATE "-fuse-ld=/usr/bin/ld")
     endif()
 
