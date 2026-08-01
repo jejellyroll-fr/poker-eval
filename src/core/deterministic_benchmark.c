@@ -184,15 +184,20 @@ const char* benchmark_get_system_info(void) {
         compiler_version = "Unknown";
 #endif
 
+        /* Field widths are capped so the worst case provably fits in info[].
+         * Without them GCC reports -Wformat-truncation, since __VERSION__ and
+         * the utsname fields can each be long enough to overrun the buffer on
+         * their own. Truncating a diagnostic string is harmless; silently
+         * risking it is what the warning is about. */
 #ifdef _WIN32
         snprintf(info, sizeof(info),
-                "System: Windows, Compiler: %s %s",
+                "System: Windows, Compiler: %.16s %.128s",
                 compiler_name, compiler_version);
 #else
         struct utsname sys_info;
         if (uname(&sys_info) == 0) {
             snprintf(info, sizeof(info),
-                    "System: %s %s %s, Compiler: %s %s",
+                    "System: %.32s %.64s %.32s, Compiler: %.16s %.128s",
                     sys_info.sysname, sys_info.release, sys_info.machine,
                     compiler_name, compiler_version);
         } else {

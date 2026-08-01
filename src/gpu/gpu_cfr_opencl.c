@@ -18,7 +18,12 @@
 #include <math.h>
 
 #ifdef __APPLE__
-#include <OpenCL/opencl.h>
+/* <OpenCL/opencl.h> also pulls in cl_gl.h and, through it,
+ * OpenGL/CGLDevice.h, which re-typedefs cl_device_id with an availability
+ * attribute — GCC rejects that as a redefinition of typedef against cl.h's
+ * plain one. Nothing here uses CL/GL interop, so include the core header
+ * only, matching what every other platform gets. */
+#include <OpenCL/cl.h>
 #else
 #include <CL/cl.h>
 #endif

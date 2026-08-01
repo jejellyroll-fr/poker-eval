@@ -193,8 +193,13 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         if(ENABLE_NATIVE_ARCH AND COMPILER_SUPPORTS_MARCH_NATIVE AND NOT APPLE)
             add_compile_options(-march=native)
         elseif(CMAKE_C_COMPILER_ID MATCHES "GNU" AND NOT APPLE)
-            # Use generic tuning for distributable binaries (GCC only)
-            add_compile_options(-mtune=generic)
+            # Use generic tuning for distributable binaries (GCC only).
+            # "generic" is an x86 tuning name; an ARM cross-compiler rejects it
+            # with "unrecognized -mtune target", so probe before adding it.
+            check_c_compiler_flag("-mtune=generic" COMPILER_SUPPORTS_MTUNE_GENERIC)
+            if(COMPILER_SUPPORTS_MTUNE_GENERIC)
+                add_compile_options(-mtune=generic)
+            endif()
         endif()
     endif()
 
@@ -245,8 +250,8 @@ if(ENABLE_COVERAGE)
 
         add_custom_target(coverage-report
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/coverage
-            COMMAND lcov --capture --directory ${CMAKE_BINARY_DIR} --output-file ${CMAKE_BINARY_DIR}/coverage/coverage.info --ignore-errors gcov
-            COMMAND lcov --remove ${CMAKE_BINARY_DIR}/coverage/coverage.info '/usr/*' '*/tests/*' --output-file ${CMAKE_BINARY_DIR}/coverage/coverage.info --ignore-errors gcov
+            COMMAND lcov --capture --directory ${CMAKE_BINARY_DIR} --output-file ${CMAKE_BINARY_DIR}/coverage/coverage.info --ignore-errors gcov,negative
+            COMMAND lcov --remove ${CMAKE_BINARY_DIR}/coverage/coverage.info '/usr/*' '*/tests/*' --output-file ${CMAKE_BINARY_DIR}/coverage/coverage.info --ignore-errors gcov,negative
             COMMAND genhtml ${CMAKE_BINARY_DIR}/coverage/coverage.info --output-directory ${CMAKE_BINARY_DIR}/coverage/html --ignore-errors source
             COMMAND ${CMAKE_COMMAND} -E echo "Coverage report generated in ${CMAKE_BINARY_DIR}/coverage/html/index.html"
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -471,6 +476,11 @@ if(BUILD_TESTS)
     endif()
 endif()
 
+# Standard install layout. Must come before add_subdirectory(src): the example
+# targets install into ${CMAKE_INSTALL_BINDIR}/poker-eval-examples, and an
+# undefined CMAKE_INSTALL_BINDIR turns that into the absolute /poker-eval-examples.
+include(GNUInstallDirs)
+
 # Modular sources (core/games/equity/utils/etc.)
 add_subdirectory(src)
 add_subdirectory(tools)
@@ -510,8 +520,7 @@ if(BUILD_DOCUMENTATION)
     endif()
 endif()
 
-# Installation
-include(GNUInstallDirs)
+# Installation (GNUInstallDirs is included above, before add_subdirectory(src))
 
 # Install headers
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/poker_eval/
@@ -559,6 +568,10 @@ set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_VENDOR "Poker-eval Project")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY ${PROJECT_DESCRIPTION})
+# The DEB generator refuses to build without a maintainer; without this the
+# TGZ is produced and then CPack aborts on "Debian package requires a
+# maintainer for a package".
+set(CPACK_PACKAGE_CONTACT "https://github.com/jejellyroll-fr/poker-eval")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENCE")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 

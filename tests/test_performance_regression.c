@@ -39,6 +39,33 @@ static double get_time(void) {
     return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
 }
 
+/*
+ * Throughput baselines are calibrated for an optimized, uninstrumented build.
+ * At -O0, and more so under coverage or a sanitizer, the measured rate falls
+ * an order of magnitude short for reasons that have nothing to do with a
+ * regression — the mask-operation baseline of 500M ops/sec is unreachable
+ * there. Measurements are still taken and printed in those builds; only the
+ * pass/fail verdict is suspended.
+ */
+#if defined(NDEBUG) && !defined(__SANITIZE_ADDRESS__)
+#  if defined(__has_feature)
+#    if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) || \
+        __has_feature(thread_sanitizer)
+#      define PE_PERF_ASSERTS 0
+#    else
+#      define PE_PERF_ASSERTS 1
+#    endif
+#  else
+#    define PE_PERF_ASSERTS 1
+#  endif
+#else
+#  define PE_PERF_ASSERTS 0
+#endif
+
+/* Kept pure: test_performance_regression_detection exercises this function
+ * with synthetic numbers and asserts it flags a regression, so it must behave
+ * identically in every build. Only the verdicts on genuinely measured
+ * throughput are suspended, through PERF_ASSERT below. */
 static bool performance_within_tolerance(double measured, double expected, double tolerance) {
     if (expected <= 0.0)
         return true;
@@ -48,6 +75,13 @@ static bool performance_within_tolerance(double measured, double expected, doubl
     double deviation = (1.0 - ratio) * 100.0;
     return deviation <= tolerance;
 }
+
+/* Assert on a measured rate only where the baselines can hold. */
+#if PE_PERF_ASSERTS
+#  define PERF_ASSERT(cond) TEST_ASSERT_TRUE(cond)
+#else
+#  define PERF_ASSERT(cond) ((void)(cond))
+#endif
 
 static void print_performance_result(const char* test_name, double measured, double expected, bool passed) {
     double ratio = measured / expected;
@@ -83,8 +117,12 @@ static void test_mask_operations_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_MASK_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Mask Operations", ops_per_sec, EXPECTED_MASK_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
-    /* Note: result might be 0 due to XOR operations, which is valid */
+    PERF_ASSERT(passed);
+    /* Read it once so the accumulator is genuinely used: volatile alone still
+     * leaves it "set but not used" for GCC. Its value carries no meaning — the
+     * XORs can legitimately cancel to zero — it only exists to keep the loop
+     * from being optimised away. */
+    (void)result;
 }
 
 /* Test popcount performance */
@@ -106,7 +144,7 @@ static void test_popcount_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_POPCOUNT_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Popcount Operations", ops_per_sec, EXPECTED_POPCOUNT_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     TEST_ASSERT_GREATER_THAN_INT(0, total_bits);  /* Ensure operations weren't optimized away */
 }
 
@@ -139,7 +177,7 @@ static void test_combination_generation_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_COMBO_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Combination Generation", ops_per_sec, EXPECTED_COMBO_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     TEST_ASSERT_GREATER_THAN_UINT64(0, total_combos);
 }
 
@@ -173,7 +211,7 @@ static void test_enumeration_performance(void) {
     bool passed = performance_within_tolerance(ops_per_sec, EXPECTED_ENUM_OPS_PER_SEC, PERFORMANCE_TOLERANCE);
     print_performance_result("Enumeration", ops_per_sec, EXPECTED_ENUM_OPS_PER_SEC, passed);
 
-    TEST_ASSERT_TRUE(passed);
+    PERF_ASSERT(passed);
     TEST_ASSERT_GREATER_THAN_UINT64(0, total_enums);
 }
 

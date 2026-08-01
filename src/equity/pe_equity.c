@@ -62,6 +62,49 @@ static int convert_ranges(const pe_range_t **ranges, int num_players, PlayerRang
     return 1;
 }
 
+/*
+ * Work budget for the automatic method selection below, in evaluated
+ * showdowns. Comparable to a default Monte Carlo run, so choosing exhaustive
+ * enumeration never costs noticeably more than sampling would have.
+ */
+#define PE_EQUITY_EXACT_WORK_BUDGET 5000000.0
+
+/*
+ * Automatic method selection, used when is_monte_carlo is 0 — which equity.h
+ * documents as "use automatic heuristic", not as a request for exhaustive
+ * enumeration.
+ *
+ * Enumerating every board is preferable when it is cheap, but the cost is the
+ * number of board completions multiplied by the number of matchups. Preflop
+ * that is C(48,5) boards against the product of the range sizes, which reaches
+ * billions and would make a bounded-looking call run effectively forever. So
+ * estimate the work and only enumerate below the budget.
+ *
+ * The estimate is deliberately pessimistic: cards_remaining ignores hole and
+ * dead cards, and matchups ignores conflicts between players, so both are
+ * over-counted and the answer errs towards sampling.
+ */
+static int auto_selects_exact(const PlayerRange ranges[], int num_players,
+                              int to_deal, int cards_remaining) {
+    if (to_deal <= 0)
+        return 1; /* board already complete — there is nothing to sample */
+    if (to_deal > 2)
+        return 0; /* turn and river at most; beyond that it is never cheap */
+
+    double boards = 1.0;
+    for (int i = 0; i < to_deal; ++i)
+        boards *= (double)(cards_remaining - i) / (double)(i + 1);
+
+    double matchups = 1.0;
+    for (int p = 0; p < num_players; ++p) {
+        matchups *= (ranges[p].count > 0) ? (double)ranges[p].count : 1.0;
+        if (boards * matchups > PE_EQUITY_EXACT_WORK_BUDGET)
+            return 0; /* stop early rather than overflow on wide ranges */
+    }
+
+    return (boards * matchups) <= PE_EQUITY_EXACT_WORK_BUDGET;
+}
+
 /* Local accumulator structure */
 typedef struct {
     double nwinhi[ENUM_MAXPLAYERS];
@@ -376,11 +419,23 @@ static pe_status_t pe_equity_legacy_fallback(
     int to_deal = (total_board_cards > cards_on_board) ? (total_board_cards - cards_on_board) : 0;
     if (to_deal < 0) to_deal = 0;
 
-    int use_mc = 0;
-    if (opts && opts->is_monte_carlo && to_deal > 0) {
+    /* is_monte_carlo == 1 forces sampling; 0 (or no options at all) asks for
+     * the automatic heuristic documented in equity.h. The previous form set
+     * use_mc = 1 in both branches whenever cards remained, so "automatic"
+     * always meant sampling and result->exact was never 1 on an incomplete
+     * board. It now enumerates when that is provably cheap and samples
+     * otherwise. */
+    int use_mc;
+    if (opts && opts->is_monte_carlo) {
         use_mc = 1;
-    } else if (to_deal > 0) {
-        use_mc = 1;
+    } else {
+        use_mc = !auto_selects_exact(internal_ranges, num_players, to_deal,
+                                     StdDeck_N_CARDS - cards_on_board);
+    }
+    if (to_deal == 0) {
+        /* Board already complete: there is nothing random left to sample, so
+         * enumerate even when Monte Carlo was forced. */
+        use_mc = 0;
     }
 
     int ret = CalculateEquityForRanges(

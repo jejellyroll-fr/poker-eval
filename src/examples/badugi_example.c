@@ -190,7 +190,7 @@ static void demo_badugi(void)
         printf(" -> ");
 
         char result[80];
-        BadugiHandVal_toString(val, result);
+        BadugiHandVal_toString_n(val, result, sizeof(result));
         printf("%s\n", result);
     }
 }
@@ -352,7 +352,7 @@ static void interactive_mode(void)
         /* Badugi evaluation */
         BadugiHandVal badugi_val = StdDeck_BadugiRules_EVAL_N(hand, num_cards);
         char badugi_str[80];
-        BadugiHandVal_toString(badugi_val, badugi_str);
+        BadugiHandVal_toString_n(badugi_val, badugi_str, sizeof(badugi_str));
         printf("Badugi:  %s\n", badugi_str);
 
         if (num_cards == 5)
