@@ -140,9 +140,6 @@ static char* read_kernel_source(const char* filename, size_t* length) {
 /**
  * Initialize OpenCL backend
  */
-/* Defined below; needed here for the staging-buffer failure paths. */
-void gpu_eval_free_opencl(gpu_eval_context_t* ctx_opaque);
-
 gpu_eval_context_t* gpu_eval_init_opencl(const gpu_eval_config_t* config) {
     cl_int err;
 
