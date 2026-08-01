@@ -28,7 +28,10 @@ static void test_heads_up_exact_with_flop(void) {
 
     pe_equity_result_multi_t result;
     pe_equity_opts_t opts = {0};
-    opts.is_monte_carlo = 0; // Exact
+    /* 0 selects the automatic heuristic, not exact evaluation. With a flop
+     * down there are C(49,2) board completions against 6x6 hand pairs, well
+     * inside the budget, so it picks exhaustive enumeration here. */
+    opts.is_monte_carlo = 0;
 
     pe_status_t status = pe_equity_range_vs_range(NULL, game_holdem, r1, r2, board, dead, &opts, &result);
     assert(status == PE_STATUS_OK);
