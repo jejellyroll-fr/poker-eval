@@ -268,7 +268,7 @@ static void test_string_representation(void)
 
     BadugiHandVal val = StdDeck_BadugiRules_EVAL_4(hand);
     char str[80];
-    BadugiHandVal_toString(val, str);
+    BadugiHandVal_toString_n(val, str, sizeof(str));
 
     printf("✓ Hand string: %s\n", str);
 

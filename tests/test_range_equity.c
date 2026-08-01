@@ -28,7 +28,10 @@ static void test_heads_up_exact_with_flop(void) {
 
     pe_equity_result_multi_t result;
     pe_equity_opts_t opts = {0};
-    opts.is_monte_carlo = 0; // Exact
+    /* 0 selects the automatic heuristic, not exact evaluation. With a flop
+     * down there are C(49,2) board completions against 6x6 hand pairs, well
+     * inside the budget, so it picks exhaustive enumeration here. */
+    opts.is_monte_carlo = 0;
 
     pe_status_t status = pe_equity_range_vs_range(NULL, game_holdem, r1, r2, board, dead, &opts, &result);
     assert(status == PE_STATUS_OK);
@@ -153,11 +156,29 @@ static void test_omaha_hilo(void) {
            result.hilo_results[0].equity_lo,
            result.hilo_results[0].scoop_prob);
 
-    // Derived Total: Assume 50/50 pot split for Hi/Lo
-    double derived_total = 0.5 * result.hilo_results[0].equity_hi + 0.5 * result.hilo_results[0].equity_lo;
-    printf("Derived Total: %.4f vs Reported: %.4f\n", derived_total, result.results[0].equity);
+    /* The old check asserted equity == 0.5*hi + 0.5*lo, which assumes a
+     * qualifying low always exists. In Omaha/8 it often does not, and the high
+     * hand then takes the whole pot — with this matchup the low shares sum to
+     * only ~0.58, so that model accounts for just ~0.79 of the pot and cannot
+     * hold. Check the invariants that do hold instead. */
+    double hi_sum = result.hilo_results[0].equity_hi + result.hilo_results[1].equity_hi;
+    double lo_sum = result.hilo_results[0].equity_lo + result.hilo_results[1].equity_lo;
+    double eq_sum = result.results[0].equity + result.results[1].equity;
+    printf("Sums over players: equity=%.4f hi=%.4f lo=%.4f (low qualifies %.1f%% of the time)\n",
+           eq_sum, hi_sum, lo_sum, lo_sum * 100.0);
 
-    assert(fabs(derived_total - result.results[0].equity) < 0.05);
+    /* The pot is always fully distributed. */
+    assert(fabs(eq_sum - 1.0) < 0.01);
+    /* The high half is always awarded, so high shares sum to exactly one. */
+    assert(fabs(hi_sum - 1.0) < 0.01);
+    /* The low half is awarded only when a low qualifies, so its shares sum to
+     * the frequency of that happening — under one, and not negligible here. */
+    assert(lo_sum > 0.3 && lo_sum < 1.0);
+
+    /* QdJdTc9c holds no card at or below eight, so it can never make a
+     * qualifying low; As2s3hKh makes one whenever the board allows it. */
+    assert(result.hilo_results[1].equity_lo == 0.0);
+    assert(result.hilo_results[0].equity_lo > 0.3);
 
     pe_range_free(r1);
     pe_range_free(r2);

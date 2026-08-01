@@ -17,7 +17,7 @@
 #include <string.h>
 
 #ifdef __APPLE__
-#include <OpenCL/opencl.h>
+#include <OpenCL/cl.h>
 #else
 #include <CL/cl.h>
 #endif
@@ -453,46 +453,61 @@ gpu_eval_context_t* gpu_eval_init_opencl(const gpu_eval_config_t* config) {
 
     /* Load poker-eval lookup tables for 5-card evaluation
      * These tables mirror StdDeck_StdRules_EVAL_N logic on GPU */
-    gpu_lookup_tables_t tables;
-    if (gpu_load_all_tables(&tables) != 0) {
+    /* Heap rather than stack: the two lookup-table structs total about 96 KB,
+     * which overruns the project's -Wstack-usage=65536 limit. They are staging
+     * buffers, read once into device memory and then dropped. */
+    gpu_lookup_tables_t *tables = (gpu_lookup_tables_t*)malloc(sizeof(*tables));
+    if (!tables) {
+        fprintf(stderr, "Failed to allocate lookup table staging buffer\n");
+        gpu_eval_free_opencl((gpu_eval_context_t*)ctx);
+        return NULL;
+    }
+    if (gpu_load_all_tables(tables) != 0) {
         fprintf(stderr, "Warning: Failed to load poker-eval tables\n");
-        memset(&tables, 0, sizeof(tables));
+        memset(tables, 0, sizeof(*tables));
     } else {
-        if (gpu_validate_tables(&tables) != 0) {
+        if (gpu_validate_tables(tables) != 0) {
             fprintf(stderr, "Warning: Loaded tables failed validation\n");
         }
         if (config->verbose) {
-            gpu_print_table_stats(&tables);
+            gpu_print_table_stats(tables);
         }
     }
 
     /* Create buffers and copy lookup tables */
     ctx->d_nbits_table = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                        sizeof(tables.nbits_table), tables.nbits_table, &err);
+                                        sizeof(tables->nbits_table), tables->nbits_table, &err);
     ctx->d_straight_table = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(tables.straight_table), tables.straight_table, &err);
+                                           sizeof(tables->straight_table), tables->straight_table, &err);
     ctx->d_top_card_table = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(tables.top_card_table), tables.top_card_table, &err);
+                                           sizeof(tables->top_card_table), tables->top_card_table, &err);
     ctx->d_top_five_table = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(tables.top_five_table), tables.top_five_table, &err);
+                                           sizeof(tables->top_five_table), tables->top_five_table, &err);
+    free(tables);
 
     /* Load low evaluation tables (for Razz / Hi-Lo) */
-    gpu_low_lookup_tables_t low_tables;
-    if (gpu_load_low_tables(&low_tables) != 0) {
+    gpu_low_lookup_tables_t *low_tables = (gpu_low_lookup_tables_t*)malloc(sizeof(*low_tables));
+    if (!low_tables) {
+        fprintf(stderr, "Failed to allocate low lookup table staging buffer\n");
+        gpu_eval_free_opencl((gpu_eval_context_t*)ctx);
+        return NULL;
+    }
+    if (gpu_load_low_tables(low_tables) != 0) {
         fprintf(stderr, "Warning: Failed to load low evaluation tables\n");
-        memset(&low_tables, 0, sizeof(low_tables));
+        memset(low_tables, 0, sizeof(*low_tables));
     } else {
-        if (gpu_validate_low_tables(&low_tables) != 0) {
+        if (gpu_validate_low_tables(low_tables) != 0) {
             fprintf(stderr, "Warning: Low tables failed validation\n");
         }
     }
 
     ctx->d_bottom_five_table = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                              sizeof(low_tables.bottom_five_table),
-                                              low_tables.bottom_five_table, &err);
+                                              sizeof(low_tables->bottom_five_table),
+                                              low_tables->bottom_five_table, &err);
     ctx->d_bottom_card_table = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                              sizeof(low_tables.bottom_card_table),
-                                              low_tables.bottom_card_table, &err);
+                                              sizeof(low_tables->bottom_card_table),
+                                              low_tables->bottom_card_table, &err);
+    free(low_tables);
 
     if (config->verbose) {
         printf("OpenCL backend initialized successfully\n");

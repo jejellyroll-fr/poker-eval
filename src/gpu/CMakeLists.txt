@@ -98,6 +98,16 @@ if(BUILD_GPU)
 
         target_link_libraries(poker_opencl PUBLIC poker_core ${OpenCL_LIBRARIES})
 
+        # Apple deprecated the whole OpenCL framework in favour of Metal, so its
+        # headers carry deprecation attributes on every entry point. GCC honours
+        # them and -Werror then turns roughly 240 warnings from Apple's own SDK
+        # into a build failure. Nothing here can be fixed by this project, so
+        # the diagnostic is dropped for the translation units that include those
+        # headers, and only for them.
+        if(APPLE)
+            target_compile_options(poker_opencl PRIVATE -Wno-deprecated-declarations)
+        endif()
+
         list(APPEND GPU_LIBRARIES poker_opencl)
 
         add_definitions(-DHAVE_OPENCL)
@@ -123,6 +133,10 @@ if(BUILD_GPU)
 
         target_link_libraries(poker_gpu_cfr_opencl PUBLIC poker_core ${OpenCL_LIBRARIES})
         target_compile_definitions(poker_gpu_cfr_opencl PRIVATE HAVE_OPENCL)
+
+        if(APPLE)
+            target_compile_options(poker_gpu_cfr_opencl PRIVATE -Wno-deprecated-declarations)
+        endif()
 
         if(TARGET cfr_core)
             target_link_libraries(poker_gpu_cfr_opencl PUBLIC cfr_core)
