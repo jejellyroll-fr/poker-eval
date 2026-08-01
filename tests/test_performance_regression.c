@@ -118,7 +118,11 @@ static void test_mask_operations_performance(void) {
     print_performance_result("Mask Operations", ops_per_sec, EXPECTED_MASK_OPS_PER_SEC, passed);
 
     PERF_ASSERT(passed);
-    /* Note: result might be 0 due to XOR operations, which is valid */
+    /* Read it once so the accumulator is genuinely used: volatile alone still
+     * leaves it "set but not used" for GCC. Its value carries no meaning — the
+     * XORs can legitimately cancel to zero — it only exists to keep the loop
+     * from being optimised away. */
+    (void)result;
 }
 
 /* Test popcount performance */
