@@ -465,13 +465,57 @@ static inline LowHandVal opencl_eval_low_a5(
                 + LowHandVal_FOURTH_CARD_VALUE(out_quads[3]);
         }
     } else if (n_cards == 5) {
-        /* Exactly 5 cards – only no-pair hands produce a valid low */
+        /* Exactly five cards: same ladder as the CPU's optimised five-card path
+           in StdDeck_Lowball_EVAL.  A paired hand is still a low here -- it is
+           just a worse one -- so returning NOTHING would lose every razz and
+           7studnsq showdown decided between two paired hands.  The hierarchical
+           selection above cannot serve this case: with five cards a quads hand
+           leaves a single kicker, which none of its branches accepts. */
         uint ranks = sc | ss | sd | sh;
-        if (nBitsTable[ranks & 0x1FFF] < 5) {
+
+        if (nBitsTable[ranks & 0x1FFF] >= 5) {
+            return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_NOPAIR)
+                + opencl_bottom_n_cards(ranks, 5);
+        }
+
+        uint dups = (sc & sd) | (sh & (sc | sd)) | (ss & (sh | sc | sd));
+        uint t = opencl_bottom_card(dups);
+
+        switch (nBitsTable[ranks & 0x1FFF]) {
+        case 4:
+            return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_ONEPAIR)
+                + LowHandVal_TOP_CARD_VALUE(t)
+                + (opencl_bottom_n_cards(ranks ^ (1U << t), 3) << LowHandVal_CARD_WIDTH);
+
+        case 3:
+            if (nBitsTable[dups & 0x1FFF] == 2) {
+                uint tt = opencl_bottom_card(dups ^ (1U << t));
+                return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TWOPAIR)
+                    + LowHandVal_TOP_CARD_VALUE(tt)
+                    + LowHandVal_SECOND_CARD_VALUE(t)
+                    + (opencl_bottom_n_cards(ranks ^ (1U << t) ^ (1U << tt), 1)
+                       << (2 * LowHandVal_CARD_WIDTH));
+            }
+            return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TRIPS)
+                + LowHandVal_TOP_CARD_VALUE(t)
+                + (opencl_bottom_n_cards(ranks ^ (1U << t), 2)
+                   << (2 * LowHandVal_CARD_WIDTH));
+
+        case 2:
+            if (nBitsTable[dups & 0x1FFF] == 2) {
+                uint trips = dups & (sc ^ ss ^ sd ^ sh);
+                uint tr = opencl_bottom_card(trips);
+                return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_FULLHOUSE)
+                    + LowHandVal_TOP_CARD_VALUE(tr)
+                    + LowHandVal_SECOND_CARD_VALUE(opencl_bottom_card(ranks ^ (1U << tr)));
+            }
+            return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_QUADS)
+                + LowHandVal_TOP_CARD_VALUE(t)
+                + LowHandVal_SECOND_CARD_VALUE(opencl_bottom_card(ranks ^ (1U << t)));
+
+        default:
             return LowHandVal_NOTHING;
         }
-        uint bottom5 = opencl_bottom_n_cards(ranks, 5);
-        return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_NOPAIR) + bottom5;
     }
 
     return LowHandVal_NOTHING;
