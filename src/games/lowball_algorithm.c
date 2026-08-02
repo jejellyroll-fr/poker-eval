@@ -17,9 +17,11 @@ void count_ranks(const StdDeck_CardMask *hand, int rank_counts[StdDeck_Rank_COUN
 
 int select_no_pair_ranks(const int rank_counts[StdDeck_Rank_COUNT], int out_ranks[5]) {
     int found = 0;
+    // A duplicated rank does not rule out a no-pair low: only one card per rank
+    // is kept and the surplus ones are skipped. A seven-card 4-5-5-6-6-7-8
+    // plays 8-7-6-5-4, not a pair.
     for (int r = 0; r < StdDeck_Rank_COUNT; ++r) {
         if (rank_counts[r] > 0) {
-            if (rank_counts[r] > 1) return 0; // Si une paire existe dans les 5 plus petits rangs, ce n'est pas NoPair
             out_ranks[found++] = r;
             if (found == 5) return 1;
         }

@@ -9,6 +9,15 @@ bool pe_low_qualify5(LowHandVal hand_low, low_qualifier_t qualifier) {
     if (hand_low == LowHandVal_NOTHING)
         return false;
 
+    if (qualifier == LOW_QUALIFIER_NONE)
+        return true;
+
+    // A paired hand can never satisfy an "8 or better" qualifier: it needs five
+    // distinct ranks. Without this test a pair of deuces passes, its TOP_CARD
+    // holding the rank of the pair.
+    if (LowHandVal_HANDTYPE(hand_low) != StdRules_HandType_NOPAIR)
+        return false;
+
     int worst_rank = LowHandVal_TOP_CARD(hand_low);
 
     switch (qualifier) {
