@@ -219,6 +219,7 @@ set(TEST_SOURCES
     test_range_equity_weighted.c
     test_low_eval.c
     test_low_qualifiers.c
+    test_low_7card_best5.c
     test_flop_texture.c
 
     # Optimization tests
@@ -539,6 +540,25 @@ set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
 
 set_tests_properties(test_a5_triple_draw PROPERTIES LABELS "games;draw")
+
+# Keeps the OpenCL low evaluator in step with the CPU one. The kernel is
+# compiled for the host, so this needs neither a GPU nor an OpenCL runtime and
+# runs everywhere.
+add_poker_test(test_opencl_low_parity)
+if(TARGET test_opencl_low_parity)
+    target_sources(test_opencl_low_parity PRIVATE opencl_low_kernel_host.c)
+    set_tests_properties(test_opencl_low_parity PROPERTIES LABELS "core;gpu")
+endif()
+
+# The kernel files duplicate their shared macro blocks behind one #ifndef each,
+# so a macro added to a single copy disappears from the combined program. This
+# reads the sources, no GPU or OpenCL compiler involved.
+add_poker_test(test_opencl_kernel_guards)
+if(TARGET test_opencl_kernel_guards)
+    target_compile_definitions(test_opencl_kernel_guards PRIVATE
+        OPENCL_KERNEL_DIR="${CMAKE_SOURCE_DIR}/src/gpu/opencl")
+    set_tests_properties(test_opencl_kernel_guards PROPERTIES LABELS "core;gpu")
+endif()
 
 # Additional modern tests (non-Unity)
 add_poker_test(test_canonical_regression)

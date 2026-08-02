@@ -41,9 +41,6 @@ typedef struct {
 #define StdRules_HandType_QUADS     7
 #define StdRules_HandType_STFLUSH   8
 
-/* Rank definitions for special cases */
-#define StdDeck_Rank_5              3  /* Rank 5 (for wheel detection in 2-7 lowball) */
-
 /* HandVal manipulation macros */
 #define HandVal_HANDTYPE_SHIFT      24
 #define HandVal_TOP_CARD_SHIFT      16
@@ -57,6 +54,7 @@ typedef struct {
 #define HandVal_SECOND_CARD_MASK    (0x0f << 12)
 #define HandVal_FIFTH_CARD_MASK     0x0f
 
+#define HandVal_HANDTYPE(hv)          ((hv) >> HandVal_HANDTYPE_SHIFT)
 #define HandVal_HANDTYPE_VALUE(ht)    ((ht) << HandVal_HANDTYPE_SHIFT)
 #define HandVal_TOP_CARD_VALUE(c)     ((c) << HandVal_TOP_CARD_SHIFT)
 #define HandVal_SECOND_CARD_VALUE(c)  ((c) << HandVal_SECOND_CARD_SHIFT)
@@ -65,6 +63,23 @@ typedef struct {
 #define HandVal_FIFTH_CARD_VALUE(c)   ((c) << HandVal_FIFTH_CARD_SHIFT)
 
 #endif /* OPENCL_HANDVAL_MACROS_DEFINED */
+
+#ifndef OPENCL_STDDECK_RANKS_DEFINED
+#define OPENCL_STDDECK_RANKS_DEFINED
+#define StdDeck_Rank_2              0
+#define StdDeck_Rank_3              1
+#define StdDeck_Rank_4              2
+#define StdDeck_Rank_5              3
+#define StdDeck_Rank_6              4
+#define StdDeck_Rank_7              5
+#define StdDeck_Rank_8              6
+#define StdDeck_Rank_9              7
+#define StdDeck_Rank_TEN            8
+#define StdDeck_Rank_JACK           9
+#define StdDeck_Rank_QUEEN          10
+#define StdDeck_Rank_KING           11
+#define StdDeck_Rank_ACE            12
+#endif
 
 /* Evaluate a poker hand - 5-card evaluation (can handle 5-7 cards) */
 HandVal eval_5cards(
