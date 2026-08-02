@@ -80,9 +80,13 @@
 #define PYTHON_VERSION "3_11"
 #endif /* WIN32 */
 
-static inline LowHandVal py_eval_low_a5_qualified(StdDeck_CardMask cards)
+/* Low "8 ou mieux" des variantes hi/lo (holdem8, 7stud8).  Passe par
+   l'evaluateur 8-or-better dedie, comme le fait la bibliotheque elle-meme dans
+   INNER_LOOP_HOLDEM8 / INNER_LOOP_7STUD8: il ne retient que les cinq rangs
+   distincts les plus bas et rend NOTHING si la main ne qualifie pas. */
+static inline LowHandVal py_eval_low8_qualified(StdDeck_CardMask cards)
 {
-  LowHandVal value = pe_eval_low_a5(cards);
+  LowHandVal value = StdDeck_Lowball8_EVAL(cards, StdDeck_numCards(cards));
   return pe_low_qualify5(value, LOW_QUALIFIER_8) ? value : LowHandVal_NOTHING;
 }
 
@@ -255,7 +259,7 @@ static inline LowHandVal py_eval_low8_joker_qualified(JokerDeck_CardMask cards)
     StdDeck_CardMask_OR(_hand, pockets[i], _finalBoard);    \
     StdDeck_CardMask_OR(_hand, _hand, cardsDealt[i + 1]);   \
     hival[i] = StdDeck_StdRules_EVAL_N(_hand, 7);           \
-    loval[i] = py_eval_low_a5_qualified(_hand);             \
+    loval[i] = py_eval_low8_qualified(_hand);               \
     err = 0;                                                \
   })
 
