@@ -541,6 +541,15 @@ set_tests_properties(test_icm PROPERTIES LABELS "economics")
 
 set_tests_properties(test_a5_triple_draw PROPERTIES LABELS "games;draw")
 
+# Keeps the OpenCL low evaluator in step with the CPU one. The kernel is
+# compiled for the host, so this needs neither a GPU nor an OpenCL runtime and
+# runs everywhere.
+add_poker_test(test_opencl_low_parity)
+if(TARGET test_opencl_low_parity)
+    target_sources(test_opencl_low_parity PRIVATE opencl_low_kernel_host.c)
+    set_tests_properties(test_opencl_low_parity PROPERTIES LABELS "core;gpu")
+endif()
+
 # Additional modern tests (non-Unity)
 add_poker_test(test_canonical_regression)
 add_poker_test(test_canonical_invariants)

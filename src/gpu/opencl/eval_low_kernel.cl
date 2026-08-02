@@ -40,6 +40,7 @@ typedef struct {
 #define HandVal_TOP_CARD_MASK       (0x0f << 16)
 #define HandVal_SECOND_CARD_MASK    (0x0f << 12)
 #define HandVal_FIFTH_CARD_MASK     0x0f
+#define HandVal_HANDTYPE(hv)          ((hv) >> HandVal_HANDTYPE_SHIFT)
 #define HandVal_HANDTYPE_VALUE(ht)    ((ht) << HandVal_HANDTYPE_SHIFT)
 #define HandVal_TOP_CARD_VALUE(c)     ((c) << HandVal_TOP_CARD_SHIFT)
 #define HandVal_SECOND_CARD_VALUE(c)  ((c) << HandVal_SECOND_CARD_SHIFT)
@@ -69,6 +70,7 @@ typedef struct {
 #ifndef OPENCL_LOW_HANDVAL_ALIASES_DEFINED
 #define OPENCL_LOW_HANDVAL_ALIASES_DEFINED
 #define LowHandVal_CARD_WIDTH           HandVal_CARD_WIDTH
+#define LowHandVal_HANDTYPE(hv)         HandVal_HANDTYPE(hv)
 #define LowHandVal_HANDTYPE_VALUE(ht)   HandVal_HANDTYPE_VALUE(ht)
 #define LowHandVal_TOP_CARD_VALUE(c)    HandVal_TOP_CARD_VALUE(c)
 #define LowHandVal_SECOND_CARD_VALUE(c) HandVal_SECOND_CARD_VALUE(c)
@@ -117,7 +119,7 @@ typedef struct {
     ((((ranks) & ~(1U << CARD_ACE)) << 1) | (((ranks) >> CARD_ACE) & 0x01U))
 
 /* Bottom card table - find lowest set bit */
-inline uint opencl_bottom_card(uint ranks) {
+static inline uint opencl_bottom_card(uint ranks) {
     for (uint i = 0; i < 13; i++) {
         if (ranks & (1U << i)) return i;
     }
@@ -125,7 +127,7 @@ inline uint opencl_bottom_card(uint ranks) {
 }
 
 /* Get N bottom cards from ranks (lowest card goes to highest position) */
-inline uint opencl_bottom_n_cards(uint ranks, int n) {
+static inline uint opencl_bottom_n_cards(uint ranks, int n) {
     uint ordered[5];
     for (int i = 0; i < n; i++) {
         uint card = opencl_bottom_card(ranks);
@@ -164,7 +166,7 @@ static inline LowHandVal opencl_eval_low8_5card(
 /* Lowball hand selection algorithms (ported from lowball_algorithm.c) */
 
 /* Select 5 unique ranks (no pairs) - returns 1 if successful */
-inline int opencl_select_no_pair_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[5]) {
+static inline int opencl_select_no_pair_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[5]) {
     /* Count occurrences of each rank across all suits */
     int rank_counts[13];
     for (int r = 0; r < 13; r++) {
@@ -176,10 +178,12 @@ inline int opencl_select_no_pair_ranks(const uint ss, const uint sc, const uint 
         if (sh & mask) rank_counts[r]++;
     }
 
+    /* A duplicated rank does not rule out a no-pair low: only one card per rank
+       is kept and the surplus ones are skipped.  A seven-card 4-5-5-6-6-7-8
+       plays 8-7-6-5-4, not a pair. */
     int found = 0;
     for (int r = 0; r < 13; r++) {
         if (rank_counts[r] > 0) {
-            if (rank_counts[r] > 1) return 0; /* Pair exists */
             out_ranks[found++] = r;
             if (found == 5) return 1;
         }
@@ -188,7 +192,7 @@ inline int opencl_select_no_pair_ranks(const uint ss, const uint sc, const uint 
 }
 
 /* Select one pair + 3 kickers - returns 1 if successful */
-inline int opencl_select_one_pair_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[4]) {
+static inline int opencl_select_one_pair_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[4]) {
     int rank_counts[13];
     for (int r = 0; r < 13; r++) {
         rank_counts[r] = 0;
@@ -222,7 +226,7 @@ inline int opencl_select_one_pair_ranks(const uint ss, const uint sc, const uint
 }
 
 /* Flatten mask into lists */
-inline int opencl_flatten_cards(OpenCLCardMask mask, int ranks[52], int suits[52]) {
+static inline int opencl_flatten_cards(OpenCLCardMask mask, int ranks[52], int suits[52]) {
     int count = 0;
     for (int s = 0; s < 4; s++) {
         uint suit_mask = mask.cards[s];
@@ -237,7 +241,7 @@ inline int opencl_flatten_cards(OpenCLCardMask mask, int ranks[52], int suits[52
     return count;
 }
 
-inline LowHandVal opencl_encode_low(int sorted[5]) {
+static inline LowHandVal opencl_encode_low(int sorted[5]) {
     LowHandVal val = 0;
     int shift = LowHandVal_TOP_CARD_SHIFT;
     for (int i = 0; i < 5; i++) {
@@ -248,7 +252,7 @@ inline LowHandVal opencl_encode_low(int sorted[5]) {
 }
 
 /* Select two pair + 1 kicker - returns 1 if successful */
-inline int opencl_select_two_pair_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[3]) {
+static inline int opencl_select_two_pair_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[3]) {
     int rank_counts[13];
     for (int r = 0; r < 13; r++) {
         rank_counts[r] = 0;
@@ -281,7 +285,7 @@ inline int opencl_select_two_pair_ranks(const uint ss, const uint sc, const uint
 }
 
 /* Select trips + 2 kickers - returns 1 if successful */
-inline int opencl_select_trips_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[3]) {
+static inline int opencl_select_trips_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[3]) {
     int rank_counts[13];
     for (int r = 0; r < 13; r++) {
         rank_counts[r] = 0;
@@ -314,7 +318,7 @@ inline int opencl_select_trips_ranks(const uint ss, const uint sc, const uint sd
 }
 
 /* Select full house - returns 1 if successful */
-inline int opencl_select_full_house_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[2]) {
+static inline int opencl_select_full_house_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[2]) {
     int rank_counts[13];
     for (int r = 0; r < 13; r++) {
         rank_counts[r] = 0;
@@ -340,7 +344,7 @@ inline int opencl_select_full_house_ranks(const uint ss, const uint sc, const ui
 }
 
 /* Select quads + 3 kickers - returns 1 if successful */
-inline int opencl_select_quads_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[4]) {
+static inline int opencl_select_quads_ranks(const uint ss, const uint sc, const uint sd, const uint sh, int out_ranks[4]) {
     int rank_counts[13];
     for (int r = 0; r < 13; r++) {
         rank_counts[r] = 0;
@@ -398,36 +402,39 @@ static inline LowHandVal opencl_eval_low_a5(
     sd = Lowball_ROTATE_RANKS(sd);
     sh = Lowball_ROTATE_RANKS(sh);
 
-    /* For 7-card hands, use hierarchical selection logic */
+    /* For 7-card hands, use hierarchical selection logic.
+       The selectors return ranks in ascending order, while LowHandVal keeps the
+       highest card in TOP_CARD (see LowHandVal_WORST_EIGHT), so the cards are
+       read back in reverse -- same layout as the CPU evaluator. */
     if (n_cards > 5) {
         int out_ranks[5];
 
         /* Try no pair (best case for lowball) */
         if (opencl_select_no_pair_ranks(ss, sc, sd, sh, out_ranks)) {
             return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_NOPAIR)
-                + LowHandVal_TOP_CARD_VALUE(out_ranks[0])
-                + LowHandVal_SECOND_CARD_VALUE(out_ranks[1])
+                + LowHandVal_TOP_CARD_VALUE(out_ranks[4])
+                + LowHandVal_SECOND_CARD_VALUE(out_ranks[3])
                 + LowHandVal_THIRD_CARD_VALUE(out_ranks[2])
-                + LowHandVal_FOURTH_CARD_VALUE(out_ranks[3])
-                + LowHandVal_FIFTH_CARD_VALUE(out_ranks[4]);
+                + LowHandVal_FOURTH_CARD_VALUE(out_ranks[1])
+                + LowHandVal_FIFTH_CARD_VALUE(out_ranks[0]);
         }
 
-        /* Try one pair */
+        /* Try one pair: the pair takes TOP_CARD, then kickers highest to lowest */
         int out_pair[4];
         if (opencl_select_one_pair_ranks(ss, sc, sd, sh, out_pair)) {
             return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_ONEPAIR)
                 + LowHandVal_TOP_CARD_VALUE(out_pair[0])
-                + LowHandVal_SECOND_CARD_VALUE(out_pair[1])
+                + LowHandVal_SECOND_CARD_VALUE(out_pair[3])
                 + LowHandVal_THIRD_CARD_VALUE(out_pair[2])
-                + LowHandVal_FOURTH_CARD_VALUE(out_pair[3]);
+                + LowHandVal_FOURTH_CARD_VALUE(out_pair[1]);
         }
 
-        /* Try two pair */
+        /* Try two pair: high pair, low pair, then kicker */
         int out_two_pair[3];
         if (opencl_select_two_pair_ranks(ss, sc, sd, sh, out_two_pair)) {
             return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TWOPAIR)
-                + LowHandVal_TOP_CARD_VALUE(out_two_pair[0])
-                + LowHandVal_SECOND_CARD_VALUE(out_two_pair[1])
+                + LowHandVal_TOP_CARD_VALUE(out_two_pair[1])
+                + LowHandVal_SECOND_CARD_VALUE(out_two_pair[0])
                 + LowHandVal_THIRD_CARD_VALUE(out_two_pair[2]);
         }
 
@@ -436,8 +443,8 @@ static inline LowHandVal opencl_eval_low_a5(
         if (opencl_select_trips_ranks(ss, sc, sd, sh, out_trips)) {
             return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TRIPS)
                 + LowHandVal_TOP_CARD_VALUE(out_trips[0])
-                + LowHandVal_SECOND_CARD_VALUE(out_trips[1])
-                + LowHandVal_THIRD_CARD_VALUE(out_trips[2]);
+                + LowHandVal_SECOND_CARD_VALUE(out_trips[2])
+                + LowHandVal_THIRD_CARD_VALUE(out_trips[1]);
         }
 
         /* Try full house */
@@ -478,7 +485,7 @@ static inline LowHandVal opencl_eval_low_a5(
  * Best hand: 7-5-4-3-2 unsuited
  */
 
-inline int opencl_rotate_rank_for_low(int rank) {
+static inline int opencl_rotate_rank_for_low(int rank) {
     return (rank == StdDeck_Rank_ACE) ? 0 : (rank + 1);
 }
 
@@ -493,6 +500,13 @@ static inline int opencl_low_qualifies(LowHandVal lo, int qualifier) {
 
     if (qualifier <= 0) {
         return 1;
+    }
+
+    /* A paired hand can never satisfy an "8 or better" qualifier: it needs five
+       distinct ranks.  Without this test a pair of deuces passes, its TOP_CARD
+       holding the rank of the pair. */
+    if (LowHandVal_HANDTYPE(lo) != StdRules_HandType_NOPAIR) {
+        return 0;
     }
 
     /* Convert qualifier (e.g. 8) to StdDeck rank index (2 -> 0, ..., Ace -> 12) */
