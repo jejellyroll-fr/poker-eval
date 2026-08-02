@@ -10,13 +10,33 @@
  * 8-or-better qualifier.
  */
 
+#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <poker_eval/core/low_eval.h>
 #include <poker_eval/core/low_qualifier.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/eval_low.h>
 #include <poker_eval/games/eval_low8.h>
+
+/*
+ * Self-contained xorshift32, rather than the C library.  random() does not
+ * exist on MSVC or MinGW, and rand() varies between runtimes -- MSVC caps
+ * RAND_MAX at 32767 -- so the same seed would cover a different set of hands
+ * on every platform.  A differential test is only worth its name if every
+ * runner checks the same hands.
+ */
+static uint32_t rng_state = 1;
+
+static void rng_seed(uint32_t seed) {
+    rng_state = seed ? seed : 1; /* xorshift32 is stuck on a zero state */
+}
+
+static uint32_t rng_next(void) {
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return rng_state;
+}
 
 #define ASSERT_TRUE(cond, msg)                             \
     do {                                                   \
@@ -124,13 +144,13 @@ int main(void) {
 
     /* Differential check against brute force over every five-card subset. */
     {
-        srandom(20260802);
+        rng_seed(20260802);
         for (int iteration = 0; iteration < 20000; ++iteration) {
             int cards[7];
             StdDeck_CardMask hand;
             StdDeck_CardMask_RESET(hand);
             for (int i = 0; i < 7;) {
-                int card = (int)(random() % StdDeck_N_CARDS);
+                int card = (int)(rng_next() % StdDeck_N_CARDS);
                 if (StdDeck_CardMask_CARD_IS_SET(hand, card))
                     continue;
                 StdDeck_CardMask_SET(hand, card);
