@@ -9,6 +9,15 @@ bool pe_low_qualify5(LowHandVal hand_low, low_qualifier_t qualifier) {
     if (hand_low == LowHandVal_NOTHING)
         return false;
 
+    if (qualifier == LOW_QUALIFIER_NONE)
+        return true;
+
+    // Une main appariee ne peut jamais satisfaire un qualifiant "8 ou mieux" :
+    // il lui faut cinq rangs distincts. Sans ce test, une paire de 2 passe, son
+    // TOP_CARD valant le rang de la paire.
+    if (LowHandVal_HANDTYPE(hand_low) != StdRules_HandType_NOPAIR)
+        return false;
+
     int worst_rank = LowHandVal_TOP_CARD(hand_low);
 
     switch (qualifier) {

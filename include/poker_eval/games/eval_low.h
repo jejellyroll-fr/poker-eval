@@ -125,31 +125,34 @@ _findBestLowballHand(uint32 ss_orig, uint32 sc_orig, uint32 sd_orig, uint32 sh_o
         if (sd_orig & (1 << r)) rank_counts[r]++;
         if (sh_orig & (1 << r)) rank_counts[r]++;
     }
+    // Les selecteurs rendent les rangs par ordre croissant, alors que LowHandVal
+    // range la carte la plus haute dans TOP_CARD (cf. le chemin 5 cartes plus bas
+    // et LowHandVal_WORST_EIGHT). Les cartes sont donc reprises a l'envers.
     int out_ranks[5];
     // No Pair
     if (select_no_pair_ranks(rank_counts, out_ranks)) {
         return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_NOPAIR)
-            + LowHandVal_TOP_CARD_VALUE(out_ranks[0])
-            + LowHandVal_SECOND_CARD_VALUE(out_ranks[1])
+            + LowHandVal_TOP_CARD_VALUE(out_ranks[4])
+            + LowHandVal_SECOND_CARD_VALUE(out_ranks[3])
             + LowHandVal_THIRD_CARD_VALUE(out_ranks[2])
-            + LowHandVal_FOURTH_CARD_VALUE(out_ranks[3])
-            + LowHandVal_FIFTH_CARD_VALUE(out_ranks[4]);
+            + LowHandVal_FOURTH_CARD_VALUE(out_ranks[1])
+            + LowHandVal_FIFTH_CARD_VALUE(out_ranks[0]);
     }
-    // One Pair
+    // One Pair: la paire occupe TOP_CARD, puis les kickers du plus haut au plus bas
     int out_pair[4];
     if (select_one_pair_ranks(rank_counts, out_pair)) {
         return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_ONEPAIR)
             + LowHandVal_TOP_CARD_VALUE(out_pair[0])
-            + LowHandVal_SECOND_CARD_VALUE(out_pair[1])
+            + LowHandVal_SECOND_CARD_VALUE(out_pair[3])
             + LowHandVal_THIRD_CARD_VALUE(out_pair[2])
-            + LowHandVal_FOURTH_CARD_VALUE(out_pair[3]);
+            + LowHandVal_FOURTH_CARD_VALUE(out_pair[1]);
     }
-    // Two Pair
+    // Two Pair: paire haute, paire basse, puis kicker
     int out_two_pair[3];
     if (select_two_pair_ranks(rank_counts, out_two_pair)) {
         return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TWOPAIR)
-            + LowHandVal_TOP_CARD_VALUE(out_two_pair[0])
-            + LowHandVal_SECOND_CARD_VALUE(out_two_pair[1])
+            + LowHandVal_TOP_CARD_VALUE(out_two_pair[1])
+            + LowHandVal_SECOND_CARD_VALUE(out_two_pair[0])
             + LowHandVal_THIRD_CARD_VALUE(out_two_pair[2]);
     }
     // Trips
@@ -157,8 +160,8 @@ _findBestLowballHand(uint32 ss_orig, uint32 sc_orig, uint32 sd_orig, uint32 sh_o
     if (select_trips_ranks(rank_counts, out_trips)) {
         return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TRIPS)
             + LowHandVal_TOP_CARD_VALUE(out_trips[0])
-            + LowHandVal_SECOND_CARD_VALUE(out_trips[1])
-            + LowHandVal_THIRD_CARD_VALUE(out_trips[2]);
+            + LowHandVal_SECOND_CARD_VALUE(out_trips[2])
+            + LowHandVal_THIRD_CARD_VALUE(out_trips[1]);
     }
     // Full House
     int out_full[2];

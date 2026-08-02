@@ -219,6 +219,7 @@ set(TEST_SOURCES
     test_range_equity_weighted.c
     test_low_eval.c
     test_low_qualifiers.c
+    test_low_7card_best5.c
     test_flop_texture.c
 
     # Optimization tests
