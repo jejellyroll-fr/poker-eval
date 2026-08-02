@@ -125,9 +125,9 @@ _findBestLowballHand(uint32 ss_orig, uint32 sc_orig, uint32 sd_orig, uint32 sh_o
         if (sd_orig & (1 << r)) rank_counts[r]++;
         if (sh_orig & (1 << r)) rank_counts[r]++;
     }
-    // Les selecteurs rendent les rangs par ordre croissant, alors que LowHandVal
-    // range la carte la plus haute dans TOP_CARD (cf. le chemin 5 cartes plus bas
-    // et LowHandVal_WORST_EIGHT). Les cartes sont donc reprises a l'envers.
+    // The selectors return ranks in ascending order, while LowHandVal keeps the
+    // highest card in TOP_CARD (see the five-card path below and
+    // LowHandVal_WORST_EIGHT). The cards are therefore read back in reverse.
     int out_ranks[5];
     // No Pair
     if (select_no_pair_ranks(rank_counts, out_ranks)) {
@@ -138,7 +138,7 @@ _findBestLowballHand(uint32 ss_orig, uint32 sc_orig, uint32 sd_orig, uint32 sh_o
             + LowHandVal_FOURTH_CARD_VALUE(out_ranks[1])
             + LowHandVal_FIFTH_CARD_VALUE(out_ranks[0]);
     }
-    // One Pair: la paire occupe TOP_CARD, puis les kickers du plus haut au plus bas
+    // One Pair: the pair takes TOP_CARD, then the kickers highest to lowest
     int out_pair[4];
     if (select_one_pair_ranks(rank_counts, out_pair)) {
         return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_ONEPAIR)
@@ -147,7 +147,7 @@ _findBestLowballHand(uint32 ss_orig, uint32 sc_orig, uint32 sd_orig, uint32 sh_o
             + LowHandVal_THIRD_CARD_VALUE(out_pair[2])
             + LowHandVal_FOURTH_CARD_VALUE(out_pair[1]);
     }
-    // Two Pair: paire haute, paire basse, puis kicker
+    // Two Pair: high pair, low pair, then kicker
     int out_two_pair[3];
     if (select_two_pair_ranks(rank_counts, out_two_pair)) {
         return LowHandVal_HANDTYPE_VALUE(StdRules_HandType_TWOPAIR)

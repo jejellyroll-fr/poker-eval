@@ -17,9 +17,9 @@ void count_ranks(const StdDeck_CardMask *hand, int rank_counts[StdDeck_Rank_COUN
 
 int select_no_pair_ranks(const int rank_counts[StdDeck_Rank_COUNT], int out_ranks[5]) {
     int found = 0;
-    // Un rang en double n'interdit pas une main sans paire : on ne retient qu'une
-    // carte par rang et on ignore les exemplaires surnumeraires. Une main de 7
-    // cartes 4-5-5-6-6-7-8 vaut bien 8-7-6-5-4, pas une paire.
+    // A duplicated rank does not rule out a no-pair low: only one card per rank
+    // is kept and the surplus ones are skipped. A seven-card 4-5-5-6-6-7-8
+    // plays 8-7-6-5-4, not a pair.
     for (int r = 0; r < StdDeck_Rank_COUNT; ++r) {
         if (rank_counts[r] > 0) {
             out_ranks[found++] = r;
