@@ -80,10 +80,10 @@
 #define PYTHON_VERSION "3_11"
 #endif /* WIN32 */
 
-/* Low "8 ou mieux" des variantes hi/lo (holdem8, 7stud8).  Passe par
-   l'evaluateur 8-or-better dedie, comme le fait la bibliotheque elle-meme dans
-   INNER_LOOP_HOLDEM8 / INNER_LOOP_7STUD8: il ne retient que les cinq rangs
-   distincts les plus bas et rend NOTHING si la main ne qualifie pas. */
+/* The 8-or-better low of the hi/lo variants (holdem8, 7stud8).  Goes through
+   the dedicated 8-or-better evaluator, as the library itself does in
+   INNER_LOOP_HOLDEM8 / INNER_LOOP_7STUD8: it keeps only the five lowest
+   distinct ranks and returns NOTHING when the hand does not qualify. */
 static inline LowHandVal py_eval_low8_qualified(StdDeck_CardMask cards)
 {
   LowHandVal value = StdDeck_Lowball8_EVAL(cards, StdDeck_numCards(cards));
