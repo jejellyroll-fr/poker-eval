@@ -5,9 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.1] - 2026-08-02
+## [1.2.0] - 2026-08-02
 
-### Fixes
+Minor rather than patch: three features landed since 1.1.0.
+
+Anyone evaluating low hands should upgrade. Ace-to-five lows on six and seven
+cards were wrong in several independent ways, so razz, 7studnsq, and the hi/lo
+games could award the low half of a pot to a hand that had no qualifying low.
+
+### Added
+- Game-aware preflop lookup table, with Omaha support (#36).
+- Omaha range parser Phase 2: range operators and a rewritten percentage-tier
+  model (#33).
+- Stud multi-street range parser, covering 4th through 7th street (#35).
+
+### Fixed -- low hand evaluation
 - Ace-to-five low evaluation on six and seven cards no longer refuses a no-pair
   low when a rank appears twice. A stud hand such as 4-5-5-6-6-7-8 now plays its
   8-7-6-5-4 instead of being scored as a pair. Affected `pe_eval_low_a5` and
@@ -21,6 +33,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library itself does, instead of the ace-to-five evaluator plus a qualifier.
   `winners()` awarded the low half of `7stud8` and `holdem8` pots to hands with
   no qualifying low.
+- The OpenCL low evaluator carried the same three defects, so results depended on
+  which backend ran. Its five-card path also returned "no low" for any paired
+  hand, where the CPU evaluates it as a low. All four are now aligned, checked
+  exhaustively over the 2598960 five-card hands.
+- Every OpenCL kernel file now compiles on its own, and their shared macro blocks
+  are kept consistent by a test.
+
+### Fixed -- equity and ranges
+- `is_monte_carlo == 0` is the automatic heuristic the header documents, not a
+  request for exhaustive enumeration. A caller passing a zero-initialised options
+  struct on an incomplete board took the exact path, which preflop expands to
+  C(48,5) boards times the product of the range sizes. The previous code never
+  selected the exact path either, so `result->exact` could not be 1 on an
+  incomplete board.
+- Hash deduplication in the advanced range parser.
+- `enum_result_t` ordering histograms, and combo buffers when a later range is
+  empty, are no longer leaked (#56).
+
+### Fixed -- build and portability
+- FreeBSD: `immintrin.h` is included whenever `__AVX2__` is defined, and `alloca`
+  comes from a portable header.
+- macOS with GCC: Apple's OpenCL deprecation no longer fails the build.
+- Windows on ARM64: DLL symbol export.
+- 32-bit wheel builds are skipped rather than failing.
+
+### CI
+- Automated GitHub Release workflow, covering multi-arch native builds, FreeBSD,
+  and Python wheels.
+- Sanitizers run the full suite weekly, UBSan failures fail the job, and the
+  suppression denylist is empty.
+- Actions moved to the Node 24 runtime.
 
 ## [1.1.0] - 2026-07-30
 
