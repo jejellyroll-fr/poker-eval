@@ -35,12 +35,56 @@ static uint32_t rng_next(void) {
     return rng_state;
 }
 
-static uint32_t eval_on_kernel(StdDeck_CardMask hand) {
+static uint32_t eval_on_kernel(StdDeck_CardMask hand, int n_cards) {
     return opencl_host_eval_low_a5(StdDeck_CardMask_SPADES(hand),
                                    StdDeck_CardMask_CLUBS(hand),
                                    StdDeck_CardMask_DIAMONDS(hand),
                                    StdDeck_CardMask_HEARTS(hand),
-                                   7);
+                                   n_cards);
+}
+
+static StdDeck_CardMask hand_from_string(const char *cards[], int count) {
+    StdDeck_CardMask hand;
+    StdDeck_CardMask_RESET(hand);
+    for (int i = 0; i < count; ++i) {
+        char text[3] = {cards[i][0], cards[i][1], '\0'};
+        int index;
+        StdDeck_stringToCard(text, &index);
+        StdDeck_CardMask_SET(hand, index);
+    }
+    return hand;
+}
+
+/*
+ * Five-card hands take a separate branch in both evaluators, and a paired hand
+ * is still a low there -- just a worse one. One hand per category, so a branch
+ * that is merely rare does not go unchecked.
+ */
+static int check_five_card_categories(void) {
+    static const char *hands[][5] = {
+        {"2c", "4d", "6h", "8s", "Ac"}, /* no pair  */
+        {"2c", "2d", "6h", "8s", "Ac"}, /* one pair */
+        {"2c", "2d", "6h", "6s", "Ac"}, /* two pair */
+        {"2c", "2d", "2h", "6s", "Ac"}, /* trips    */
+        {"2c", "2d", "2h", "6s", "6c"}, /* full house */
+        {"2c", "2d", "2h", "2s", "Ac"}, /* quads -- the case the hierarchical
+                                           selection above cannot express */
+    };
+
+    for (int i = 0; i < (int)(sizeof(hands) / sizeof(hands[0])); ++i) {
+        StdDeck_CardMask hand = hand_from_string(hands[i], 5);
+        LowHandVal cpu = pe_eval_low_a5(hand);
+        uint32_t kernel = eval_on_kernel(hand, 5);
+        if (cpu != kernel) {
+            fprintf(stderr, "five-card category %d: cpu=%u kernel=%u\n", i, cpu, kernel);
+            return 1;
+        }
+        if (cpu == LowHandVal_NOTHING) {
+            fprintf(stderr, "five-card category %d evaluated to nothing\n", i);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int main(void) {
@@ -48,17 +92,10 @@ int main(void) {
        qualifying 8-7-6-5-4 to be found underneath them. */
     {
         const char *cards[] = {"7h", "6s", "8h", "4c", "5c", "5s", "6d"};
-        StdDeck_CardMask hand;
-        StdDeck_CardMask_RESET(hand);
-        for (int i = 0; i < 7; ++i) {
-            char text[3] = {cards[i][0], cards[i][1], '\0'};
-            int index;
-            StdDeck_stringToCard(text, &index);
-            StdDeck_CardMask_SET(hand, index);
-        }
+        StdDeck_CardMask hand = hand_from_string(cards, 7);
 
         LowHandVal cpu = pe_eval_low_a5(hand);
-        uint32_t kernel = eval_on_kernel(hand);
+        uint32_t kernel = eval_on_kernel(hand, 7);
         if (cpu != kernel) {
             fprintf(stderr, "8-7-6-5-4: cpu=%u kernel=%u\n", cpu, kernel);
             return 1;
@@ -69,12 +106,18 @@ int main(void) {
         }
     }
 
+    if (check_five_card_categories() != 0)
+        return 1;
+
     long qualifying = 0;
     rng_seed(20260802);
     for (int iteration = 0; iteration < 50000; ++iteration) {
+        /* Alternate hand sizes: the two evaluators take a different branch for
+           five cards than for six or seven. */
+        int n_cards = 5 + (iteration % 3);
         StdDeck_CardMask hand;
         StdDeck_CardMask_RESET(hand);
-        for (int i = 0; i < 7;) {
+        for (int i = 0; i < n_cards;) {
             int card = (int)(rng_next() % StdDeck_N_CARDS);
             if (StdDeck_CardMask_CARD_IS_SET(hand, card))
                 continue;
@@ -83,9 +126,10 @@ int main(void) {
         }
 
         LowHandVal cpu = pe_eval_low_a5(hand);
-        uint32_t kernel = eval_on_kernel(hand);
+        uint32_t kernel = eval_on_kernel(hand, n_cards);
         if (cpu != kernel) {
-            fprintf(stderr, "low value: cpu=%u kernel=%u\n", cpu, kernel);
+            fprintf(stderr, "low value on %d cards: cpu=%u kernel=%u\n",
+                    n_cards, cpu, kernel);
             return 1;
         }
 

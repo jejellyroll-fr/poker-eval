@@ -550,6 +550,16 @@ if(TARGET test_opencl_low_parity)
     set_tests_properties(test_opencl_low_parity PROPERTIES LABELS "core;gpu")
 endif()
 
+# The kernel files duplicate their shared macro blocks behind one #ifndef each,
+# so a macro added to a single copy disappears from the combined program. This
+# reads the sources, no GPU or OpenCL compiler involved.
+add_poker_test(test_opencl_kernel_guards)
+if(TARGET test_opencl_kernel_guards)
+    target_compile_definitions(test_opencl_kernel_guards PRIVATE
+        OPENCL_KERNEL_DIR="${CMAKE_SOURCE_DIR}/src/gpu/opencl")
+    set_tests_properties(test_opencl_kernel_guards PROPERTIES LABELS "core;gpu")
+endif()
+
 # Additional modern tests (non-Unity)
 add_poker_test(test_canonical_regression)
 add_poker_test(test_canonical_invariants)
