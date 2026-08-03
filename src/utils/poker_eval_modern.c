@@ -37,33 +37,7 @@
 #include <ctype.h>
 #include <assert.h>
 
-/* ========================================================================
- * INTERNAL STRUCTURES
- * ======================================================================== */
-
-struct poker_eval_context {
-    poker_deck_type_t deck_type;
-    bool caching_enabled;
-    eval_cache_t* cache;
-};
-
-struct poker_eval_hand {
-    poker_deck_type_t deck_type;
-    union {
-        StdDeck_CardMask std_mask;
-        ShortDeck_CardMask short_mask;
-        JokerDeck_CardMask joker_mask;
-        AStudDeck_CardMask astud_mask;
-    } cards;
-    size_t card_count;
-};
-
-struct poker_eval_result {
-    poker_deck_type_t deck_type;
-    uint32_t raw_value;
-    poker_hand_type_t hand_type;
-    bool is_valid;
-};
+#include "poker_eval_modern_internal.h"
 
 /* ========================================================================
  * ERROR HANDLING
@@ -728,3 +702,8 @@ poker_eval_error_t poker_eval_get_version(int* major, int* minor, int* patch) {
     
     return POKER_EVAL_SUCCESS;
 }
+
+/* ========================================================================
+ * EQUITY CALCULATION (experimental)
+ * ======================================================================== */
+
