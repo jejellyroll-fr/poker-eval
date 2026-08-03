@@ -279,16 +279,18 @@ GPU evaluation failed
 ## Future Enhancements
 
 ### Planned Features
-1. **Range Support**: Implement player range parsing and evaluation
-2. **Multi-GPU**: Support for multiple GPUs
-3. **Streaming**: Overlap computation with memory transfers
-4. **Precision Tuning**: Half-precision floating point for memory bandwidth
-5. **Advanced RNG**: Better random number generation algorithms
+1. **Range Support**: Implement player range passing and evaluation in the Monte Carlo kernels (tracked as issue #37; the `ranges` parameter is passed as `NULL` today)
+2. **Streaming**: Overlap computation with memory transfers
+3. **Precision Tuning**: Half-precision (FP16) floating point for memory bandwidth
+4. **Advanced RNG**: Better random number generation algorithms (only XORShift32 exists today)
+
+### Implemented
+- **Multi-GPU**: Distribute work across multiple GPUs with static/dynamic load balancing — implemented in `src/gpu/eval_multi_gpu.c` (`include/poker_eval/gpu/eval_multi_gpu.h`) and documented in [GPU_BATCHED_EVALUATION.md](./GPU_BATCHED_EVALUATION.md). Note: it is currently not wired into the CMake build (the module is present in the tree but `poker_gpu` targets do not compile it yet).
 
 ### Roadmap
 - **Phase 1**: ✅ Basic batch evaluation and Monte Carlo
 - **Phase 2**: 🔄 Range support and advanced features
-- **Phase 3**: 📋 Multi-GPU and streaming optimizations
+- **Phase 3**: 🔄 Multi-GPU (source implemented, awaiting build wiring) and streaming optimizations
 - **Phase 4**: 📋 Integration with poker analysis tools
 
 ## Contributing
