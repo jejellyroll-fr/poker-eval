@@ -22,6 +22,8 @@
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/distributions/plo_integration.h>
 #include <poker_eval/range/StudRangeParser.h>
+#include <poker_eval/equity/omaha_preflop.h>
+#include "omaha_hand_rankings.h"
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -1060,46 +1062,81 @@ static int arp_parse_plo_pattern(const char *pattern, StdDeck_CardMask dead_card
     return 1;
 }
 
+/* Total number of distinct 4-card combinations: C(52,4) */
+#define OMAHA_ALL_CONCRETE_HANDS 270725u
+
+/* Reverse-map a canonical Omaha key back to every concrete 4-card hand it
+ * represents (the "equivalence class" of the canonical form), skipping any
+ * hand that uses a dead card.  Returns the number of hands added. */
+static int arp_expand_omaha_key(omaha_hand_key_t key, StdDeck_CardMask dead_cards, arp_range_t *range)
+{
+    /* Key layout (see omaha_preflop.h): ranks r1..r4 descending in bits
+     * 6..21, suit isomorphism in bits 0..5.  r1 is always suit 0 and the
+     * remaining suits are normalized to first-appearance order. */
+    int ranks[4] = { (int)((key >> 18) & 0xF), (int)((key >> 14) & 0xF),
+                     (int)((key >> 10) & 0xF), (int)((key >> 6) & 0xF) };
+
+    /* Enumerate every concrete suit assignment for the 4 ranks and keep the
+     * ones whose canonical key matches.  Two cards of the same rank must use
+     * distinct suits (a hand cannot contain the same card twice).  Different
+     * assignments can land on the same concrete hand (e.g. swapped equal
+     * ranks), so deduplicate within the class before adding. */
+    StdDeck_CardMask seen[256];
+    int nseen = 0;
+    int added = 0;
+    for (int a1 = 0; a1 < 4; ++a1)
+    for (int a2 = 0; a2 < 4; ++a2)
+    for (int a3 = 0; a3 < 4; ++a3)
+    for (int a4 = 0; a4 < 4; ++a4) {
+        int suits[4] = { a1, a2, a3, a4 };
+        int valid = 1;
+        for (int c = 0; c < 4 && valid; ++c)
+            for (int d = c + 1; d < 4; ++d)
+                if (ranks[c] == ranks[d] && suits[c] == suits[d]) { valid = 0; break; }
+        if (!valid) continue;
+
+        StdDeck_CardMask m;
+        StdDeck_CardMask_RESET(m);
+        for (int c = 0; c < 4; ++c)
+            StdDeck_CardMask_SET(m, StdDeck_MAKE_CARD(ranks[c], suits[c]));
+
+        if (omaha_cards_to_key(m) != key) continue;
+        if (StdDeck_CardMask_ANY_SET(m, dead_cards)) continue;
+
+        int dup = 0;
+        for (int i = 0; i < nseen; ++i)
+            if (StdDeck_CardMask_EQUAL(seen[i], m)) { dup = 1; break; }
+        if (dup) continue;
+        seen[nseen++] = m;
+
+        if (!arp_add_hand_to_range(range, m, 1.0))
+            return -1;
+        added++;
+    }
+    return added;
+}
+
 /* Expand Omaha percentage range */
 static int arp_expand_omaha_percentage(float percentage, enum_game_t game_type, StdDeck_CardMask dead_cards, arp_range_t *range)
 {
-    static const char *tiers_pct[] = {
-        /* Tier 1: Top ~2% — ultra-premium */
-        "AAxxds, KKxxds, QQxxds, JJxxds, AAxxss, KKxxss",
-        /* Tier 2: Top ~5% — add premium pairs and top rundowns */
-        "QQxxss, JJxxss, TTxxds, TTxxss, AKQJds, AKQTds, AKJTds, AQJTds, KQJTds",
-        /* Tier 3: Top ~10% — add premium pairs any suit, top rundowns */
-        "AAxx, KKxx, QQxx, JJxx, TTxx, 99xxds, 99xxss, AKQJ, AKQT, AKJT, AQJT, KQJT",
-        /* Tier 4: Top ~15% — add 99, 88, more rundowns */
-        "99xx, 88xxds, 88xxss, AKQ9, AKJ9, AQJ9, KQJ9, AKT9, AQT9, KQT9",
-        /* Tier 5: Top ~20% — add 77, broadway combos */
-        "77xxds, 77xxss, AJT9, KJT9, QJT9, AK98, AQ98, KQ98, AJ98, KJ98, QJ98, AT98, KT98, QT98, JT98",
-        /* Tier 6: Top ~30% — add 55-22, more rundowns, connectors */
-        "66xx, 55xx, 44xx, 33xx, 22xx, AKQx, AKJx, AQJx, KQJx, AKTx, AQTx, KQTx, AJTx, KJTx, QJTx, T9xy, 98xy, 87xy",
-    };
-
     if (!range || percentage <= 0.0f || percentage > 1.0f)
         return 0;
 
     if (!arp_is_omaha_game(game_type))
         return 0;
 
-    arp_range_t tier_range;
-    int tiers_count = (int)(sizeof(tiers_pct) / sizeof(tiers_pct[0]));
-    int pct = (int)(percentage * 100.0f + 0.5f);
+    /* Ranked table of canonical keys (best first).  Expand classes in order
+     * until the cumulative number of concrete hands reaches the requested
+     * percentage of all C(52,4) hands. */
+    double target = (double)OMAHA_ALL_CONCRETE_HANDS * (double)percentage;
+    double accumulated = 0.0;
 
-    for (int t = 0; t < tiers_count; t++)
+    for (size_t i = 0; i < OMAHA_HAND_RANKINGS_COUNT && accumulated < target; ++i)
     {
-        if (pct <= 2 + 3 * t)
-            break;
-
-        memset(&tier_range, 0, sizeof(tier_range));
-        if (!ARP_ParseRange(tiers_pct[t], dead_cards, game_type, &tier_range))
-            continue;
-
-        for (size_t i = 0; i < tier_range.count; i++)
-            arp_add_hand_to_range(range, tier_range.hands[i], 1.0);
-        ARP_FreeRange(&tier_range);
+        int added = arp_expand_omaha_key(omaha_hand_rankings[i], dead_cards, range);
+        if (added < 0)
+            return 0;
+        accumulated += (double)added;
     }
 
     return range->count > 0 ? 1 : 0;

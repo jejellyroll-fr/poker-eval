@@ -29,6 +29,7 @@
 /* Function prototypes */
 static void test_plo_pattern_recognition(void);
 static void test_percentage_ranges(void);
+static void test_rank_table_percentage(void);
 static void test_validation(void);
 static void test_complex_ranges(void);
 static void test_omaha_hand_list_integration(void);
@@ -121,6 +122,89 @@ static void test_percentage_ranges(void)
     TEST_ASSERT(range.is_percentage == true, "Range marked as percentage");
     if (result)
         ARP_FreeRange(&range);
+}
+
+/* Test rank-table based percentage ranges (Phase 3) */
+static int omaha_range_contains(const arp_range_t *range, StdDeck_CardMask hand)
+{
+    for (size_t i = 0; i < range->count; i++)
+        if (StdDeck_CardMask_EQUAL(range->hands[i], hand))
+            return 1;
+    return 0;
+}
+
+static void test_rank_table_percentage(void)
+{
+    printf("\n=== Testing Rank-Table Percentage Ranges ===\n");
+
+    StdDeck_CardMask dead_cards;
+    StdDeck_CardMask_RESET(dead_cards);
+
+    static const int pcts[] = { 2, 5, 10, 15, 20, 30, 50, 100 };
+    arp_range_t ranges[8];
+    size_t counts[8];
+    int have[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    for (int i = 0; i < 8; i++)
+    {
+        if (ARP_GetOmahaTopPercentage(pcts[i] / 100.0f, game_omaha, dead_cards, &ranges[i]))
+        {
+            have[i] = 1;
+            counts[i] = ranges[i].count;
+        }
+    }
+
+    /* Each percentage yields a non-empty range of unique hands */
+    for (int i = 0; i < 8; i++)
+    {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "top %d%% returns hands", pcts[i]);
+        TEST_ASSERT(have[i] == 1, msg);
+    }
+    TEST_ASSERT(counts[7] == 270725, "100% covers every 4-card hand");
+
+    /* Coverage is monotonically increasing: larger % is a strict superset */
+    for (int i = 1; i < 8; i++)
+    {
+        if (!have[i - 1] || !have[i])
+            continue;
+        size_t missing = 0;
+        for (size_t j = 0; j < counts[i - 1]; j++)
+            if (!omaha_range_contains(&ranges[i], ranges[i - 1].hands[j]))
+                missing++;
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%d%% is a subset of %d%%", pcts[i - 1], pcts[i]);
+        TEST_ASSERT(missing == 0, msg);
+    }
+
+    /* Top ranges must contain known premium hands */
+    StdDeck_CardMask aakk_ds;
+    StdDeck_CardMask_RESET(aakk_ds);
+    StdDeck_CardMask_SET(aakk_ds, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, 0));
+    StdDeck_CardMask_SET(aakk_ds, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, 1));
+    StdDeck_CardMask_SET(aakk_ds, StdDeck_MAKE_CARD(StdDeck_Rank_KING, 0));
+    StdDeck_CardMask_SET(aakk_ds, StdDeck_MAKE_CARD(StdDeck_Rank_KING, 1));
+    if (have[0])
+        TEST_ASSERT(omaha_range_contains(&ranges[0], aakk_ds), "AAKK ds in top 2%");
+
+    /* Dead cards are excluded from the range */
+    StdDeck_CardMask dead_ace;
+    StdDeck_CardMask_RESET(dead_ace);
+    StdDeck_CardMask_SET(dead_ace, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, 0));
+    arp_range_t dead_range;
+    if (ARP_GetOmahaTopPercentage(0.02f, game_omaha, dead_ace, &dead_range))
+    {
+        int overlaps = 0;
+        for (size_t j = 0; j < dead_range.count; j++)
+            if (StdDeck_CardMask_ANY_SET(dead_range.hands[j], dead_ace))
+                overlaps++;
+        TEST_ASSERT(overlaps == 0, "dead cards excluded from percentage range");
+        ARP_FreeRange(&dead_range);
+    }
+
+    for (int i = 0; i < 8; i++)
+        if (have[i])
+            ARP_FreeRange(&ranges[i]);
 }
 
 /* Test validation */
@@ -338,6 +422,7 @@ int main(void)
     /* Run all tests */
     test_plo_pattern_recognition();
     test_percentage_ranges();
+    test_rank_table_percentage();
     test_validation();
     test_complex_ranges();
     test_omaha_hand_list_integration();

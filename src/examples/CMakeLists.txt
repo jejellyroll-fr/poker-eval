@@ -90,8 +90,9 @@ set(EXAMPLES
     # Omaha range parser example
     omaha_range_example
 
-    # Omaha table generator
+    # Omaha table generators
     generate_omaha_table
+    generate_omaha_rankings
 
     # Stud examples
 
