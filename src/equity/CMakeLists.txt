@@ -23,6 +23,7 @@ set(EQUITY_SOURCES
     flop_equity.c
     run_it_twice.c
     pe_equity.c
+    poker_eval_modern_equity.c
 )
 
 # Equity header files

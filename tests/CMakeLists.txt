@@ -1062,6 +1062,29 @@ endif()
 
 add_test(NAME test_modern_legacy_compatibility COMMAND test_modern_legacy_compatibility)
 
+# Add modern equity API test (only meaningful when experimental API is enabled)
+if(POKER_EVAL_EXPERIMENTAL)
+    add_executable(test_modern_equity
+        test_modern_equity.c
+    )
+    target_include_directories(test_modern_equity PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    if(TARGET poker_eval_modular)
+        target_link_libraries(test_modern_equity PRIVATE poker_eval_modular)
+    elseif(TARGET poker-eval)
+        target_link_libraries(test_modern_equity PRIVATE poker-eval)
+    else()
+        target_link_libraries(test_modern_equity PRIVATE poker-eval-static)
+    endif()
+    if(UNIX)
+        target_link_libraries(test_modern_equity PRIVATE m)
+    endif()
+
+    add_test(NAME test_modern_equity COMMAND test_modern_equity)
+endif()
+
 # Create a summary of test results
 add_custom_target(test-summary
     COMMAND ${CMAKE_COMMAND} -E echo "Running test summary..."
