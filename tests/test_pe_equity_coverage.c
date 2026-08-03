@@ -353,6 +353,64 @@ void test_pe_equity_range_vs_range(void)
     pe_range_free(r2);
 }
 
+/*
+ * Issue #63 regression: iterations must be a TOTAL budget, not a per-matchup
+ * budget. A wide range vs itself produces ~306k matchups; spending the full
+ * iteration count on each matchup (200k x 306k = 61e9 showdowns) never
+ * completes. With a total-budget interpretation the call must complete quickly
+ * and the reported sample count must stay within the caller's budget.
+ */
+void test_pe_equity_wide_range_bounded_iterations(void)
+{
+    const char *wide = "22+,A2s+,K2s+,Q2s+,J2s+,T2s+,A2o+,K2o+";
+    StdDeck_CardMask board, dead;
+    pe_equity_result_multi_t result;
+    pe_range_t *r1 = NULL, *r2 = NULL;
+    pe_status_t st;
+
+    StdDeck_CardMask_RESET(board);
+    StdDeck_CardMask_RESET(dead);
+
+    st = pe_range_parse(game_holdem, wide, dead, NULL, &r1);
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK, st);
+    TEST_ASSERT_NOT_NULL(r1);
+    st = pe_range_parse(game_holdem, wide, dead, NULL, &r2);
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK, st);
+    TEST_ASSERT_NOT_NULL(r2);
+
+    /* The exact match-up count before conflict filtering for 554 combos vs
+     * itself is 554*554 = 306,916. A small explicit budget forces the
+     * divide-across-matchups path (per-matchup count would otherwise be 1). */
+    pe_equity_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.is_monte_carlo = 1;
+    opts.iterations = 20000;
+
+    st = pe_equity_range_vs_range(NULL, game_holdem, r1, r2, board, dead, &opts, &result);
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK, st);
+    TEST_ASSERT_EQUAL_INT(2, result.num_players);
+
+    /* With a total-budget interpretation, total work is capped at roughly
+     * min(iterations, matchups): the reported samples must not explode to the
+     * 61e9 per-matchup interpretation. Allow generous slack for the upper-bound
+     * matchup estimate. */
+    TEST_ASSERT_LESS_THAN_INT64(1000000, result.samples);
+    TEST_ASSERT_GREATER_THAN(0, result.samples);
+
+    /* Results must be sane equities in [0,1]. */
+    for (int i = 0; i < 2; i++) {
+        TEST_ASSERT_GREATER_OR_EQUAL(0.0, result.results[i].equity);
+        TEST_ASSERT_LESS_OR_EQUAL(1.0, result.results[i].equity);
+    }
+    /* Two identical ranges should each be near 50%. */
+    TEST_ASSERT_DOUBLE_WITHIN(0.05, 0.5, result.results[0].equity);
+    TEST_ASSERT_DOUBLE_WITHIN(0.05, 0.5, result.results[1].equity);
+
+    pe_range_free(r1);
+    pe_range_free(r2);
+}
+
 /* ===== HI/LO GAME TESTS ===== */
 
 /*
@@ -662,6 +720,7 @@ int main(void)
 
     /* pe_equity_range_vs_range tests */
     RUN_TEST(test_pe_equity_range_vs_range);
+    RUN_TEST(test_pe_equity_wide_range_bounded_iterations);
 
     /* Hi/Lo game tests */
     RUN_TEST(test_pe_equity_hilo_game);

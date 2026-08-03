@@ -345,6 +345,13 @@ int CalculateEquityForRanges_MT_Batched(
         num_threads = omp_get_max_threads();
     }
     omp_set_num_threads(num_threads);
+
+    /* Total Monte-Carlo budget, divided across matchups. queue->total_combinations
+     * is an upper bound on the number of valid matchups (product of per-player
+     * combo counts); dividing the caller's iteration budget by it keeps the whole
+     * call within budget (see range_equity_per_matchup_budget). */
+    int per_matchup_iterations = range_equity_per_matchup_budget(
+        iterations_if_montecarlo, (double)queue->total_combinations);
     
     // Allocate thread-local results
     ThreadLocalResultsBatched *thread_results = calloc(num_threads, sizeof(ThreadLocalResultsBatched));
@@ -371,7 +378,7 @@ int CalculateEquityForRanges_MT_Batched(
         while (get_matchup_batch(queue, &batch)) {
             process_matchup_batch_batched(
                 &batch, game, board, dead_cards_initial,
-                num_players, use_montecarlo, iterations_if_montecarlo,
+                num_players, use_montecarlo, per_matchup_iterations,
                 orderflag, local_results
             );
         }
