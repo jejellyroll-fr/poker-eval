@@ -105,7 +105,6 @@ typedef struct {
  * Configure range optimization during compilation.
  */
 typedef struct {
-    int optimize_lookup;   /**< Build hash tables for fast lookup (future) */
     int canonicalize;      /**< Sort and deduplicate hands */
 } pe_compile_opts_t;
 
