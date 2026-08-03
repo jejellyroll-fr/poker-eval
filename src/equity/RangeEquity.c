@@ -424,6 +424,49 @@ int CalculateEquityForRanges(
         }
     }
 
+    /*
+     * Monte-Carlo iteration budget.
+     *
+     * `iterations_if_montecarlo` is a TOTAL budget for the whole call, not a
+     * per-matchup budget. The recursive/eager walk below evaluates each valid
+     * matchup and passes `iterations_if_montecarlo` straight to
+     * enumSampleBatched / enumSample, so an un-scaled budget would be spent
+     * once per matchup (range-size product). For wide ranges that is
+     * combinatorially explosive and effectively hangs the call.
+     *
+     * We derive a per-matchup iteration count by dividing the total budget by the
+     * number of matchups. The product of per-player valid-combo counts is an
+     * UPPER BOUND on the number of valid matchups (conflicts only reduce it), so
+     *
+     *     total_samples <= matchup_estimate * per_matchup
+     *                   <= iterations_if_montecarlo
+     *
+     * is guaranteed: the call never exceeds the caller's budget. The weighted
+     * aggregation normalizes EV per-sample and weights each matchup by its
+     * weight, so spreading the budget across matchups keeps the estimator
+     * unbiased.
+     */
+    int per_matchup_iterations = iterations_if_montecarlo > 0 ? iterations_if_montecarlo : 200000;
+    if (use_montecarlo && iterations_if_montecarlo > 0)
+    {
+        double matchup_estimate = 1.0;
+        if (use_prefilter)
+        {
+            for (int i = 0; i < num_players; ++i)
+                matchup_estimate *= (double)combo_buffers[i].count;
+        }
+        else
+        {
+            for (int i = 0; i < num_players; ++i)
+            {
+                double w = 0.0;
+                int valid = count_valid_hands_in_range(&player_ranges[i], board, dead_cards_initial, &w);
+                matchup_estimate *= (double)(valid > 0 ? valid : 1);
+            }
+        }
+        per_matchup_iterations = range_equity_per_matchup_budget(iterations_if_montecarlo, matchup_estimate);
+    }
+
     enumResultClear(aggregated_results);
     aggregated_results->game = game;
     aggregated_results->nplayers = num_players;
@@ -454,7 +497,7 @@ int CalculateEquityForRanges(
                                            &total_weight, &total_valid_matchups,
                                            game, combo_buffers, num_players,
                                            board, dead_cards_initial, use_montecarlo,
-                                           iterations_if_montecarlo, orderflag,
+                                           per_matchup_iterations, orderflag,
                                            &weighted_results);
     }
     else
@@ -462,7 +505,7 @@ int CalculateEquityForRanges(
         iterate_range_matchups_recursive_legacy(0, current_selection, 1.0, &total_weight, &total_valid_matchups,
                                          &total_skipped_hands, game, player_ranges, num_players,
                                          board, dead_cards_initial, nboard_cards_to_deal,
-                                         use_montecarlo, iterations_if_montecarlo,
+                                         use_montecarlo, per_matchup_iterations,
                                          orderflag, aggregated_results, &weighted_results);
     }
 
