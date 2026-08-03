@@ -263,4 +263,30 @@ static inline unsigned int weightedAggregationFinalize(
     return target_samples;
 }
 
+/**
+ * @brief Compute a per-matchup Monte-Carlo iteration budget from a total budget.
+ *
+ * `iterations_if_montecarlo` is treated as a TOTAL budget for the whole
+ * range-vs-range call, not a per-matchup budget. Evaluating every matchup with
+ * the full budget would multiply the cost by the number of matchups (the
+ * product of the per-player valid-combo counts), which hangs for wide ranges.
+ *
+ * @param iterations_if_montecarlo The caller's total iteration budget (> 0).
+ * @param matchup_estimate         Upper bound on the number of valid matchups
+ *                                 (product of per-player valid-combo counts).
+ * @return Per-matchup iteration count, always >= 1.
+ */
+static inline int range_equity_per_matchup_budget(int iterations_if_montecarlo,
+                                                  double matchup_estimate)
+{
+    int per = iterations_if_montecarlo > 0 ? iterations_if_montecarlo : 200000;
+    if (matchup_estimate > 1.0)
+    {
+        per = per / (int)matchup_estimate;
+    }
+    if (per < 1)
+        per = 1;
+    return per;
+}
+
 #endif // RANGE_EQUITY_INTERNAL_H

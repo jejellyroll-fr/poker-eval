@@ -310,6 +310,15 @@ int CalculateEquityForRanges_MT(
     TRACE_RE("Info: Generated %d valid matchups to evaluate.\n", valid_matchups_total);
     RANGE_MT_DEBUG("RangeMT: evaluating %d matchups (queue capacity=%d)\n",
                    valid_matchups_total, queue_capacity);
+
+    /* Total Monte-Carlo budget, divided across matchups (see
+     * range_equity_per_matchup_budget). Each matchup samples
+     * iterations_if_montecarlo by default, which multiplies the caller's
+     * budget by the number of matchups. Recompute a per-matchup budget so the
+     * whole call stays within the caller's total iteration budget. */
+    int per_matchup_iterations = use_montecarlo
+        ? range_equity_per_matchup_budget(iterations_if_montecarlo, (double)valid_matchups_total)
+        : iterations_if_montecarlo;
     
     // Set number of threads
     if (num_threads <= 0) {
@@ -366,7 +375,7 @@ int CalculateEquityForRanges_MT(
             int num_cards_on_board_mt = StdDeck_numCards(board);
             if (use_montecarlo) {
                 ret_eval = enumSample(game, item->hands, board, effective_dead_cards_mt,
-                                    num_players, num_cards_on_board_mt, iterations_if_montecarlo,
+                                    num_players, num_cards_on_board_mt, per_matchup_iterations,
                                     orderflag, &matchup_result);
             } else {
                 ret_eval = enumExhaustive_dispatch(game, item->hands, board, effective_dead_cards_mt,
