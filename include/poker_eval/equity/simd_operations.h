@@ -21,12 +21,14 @@ typedef enum {
     SIMD_NONE = 0,
     SIMD_SSE2 = 1,
     SIMD_AVX2 = 2,
-    SIMD_AVX512 = 3
+    SIMD_AVX512 = 3,
+    SIMD_NEON = 4
 } simd_capability_t;
 
 /* SIMD batch sizes */
 #define SIMD_AVX2_BATCH_SIZE    4   /* 4 hands in 256-bit registers */
 #define SIMD_AVX512_BATCH_SIZE  8   /* 8 hands in 512-bit registers */
+#define SIMD_NEON_BATCH_SIZE    4   /* 4 hands in 128-bit registers */
 
 /* Structure for batched card masks */
 typedef struct {
@@ -50,6 +52,7 @@ const char* simd_capability_name(simd_capability_t cap);
 /* Batch evaluation functions */
 int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch_t* results);
 int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_batch_t* results);
+int simd_eval_batch_hands_neon(const simd_card_batch_t* batch, simd_result_batch_t* results);
 
 /* Adaptive batch evaluation - automatically chooses best SIMD version */
 int simd_eval_batch_hands_adaptive(const simd_card_batch_t* batch, simd_result_batch_t* results);
