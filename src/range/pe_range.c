@@ -320,6 +320,56 @@ static int parse_holdem_token(pe_range_t *range, char *token, StdDeck_CardMask d
     return 0; /* Failed to parse */
 }
 
+/* Parse a single concrete 3-card Pineapple token like "AsKsQs". Used by the
+ * 3-card games (game_pineapple, game_pineapple8), which share the hold'em
+ * helpers above. Percentage expansion is intentionally not supported here:
+ * there is no ranked table for 3-card hands, so N% would be wrong. */
+static int parse_pineapple_token(pe_range_t *range, char *token, StdDeck_CardMask dead_cards, double default_weight) {
+    /* Check for weight override ":weight" */
+    double weight = default_weight;
+    char *w_ptr = strchr(token, ':');
+    if (w_ptr) {
+        *w_ptr = '\0';
+        weight = atof(w_ptr + 1);
+    }
+
+    /* Percentage unsupported for 3-card hands */
+    if (strchr(token, '%')) {
+        return 0;
+    }
+
+    /* Specific 3-card hand: AsKsQs (len 6) */
+    if (strnlen(token, 16) == 6 &&
+        char_to_suit(token[1]) != -1 && char_to_suit(token[3]) != -1 && char_to_suit(token[5]) != -1) {
+        int r1 = char_to_rank(token[0]);
+        int s1 = char_to_suit(token[1]);
+        int r2 = char_to_rank(token[2]);
+        int s2 = char_to_suit(token[3]);
+        int r3 = char_to_rank(token[4]);
+        int s3 = char_to_suit(token[5]);
+        if (r1 >= 0 && s1 >= 0 && r2 >= 0 && s2 >= 0 && r3 >= 0 && s3 >= 0) {
+            /* Reject duplicate cards within the hand */
+            if ((r1 == r2 && s1 == s2) || (r1 == r3 && s1 == s3) || (r2 == r3 && s2 == s3)) {
+                return 0;
+            }
+            StdDeck_CardMask hand;
+            StdDeck_CardMask_RESET(hand);
+            StdDeck_CardMask c1 = StdDeck_MASK(StdDeck_MAKE_CARD(r1, s1));
+            StdDeck_CardMask c2 = StdDeck_MASK(StdDeck_MAKE_CARD(r2, s2));
+            StdDeck_CardMask c3 = StdDeck_MASK(StdDeck_MAKE_CARD(r3, s3));
+            StdDeck_CardMask_OR(hand, hand, c1);
+            StdDeck_CardMask_OR(hand, hand, c2);
+            StdDeck_CardMask_OR(hand, hand, c3);
+            if (!StdDeck_CardMask_ANY_SET(hand, dead_cards)) {
+                pe_range_add_combo(range, hand, weight);
+            }
+            return 1; /* Hand valid even if dead, effectively added 0 */
+        }
+    }
+
+    return 0; /* Failed to parse */
+}
+
 
 /* --- Public API Implementation --- */
 
@@ -377,6 +427,39 @@ pe_status_t pe_range_parse(
             *out_range = NULL;
             return PE_STATUS_PARSE_ERROR;
         }
+    }
+
+    /* For Pineapple variants (3 hole cards), use the local 3-card tokenizer.
+     * ARP has no 3-card support (its specific-hand token and ranked tables are
+     * 2- and 4-card only), so concrete hands are handled here. */
+    if (variant == game_pineapple || variant == game_pineapple8) {
+        char *str_copy = strdup(range_str);
+        if (!str_copy) {
+            pe_range_free(range);
+            return PE_STATUS_OUT_OF_MEMORY;
+        }
+
+        char *token = strtok(str_copy, ",");
+        while (token) {
+            /* Trim whitespace */
+            while(isspace(*token)) token++;
+            char *end = token + strlen(token) - 1;
+            while(end > token && isspace(*end)) *end-- = '\0';
+
+            if (*token) {
+                if (!parse_pineapple_token(range, token, dead_cards, opts ? opts->default_weight : 1.0)) {
+                    free(str_copy);
+                    pe_range_free(range);
+                    *out_range = NULL;
+                    return PE_STATUS_PARSE_ERROR;
+                }
+            }
+            token = strtok(NULL, ",");
+        }
+
+        free(str_copy);
+        *out_range = range;
+        return PE_STATUS_OK;
     }
 
     /* For Omaha and other non-Hold'em, use Omaha parser */
