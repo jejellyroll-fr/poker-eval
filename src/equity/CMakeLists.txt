@@ -20,6 +20,7 @@ set(EQUITY_SOURCES
     sampling_policies.c
     preflop_equity.c
     omaha_preflop.c
+    pineapple_preflop.c
     flop_equity.c
     run_it_twice.c
     pe_equity.c
@@ -42,6 +43,7 @@ set(EQUITY_HEADERS
     sampling_policies.h
     preflop_equity.h
     omaha_preflop.h
+    pineapple_preflop.h
     flop_equity.h
     run_it_twice.h
 )

@@ -1,6 +1,7 @@
 #include <poker_eval/range.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/equity/pineapple_preflop.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -212,6 +213,42 @@ static void test_pineapple_specific(void) {
     pe_range_free(range);
 }
 
+static void test_pineapple8_top_percent_full(void) {
+    pe_range_t *range;
+    pe_status_t status = pe_range_top_percent(game_pineapple8, 1.0, empty_mask(), &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    /* C(52,3) = 22100 distinct 3-card hands */
+    TEST_ASSERT_EQUAL(22100, range->count);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_top_percent_half(void) {
+    pe_range_t *range;
+    pe_status_t status = pe_range_top_percent(game_pineapple8, 0.5, empty_mask(), &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    /* Top 50% should be a strict subset: > 0 and < 22100 */
+    TEST_ASSERT(range->count > 0);
+    TEST_ASSERT(range->count < 22100);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_top_percent_dead_cards(void) {
+    pe_range_t *range;
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+    /* Dead card: As (rank 0, suit 0) */
+    StdDeck_CardMask_SET(dead, 0);
+
+    pe_status_t status = pe_range_top_percent(game_pineapple8, 1.0, dead, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    /* With 1 dead card, total possible 3-card hands from remaining 51 cards
+     * is C(51,3) = 20825, but some canonical classes may map to hands that
+     * include the dead card, so count should be less than 22100 and > 0. */
+    TEST_ASSERT(range->count > 0);
+    TEST_ASSERT(range->count < 22100);
+    pe_range_free(range);
+}
+
 int main(void) {
     RUN_TEST(test_parse_pairs);
     RUN_TEST(test_parse_suited);
@@ -229,5 +266,8 @@ int main(void) {
     RUN_TEST(test_pineapple8_weighted);
     RUN_TEST(test_pineapple8_invalid);
     RUN_TEST(test_pineapple_specific);
+    RUN_TEST(test_pineapple8_top_percent_full);
+    RUN_TEST(test_pineapple8_top_percent_half);
+    RUN_TEST(test_pineapple8_top_percent_dead_cards);
     return 0;
 }
