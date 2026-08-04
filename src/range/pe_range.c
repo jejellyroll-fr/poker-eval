@@ -362,6 +362,23 @@ pe_status_t pe_range_parse(
         }
     }
 
+    /* For Badugi, use the generic range parser which supports 4-card hands */
+    if (variant == game_badugi) {
+        arp_range_t arp_range;
+        memset(&arp_range, 0, sizeof(arp_range_t));
+        int ret = ARP_ParseRange(range_str, dead_cards, variant, &arp_range);
+        if (ret) {
+            convert_arp_to_pe(&arp_range, range);
+            ARP_FreeRange(&arp_range);
+            *out_range = range;
+            return PE_STATUS_OK;
+        } else {
+            pe_range_free(range);
+            *out_range = NULL;
+            return PE_STATUS_PARSE_ERROR;
+        }
+    }
+
     /* For Omaha and other non-Hold'em, use Omaha parser */
     if (variant != game_holdem) {
         arp_range_t arp_range;
