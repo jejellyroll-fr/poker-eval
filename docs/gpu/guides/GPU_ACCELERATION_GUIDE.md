@@ -131,7 +131,7 @@ if (ret == 0) {
 float equities[2];
 int ret = gpu_monte_carlo_equity(
     ctx,
-    NULL,       // ranges (not implemented yet)
+    NULL,       // ranges: NULL deals uniformly random hole cards
     2,          // n_players
     1000000,    // n_simulations
     equities
@@ -142,6 +142,28 @@ if (ret == 0) {
     printf("Player 2 equity: %.3f\n", equities[1]);
 }
 ```
+
+### Range-vs-Range Monte Carlo
+Pass a `StdDeck_CardMask` range per player. Each range is the set of hole
+cards the player may hold; the CUDA Monte Carlo kernel draws each player's two
+hole cards only from that player's range:
+
+```c
+// Player 0 may hold only Aces and Kings, player 1 only Queens and Jacks
+StdDeck_CardMask ranges[2];
+StdDeck_CardMask_RESET(ranges[0]);
+StdDeck_CardMask_SET(ranges[0], StdDeck_MASK(StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES)));
+StdDeck_CardMask_SET(ranges[0], StdDeck_MASK(StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_HEARTS)));
+StdDeck_CardMask_RESET(ranges[1]);
+StdDeck_CardMask_SET(ranges[1], StdDeck_MASK(StdDeck_MAKE_CARD(StdDeck_Rank_QUEEN, StdDeck_Suit_DIAMONDS)));
+StdDeck_CardMask_SET(ranges[1], StdDeck_MASK(StdDeck_MAKE_CARD(StdDeck_Rank_JACK, StdDeck_Suit_CLUBS)));
+
+float equities[2];
+int ret = gpu_monte_carlo_equity(ctx, ranges, 2, 1000000, equities);
+```
+
+If `ranges` is `NULL`, every player's hole cards are dealt uniformly from the
+full deck (historical behavior).
 
 ### Cleanup
 ```c

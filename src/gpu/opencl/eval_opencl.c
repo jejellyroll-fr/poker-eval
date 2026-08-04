@@ -546,11 +546,24 @@ int opencl_gpu_monte_carlo_equity(
             {
                 int card;
                 StdDeck_CardMask card_mask;
+                int attempts = 0;
                 do
                 {
                     card = rand() % 52;
                     card_mask = StdDeck_MASK(card);
-                } while (StdDeck_CardMask_ANY_SET(used_cards, card_mask));
+                    /* When a per-player range is given, hole cards must be
+                       drawn only from that player's range. */
+                    if (ranges != NULL &&
+                        !StdDeck_CardMask_ANY_SET(ranges[p], card_mask))
+                    {
+                        card = -1;
+                    }
+                    attempts++;
+                } while ((card < 0 || StdDeck_CardMask_ANY_SET(used_cards, card_mask)) &&
+                         attempts < 100);
+
+                if (card < 0)
+                    continue; /* skip a card we could not draw */
 
                 StdDeck_CardMask_OR(player_hands[p], player_hands[p], card_mask);
                 StdDeck_CardMask_OR(used_cards, used_cards, card_mask);

@@ -342,10 +342,32 @@ int cuda_gpu_monte_carlo_equity(
     
     err = cudaMemsetAsync(cuda_ctx->d_ties, 0, n_players * sizeof(int), cuda_ctx->stream);
     if (err != cudaSuccess) return -1;
+
+    /* Convert and upload the per-player range masks when provided.
+       Each player's range is the set of hole cards it may hold. */
+    CudaCardMask* h_ranges = NULL;
+    void* d_ranges = NULL;
+    if (ranges != NULL)
+    {
+        h_ranges = (CudaCardMask*)malloc(n_players * sizeof(CudaCardMask));
+        if (!h_ranges) return -1;
+        for (int p = 0; p < n_players; p++)
+            h_ranges[p] = convert_to_cuda_cardmask(ranges[p]);
+
+        err = cudaMalloc(&d_ranges, n_players * sizeof(CudaCardMask));
+        if (err != cudaSuccess) { free(h_ranges); return -1; }
+        err = cudaMemcpyAsync(d_ranges, h_ranges, n_players * sizeof(CudaCardMask),
+                              cudaMemcpyHostToDevice, cuda_ctx->stream);
+        free(h_ranges);
+        if (err != cudaSuccess) { cudaFree(d_ranges); return -1; }
+    }
     
     /* Initialize RNG states */
     uint32_t* host_rng_states = (uint32_t*)malloc(n_simulations * sizeof(uint32_t));
-    if (!host_rng_states) return -1;
+    if (!host_rng_states) {
+        if (d_ranges) cudaFree(d_ranges);
+        return -1;
+    }
     
     for (int i = 0; i < n_simulations; i++) {
         host_rng_states[i] = (uint32_t)(rand() ^ (i * 1234567));
@@ -355,11 +377,14 @@ int cuda_gpu_monte_carlo_equity(
                           n_simulations * sizeof(uint32_t),
                           cudaMemcpyHostToDevice, cuda_ctx->stream);
     free(host_rng_states);
-    if (err != cudaSuccess) return -1;
+    if (err != cudaSuccess) {
+        if (d_ranges) cudaFree(d_ranges);
+        return -1;
+    }
     
     /* Launch Monte Carlo kernel */
     int ret = cuda_monte_carlo_equity(
-        NULL, /* ranges not implemented yet */
+        d_ranges,
         n_players,
         n_simulations,
         cuda_ctx->d_wins,
@@ -367,12 +392,16 @@ int cuda_gpu_monte_carlo_equity(
         cuda_ctx->d_rng_states
     );
     
-    if (ret != 0) return ret;
+    if (ret != 0) {
+        if (d_ranges) cudaFree(d_ranges);
+        return ret;
+    }
     
     /* Copy results back to host */
     int* host_wins = (int*)malloc(n_players * sizeof(int));
     int* host_ties = (int*)malloc(n_players * sizeof(int));
     if (!host_wins || !host_ties) {
+        if (d_ranges) cudaFree(d_ranges);
         free(host_wins);
         free(host_ties);
         return -1;
@@ -382,6 +411,7 @@ int cuda_gpu_monte_carlo_equity(
                           n_players * sizeof(int),
                           cudaMemcpyDeviceToHost, cuda_ctx->stream);
     if (err != cudaSuccess) {
+        if (d_ranges) cudaFree(d_ranges);
         free(host_wins);
         free(host_ties);
         return -1;
@@ -391,6 +421,7 @@ int cuda_gpu_monte_carlo_equity(
                           n_players * sizeof(int),
                           cudaMemcpyDeviceToHost, cuda_ctx->stream);
     if (err != cudaSuccess) {
+        if (d_ranges) cudaFree(d_ranges);
         free(host_wins);
         free(host_ties);
         return -1;
@@ -399,6 +430,7 @@ int cuda_gpu_monte_carlo_equity(
     /* Wait for all operations to complete */
     err = cudaStreamSynchronize(cuda_ctx->stream);
     if (err != cudaSuccess) {
+        if (d_ranges) cudaFree(d_ranges);
         free(host_wins);
         free(host_ties);
         return -1;
@@ -409,6 +441,7 @@ int cuda_gpu_monte_carlo_equity(
         equities[p] = (float)host_wins[p] / (float)n_simulations + 0.5f * (float)host_ties[p] / (float)n_simulations;
     }
     
+    if (d_ranges) cudaFree(d_ranges);
     free(host_wins);
     free(host_ties);
     
