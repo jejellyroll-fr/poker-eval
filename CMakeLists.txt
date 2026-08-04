@@ -446,15 +446,18 @@ elseif(POKER_TARGET_ARCH MATCHES "^(aarch64|arm64|arm64e|armv8|armv[5-9])")
 
     # Set SIMD defines and report capabilities
     if(HAS_NEON)
-        message(STATUS "NEON support detected - OFC SIMD batch size: 4")
+        message(STATUS "NEON support detected - hand evaluator batch size: 4")
         add_compile_definitions(HAS_NEON)
-        set(OFC_SIMD_CAPABILITY "NEON")
-        set(OFC_SIMD_BATCH_SIZE 4)
     else()
-        message(STATUS "No SIMD support detected - OFC will use CPU fallback")
-        set(OFC_SIMD_CAPABILITY "None")
-        set(OFC_SIMD_BATCH_SIZE 1)
+        message(STATUS "No SIMD support detected - scalar evaluation only")
     endif()
+
+    # The OFC kernels in src/ofc/ofc_simd.c are x86 intrinsics only (SSE2/AVX2/
+    # AVX-512); there is no NEON implementation and OFC_PROCESS_SIMD_* has no
+    # NEON mode, so OFC always takes the scalar path on ARM regardless of NEON.
+    set(OFC_SIMD_CAPABILITY "None")
+    set(OFC_SIMD_BATCH_SIZE 1)
+    message(STATUS "OFC SIMD kernels are x86-only - OFC uses the scalar path on ARM")
 
     # Add OFC SIMD defines
     if(ENABLE_OFC_SIMD)
