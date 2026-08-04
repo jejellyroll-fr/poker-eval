@@ -463,6 +463,20 @@ extern "C"
     int ARP_ExportRange(const arp_range_t *range, FILE *output, enum_game_t game_type);
 
     /**
+     * Export range to a 13x13 hold'em matrix grid in text form.
+     *
+     * Rows/columns are ranks A-K-Q-J-T-9-8-7-6-5-4-3-2. Diagonal cells are
+     * pocket pairs; cells above the diagonal are suited; below are offsuit.
+     * Each cell shows the summed weight of all hands of that class, as a
+     * percentage of the range's total weight ("-" when absent).
+     *
+     * @param range Range to export (hold'em expected)
+     * @param output Output file
+     * @return 1 on success, 0 on failure
+     */
+    int ARP_ExportRangeMatrix(const arp_range_t *range, FILE *output);
+
+    /**
      * Import range from exported file
      * @param input Input file
      * @param result Output range

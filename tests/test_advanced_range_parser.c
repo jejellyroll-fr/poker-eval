@@ -436,6 +436,64 @@ static int test_weighted_and_exclusion(void)
     TEST_ASSERT(fabs(sum_offsuit - 0.5) < 1e-6, "Offsuit combos should sum to 0.5");
     ARP_FreeRange(&range);
 
+    /* @ weight syntax: AA@100 is equivalent to AA{100} */
+    arp_range_t at_range;
+    TEST_ASSERT(ARP_ParseRange("AA@100, KK@50", dead_cards, game_holdem, &at_range),
+                "Should parse @ weighted range");
+    TEST_ASSERT(at_range.has_weights, "@ weighted range should flag has_weights");
+    TEST_ASSERT(at_range.count == 12, "@ weighted range should contain 12 combos");
+
+    double at_aa = 0.0, at_kk = 0.0;
+    for (size_t i = 0; i < at_range.count; ++i)
+    {
+        double w = at_range.weights[i];
+        char buf[8];
+        StdDeck_maskToString(at_range.hands[i], buf);
+        if (buf[0] == 'A' && buf[1] == 'A') at_aa += w;
+        else if (buf[0] == 'K' && buf[1] == 'K') at_kk += w;
+    }
+    /* AA should weigh twice KK after normalization */
+    TEST_ASSERT(fabs(at_aa - 2.0 * at_kk) < 1e-9, "AA@100 should weigh double KK@50");
+    ARP_FreeRange(&at_range);
+
+    /* Mixed @ and brace weights together */
+    arp_range_t mix_range;
+    TEST_ASSERT(ARP_ParseRange("AA{60%}, KK@25%, AKo@15%", dead_cards, game_holdem, &mix_range),
+                "Should parse mixed brace and @ weights");
+    TEST_ASSERT(mix_range.has_weights, "Mixed weight range should flag has_weights");
+    TEST_ASSERT(mix_range.count == 24, "Mixed weight range should contain 24 combos");
+    ARP_FreeRange(&mix_range);
+
+    /* @ weight must be rejected when followed by a non-delimiter */
+    TEST_ASSERT(!ARP_ParseRange("AA@25x", dead_cards, game_holdem, &mix_range),
+                "@ weight followed by junk should be rejected");
+
+    /* Matrix export */
+    arp_range_t matrix_range;
+    TEST_ASSERT(ARP_ParseRange("AA@60%, KK@25%, AKo@15%", dead_cards, game_holdem, &matrix_range),
+                "Should parse range for matrix export");
+    FILE *mem = tmpfile();
+    TEST_ASSERT(mem != NULL, "Should create temp file for matrix export");
+    TEST_ASSERT(ARP_ExportRangeMatrix(&matrix_range, mem) == 1, "Matrix export should succeed");
+    fflush(mem);
+    rewind(mem);
+
+    char line[256];
+    int found_pair = 0, found_offsuit = 0;
+    while (fgets(line, sizeof(line), mem))
+    {
+        /* A row diagonal should show 60.0 for AA, 25.0 for KK */
+        if (strncmp(line, " A |", 4) == 0 && strstr(line, "60.0"))
+            found_pair = 1;
+        /* K row offsuit cell (AKo) should show 15.0 */
+        if (strncmp(line, " K |", 4) == 0 && strstr(line, "15.0"))
+            found_offsuit = 1;
+    }
+    fclose(mem);
+    TEST_ASSERT(found_pair, "Matrix should show 60.0 in the A diagonal (AA)");
+    TEST_ASSERT(found_offsuit, "Matrix should show 15.0 in the K row (AK offsuit)");
+    ARP_FreeRange(&matrix_range);
+
     TEST_ASSERT(ARP_ParseRange("AA, !AsAh", dead_cards, game_holdem, &range),
                 "Should parse exclusion in range");
     TEST_ASSERT(range.count == 5, "AA minus AsAh should leave 5 combos");
