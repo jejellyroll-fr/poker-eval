@@ -162,6 +162,56 @@ static void test_badugi_range(void) {
     pe_range_free(range);
 }
 
+static void test_pineapple8_specific(void) {
+    pe_range_t *range;
+    /* Single concrete 3-card Pineapple Hi/Lo hand */
+    pe_status_t status = pe_range_parse(game_pineapple8, "AsKsQs", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(1, range->count);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_multiple(void) {
+    pe_range_t *range;
+    /* Multiple concrete 3-card hands, comma-separated with whitespace */
+    pe_status_t status = pe_range_parse(game_pineapple8, "AsKsQs, AhKhQh",
+                                        empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(2, range->count);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_weighted(void) {
+    pe_range_t *range;
+    pe_status_t status = pe_range_parse(game_pineapple8, "AsKsQs:0.5",
+                                        empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(1, range->count);
+    TEST_ASSERT((range->total_weight - 0.5) < 0.0001 && (range->total_weight - 0.5) > -0.0001);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_invalid(void) {
+    pe_range_t *range;
+    /* Duplicate card within a hand must be rejected */
+    pe_status_t status = pe_range_parse(game_pineapple8, "AsAsQs", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
+
+    /* Percentage expansion is unsupported for 3-card hands */
+    status = pe_range_parse(game_pineapple8, "10%", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
+}
+
+static void test_pineapple_specific(void) {
+    pe_range_t *range;
+    /* Plain Pineapple (game_pineapple) is also 3-card and routes to the same
+     * tokenizer; concrete hands must parse. */
+    pe_status_t status = pe_range_parse(game_pineapple, "AsKsQs", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(1, range->count);
+    pe_range_free(range);
+}
+
 int main(void) {
     RUN_TEST(test_parse_pairs);
     RUN_TEST(test_parse_suited);
@@ -174,5 +224,10 @@ int main(void) {
     RUN_TEST(test_weights);
     RUN_TEST(test_omaha_compatibility);
     RUN_TEST(test_badugi_range);
+    RUN_TEST(test_pineapple8_specific);
+    RUN_TEST(test_pineapple8_multiple);
+    RUN_TEST(test_pineapple8_weighted);
+    RUN_TEST(test_pineapple8_invalid);
+    RUN_TEST(test_pineapple_specific);
     return 0;
 }
