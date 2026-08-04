@@ -282,7 +282,13 @@ static inline int range_equity_per_matchup_budget(int iterations_if_montecarlo,
     int per = iterations_if_montecarlo > 0 ? iterations_if_montecarlo : 200000;
     if (matchup_estimate > 1.0)
     {
-        per = per / (int)matchup_estimate;
+        /*
+         * Divide in double to avoid casting `matchup_estimate` to int: for
+         * Omaha range-vs-range the estimate is the product of per-player
+         * valid-combo counts and can exceed INT_MAX (C(52,4)^2 ~= 7.3e10),
+         * where a float-to-int conversion is undefined behavior.
+         */
+        per = (int)((double)per / matchup_estimate);
     }
     if (per < 1)
         per = 1;
