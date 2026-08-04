@@ -2578,6 +2578,113 @@ static int parse_hand_string(const char *hand_str, StdDeck_CardMask *hand) {
     return 1;
 }
 
+/**
+ * Export a hold'em range as a 13x13 weight grid.
+ *
+ * Row/column labels run Ace-high to deuce-low. The diagonal holds pocket
+ * pairs; cells above the diagonal are suited combinations; cells below are
+ * offsuit. Each cell prints the summed weight of that hand class as a
+ * percentage of the range's total weight, or "-" when absent.
+ */
+int ARP_ExportRangeMatrix(const arp_range_t *range, FILE *output)
+{
+    static const int matrix_ranks[13] = {
+        StdDeck_Rank_ACE, StdDeck_Rank_KING, StdDeck_Rank_QUEEN,
+        StdDeck_Rank_JACK, StdDeck_Rank_TEN, StdDeck_Rank_9,
+        StdDeck_Rank_8, StdDeck_Rank_7, StdDeck_Rank_6,
+        StdDeck_Rank_5, StdDeck_Rank_4, StdDeck_Rank_3, StdDeck_Rank_2
+    };
+    static const char *rank_labels[13] = {
+        "A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"
+    };
+    double cell[13][13];
+    int i, j;
+    double total;
+
+    if (!range || !output)
+        return 0;
+
+    for (i = 0; i < 13; i++)
+        for (j = 0; j < 13; j++)
+            cell[i][j] = 0.0;
+
+    for (size_t h = 0; h < range->count; h++)
+    {
+        int ranks[2];
+        int suits[2];
+        int ncards = 0;
+
+        for (int card = 0; card < StdDeck_N_CARDS && ncards < 2; card++)
+        {
+            if (StdDeck_CardMask_CARD_IS_SET(range->hands[h], card))
+            {
+                ranks[ncards] = StdDeck_RANK(card);
+                suits[ncards] = StdDeck_SUIT(card);
+                ncards++;
+            }
+        }
+
+        if (ncards != 2)
+            continue;
+
+        int r1 = -1, r2 = -1;
+        for (i = 0; i < 13; i++)
+        {
+            if (matrix_ranks[i] == ranks[0]) r1 = i;
+            if (matrix_ranks[i] == ranks[1]) r2 = i;
+        }
+        if (r1 < 0 || r2 < 0)
+            continue;
+
+        double w = range->has_weights ? range->weights[h] : 1.0;
+
+        if (r1 == r2)
+        {
+            cell[r1][r1] += w;
+        }
+        else if (suits[0] == suits[1])
+        {
+            int hi = (r1 < r2) ? r1 : r2;
+            int lo = (r1 < r2) ? r2 : r1;
+            cell[hi][lo] += w;
+        }
+        else
+        {
+            int hi = (r1 < r2) ? r1 : r2;
+            int lo = (r1 < r2) ? r2 : r1;
+            cell[lo][hi] += w;
+        }
+    }
+
+    total = (range->has_weights && range->total_weight > 0.0) ? range->total_weight : (double)range->count;
+    if (total <= 0.0)
+        total = 1.0;
+
+    fprintf(output, "      ");
+    for (j = 0; j < 13; j++)
+        fprintf(output, " %s", rank_labels[j]);
+    fprintf(output, "\n");
+    fprintf(output, "      ");
+    for (j = 0; j < 13; j++)
+        fprintf(output, " --");
+    fprintf(output, "\n");
+
+    for (i = 0; i < 13; i++)
+    {
+        fprintf(output, " %s |", rank_labels[i]);
+        for (j = 0; j < 13; j++)
+        {
+            if (cell[i][j] > 0.0)
+                fprintf(output, " %3.1f", (cell[i][j] / total) * 100.0);
+            else
+                fprintf(output, "  -");
+        }
+        fprintf(output, "\n");
+    }
+
+    return 1;
+}
+
 int ARP_ImportRange(FILE *input, arp_range_t *result) {
     if (!input || !result)
         return 0;
@@ -3531,7 +3638,8 @@ static int arp_tokenize(arp_context_t *ctx)
                 {
                     char ch = ctx->input[token_end];
                     if (ch == ',' || ch == '+' || ch == '-' || ch == '!' ||
-                        ch == '(' || ch == ')' || ch == '{' || ch == '}' || isspace((unsigned char)ch))
+                        ch == '(' || ch == ')' || ch == '{' || ch == '}' ||
+                        ch == '@' || isspace((unsigned char)ch))
                         break;
                     token_end++;
                 }
@@ -3775,8 +3883,10 @@ static int arp_tokenize(arp_context_t *ctx)
         }
 
 token_complete:
-        if (allow_weight && ctx->position < ctx->length && ctx->input[ctx->position] == '{')
+        if (allow_weight && ctx->position < ctx->length &&
+            (ctx->input[ctx->position] == '{' || ctx->input[ctx->position] == '@'))
         {
+            bool is_brace = (ctx->input[ctx->position] == '{');
             size_t weight_start = ctx->position + 1;
             char *endptr = NULL;
             double value = strtod(&ctx->input[weight_start], &endptr);
@@ -3799,11 +3909,29 @@ token_complete:
                     endptr++;
                 }
             }
-            if (*endptr != '}')
+            if (is_brace)
             {
-                snprintf(ctx->error_message, sizeof(ctx->error_message),
-                         "Weight must end with '}' at position %zu", ctx->position);
-                return 0;
+                if (*endptr != '}')
+                {
+                    snprintf(ctx->error_message, sizeof(ctx->error_message),
+                             "Weight must end with '}' at position %zu", ctx->position);
+                    return 0;
+                }
+            }
+            else
+            {
+                /* @ form: value is terminated by a delimiter; do not consume it. */
+                char next = *endptr;
+                if (next != '\0' && next != ',' && next != ' ' && next != '\t' &&
+                    next != '+' && next != '-' && next != '!' &&
+                    next != '(' && next != ')' && next != '{' && next != '}' &&
+                    next != '@')
+                {
+                    snprintf(ctx->error_message, sizeof(ctx->error_message),
+                             "Weight must be followed by a delimiter at position %zu",
+                             ctx->position);
+                    return 0;
+                }
             }
             if (value < 0.0)
             {
@@ -3813,7 +3941,10 @@ token_complete:
             }
             token->weight = value;
             token->has_weight = true;
-            ctx->position = (size_t)(endptr - ctx->input) + 1;
+            if (is_brace)
+                ctx->position = (size_t)(endptr - ctx->input) + 1;
+            else
+                ctx->position = (size_t)(endptr - ctx->input);
         }
 
         ctx->token_count++;
