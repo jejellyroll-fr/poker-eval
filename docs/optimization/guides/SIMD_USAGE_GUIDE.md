@@ -6,10 +6,11 @@ This guide explains how to use the SIMD (Single Instruction, Multiple Data) vect
 
 ## Features
 
-- **Automatic CPU detection**: Detects available SIMD capabilities (SSE2, AVX2, AVX-512)
-- **Batch evaluation**: Process 4 hands (AVX2) or 8 hands (AVX-512) simultaneously
+- **Automatic CPU detection**: Detects available SIMD capabilities (SSE2, AVX2, AVX-512, NEON)
+- **Batch evaluation**: Process 4 hands (AVX2/NEON) or 8 hands (AVX-512) simultaneously
 - **Adaptive API**: Automatically selects the best available SIMD implementation
 - **Backward compatible**: Falls back to scalar evaluation on unsupported CPUs
+- **ARM NEON**: Supported on AArch64 and ARMv7+ NEON targets (e.g. Apple Silicon)
 
 ## Performance Benefits
 
@@ -128,6 +129,9 @@ gcc -mavx2 -O3 -c src/utils/simd_card_operations.c
 
 # For AVX-512 support
 gcc -mavx512f -O3 -c src/utils/simd_card_operations.c
+
+# For ARM NEON support (AArch64)
+gcc -O3 -march=armv8-a+simd -c src/utils/simd_card_operations.c
 ```
 
 ## Testing and Validation
@@ -146,7 +150,7 @@ Benchmark SIMD performance:
 
 ## Best Practices
 
-1. **Batch Size**: Process hands in multiples of 4 (AVX2) or 8 (AVX-512) for best performance
+1. **Batch Size**: Process hands in multiples of 4 (AVX2/NEON) or 8 (AVX-512) for best performance
 2. **Memory Alignment**: Ensure arrays are properly aligned for SIMD operations
 3. **Validation**: Always validate SIMD results against scalar implementation during development
 4. **Fallback**: Implement scalar fallback for CPUs without SIMD support
@@ -173,7 +177,6 @@ Benchmark SIMD performance:
 
 ## Future Enhancements
 
-- ARM NEON support for mobile/embedded devices
 - GPU acceleration integration
 - Specialized SIMD kernels for specific game types
 - Cache-aware batch processing

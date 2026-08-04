@@ -64,6 +64,7 @@ static void test_capability_detection(void)
     printf("  SIMD_SSE2: %s\n", simd_capability_name(SIMD_SSE2));
     printf("  SIMD_AVX2: %s\n", simd_capability_name(SIMD_AVX2));
     printf("  SIMD_AVX512: %s\n", simd_capability_name(SIMD_AVX512));
+    printf("  SIMD_NEON: %s\n", simd_capability_name(SIMD_NEON));
 
     printf("\n");
 }

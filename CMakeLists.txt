@@ -418,6 +418,54 @@ if(POKER_TARGET_ARCH MATCHES "^(x86_64|AMD64|i686)$")
     else()
         message(STATUS "OFC SIMD optimizations: DISABLED")
     endif()
+elseif(POKER_TARGET_ARCH MATCHES "^(aarch64|arm64|arm64e|armv8|armv[5-9])")
+    # Check for ARM NEON (mandatory on AArch64, check compile + runtime on 32-bit)
+    set(HAS_NEON FALSE)
+    check_c_source_compiles("
+        #include <arm_neon.h>
+        int main() { uint32x4_t a = vdupq_n_u32(1); (void)a; return 0; }
+    " HAS_NEON_COMPILES)
+    if(HAS_NEON_COMPILES)
+        if(NOT CMAKE_CROSSCOMPILING)
+            check_c_source_runs("
+                #include <arm_neon.h>
+                int main() {
+                    uint32x4_t a = vdupq_n_u32(1);
+                    uint32x4_t b = vaddq_u32(a, a);
+                    volatile uint32_t result = vgetq_lane_u32(b, 0);
+                    return result == 2 ? 0 : 1;
+                }
+            " HAS_NEON_RUNS)
+            if(HAS_NEON_RUNS)
+                set(HAS_NEON TRUE)
+            endif()
+        else()
+            set(HAS_NEON TRUE)
+        endif()
+    endif()
+
+    # Set SIMD defines and report capabilities
+    if(HAS_NEON)
+        message(STATUS "NEON support detected - hand evaluator batch size: 4")
+        add_compile_definitions(HAS_NEON)
+    else()
+        message(STATUS "No SIMD support detected - scalar evaluation only")
+    endif()
+
+    # The OFC kernels in src/ofc/ofc_simd.c are x86 intrinsics only (SSE2/AVX2/
+    # AVX-512); there is no NEON implementation and OFC_PROCESS_SIMD_* has no
+    # NEON mode, so OFC always takes the scalar path on ARM regardless of NEON.
+    set(OFC_SIMD_CAPABILITY "None")
+    set(OFC_SIMD_BATCH_SIZE 1)
+    message(STATUS "OFC SIMD kernels are x86-only - OFC uses the scalar path on ARM")
+
+    # Add OFC SIMD defines
+    if(ENABLE_OFC_SIMD)
+        add_compile_definitions(ENABLE_OFC_SIMD)
+        message(STATUS "OFC SIMD optimizations: ENABLED (${OFC_SIMD_CAPABILITY})")
+    else()
+        message(STATUS "OFC SIMD optimizations: DISABLED")
+    endif()
 else()
     # Force-disable x86 SIMD on non-x86 targets (e.g., Apple Silicon arm64)
     set(HAS_SSE2 FALSE)
@@ -637,14 +685,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i686)")
 message(STATUS "    AVX-512:         ${HAS_AVX512}")
 message(STATUS "    AVX2:            ${HAS_AVX2}")
 message(STATUS "    SSE2:            ${HAS_SSE2}")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|arm64e|armv|arm)")
+message(STATUS "    NEON:            ${HAS_NEON}")
+endif()
 message(STATUS "")
 message(STATUS "  OFC Optimizations:")
 message(STATUS "    SIMD Enabled:    ${ENABLE_OFC_SIMD}")
 message(STATUS "    SIMD Mode:       ${OFC_SIMD_CAPABILITY}")
 message(STATUS "    Batch Size:      ${OFC_SIMD_BATCH_SIZE}")
-else()
-message(STATUS "    Platform:        Non-x86 (SIMD disabled)")
-endif()
 message(STATUS "")
 message(STATUS "  Other:")
 message(STATUS "    Five cards mode: ${USE_FIVE_CARDS}")
