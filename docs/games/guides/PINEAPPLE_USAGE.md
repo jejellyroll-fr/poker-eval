@@ -68,13 +68,30 @@ double player1_equity = 100.0 * result.ev[0] / result.nsamples;
 double player2_equity = 100.0 * result.ev[1] / result.nsamples;
 ```
 
+### Pineapple Hi/Lo (8-or-better)
+
+Pineapple Hi/Lo (`game_pineapple8`) splits the pot between the best high hand
+and the best low hand (8-or-better qualifier). As in Omaha Hi/Lo, the best two
+hole cards are chosen **independently** for the high and the low: a player may
+use one pair of their 3 hole cards for the high hand and a different pair for
+the low hand.
+
+```c
+int err = enumExhaustive(game_pineapple8, pockets, board, dead, 2, 5, 0, &result);
+// result.nwinhi[i] / nwinlo[i] / nscoop[i] describe high, low and scoop wins.
+```
+
 ## Command Line Usage (pokenum)
 
-The `pokenum` tool supports Pineapple Hold'em with the `-pa` flag:
+The `pokenum` tool supports Pineapple Hold'em with the `-pa` flag and Pineapple
+Hi/Lo with the `-pa8` flag:
 
 ```bash
 # Basic equity calculation (pre-flop)
 ./pokenum -pa AsAhKh - KsKdQh
+
+# Pineapple Hi/Lo
+./pokenum -pa8 AsAhKh - KsKdQh
 
 # With a flop
 ./pokenum -pa AsAhKh - KsKdQh -- 2c7dJh
@@ -133,7 +150,8 @@ The Pineapple evaluation works by:
 
 ### Limitations
 
-- Currently only supports high-only games (no hi/lo split)
+- Standard Pineapple (`game_pineapple`) is high-only; Pineapple Hi/Lo is
+  available as `game_pineapple8`
 - Assumes optimal discard strategy (players always make the mathematically best discard)
 - Does not model psychological aspects of discard decisions
 
@@ -153,23 +171,28 @@ The implementation includes comprehensive tests:
 - Basic evaluation correctness
 - Optimal discard selection
 - Equity calculation accuracy
+- Hi/Lo low qualifier and scoop behavior
 - Edge cases (insufficient cards, etc.)
 
 Run tests with:
 ```bash
-./build/tests/test_pineapple_basic
 ./build/tests/test_pineapple_unity
+./build/tests/test_pineapple8_unity
 ```
 
 ## Future Enhancements
 
 Potential improvements for future versions:
 
-1. **Pineapple Hi/Lo**: Split pot variant with low qualifiers
-2. **Crazy Pineapple**: Discard after the turn instead of flop
-3. **Lazy Pineapple**: Optional discard (can keep all 3 cards)
-4. **Performance Optimizations**: SIMD acceleration for batch evaluations
-5. **Range Analysis**: Specialized tools for Pineapple range vs range calculations
+1. **Crazy / Lazy Pineapple variants**: These are game-play variations that
+   change *when* (or whether) a player discards — Crazy Pineapple discards after
+   the turn instead of the flop, Lazy Pineapple makes the discard optional. In an
+   equity computation the showdown evaluation is always the best two of the three
+   hole cards, so these variants produce identical equity to standard Pineapple
+   and are deliberately not exposed as separate `game_*` types. Simulate them
+   with `game_pineapple`.
+2. **Performance Optimizations**: SIMD acceleration for batch evaluations
+3. **Range Analysis**: Specialized tools for Pineapple range vs range calculations
 
 ## References
 

@@ -437,6 +437,8 @@ parseArgs(int argc, char **argv,
           *game = game_doubleflop_holdem;
         } else if (strcmp(*argv, "-pa") == 0) {
           *game = game_pineapple;
+        } else if (strcmp(*argv, "-pa8") == 0) {
+          *game = game_pineapple8;
         } else if (strcmp(*argv, "-27td") == 0) {
           *game = game_27_triple_draw;
         } else if (strcmp(*argv, "-a5td") == 0) {
