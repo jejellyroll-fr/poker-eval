@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Pineapple Hi/Lo (`game_pineapple8`): 8-or-better pot split with the best two
+  hole cards chosen independently for the high and low hands; `pokenum -pa8`
+  (#42).
+- Modern Equity API (`poker_eval_modern_equity.c`), game-aware preflop helper,
+  behind `POKER_EVAL_EXPERIMENTAL` (#38).
+- Range parser `@` weight syntax (e.g. `AA@60%, KK@25%, AKo@15%`), equivalent
+  to the `{}` brace form, plus `ARP_ExportRangeMatrix()` visualization (#45).
+- Badugi 4-card hands in `pe_range_parse` (#41).
+- GPU range-vs-range Monte Carlo: per-player `StdDeck_CardMask` ranges in the
+  CUDA and OpenCL backends (#37).
+
+### Changed
+- Monte Carlo `iterations_if_montecarlo` is treated as a total budget for the
+  whole range-vs-range call, divided across matchups, in the single-threaded
+  path as well as the MT variants (#63).
+
+### Fixed
+- GPU Monte Carlo hole-card dealing drew cards by rejection sampling, which
+  could exhaust its attempts and silently leave a player with a short hand when
+  a range was tight. The CUDA and OpenCL backends now collect the
+  range-allowed available cards and deal uniformly from them (#37).
+
 ## [1.2.0] - 2026-08-02
 
 Minor rather than patch: three features landed since 1.1.0.

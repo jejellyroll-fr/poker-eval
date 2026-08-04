@@ -349,7 +349,8 @@ int CalculateEquityForRanges_MT_Batched(
     /* Total Monte-Carlo budget, divided across matchups. queue->total_combinations
      * is an upper bound on the number of valid matchups (product of per-player
      * combo counts); dividing the caller's iteration budget by it keeps the whole
-     * call within budget (see range_equity_per_matchup_budget). */
+     * call within (or, when the budget is smaller than the matchup count, close
+     * to) budget (see range_equity_per_matchup_budget). */
     int per_matchup_iterations = range_equity_per_matchup_budget(
         iterations_if_montecarlo, (double)queue->total_combinations);
     
