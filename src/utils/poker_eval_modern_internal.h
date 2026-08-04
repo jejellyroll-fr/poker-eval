@@ -7,6 +7,7 @@
 #include <poker_eval/deck/deck_joker.h>
 #include <poker_eval/deck/deck_astud.h>
 #include <poker_eval/core/eval_cache.h>
+#include <poker_eval/core/enumdefs.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -15,6 +16,9 @@ struct poker_eval_context {
     poker_deck_type_t deck_type;
     bool caching_enabled;
     eval_cache_t* cache;
+    /* Optional game-type override used by the experimental equity functions.
+     * Set to (enum_game_t)-1 for automatic selection from pocket size. */
+    enum_game_t game_type;
 };
 
 struct poker_eval_hand {
