@@ -181,7 +181,7 @@ alias badugi_exact="./pokenum -badugi "
 
 ## 🚨 Current Limitations
 
-- **Complex ranges**: pokenum evaluates hand vs hand, not range vs range
+- **Complex ranges**: pokenum evaluates hand vs hand; range-vs-range analysis is not wired into the CLI. The underlying range parser does support Badugi 4-card hands (`pe_range_parse(game_badugi, "As2d3h4c, KsQdJhTc", ...)`), including `@` weights.
 - **Multiway analysis**: Limited to 2 players for now
 - **Dead cards**: No explicit support for exposed cards
 

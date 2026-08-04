@@ -141,6 +141,27 @@ static void test_omaha_compatibility(void) {
     }
 }
 
+static void test_badugi_range(void) {
+    pe_range_t *range;
+    /* Single specific 4-card badugi hand */
+    pe_status_t status = pe_range_parse(game_badugi, "As2d3h4c", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(1, range->count);
+    pe_range_free(range);
+
+    /* Multiple badugi hands in a comma-separated range */
+    status = pe_range_parse(game_badugi, "As2d3h4c, KsQdJhTc", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(2, range->count);
+    pe_range_free(range);
+
+    /* Weighted badugi range using @ syntax */
+    status = pe_range_parse(game_badugi, "As2d3h4c@50%, 5s6d7h8c@50%", empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    TEST_ASSERT_EQUAL(2, range->count);
+    pe_range_free(range);
+}
+
 int main(void) {
     RUN_TEST(test_parse_pairs);
     RUN_TEST(test_parse_suited);
@@ -152,5 +173,6 @@ int main(void) {
     RUN_TEST(test_parse_multiple);
     RUN_TEST(test_weights);
     RUN_TEST(test_omaha_compatibility);
+    RUN_TEST(test_badugi_range);
     return 0;
 }
