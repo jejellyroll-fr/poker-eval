@@ -509,6 +509,31 @@ int opencl_gpu_eval_batch_boards(
     return 0;
 }
 
+/* Draw a card uniformly among the still-available cards. When a per-player
+ * range is given, the card is drawn only from that range. Returns -1 when no
+ * available card matches the constraint (caller should treat this as an error
+ * rather than silently producing a short hand). */
+static int opencl_random_card(StdDeck_CardMask used_cards,
+                              const StdDeck_CardMask *range)
+{
+    int avail[52];
+    int n = 0;
+
+    for (int card = 0; card < 52; card++)
+    {
+        StdDeck_CardMask card_mask = StdDeck_MASK(card);
+        if (StdDeck_CardMask_ANY_SET(used_cards, card_mask))
+            continue;
+        if (range != NULL && !StdDeck_CardMask_ANY_SET(*range, card_mask))
+            continue;
+        avail[n++] = card;
+    }
+
+    if (n == 0)
+        return -1;
+    return avail[rand() % n];
+}
+
 /* Monte Carlo equity calculation */
 int opencl_gpu_monte_carlo_equity(
     gpu_eval_context_t *ctx,
@@ -544,27 +569,19 @@ int opencl_gpu_monte_carlo_equity(
             StdDeck_CardMask_RESET(player_hands[p]);
             for (int c = 0; c < 2; c++)
             {
-                int card;
-                StdDeck_CardMask card_mask;
-                int attempts = 0;
-                do
-                {
-                    card = rand() % 52;
-                    card_mask = StdDeck_MASK(card);
-                    /* When a per-player range is given, hole cards must be
-                       drawn only from that player's range. */
-                    if (ranges != NULL &&
-                        !StdDeck_CardMask_ANY_SET(ranges[p], card_mask))
-                    {
-                        card = -1;
-                    }
-                    attempts++;
-                } while ((card < 0 || StdDeck_CardMask_ANY_SET(used_cards, card_mask)) &&
-                         attempts < 100);
-
+                /* When a per-player range is given, hole cards must be
+                   drawn only from that player's range. */
+                const StdDeck_CardMask *range =
+                    (ranges != NULL) ? &ranges[p] : NULL;
+                int card = opencl_random_card(used_cards, range);
                 if (card < 0)
-                    continue; /* skip a card we could not draw */
+                {
+                    free(wins);
+                    free(ties);
+                    return -1;
+                }
 
+                StdDeck_CardMask card_mask = StdDeck_MASK(card);
                 StdDeck_CardMask_OR(player_hands[p], player_hands[p], card_mask);
                 StdDeck_CardMask_OR(used_cards, used_cards, card_mask);
             }
