@@ -919,17 +919,49 @@ make test_omaha_range_parser
 
 ### Planned Features
 
-1. **Weighted Ranges**: Support for hand weighting (e.g., "AA@100, KK@50")
-2. **Cached Rankings**: Pre-computed hand rankings for faster percentage generation
-3. **Range Visualization**: Export ranges to visual formats
-4. **Range Algebra**: More complex set operations
-5. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
+1. **Cached Rankings**: Pre-computed hand rankings for faster percentage generation
+2. **Range Algebra**: More complex set operations
+3. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
 
 ### Known Limitations
 
 1. **Mixed Comma Patterns**: "AAxx, JT98r" may fail in some contexts (under investigation)
 2. **Maximum Range Size**: Limited to `ARP_MAX_RANGE_SIZE` (2048 hands)
 3. **Percentage Rankings**: Currently only available for Hold'em and Omaha
+
+## Weighted Ranges
+
+Hands can be weighted to express how often they appear in a range. Two equivalent
+syntaxes are supported:
+
+- `AA{100}` — brace form
+- `AA@100` — `@` shorthand (equivalent to the brace form)
+
+Weights may be given as plain numbers or percentages (`AA@60%`). Weights are
+normalized so the whole range sums to 1.0. Example:
+
+```
+AA@60%, KK@25%, AKo@15%
+```
+
+## Range Matrix Visualization
+
+`ARP_ExportRangeMatrix()` renders a hold'em range as a 13x13 grid of hand
+classes. Rows and columns run A-K-Q-J-T-9-8-7-6-5-4-3-2. The diagonal holds
+pocket pairs, cells above the diagonal are suited combinations, and cells below
+are offsuit combinations. Each cell shows the summed weight of that hand class
+as a percentage of the range's total weight, or `-` when the class is absent.
+
+Example output for `AA@60%, KK@25%, AKo@15%`:
+
+```
+       A K Q J T 9 8 7 6 5 4 3 2
+       -- -- -- -- -- -- -- -- -- -- -- -- --
+ A | 60.0  -  -  -  -  -  -  -  -  -  -  -  -
+ K | 15.0 25.0  -  -  -  -  -  -  -  -  -  -  -
+ Q |  -  -  -  -  -  -  -  -  -  -  -  -  -
+ ...
+```
 
 ---
 
