@@ -147,6 +147,7 @@ deck_type_t Universal_DetermineRequiredDeckType(enum_game_t game) {
   case game_doubleflop_holdem:
   case game_drawmaha:
   case game_pineapple:
+  case game_pineapple8:
   case game_27_triple_draw:
   case game_a5_triple_draw:
   case game_badacey:
