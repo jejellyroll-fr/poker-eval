@@ -64,6 +64,32 @@ __device__ int random_card(uint32_t* rng_state, uint64_t used_cards) {
     return (attempts < 100) ? card : -1;
 }
 
+/* Generate a random card that is (a) still available and (b) present in the
+ * given per-player range mask. Card indices follow the StdDeck layout
+ * (suit = card / 13, rank = card % 13) matching the card_to_mask mapping. */
+__device__ int random_card_from_range(uint32_t* rng_state, uint64_t used_cards,
+                                      CudaCardMask range) {
+    /* Collect still-available cards that the player's range allows. */
+    int avail[52];
+    int n = 0;
+    for (int suit = 0; suit < 4; suit++) {
+        uint32_t suit_ranks = range.cards[suit];
+        for (int rank = 0; rank < 13; rank++) {
+            if (suit_ranks & (1u << rank)) {
+                int card = suit * 13 + rank;
+                if (!(used_cards & (1ULL << card)) && n < 52) {
+                    avail[n++] = card;
+                }
+            }
+        }
+    }
+    if (n == 0) {
+        return -1;
+    }
+    *rng_state = xorshift32(*rng_state);
+    return avail[(*rng_state) % n];
+}
+
 /* Convert card index to CardMask */
 __device__ CudaCardMask card_to_mask(int card) {
     CudaCardMask mask;
@@ -114,9 +140,15 @@ __global__ void monte_carlo_equity_kernel(
             player_hands[p].cards[0] = player_hands[p].cards[1] = 
             player_hands[p].cards[2] = player_hands[p].cards[3] = 0;
             
-            /* Deal 2 hole cards per player */
+            /* Deal 2 hole cards per player. When a per-player range mask is
+               provided, hole cards are drawn only from that range. */
             for (int c = 0; c < 2; c++) {
-                int card = random_card(&rng_state, used_cards);
+                int card;
+                if (ranges != NULL) {
+                    card = random_card_from_range(&rng_state, used_cards, ranges[p]);
+                } else {
+                    card = random_card(&rng_state, used_cards);
+                }
                 if (card >= 0) {
                     used_cards |= (1ULL << card);
                     CudaCardMask card_mask = card_to_mask(card);
