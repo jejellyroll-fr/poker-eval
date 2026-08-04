@@ -48,20 +48,22 @@ __device__ uint32_t xorshift32(uint32_t state) {
     return state;
 }
 
-/* Generate random card from available deck */
+/* Generate a random card from the still-available deck. Returns -1 when the
+ * deck is exhausted (caller should treat this as an error rather than
+ * silently producing a short hand). */
 __device__ int random_card(uint32_t* rng_state, uint64_t used_cards) {
-    int card;
-    uint64_t card_mask;
-    int attempts = 0;
-    
-    do {
-        *rng_state = xorshift32(*rng_state);
-        card = (*rng_state) % 52;
-        card_mask = 1ULL << card;
-        attempts++;
-    } while ((used_cards & card_mask) && attempts < 100);
-    
-    return (attempts < 100) ? card : -1;
+    int avail[52];
+    int n = 0;
+    for (int card = 0; card < 52; card++) {
+        if (!(used_cards & (1ULL << card))) {
+            avail[n++] = card;
+        }
+    }
+    if (n == 0) {
+        return -1;
+    }
+    *rng_state = xorshift32(*rng_state);
+    return avail[(*rng_state) % n];
 }
 
 /* Generate a random card that is (a) still available and (b) present in the
