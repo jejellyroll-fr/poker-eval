@@ -131,6 +131,22 @@ void poker_eval_context_destroy(poker_eval_context_t* context);
 poker_eval_error_t poker_eval_context_set_caching(poker_eval_context_t* context, 
                                                  bool enable);
 
+#ifdef POKER_EVAL_EXPERIMENTAL
+/**
+ * Override the game type used by the experimental equity functions. Without
+ * this, the game is derived automatically from the hole-card count (2 -> hold'em,
+ * 3 -> pineapple, 4 -> omaha, ...). Setting a game lets callers reach variants
+ * that share a pocket size with a different default — e.g. Pineapple Hi/Lo
+ * (3 cards) as `game_pineapple8`. Pass (enum_game_t)-1 to restore automatic
+ * selection.
+ * @param context Evaluation context
+ * @param game_type Desired enum_game_t, or (enum_game_t)-1 for automatic
+ * @return Error code
+ */
+poker_eval_error_t poker_eval_context_set_game(poker_eval_context_t* context,
+                                               int game_type);
+#endif /* POKER_EVAL_EXPERIMENTAL */
+
 /* ========================================================================
  * HAND MANAGEMENT
  * ======================================================================== */
