@@ -53,6 +53,7 @@ typedef enum {
   game_doubleflop_holdem,
   game_drawmaha,
   game_pineapple,
+  game_pineapple8,
   game_27_triple_draw,
   game_a5_triple_draw,
   game_badacey,

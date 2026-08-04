@@ -128,6 +128,7 @@ static int is_hilo(enum_game_t game) {
         case game_5draw8:
         case game_holdem8:
         case game_courchevel8:
+        case game_pineapple8:
             return 1;
         case game_holdem:
         case game_omaha:

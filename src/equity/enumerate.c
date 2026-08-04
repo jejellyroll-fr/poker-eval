@@ -90,6 +90,7 @@ static enum_gameparams_t enum_gameparams[] = {
     {game_doubleflop_holdem, 2, 2, 10, 0, 1, LOW_QUALIFIER_NONE, "Double Flop Holdem Hi"},
     {game_drawmaha, 5, 5, 5, 0, 1, LOW_QUALIFIER_NONE, "Drawmaha (Sviten Special)"},
     {game_pineapple, 3, 3, 5, 0, 1, LOW_QUALIFIER_NONE, "Pineapple Holdem"},
+    {game_pineapple8, 3, 3, 5, 1, 1, LOW_QUALIFIER_8, "Pineapple Hi/Lo"},
     {game_27_triple_draw, 5, 5, 0, 1, 0, LOW_QUALIFIER_NONE, "2-7 Triple Draw"},
     {game_a5_triple_draw, 5, 5, 0, 1, 0, LOW_QUALIFIER_NONE, "A-5 Triple Draw"},
     {game_badacey, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Badacey"},
@@ -342,6 +343,60 @@ static inline int evaluate_best_two_hole_holdem(StdDeck_CardMask pocket,
   return best == HandVal_NOTHING;
 }
 
+/* Hi/Lo variant of the above: choose the best two hole cards independently
+ * for the high and the low hand (like Omaha Hi/Lo, the low may use a
+ * different pair than the high). The low result is already qualified. */
+static int evaluate_best_two_hole_holdem8(StdDeck_CardMask pocket,
+                                          StdDeck_CardMask final_board,
+                                          int expected_hole_cards,
+                                          HandVal *hivalue,
+                                          HandVal *lovalue)
+{
+  int hole_cards[4];
+  int hole_count = 0;
+  HandVal best_hi = HandVal_NOTHING;
+  LowHandVal best_lo = LowHandVal_NOTHING;
+
+  if (!hivalue || !lovalue || expected_hole_cards < 2 || expected_hole_cards > 4 ||
+      StdDeck_numCards(final_board) != 5)
+    return 1;
+
+  for (int card = 0; card < StdDeck_N_CARDS; ++card)
+  {
+    if (StdDeck_CardMask_CARD_IS_SET(pocket, card))
+    {
+      if (hole_count >= expected_hole_cards)
+        return 1;
+      hole_cards[hole_count++] = card;
+    }
+  }
+  if (hole_count != expected_hole_cards)
+    return 1;
+
+  for (int first = 0; first < hole_count - 1; ++first)
+  {
+    for (int second = first + 1; second < hole_count; ++second)
+    {
+      StdDeck_CardMask candidate;
+      StdDeck_CardMask_RESET(candidate);
+      StdDeck_CardMask_SET(candidate, hole_cards[first]);
+      StdDeck_CardMask_SET(candidate, hole_cards[second]);
+      StdDeck_CardMask_OR(candidate, candidate, final_board);
+      HandVal current = StdDeck_StdRules_EVAL_N_Cached(candidate, 7);
+      if (current > best_hi)
+        best_hi = current;
+      LowHandVal low = StdDeck_Lowball8_EVAL(candidate, 7);
+      low = apply_low_qualifier(low, LOW_QUALIFIER_8);
+      if (low < best_lo)
+        best_lo = low;
+    }
+  }
+
+  *hivalue = best_hi;
+  *lovalue = best_lo;
+  return best_hi == HandVal_NOTHING;
+}
+
 #define INNER_LOOP_DISCARD_HOLDEM(expected_hole_cards)       \
   INNER_LOOP({                                                \
     StdDeck_CardMask _finalBoard;                             \
@@ -355,6 +410,17 @@ static inline int evaluate_best_two_hole_holdem(StdDeck_CardMask pocket,
 
 #define INNER_LOOP_PINEAPPLE INNER_LOOP_DISCARD_HOLDEM(3)
 #define INNER_LOOP_IRISH INNER_LOOP_DISCARD_HOLDEM(4)
+
+#define INNER_LOOP_PINEAPPLE8                                 \
+  INNER_LOOP({                                                \
+    StdDeck_CardMask _finalBoard;                             \
+    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);     \
+    err = evaluate_best_two_hole_holdem8(pockets[i],          \
+                                         _finalBoard,         \
+                                         3,                   \
+                                         &hival[i],           \
+                                         &loval[i]);          \
+  })
 
 #define INNER_LOOP_OMAHA                                      \
   INNER_LOOP({                                                \
@@ -869,6 +935,7 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     case game_7studnsq:
     case game_5draw8:
     case game_5drawnsq:
+    case game_pineapple8:
       mode = enum_ordering_mode_hilo;
       break;
     case game_doubleflop_holdem:
@@ -1290,6 +1357,33 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
     }
   }
+  else if (game == game_pineapple8)
+  {
+    /* Pineapple Hi/Lo: choose the best two hole cards independently for the
+       high and the low hand, evaluated against the complete board. */
+    StdDeck_CardMask sharedCards;
+    if (nboard == 0)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(5, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE8);
+    }
+    else if (nboard == 3)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(2, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE8);
+    }
+    else if (nboard == 4)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(1, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE8);
+    }
+    else if (nboard == 5)
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_PINEAPPLE8;
+    }
+    else
+    {
+      return 1;
+    }
+  }
   else if (game == game_irish)
   {
     StdDeck_CardMask sharedCards;
@@ -1579,6 +1673,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     case game_7studnsq:
     case game_5draw8:
     case game_5drawnsq:
+    case game_pineapple8:
       mode = enum_ordering_mode_hilo;
       break;
     case game_doubleflop_holdem:
@@ -1930,6 +2025,42 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       for (int iter = 0; iter < niter; iter++)
       {
         INNER_LOOP_DRAWMAHA;
+      }
+    }
+  }
+  else if (game == game_pineapple)
+  {
+    StdDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0)
+    {
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+                                niter, INNER_LOOP_PINEAPPLE);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      for (int iter = 0; iter < niter; iter++)
+      {
+        INNER_LOOP_PINEAPPLE;
+      }
+    }
+  }
+  else if (game == game_pineapple8)
+  {
+    StdDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0)
+    {
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+                                niter, INNER_LOOP_PINEAPPLE8);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      for (int iter = 0; iter < niter; iter++)
+      {
+        INNER_LOOP_PINEAPPLE8;
       }
     }
   }

@@ -222,6 +222,8 @@ parseArgs(int argc, char **argv,
           *game = game_doubleflop_holdem;
         } else if (strcmp(*argv, "-pa") == 0) {
           *game = game_pineapple;
+        } else if (strcmp(*argv, "-pa8") == 0) {
+          *game = game_pineapple8;
         } else if (strcmp(*argv, "-27td") == 0) {
           *game = game_27_triple_draw;
         } else if (strcmp(*argv, "-a5td") == 0) {
@@ -460,7 +462,7 @@ main(int argc, char **argv) {
         printf("ERROR\n");
       } else {
         printf("single usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
-        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish]\n");
+        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-pa8|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish]\n");
         printf("\t<pocket1> - <pocket2> - ... [ -- <board> ] [ / <dead> ] ]\n");
         printf("streaming usage: %s -i < argsfile\n", argv[0]);
       }
