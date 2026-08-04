@@ -133,6 +133,7 @@ add_unity_test(test_pineapple8_unity unity_tests/test_pineapple8_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
 
 # New extended Unity tests for 80% coverage
+add_unity_test(test_range_equity_per_matchup_budget unity_tests/test_range_equity_per_matchup_budget.c)
 add_unity_test(test_enumerate_unity unity_tests/test_enumerate_unity.c)
 add_unity_test(test_enumerate_comprehensive unity_tests/test_enumerate_comprehensive.c)
 add_unity_test(test_enumerate_games_coverage unity_tests/test_enumerate_games_coverage.c)
