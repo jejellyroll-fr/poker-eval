@@ -128,6 +128,7 @@ poker_eval_error_t poker_eval_context_create(poker_deck_type_t deck_type,
     ctx->deck_type = deck_type;
     ctx->caching_enabled = false;
     ctx->cache = NULL;
+    ctx->game_type = (enum_game_t)-1;
     
     *context = ctx;
     return POKER_EVAL_SUCCESS;
@@ -161,6 +162,20 @@ poker_eval_error_t poker_eval_context_set_caching(poker_eval_context_t* context,
     context->caching_enabled = enable;
     return POKER_EVAL_SUCCESS;
 }
+
+#ifdef POKER_EVAL_EXPERIMENTAL
+poker_eval_error_t poker_eval_context_set_game(poker_eval_context_t* context,
+                                               int game_type) {
+    if (!context) {
+        return POKER_EVAL_ERROR_NULL_POINTER;
+    }
+    if (game_type != -1 && (game_type < 0 || game_type >= game_NUMGAMES)) {
+        return POKER_EVAL_ERROR_INVALID_ARGUMENT;
+    }
+    context->game_type = (enum_game_t)game_type;
+    return POKER_EVAL_SUCCESS;
+}
+#endif /* POKER_EVAL_EXPERIMENTAL */
 
 /* ========================================================================
  * HAND MANAGEMENT

@@ -92,6 +92,10 @@ poker_eval_calculate_equity(poker_eval_context_t *context,
   }
 
   game = equity_game_for_pocket_size(pocket_size);
+  /* A caller may override the pocket-size-derived game (e.g. 3 cards as
+   * game_pineapple8 instead of game_pineapple) via the context setter. */
+  if (context->game_type != (enum_game_t)-1)
+    game = context->game_type;
   if (game == (enum_game_t)-1)
     return POKER_EVAL_ERROR_UNSUPPORTED_OPERATION;
 
@@ -169,6 +173,7 @@ poker_eval_calculate_equity_monte_carlo(poker_eval_context_t *context,
   int pocket_size;
   int nboard;
   int i;
+  int ret;
 
   if (context == NULL || hands == NULL || results == NULL)
     return POKER_EVAL_ERROR_NULL_POINTER;
@@ -191,6 +196,10 @@ poker_eval_calculate_equity_monte_carlo(poker_eval_context_t *context,
   }
 
   game = equity_game_for_pocket_size(pocket_size);
+  /* A caller may override the pocket-size-derived game (e.g. 3 cards as
+   * game_pineapple8 instead of game_pineapple) via the context setter. */
+  if (context->game_type != (enum_game_t)-1)
+    game = context->game_type;
   if (game == (enum_game_t)-1)
     return POKER_EVAL_ERROR_UNSUPPORTED_OPERATION;
 
@@ -219,8 +228,13 @@ poker_eval_calculate_equity_monte_carlo(poker_eval_context_t *context,
    * set, so only a zeroed struct is required up front. */
   memset(&eres, 0, sizeof(eres));
 
-  (void)enumSample(game, pockets, board, dead,
+  ret = enumSample(game, pockets, board, dead,
                    (int)num_hands, nboard, (int)num_iterations, 1, &eres);
+  if (ret != 0)
+  {
+    enumResultFree(&eres);
+    return POKER_EVAL_ERROR_INVALID_ARGUMENT;
+  }
 
   for (i = 0; i < (int)num_hands; i++)
   {

@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include <poker_eval/core/poker_eval_modern.h>
+#include <poker_eval/core/enumdefs.h>
 
 int main(void)
 {
@@ -99,6 +100,81 @@ int main(void)
             printf("FAIL: MC expected non-zero outcomes\n");
             failures++;
         }
+    }
+
+    /* --- poker_eval_context_set_game validation --- */
+    err = poker_eval_context_set_game(NULL, 0);
+    if (err != POKER_EVAL_ERROR_NULL_POINTER)
+    {
+        printf("FAIL: set_game(NULL) expected NULL_POINTER, got %d\n", err);
+        failures++;
+    }
+    err = poker_eval_context_set_game(ctx, game_pineapple8);
+    if (err != POKER_EVAL_SUCCESS)
+    {
+        printf("FAIL: set_game(pineapple8) expected SUCCESS, got %d\n", err);
+        failures++;
+    }
+    err = poker_eval_context_set_game(ctx, game_NUMGAMES);
+    if (err != POKER_EVAL_ERROR_INVALID_ARGUMENT)
+    {
+        printf("FAIL: set_game(out-of-range) expected INVALID_ARGUMENT, got %d\n", err);
+        failures++;
+    }
+    err = poker_eval_context_set_game(ctx, -1);
+    if (err != POKER_EVAL_SUCCESS)
+    {
+        printf("FAIL: set_game(-1/auto) expected SUCCESS, got %d\n", err);
+        failures++;
+    }
+
+    /* --- Pineapple8 override: 3-card hands previously unsupported by the
+     * exhaustive path defaulting to game_pineapple; the setter should let the
+     * same 3-card pockets run as game_pineapple8. --- */
+    poker_eval_hand_destroy(hand1);
+    poker_eval_hand_destroy(hand2);
+    poker_eval_hand_create(&hand1);
+    poker_eval_hand_create(&hand2);
+
+    poker_eval_hand_add_card(hand1, POKER_RANK_ACE, POKER_SUIT_SPADES);
+    poker_eval_hand_add_card(hand1, POKER_RANK_ACE, POKER_SUIT_HEARTS);
+    poker_eval_hand_add_card(hand1, POKER_RANK_KING, POKER_SUIT_SPADES);
+
+    poker_eval_hand_add_card(hand2, POKER_RANK_QUEEN, POKER_SUIT_HEARTS);
+    poker_eval_hand_add_card(hand2, POKER_RANK_JACK, POKER_SUIT_SPADES);
+    poker_eval_hand_add_card(hand2, POKER_RANK_TEN, POKER_SUIT_HEARTS);
+
+    hands[0] = hand1;
+    hands[1] = hand2;
+
+    err = poker_eval_context_set_game(ctx, game_pineapple8);
+    if (err == POKER_EVAL_SUCCESS)
+    {
+        err = poker_eval_calculate_equity(ctx, hands, 2, board, NULL, results);
+        if (err != POKER_EVAL_SUCCESS)
+        {
+            printf("FAIL: pineapple8 exhaustive equity: %d\n", err);
+            failures++;
+        }
+        else if (results[0].total_outcomes == 0)
+        {
+            printf("FAIL: pineapple8 expected non-zero outcomes\n");
+            failures++;
+        }
+        else
+        {
+            printf("Pineapple8 exhaustive equity (3 cards each):\n");
+            printf("  H1: win=%.4f tie=%.4f lose=%.4f (outcomes=%llu)\n",
+                   results[0].win_probability, results[0].tie_probability,
+                   results[0].lose_probability,
+                   (unsigned long long)results[0].total_outcomes);
+        }
+        poker_eval_context_set_game(ctx, -1);
+    }
+    else
+    {
+        printf("FAIL: set_game(game_pineapple8) unsupported: %d\n", err);
+        failures++;
     }
 
     poker_eval_hand_destroy(board);
