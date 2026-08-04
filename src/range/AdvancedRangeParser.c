@@ -23,7 +23,9 @@
 #include <poker_eval/distributions/plo_integration.h>
 #include <poker_eval/range/StudRangeParser.h>
 #include <poker_eval/equity/omaha_preflop.h>
+#include <poker_eval/equity/pineapple_preflop.h>
 #include "omaha_hand_rankings.h"
+#include "pineapple8_hand_rankings.h"
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -80,7 +82,10 @@ static int arp_expand_percentage(float percentage, enum_game_t game_type, StdDec
 static int arp_is_plo_pattern(const char *str, size_t len);
 static int arp_parse_plo_pattern(const char *pattern, StdDeck_CardMask dead_cards, arp_range_t *range);
 static int arp_expand_omaha_percentage(float percentage, enum_game_t game_type, StdDeck_CardMask dead_cards, arp_range_t *range);
+static int arp_expand_pineapple8_key(pineapple_hand_key_t key, StdDeck_CardMask dead_cards, arp_range_t *range);
+static int arp_expand_pineapple8_percentage(float percentage, enum_game_t game_type, StdDeck_CardMask dead_cards, arp_range_t *range);
 static int arp_is_omaha_game(enum_game_t game_type);
+static int arp_is_pineapple8_game(enum_game_t game_type);
 static int arp_init_range_with_game(arp_range_t *range, enum_game_t game_type);
 static int arp_init_range(arp_range_t *range);
 static int arp_lookup_plo_category(const char *str, size_t len, PLOHandCategory *category);
@@ -668,6 +673,12 @@ static int arp_is_omaha_game(enum_game_t game_type)
     }
 }
 
+/* Check if game type is Pineapple Hi/Lo (3-card) */
+static int arp_is_pineapple8_game(enum_game_t game_type)
+{
+    return game_type == game_pineapple8;
+}
+
 /* Initialize range with specific capacity */
 static int arp_init_range_with_capacity(arp_range_t *range, size_t estimated_capacity) {
     if (!range)
@@ -1143,6 +1154,80 @@ static int arp_expand_omaha_percentage(float percentage, enum_game_t game_type, 
     return range->count > 0 ? 1 : 0;
 }
 
+/* Expand Pineapple8 key into concrete 3-card hands */
+static int arp_expand_pineapple8_key(pineapple_hand_key_t key, StdDeck_CardMask dead_cards, arp_range_t *range)
+{
+    /* Key layout (see pineapple_preflop.h): ranks r1..r3 descending in bits
+     * 4..15, suit isomorphism in bits 0..3.  r1 is always suit 0 and the
+     * remaining suits are normalized to first-appearance order. */
+    int ranks[3] = { (int)((key >> 12) & 0xF), (int)((key >> 8) & 0xF),
+                       (int)((key >> 4) & 0xF) };
+
+    /* Enumerate every concrete suit assignment for the 3 ranks and keep the
+     * ones whose canonical key matches.  Two cards of the same rank must use
+     * distinct suits (a hand cannot contain the same card twice).  Different
+     * assignments can land on the same concrete hand (e.g. swapped equal
+     * ranks), so deduplicate within the class before adding. */
+    StdDeck_CardMask seen[256];
+    int nseen = 0;
+    int added = 0;
+    for (int a1 = 0; a1 < 4; ++a1)
+    for (int a2 = 0; a2 < 4; ++a2)
+    for (int a3 = 0; a3 < 4; ++a3) {
+        int suits[3] = { a1, a2, a3 };
+        int valid = 1;
+        for (int c = 0; c < 3 && valid; ++c)
+            for (int d = c + 1; d < 3; ++d)
+                if (ranks[c] == ranks[d] && suits[c] == suits[d]) { valid = 0; break; }
+        if (!valid) continue;
+
+        StdDeck_CardMask m;
+        StdDeck_CardMask_RESET(m);
+        for (int c = 0; c < 3; ++c)
+            StdDeck_CardMask_SET(m, StdDeck_MAKE_CARD(ranks[c], suits[c]));
+
+        if (pineapple_cards_to_key(m) != key) continue;
+        if (StdDeck_CardMask_ANY_SET(m, dead_cards)) continue;
+
+        int dup = 0;
+        for (int i = 0; i < nseen; ++i)
+            if (StdDeck_CardMask_EQUAL(seen[i], m)) { dup = 1; break; }
+        if (dup) continue;
+        seen[nseen++] = m;
+
+        if (!arp_add_hand_to_range(range, m, 1.0))
+            return -1;
+        added++;
+    }
+    return added;
+}
+
+/* Expand Pineapple8 percentage range */
+static int arp_expand_pineapple8_percentage(float percentage, enum_game_t game_type, StdDeck_CardMask dead_cards, arp_range_t *range)
+{
+    if (!range || percentage <= 0.0f || percentage > 1.0f)
+        return 0;
+
+    if (!arp_is_pineapple8_game(game_type))
+        return 0;
+
+    /* Ranked table of canonical keys (best first).  Expand classes in order
+     * until the cumulative number of concrete hands reaches the requested
+     * percentage of all C(52,3) hands. */
+    double target = (double)PINEAPPLE8_ALL_CONCRETE_HANDS * (double)percentage;
+    double accumulated = 0.0;
+
+    for (size_t i = 0; i < PINEAPPLE8_HAND_RANKINGS_COUNT && accumulated < target; ++i)
+    {
+        int added = arp_expand_pineapple8_key(pineapple8_hand_rankings[i], dead_cards, range);
+        if (added < 0)
+            return 0;
+        accumulated += (double)added;
+    }
+
+    return range->count > 0 ? 1 : 0;
+}
+
 /* Omaha-specific API functions */
 
 /* Parse an Omaha range string */
@@ -1232,6 +1317,8 @@ int ARP_GetTopPercentage(float percentage, enum_game_t game_type,
     int success;
     if (arp_is_omaha_game(game_type)) {
         success = arp_expand_omaha_percentage(percentage, game_type, dead_cards, result);
+    } else if (arp_is_pineapple8_game(game_type)) {
+        success = arp_expand_pineapple8_percentage(percentage, game_type, dead_cards, result);
     } else {
         success = arp_expand_percentage(percentage, game_type, dead_cards, result);
     }
@@ -2050,6 +2137,8 @@ static int arp_evaluate_range_token(arp_token_t *token, StdDeck_CardMask dead_ca
             if (arp_is_omaha_game(game_type))
             {
                 success = arp_expand_omaha_percentage(token->data.percentage, game_type, dead_cards, result);
+            } else if (arp_is_pineapple8_game(game_type)) {
+                success = arp_expand_pineapple8_percentage(token->data.percentage, game_type, dead_cards, result);
             }
             else
             {
@@ -4109,6 +4198,8 @@ static int arp_parse_tokens(arp_context_t *ctx, StdDeck_CardMask dead_cards, enu
                 if (arp_is_omaha_game(game_type))
                 {
                     expand_success = arp_expand_omaha_percentage(token->data.percentage, game_type, dead_cards, &token_range);
+                } else if (arp_is_pineapple8_game(game_type)) {
+                    expand_success = arp_expand_pineapple8_percentage(token->data.percentage, game_type, dead_cards, &token_range);
                 }
                 else
                 {
