@@ -301,17 +301,17 @@ GPU evaluation failed
 ## Future Enhancements
 
 ### Planned Features
-1. **Range Support**: Implement player range passing and evaluation in the Monte Carlo kernels (tracked as issue #37; the `ranges` parameter is passed as `NULL` today)
+1. **Advanced RNG**: Better random number generation algorithms (only XORShift32 exists today)
 2. **Streaming**: Overlap computation with memory transfers
 3. **Precision Tuning**: Half-precision (FP16) floating point for memory bandwidth
-4. **Advanced RNG**: Better random number generation algorithms (only XORShift32 exists today)
 
 ### Implemented
+- **Range Support**: Per-player `StdDeck_CardMask` ranges in the Monte Carlo path (tracked as issue #37). A `NULL` range deals uniformly from the full deck; a non-`NULL` range restricts each player's hole cards to that range (see [Range-vs-Range Monte Carlo](#range-vs-range-monte-carlo)). The CUDA and OpenCL backends draw hole cards by collecting the range-allowed available cards rather than rejection sampling, so tight ranges deal correctly.
 - **Multi-GPU**: Distribute work across multiple GPUs with static/dynamic load balancing — implemented in `src/gpu/eval_multi_gpu.c` (`include/poker_eval/gpu/eval_multi_gpu.h`) and documented in [GPU_BATCHED_EVALUATION.md](./GPU_BATCHED_EVALUATION.md). Note: it is currently not wired into the CMake build (the module is present in the tree but `poker_gpu` targets do not compile it yet).
 
 ### Roadmap
 - **Phase 1**: ✅ Basic batch evaluation and Monte Carlo
-- **Phase 2**: 🔄 Range support and advanced features
+- **Phase 2**: ✅ Range support and advanced features
 - **Phase 3**: 🔄 Multi-GPU (source implemented, awaiting build wiring) and streaming optimizations
 - **Phase 4**: 📋 Integration with poker analysis tools
 

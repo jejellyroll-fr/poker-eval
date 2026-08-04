@@ -438,16 +438,21 @@ int CalculateEquityForRanges(
      * number of matchups. The product of per-player valid-combo counts is an
      * UPPER BOUND on the number of valid matchups (conflicts only reduce it), so
      *
-     *     total_samples <= matchup_estimate * per_matchup
-     *                   <= iterations_if_montecarlo
+     *     total_samples <= matchup_estimate * per_matchup <= iterations_if_montecarlo
      *
-     * is guaranteed: the call never exceeds the caller's budget. The weighted
-     * aggregation normalizes EV per-sample and weights each matchup by its
-     * weight, so spreading the budget across matchups keeps the estimator
-     * unbiased.
+     * when the budget is at least as large as the matchup count. When the budget
+     * is SMALLER than the matchup count, per_matchup clamps to a minimum of 1
+     * (a matchup cannot be sampled zero times), so the call may spend up to
+     * `matchup_estimate` samples — more than the nominal budget but bounded,
+     * and it can no longer hang. In either case each matchup is sampled an equal
+     * number of times.
+     *
+     * The weighted aggregation normalizes EV per-sample and weights each
+     * matchup by its weight, so spreading the budget across matchups keeps the
+     * estimator unbiased.
      */
     int per_matchup_iterations = iterations_if_montecarlo > 0 ? iterations_if_montecarlo : 200000;
-    if (use_montecarlo && iterations_if_montecarlo > 0)
+    if (use_montecarlo)
     {
         double matchup_estimate = 1.0;
         if (use_prefilter)

@@ -315,7 +315,8 @@ int CalculateEquityForRanges_MT(
      * range_equity_per_matchup_budget). Each matchup samples
      * iterations_if_montecarlo by default, which multiplies the caller's
      * budget by the number of matchups. Recompute a per-matchup budget so the
-     * whole call stays within the caller's total iteration budget. */
+     * whole call stays within (or, when the budget is smaller than the number
+     * of matchups, close to) the caller's total iteration budget. */
     int per_matchup_iterations = use_montecarlo
         ? range_equity_per_matchup_budget(iterations_if_montecarlo, (double)valid_matchups_total)
         : iterations_if_montecarlo;
