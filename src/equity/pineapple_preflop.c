@@ -23,6 +23,56 @@ static int compare_cards(const void* a, const void* b) {
     return c1->suit - c2->suit;
 }
 
+/* Normalized suit pattern for a rank-descending sorted hand.
+ *
+ * Suit labels are arbitrary and cards of equal rank are interchangeable, so
+ * the pattern must not depend on which of two equal-ranked cards we happen to
+ * visit first. Sorting by raw suit to break rank ties does not achieve that:
+ * it bakes the arbitrary suit numbering into the key, which used to split
+ * isomorphic hands such as AsAh Ks and AsAh Kh into two distinct classes.
+ *
+ * Take instead the smallest pattern over every card ordering that keeps ranks
+ * descending. Orderings that permute equal ranks are exactly the ones that
+ * describe the same hand, so the minimum is invariant under both suit
+ * relabeling and equal-rank swaps. Ranks are identical across those orderings,
+ * so minimizing the suit pattern minimizes the whole key. */
+static uint32_t normalized_suit_pattern(const card_t cards[3]) {
+    static const int perms[6][3] = {
+        {0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}
+    };
+    uint32_t best = 0xFFFFFFFFu;
+
+    for (int p = 0; p < 6; ++p) {
+        const int *o = perms[p];
+        if (cards[o[0]].rank < cards[o[1]].rank ||
+            cards[o[1]].rank < cards[o[2]].rank) {
+            continue; /* not rank-descending: describes a different hand */
+        }
+
+        int suit_map[4] = {-1, -1, -1, -1};
+        int next_suit_id = 0;
+        int norm_suits[3];
+
+        for (int i = 0; i < 3; ++i) {
+            int s = cards[o[i]].suit;
+            if (s < 0 || s > 3) s = 0;
+            if (suit_map[s] == -1) {
+                suit_map[s] = next_suit_id++;
+            }
+            norm_suits[i] = suit_map[s];
+        }
+
+        /* norm_suits[0] is always 0 by construction, so it is not stored. */
+        uint32_t packed = ((uint32_t)norm_suits[1] << 2) |
+                            ((uint32_t)norm_suits[2]);
+        if (packed < best) {
+            best = packed;
+        }
+    }
+
+    return best;
+}
+
 pineapple_hand_key_t pineapple_key_from_ranks_suits(const int ranks[3], const int suits[3]) {
     card_t cards[3];
     for (int i = 0; i < 3; ++i) {
@@ -32,25 +82,11 @@ pineapple_hand_key_t pineapple_key_from_ranks_suits(const int ranks[3], const in
 
     qsort(cards, 3, sizeof(card_t), compare_cards);
 
-    int suit_map[4] = {-1, -1, -1, -1};
-    int next_suit_id = 0;
-    int norm_suits[3];
-
-    for (int i = 0; i < 3; ++i) {
-        int s = cards[i].suit;
-        if (s < 0 || s > 3) s = 0;
-        if (suit_map[s] == -1) {
-            suit_map[s] = next_suit_id++;
-        }
-        norm_suits[i] = suit_map[s];
-    }
-
     uint32_t r_packed = ((uint32_t)cards[0].rank << 8) |
                           ((uint32_t)cards[1].rank << 4) |
                           ((uint32_t)cards[2].rank);
 
-    uint32_t s_packed = ((uint32_t)norm_suits[1] << 2) |
-                          ((uint32_t)norm_suits[2]);
+    uint32_t s_packed = normalized_suit_pattern(cards);
 
     return (r_packed << 4) | s_packed;
 }
