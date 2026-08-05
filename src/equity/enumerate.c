@@ -1922,7 +1922,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_HOLDEM);
     }
     else
@@ -1938,7 +1938,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(ShortDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(ShortDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_SDHOLDEM);
     }
     else
@@ -1954,7 +1954,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_HOLDEM8);
     }
     else
@@ -1970,7 +1970,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_OMAHA);
     }
     else
@@ -1986,7 +1986,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_OMAHA5);
     }
     else
@@ -2002,7 +2002,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_OMAHA6);
     }
     else
@@ -2018,7 +2018,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_OMAHA8);
     }
     else
@@ -2034,7 +2034,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_OMAHA85);
     }
     else
@@ -2067,7 +2067,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_COURCHEVEL);
     }
     else
@@ -2084,7 +2084,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_COURCHEVEL8);
     }
     else
@@ -2230,7 +2230,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_DRAWMAHA);
     }
     else
@@ -2248,7 +2248,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_PINEAPPLE);
     }
     else
@@ -2266,7 +2266,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     numCards = 5 - nboard;
     if (numCards > 0)
     {
-      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, dead, numCards,
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_PINEAPPLE8);
     }
     else
