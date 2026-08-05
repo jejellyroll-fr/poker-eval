@@ -35,14 +35,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Export compile commands for IDEs
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Experimental API toggle
-if(POKER_EVAL_EXPERIMENTAL)
-    add_compile_definitions(POKER_EVAL_EXPERIMENTAL=1)
-endif()
-if(PE_EEDC_CANONICALIZE)
-    add_compile_definitions(PE_EEDC_CANONICALIZE=1)
-endif()
-
 # Options
 # BUILD_SHARED_LIBS drives the type of every modular library (see src/CMakeLists.txt).
 # Set it to OFF for static archives; there is no separate BUILD_STATIC_LIBS, as CMake
@@ -71,6 +63,14 @@ option(PE_CANONICAL_ONLY "Fail configuration if legacy includes are present outs
 option(POKER_EVAL_EXPERIMENTAL "Enable experimental API (e.g., equity prototypes)" OFF)
 option(PE_EEDC_CANONICALIZE "Canonicalize boards in EEDC exhaustive enumeration (experimental)" OFF)
 option(ENABLE_NATIVE_ARCH "Enable compiler optimizations for the build host CPU" ON)
+
+# Experimental API toggle
+if(POKER_EVAL_EXPERIMENTAL)
+    add_compile_definitions(POKER_EVAL_EXPERIMENTAL=1)
+endif()
+if(PE_EEDC_CANONICALIZE)
+    add_compile_definitions(PE_EEDC_CANONICALIZE=1)
+endif()
 
 # Platform detection
 if(UNIX AND NOT APPLE)

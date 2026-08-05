@@ -119,8 +119,14 @@ The wrapper retains the methods used by fpdb: `poker_eval`, `best`,
 | `BUILD_C_API` | `ON` | Stable C API |
 | `BUILD_EXAMPLES` | `ON` | Examples and CLI tools |
 | `BUILD_GPU` | `ON` | GPU support (CUDA / OpenCL / Metal) |
+| `POKER_EVAL_EXPERIMENTAL` | `OFF` | Experimental equity API (`poker_eval_calculate_equity*`) |
 
 GPU support requires the platform SDK and can be disabled with `-DBUILD_GPU=OFF`.
+
+The experimental Modern Equity API (`src/equity/poker_eval_modern_equity.c`,
+header `include/poker_eval/core/poker_eval_modern.h`) is compiled only when
+`-DPOKER_EVAL_EXPERIMENTAL=ON` is passed. It is still evolving, so its API is
+not yet covered by the stable-API guarantees.
 
 ## CMake installation
 
