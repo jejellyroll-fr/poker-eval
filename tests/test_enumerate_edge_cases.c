@@ -330,9 +330,10 @@ void test_enumerate_badugi(void) {
     build_dead(&dead, pockets, 2, board);
     enumResultClear(&result);
 
-    /* Enumeration not implemented for badugi - expect error 1 */
+    /* Badugi sampling is implemented (enumSampleBatched -> MC) */
     int err = enumSample(game_badugi, pockets, board, dead, 2, 0, 200, 0, &result);
-    TEST_ASSERT_EQUAL_INT(1, err);
+    TEST_ASSERT_EQUAL_INT(0, err);
+    TEST_ASSERT_TRUE(result.nsamples > 0);
     enumResultFree(&result);
 }
 
@@ -524,9 +525,10 @@ void test_enumerate_mc_badugi(void) {
     build_dead(&dead, pockets, 2, board);
     enumResultClear(&result);
 
-    /* Enumeration not implemented for badugi - expect error 1 */
+    /* Badugi sampling is implemented (enumSampleBatched -> MC) */
     int err = enumSample(game_badugi, pockets, board, dead, 2, 0, 100, 0, &result);
-    TEST_ASSERT_EQUAL_INT(1, err);
+    TEST_ASSERT_EQUAL_INT(0, err);
+    TEST_ASSERT_TRUE(result.nsamples > 0);
     enumResultFree(&result);
 }
 

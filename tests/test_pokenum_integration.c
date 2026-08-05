@@ -21,6 +21,8 @@
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/equity/enumord.h>
+#include <poker_eval/equity/RangeEquity.h>
+#include <poker_eval/range.h>
 
 /* Tolerance for Monte Carlo results */
 #define MC_TOLERANCE 0.05
@@ -1067,6 +1069,155 @@ void test_pokenum_holdem8_2p(void) {
   enumResultFree(&result);
 }
 
+/* ===== RANGE EQUITY TESTS ===== */
+
+/* Build a contiguous PlayerRange from a parsed pe_range_t.
+ * pe_range_t->combos[] is an array of pe_combo_t structs, not a
+ * contiguous array of masks, so copy hand + weight into dedicated
+ * buffers (same pattern as the pokenum CLI and pe_equity's
+ * convert_ranges()). */
+static void range_build(PlayerRange *pr, const pe_range_t *range,
+                        StdDeck_CardMask *hands, double *weights) {
+  for (size_t j = 0; j < range->count; ++j) {
+    hands[j] = range->combos[j].hand;
+    weights[j] = range->combos[j].weight;
+  }
+  pr->hand_masks = hands;
+  pr->weights = weights;
+  pr->count = (int)range->count;
+  pr->total_weight = range->total_weight;
+}
+
+void test_pokenum_range_holdem_exhaustive(void) {
+  StdDeck_CardMask board, dead;
+  StdDeck_CardMask_RESET(board);
+  StdDeck_CardMask_RESET(dead);
+  enum_result_t result;
+  pe_range_t *r1 = NULL, *r2 = NULL;
+  StdDeck_CardMask h1[6], h2[6];
+  double w1[6], w2[6];
+  PlayerRange players[2];
+
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_holdem, "AA", dead, NULL, &r1));
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_holdem, "KK", dead, NULL, &r2));
+  TEST_ASSERT_EQUAL_UINT64(6, r1->count);
+  TEST_ASSERT_EQUAL_UINT64(6, r2->count);
+
+  range_build(&players[0], r1, h1, w1);
+  range_build(&players[1], r2, h2, w2);
+
+  enumResultClear(&result);
+  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 5,
+                                   0, 0, 0, &result);
+  TEST_ASSERT_TRUE(m > 0);
+  /* All 6x6 AA vs KK matchups are usable. */
+  TEST_ASSERT_EQUAL_INT(36, m);
+  /* AA dominates KK preflop (~81.9% equity). */
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.819, get_equity(&result, 0));
+
+  enumResultFree(&result);
+  pe_range_free(r1);
+  pe_range_free(r2);
+}
+
+void test_range_holdem_mc(void) {
+  StdDeck_CardMask board, dead;
+  StdDeck_CardMask_RESET(board);
+  StdDeck_CardMask_RESET(dead);
+  enum_result_t result;
+  pe_range_t *r1 = NULL, *r2 = NULL;
+  StdDeck_CardMask h1[6], h2[6];
+  double w1[6], w2[6];
+  PlayerRange players[2];
+
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_holdem, "AA", dead, NULL, &r1));
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_holdem, "KK", dead, NULL, &r2));
+  range_build(&players[0], r1, h1, w1);
+  range_build(&players[1], r2, h2, w2);
+
+  enumResultClear(&result);
+  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 5,
+                                   1, 100000, 0, &result);
+  TEST_ASSERT_EQUAL_INT(36, m);
+  TEST_ASSERT_TRUE(result.nsamples > 0);
+  TEST_ASSERT_DOUBLE_WITHIN(MC_TOLERANCE, 0.819, get_equity(&result, 0));
+
+  enumResultFree(&result);
+  pe_range_free(r1);
+  pe_range_free(r2);
+}
+
+void test_range_badugi_mc(void) {
+  StdDeck_CardMask board, dead;
+  StdDeck_CardMask_RESET(board);
+  StdDeck_CardMask_RESET(dead);
+  enum_result_t result;
+  pe_range_t *r1 = NULL, *r2 = NULL;
+  StdDeck_CardMask h1[1], h2[1];
+  double w1[1], w2[1];
+  PlayerRange players[2];
+
+  /* A234 suited best-possible is a wheel badugi, unbeaten by KQJ7. */
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_badugi, "As2d3h4c", dead, NULL, &r1));
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_badugi, "KsQdJh7c", dead, NULL, &r2));
+  TEST_ASSERT_EQUAL_UINT64(1, r1->count);
+  range_build(&players[0], r1, h1, w1);
+  range_build(&players[1], r2, h2, w2);
+
+  enumResultClear(&result);
+  int m = CalculateEquityForRanges(game_badugi, players, 2, board, dead, 0,
+                                   1, 5000, 0, &result);
+  TEST_ASSERT_TRUE(m > 0);
+  TEST_ASSERT_DOUBLE_WITHIN(0.02, 1.0, get_equity(&result, 0));
+
+  enumResultFree(&result);
+  pe_range_free(r1);
+  pe_range_free(r2);
+}
+
+void test_range_mixed_fixed_vs_range(void) {
+  StdDeck_CardMask board, dead, pocket0;
+  StdDeck_CardMask_RESET(board);
+  StdDeck_CardMask_RESET(dead);
+  StdDeck_CardMask_RESET(pocket0);
+  StdDeck_CardMask_SET(pocket0, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES));
+  StdDeck_CardMask_SET(pocket0, StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_SPADES));
+  enum_result_t result;
+  pe_range_t *r2 = NULL;
+  StdDeck_CardMask h2[12];
+  double w2[12];
+  PlayerRange players[2];
+
+  /* Fixed AsKs vs range {QQ, KK}. The fixed player's own cards must not be
+   * listed as external dead cards (CalculateEquityForRanges treats dead
+   * cards as conflicting with every player). */
+  players[0].hand_masks = &pocket0;
+  players[0].weights = NULL;
+  players[0].count = 1;
+  players[0].total_weight = 1.0;
+
+  TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                        pe_range_parse(game_holdem, "QQ,KK", dead, NULL, &r2));
+  TEST_ASSERT_EQUAL_UINT64(12, r2->count);
+  range_build(&players[1], r2, h2, w2);
+
+  enumResultClear(&result);
+  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 5,
+                                   0, 0, 0, &result);
+  TEST_ASSERT_TRUE(m > 0);
+  /* AsKs has ~42% vs {QQ,KK}. */
+  TEST_ASSERT_DOUBLE_WITHIN(0.02, 0.42, get_equity(&result, 0));
+
+  enumResultFree(&result);
+  pe_range_free(r2);
+}
+
 int main(void) {
   UNITY_BEGIN();
 
@@ -1111,6 +1262,10 @@ int main(void) {
   RUN_TEST(test_pokenum_badugi_2p);
   RUN_TEST(test_pokenum_omaha85_2p);
   RUN_TEST(test_pokenum_holdem8_2p);
+  RUN_TEST(test_pokenum_range_holdem_exhaustive);
+  RUN_TEST(test_range_holdem_mc);
+  RUN_TEST(test_range_badugi_mc);
+  RUN_TEST(test_range_mixed_fixed_vs_range);
 
   return UNITY_END();
 }

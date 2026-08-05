@@ -2357,6 +2357,20 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
                                    npockets, numToDeal,
                                    dead, niter, INNER_LOOP_A5_TRIPLE_DRAW);
   }
+  else if (game == game_badugi)
+  {
+    if (nboard != 0)
+    {
+      return 1; /* Badugi has no board cards */
+    }
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 4 - StdDeck_numCards(pockets[idx]);
+    DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
+                                   npockets, numToDeal,
+                                   effective_dead, niter, INNER_LOOP_BADUGI);
+  }
   else if (game == game_irish)
   {
     StdDeck_CardMask sharedCards;
