@@ -432,7 +432,8 @@ pe_status_t pe_range_parse(
     /* For Pineapple variants (3 hole cards), use the local 3-card tokenizer.
      * ARP has no 3-card support (its specific-hand token and ranked tables are
      * 2- and 4-card only), so concrete hands are handled here. */
-    if (variant == game_pineapple || variant == game_pineapple8) {
+    if (variant == game_pineapple || variant == game_pineapple8 ||
+        variant == game_pineapple_crazy || variant == game_pineapple_lazy) {
         char *str_copy = strdup(range_str);
         if (!str_copy) {
             pe_range_free(range);

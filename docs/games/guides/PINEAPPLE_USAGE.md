@@ -180,17 +180,52 @@ Run tests with:
 ./build/tests/test_pineapple8_unity
 ```
 
+## Variants
+
+### Lazy Pineapple / Tahoe — `game_pineapple_lazy` (`pokenum -palazy`)
+
+All three hole cards reach showdown and the best two play. This is exactly what
+`game_pineapple` computes, so the two produce identical results down to the
+individual win, tie and lose counts; the separate game exists so callers can
+name the variant they mean.
+
+### Crazy Pineapple — `game_pineapple_crazy` (`pokenum -pacrazy`)
+
+The third card is discarded **after the flop**, so the decision may use the flop
+but not the turn or the river. That is a genuinely different computation, and it
+is *not* the same as the standard rule:
+
+```
+P0 As Ad Ks   vs   P1 7h 8h 9c   on flop 2s 5s 9h
+
+game_pineapple / lazy   P0 70.875%   P1 29.125%
+game_pineapple_crazy    P0 76.080%   P1 23.920%
+```
+
+Both players lose information when the discard is committed early; here P1 loses
+more of it, so P0's share rises. Note this cuts both ways — it is a zero-sum
+split, so a player is not guaranteed less equity under the crazy rule.
+
+For each player the discard is chosen by measuring that player's equity over
+every runout still possible at the moment of the decision, with opponents holding
+all three cards, and keeping the best pair. The surviving two cards then play out
+as an ordinary Hold'em pocket.
+
+**A flop is required.** With no board there is nothing to decide on, and
+evaluating anyway would hand the player turn/river knowledge they never had, so
+`enumExhaustive`/`enumSample` return an error for `nboard < 3` rather than
+quietly returning an optimistic number. Turn and river states are supported: the
+decision still uses only the first three board cards, even when the caller
+supplies the whole board.
+
 ## Future Enhancements
 
 Potential improvements for future versions:
 
-1. **Crazy / Lazy Pineapple variants**: These are game-play variations that
-   change *when* (or whether) a player discards — Crazy Pineapple discards after
-   the turn instead of the flop, Lazy Pineapple makes the discard optional. In an
-   equity computation the showdown evaluation is always the best two of the three
-   hole cards, so these variants produce identical equity to standard Pineapple
-   and are deliberately not exposed as separate `game_*` types. Simulate them
-   with `game_pineapple`.
+1. **Preflop Crazy Pineapple**: modelling the flop-time discard from a preflop
+   state needs the flop enumerated in an outer loop with the discard resolved
+   per flop, which the current enumerator does not do. Preflop is rejected today
+   rather than approximated.
 2. **Performance Optimizations**: SIMD acceleration for batch evaluations
 3. **Range Analysis**: Specialized tools for Pineapple range vs range calculations
 
