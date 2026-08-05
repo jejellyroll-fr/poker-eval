@@ -2357,6 +2357,43 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
                                    npockets, numToDeal,
                                    dead, niter, INNER_LOOP_A5_TRIPLE_DRAW);
   }
+  else if (game == game_irish)
+  {
+    StdDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0)
+    {
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
+                                niter, INNER_LOOP_IRISH);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      for (int iter = 0; iter < niter; iter++)
+      {
+        INNER_LOOP_IRISH;
+      }
+    }
+  }
+  else if (game == game_fusion)
+  {
+    /* Fusion (2 hole cards + 5 community) evaluates like Hold'em. */
+    StdDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0)
+    {
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
+                                niter, INNER_LOOP_HOLDEM);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      for (int iter = 0; iter < niter; iter++)
+      {
+        INNER_LOOP_HOLDEM;
+      }
+    }
+  }
   else if (game == game_doubleflop_holdem)
   {
     fprintf(stderr, "DEBUG: Entering double flop Monte Carlo, niter=%d\n", niter);
