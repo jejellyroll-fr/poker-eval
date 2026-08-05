@@ -646,6 +646,14 @@ int simd_eval_batch_hands_neon(const simd_card_batch_t* batch, simd_result_batch
     }
     return 0;
 }
+#else
+/* Fallback implementation: the adaptive and benchmark paths below reference
+ * this symbol unconditionally, so it must exist on non-ARM targets too. */
+int simd_eval_batch_hands_neon(const simd_card_batch_t* batch, simd_result_batch_t* results) {
+    (void)batch;
+    (void)results;
+    return -1; /* Not supported */
+}
 #endif
 
 /* Adaptive batch evaluation */
