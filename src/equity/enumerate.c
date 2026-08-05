@@ -102,6 +102,8 @@ static enum_gameparams_t enum_gameparams[] = {
     {game_irish, 4, 4, 5, 0, 1, LOW_QUALIFIER_NONE, "Irish Poker"},
     {game_ofc, 13, 13, 0, 0, 1, LOW_QUALIFIER_NONE, "Open Face Chinese"},
     {game_manila, 2, 2, 5, 0, 1, LOW_QUALIFIER_NONE, "Manila Poker"},
+    {game_pineapple_crazy, 3, 3, 5, 0, 1, LOW_QUALIFIER_NONE, "Crazy Pineapple"},
+    {game_pineapple_lazy, 3, 3, 5, 0, 1, LOW_QUALIFIER_NONE, "Lazy Pineapple (Tahoe)"},
 };
 
 /* INNER_LOOP is executed in every iteration of the combinatorial enumerator
@@ -397,6 +399,138 @@ static int evaluate_best_two_hole_holdem8(StdDeck_CardMask pocket,
   return best_hi == HandVal_NOTHING;
 }
 
+/* Commit each player's Crazy Pineapple discard.
+ *
+ * In Crazy Pineapple the third card is thrown away after the flop, so the
+ * decision may use the flop but not the turn or the river. Modelling it as
+ * "best two of three against the final board" - what game_pineapple does -
+ * would hand the player information they did not have and overstate equity.
+ *
+ * For every player and every candidate discard, this measures that player's
+ * equity over all runouts that were still possible when the decision was made,
+ * with opponents holding all three cards, then keeps the best pair. The chosen
+ * two cards are what the caller plays out.
+ *
+ * `board` must contain at least a flop; only its first three cards inform the
+ * decision. Returns 0 on success, 1 if the flop is unknown or a pocket is
+ * malformed.
+ */
+static int crazy_pineapple_commit(StdDeck_CardMask pockets[], int npockets,
+                                  StdDeck_CardMask board, StdDeck_CardMask dead,
+                                  StdDeck_CardMask committed[])
+{
+  StdDeck_CardMask flop;
+  StdDeck_CardMask decided_dead;
+  int flop_cards[3];
+  int nflop = 0;
+
+  if (npockets < 1 || npockets > ENUM_MAXPLAYERS)
+    return 1;
+
+  /* Only the flop is visible at decision time. */
+  StdDeck_CardMask_RESET(flop);
+  for (int card = 0; card < StdDeck_N_CARDS && nflop < 3; ++card)
+    if (StdDeck_CardMask_CARD_IS_SET(board, card))
+      flop_cards[nflop++] = card;
+  if (nflop != 3)
+    return 1;
+  for (int i = 0; i < 3; ++i)
+    StdDeck_CardMask_SET(flop, flop_cards[i]);
+
+  /* Cards that were already accounted for when the discard was made: every
+     player's three hole cards, the flop, and any dead cards. The turn and
+     river are unknown at that point even when the caller supplied them. */
+  StdDeck_CardMask_RESET(decided_dead);
+  StdDeck_CardMask_OR(decided_dead, decided_dead, flop);
+  StdDeck_CardMask_OR(decided_dead, decided_dead, dead);
+  for (int p = 0; p < npockets; ++p)
+    StdDeck_CardMask_OR(decided_dead, decided_dead, pockets[p]);
+
+  for (int p = 0; p < npockets; ++p)
+  {
+    int hole[3];
+    int nhole = 0;
+    double best_equity = -1.0;
+
+    for (int card = 0; card < StdDeck_N_CARDS && nhole < 3; ++card)
+      if (StdDeck_CardMask_CARD_IS_SET(pockets[p], card))
+        hole[nhole++] = card;
+    if (nhole != 3)
+      return 1;
+
+    StdDeck_CardMask_RESET(committed[p]);
+
+    for (int discard = 0; discard < 3; ++discard)
+    {
+      StdDeck_CardMask keep;
+      double equity = 0.0;
+      long runouts = 0;
+
+      StdDeck_CardMask_RESET(keep);
+      for (int i = 0; i < 3; ++i)
+        if (i != discard)
+          StdDeck_CardMask_SET(keep, hole[i]);
+
+      /* Enumerate every turn/river pair that was still live at the flop. */
+      for (int turn = 0; turn < StdDeck_N_CARDS; ++turn)
+      {
+        if (StdDeck_CardMask_CARD_IS_SET(decided_dead, turn))
+          continue;
+        for (int river = turn + 1; river < StdDeck_N_CARDS; ++river)
+        {
+          StdDeck_CardMask final_board;
+          HandVal mine;
+          StdDeck_CardMask mine_hand;
+          int winners = 1;
+          int beaten = 0;
+
+          if (StdDeck_CardMask_CARD_IS_SET(decided_dead, river))
+            continue;
+
+          final_board = flop;
+          StdDeck_CardMask_SET(final_board, turn);
+          StdDeck_CardMask_SET(final_board, river);
+
+          StdDeck_CardMask_OR(mine_hand, keep, final_board);
+          mine = StdDeck_StdRules_EVAL_N(mine_hand, 7);
+
+          /* Opponents still hold three cards and play their best two. */
+          for (int o = 0; o < npockets && !beaten; ++o)
+          {
+            HandVal theirs;
+            if (o == p)
+              continue;
+            if (evaluate_best_two_hole_holdem(pockets[o], final_board, 3, &theirs))
+              return 1;
+            if (theirs > mine)
+              beaten = 1;
+            else if (theirs == mine)
+              winners++;
+          }
+
+          if (!beaten)
+            equity += 1.0 / (double)winners;
+          runouts++;
+        }
+      }
+
+      if (runouts > 0)
+        equity /= (double)runouts;
+
+      if (equity > best_equity)
+      {
+        best_equity = equity;
+        committed[p] = keep;
+      }
+    }
+
+    if (best_equity < 0.0)
+      return 1;
+  }
+
+  return 0;
+}
+
 #define INNER_LOOP_DISCARD_HOLDEM(expected_hole_cards)       \
   INNER_LOOP({                                                \
     StdDeck_CardMask _finalBoard;                             \
@@ -410,6 +544,27 @@ static int evaluate_best_two_hole_holdem8(StdDeck_CardMask pocket,
 
 #define INNER_LOOP_PINEAPPLE INNER_LOOP_DISCARD_HOLDEM(3)
 #define INNER_LOOP_IRISH INNER_LOOP_DISCARD_HOLDEM(4)
+
+/* Lazy Pineapple (Tahoe): all three hole cards reach showdown and the best two
+   play. That is what INNER_LOOP_DISCARD_HOLDEM(3) already computes, so this is
+   deliberately the same evaluation as game_pineapple; the separate game exists
+   so callers can name the variant they mean. */
+#define INNER_LOOP_PINEAPPLE_LAZY INNER_LOOP_DISCARD_HOLDEM(3)
+
+/* Crazy Pineapple: the discard is committed on the flop, so the two surviving
+   cards are fixed before this loop runs (see crazy_pineapple_commit) and play
+   out as an ordinary Hold'em pocket. */
+#define INNER_LOOP_PINEAPPLE_CRAZY                            \
+  INNER_LOOP({                                                \
+    StdDeck_CardMask _finalBoard;                             \
+    StdDeck_CardMask _crazyHand;                              \
+    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);     \
+    StdDeck_CardMask_OR(_crazyHand, _committed[i],            \
+                        _finalBoard);                         \
+    hival[i] = StdDeck_StdRules_EVAL_N(_crazyHand, 7);        \
+    loval[i] = LowHandVal_NOTHING;                            \
+    err = 0;                                                  \
+  })
 
 #define INNER_LOOP_PINEAPPLE8                                 \
   INNER_LOOP({                                                \
@@ -943,6 +1098,8 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       break;
     case game_drawmaha:
     case game_pineapple:
+    case game_pineapple_crazy:
+    case game_pineapple_lazy:
     case game_27_triple_draw:
     case game_a5_triple_draw:
     case game_badacey:
@@ -1384,6 +1541,61 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
     }
   }
+  else if (game == game_pineapple_lazy)
+  {
+    /* All three cards reach showdown and the best two play: the same
+       evaluation as game_pineapple, exposed under its own name. */
+    StdDeck_CardMask sharedCards;
+    if (nboard == 0)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(5, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE_LAZY);
+    }
+    else if (nboard == 3)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(2, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE_LAZY);
+    }
+    else if (nboard == 4)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(1, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE_LAZY);
+    }
+    else if (nboard == 5)
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_PINEAPPLE_LAZY;
+    }
+    else
+    {
+      return 1;
+    }
+  }
+  else if (game == game_pineapple_crazy)
+  {
+    /* The discard is committed on the flop, so it is resolved once here and the
+       surviving two cards then play out as an ordinary Hold'em pocket. Without
+       a flop there is nothing to decide on, so those states are rejected rather
+       than silently evaluated with turn/river knowledge. */
+    StdDeck_CardMask sharedCards;
+    StdDeck_CardMask _committed[ENUM_MAXPLAYERS];
+
+    if (nboard < 3 || nboard > 5)
+      return 1;
+    if (crazy_pineapple_commit(pockets, npockets, board, dead, _committed))
+      return 1;
+
+    if (nboard == 3)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(2, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE_CRAZY);
+    }
+    else if (nboard == 4)
+    {
+      ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(1, effective_dead, sharedCards, INNER_LOOP_PINEAPPLE_CRAZY);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      INNER_LOOP_PINEAPPLE_CRAZY;
+    }
+  }
   else if (game == game_irish)
   {
     StdDeck_CardMask sharedCards;
@@ -1681,6 +1893,8 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       break;
     case game_drawmaha:
     case game_pineapple:
+    case game_pineapple_crazy:
+    case game_pineapple_lazy:
     case game_27_triple_draw:
     case game_a5_triple_draw:
     case game_badacey:
@@ -2061,6 +2275,57 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       for (int iter = 0; iter < niter; iter++)
       {
         INNER_LOOP_PINEAPPLE8;
+      }
+    }
+  }
+  else if (game == game_pineapple_lazy)
+  {
+    StdDeck_CardMask sharedCards;
+    numCards = 5 - nboard;
+    if (numCards > 0)
+    {
+      /* effective_dead, not dead: the sampler must not redeal the board or
+         anyone's hole cards. Most other games here still pass `dead` and
+         misdeal because of it. */
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
+                                niter, INNER_LOOP_PINEAPPLE_LAZY);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      for (int iter = 0; iter < niter; iter++)
+      {
+        INNER_LOOP_PINEAPPLE_LAZY;
+      }
+    }
+  }
+  else if (game == game_pineapple_crazy)
+  {
+    /* See the exhaustive path: the discard needs a flop and is resolved once,
+       before sampling the remaining board cards. */
+    StdDeck_CardMask sharedCards;
+    StdDeck_CardMask _committed[ENUM_MAXPLAYERS];
+
+    if (nboard < 3 || nboard > 5)
+      return 1;
+    if (crazy_pineapple_commit(pockets, npockets, board, dead, _committed))
+      return 1;
+
+    numCards = 5 - nboard;
+    if (numCards > 0)
+    {
+      /* effective_dead, not dead: the sampler must not redeal the board or
+         anyone's hole cards. Most other games here still pass `dead` and
+         misdeal because of it. */
+      DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
+                                niter, INNER_LOOP_PINEAPPLE_CRAZY);
+    }
+    else
+    {
+      StdDeck_CardMask_RESET(sharedCards);
+      for (int iter = 0; iter < niter; iter++)
+      {
+        INNER_LOOP_PINEAPPLE_CRAZY;
       }
     }
   }
