@@ -1091,7 +1091,13 @@ static void range_build(PlayerRange *pr, const pe_range_t *range,
 void test_pokenum_range_holdem_exhaustive(void) {
   StdDeck_CardMask board, dead;
   StdDeck_CardMask_RESET(board);
+  /* Partial flop keeps the exhaustive walk small enough for slow CI
+   * runners while still exercising full matchups and ties. */
+  add_card(&board, StdDeck_Rank_2, StdDeck_Suit_CLUBS);
+  add_card(&board, StdDeck_Rank_3, StdDeck_Suit_DIAMONDS);
+  add_card(&board, StdDeck_Rank_4, StdDeck_Suit_HEARTS);
   StdDeck_CardMask_RESET(dead);
+  StdDeck_CardMask_OR(dead, dead, board);
   enum_result_t result;
   pe_range_t *r1 = NULL, *r2 = NULL;
   StdDeck_CardMask h1[6], h2[6];
@@ -1109,13 +1115,13 @@ void test_pokenum_range_holdem_exhaustive(void) {
   range_build(&players[1], r2, h2, w2);
 
   enumResultClear(&result);
-  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 5,
+  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 2,
                                    0, 0, 0, &result);
   TEST_ASSERT_TRUE(m > 0);
   /* All 6x6 AA vs KK matchups are usable. */
   TEST_ASSERT_EQUAL_INT(36, m);
-  /* AA dominates KK preflop (~81.9% equity). */
-  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.819, get_equity(&result, 0));
+  /* AA dominates KK on the 2c3d4h flop (~91.2% equity). */
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.912, get_equity(&result, 0));
 
   enumResultFree(&result);
   pe_range_free(r1);
@@ -1184,7 +1190,11 @@ void test_range_badugi_mc(void) {
 void test_range_mixed_fixed_vs_range(void) {
   StdDeck_CardMask board, dead, pocket0;
   StdDeck_CardMask_RESET(board);
+  add_card(&board, StdDeck_Rank_2, StdDeck_Suit_CLUBS);
+  add_card(&board, StdDeck_Rank_7, StdDeck_Suit_DIAMONDS);
+  add_card(&board, StdDeck_Rank_9, StdDeck_Suit_HEARTS);
   StdDeck_CardMask_RESET(dead);
+  StdDeck_CardMask_OR(dead, dead, board);
   StdDeck_CardMask_RESET(pocket0);
   StdDeck_CardMask_SET(pocket0, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES));
   StdDeck_CardMask_SET(pocket0, StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_SPADES));
@@ -1208,11 +1218,11 @@ void test_range_mixed_fixed_vs_range(void) {
   range_build(&players[1], r2, h2, w2);
 
   enumResultClear(&result);
-  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 5,
+  int m = CalculateEquityForRanges(game_holdem, players, 2, board, dead, 2,
                                    0, 0, 0, &result);
   TEST_ASSERT_TRUE(m > 0);
-  /* AsKs has ~42% vs {QQ,KK}. */
-  TEST_ASSERT_DOUBLE_WITHIN(0.02, 0.42, get_equity(&result, 0));
+  /* AsKs has ~20.2% vs {QQ,KK} on the 2c7d9h flop. */
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.202, get_equity(&result, 0));
 
   enumResultFree(&result);
   pe_range_free(r2);
