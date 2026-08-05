@@ -88,6 +88,38 @@ jobs:
         name: performance-report-release
         path: build/performance_report.md
 
+  test-experimental:
+    name: Experimental API Build & Tests
+    runs-on: ubuntu-latest
+    # One Linux job is enough to catch signature drift; no need to run the
+    # flag across the whole platform matrix. Everything behind
+    # POKER_EVAL_EXPERIMENTAL (Modern Equity API) is otherwise never
+    # compiled in CI.
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential libssl-dev
+
+    - name: Configure Experimental API Build
+      run: |
+        cmake -S . -B build-experimental \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DPOKER_EVAL_EXPERIMENTAL=ON
+
+    - name: Build and Test Experimental API
+      run: |
+        cmake --build build-experimental -j"$(nproc)"
+        ctest --test-dir build-experimental --output-on-failure
+
   test-debug-sanitizers:
     name: Debug + Sanitizers (Weekly)
     runs-on: ubuntu-latest
