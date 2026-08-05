@@ -24,12 +24,14 @@
 /* HandVal type (matches poker-eval) */
 typedef uint32_t HandVal;
 
-/* ===== Device lookup tables (constant memory) ===== */
+/* ===== Device lookup tables (global memory) ===== */
 
 /* These tables are loaded from host at initialization */
-__constant__ uint32_t d_rank_table[8192];      /* 13-bit rank patterns → hand value */
-__constant__ uint32_t d_flush_table[8192];     /* Flush evaluation */
-__constant__ uint32_t d_straight_table[8192];  /* Straight evaluation */
+/* NOTE: declared in __device__ global memory, not __constant__: three
+ * 32KB uint32 tables would exceed ptxas's 64KB per-module constant limit. */
+__device__ uint32_t d_rank_table[8192];      /* 13-bit rank patterns → hand value */
+__device__ uint32_t d_flush_table[8192];     /* Flush evaluation */
+__device__ uint32_t d_straight_table[8192];  /* Straight evaluation */
 
 /* ===== Device helper functions ===== */
 
