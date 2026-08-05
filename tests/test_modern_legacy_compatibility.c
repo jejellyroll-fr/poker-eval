@@ -23,29 +23,20 @@
 #include <poker_eval/deck/deck_std.h>
 
 /*
- * Wall-clock ratios only carry information in an optimized, uninstrumented
- * build. At -O0 under ASan/UBSan the conversion helpers — which touch memory
- * on every call — are penalised far more heavily than the trivial mask
- * operations they are compared against, so the ratio blows up for reasons
- * that have nothing to do with the code under test. The measurements are
- * still printed in those builds; only the assertions are skipped.
+ * The wall-clock measurements are printed for information only and are no
+ * longer asserted on. The two loops being compared are not equally
+ * optimizable — legacy_result is never read after its loop, so the compiler
+ * is free to delete it, while modern_result is volatile and must be
+ * materialized every iteration — and both timings sit on the clock()
+ * resolution floor, so the legacy_time<=0.0 retry loop can stop at a single
+ * tick of quantization noise. The assertions therefore measured scheduler
+ * and timer noise, not the code, and failed ~6% of Release runs in CI while
+ * the correctness tests in this file stayed deterministic.
+ *
+ * Reinstating them would mean fixing the measurement first: give both loops
+ * the same optimization barrier, and grow the iteration count until the
+ * elapsed time clears a fixed floor rather than merely turning non-zero.
  */
-#if defined(NDEBUG)
-#  if defined(__SANITIZE_ADDRESS__)
-#    define PE_TIMING_ASSERTS 0
-#  elif defined(__has_feature)
-#    if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) || \
-        __has_feature(thread_sanitizer)
-#      define PE_TIMING_ASSERTS 0
-#    else
-#      define PE_TIMING_ASSERTS 1
-#    endif
-#  else
-#    define PE_TIMING_ASSERTS 1
-#  endif
-#else
-#  define PE_TIMING_ASSERTS 0
-#endif
 
 /* Test data for compatibility verification */
 typedef struct
@@ -272,21 +263,8 @@ static void test_performance_compatibility(void)
     {
         double speedup = legacy_time / modern_time;
         printf("  Modern speedup: %.2fx\n", speedup);
-
-#if PE_TIMING_ASSERTS
-        /* Modern should be reasonably competitive */
-        TEST_ASSERT_GREATER_THAN_DOUBLE(0.05, speedup); /* Within 20x either direction */
-#endif
     }
-
-#if PE_TIMING_ASSERTS
-    /* Conversion overhead should be reasonable */
-    if (legacy_time > 0.0)
-        TEST_ASSERT_TRUE(conversion_time <= legacy_time * 100.0);
-#else
-    printf("  (timing assertions skipped: unoptimized or instrumented build)\n");
     (void)conversion_time;
-#endif
 }
 
 /* Test API consistency */
