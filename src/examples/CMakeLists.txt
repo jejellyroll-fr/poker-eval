@@ -93,6 +93,7 @@ set(EXAMPLES
     # Omaha table generators
     generate_omaha_table
     generate_omaha_rankings
+    generate_pineapple8_rankings
 
     # Stud examples
 

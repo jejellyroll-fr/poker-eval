@@ -1,6 +1,7 @@
 #include <poker_eval/range.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/equity/pineapple_preflop.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -212,6 +213,119 @@ static void test_pineapple_specific(void) {
     pe_range_free(range);
 }
 
+static void test_pineapple8_top_percent_full(void) {
+    pe_range_t *range;
+    pe_status_t status = pe_range_top_percent(game_pineapple8, 1.0, empty_mask(), &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    /* C(52,3) = 22100 distinct 3-card hands */
+    TEST_ASSERT_EQUAL(22100, range->count);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_top_percent_half(void) {
+    pe_range_t *range;
+    pe_status_t status = pe_range_top_percent(game_pineapple8, 0.5, empty_mask(), &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    /* Top 50% should be a strict subset: > 0 and < 22100 */
+    TEST_ASSERT(range->count > 0);
+    TEST_ASSERT(range->count < 22100);
+    pe_range_free(range);
+}
+
+static void test_pineapple8_top_percent_dead_cards(void) {
+    pe_range_t *range;
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+    /* Dead card: As (rank 0, suit 0) */
+    StdDeck_CardMask_SET(dead, 0);
+
+    pe_status_t status = pe_range_top_percent(game_pineapple8, 1.0, dead, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+    /* With 1 dead card, total possible 3-card hands from remaining 51 cards
+     * is C(51,3) = 20825, but some canonical classes may map to hands that
+     * include the dead card, so count should be less than 22100 and > 0. */
+    TEST_ASSERT(range->count > 0);
+    TEST_ASSERT(range->count < 22100);
+    pe_range_free(range);
+}
+
+/* The canonical key must be invariant under suit relabeling. Suit labels carry
+ * no meaning, and cards of equal rank are interchangeable, so AsAh Ks and
+ * AsAh Kh describe the same hand and must share one key. Sorting rank ties by
+ * raw suit used to violate this and split 156 pair-plus-kicker classes in two,
+ * inflating the ranked table from 1755 to 1911 entries. */
+static void test_pineapple8_key_suit_isomorphism(void) {
+    /* The specific case that regressed. */
+    int ranks[3] = { StdDeck_Rank_ACE, StdDeck_Rank_ACE, StdDeck_Rank_KING };
+    int suits_a[3] = { StdDeck_Suit_SPADES, StdDeck_Suit_HEARTS, StdDeck_Suit_SPADES };
+    int suits_b[3] = { StdDeck_Suit_SPADES, StdDeck_Suit_HEARTS, StdDeck_Suit_HEARTS };
+    TEST_ASSERT(pineapple_key_from_ranks_suits(ranks, suits_a) ==
+                pineapple_key_from_ranks_suits(ranks, suits_b));
+
+    /* Exhaustive: every one of the 24 suit permutations must preserve the key
+     * of every one of the C(52,3) hands. */
+    int perms[24][4];
+    int nperm = 0;
+    for (int a = 0; a < 4; ++a)
+    for (int b = 0; b < 4; ++b)
+    for (int c = 0; c < 4; ++c)
+    for (int d = 0; d < 4; ++d) {
+        if (a == b || a == c || a == d || b == c || b == d || c == d) continue;
+        perms[nperm][0] = a; perms[nperm][1] = b;
+        perms[nperm][2] = c; perms[nperm][3] = d;
+        nperm++;
+    }
+    TEST_ASSERT_EQUAL(24, nperm);
+
+    for (int i = 0; i < 52; ++i)
+    for (int j = i + 1; j < 52; ++j)
+    for (int k = j + 1; k < 52; ++k) {
+        int r[3] = { StdDeck_RANK(i), StdDeck_RANK(j), StdDeck_RANK(k) };
+        int s[3] = { StdDeck_SUIT(i), StdDeck_SUIT(j), StdDeck_SUIT(k) };
+        pineapple_hand_key_t base = pineapple_key_from_ranks_suits(r, s);
+        for (int p = 0; p < nperm; ++p) {
+            int ps[3] = { perms[p][s[0]], perms[p][s[1]], perms[p][s[2]] };
+            TEST_ASSERT(pineapple_key_from_ranks_suits(r, ps) == base);
+        }
+    }
+}
+
+/* Because isomorphic hands share a key, a top-N% cut can never include one
+ * and exclude the other. This used to fail around 1.15%-1.40%, where the two
+ * halves of the AAK-suited-kicker class sat 8 ranks apart. */
+static void test_pineapple8_top_percent_no_suit_bias(void) {
+    int as = StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES);
+    int ah = StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_HEARTS);
+    int ks = StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_SPADES);
+    int kh = StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_HEARTS);
+
+    for (int step = 1; step <= 40; ++step) {
+        double percent = step * 0.005; /* 0.5% .. 20% */
+        pe_range_t *range = NULL;
+        pe_status_t status = pe_range_top_percent(game_pineapple8, percent,
+                                                  empty_mask(), &range);
+        TEST_ASSERT_EQUAL(PE_STATUS_OK, status);
+
+        StdDeck_CardMask want_a, want_b;
+        StdDeck_CardMask_RESET(want_a);
+        StdDeck_CardMask_SET(want_a, as);
+        StdDeck_CardMask_SET(want_a, ah);
+        StdDeck_CardMask_SET(want_a, ks);
+        StdDeck_CardMask_RESET(want_b);
+        StdDeck_CardMask_SET(want_b, as);
+        StdDeck_CardMask_SET(want_b, ah);
+        StdDeck_CardMask_SET(want_b, kh);
+
+        int found_a = 0, found_b = 0;
+        for (size_t i = 0; i < range->count; ++i) {
+            if (StdDeck_CardMask_EQUAL(range->combos[i].hand, want_a)) found_a = 1;
+            if (StdDeck_CardMask_EQUAL(range->combos[i].hand, want_b)) found_b = 1;
+        }
+        TEST_ASSERT(found_a == found_b);
+        pe_range_free(range);
+    }
+}
+
 int main(void) {
     RUN_TEST(test_parse_pairs);
     RUN_TEST(test_parse_suited);
@@ -229,5 +343,10 @@ int main(void) {
     RUN_TEST(test_pineapple8_weighted);
     RUN_TEST(test_pineapple8_invalid);
     RUN_TEST(test_pineapple_specific);
+    RUN_TEST(test_pineapple8_top_percent_full);
+    RUN_TEST(test_pineapple8_top_percent_half);
+    RUN_TEST(test_pineapple8_top_percent_dead_cards);
+    RUN_TEST(test_pineapple8_key_suit_isomorphism);
+    RUN_TEST(test_pineapple8_top_percent_no_suit_bias);
     return 0;
 }

@@ -702,6 +702,8 @@ pe_status_t pe_range_top_percent(
     int ret;
     if (variant == game_omaha || variant == game_omaha5 || variant == game_omaha6) {
         ret = ARP_GetOmahaTopPercentage((float)percent, variant, dead_cards, &arp_res);
+    } else if (variant == game_pineapple8) {
+        ret = ARP_GetTopPercentage((float)percent, variant, dead_cards, &arp_res);
     } else if (variant == game_7stud || variant == game_7stud8 ||
                variant == game_7studnsq || variant == game_razz) {
         ret = ARP_GetStudTopPercentage((float)percent, variant, dead_cards, &arp_res);
