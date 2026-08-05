@@ -53,4 +53,5 @@ jobs:
           find build -name 'gpu_cfr_kernels.cu.o' | grep .
           find build -name 'gpu_cfr_cuda.cu.o' | grep .
           find build -name 'gpu_combinatorics.cu.o' | grep .
+          find build -name 'eval_holdem_batch.cu.o' | grep .
           find build -name 'eval_batched_cuda.c.o' | grep .
