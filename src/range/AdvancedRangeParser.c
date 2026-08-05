@@ -3981,11 +3981,53 @@ static int arp_tokenize(arp_context_t *ctx)
                             /* offsuit logic handled by token type setting below */
                             bool both = (suffix_start == '\0');
 
+                            /* "and better" suffix. A '+' bound directly to the hand and
+                             * closing the term is poker notation ("22+" is 22 through AA),
+                             * not the binary union of the expression grammar ("AA-TT + AKs").
+                             * Requiring the next significant character to end the term keeps
+                             * spaced unions parsing as unions. Without this the '+' fell
+                             * through to the operator branch below and every "22+" style
+                             * range was rejected as ending with an operator. */
+                            bool plus = false;
+                            if (ctx->position < ctx->length && ctx->input[ctx->position] == '+')
+                            {
+                                size_t after = ctx->position + 1;
+                                while (after < ctx->length && isspace((unsigned char)ctx->input[after]))
+                                    after++;
+                                /* An operand after the '+' means it joins two terms
+                                 * ("AA-TT + AKs"); anything else - end of string, ',', ')',
+                                 * or a following operator - closes the term, so the '+'
+                                 * belongs to the hand. */
+                                if (after >= ctx->length ||
+                                    !(isalnum((unsigned char)ctx->input[after]) ||
+                                      ctx->input[after] == '('))
+                                {
+                                    plus = true;
+                                    ctx->position++; /* consume the '+' */
+                                }
+                            }
+
                             if (rank1 == rank2)
                             {
                                 token->type = ARP_TOKEN_PAIR_RANGE;
-                                token->data.pair_range.high_rank = rank1;
+                                token->data.pair_range.high_rank = plus ? StdDeck_Rank_ACE : rank1;
                                 token->data.pair_range.low_rank = rank1;
+                                allow_weight = true;
+                            }
+                            else if (plus && rank2 < rank1 - 1)
+                            {
+                                /* "A2s+" spans A2s..AKs: the kicker climbs to just below
+                                 * rank1. When rank2 is already rank1-1 ("76o+") the span is
+                                 * the single hand, which arp_expand_nonpropair_range rejects
+                                 * for rank2_high <= rank2_low, so that case falls through to
+                                 * the plain hand token below. */
+                                token->type = ARP_TOKEN_HAND_RANGE;
+                                token->data.hand_range.rank1_high = rank1;
+                                token->data.hand_range.rank2_high = rank1 - 1;
+                                token->data.hand_range.rank2_low = rank2;
+                                token->data.hand_range.suited = (suffix_start == 's');
+                                token->data.hand_range.offsuit = (suffix_start == 'o');
+                                token->data.hand_range.both = both;
                                 allow_weight = true;
                             }
                             else

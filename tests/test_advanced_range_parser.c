@@ -573,6 +573,67 @@ static int test_plo_categories(void)
  * Suit-permuted Omaha hands therefore piled onto a few buckets, overran the
  * probe limit and slipped past the duplicate check.
  */
+/*
+ * The '+' suffix ("22+" is 22 through AA) used to be tokenized as the binary
+ * union operator of the expression grammar, so every such range was rejected
+ * with "Range string cannot end with an operator". ARP_ParseRange therefore
+ * disagreed with pe_range_parse, which has its own hold'em path and accepted
+ * them. The fix distinguishes the two by what follows the '+': an operand
+ * means union, anything else closes the term.
+ */
+static int test_plus_suffix(void)
+{
+    printf("\n--- Testing '+' suffix vs binary union ---\n");
+
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+
+    struct { const char *range; size_t expected; const char *why; } cases[] = {
+        /* Pairs: 22+ is the 13 pairs, 6 combos each. */
+        { "22+",            78, "22+ is 13 pairs" },
+        { "TT+",            30, "TT+ is 5 pairs" },
+        { "AA+",             6, "AA+ degenerates to AA" },
+        /* Non-pairs: the kicker climbs to just below the high card. */
+        { "A2s+",           48, "A2s+ is A2s..AKs, 12 hands suited" },
+        { "A2o+",          144, "A2o+ is A2o..AKo, 12 hands offsuit" },
+        { "A2+",           192, "A2+ is both, 48 + 144" },
+        { "76o+",           12, "76o+ degenerates to 76o" },
+        { "32s+",            4, "32s+ degenerates to 32s" },
+        /* The suffix must survive lists, parens and the issue #63 range. */
+        { "22+, AKs",       82, "78 + 4" },
+        { "AKs, 22+",       82, "order must not matter" },
+        { "(22+)",          78, "parenthesised" },
+        { "22+,A2s+,K2s+", 170, "the wide range from issue #63" },
+        /* Binary union and subtraction must keep working. */
+        { "AA-TT + AKs",    34, "documented union: 30 + 4" },
+        { "AA-TT+AKs",      34, "union without spaces, an operand follows" },
+        { "AA + KK",        12, "union of two pairs" },
+        { "AA-TT - QQ",     24, "subtraction still works" },
+        { "22+ + AKs",      82, "suffix, then union" },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        arp_range_t r;
+        memset(&r, 0, sizeof(r));
+        if (!ARP_ParseRange(cases[i].range, dead, game_holdem, &r))
+        {
+            printf("❌ FAIL: \"%s\" did not parse (%s)\n", cases[i].range, cases[i].why);
+            return 0;
+        }
+        if (r.count != cases[i].expected)
+        {
+            printf("❌ FAIL: \"%s\" gave %zu combos, expected %zu (%s)\n",
+                   cases[i].range, r.count, cases[i].expected, cases[i].why);
+            ARP_FreeRange(&r);
+            return 0;
+        }
+        ARP_FreeRange(&r);
+    }
+
+    TEST_PASS("'+' suffix parses and binary union is unaffected");
+}
+
 static int test_hash_dedup(void)
 {
     printf("\n--- Testing Range Dedup (hash table) ---\n");
@@ -700,6 +761,9 @@ int main(void)
         tests_passed++;
     total_tests++;
     if (test_plo_categories())
+        tests_passed++;
+    total_tests++;
+    if (test_plus_suffix())
         tests_passed++;
     total_tests++;
     if (test_hash_dedup())
