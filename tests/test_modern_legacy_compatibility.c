@@ -32,8 +32,11 @@
  * tick of quantization noise. The assertions therefore measured scheduler
  * and timer noise, not the code, and failed ~6% of Release runs in CI while
  * the correctness tests in this file stayed deterministic.
+ *
+ * Reinstating them would mean fixing the measurement first: give both loops
+ * the same optimization barrier, and grow the iteration count until the
+ * elapsed time clears a fixed floor rather than merely turning non-zero.
  */
-#define PE_TIMING_ASSERTS 0
 
 /* Test data for compatibility verification */
 typedef struct
