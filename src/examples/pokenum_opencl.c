@@ -48,7 +48,9 @@ $ pokenum [-mc niter] [-t] [-O]
       -5dnsq 5-card draw hi/lo no stinking qualifier (with joker)
       -l     5-card draw ace-to-5 lowball (with joker)
       -l27   5-card draw deuce-to-seven lowball
-      -pa    pineapple hold'em (3 hole cards, discard 1 after flop)
+      -pa    pineapple hold'em (3 hole cards, best 2 at showdown)
+      -pacrazy crazy pineapple (discard committed on the flop; needs a board)
+      -palazy  lazy/Tahoe pineapple (all 3 cards reach showdown)
       -fusion fusion poker (hybrid Hold'em/Omaha)
       -27td  2-7 triple draw
       -a5td  A-5 triple draw
@@ -439,6 +441,10 @@ parseArgs(int argc, char **argv,
           *game = game_pineapple;
         } else if (strcmp(*argv, "-pa8") == 0) {
           *game = game_pineapple8;
+        } else if (strcmp(*argv, "-pacrazy") == 0) {
+          *game = game_pineapple_crazy;
+        } else if (strcmp(*argv, "-palazy") == 0) {
+          *game = game_pineapple_lazy;
         } else if (strcmp(*argv, "-27td") == 0) {
           *game = game_27_triple_draw;
         } else if (strcmp(*argv, "-a5td") == 0) {

@@ -130,6 +130,7 @@ add_unity_test(test_benchmark_example unity_tests/test_benchmark_example.c)
 # Use the corrected versions (now in original files)
 add_unity_test(test_pineapple_unity unity_tests/test_pineapple_unity.c)
 add_unity_test(test_pineapple8_unity unity_tests/test_pineapple8_unity.c)
+add_unity_test(test_pineapple_variants_unity unity_tests/test_pineapple_variants_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
 
 # New extended Unity tests for 80% coverage

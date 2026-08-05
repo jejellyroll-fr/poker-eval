@@ -65,6 +65,10 @@ typedef enum {
   game_irish,
   game_ofc,
   game_manila,
+  /* New games must be appended here: enum_gameparams[] is indexed by this
+     enum, so inserting in the middle silently mismatches every later game. */
+  game_pineapple_crazy,
+  game_pineapple_lazy,
   game_NUMGAMES
 } enum_game_t;
 
