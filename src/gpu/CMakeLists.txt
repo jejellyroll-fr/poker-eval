@@ -1,5 +1,13 @@
 # GPU acceleration module CMakeLists.txt
 
+# When BUILD_GPU is ON the CUDA toolkit is optional by default. A missing
+# toolkit used to print nothing, so configurations silently fell back to
+# OpenCL-only (or no backend at all) while the CUDA sources went unbuilt.
+# Surface it: always announce the outcome, and let CI opt into failing hard.
+option(POKER_EVAL_CUDA_REQUIRED
+    "Require the CUDA toolkit when BUILD_GPU is ON (error instead of silently disabling CUDA)"
+    OFF)
+
 # Check for CUDA/OpenCL when GPU mode is enabled
 set(GPU_SOURCES)
 set(GPU_LIBRARIES)
@@ -10,6 +18,17 @@ if(BUILD_GPU)
     endif()
     find_package(CUDA QUIET)
     find_package(OpenCL)
+
+    if(NOT CUDA_FOUND)
+        if(POKER_EVAL_CUDA_REQUIRED)
+            message(FATAL_ERROR "POKER_EVAL_CUDA_REQUIRED is ON but the CUDA toolkit was not \
+found. Install the NVIDIA CUDA toolkit (https://developer.nvidia.com/cuda-downloads) and retry.")
+        else()
+            message(WARNING "CUDA toolkit not found - CUDA acceleration will NOT be built. \
+Install the NVIDIA CUDA toolkit to enable it, or set -DPOKER_EVAL_CUDA_REQUIRED=ON to fail \
+here instead of silently skipping it.")
+        endif()
+    endif()
 
     # CUDA support
     if(CUDA_FOUND)
