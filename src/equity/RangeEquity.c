@@ -514,23 +514,18 @@ int CalculateEquityForRanges(
                                          orderflag, aggregated_results, &weighted_results);
     }
 
-    /* The aggregated counters (ev, nwinhi, nsharehi, ...) are normalized
-     * against the total weighted sample count, not the raw matchup count, so
-     * nsamples must be set to that denominator or any consumer that divides
-     * by it (enumResultPrint, pokenum, pe_equity) reads wrong percentages.
-     * The raw matchup count stays available in total_valid_matchups. */
+    aggregated_results->nsamples = total_valid_matchups; // raw matchup count (for API compatibility)
     unsigned int target_samples = weightedAggregationFinalize(&weighted_results, aggregated_results, num_players);
-    if (target_samples > 0) {
-        aggregated_results->nsamples = target_samples;
-        aggregated_results->sampleType = use_montecarlo ? ENUM_SAMPLE : ENUM_EXHAUSTIVE;
-    }
     if (weighted_results.total_weight <= 0.0) {
         TRACE_RE("Warning: No weight accumulated for matchups.\n");
+    }
+    if (target_samples > 0) {
+        aggregated_results->sampleType = use_montecarlo ? ENUM_SAMPLE : ENUM_EXHAUSTIVE;
     }
 
     if (total_weight > 0.0) {
         TRACE_RE("Info: Evaluated %u valid matchups (total matchup weight %.3f, weighted samples %.3f).\n",
-                 total_valid_matchups, total_weight, weighted_results.total_weighted_samples);
+                 aggregated_results->nsamples, total_weight, weighted_results.total_weighted_samples);
     } else {
         TRACE_RE("Warning: No valid matchups found after filtering conflicts.\n");
     }

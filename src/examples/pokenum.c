@@ -679,12 +679,26 @@ main(int argc, char **argv) {
         if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(board.joker, &sboard_print);
         else sboard_print = board.std;
 
-        /* CalculateEquityForRanges stores ev already normalized (0..1),
-         * but the legacy printers divide by nsamples themselves, so
-         * restore the raw accumulated value for display. */
+        /* CalculateEquityForRanges keeps ev normalized (0..1), while the
+         * legacy printers divide ev and the win/tie/lose counters by
+         * nsamples. For player 0 the counters sum exactly to the total
+         * weighted sample count, so report that as nsamples (honest for
+         * the "N boards" header) and rescale ev to match: afterwards
+         * ev/nsamples and counter/nsamples give true values. */
         if (anyRange && result.nsamples > 0) {
-          for (int i = 0; i < npockets; ++i)
-            result.ev[i] *= (double)result.nsamples;
+          enum_gameparams_t *gp = enumGameParams(result.game);
+          double total;
+          if (gp && gp->hashipot)
+            total = (double)result.nwinhi[0] + result.ntiehi[0] +
+                    (double)result.nlosehi[0];
+          else
+            total = (double)result.nwinlo[0] + result.ntielo[0] +
+                    (double)result.nloselo[0];
+          if (total > 0.0) {
+            result.nsamples = (unsigned int)total;
+            for (int i = 0; i < result.nplayers; ++i)
+              result.ev[i] *= total;
+          }
         }
         if (terse)
           enumResultPrintTerse(&result, spockets_print, sboard_print);
