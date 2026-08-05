@@ -589,9 +589,10 @@ void test_enumerate_mc_irish(void) {
     build_dead(&dead, pockets, 2, board);
     enumResultClear(&result);
 
-    /* Enumeration not implemented for irish - expect error 1 */
+    /* Enumeration now implemented for irish - expect success 0 */
     int err = enumSample(game_irish, pockets, board, dead, 2, 3, 500, 0, &result);
-    TEST_ASSERT_EQUAL_INT(1, err);
+    TEST_ASSERT_EQUAL_INT(0, err);
+    TEST_ASSERT_TRUE(result.nsamples > 0);
     enumResultFree(&result);
 }
 

@@ -121,6 +121,14 @@ static void test_preflop_converges(void) {
   assert_converges(game_omaha, "omaha preflop", "AsAdKsQd", "7h8h9c6c", "");
 }
 
+static void test_irish_converges(void) {
+  assert_converges(game_irish, "irish", "AsAdKsQd", "7h8h9c6c", "2s5s9d");
+}
+
+static void test_fusion_converges(void) {
+  assert_converges(game_fusion, "fusion", "AsAd", "7h8h", "2s5s9h");
+}
+
 /* The sampled board must never collide with a hole card or a board card. This
    is the defect itself rather than one of its symptoms, so check it directly:
    every sampled showdown has to involve exactly the expected card count. */
@@ -150,6 +158,8 @@ int main(void) {
   RUN_TEST(test_pineapple_converges);
   RUN_TEST(test_courchevel_converges);
   RUN_TEST(test_preflop_converges);
+  RUN_TEST(test_irish_converges);
+  RUN_TEST(test_fusion_converges);
   RUN_TEST(test_no_duplicate_cards_dealt);
   return UNITY_END();
 }
