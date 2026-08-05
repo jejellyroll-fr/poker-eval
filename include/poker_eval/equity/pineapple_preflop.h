@@ -34,6 +34,11 @@ extern "C" {
  *   - Subsequent cards map to 0, 1, 2 based on first-appearance order.
  *   - Encoded as: s2 (2) | s3 (2).
  *   - Fits in 4 bits. Stored in bits 0..3.
+ *   - The pattern is minimized over every card ordering that keeps ranks
+ *     descending, so equal-ranked cards are interchangeable: AsAh Ks and
+ *     AsAh Kh are the same hand up to relabeling suits and therefore share
+ *     one key. There are 1755 distinct classes (13 trips + 312 pair-plus-
+ *     kicker + 1430 three-distinct-ranks).
  *
  * Total canonical key = (r_packed << 4) | s_packed.
  */

@@ -175,9 +175,15 @@ int main(int argc, char *argv[]) {
     if (!f) { fprintf(stderr, "cannot write %s\n", outfile); free(ranks); return 1; }
 
     fprintf(f, "/* This is a GENERATED file. Do not edit by hand.                   */\n");
-    fprintf(f, "/* Regenerate with: src/examples/generate_pineapple8_rankings       */\n");
     fprintf(f, "/* Canonical Pineapple Hi/Lo hands ranked by preflop equity.       */\n");
-    fprintf(f, "/* Canonical : suits normalized, ranks descending (Ace..2).        */\n\n");
+    fprintf(f, "/* Canonical : suits normalized, ranks descending (Ace..2), and    */\n");
+    fprintf(f, "/* equal-ranked cards interchangeable (see pineapple_preflop.h).   */\n");
+    fprintf(f, "/*                                                                 */\n");
+    fprintf(f, "/* Equity is Monte-Carlo estimated, so the ordering of near-equal  */\n");
+    fprintf(f, "/* hands depends on the sample count and seed. Regenerate with the */\n");
+    fprintf(f, "/* exact arguments below to reproduce this table:                  */\n");
+    fprintf(f, "/*   generate_pineapple8_rankings <out.h> %d %u\n", samples, seed);
+    fprintf(f, "*/\n\n");
 
     fprintf(f, "#ifndef POKER_EVAL_PINEAPPLE8_HAND_RANKINGS_H\n");
     fprintf(f, "#define POKER_EVAL_PINEAPPLE8_HAND_RANKINGS_H\n\n");
