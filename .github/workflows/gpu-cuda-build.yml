@@ -1,0 +1,56 @@
+name: CUDA Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+# BUILD_GPU defaults to ON, yet no job ever had a CUDA toolkit installed, so
+# find_package(CUDA QUIET) silently took the no-op branch and the CUDA sources
+# under src/gpu/ were never compiled anywhere. This job compiles and links them
+# in the official nvidia/cuda devel container. It needs no GPU: nvcc compiles
+# device code to cubin/PTX at build time, so a toolkit alone is enough.
+jobs:
+  cuda-build:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.6.3-devel-ubuntu22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install build tools
+        run: apt-get update && apt-get install -y cmake git
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=ON \
+            -DPOKER_EVAL_CUDA_REQUIRED=ON \
+            -DENABLE_OPENMP=OFF 2>&1 | tee configure.log
+
+      # POKER_EVAL_CUDA_REQUIRED=ON above makes configuration itself fail if
+      # the toolkit is missing, but keep an explicit guard like gpu-build.yml.
+      - name: Verify the CUDA backend is actually configured
+        run: grep -q "CUDA found, building CUDA acceleration" configure.log
+
+      - name: Build
+        run: cmake --build build -j2
+
+      - name: Check the CUDA objects were produced
+        run: |
+          find build -name 'eval_cuda_kernel.cu.o' | grep .
+          find build -name 'eval_cuda_tables.cu.o' | grep .
+          find build -name 'eval_cuda.c.o' | grep .
+          find build -name 'eval_generic_kernel.cu.o' | grep .
+          find build -name 'eval_low_kernel.cu.o' | grep .
+          find build -name 'eval_omaha_kernel.cu.o' | grep .
+          find build -name 'eval_cuda_generic.c.o' | grep .
+          find build -name 'gpu_cfr_kernels.cu.o' | grep .
+          find build -name 'gpu_cfr_cuda.cu.o' | grep .
+          find build -name 'gpu_combinatorics.cu.o' | grep .
+          find build -name 'eval_batched_cuda.c.o' | grep .
