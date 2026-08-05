@@ -54,7 +54,13 @@ extern "C" {
 
 /**
  * @brief Status codes for range and equity operations
+ *
+ * Note: pe_status_t may already be defined by <poker_eval/core/status.h>
+ * when this header is included after poker_eval.h; the guard below lets the
+ * first definition win.
  */
+#ifndef PE_STATUS_T_DEFINED
+#define PE_STATUS_T_DEFINED
 typedef enum {
     PE_STATUS_OK = 0,             /**< Operation completed successfully */
     PE_STATUS_ERROR = 1,          /**< Generic error */
@@ -63,6 +69,7 @@ typedef enum {
     PE_STATUS_OUT_OF_MEMORY = 4,  /**< Memory allocation failed */
     PE_STATUS_NOT_IMPLEMENTED = 5 /**< Feature not yet implemented */
 } pe_status_t;
+#endif
 
 /**
  * @brief Single weighted hand combination
