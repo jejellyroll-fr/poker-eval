@@ -106,6 +106,25 @@ AA-TT     Pairs from aces to tens
 
 **How it works**: The tokenizer detects the pattern `[Rank][Rank]-[Rank][Rank]` where both pairs of ranks match, creating a `ARP_TOKEN_PAIR_RANGE` token with `high_rank` and `low_rank`.
 
+### The `+` Suffix ("and better")
+
+```
+22+       All pocket pairs, 22 through AA          (78 combos)
+TT+       Pairs from tens up                       (30 combos)
+A2s+      A2s through AKs: the kicker climbs       (48 combos)
+A2o+      A2o through AKo                          (144 combos)
+A2+       Both suited and offsuit                  (192 combos)
+```
+
+For a pair, `+` runs from the named rank up to aces. For a non-pair, the high card
+stays fixed and the kicker climbs to just below it, so `76o+` is simply `76o` — the
+span is already a single hand.
+
+**`+` is also the union operator**, as in `AA-TT + AKs`. The two are told apart by what
+follows: if an operand comes next, the `+` joins two terms; if the term ends there
+(end of string, `,`, `)`, or another operator), the `+` belongs to the hand. So
+`AA-TT+AKs` is a union, while `22+, AKs` is the suffix followed by a list separator.
+
 ### Complex Combinations
 
 ```
@@ -917,17 +936,26 @@ make test_omaha_range_parser
 
 ## Future Enhancements
 
+### Implemented
+
+1. **Cached Rankings**: percentage expansions are memoized per `(game_type, percentage)`;
+   see `ARP_InitCache`, `ARP_ClearCache` and `ARP_GetCacheStats`.
+2. **Range Algebra**: `ARP_UnionRanges`, `ARP_IntersectRanges`, `ARP_SubtractRanges` and
+   `ARP_CombineRanges`, plus the expression grammar (`ARP_ParseComplexExpression`,
+   `ARP_EvaluateExpressionTree`) for forms like `AA-TT + AKs`.
+
 ### Planned Features
 
-1. **Cached Rankings**: Pre-computed hand rankings for faster percentage generation
-2. **Range Algebra**: More complex set operations
-3. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
+1. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
 
 ### Known Limitations
 
-1. **Mixed Comma Patterns**: "AAxx, JT98r" may fail in some contexts (under investigation)
-2. **Maximum Range Size**: Limited to `ARP_MAX_RANGE_SIZE` (2048 hands)
-3. **Percentage Rankings**: Currently only available for Hold'em and Omaha
+1. **Percentage Rankings**: available for Hold'em, Omaha (`ARP_GetOmahaTopPercentage`),
+   Pineapple Hi/Lo, and Stud games through `ARP_GetStudTopPercentage`. The generic
+   `ARP_GetTopPercentage` does not route Stud, Razz, Badugi or plain Pineapple; those
+   either need their dedicated entry point or have no ranked table yet.
+2. **Percentage scale**: percentages are passed as a fraction in `0.0 .. 1.0`
+   (`0.10` for the top 10%), not as `0 .. 100`. Values outside that range are rejected.
 
 ## Weighted Ranges
 
