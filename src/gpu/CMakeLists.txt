@@ -61,11 +61,16 @@ here instead of silently skipping it.")
             kernels/gpu_combinatorics.cu
         )
 
+        cuda_add_library(poker_cuda_batch STATIC
+            kernels/eval_holdem_batch.cu
+        )
+
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
             target_compile_options(poker_cuda PRIVATE -Wno-error=pedantic)
             target_compile_options(poker_cuda_generic PRIVATE -Wno-error=pedantic)
             target_compile_options(poker_gpu_cfr_cuda PRIVATE -Wno-error=pedantic)
             target_compile_options(poker_gpu_combinatorics_cuda PRIVATE -Wno-error=pedantic)
+            target_compile_options(poker_cuda_batch PRIVATE -Wno-error=pedantic)
         endif()
 
         target_include_directories(poker_cuda PUBLIC
@@ -89,13 +94,19 @@ here instead of silently skipping it.")
             ${CMAKE_SOURCE_DIR}/include
             ${CUDA_INCLUDE_DIRS}
         )
+        target_include_directories(poker_cuda_batch PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_SOURCE_DIR}/include
+            ${CUDA_INCLUDE_DIRS}
+        )
 
         target_link_libraries(poker_cuda ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_cuda_generic ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_gpu_cfr_cuda ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_gpu_combinatorics_cuda ${CUDA_LIBRARIES} poker_core)
+        target_link_libraries(poker_cuda_batch ${CUDA_LIBRARIES} poker_core)
 
-        list(APPEND GPU_LIBRARIES poker_cuda poker_cuda_generic poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda)
+        list(APPEND GPU_LIBRARIES poker_cuda poker_cuda_generic poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda poker_cuda_batch)
 
         add_definitions(-DHAVE_CUDA)
         add_definitions(-DENABLE_CUDA)
