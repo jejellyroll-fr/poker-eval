@@ -453,7 +453,7 @@ int cuda_backend_init(void** out_context, int device_id, bool verbose) {
         fprintf(stderr, "  Compute capability: %d.%d\n",
                 prop.major, prop.minor);
         fprintf(stderr, "  Global memory: %.2f GB\n",
-                prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
+                (double)prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
         fprintf(stderr, "  Lookup tables loaded to constant memory\n");
     }
 
