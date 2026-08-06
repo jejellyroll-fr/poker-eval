@@ -214,6 +214,15 @@ here instead of silently skipping it.")
             gpu_table_loader.c
         )
         target_include_directories(poker_gpu_unified PUBLIC ${GPU_INCLUDE_DIRS})
+
+        # eval_batched_cuda.c includes CUDA's cuda_runtime.h; its driver_types.h
+        # uses C11 anonymous unions, which the project-wide -pedantic builds
+        # reject. The CUDA libraries above already drop -Werror for pedantic;
+        # do the same here so the strict -Werror build accepts the same header.
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(poker_gpu_unified PRIVATE -Wno-error=pedantic)
+        endif()
+
         target_link_libraries(poker_gpu_unified
             PUBLIC poker_core
             PRIVATE ${GPU_LIBRARIES})
