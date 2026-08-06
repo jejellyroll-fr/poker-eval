@@ -1,0 +1,64 @@
+name: CUDA Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+# BUILD_GPU defaults to ON, yet no job ever had a CUDA toolkit installed, so
+# find_package(CUDA QUIET) silently took the no-op branch and the CUDA sources
+# under src/gpu/ were never compiled anywhere. This job compiles and links them
+# in the official nvidia/cuda devel container. It needs no GPU: nvcc compiles
+# device code to cubin/PTX at build time, so a toolkit alone is enough.
+jobs:
+  cuda-build:
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.6.3-devel-ubuntu22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install build tools
+        run: apt-get update && apt-get install -y cmake git
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=ON \
+            -DPOKER_EVAL_CUDA_REQUIRED=ON \
+            -DPOKER_EVAL_GPU_LINK_CHECK=ON \
+            -DENABLE_OPENMP=OFF 2>&1 | tee configure.log
+
+      # POKER_EVAL_CUDA_REQUIRED=ON above makes configuration itself fail if
+      # the toolkit is missing, but keep an explicit guard like gpu-build.yml.
+      - name: Verify the CUDA backend is actually configured
+        run: grep -q "CUDA found, building CUDA acceleration" configure.log
+
+      - name: Build
+        run: cmake --build build -j2
+
+      - name: Check the CUDA objects were produced
+        run: |
+          # FindCUDA names its objects <target>_generated_<source>.cu.o.
+          for o in eval_cuda_kernel.cu.o eval_cuda_tables.cu.o eval_cuda.c.o \
+                   eval_generic_kernel.cu.o eval_low_kernel.cu.o eval_omaha_kernel.cu.o \
+                   eval_cuda_generic.c.o gpu_cfr_kernels.cu.o gpu_cfr_cuda.cu.o \
+                   gpu_combinatorics.cu.o eval_holdem_batch.cu.o eval_batched_cuda.c.o; do
+            find build -name "*${o}" | grep . >/dev/null || { echo "missing object: $o"; exit 1; }
+          done
+
+      # The objects above live in static archives, and ar never resolves a
+      # symbol, so everything so far only proves the sources compile. This is
+      # the step that proves they link: gpu_link_check.c references the batched
+      # API, which drags eval_batched_gpu.c and the whole cuda_backend_* surface
+      # into a real link. An undefined device symbol fails here instead of in a
+      # user's build.
+      - name: Link against the CUDA libraries
+        run: |
+          cmake --build build --target poker_gpu_link_check -j2
+          find build -name 'poker_gpu_link_check' -type f | grep .
