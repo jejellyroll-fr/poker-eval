@@ -19,6 +19,10 @@ This guide explains how to use `pokenum` to analyze card-drawing strategies in B
 
 # Monte Carlo (recommended for incomplete hands)
 ./pokenum -mc 100000 -badugi <cards> - <cards>
+
+# Range-vs-range (any argument longer than 2 chars is a range fragment;
+# combine hands with commas; short pair notation works for pocket cards)
+./pokenum -badugi "As2d3h4c" - "KsQdJhTc, 2c3d4h5s"
 ```
 
 ## 📊 Pre-Draw Analysis (1st round)
@@ -181,9 +185,9 @@ alias badugi_exact="./pokenum -badugi "
 
 ## 🚨 Current Limitations
 
-- **Complex ranges**: pokenum evaluates hand vs hand; range-vs-range analysis is not wired into the CLI. The underlying range parser does support Badugi 4-card hands (`pe_range_parse(game_badugi, "As2d3h4c, KsQdJhTc", ...)`), including `@` weights.
 - **Multiway analysis**: Limited to 2 players for now
 - **Dead cards**: No explicit support for exposed cards
+- **Card syntax**: Hands with internal spaces in a single argument (e.g. `"As 2h"`) are not supported; pass each card as its own argument (`As 2h`) or concatenated (`As2h`)
 
 ## 📚 Additional Resources
 

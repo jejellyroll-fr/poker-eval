@@ -5,6 +5,10 @@
 extern "C" {
 #endif
 
+/* Note: pe_status_t may also be defined (with different members) by
+ * <poker_eval/range.h>; the guard below lets the first definition win. */
+#ifndef PE_STATUS_T_DEFINED
+#define PE_STATUS_T_DEFINED
 typedef enum {
     PE_STATUS_OK = 0,
     PE_STATUS_INVALID_ARGS,
@@ -15,6 +19,7 @@ typedef enum {
     PE_STATUS_IO_ERROR,
     PE_STATUS_INTERNAL_ERROR
 } pe_status_t;
+#endif
 
 const char* pe_error_string(pe_status_t status);
 
