@@ -713,20 +713,6 @@ static int test_contains_after_removal(void)
     TEST_PASS("Contains-after-removal tests");
 }
 
-/* True when no card appears in both ranges */
-static int ranges_disjoint(const arp_range_t *a, const arp_range_t *b)
-{
-    for (size_t i = 0; i < a->count; i++)
-    {
-        for (size_t j = 0; j < b->count; j++)
-        {
-            if (StdDeck_CardMask_ANY_SET(a->hands[i], b->hands[j]))
-                return 0;
-        }
-    }
-    return 1;
-}
-
 static int test_multiway_ranges(void)
 {
     printf("\n--- Testing Multi-Way Ranges ---\n");
@@ -736,7 +722,7 @@ static int test_multiway_ranges(void)
     arp_multiway_range_t mw;
     const char *players[4];
 
-    /* Three disjoint pocket ranges */
+    /* Three ranges, one per player */
     players[0] = "AA";
     players[1] = "KK";
     players[2] = "QQ";
@@ -745,32 +731,26 @@ static int test_multiway_ranges(void)
     TEST_ASSERT(mw.num_players == 3, "num_players should be 3");
     TEST_ASSERT(mw.ranges[0].count == 6 && mw.ranges[1].count == 6 &&
                 mw.ranges[2].count == 6, "each pocket pair keeps its 6 combos");
-    TEST_ASSERT(ranges_disjoint(&mw.ranges[0], &mw.ranges[1]) &&
-                ranges_disjoint(&mw.ranges[0], &mw.ranges[2]) &&
-                ranges_disjoint(&mw.ranges[1], &mw.ranges[2]),
-                "player ranges must be mutually exclusive");
     ARP_FreeMultiwayRange(&mw);
 
-    /* Identical ranges cannot coexist: AA vs AA has no valid deal */
+    /* Overlapping ranges are kept whole: card exclusion is a property of
+     * the deal, not of the ranges. AA vs AA has six valid deals (e.g.
+     * AsAh vs AdAc), so both ranges stay complete. */
     players[0] = "AA";
     players[1] = "AA";
     TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_holdem, &mw),
                 "AA/AA should parse");
-    TEST_ASSERT(mw.ranges[0].count == 0 && mw.ranges[1].count == 0,
-                "two AA ranges cannot be dealt together");
+    TEST_ASSERT(mw.ranges[0].count == 6 && mw.ranges[1].count == 6,
+                "AA/AA keeps every combo: AsAh vs AdAc is dealable");
     ARP_FreeMultiwayRange(&mw);
 
-    /* Overlapping card sets resolve per-hand: each player keeps the
-     * portion that uses no card of the other's range. AA+KK vs KK+QQ:
-     * away the shared kings, leaving AA vs QQ (6 combos each). */
-    players[0] = "AA,KK";
-    players[1] = "KK,QQ";
+    /* The same applies to partially overlapping ranges */
+    players[0] = "AKs";
+    players[1] = "AKo";
     TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_holdem, &mw),
-                "AA,KK / KK,QQ should parse");
-    TEST_ASSERT(mw.ranges[0].count == 6 && mw.ranges[1].count == 6,
-                "shared kings are dropped, the disjoint pairs stay");
-    TEST_ASSERT(ranges_disjoint(&mw.ranges[0], &mw.ranges[1]),
-                "player ranges must be mutually exclusive");
+                "AKs/AKo should parse");
+    TEST_ASSERT(mw.ranges[0].count == 4 && mw.ranges[1].count == 12,
+                "suited and offsuit ranges keep their combos");
     ARP_FreeMultiwayRange(&mw);
 
     /* Dead cards reduce every player's range */
@@ -791,31 +771,13 @@ static int test_multiway_ranges(void)
                 "an invalid player string must fail the parse");
     ARP_FreeMultiwayRange(&mw);
 
-    /* Omaha: 4-card hands are filtered the same way. AAxxds spans
-     * every ace-kicker combo, so an opponent range can never borrow
-     * those aces/share the board cards; the shared cards are resolved
-     * to one side. */
+    /* Omaha patterns keep every combo */
     players[0] = "AAxxds";
     players[1] = "KKxxds";
     TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_omaha, &mw),
                 "Omaha AAxxds/KKxxds should parse");
-    TEST_ASSERT(mw.ranges[0].count == 0 || mw.ranges[1].count == 0,
-                "every AAxxds hand borrows an ace the opponent also needs");
-    TEST_ASSERT(ranges_disjoint(&mw.ranges[0], &mw.ranges[1]),
-                "Omaha player ranges must be mutually exclusive");
-    ARP_FreeMultiwayRange(&mw);
-
-    /* Omaha: mutually exclusive 4-card hands survive untouched */
-    players[0] = "AsKh6d5c,KsQs2h2c";
-    players[1] = "9s9h9d9c";
-    TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_omaha, &mw),
-                "disjoint Omaha hands should parse");
-    TEST_ASSERT(mw.ranges[0].count == 2 && mw.ranges[1].count == 1,
-                "disjoint Omaha hands are all kept");
-    TEST_ASSERT(ranges_disjoint(&mw.ranges[0], &mw.ranges[1]),
-                "Omaha player ranges must be mutually exclusive");
-    ARP_FreeMultiwayRange(&mw);
-
+    TEST_ASSERT(mw.ranges[0].count == 864 && mw.ranges[1].count == 864,
+                "Omaha ranges keep all 864 combos each");
     TEST_PASS("Multi-way range tests");
 }
 

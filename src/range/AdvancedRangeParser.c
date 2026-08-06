@@ -4469,77 +4469,15 @@ int ARP_ValidateRangeString(const char *range_string, char *error_buffer, size_t
 /* ===== Multi-way Ranges ===== */
 
 /*
- * Drop, from every player's range, the hands that share a card with any
- * hand of another player's range. The resulting ranges are mutually
- * exclusive, so cards drawn from them can never collide between players.
+ * No cross-player exclusion happens here. A player is dealt a single hand
+ * per deal, so the collision between players is a property of the deal, not
+ * of the ranges: AA vs AA has six valid deals (AsAh vs AdAc), and filtering
+ * every hand that touches any hand of another player's range would empty
+ * most realistic ranges. Per-deal exclusion is the equity engine's job
+ * (see RangeEquity.c), which tests each dealt hand against the selection in
+ * progress. This function only parses N strings against a shared dead-card
+ * mask; the resulting per-player ranges may freely overlap.
  */
-static void arp_multiway_filter_overlaps(arp_multiway_range_t *multiway)
-{
-    int n = multiway->num_players;
-
-    /* Snapshot, per player, the cards used by the other players' ORIGINAL
-     * ranges. Filtering in place must not feed earlier players' filtered
-     * results into later players, or the outcome would depend on player
-     * order (AA vs AA would leave the last player's range intact). */
-    StdDeck_CardMask *others_cards = calloc((size_t)n, sizeof(StdDeck_CardMask));
-    if (!others_cards)
-        return;
-
-    for (int i = 0; i < n; i++)
-    {
-        StdDeck_CardMask_RESET(others_cards[i]);
-        for (int j = 0; j < n; j++)
-        {
-            if (j == i)
-                continue;
-            for (size_t k = 0; k < multiway->ranges[j].count; k++)
-            {
-                StdDeck_CardMask_OR(others_cards[i], others_cards[i],
-                                    multiway->ranges[j].hands[k]);
-            }
-        }
-    }
-
-    for (int i = 0; i < n; i++)
-    {
-        /* Keep only the hands that share no card with the others */
-        arp_range_t *range = &multiway->ranges[i];
-        size_t out = 0;
-        for (size_t k = 0; k < range->count; k++)
-        {
-            if (StdDeck_CardMask_ANY_SET(range->hands[k], others_cards[i]))
-                continue;
-            if (out != k)
-            {
-                range->hands[out] = range->hands[k];
-                range->weights[out] = range->weights[k];
-            }
-            out++;
-        }
-        range->count = out;
-
-        /* Recompute the aggregates over the kept hands */
-        range->total_weight = 0.0;
-        range->has_weights = false;
-        for (size_t k = 0; k < range->count; k++)
-        {
-            range->total_weight += range->weights[k];
-            if (fabs(range->weights[k] - 1.0) > 1e-9)
-                range->has_weights = true;
-        }
-
-        /* The dedup hash table is stale after filtering */
-        if (range->internal_data)
-        {
-            arp_hash_table_t *ht = (arp_hash_table_t *)range->internal_data;
-            arp_hash_free(ht);
-            free(ht);
-            range->internal_data = NULL;
-        }
-    }
-
-    free(others_cards);
-}
 
 int ARP_ParseMultiwayRanges(const char *const *range_strings,
                             int num_players,
@@ -4568,7 +4506,6 @@ int ARP_ParseMultiwayRanges(const char *const *range_strings,
         }
     }
 
-    arp_multiway_filter_overlaps(result);
     return 1;
 }
 

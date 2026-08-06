@@ -943,10 +943,10 @@ make test_omaha_range_parser
 2. **Range Algebra**: `ARP_UnionRanges`, `ARP_IntersectRanges`, `ARP_SubtractRanges` and
    `ARP_CombineRanges`, plus the expression grammar (`ARP_ParseComplexExpression`,
    `ARP_EvaluateExpressionTree`) for forms like `AA-TT + AKs`.
-3. **Multi-way Ranges**: `ARP_ParseMultiwayRanges` defines one range per player
-   (3+ players) and removes the hands that would collide with another player's
-   range, so the player ranges are mutually exclusive (see
-   [Multi-Way Ranges](#multi-way-ranges)).
+3. **Multi-way Ranges**: `ARP_ParseMultiwayRanges` parses one range string per
+   player (3+ players) against a shared dead-card mask (see
+   [Multi-Way Ranges](#multi-way-ranges)). Per-deal card exclusion between
+   players is the equity engine's job, not the parser's.
 
 ### Planned Features
 
@@ -1012,23 +1012,16 @@ ARP_FreeMultiwayRange(&mw);
 ```
 
 Each player's string is parsed exactly like `ARP_ParseRange()`, with the
-shared `dead_cards` (board/burn cards) excluded from every player. A second
-pass then removes, from each player's range, every hand that shares a card
-with any hand of another player's range. The resulting ranges are **mutually
-exclusive**: cards drawn from them can never collide between players, which
-is what a multi-way equity or dealing scenario requires.
+shared `dead_cards` (board/burn cards) excluded from every player.
 
-Consequences of the conflict rule to be aware of:
-
-- Identical ranges can no longer coexist: `{"AA","AA"}` resolves to two empty
-  ranges, because no deal can give two players the same four aces.
-- Card sets resolve conservatively: `{"AKs","AKo"}` empties both, because every
-  `AKs` combo needs the same aces and kings the offsuit combos also use.
-  `{"AKs","QQ"}` keeps the suited range's 4 combos and the 6 queen pairs —
-  the card sets are disjoint.
-- Wide patterns are unforgiving in multi-way mode: every hand of `AAxxds`
-  (Omaha) uses an ace, so an opponent range that needs aces is emptied.
-  `{"AAxxds","KKxxds"}` leaves one side with nothing to deal.
+The per-player ranges are **not** made mutually exclusive, on purpose: a
+player is dealt a single hand per deal, so the collision between players is
+a property of the deal, not of the ranges. `AA` vs `AA` has six valid deals
+(`AsAh` vs `AdAc`), and `AKs` vs `AKo` 24 (`AsKs` vs `AhKd`) — dropping
+every hand that touches any hand of another player's range would empty
+almost every realistic multi-way input. Card exclusion is enforced per deal
+by the equity engine (`src/equity/RangeEquity.c`), which tests each dealt
+hand against the selection in progress.
 
 `ARP_FreeMultiwayRange()` releases all per-player ranges; the per-player
 ranges are plain `arp_range_t`, so `ARP_GetRangePercentage()`,
