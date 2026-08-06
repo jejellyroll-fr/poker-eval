@@ -8,6 +8,13 @@ option(POKER_EVAL_CUDA_REQUIRED
     "Require the CUDA toolkit when BUILD_GPU is ON (error instead of silently disabling CUDA)"
     OFF)
 
+# Every GPU target below is a static archive, and ar accepts undefined symbols,
+# so building them says nothing about whether they resolve. This adds a tiny
+# executable whose only job is to make the linker prove it. See gpu_link_check.c.
+option(POKER_EVAL_GPU_LINK_CHECK
+    "Build a small executable that links the GPU libraries, for CI link coverage"
+    OFF)
+
 # Check for CUDA/OpenCL when GPU mode is enabled
 set(GPU_SOURCES)
 set(GPU_LIBRARIES)
@@ -234,6 +241,16 @@ here instead of silently skipping it.")
         if(OpenCL_FOUND)
             target_compile_definitions(poker_gpu_unified PRIVATE HAVE_OPENCL)
             target_compile_definitions(poker_gpu_unified PRIVATE ENABLE_OPENCL)
+        endif()
+
+        # The only step that resolves the backend symbols. poker_gpu_unified is
+        # static, so CMake still puts its PRIVATE dependencies on this link line.
+        if(POKER_EVAL_GPU_LINK_CHECK)
+            add_executable(poker_gpu_link_check gpu_link_check.c)
+            target_include_directories(poker_gpu_link_check PRIVATE
+                ${CMAKE_SOURCE_DIR}/include
+                ${CMAKE_BINARY_DIR}/include)
+            target_link_libraries(poker_gpu_link_check PRIVATE poker_gpu_unified)
         endif()
 
         add_library(poker_ofc_gpu STATIC
