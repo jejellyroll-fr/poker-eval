@@ -22,9 +22,6 @@ jobs:
       - name: Install build tools
         run: apt-get update && apt-get install -y cmake git
 
-      # LTO is off on purpose: it defers most diagnostics to link time, which is
-      # the opposite of what a compile-coverage job wants, and it would hand the
-      # link check GIMPLE archives instead of real object code.
       - name: Configure
         run: |
           cmake -S . -B build \
@@ -35,7 +32,6 @@ jobs:
             -DBUILD_GPU=ON \
             -DPOKER_EVAL_CUDA_REQUIRED=ON \
             -DPOKER_EVAL_GPU_LINK_CHECK=ON \
-            -DENABLE_LTO=OFF \
             -DENABLE_OPENMP=OFF 2>&1 | tee configure.log
 
       # POKER_EVAL_CUDA_REQUIRED=ON above makes configuration itself fail if
