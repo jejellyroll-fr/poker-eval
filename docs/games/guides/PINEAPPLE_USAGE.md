@@ -146,7 +146,8 @@ The Pineapple evaluation works by:
 
 - Each Pineapple evaluation requires 3 standard Hold'em evaluations
 - Monte Carlo simulations scale linearly with the number of iterations
-- For large-scale simulations, consider using the batched evaluation functions
+- For large-scale simulations, `enumSampleBatched` evaluates boards in batches
+  through the SIMD kernels when available (see "Future Enhancements" below)
 
 ### Limitations
 
@@ -226,8 +227,16 @@ Potential improvements for future versions:
    state needs the flop enumerated in an outer loop with the discard resolved
    per flop, which the current enumerator does not do. Preflop is rejected today
    rather than approximated.
-2. **Performance Optimizations**: SIMD acceleration for batch evaluations
-3. **Range Analysis**: Specialized tools for Pineapple range vs range calculations
+2. **Range Analysis**: specialized tools for Pineapple range vs range calculations
+
+The batched Monte-Carlo path (`enumSampleBatched`, used by range equity) now
+covers the whole Pineapple family. All four games are evaluated board-by-board
+through the runtime-gated SIMD kernels when the CPU supports them (AVX2 /
+AVX-512 / NEON), and fall back to an exact scalar path otherwise — also in a
+default build that does not set `USE_SIMD`. The batched engines are pinned
+against the scalar `enumSample` reference by `test_pineapple_batched_unity`,
+covering the Pine-High split of `game_pineapple8` and the flop-time discard
+commit of `game_pineapple_crazy`.
 
 ## References
 
