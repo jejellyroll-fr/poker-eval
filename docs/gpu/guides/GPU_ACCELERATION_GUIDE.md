@@ -301,11 +301,13 @@ GPU evaluation failed
 ## Future Enhancements
 
 ### Planned Features
+The following items are not implemented yet and are tracked in issue [#43](https://github.com/jejellyroll-fr/poker-eval/issues/43):
 1. **Advanced RNG**: Better random number generation algorithms (only XORShift32 exists today)
 2. **Streaming**: Overlap computation with memory transfers
 3. **Precision Tuning**: Half-precision (FP16) floating point for memory bandwidth
 
 ### Implemented
+- **CUDA build coverage in CI**: The CUDA sources under `src/gpu/` are compiled and linked by the `gpu-cuda-build` workflow (`.github/workflows/gpu-cuda-build.yml`) on every push and pull request, using the official `nvidia/cuda` devel container. No GPU is required — `nvcc` emits cubin/PTX at build time — mirroring how the `gpu-build` workflow already covers the OpenCL backend. Configuration fails hard (`-DPOKER_EVAL_CUDA_REQUIRED=ON`) if the toolkit is missing, so the CUDA path cannot silently rot again. Machine-independent compilation is verified here; runtime behaviour still needs real NVIDIA hardware.
 - **Range Support**: Per-player `StdDeck_CardMask` ranges in the Monte Carlo path (tracked as issue #37). A `NULL` range deals uniformly from the full deck; a non-`NULL` range restricts each player's hole cards to that range (see [Range-vs-Range Monte Carlo](#range-vs-range-monte-carlo)). The CUDA and OpenCL backends draw hole cards by collecting the range-allowed available cards rather than rejection sampling, so tight ranges deal correctly.
 - **Multi-GPU**: Distribute work across multiple GPUs with static/dynamic load balancing — implemented in `src/gpu/eval_multi_gpu.c` (`include/poker_eval/gpu/eval_multi_gpu.h`) and documented in [GPU_BATCHED_EVALUATION.md](./GPU_BATCHED_EVALUATION.md). Note: it is currently not wired into the CMake build (the module is present in the tree but `poker_gpu` targets do not compile it yet).
 
@@ -314,6 +316,7 @@ GPU evaluation failed
 - **Phase 2**: ✅ Range support and advanced features
 - **Phase 3**: 🔄 Multi-GPU (source implemented, awaiting build wiring) and streaming optimizations
 - **Phase 4**: 📋 Integration with poker analysis tools
+- **Phase 5**: ⏳ Remaining GPU optimizations tracked in [#43](https://github.com/jejellyroll-fr/poker-eval/issues/43) (advanced RNG, streaming, FP16)
 
 ## Contributing
 

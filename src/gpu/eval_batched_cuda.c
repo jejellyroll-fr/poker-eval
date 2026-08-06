@@ -38,42 +38,42 @@
 } while(0)
 
 /* Forward declarations of CUDA kernels (defined in .cu file) */
-extern "C" void launch_eval_holdem_batch_kernel(
+extern void launch_eval_holdem_batch_kernel(
     const uint8_t* d_hands,
     size_t batch_size,
     uint32_t* d_values,
     cudaStream_t stream
 );
 
-extern "C" void launch_eval_holdem_batch_kernel_opt(
+extern void launch_eval_holdem_batch_kernel_opt(
     const uint8_t* d_hands,
     size_t batch_size,
     uint32_t* d_values,
     cudaStream_t stream
 );
 
-extern "C" void launch_eval_omaha_batch_kernel(
+extern void launch_eval_omaha_batch_kernel(
     const uint8_t* d_hands,
     size_t batch_size,
     uint32_t* d_values,
     cudaStream_t stream
 );
 
-extern "C" void launch_eval_omaha5_batch_kernel(
+extern void launch_eval_omaha5_batch_kernel(
     const uint8_t* d_hands,
     size_t batch_size,
     uint32_t* d_values,
     cudaStream_t stream
 );
 
-extern "C" void launch_eval_omaha6_batch_kernel(
+extern void launch_eval_omaha6_batch_kernel(
     const uint8_t* d_hands,
     size_t batch_size,
     uint32_t* d_values,
     cudaStream_t stream
 );
 
-extern "C" void launch_eval_equity_kernel(
+extern void launch_eval_equity_kernel(
     uint8_t hero0,
     uint8_t hero1,
     uint8_t villain0,
@@ -147,11 +147,17 @@ static void init_lookup_tables(void) {
     tables_initialized = true;
 }
 
-/* External symbols from kernel (constant memory) */
-extern __constant__ uint8_t d_nbits_table[8192];
-extern __constant__ uint8_t d_straight_table[8192];
-extern __constant__ uint8_t d_top_card_table[8192];
-extern __constant__ uint32_t d_top_five_table[8192];
+/* Uploads the lookup tables to the device-side constant memory used by the
+ * evaluation kernels. The symbols (d_nBitsTable and friends, declared in
+ * cuda/eval_cuda_device_common.cuh) belong to the poker_cuda module, so the
+ * copy has to be issued from that module rather than from here; this is the
+ * extern "C" entry point cuda/eval_cuda_kernel.cu exposes for it. */
+extern void cuda_init_lookup_tables(
+    const uint8_t* nBitsTable,
+    const uint8_t* straightTable,
+    const uint32_t* topFiveCardsTable,
+    const uint8_t* topCardTable
+);
 
 /* ===== Internal Helpers ===== */
 
@@ -179,8 +185,8 @@ static int ensure_device_buffers(cuda_context_t* ctx, size_t batch_size, int car
         size_t hands_size = required_capacity * cards_per_hand * sizeof(uint8_t);
         size_t values_size = required_capacity * sizeof(uint32_t);
 
-        CUDA_CHECK_RETURN(cudaMalloc(&ctx->d_hands, hands_size), -1);
-        CUDA_CHECK_RETURN(cudaMalloc(&ctx->d_values, values_size), -1);
+        CUDA_CHECK_RETURN(cudaMalloc((void**)&ctx->d_hands, hands_size), -1);
+        CUDA_CHECK_RETURN(cudaMalloc((void**)&ctx->d_values, values_size), -1);
 
         ctx->buffer_capacity = required_capacity;
         ctx->cards_per_hand_capacity = cards_per_hand;
@@ -312,20 +318,20 @@ static int ensure_board_buffer(cuda_context_t* ctx, size_t num_boards) {
 
     if (ctx->d_boards) cudaFree(ctx->d_boards);
     size_t size = num_boards * 5 * sizeof(uint8_t);
-    CUDA_CHECK_RETURN(cudaMalloc(&ctx->d_boards, size), -1);
+    CUDA_CHECK_RETURN(cudaMalloc((void**)&ctx->d_boards, size), -1);
     ctx->boards_capacity = num_boards;
     return 0;
 }
 
 static int ensure_equity_counters(cuda_context_t* ctx) {
     if (!ctx->d_wins) {
-        CUDA_CHECK_RETURN(cudaMalloc(&ctx->d_wins, sizeof(unsigned long long)), -1);
+        CUDA_CHECK_RETURN(cudaMalloc((void**)&ctx->d_wins, sizeof(unsigned long long)), -1);
     }
     if (!ctx->d_ties) {
-        CUDA_CHECK_RETURN(cudaMalloc(&ctx->d_ties, sizeof(unsigned long long)), -1);
+        CUDA_CHECK_RETURN(cudaMalloc((void**)&ctx->d_ties, sizeof(unsigned long long)), -1);
     }
     if (!ctx->d_losses) {
-        CUDA_CHECK_RETURN(cudaMalloc(&ctx->d_losses, sizeof(unsigned long long)), -1);
+        CUDA_CHECK_RETURN(cudaMalloc((void**)&ctx->d_losses, sizeof(unsigned long long)), -1);
     }
     return 0;
 }
@@ -417,39 +423,22 @@ int cuda_backend_init(void** out_context, int device_id, bool verbose) {
     /* Initialize lookup tables */
     init_lookup_tables();
 
-    /* Copy poker-eval lookup tables to device constant memory */
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_nbits_table, host_tables.nbits_table,
-                          sizeof(host_tables.nbits_table)),
-        -1
-    );
-
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_straight_table, host_tables.straight_table,
-                          sizeof(host_tables.straight_table)),
-        -1
-    );
-
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_top_card_table, host_tables.top_card_table,
-                          sizeof(host_tables.top_card_table)),
-        -1
-    );
-
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_top_five_table, host_tables.top_five_table,
-                          sizeof(host_tables.top_five_table)),
-        -1
-    );
+    /* Copy poker-eval lookup tables to device constant memory. The uploader
+     * returns void, so surface any failure through the sticky error state. */
+    cuda_init_lookup_tables(host_tables.nbits_table,
+                            host_tables.straight_table,
+                            host_tables.top_five_table,
+                            host_tables.top_card_table);
+    CUDA_CHECK_RETURN(cudaGetLastError(), -1);
 
     if (verbose) {
-        cudaDeviceProp prop;
+        struct cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, selected_device);
         fprintf(stderr, "CUDA device %d: %s\n", selected_device, prop.name);
         fprintf(stderr, "  Compute capability: %d.%d\n",
                 prop.major, prop.minor);
         fprintf(stderr, "  Global memory: %.2f GB\n",
-                prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
+                (double)prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
         fprintf(stderr, "  Lookup tables loaded to constant memory\n");
     }
 
@@ -525,7 +514,7 @@ int cuda_backend_get_device_info(void* context, gpu_device_info_t* info) {
 
     cuda_context_t* ctx = (cuda_context_t*)context;
 
-    cudaDeviceProp prop;
+    struct cudaDeviceProp prop;
     CUDA_CHECK_RETURN(cudaGetDeviceProperties(&prop, ctx->device_id), -1);
 
     info->backend = GPU_BACKEND_CUDA;

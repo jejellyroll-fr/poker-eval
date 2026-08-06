@@ -1,5 +1,20 @@
 # GPU acceleration module CMakeLists.txt
 
+# When BUILD_GPU is ON the CUDA toolkit is optional by default. A missing
+# toolkit used to print nothing, so configurations silently fell back to
+# OpenCL-only (or no backend at all) while the CUDA sources went unbuilt.
+# Surface it: always announce the outcome, and let CI opt into failing hard.
+option(POKER_EVAL_CUDA_REQUIRED
+    "Require the CUDA toolkit when BUILD_GPU is ON (error instead of silently disabling CUDA)"
+    OFF)
+
+# Every GPU target below is a static archive, and ar accepts undefined symbols,
+# so building them says nothing about whether they resolve. This adds a tiny
+# executable whose only job is to make the linker prove it. See gpu_link_check.c.
+option(POKER_EVAL_GPU_LINK_CHECK
+    "Build a small executable that links the GPU libraries, for CI link coverage"
+    OFF)
+
 # Check for CUDA/OpenCL when GPU mode is enabled
 set(GPU_SOURCES)
 set(GPU_LIBRARIES)
@@ -10,6 +25,17 @@ if(BUILD_GPU)
     endif()
     find_package(CUDA QUIET)
     find_package(OpenCL)
+
+    if(NOT CUDA_FOUND)
+        if(POKER_EVAL_CUDA_REQUIRED)
+            message(FATAL_ERROR "POKER_EVAL_CUDA_REQUIRED is ON but the CUDA toolkit was not \
+found. Install the NVIDIA CUDA toolkit (https://developer.nvidia.com/cuda-downloads) and retry.")
+        else()
+            message(WARNING "CUDA toolkit not found - CUDA acceleration will NOT be built. \
+Install the NVIDIA CUDA toolkit to enable it, or set -DPOKER_EVAL_CUDA_REQUIRED=ON to fail \
+here instead of silently skipping it.")
+        endif()
+    endif()
 
     # CUDA support
     if(CUDA_FOUND)
@@ -42,11 +68,16 @@ if(BUILD_GPU)
             kernels/gpu_combinatorics.cu
         )
 
+        cuda_add_library(poker_cuda_batch STATIC
+            kernels/eval_holdem_batch.cu
+        )
+
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
             target_compile_options(poker_cuda PRIVATE -Wno-error=pedantic)
             target_compile_options(poker_cuda_generic PRIVATE -Wno-error=pedantic)
             target_compile_options(poker_gpu_cfr_cuda PRIVATE -Wno-error=pedantic)
             target_compile_options(poker_gpu_combinatorics_cuda PRIVATE -Wno-error=pedantic)
+            target_compile_options(poker_cuda_batch PRIVATE -Wno-error=pedantic)
         endif()
 
         target_include_directories(poker_cuda PUBLIC
@@ -70,13 +101,19 @@ if(BUILD_GPU)
             ${CMAKE_SOURCE_DIR}/include
             ${CUDA_INCLUDE_DIRS}
         )
+        target_include_directories(poker_cuda_batch PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_SOURCE_DIR}/include
+            ${CUDA_INCLUDE_DIRS}
+        )
 
         target_link_libraries(poker_cuda ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_cuda_generic ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_gpu_cfr_cuda ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_gpu_combinatorics_cuda ${CUDA_LIBRARIES} poker_core)
+        target_link_libraries(poker_cuda_batch ${CUDA_LIBRARIES} poker_core)
 
-        list(APPEND GPU_LIBRARIES poker_cuda poker_cuda_generic poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda)
+        list(APPEND GPU_LIBRARIES poker_cuda poker_cuda_generic poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda poker_cuda_batch)
 
         add_definitions(-DHAVE_CUDA)
         add_definitions(-DENABLE_CUDA)
@@ -184,6 +221,15 @@ if(BUILD_GPU)
             gpu_table_loader.c
         )
         target_include_directories(poker_gpu_unified PUBLIC ${GPU_INCLUDE_DIRS})
+
+        # eval_batched_cuda.c includes CUDA's cuda_runtime.h; its driver_types.h
+        # uses C11 anonymous unions, which the project-wide -pedantic builds
+        # reject. The CUDA libraries above already drop -Werror for pedantic;
+        # do the same here so the strict -Werror build accepts the same header.
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(poker_gpu_unified PRIVATE -Wno-error=pedantic)
+        endif()
+
         target_link_libraries(poker_gpu_unified
             PUBLIC poker_core
             PRIVATE ${GPU_LIBRARIES})
@@ -195,6 +241,18 @@ if(BUILD_GPU)
         if(OpenCL_FOUND)
             target_compile_definitions(poker_gpu_unified PRIVATE HAVE_OPENCL)
             target_compile_definitions(poker_gpu_unified PRIVATE ENABLE_OPENCL)
+        endif()
+
+        # The only step that resolves the backend symbols. poker_gpu_unified is
+        # static, so CMake still puts its PRIVATE dependencies on this link line.
+        if(POKER_EVAL_GPU_LINK_CHECK)
+            # EXCLUDE_FROM_ALL so a link failure is attributed to the step that
+            # asks for it rather than getting lost in the middle of the build.
+            add_executable(poker_gpu_link_check EXCLUDE_FROM_ALL gpu_link_check.c)
+            target_include_directories(poker_gpu_link_check PRIVATE
+                ${CMAKE_SOURCE_DIR}/include
+                ${CMAKE_BINARY_DIR}/include)
+            target_link_libraries(poker_gpu_link_check PRIVATE poker_gpu_unified)
         endif()
 
         add_library(poker_ofc_gpu STATIC
