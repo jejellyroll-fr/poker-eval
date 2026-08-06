@@ -93,6 +93,15 @@ $ pokenum -l 7h 5s 3d Xx - 9s 8h 6d 4c / 8c Kd
 $ pokenum -l27 5h 4h 3h 2h - 9s 8h 6d 4c / Kd 5s
 $ pokenum -mc 10000 -l27 5h 4h 3h - 9s 8h 6d / Ks Kh 5s Qd
 
+Range usage (any game):
+$ pokenum -h "AA,KK,QQ,AKs" - "22+,99+"
+$ pokenum -h "AA,KK" - Jh Jc - "QQ" -- 2h 7c 3d
+$ pokenum -mc 100000 -badugi "As2d3h4c" - "KsQdJhTc"
+A token that is not a card is treated as a range fragment for the current
+player; fragments are joined with commas. A player cannot mix fixed cards
+and a range, but fixed hands and ranges can be mixed across players. The
+first combo of each range is shown in the output table.
+
    Michael Maurer, Apr 2002
    modified by jejellyroll
 */
@@ -104,6 +113,10 @@ $ pokenum -mc 10000 -l27 5h 4h 3h - 9s 8h 6d / Ks Kh 5s Qd
 #include <poker_eval/poker_eval.h>
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/universal_deck.h>
+#include <poker_eval/range.h>
+#include <poker_eval/equity/RangeEquity.h>
+
+#define MAX_RANGE_SPEC 1024
 
 /* Fusion-specific helper functions */
 static int fusion_get_expected_pocket_cards(int nboard) {
@@ -144,12 +157,15 @@ parseArgs(int argc, char **argv,
           deck_type_t *deckType,
           int *npockets, int *nboard, int *nboard2,
           int *orderflag, int *terse,
-          int *show_backend, const char **backend_override) {
+          int *show_backend, const char **backend_override,
+          char rangeSpecs[ENUM_MAXPLAYERS][MAX_RANGE_SPEC]) {
   enum_gameparams_t *gameParams = enumGameParams(game_holdem);
   enum { ST_OPTIONS, ST_POCKET, ST_BOARD, ST_BOARD2, ST_DEAD } state; 
   int ncards;
   int card;
   int i;
+  int rangeActive = 0;
+  int rangeLen = 0;
 
   state = ST_OPTIONS;
   *npockets = *nboard = *nboard2 = ncards = 0;
@@ -165,8 +181,10 @@ parseArgs(int argc, char **argv,
   UMASK_RESET(*dead, *deckType);
   UMASK_RESET(*board, *deckType);
   UMASK_RESET(*board2, *deckType);
-  for (i=0; i<ENUM_MAXPLAYERS; i++)
+  for (i=0; i<ENUM_MAXPLAYERS; i++) {
     UMASK_RESET(pockets[i], *deckType);
+    rangeSpecs[i][0] = '\0';
+  }
 
   while (++argv, --argc) {
     if (state == ST_OPTIONS) {
@@ -273,23 +291,35 @@ parseArgs(int argc, char **argv,
       }
     } else if (state == ST_POCKET) {
       if (strcmp(*argv, "-") == 0) {
-        if (ncards > 0) {
+        if (ncards > 0 || rangeActive) {
           /* For Fusion, skip validation during parsing - validate later */
-          if (*game != game_fusion) {
+          if (rangeActive == 0 && *game != game_fusion) {
             if (ncards < gameParams->minpocket)
               return 1;
           }
           (*npockets)++;
           ncards = 0;
+          rangeActive = 0;
+          rangeLen = 0;
         }
         state = ST_POCKET;
       } else if (strcmp(*argv, "--") == 0) {
+        if (rangeActive) {
+          if (rangeLen == 0)
+            return 1;
+          (*npockets)++;
+          ncards = 0;
+          rangeActive = 0;
+          rangeLen = 0;
+        }
         state = ST_BOARD;
       } else if (strcmp(*argv, "/") == 0 || strstr(*argv, "/") != NULL) {
         char *lastSlash = strrchr(*argv, '/');
         if (lastSlash != NULL && *(lastSlash + 1) == '\0') {
           state = ST_DEAD;
         } else {
+          if (rangeActive)
+            return 1;
           char *cardStr = lastSlash ? lastSlash + 1 : *argv;
           deck_type_t parsedDeckType = *deckType;
           if (Universal_StringToCard(cardStr, &card, &parsedDeckType) == 0)
@@ -312,19 +342,40 @@ parseArgs(int argc, char **argv,
         if (*npockets >= ENUM_MAXPLAYERS)
           return 1;
         deck_type_t parsedDeckType = *deckType;
-        if (Universal_StringToCard(*argv, &card, &parsedDeckType) == 0)
-          return 1;
-        if (parsedDeckType == UNIVERSAL_DECK_JOKER && *deckType == UNIVERSAL_DECK_STANDARD) *deckType = UNIVERSAL_DECK_JOKER;
-        if (UMASK_IS_SET(*dead, card, *deckType))
-          return 1;
-        UMASK_SET(pockets[*npockets], card, *deckType);
-        UMASK_SET(*dead, card, *deckType);
-        ncards++;
-        /* For Fusion, use a flexible approach - don't auto-advance */
-        if (*game != game_fusion) {
-          if (ncards == gameParams->maxpocket) {
-            (*npockets)++;
-            ncards = 0;
+        if (Universal_StringToCard(*argv, &card, &parsedDeckType) == 0 ||
+            strlen(*argv) > 2) {
+          /* Not a single card token (or a 4+ char hand like "AsAh"): treat
+           * as a range fragment for the current player */
+          if (ncards > 0)
+            return 1; /* cannot mix fixed cards and a range in one player */
+          if (rangeActive == 0) {
+            rangeActive = 1;
+            rangeLen = 0;
+          } else if (rangeLen > 0) {
+            if (rangeLen >= MAX_RANGE_SPEC - 1)
+              return 1;
+            rangeSpecs[*npockets][rangeLen++] = ',';
+          }
+          size_t fragLen = strlen(*argv);
+          if (rangeLen + fragLen + 1 > MAX_RANGE_SPEC)
+            return 1;
+          memcpy(&rangeSpecs[*npockets][rangeLen], *argv, fragLen + 1);
+          rangeLen += (int)fragLen;
+        } else {
+          if (rangeActive)
+            return 1;
+          if (parsedDeckType == UNIVERSAL_DECK_JOKER && *deckType == UNIVERSAL_DECK_STANDARD) *deckType = UNIVERSAL_DECK_JOKER;
+          if (UMASK_IS_SET(*dead, card, *deckType))
+            return 1;
+          UMASK_SET(pockets[*npockets], card, *deckType);
+          UMASK_SET(*dead, card, *deckType);
+          ncards++;
+          /* For Fusion, use a flexible approach - don't auto-advance */
+          if (*game != game_fusion) {
+            if (ncards == gameParams->maxpocket) {
+              (*npockets)++;
+              ncards = 0;
+            }
           }
         }
       }
@@ -412,9 +463,9 @@ parseArgs(int argc, char **argv,
     }
   }
 
-  if (ncards > 0) {
+  if (ncards > 0 || rangeActive) {
     /* For Fusion, skip validation during parsing - validate later */
-    if (*game != game_fusion) {
+    if (rangeActive == 0 && *game != game_fusion) {
       if (ncards < gameParams->minpocket)
         return 1;
     }
@@ -438,6 +489,7 @@ main(int argc, char **argv) {
   UniversalCardMask board;
   UniversalCardMask board2;
   UniversalCardMask dead;
+  char rangeSpecs[ENUM_MAXPLAYERS][MAX_RANGE_SPEC];
   enum_result_t result;
   int fromStdin;
 
@@ -463,13 +515,17 @@ main(int argc, char **argv) {
     }
     if (parseArgs(argc, argv, &game, &enumType, &niter,
                   pockets, &board, &board2, &dead, &deckType, &npockets, &nboard,
-                  &nboard2, &orderflag, &terse, &show_backend, &backend_override)) {
+                  &nboard2, &orderflag, &terse, &show_backend, &backend_override,
+                  rangeSpecs)) {
       if (fromStdin) {
         printf("ERROR\n");
       } else {
         printf("single usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
         printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-pa8|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish]\n");
         printf("\t<pocket1> - <pocket2> - ... [ -- <board> ] [ / <dead> ] ]\n");
+        printf("range usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
+        printf("\t<range1> - <range2> - ... [ -- <board> ] [ / <dead> ] ]\n");
+        printf("\t(any non-card token is a range, e.g. \"AA,KK,AKs\" or \"22+,99+\")\n");
         printf("streaming usage: %s -i < argsfile\n", argv[0]);
       }
       err = 1;
@@ -487,13 +543,111 @@ main(int argc, char **argv) {
       if (backend_override && *backend_override) {
         setenv("PE_ENUM_BACKEND", backend_override, 1);
       }
-      if (deckType == UNIVERSAL_DECK_JOKER) {
+      StdDeck_CardMask spockets[ENUM_MAXPLAYERS], sboard, sdead;
+      pe_range_t *parsedRanges[ENUM_MAXPLAYERS];
+      StdDeck_CardMask *rangeHands[ENUM_MAXPLAYERS];
+      double *rangeWeights[ENUM_MAXPLAYERS];
+      int anyRange = 0;
+      for (int i = 0; i < npockets; ++i) {
+        spockets[i] = pockets[i].std;
+        parsedRanges[i] = NULL;
+        rangeHands[i] = NULL;
+        rangeWeights[i] = NULL;
+        if (rangeSpecs[i][0] != '\0')
+          anyRange = 1;
+      }
+      sboard = board.std;
+      sdead = dead.std;
+      if (anyRange) {
+        if (deckType == UNIVERSAL_DECK_JOKER) {
+          if (fromStdin)
+            printf("ERROR\n");
+          else
+            printf("ERROR: range syntax is not supported with joker decks\n");
+          err = 1;
+        } else if (game == game_doubleflop_holdem) {
+          if (fromStdin)
+            printf("ERROR\n");
+          else
+            printf("ERROR: range syntax is not supported for double-flop hold'em\n");
+          err = 1;
+        } else {
+          PlayerRange players[ENUM_MAXPLAYERS];
+          /* The fixed players' own cards are folded into sdead during
+           * parsing, but CalculateEquityForRanges() treats dead cards as
+           * external and would reject a fixed player whose cards are
+           * "dead". Use a dead mask with those cards removed. */
+          StdDeck_CardMask fixedUnion, sdeadNotFixed, sdeadRange;
+          StdDeck_CardMask_RESET(fixedUnion);
+          for (int i = 0; i < npockets; ++i)
+            if (rangeSpecs[i][0] == '\0')
+              StdDeck_CardMask_OR(fixedUnion, fixedUnion, spockets[i]);
+          StdDeck_CardMask_NOT(sdeadNotFixed, fixedUnion);
+          StdDeck_CardMask_AND(sdeadRange, sdead, sdeadNotFixed);
+          for (int i = 0; i < npockets; ++i) {
+            if (rangeSpecs[i][0] != '\0') {
+              pe_status_t st = pe_range_parse(game, rangeSpecs[i], sdead, NULL,
+                                              &parsedRanges[i]);
+              if (st != PE_STATUS_OK || parsedRanges[i]->count == 0) {
+                if (fromStdin)
+                  printf("ERROR\n");
+                else
+                  printf("ERROR: could not parse range '%s' for player %d\n",
+                         rangeSpecs[i], i + 1);
+                err = 1;
+                break;
+              }
+              /* combos[] is an array of pe_combo_t structs (hand + weight),
+               * not a contiguous array of masks, so copy into dedicated
+               * buffers for PlayerRange. */
+              rangeHands[i] = (StdDeck_CardMask *)malloc(
+                  parsedRanges[i]->count * sizeof(StdDeck_CardMask));
+              rangeWeights[i] = (double *)malloc(
+                  parsedRanges[i]->count * sizeof(double));
+              if (rangeHands[i] == NULL || rangeWeights[i] == NULL) {
+                err = 1;
+                break;
+              }
+              for (size_t j = 0; j < parsedRanges[i]->count; ++j) {
+                rangeHands[i][j] = parsedRanges[i]->combos[j].hand;
+                rangeWeights[i][j] = parsedRanges[i]->combos[j].weight;
+              }
+              players[i].hand_masks = rangeHands[i];
+              players[i].weights = rangeWeights[i];
+              players[i].count = (int)parsedRanges[i]->count;
+              players[i].total_weight = parsedRanges[i]->total_weight;
+              /* Show the first combo of the range in the output table */
+              spockets[i] = parsedRanges[i]->combos[0].hand;
+            } else {
+              players[i].hand_masks = &spockets[i];
+              players[i].weights = NULL;
+              players[i].count = 1;
+              players[i].total_weight = 1.0;
+            }
+          }
+          if (!err) {
+            int matchups = CalculateEquityForRanges(
+                game, players, npockets, sboard, sdeadRange,
+                enumGameParams(game)->maxboard - nboard,
+                enumType == ENUM_SAMPLE, niter, orderflag, &result);
+            if (matchups < 0) {
+              if (fromStdin)
+                printf("ERROR\n");
+              else
+                printf("ERROR: range equity calculation failed\n");
+              err = 1;
+            } else if (matchups == 0) {
+              if (fromStdin)
+                printf("ERROR\n");
+              else
+                printf("ERROR: no valid matchups - ranges conflict with each other or with board/dead cards\n");
+              err = 1;
+            }
+          }
+        }
+      } else if (deckType == UNIVERSAL_DECK_JOKER) {
         // For JokerDeck games, we still use StdDeck_CardMask in the enumeration functions
         // The conversion to JokerDeck is handled internally in enumerate.c
-        StdDeck_CardMask spockets[ENUM_MAXPLAYERS], sboard, sdead;
-        for (int i = 0; i < npockets; ++i) spockets[i] = pockets[i].std;
-        sboard = board.std;
-        sdead = dead.std;
         if (enumType == ENUM_EXHAUSTIVE) {
           err = enumExhaustive_dispatch(game, spockets, sboard, sdead, npockets, nboard, orderflag, &result);
         } else if (enumType == ENUM_SAMPLE) {
@@ -502,10 +656,6 @@ main(int argc, char **argv) {
           err = 1;
         }
       } else {
-        StdDeck_CardMask spockets[ENUM_MAXPLAYERS], sboard, sdead;
-        for (int i = 0; i < npockets; ++i) spockets[i] = pockets[i].std;
-        sboard = board.std;
-        sdead = dead.std;
         if (enumType == ENUM_EXHAUSTIVE) {
           err = enumExhaustive_dispatch(game, spockets, sboard, sdead, npockets, nboard, orderflag, &result);
         } else if (enumType == ENUM_SAMPLE) {
@@ -522,16 +672,39 @@ main(int argc, char **argv) {
       } else {
         StdDeck_CardMask spockets_print[ENUM_MAXPLAYERS], sboard_print;
         for (int i = 0; i < npockets; ++i) {
-          if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(pockets[i].joker, &spockets_print[i]);
+          if (rangeSpecs[i][0] != '\0') spockets_print[i] = spockets[i];
+          else if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(pockets[i].joker, &spockets_print[i]);
           else spockets_print[i] = pockets[i].std;
         }
         if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(board.joker, &sboard_print);
         else sboard_print = board.std;
 
+        /* CalculateEquityForRanges keeps ev normalized (0..1), while the
+         * legacy printers divide ev and the win/tie/lose counters by
+         * nsamples. For player 0 the counters sum exactly to the total
+         * weighted sample count, so report that as nsamples (honest for
+         * the "N boards" header) and rescale ev to match: afterwards
+         * ev/nsamples and counter/nsamples give true values. */
+        if (anyRange && result.nsamples > 0) {
+          enum_gameparams_t *gp = enumGameParams(result.game);
+          double total;
+          if (gp && gp->hashipot)
+            total = (double)result.nwinhi[0] + result.ntiehi[0] +
+                    (double)result.nlosehi[0];
+          else
+            total = (double)result.nwinlo[0] + result.ntielo[0] +
+                    (double)result.nloselo[0];
+          if (total > 0.0) {
+            result.nsamples = (unsigned int)total;
+            for (int i = 0; i < result.nplayers; ++i)
+              result.ev[i] *= total;
+          }
+        }
         if (terse)
           enumResultPrintTerse(&result, spockets_print, sboard_print);
         else
           enumResultPrint(&result, spockets_print, sboard_print);
+
         if (show_backend) {
           if (enumType == ENUM_EXHAUSTIVE) {
             enum_dispatch_backend_t backend = enum_dispatch_last_backend();
@@ -539,6 +712,20 @@ main(int argc, char **argv) {
           } else {
             printf("[enum-backend] sampling\n");
           }
+        }
+      }
+      for (int i = 0; i < ENUM_MAXPLAYERS; ++i) {
+        if (parsedRanges[i] != NULL) {
+          pe_range_free(parsedRanges[i]);
+          parsedRanges[i] = NULL;
+        }
+        if (rangeHands[i] != NULL) {
+          free(rangeHands[i]);
+          rangeHands[i] = NULL;
+        }
+        if (rangeWeights[i] != NULL) {
+          free(rangeWeights[i]);
+          rangeWeights[i] = NULL;
         }
       }
     }
