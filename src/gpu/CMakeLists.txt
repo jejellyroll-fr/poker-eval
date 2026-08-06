@@ -246,7 +246,9 @@ here instead of silently skipping it.")
         # The only step that resolves the backend symbols. poker_gpu_unified is
         # static, so CMake still puts its PRIVATE dependencies on this link line.
         if(POKER_EVAL_GPU_LINK_CHECK)
-            add_executable(poker_gpu_link_check gpu_link_check.c)
+            # EXCLUDE_FROM_ALL so a link failure is attributed to the step that
+            # asks for it rather than getting lost in the middle of the build.
+            add_executable(poker_gpu_link_check EXCLUDE_FROM_ALL gpu_link_check.c)
             target_include_directories(poker_gpu_link_check PRIVATE
                 ${CMAKE_SOURCE_DIR}/include
                 ${CMAKE_BINARY_DIR}/include)
