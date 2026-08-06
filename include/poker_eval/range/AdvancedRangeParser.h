@@ -211,6 +211,50 @@ extern "C"
      */
     void ARP_FreeRange(arp_range_t *range);
 
+    /* Multi-way ranges: one range per player, with cross-player exclusion */
+
+    /**
+     * Ranges for several players at once.
+     *
+     * `ranges[i]` is the range for player i, parsed from that player's
+     * string. Hands that share a card with any hand of another player's
+     * range are dropped, so the player ranges are mutually exclusive:
+     * cards dealt from them can never collide between players.
+     */
+    typedef struct
+    {
+        arp_range_t *ranges;      /* One range per player */
+        int num_players;
+        StdDeck_CardMask dead_cards; /* Shared dead cards (board + burns) */
+    } arp_multiway_range_t;
+
+    /**
+     * Parse one range string per player into a multi-way range.
+     *
+     * Each string is parsed like ARP_ParseRange with the shared
+     * `dead_cards`. A second pass then drops, from every player's range,
+     * the hands that use a card used by another player's range, so the
+     * resulting ranges can be dealt together without card collisions.
+     *
+     * @param range_strings One range string per player (e.g. {"AA","KK","QQ"})
+     * @param num_players   Number of players (>= 1)
+     * @param dead_cards    Cards excluded from every player's range
+     * @param game_type     Game the ranges are for
+     * @param result        Filled on success
+     * @return 1 on success, 0 on failure
+     */
+    int ARP_ParseMultiwayRanges(const char *const *range_strings,
+                                int num_players,
+                                StdDeck_CardMask dead_cards,
+                                enum_game_t game_type,
+                                arp_multiway_range_t *result);
+
+    /**
+     * Free resources used by a multi-way range
+     * @param multiway Multi-way range to free
+     */
+    void ARP_FreeMultiwayRange(arp_multiway_range_t *multiway);
+
     /* Utility Functions */
 
     /**

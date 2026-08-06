@@ -928,8 +928,8 @@ cd build
 make test_advanced_range_parser
 make test_omaha_range_parser
 
-./tests/test_advanced_range_parser    # Should show 10/10 passing
-./tests/test_omaha_range_parser       # Should show 36/38 passing
+./tests/test_advanced_range_parser    # Should show 17/17 passing
+./tests/test_omaha_range_parser       # Should show 66/66 passing
 ```
 
 ---
@@ -943,10 +943,14 @@ make test_omaha_range_parser
 2. **Range Algebra**: `ARP_UnionRanges`, `ARP_IntersectRanges`, `ARP_SubtractRanges` and
    `ARP_CombineRanges`, plus the expression grammar (`ARP_ParseComplexExpression`,
    `ARP_EvaluateExpressionTree`) for forms like `AA-TT + AKs`.
+3. **Multi-way Ranges**: `ARP_ParseMultiwayRanges` defines one range per player
+   (3+ players) and removes the hands that would collide with another player's
+   range, so the player ranges are mutually exclusive (see
+   [Multi-Way Ranges](#multi-way-ranges)).
 
 ### Planned Features
 
-1. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
+(none)
 
 ### Known Limitations
 
@@ -990,6 +994,46 @@ Example output for `AA@60%, KK@25%, AKo@15%`:
  Q |  -  -  -  -  -  -  -  -  -  -  -  -  -
  ...
 ```
+
+---
+
+## Multi-Way Ranges
+
+`ARP_ParseMultiwayRanges()` defines ranges for several players at once
+(3+ players is the whole point, though 1-2 work too):
+
+```c
+const char *players[3] = { "AA", "KK", "QQ" };
+arp_multiway_range_t mw;
+if (ARP_ParseMultiwayRanges(players, 3, dead_cards, game_holdem, &mw)) {
+    /* mw.ranges[0] is the AA range, mw.ranges[1] the KK range, ... */
+}
+ARP_FreeMultiwayRange(&mw);
+```
+
+Each player's string is parsed exactly like `ARP_ParseRange()`, with the
+shared `dead_cards` (board/burn cards) excluded from every player. A second
+pass then removes, from each player's range, every hand that shares a card
+with any hand of another player's range. The resulting ranges are **mutually
+exclusive**: cards drawn from them can never collide between players, which
+is what a multi-way equity or dealing scenario requires.
+
+Consequences of the conflict rule to be aware of:
+
+- Identical ranges can no longer coexist: `{"AA","AA"}` resolves to two empty
+  ranges, because no deal can give two players the same four aces.
+- Card sets resolve conservatively: `{"AKs","AKo"}` empties both, because every
+  `AKs` combo needs the same aces and kings the offsuit combos also use.
+  `{"AKs","QQ"}` keeps the suited range's 4 combos and the 6 queen pairs —
+  the card sets are disjoint.
+- Wide patterns are unforgiving in multi-way mode: every hand of `AAxxds`
+  (Omaha) uses an ace, so an opponent range that needs aces is emptied.
+  `{"AAxxds","KKxxds"}` leaves one side with nothing to deal.
+
+`ARP_FreeMultiwayRange()` releases all per-player ranges; the per-player
+ranges are plain `arp_range_t`, so `ARP_GetRangePercentage()`,
+`ARP_RangeToString()`, `ARP_ToPlayerRange()` and friends work on them
+directly (useful for feeding `CalculateEquityForRanges`).
 
 ---
 
