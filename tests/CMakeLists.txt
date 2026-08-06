@@ -131,6 +131,7 @@ add_unity_test(test_benchmark_example unity_tests/test_benchmark_example.c)
 add_unity_test(test_pineapple_unity unity_tests/test_pineapple_unity.c)
 add_unity_test(test_pineapple8_unity unity_tests/test_pineapple8_unity.c)
 add_unity_test(test_pineapple_variants_unity unity_tests/test_pineapple_variants_unity.c)
+add_unity_test(test_pineapple_batched_unity unity_tests/test_pineapple_batched_unity.c)
 add_unity_test(test_montecarlo_convergence_unity unity_tests/test_montecarlo_convergence_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
 

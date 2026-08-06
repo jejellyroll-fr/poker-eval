@@ -154,4 +154,11 @@ extern POKEREVAL_EXPORT int enumSample(enum_game_t game, StdDeck_CardMask pocket
                       enum_result_t *result);
 extern POKEREVAL_EXPORT enum_gameparams_t *enumGameParams(enum_game_t game);
 
+/* Commit each player's Crazy Pineapple discard. `board` must contain at
+ * least a flop; only its first three cards inform the decision. Returns 0 on
+ * success, 1 if the flop is unknown or a pocket is malformed. */
+extern POKEREVAL_EXPORT int pe_crazy_pineapple_commit(
+    StdDeck_CardMask pockets[], int npockets, StdDeck_CardMask board,
+    StdDeck_CardMask dead, StdDeck_CardMask committed[]);
+
 #endif
