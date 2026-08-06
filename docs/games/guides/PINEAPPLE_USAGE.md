@@ -232,11 +232,11 @@ Potential improvements for future versions:
 The batched Monte-Carlo path (`enumSampleBatched`, used by range equity) now
 covers the whole Pineapple family. All four games are evaluated board-by-board
 through the runtime-gated SIMD kernels when the CPU supports them (AVX2 /
-AVX-512 / NEON, disable with `PE_DISABLE_SIMD`), and fall back to an exact
-scalar path otherwise — also in a default build that does not set `USE_SIMD`.
-The batched engines are pinned against the scalar `enumSample` reference by
-`test_pineapple_batched_unity`, covering the Pine-High split of `game_pineapple8`
-and the flop-time discard commit of `game_pineapple_crazy`.
+AVX-512 / NEON), and fall back to an exact scalar path otherwise — also in a
+default build that does not set `USE_SIMD`. The batched engines are pinned
+against the scalar `enumSample` reference by `test_pineapple_batched_unity`,
+covering the Pine-High split of `game_pineapple8` and the flop-time discard
+commit of `game_pineapple_crazy`.
 
 ## References
 
