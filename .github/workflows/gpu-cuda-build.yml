@@ -43,15 +43,10 @@ jobs:
 
       - name: Check the CUDA objects were produced
         run: |
-          find build -name 'eval_cuda_kernel.cu.o' | grep .
-          find build -name 'eval_cuda_tables.cu.o' | grep .
-          find build -name 'eval_cuda.c.o' | grep .
-          find build -name 'eval_generic_kernel.cu.o' | grep .
-          find build -name 'eval_low_kernel.cu.o' | grep .
-          find build -name 'eval_omaha_kernel.cu.o' | grep .
-          find build -name 'eval_cuda_generic.c.o' | grep .
-          find build -name 'gpu_cfr_kernels.cu.o' | grep .
-          find build -name 'gpu_cfr_cuda.cu.o' | grep .
-          find build -name 'gpu_combinatorics.cu.o' | grep .
-          find build -name 'eval_holdem_batch.cu.o' | grep .
-          find build -name 'eval_batched_cuda.c.o' | grep .
+          # FindCUDA names its objects <target>_generated_<source>.cu.o.
+          for o in eval_cuda_kernel.cu.o eval_cuda_tables.cu.o eval_cuda.c.o \
+                   eval_generic_kernel.cu.o eval_low_kernel.cu.o eval_omaha_kernel.cu.o \
+                   eval_cuda_generic.c.o gpu_cfr_kernels.cu.o gpu_cfr_cuda.cu.o \
+                   gpu_combinatorics.cu.o eval_holdem_batch.cu.o eval_batched_cuda.c.o; do
+            find build -name "*${o}" | grep . >/dev/null || { echo "missing object: $o"; exit 1; }
+          done
