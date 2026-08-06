@@ -99,7 +99,12 @@ elseif(HAS_AVX2)
     set_source_files_properties(eval_7c_simd.c PROPERTIES COMPILE_OPTIONS "-mavx2")
 endif()
 
-# Disable false positive warning for deterministic_benchmark.c with GCC-12
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0)
+# Disable false positive warning for deterministic_benchmark.c. In
+# calculate_statistics() the count == 0 case returns early and the loop fills
+# every element, but the ops_values[0] / ops_values[count - 1] reads still get
+# flagged in the .part.0 clone. GCC 11 reports it too, not just 12+; it only
+# stayed hidden because the analysis moves to link time under LTO, which the
+# build disables whenever BUILD_TESTS is ON.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 11.0)
     set_source_files_properties(deterministic_benchmark.c PROPERTIES COMPILE_OPTIONS "-Wno-error=maybe-uninitialized")
 endif()
