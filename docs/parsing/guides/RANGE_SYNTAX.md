@@ -928,8 +928,8 @@ cd build
 make test_advanced_range_parser
 make test_omaha_range_parser
 
-./tests/test_advanced_range_parser    # Should show 10/10 passing
-./tests/test_omaha_range_parser       # Should show 36/38 passing
+./tests/test_advanced_range_parser    # Should show 17/17 passing
+./tests/test_omaha_range_parser       # Should show 66/66 passing
 ```
 
 ---
@@ -943,10 +943,14 @@ make test_omaha_range_parser
 2. **Range Algebra**: `ARP_UnionRanges`, `ARP_IntersectRanges`, `ARP_SubtractRanges` and
    `ARP_CombineRanges`, plus the expression grammar (`ARP_ParseComplexExpression`,
    `ARP_EvaluateExpressionTree`) for forms like `AA-TT + AKs`.
+3. **Multi-way Ranges**: `ARP_ParseMultiwayRanges` parses one range string per
+   player (3+ players) against a shared dead-card mask (see
+   [Multi-Way Ranges](#multi-way-ranges)). Per-deal card exclusion between
+   players is the equity engine's job, not the parser's.
 
 ### Planned Features
 
-1. **Multi-way Ranges**: Support for defining ranges for 3+ players simultaneously
+(none)
 
 ### Known Limitations
 
@@ -990,6 +994,39 @@ Example output for `AA@60%, KK@25%, AKo@15%`:
  Q |  -  -  -  -  -  -  -  -  -  -  -  -  -
  ...
 ```
+
+---
+
+## Multi-Way Ranges
+
+`ARP_ParseMultiwayRanges()` defines ranges for several players at once
+(3+ players is the whole point, though 1-2 work too):
+
+```c
+const char *players[3] = { "AA", "KK", "QQ" };
+arp_multiway_range_t mw;
+if (ARP_ParseMultiwayRanges(players, 3, dead_cards, game_holdem, &mw)) {
+    /* mw.ranges[0] is the AA range, mw.ranges[1] the KK range, ... */
+}
+ARP_FreeMultiwayRange(&mw);
+```
+
+Each player's string is parsed exactly like `ARP_ParseRange()`, with the
+shared `dead_cards` (board/burn cards) excluded from every player.
+
+The per-player ranges are **not** made mutually exclusive, on purpose: a
+player is dealt a single hand per deal, so the collision between players is
+a property of the deal, not of the ranges. `AA` vs `AA` has six valid deals
+(`AsAh` vs `AdAc`), and `AKs` vs `AKo` 24 (`AsKs` vs `AhKd`) — dropping
+every hand that touches any hand of another player's range would empty
+almost every realistic multi-way input. Card exclusion is enforced per deal
+by the equity engine (`src/equity/RangeEquity.c`), which tests each dealt
+hand against the selection in progress.
+
+`ARP_FreeMultiwayRange()` releases all per-player ranges; the per-player
+ranges are plain `arp_range_t`, so `ARP_GetRangePercentage()`,
+`ARP_RangeToString()`, `ARP_ToPlayerRange()` and friends work on them
+directly (useful for feeding `CalculateEquityForRanges`).
 
 ---
 

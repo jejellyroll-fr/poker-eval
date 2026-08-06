@@ -211,6 +211,51 @@ extern "C"
      */
     void ARP_FreeRange(arp_range_t *range);
 
+    /* Multi-way ranges: several ranges parsed against one dead-card mask */
+
+    /**
+     * Ranges for several players at once.
+     *
+     * `ranges[i]` is the range for player i, parsed from that player's
+     * string against the shared `dead_cards`. The ranges are NOT mutually
+     * exclusive: per-deal card exclusion (no two players share a card in a
+     * given deal) is the equity engine's job, since a player is dealt one
+     * hand at a time.
+     */
+    typedef struct
+    {
+        arp_range_t *ranges;      /* One range per player */
+        int num_players;
+        StdDeck_CardMask dead_cards; /* Shared dead cards (board + burns) */
+    } arp_multiway_range_t;
+
+    /**
+     * Parse one range string per player into a multi-way range.
+     *
+     * Each string is parsed like ARP_ParseRange with the shared
+     * `dead_cards`. The per-player ranges are left overlapping;
+     * collision-free dealing is enforced per deal by the equity engine
+     * (see src/equity/RangeEquity.c).
+     *
+     * @param range_strings One range string per player (e.g. {"AA","KK","QQ"})
+     * @param num_players   Number of players (>= 1)
+     * @param dead_cards    Cards excluded from every player's range
+     * @param game_type     Game the ranges are for
+     * @param result        Filled on success
+     * @return 1 on success, 0 on failure
+     */
+    int ARP_ParseMultiwayRanges(const char *const *range_strings,
+                                int num_players,
+                                StdDeck_CardMask dead_cards,
+                                enum_game_t game_type,
+                                arp_multiway_range_t *result);
+
+    /**
+     * Free resources used by a multi-way range
+     * @param multiway Multi-way range to free
+     */
+    void ARP_FreeMultiwayRange(arp_multiway_range_t *multiway);
+
     /* Utility Functions */
 
     /**
