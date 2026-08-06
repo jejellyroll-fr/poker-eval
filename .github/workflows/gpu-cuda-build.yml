@@ -16,17 +16,22 @@ jobs:
     runs-on: ubuntu-latest
     container: nvidia/cuda:12.6.3-devel-ubuntu22.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
+      # Before the checkout: without git in the image, actions/checkout falls
+      # back to the tarball API and cannot fetch the Unity submodule the tests
+      # need for the link step below.
       - name: Install build tools
         run: apt-get update && apt-get install -y cmake git
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Configure
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTS=OFF \
+            -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BINDINGS=OFF \
             -DBUILD_GPU=ON \
@@ -38,8 +43,10 @@ jobs:
       - name: Verify the CUDA backend is actually configured
         run: grep -q "CUDA found, building CUDA acceleration" configure.log
 
-      - name: Build
-        run: cmake --build build -j2
+      # poker_gpu_unified depends on every CUDA library, so this compiles all
+      # of the CUDA sources without dragging in the rest of the tree.
+      - name: Build the CUDA libraries
+        run: cmake --build build --target poker_gpu_unified -j2
 
       - name: Check the CUDA objects were produced
         run: |
@@ -50,3 +57,14 @@ jobs:
                    gpu_combinatorics.cu.o eval_holdem_batch.cu.o eval_batched_cuda.c.o; do
             find build -name "*${o}" | grep . >/dev/null || { echo "missing object: $o"; exit 1; }
           done
+
+      # Every CUDA target is a static archive and `ar` accepts undefined
+      # symbols, so the steps above prove compilation only. test_gpu_multigame
+      # links poker_gpu -> poker_gpu_unified -> the CUDA libraries and calls the
+      # batched backend, which forces eval_batched_cuda.c into the link, so an
+      # unresolved device symbol fails here instead of in a user's build.
+      - name: Link a GPU executable against the CUDA libraries
+        run: cmake --build build --target test_gpu_multigame -j2
+
+      - name: Check the linked executable exists
+        run: find build -name 'test_gpu_multigame' -type f | grep .
