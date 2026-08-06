@@ -1151,14 +1151,25 @@ static void processBatchResultsHoldem2P_SIMD(const BatchEvalResults *results,
  * SIMD kernels so a default (non-USE_SIMD) build still accelerates.
  * ------------------------------------------------------------------------- */
 
+/* Runtime SIMD gate shared by the Pineapple evaluators. A capability check
+ * decides whether the vector kernels can run at all; PE_DISABLE_SIMD is a
+ * non-security performance override documented in the SIMD guide, read once
+ * and normalized to a strict bool so the value is never used as a decision
+ * input beyond enabling the same accelerated path the hold'em dispatches use. */
 static int bmc_engine_simd_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
     {
-        const char *d = getenv("PE_DISABLE_SIMD");
-        int disabled = d && (!strcmp(d, "1") || !strcmp(d, "true") ||
-                             !strcmp(d, "TRUE") || !strcmp(d, "yes"));
+        const char *value = getenv("PE_DISABLE_SIMD");
+        int disabled = 0;
+        if (value)
+        {
+            disabled = strcmp(value, "1") == 0 ||
+                       strcmp(value, "true") == 0 ||
+                       strcmp(value, "TRUE") == 0 ||
+                       strcmp(value, "yes") == 0;
+        }
         cached = (!disabled && simd_detect_capability() != SIMD_NONE) ? 1 : 0;
     }
     return cached;
