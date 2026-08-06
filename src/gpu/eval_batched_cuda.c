@@ -147,11 +147,17 @@ static void init_lookup_tables(void) {
     tables_initialized = true;
 }
 
-/* External symbols from kernel (constant memory) */
-extern __constant__ uint8_t d_nbits_table[8192];
-extern __constant__ uint8_t d_straight_table[8192];
-extern __constant__ uint8_t d_top_card_table[8192];
-extern __constant__ uint32_t d_top_five_table[8192];
+/* Uploads the lookup tables to the device-side constant memory used by the
+ * evaluation kernels. The symbols (d_nBitsTable and friends, declared in
+ * cuda/eval_cuda_device_common.cuh) belong to the poker_cuda module, so the
+ * copy has to be issued from that module rather than from here; this is the
+ * extern "C" entry point cuda/eval_cuda_kernel.cu exposes for it. */
+extern void cuda_init_lookup_tables(
+    const uint8_t* nBitsTable,
+    const uint8_t* straightTable,
+    const uint32_t* topFiveCardsTable,
+    const uint8_t* topCardTable
+);
 
 /* ===== Internal Helpers ===== */
 
@@ -417,34 +423,13 @@ int cuda_backend_init(void** out_context, int device_id, bool verbose) {
     /* Initialize lookup tables */
     init_lookup_tables();
 
-    /* Copy poker-eval lookup tables to device constant memory */
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_nbits_table, host_tables.nbits_table,
-                          sizeof(host_tables.nbits_table),
-                          0, cudaMemcpyHostToDevice),
-        -1
-    );
-
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_straight_table, host_tables.straight_table,
-                          sizeof(host_tables.straight_table),
-                          0, cudaMemcpyHostToDevice),
-        -1
-    );
-
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_top_card_table, host_tables.top_card_table,
-                          sizeof(host_tables.top_card_table),
-                          0, cudaMemcpyHostToDevice),
-        -1
-    );
-
-    CUDA_CHECK_RETURN(
-        cudaMemcpyToSymbol(d_top_five_table, host_tables.top_five_table,
-                          sizeof(host_tables.top_five_table),
-                          0, cudaMemcpyHostToDevice),
-        -1
-    );
+    /* Copy poker-eval lookup tables to device constant memory. The uploader
+     * returns void, so surface any failure through the sticky error state. */
+    cuda_init_lookup_tables(host_tables.nbits_table,
+                            host_tables.straight_table,
+                            host_tables.top_five_table,
+                            host_tables.top_card_table);
+    CUDA_CHECK_RETURN(cudaGetLastError(), -1);
 
     if (verbose) {
         struct cudaDeviceProp prop;
