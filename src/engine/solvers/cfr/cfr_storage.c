@@ -60,6 +60,11 @@ static int cfr_storage_resize(cfr_storage_t *s, size_t new_cap)
     if (new_cap == 0)
         new_cap = 1;
     new_cap = next_pow2(new_cap);
+    if (new_cap == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
     if (s->tab && s->cap == new_cap)
     {
         cfr_storage_free_entries(s);
@@ -88,6 +93,11 @@ static size_t cfr_storage_entry_count(cfr_storage_t *s)
 
 static size_t next_pow2(size_t x)
 {
+    /* No power of two >= x fits in size_t once x exceeds 2^(bits-1):
+       return 0 to signal overflow instead of wrapping to 0 and looping
+       forever. */
+    if (x > (SIZE_MAX >> 1) + 1)
+        return 0;
     size_t p = 1;
     while (p < x)
         p <<= 1;
@@ -529,6 +539,16 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
         return -1;
     }
     if (memcmp(hdr.magic, "CFRCHKPT", 8) != 0 || (hdr.version != 1 && hdr.version != 2))
+    {
+        fclose(f);
+        errno = EINVAL;
+        return -1;
+    }
+    /* Validate cap before any allocation: must be a power of two (as
+       written by cfr_storage_save_checkpoint), >= 1, and small enough
+       that next_pow2 of it cannot overflow (BUG-04). */
+    if (hdr.cap == 0 || (hdr.cap & (hdr.cap - 1)) != 0 ||
+        hdr.cap > (SIZE_MAX >> 1) + 1)
     {
         fclose(f);
         errno = EINVAL;
