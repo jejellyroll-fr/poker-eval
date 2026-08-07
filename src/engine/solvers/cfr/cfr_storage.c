@@ -30,6 +30,10 @@ typedef struct {
     uint64_t iteration;
 } cfr_checkpoint_header_t;
 
+/* Compiled-in upper bound for checkpoint hash-table capacity.
+   A checkpoint whose cap exceeds this is treated as corrupt. */
+#define CFR_MAX_CHECKPOINT_CAP ((size_t)1u << 26)
+
 /* Forward declarations */
 static size_t next_pow2(size_t x);
 
@@ -60,6 +64,11 @@ static int cfr_storage_resize(cfr_storage_t *s, size_t new_cap)
     if (new_cap == 0)
         new_cap = 1;
     new_cap = next_pow2(new_cap);
+    if (new_cap == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
     if (s->tab && s->cap == new_cap)
     {
         cfr_storage_free_entries(s);
@@ -534,12 +543,30 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
         errno = EINVAL;
         return -1;
     }
+    /* Validate the header before doing any work (BUG-05): treated as
+       untrusted input.  cap must be a sensible power of two (saves always
+       write a power of two), and entry_count must fit inside it or the
+       table fills up and get_entry never finds a free slot. */
+    if (hdr.cap == 0 || hdr.cap > CFR_MAX_CHECKPOINT_CAP ||
+        (hdr.cap & (hdr.cap - 1)) != 0 ||
+        hdr.entry_count > hdr.cap)
+    {
+        fclose(f);
+        errno = EINVAL;
+        return -1;
+    }
 
     if (cfr_storage_resize(s, hdr.cap) != 0)
     {
         int err = errno;
         fclose(f);
         errno = err;
+        return -1;
+    }
+    if (s->cap != hdr.cap)
+    {
+        fclose(f);
+        errno = EINVAL;
         return -1;
     }
 
@@ -583,6 +610,12 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
             return -1;
         }
         entry_t *e = get_entry(s, key, (int)n);
+        if (!e || !e->regret || !e->avg)
+        {
+            fclose(f);
+            errno = ENOMEM;
+            return -1;
+        }
         e->ev_sum = ev_sum;
         e->ev_sq_sum = ev_sq_sum;
         e->ev_count = ev_count;
