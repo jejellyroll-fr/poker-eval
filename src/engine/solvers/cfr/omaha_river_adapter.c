@@ -37,6 +37,12 @@ static uint64_t omaha_apply_action_wrapper(cfr_game_t* game, uint64_t state_key,
     return (uint64_t)next_state;
 }
 
+static void omaha_release_state_wrapper(cfr_game_t* game, uint64_t state_key, void* user_data) {
+    (void)game;
+    (void)user_data;
+    free((void*)state_key);
+}
+
 static int omaha_current_player_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
 {
     return omaha_player_to_act((const void *)state_key);
@@ -269,6 +275,7 @@ void omaha_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board
     out_game->get_utility = omaha_get_utility_wrapper;
     out_game->get_actions = omaha_get_actions_wrapper;
     out_game->apply_action = omaha_apply_action_wrapper;
+    out_game->release_state = omaha_release_state_wrapper;
     out_game->current_player = omaha_current_player_wrapper;
     out_game->num_players = 2;
     out_game->state_size = sizeof(*out_state);
