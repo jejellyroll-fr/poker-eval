@@ -670,10 +670,8 @@ static void mpf_compute_utilities(mpf_state_t *st)
     for (int i = 0; i < st->board_revealed; ++i)
         board = mask_set(board, st->board_cards[i]);
 
-    eval_t best = 0;
-    int winners[MPF_MAX_PLAYERS];
-    int win_cnt = 0;
-
+    /* Evaluate every active hand once so it can be reused for each side pot. */
+    eval_t hand_val[MPF_MAX_PLAYERS];
     for (int idx = 0; idx < act_cnt; ++idx)
     {
         int p = active_players[idx];
@@ -695,21 +693,105 @@ static void mpf_compute_utilities(mpf_state_t *st)
             value = eval_holdem_high(st->ctx, st->hole[p], board);
             break;
         }
-        if (win_cnt == 0 || value > best)
-        {
-            best = value;
-            winners[0] = p;
-            win_cnt = 1;
-        }
-        else if (value == best)
-        {
-            winners[win_cnt++] = p;
-        }
+        hand_val[p] = value;
     }
 
-    double share = (win_cnt > 0) ? (st->pot / win_cnt) : 0.0;
-    for (int i = 0; i < win_cnt; ++i)
-        st->utilities[winners[i]] += share;
+    /* Award each side pot to the best hand among the players who can
+       win it.  The pot contributed by a layer of invested amounts is
+       shared by the players who invested at least that much; folded
+       players' chips stay in the pot and go to the winner, but a layer
+       contributed by players no remaining player can cover is refunded
+       (matching the poker rule for uncalled bets). */
+    {
+        /* Collect the distinct total investment levels, ascending. */
+        double levels[MPF_MAX_PLAYERS];
+        int n_levels = 0;
+        for (int i = 0; i < st->num_players; ++i)
+        {
+            if (st->invested[i] <= MPF_EPS)
+                continue;
+            double lv = st->invested[i];
+            int dup = 0;
+            for (int j = 0; j < n_levels; ++j)
+            {
+                if (levels[j] == lv)
+                {
+                    dup = 1;
+                    break;
+                }
+            }
+            if (!dup)
+                levels[n_levels++] = lv;
+        }
+        /* Ascending insertion sort (n_levels <= MPF_MAX_PLAYERS). */
+        for (int i = 1; i < n_levels; ++i)
+        {
+            double lv = levels[i];
+            int j = i - 1;
+            while (j >= 0 && levels[j] > lv)
+            {
+                levels[j + 1] = levels[j];
+                --j;
+            }
+            levels[j + 1] = lv;
+        }
+
+        double prev_level = 0.0;
+        for (int li = 0; li < n_levels; ++li)
+        {
+            double layer = levels[li] - prev_level;
+            if (layer <= MPF_EPS)
+                continue;
+
+            /* Contributors: every player (folded included) whose chips
+               reach this layer. */
+            int n_layer_players = 0;
+            int layer_players[MPF_MAX_PLAYERS];
+            for (int i = 0; i < st->num_players; ++i)
+            {
+                if (st->invested[i] >= levels[li] - MPF_EPS)
+                    layer_players[n_layer_players++] = i;
+            }
+
+            /* Active players who are entitled to this layer. */
+            eval_t best = 0;
+            int winners[MPF_MAX_PLAYERS];
+            int win_cnt = 0;
+            for (int k = 0; k < n_layer_players; ++k)
+            {
+                int p = layer_players[k];
+                if (!st->active[p])
+                    continue;
+                if (win_cnt == 0 || hand_val[p] > best)
+                {
+                    best = hand_val[p];
+                    winners[0] = p;
+                    win_cnt = 1;
+                }
+                else if (hand_val[p] == best)
+                {
+                    winners[win_cnt++] = p;
+                }
+            }
+
+            if (win_cnt > 0)
+            {
+                /* Winner(s) of this layer take it all, including folded
+                   players' contributions. */
+                double share = (layer * (double)n_layer_players) / (double)win_cnt;
+                for (int i = 0; i < win_cnt; ++i)
+                    st->utilities[winners[i]] += share;
+            }
+            else
+            {
+                /* No surviving player covered this layer (uncalled bet):
+                   refund the layer to the players who put it in. */
+                for (int k = 0; k < n_layer_players; ++k)
+                    st->utilities[layer_players[k]] += layer;
+            }
+            prev_level = levels[li];
+        }
+    }
     st->util_ready = 1;
 }
 
