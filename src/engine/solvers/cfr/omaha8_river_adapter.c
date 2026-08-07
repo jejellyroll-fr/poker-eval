@@ -41,6 +41,12 @@ static uint64_t o8_apply_action_wrapper(cfr_game_t* game, uint64_t state_key, in
     return (uint64_t)next_state;
 }
 
+static void o8_release_state_wrapper(cfr_game_t* game, uint64_t state_key, void* user_data) {
+    (void)game;
+    (void)user_data;
+    free((void*)state_key);
+}
+
 static int o8_current_player_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
 {
     return o8_player_to_act((const void *)state_key);
@@ -334,6 +340,7 @@ void o8_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_game->get_utility = o8_get_utility_wrapper;
     out_game->get_actions = o8_get_actions_wrapper;
     out_game->apply_action = o8_apply_action_wrapper;
+    out_game->release_state = o8_release_state_wrapper;
     out_game->current_player = o8_current_player_wrapper;
     out_game->num_players = 2;
     out_game->state_size = sizeof(*out_state);
