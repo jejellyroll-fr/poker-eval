@@ -50,6 +50,13 @@ static uint64_t hrm_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, i
     return (uint64_t)(uintptr_t)next_state;
 }
 
+static void hrm_release_state_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
+{
+    (void)game;
+    (void)user_data;
+    free((void *)(uintptr_t)state_key);
+}
+
 static int hrm_active_count(const holdem_multi_state_t *st)
 {
     int cnt = 0;
@@ -189,6 +196,7 @@ void hrm_build_game(const EvalContext *ctx,
     out_game->get_utility = hrm_get_utility_wrapper;
     out_game->get_actions = hrm_get_actions_wrapper;
     out_game->apply_action = hrm_apply_action_wrapper;
+    out_game->release_state = hrm_release_state_wrapper;
     out_game->current_player = hrm_current_player_wrapper;
     out_game->num_players = num_players;
     out_game->state_size = sizeof(*out_state);

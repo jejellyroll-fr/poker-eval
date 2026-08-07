@@ -34,6 +34,12 @@ static uint64_t stud_apply_action_wrapper(cfr_game_t* game, uint64_t state_key, 
     return (uint64_t)next_state;
 }
 
+static void stud_release_state_wrapper(cfr_game_t* game, uint64_t state_key, void* user_data) {
+    (void)game;
+    (void)user_data;
+    free((void*)state_key);
+}
+
 static int stud_current_player_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
 {
     return stud_player_to_act((const void *)state_key);
@@ -253,6 +259,7 @@ void stud_build_game(const EvalContext *ctx, mask_t seven0, mask_t seven1, cfr_g
     out_game->get_utility = stud_get_utility_wrapper;
     out_game->get_actions = stud_get_actions_wrapper;
     out_game->apply_action = stud_apply_action_wrapper;
+    out_game->release_state = stud_release_state_wrapper;
     out_game->current_player = stud_current_player_wrapper;
     out_game->num_players = 2;
     out_game->state_size = sizeof(*out_state);

@@ -479,6 +479,9 @@ static void cfr_traverse_recursive(
             game, storage, config, next_state_key,
             next_reach, num_players, iter, child_util, user_data);
 
+        if (game->release_state)
+            game->release_state(game, next_state_key, user_data);
+
         if (config->stop_flag && *config->stop_flag)
             goto cfr_exit;
 
@@ -569,6 +572,8 @@ static double best_response_recursive(
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
             double value = best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data);
+            if (game->release_state)
+                game->release_state(game, next_state_key, user_data);
             if (br_player == 0)
             {
                 if (value > best_value)
@@ -591,6 +596,8 @@ static double best_response_recursive(
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
             node_value += avg_strategy[i] * best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data);
+            if (game->release_state)
+                game->release_state(game, next_state_key, user_data);
         }
         return node_value;
     }
@@ -785,6 +792,8 @@ static double best_response_recursive_multiway(
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
             double value = best_response_recursive_multiway(game, storage, br_player, next_state_key, user_data);
+            if (game->release_state)
+                game->release_state(game, next_state_key, user_data);
             if (value > best_value)
                 best_value = value;
         }
@@ -801,6 +810,8 @@ static double best_response_recursive_multiway(
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
             node_value += avg_strategy[i] * best_response_recursive_multiway(game, storage, br_player, next_state_key, user_data);
+            if (game->release_state)
+                game->release_state(game, next_state_key, user_data);
         }
         return node_value;
     }
@@ -998,6 +1009,8 @@ static void policy_value_recursive(
         /* Recurse */
         uint64_t next_state = ctx->game->apply_action(ctx->game, state_key, actions[a], ctx->user_data);
         policy_value_recursive(ctx, next_state, next_reach, child_util);
+        if (ctx->game->release_state)
+            ctx->game->release_state(ctx->game, next_state, ctx->user_data);
 
         /* Accumulate expected utility */
         for (int p = 0; p < ctx->num_players; ++p)
