@@ -64,6 +64,7 @@ static int cfr_storage_resize(cfr_storage_t *s, size_t new_cap)
     {
         cfr_storage_free_entries(s);
         memset(s->tab, 0, s->cap * sizeof(entry_t));
+        s->used_count = 0;
         return 0;
     }
     cfr_storage_free_entries(s);
@@ -72,7 +73,61 @@ static int cfr_storage_resize(cfr_storage_t *s, size_t new_cap)
     if (!s->tab)
         return -1;
     s->cap = new_cap;
+    s->used_count = 0;
     return 0;
+}
+
+/* Grow the table to new_cap (power of two) and reinsert every live entry.
+ * Unlike cfr_storage_resize this preserves the loaded entries. */
+static int cfr_storage_rehash(cfr_storage_t *s, size_t new_cap)
+{
+    if (!s || !s->tab || s->cap == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    new_cap = next_pow2(new_cap);
+    if (new_cap <= s->cap)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    entry_t *new_tab = (entry_t *)calloc(new_cap, sizeof(entry_t));
+    if (!new_tab)
+        return -1;
+
+    size_t new_mask = new_cap - 1;
+    for (size_t i = 0; i < s->cap; ++i)
+    {
+        if (!s->tab[i].used)
+            continue;
+        /* Copy the whole entry (including regret/avg pointers) into the new tab */
+        entry_t move = s->tab[i];
+        size_t j = (size_t)(move.key * 11400714819323198485ull) & new_mask;
+        while (new_tab[j].used)
+            j = (j + 1) & new_mask;
+        new_tab[j] = move;
+        /* Mark the source entry as dead so cfr_storage_free_entries never
+           touches the regret/avg buffers now owned by the new slot. */
+        s->tab[i].regret = NULL;
+        s->tab[i].avg = NULL;
+        s->tab[i].used = 0;
+    }
+    free(s->tab);
+    s->tab = new_tab;
+    s->cap = new_cap;
+    return 0;
+}
+
+/* Enforce a load factor: grow the table (x2) once used_count exceeds cap*0.7.
+ * Returns 0 on success or when no growth is needed, -1 on allocation failure. */
+static int cfr_storage_ensure_capacity(cfr_storage_t *s)
+{
+    if (!s || s->cap == 0)
+        return -1;
+    if (s->used_count <= s->cap / 2 + s->cap / 5) /* ~0.7 load factor */
+        return 0;
+    return cfr_storage_rehash(s, s->cap * 2);
 }
 
 static size_t cfr_storage_entry_count(cfr_storage_t *s)
@@ -134,6 +189,10 @@ void cfr_storage_destroy(cfr_storage_t *s)
 
 static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
 {
+    if (!s || !s->tab || s->cap == 0)
+        return NULL;
+    if (cfr_storage_ensure_capacity(s) != 0)
+        return NULL;
     size_t m = s->cap - 1;
     size_t i = (size_t)(key * 11400714819323198485ull) & m;
     for (;;)
@@ -147,6 +206,7 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
             s->tab[i].avg = (double *)calloc(n, sizeof(double));
             s->tab[i].ev_sum = 0.0;
             s->tab[i].ev_count = 0;
+            s->used_count++;
             return &s->tab[i];
         }
         if (s->tab[i].key == key)
@@ -222,6 +282,8 @@ int cfr_storage_peek_avg_strategy(cfr_storage_t *s,
 void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_count, double *probs)
 {
     entry_t *e = get_entry(s, infoset, action_count);
+    if (!e)
+        return;
     if (!g_use_ecfr)
     {
         double sum_pos = 0.0;
@@ -288,6 +350,8 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
 void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action_count, double *probs)
 {
     entry_t *e = get_entry(s, infoset, action_count);
+    if (!e)
+        return;
     double sum = 0.0;
     for (int i = 0; i < action_count; i++)
     {
@@ -313,6 +377,8 @@ void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action
 void cfr_storage_update_regret(cfr_storage_t *s, uint64_t infoset, int action_count, const double *regret_delta, double discount)
 {
     entry_t *e = get_entry(s, infoset, action_count);
+    if (!e)
+        return;
     for (int i = 0; i < action_count; i++)
     {
         e->regret[i] = e->regret[i] * discount + regret_delta[i];
@@ -322,6 +388,8 @@ void cfr_storage_update_regret(cfr_storage_t *s, uint64_t infoset, int action_co
 void cfr_storage_update_avg(cfr_storage_t *s, uint64_t infoset, int action_count, const double *strategy, double weight)
 {
     entry_t *e = get_entry(s, infoset, action_count);
+    if (!e)
+        return;
     for (int i = 0; i < action_count; i++)
     {
         e->avg[i] += strategy[i] * weight;
@@ -381,6 +449,10 @@ void cfr_storage_accumulate_ev(cfr_storage_t *s, uint64_t infoset, double node_e
 {
     if (!s)
         return;
+    if (s->cap == 0 || !s->tab)
+        return;
+    if (cfr_storage_ensure_capacity(s) != 0)
+        return;
     /* We don't know n here; use get_entry with n=1 to find/create entry, then ignore n change unless later updated */
     size_t m = s->cap - 1;
     size_t i = (size_t)(infoset * 11400714819323198485ull) & m;
@@ -398,6 +470,7 @@ void cfr_storage_accumulate_ev(cfr_storage_t *s, uint64_t infoset, double node_e
             e->ev_sum = 0.0;
             e->ev_sq_sum = 0.0;
             e->ev_count = 0;
+            s->used_count++;
             break;
         }
         if (e->key == infoset)
@@ -583,6 +656,13 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
             return -1;
         }
         entry_t *e = get_entry(s, key, (int)n);
+        if (!e)
+        {
+            int err = errno;
+            fclose(f);
+            errno = err;
+            return -1;
+        }
         e->ev_sum = ev_sum;
         e->ev_sq_sum = ev_sq_sum;
         e->ev_count = ev_count;
