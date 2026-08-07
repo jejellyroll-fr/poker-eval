@@ -195,7 +195,7 @@ void cfr_storage_destroy(cfr_storage_t *s)
 
 static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
 {
-    if (!s || !s->tab || s->cap == 0)
+    if (!s || !s->tab || s->cap == 0 || n <= 0)
         return NULL;
     if (cfr_storage_ensure_capacity(s) != 0)
         return NULL;
@@ -205,11 +205,19 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
     {
         if (!s->tab[i].used)
         {
+            double *regret = (double *)calloc((size_t)n, sizeof(double));
+            double *avg = (double *)calloc((size_t)n, sizeof(double));
+            if (!regret || !avg)
+            {
+                free(regret);
+                free(avg);
+                return NULL;
+            }
             s->tab[i].used = 1;
             s->tab[i].key = key;
             s->tab[i].n = n;
-            s->tab[i].regret = (double *)calloc(n, sizeof(double));
-            s->tab[i].avg = (double *)calloc(n, sizeof(double));
+            s->tab[i].regret = regret;
+            s->tab[i].avg = avg;
             s->tab[i].ev_sum = 0.0;
             s->tab[i].ev_count = 0;
             s->used_count++;
@@ -219,9 +227,28 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
         {
             if (s->tab[i].n != n)
             { /* resize arrays if action count changed */
-                s->tab[i].regret = (double *)realloc(s->tab[i].regret, n * sizeof(double));
-                s->tab[i].avg = (double *)realloc(s->tab[i].avg, n * sizeof(double));
-                s->tab[i].locked = (double *)realloc(s->tab[i].locked, n * sizeof(double));
+                /* Use temporaries so a failed realloc keeps the original
+                   array alive (no leak, no NULL). */
+                double *new_regret = (double *)realloc(s->tab[i].regret, (size_t)n * sizeof(double));
+                double *new_avg = (double *)realloc(s->tab[i].avg, (size_t)n * sizeof(double));
+                double *new_locked = (double *)realloc(s->tab[i].locked, (size_t)n * sizeof(double));
+                if (!new_regret || !new_avg || !new_locked)
+                {
+                    /* Commit whichever resizes succeeded; the others keep
+                       their original blocks valid.  n is left unchanged, so
+                       the entry stays consistent, and grow failures are
+                       still recoverable on a later pass. */
+                    if (new_regret)
+                        s->tab[i].regret = new_regret;
+                    if (new_avg)
+                        s->tab[i].avg = new_avg;
+                    if (new_locked)
+                        s->tab[i].locked = new_locked;
+                    return NULL;
+                }
+                s->tab[i].regret = new_regret;
+                s->tab[i].avg = new_avg;
+                s->tab[i].locked = new_locked;
                 for (int k = s->tab[i].n; k < n; k++)
                 {
                     s->tab[i].regret[k] = 0.0;
@@ -329,7 +356,11 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
 {
     entry_t *e = get_entry(s, infoset, action_count);
     if (!e)
+    {
+        for (int i = 0; i < action_count; i++)
+            probs[i] = 1.0 / action_count;
         return;
+    }
     if (!g_use_ecfr)
     {
         double sum_pos = 0.0;
@@ -397,7 +428,11 @@ void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action
 {
     entry_t *e = get_entry(s, infoset, action_count);
     if (!e)
+    {
+        for (int i = 0; i < action_count; i++)
+            probs[i] = 1.0 / action_count;
         return;
+    }
     double sum = 0.0;
     for (int i = 0; i < action_count; i++)
     {
@@ -508,11 +543,19 @@ void cfr_storage_accumulate_ev(cfr_storage_t *s, uint64_t infoset, double node_e
         if (!e->used)
         {
             /* Create minimal entry */
+            double *regret = (double *)calloc(1, sizeof(double));
+            double *avg = (double *)calloc(1, sizeof(double));
+            if (!regret || !avg)
+            {
+                free(regret);
+                free(avg);
+                return;
+            }
             e->used = 1;
             e->key = infoset;
             e->n = 1;
-            e->regret = (double *)calloc(1, sizeof(double));
-            e->avg = (double *)calloc(1, sizeof(double));
+            e->regret = regret;
+            e->avg = avg;
             e->ev_sum = 0.0;
             e->ev_sq_sum = 0.0;
             e->ev_count = 0;
