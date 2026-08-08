@@ -211,7 +211,11 @@ typedef struct {
     uint64_t total_iterations;
     uint64_t total_simulations;
     uint64_t total_nodes_created;
+<<<<<<< HEAD
     int live_heap_nodes;              /* Heap-allocated nodes not yet freed */
+=======
+    int live_children_arrays;    /* Heap-allocated children arrays not yet freed */
+>>>>>>> 4707b4b4 (fix(ismcts): walk the tree on reset so children arrays are freed)
 } ismcts_solver_t;
 
 /* ===== Public API ===== */

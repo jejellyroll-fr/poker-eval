@@ -66,14 +66,16 @@ static ismcts_node_t* node_create(ismcts_solver_t* solver) {
     return node;
 }
 
-static void node_free_recursive(ismcts_solver_t* solver, ismcts_node_t* node) {
+static void node_free_recursive(ismcts_solver_t* solver, ismcts_node_t* node, bool pool_allocated) {
     if (!node) return;
     
     for (int i = 0; i < node->num_children; i++) {
-        node_free_recursive(solver, node->children[i]);
-    }
+        node_free_recursive(solver, node->children[i], pool_allocated);    }
     
-    free(node->children);
+    if (node->children) {
+        solver->live_children_arrays--;
+        free(node->children);
+    }
     
     /* Only free node if it was heap-allocated (not from the pool) */
     if (!node->from_pool) {
@@ -82,7 +84,7 @@ static void node_free_recursive(ismcts_solver_t* solver, ismcts_node_t* node) {
     }
 }
 
-static int node_add_child(ismcts_node_t* parent, ismcts_node_t* child, const ismcts_action_t* action) {
+static int node_add_child(ismcts_solver_t* solver, ismcts_node_t* parent, ismcts_node_t* child, const ismcts_action_t* action) {
     /* Expand children array if needed */
     if (parent->num_children >= parent->children_capacity) {
         int new_cap = parent->children_capacity == 0 ? 4 : parent->children_capacity * 2;
@@ -91,6 +93,7 @@ static int node_add_child(ismcts_node_t* parent, ismcts_node_t* child, const ism
             new_cap * sizeof(ismcts_node_t*)
         );
         if (!new_children) return -1;
+        if (!parent->children) solver->live_children_arrays++;
         parent->children = new_children;
         parent->children_capacity = new_cap;
     }
@@ -149,7 +152,7 @@ static int expand_node(ismcts_solver_t* solver, ismcts_node_t* node, const ismct
         if (!child) continue;
         
         child->acting_player = state->current_player;
-        node_add_child(node, child, &actions[i]);
+        node_add_child(solver, node, child, &actions[i]);
     }
     
     node->is_expanded = true;
@@ -310,8 +313,7 @@ void ismcts_poker_free(ismcts_solver_t* solver) {
     
     /* Free tree nodes */
     if (solver->root) {
-        node_free_recursive(solver, solver->root);
-    }
+        node_free_recursive(solver, solver->root, solver->node_pool != NULL);    }
     
     free(solver->node_pool);
     free(solver);
@@ -320,11 +322,12 @@ void ismcts_poker_free(ismcts_solver_t* solver) {
 void ismcts_poker_reset(ismcts_solver_t* solver) {
     if (!solver) return;
     
-    /* Reset tree: per-node from_pool flags let node_free_recursive free
-     only the calloc-ed overflow nodes, wherever they hang. */
+    /* Reset tree: walk always, regardless of pool.  node_free_recursive
+     * frees every children array (heap-allocated via realloc); node structs
+     * are only freed when they do not live in the pool buffer. Pooled nodes
+     * themselves are recycled below. */
     if (solver->root) {
-        node_free_recursive(solver, solver->root);
-    }
+        node_free_recursive(solver, solver->root, solver->node_pool != NULL);    }
     solver->root = NULL;
     
     /* Reset pool */
