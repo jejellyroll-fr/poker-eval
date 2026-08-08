@@ -631,6 +631,8 @@ add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")
 add_poker_test(test_ismcts_pool_cap)
 set_tests_properties(test_ismcts_pool_cap PROPERTIES LABELS "engine;ismcts;solver;bug11")
+add_poker_test(test_ismcts_pool_leak)
+set_tests_properties(test_ismcts_pool_leak PROPERTIES LABELS "engine;ismcts;solver;bug09")
 
 if(TARGET multiway_equity_cli)
     add_test(NAME multiway_equity_cli_basic
