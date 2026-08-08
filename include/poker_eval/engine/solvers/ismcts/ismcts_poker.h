@@ -168,6 +168,7 @@ typedef struct ismcts_node_t {
     /* State info */
     int acting_player;           /* Player who acted to reach this node */
     bool is_expanded;            /* True if children have been generated */
+    bool from_pool;              /* True if node lives in solver->node_pool */
 } ismcts_node_t;
 
 /* ===== ISMCTS Configuration ===== */
@@ -206,6 +207,7 @@ typedef struct {
     uint64_t total_iterations;
     uint64_t total_simulations;
     uint64_t total_nodes_created;
+    int live_heap_nodes;              /* Heap-allocated nodes not yet freed */
 } ismcts_solver_t;
 
 /* ===== Public API ===== */
