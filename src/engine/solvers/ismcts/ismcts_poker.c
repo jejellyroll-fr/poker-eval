@@ -278,9 +278,23 @@ ismcts_solver_t* ismcts_poker_create(
     solver->game = game;
     solver->rng_state = solver->config.random_seed;
     
-    /* Allocate node pool */
-    solver->pool_size = solver->config.max_iterations * 2; /* Estimate */
-    solver->node_pool = (ismcts_node_t*)calloc(solver->pool_size, sizeof(ismcts_node_t));
+    /* Allocate node pool: pool_size = max_iterations * 2, computed in
+     * size_t (max_iterations > INT_MAX/2 used to overflow the int math
+     * into a negative size), capped so absurd configs cannot request a
+     * multi-GB allocation up front. On calloc failure, zero pool_size so
+     * node_create cleanly falls back to per-node calloc (BUG-11). */
+    size_t pool_estimate = 0;
+    if (solver->config.max_iterations > 0) {
+        pool_estimate = (size_t)solver->config.max_iterations * 2;
+        if (pool_estimate > ISMCTS_MAX_POOL_ITEMS) {
+            pool_estimate = ISMCTS_MAX_POOL_ITEMS;
+        }
+    }
+    solver->pool_size = (int)pool_estimate;
+    solver->node_pool = (ismcts_node_t*)calloc(pool_estimate, sizeof(ismcts_node_t));
+    if (!solver->node_pool) {
+        solver->pool_size = 0;
+    }
     solver->pool_used = 0;
     
     return solver;
