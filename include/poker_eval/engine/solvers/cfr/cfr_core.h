@@ -20,11 +20,21 @@ extern "C" {
 
 #define CFR_MAX_PLAYERS 8
 
+<<<<<<< HEAD
 /* Upper bound on the number of actions any game can expose at a node.
    Adapters must clamp their returned action count to this; the core
    allocates fixed arrays and alloca()s based on it. */
 #define CFR_MAX_ACTIONS 16
 
+=======
+/* Upper bound on the number of actions any game exposes at a node. */
+#define CFR_MAX_ACTIONS 16
+
+/* Default recursion depth limit for tree walks; a value of 0 in
+   cfr_config_t::max_depth selects this default. */
+#define CFR_DEFAULT_MAX_DEPTH 1000
+
+>>>>>>> 46a90d43 (fix(cfr): enforce recursion depth limit and replace per-frame alloca (BUG-08))
 /* Forward declarations */
 typedef struct cfr_game_t cfr_game_t;
 typedef struct cfr_storage_t cfr_storage_t;
@@ -129,6 +139,7 @@ struct cfr_game_t {
 /* CFR configuration */
 struct cfr_config_t {
     int max_iterations;
+    int max_depth;         /* Max tree recursion depth (0 = CFR_DEFAULT_MAX_DEPTH) */
     int checkpoint_interval;
     double convergence_threshold;
     int enable_dcfr;       /* Discounted CFR */
