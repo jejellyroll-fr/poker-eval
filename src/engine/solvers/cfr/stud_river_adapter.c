@@ -25,7 +25,7 @@ static int stud_get_actions_wrapper(cfr_game_t* game, uint64_t state_key, int* o
     for (int i = 0; i < n && i < max_actions; ++i) {
         out_actions[i] = i;
     }
-    return n;
+    return n < max_actions ? n : max_actions;
 }
 
 static uint64_t stud_apply_action_wrapper(cfr_game_t* game, uint64_t state_key, int action, void* user_data) {
