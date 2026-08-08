@@ -206,6 +206,7 @@ typedef struct {
     uint64_t total_iterations;
     uint64_t total_simulations;
     uint64_t total_nodes_created;
+    int live_children_arrays;    /* Heap-allocated children arrays not yet freed */
 } ismcts_solver_t;
 
 /* ===== Public API ===== */

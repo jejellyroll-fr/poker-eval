@@ -610,6 +610,8 @@ add_poker_test(test_cfr_multiway)
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")
+add_poker_test(test_ismcts_children_leak)
+set_tests_properties(test_ismcts_children_leak PROPERTIES LABELS "engine;ismcts;solver;bug10")
 
 if(TARGET multiway_equity_cli)
     add_test(NAME multiway_equity_cli_basic
