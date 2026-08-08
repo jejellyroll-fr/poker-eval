@@ -20,6 +20,11 @@ extern "C" {
 
 #define CFR_MAX_PLAYERS 8
 
+/* Upper bound on the number of actions any game can expose at a node.
+   Adapters must clamp their returned action count to this; the core
+   allocates fixed arrays and alloca()s based on it. */
+#define CFR_MAX_ACTIONS 16
+
 /* Forward declarations */
 typedef struct cfr_game_t cfr_game_t;
 typedef struct cfr_storage_t cfr_storage_t;
