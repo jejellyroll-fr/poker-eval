@@ -7,6 +7,7 @@
 #include <poker_eval/core/card.h>
 #include <string.h>
 #include <stdlib.h>
+#include <poker_eval/core/pcg_rng.h>
 
 double pe_board_partial_score(StdDeck_CardMask partial_missing_cards,
                               int num_cards_drawn) {
@@ -137,14 +138,14 @@ pe_bpair_counts_t pe_board_pair_counts(StdDeck_CardMask dead, int k) {
 /* RNG helper */
 static inline int urand_bounded(int bound) {
     if (bound <= 0) return 0;
-    return rand() % bound;
+    return (int)pe_rng_below(pe_rng_current(), (uint32_t)bound);
 }
 
 /* Choose rank index with probability proportional to weights[r] among ranks with weights>0 */
 static int choose_rank_weighted(const uint64_t weights[13]) {
     uint64_t sum = 0ULL; for (int r = 0; r < 13; ++r) sum += weights[r];
     if (sum == 0ULL) return -1;
-    double u = rand() / ((double)RAND_MAX + 1.0);
+    double u = pe_rng_uniform01(pe_rng_current());
     uint64_t x = (uint64_t)(u * (double)sum);
     uint64_t acc = 0ULL;
     for (int r = 0; r < 13; ++r) {
