@@ -4,6 +4,7 @@
 #include "cfr_core.h"
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
+#include <poker_eval/economics/rake.h>
 
 #if !defined(_WIN32)
 #include <poker_eval/core/pthread_compat.h>
@@ -113,6 +114,11 @@ typedef struct
 
     int enable_pot_sizing; /* 0 = montants absolus, 1 = fractions du pot */
 
+    /* Terminal rake applied to pots won at showdown and on folds.
+     * percentage <= 0.0 disables rake; no_flop_no_drop skips rake when
+     * the pot never saw a flop. */
+    rake_config_t rake;
+
     mpf_preflop_cfg_t preflop;
 
     struct mpf_tree_def_t *tree;
@@ -161,6 +167,8 @@ typedef struct mpf_state_s
     int bet_size_count;
     int raise_cap;
     int enable_pot_sizing;
+    /* Copied from mpf_config_t at build time; propagates to cloned states */
+    rake_config_t rake;
     double base_bet_sizes[MPF_MAX_BET_SIZES];
     int base_bet_size_count;
     int base_enable_pot_sizing;
