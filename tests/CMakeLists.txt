@@ -218,6 +218,7 @@ set(TEST_SOURCES
     # Equity tests
     test_simple_equity.c
     test_range_equity_mt.c
+    test_range_equity_seed_determinism.c
     test_range_equity_aavs_kk.c
     test_multiway_equity.c
     test_range_equity_weighted.c
@@ -537,6 +538,8 @@ set_tests_properties(test_plo6_basic PROPERTIES LABELS "games;plo;section7")
 if(OpenMP_FOUND)
     set_tests_properties(test_range_equity_mt PROPERTIES TIMEOUT 180)
     set_property(TEST test_range_equity_mt APPEND PROPERTY LABELS "slow")
+    set_tests_properties(test_range_equity_seed_determinism PROPERTIES TIMEOUT 180)
+    set_property(TEST test_range_equity_seed_determinism APPEND PROPERTY LABELS "slow")
 endif()
 
 # Section 5.5: Economics tests
