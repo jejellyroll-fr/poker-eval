@@ -152,6 +152,11 @@ static size_t generate_all_combinations(int n, int k, int *deck,
     return 0;
 
   int *indices = malloc(k * sizeof(int));
+  if (!indices) {
+    free(*output_buffer);
+    *output_buffer = NULL;
+    return 0;
+  }
   for (int i = 0; i < k; i++)
     indices[i] = i;
 
@@ -242,6 +247,8 @@ int enumExhaustive_eedc_omaha_opt(enum_game_t game, StdDeck_CardMask pockets[],
     // 1 "combinaison" vide
     num_combos = 1;
     combos = malloc(sizeof(int)); // Dummy
+    if (!combos)
+      return 1;
   }
 
   // Préparer les résultats thread-local
@@ -252,8 +259,18 @@ int enumExhaustive_eedc_omaha_opt(enum_game_t game, StdDeck_CardMask pockets[],
 
   // Allocation dynamique des résultats locaux pour éviter la stack
   enum_result_t **local_results = malloc(max_threads * sizeof(enum_result_t *));
+  if (!local_results)
+    return -1;
   for (int i = 0; i < max_threads; i++) {
     local_results[i] = malloc(sizeof(enum_result_t));
+    if (!local_results[i]) {
+      for (int j = 0; j < i; j++) {
+        enumResultFree(local_results[j]);
+        free(local_results[j]);
+      }
+      free(local_results);
+      return -1;
+    }
     /* Clear before allocating: enumResultClear() memsets the struct, so an
      * ordering allocated first is dropped without being freed — and the
      * histogram merge below then finds a NULL ordering and skips. */

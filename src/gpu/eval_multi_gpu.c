@@ -242,6 +242,11 @@ int multi_gpu_eval_holdem_batch(
     pthread_t* threads = (pthread_t*)calloc(ctx->num_devices, sizeof(pthread_t));
     pthread_mutex_t done_mutex;
     pthread_cond_t done_cond;
+    if (!workers || !threads) {
+        free(workers);
+        free(threads);
+        return -1;
+    }
 
     pthread_mutex_init(&done_mutex, NULL);
     pthread_cond_init(&done_cond, NULL);
@@ -319,6 +324,11 @@ int multi_gpu_eval_omaha_batch(
     pthread_t* threads = (pthread_t*)calloc(ctx->num_devices, sizeof(pthread_t));
     pthread_mutex_t done_mutex;
     pthread_cond_t done_cond;
+    if (!workers || !threads) {
+        free(workers);
+        free(threads);
+        return -1;
+    }
 
     pthread_mutex_init(&done_mutex, NULL);
     pthread_cond_init(&done_cond, NULL);
