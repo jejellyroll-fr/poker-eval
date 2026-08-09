@@ -173,6 +173,12 @@ omaha_generator_t *omaha_generator_create(const omaha_config_t *config)
     {
         size_t cache_size = config->cache_size_mb * 1024 * 1024;
         gen->cache_data = calloc(1, cache_size);
+        if (!gen->cache_data) {
+            combo_generator_destroy(gen->hole_gen);
+            combo_generator_destroy(gen->board_gen);
+            free(gen);
+            return NULL;
+        }
         /* Cache implementation would go here */
     }
 

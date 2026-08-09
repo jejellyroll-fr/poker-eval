@@ -583,6 +583,12 @@ static void eedc_canonicalizer_init(eedc_canonicalizer_t *canon, int ndeck)
     canon->cap = req;
     canon->seen = (uint64_t *)calloc(canon->cap, sizeof(uint64_t));
     canon->used = (unsigned char *)calloc(canon->cap, sizeof(unsigned char));
+    if (!canon->seen || !canon->used) {
+        free(canon->seen);
+        free(canon->used);
+        canon->cap = 0;
+        return;
+    }
 #else
     (void)canon;
     (void)ndeck;

@@ -59,11 +59,14 @@ typedef struct {
     int capacity;
 } TaskDeque;
 
-static void taskdeque_init(TaskDeque *dq, int capacity) {
+static int taskdeque_init(TaskDeque *dq, int capacity) {
     dq->tasks = malloc(sizeof(Task) * capacity);
+    if (!dq->tasks)
+        return -1;
     dq->head = dq->tail = 0;
     dq->capacity = capacity;
     omp_init_lock(&dq->lock);
+    return 0;
 }
 
 static void taskdeque_destroy(TaskDeque *dq) {
@@ -220,8 +223,15 @@ int CalculateEquityForRanges_MT_v5(
 
     // Create per-thread deques
     TaskDeque deques[MAX_THREADS];
-    for (int t = 0; t < num_threads; t++)
-        taskdeque_init(&deques[t], 1024);
+    for (int t = 0; t < num_threads; t++) {
+        if (taskdeque_init(&deques[t], 1024) != 0) {
+            for (int t2 = 0; t2 < t; t2++)
+                taskdeque_destroy(&deques[t2]);
+            if (use_prefilter)
+                range_combo_free_buffers(combo_buffers, num_players);
+            return -1;
+        }
+    }
 
     // Split work into batches
     int batch_size = TASK_BATCH_SIZE;
