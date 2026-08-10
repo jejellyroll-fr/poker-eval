@@ -71,6 +71,8 @@ static const char *k_tree_json =
     "      \"player\": 1,\n"
     "      \"bet_profile\": \"default\",\n"
     "      \"range_profile\": \"root_p1_pre\",\n"
+    "      \"is_locked\": true,\n"
+    "      \"locked_strategy\": [1.0, 0.0],\n"
     "      \"actions\": [\n"
     "        {\"type\": \"call\", \"next\": \"flop_chance\"},\n"
     "        {\"type\": \"raise\", \"size_index\": 0, \"next\": \"terminal_raise\"}\n"
@@ -221,6 +223,11 @@ int main(void)
                    root_node->range_profile_id ? root_node->range_profile_id : "<none>");
     ASSERT_TRUE(root_node->range_profile != NULL, "root range profile assigned");
     ASSERT_TRUE(strcmp(root_node->range_profile->id, "root_p1_pre") == 0, "root range id");
+    ASSERT_TRUE(root_node->is_locked == 1, "root is_locked parsed");
+    ASSERT_TRUE(root_node->locked_strategy_count == 2, "root locked_strategy count");
+    ASSERT_TRUE(root_node->locked_strategy != NULL, "root locked_strategy present");
+    ASSERT_TRUE(fabs(root_node->locked_strategy[0] - 1.0) < 1e-6, "root locked_strategy[0]");
+    ASSERT_TRUE(fabs(root_node->locked_strategy[1] - 0.0) < 1e-6, "root locked_strategy[1]");
     ASSERT_TRUE(root_node->range_profile->combo_count == 2, "root combo count");
     ASSERT_TRUE(strcmp(root_node->range_profile->combos[0].hand, "AhKh") == 0, "root combo hand");
     ASSERT_TRUE(fabs(root_node->range_profile->combos[0].weight - 1.0) < 1e-6, "root combo weight");
@@ -249,6 +256,9 @@ int main(void)
     rt_root = &round_trip->nodes[round_trip->root_index];
     ASSERT_TRUE(rt_root->range_profile != NULL, "round trip root range");
     ASSERT_TRUE(strcmp(rt_root->range_profile->id, "root_p1_pre") == 0, "round trip root id");
+    ASSERT_TRUE(rt_root->is_locked == 1, "round trip is_locked");
+    ASSERT_TRUE(rt_root->locked_strategy_count == 2, "round trip locked_strategy count");
+    ASSERT_TRUE(fabs(rt_root->locked_strategy[0] - 1.0) < 1e-6, "round trip locked_strategy[0]");
     rt_flop_idx = -1;
     for (int i = 0; i < round_trip->node_count; ++i)
     {
