@@ -136,6 +136,9 @@ struct cfr_config_t {
     int monitor_period;
     int metrics_interval;
     int metrics_history;
+    int exploitability_interval; /* Full best-response exploitability every N
+                                  * iterations (0 = disabled; also drives the
+                                  * periodic convergence check). */
     int metrics_level;
     double metrics_bb_value;
     double metrics_mchips_scale;
@@ -306,8 +309,16 @@ double cfr_best_response_value(
     void* user_data
 );
 
-/* Calculate exploitability proxy */
-double cfr_exploitability_proxy(
+/*
+ * Compute exact 2-player best-response exploitability.
+ *
+ * Despite its old name ("proxy") this is an exact computation: it walks the
+ * game tree once per player and returns the sum of the best-response values,
+ * so it is expensive and should be run on a configurable period (see
+ * cfr_config_t::exploitability_interval) rather than on every iteration.
+ * For N-player games use cfr_exploitability_multiway instead.
+ */
+double cfr_exploitability(
     cfr_game_t* game,
     cfr_storage_t* storage,
     void* user_data

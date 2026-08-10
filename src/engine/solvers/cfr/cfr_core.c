@@ -126,8 +126,18 @@ static void cfr_metrics_ev_accumulate(uint64_t key,
 
 /* Exploitability metric used by cfr_solve. Multiway games (num_players > 2)
  * use the full N-player best-response metric; 2-player (or unspecified) games
- * use the classic proxy. Both receive game->game_data as the traversal
- * user_data, consistent with the rest of the solve. */
+ * use the exact 2-player best-response. Both receive game->game_data as the
+ * traversal user_data, consistent with the rest of the solve.
+ *
+ * The computation walks the game tree twice, so cfr_solve gates it on
+ * cfr_config_t::exploitability_interval and caches the result per iteration. */
+typedef struct
+{
+    double value;
+    int iteration;
+    int valid;
+} cfr_exploitability_cache_t;
+
 static double cfr_solve_exploitability(cfr_game_t *game, cfr_storage_t *storage)
 {
     void *user_data = game->game_data;
@@ -138,7 +148,20 @@ static double cfr_solve_exploitability(cfr_game_t *game, cfr_storage_t *storage)
             return 0.0;
         return result.total_exploitability;
     }
-    return cfr_exploitability_proxy(game, storage, user_data);
+    return cfr_exploitability(game, storage, user_data);
+}
+
+static double cfr_solve_exploitability_cached(cfr_game_t *game,
+                                              cfr_storage_t *storage,
+                                              cfr_exploitability_cache_t *cache,
+                                              int iteration)
+{
+    if (cache->valid && cache->iteration == iteration)
+        return cache->value;
+    cache->value = cfr_solve_exploitability(game, storage);
+    cache->iteration = iteration;
+    cache->valid = 1;
+    return cache->value;
 }
 
 double cfr_solve(
@@ -185,6 +208,7 @@ double cfr_solve(
 
     int last_iter = start_iter;
     int aborted = 0;
+    cfr_exploitability_cache_t expl_cache = {0.0, -1, 0};
     long long metrics_nodes_total = 0;
     double metrics_elapsed_total = 0.0;
     int metrics_interval_raw = config->metrics_interval;
@@ -267,8 +291,9 @@ double cfr_solve(
                 snap.infosets_total = cfr_storage_count_infosets(storage);
                 snap.num_players = (game->num_players > 0) ? game->num_players : 0;
 
-                if (config->metrics_level >= 1)
-                    snap.exploitability = cfr_solve_exploitability(game, storage);
+                if (config->metrics_level >= 1 && config->exploitability_interval > 0 &&
+                    ((it + 1) % config->exploitability_interval) == 0)
+                    snap.exploitability = cfr_solve_exploitability_cached(game, storage, &expl_cache, (int)(it + 1));
 
                 if (config->metrics_level >= 2)
                 {
@@ -326,9 +351,9 @@ double cfr_solve(
             }
         }
 
-        if (config->checkpoint_interval > 0 && (it + 1) % config->checkpoint_interval == 0)
+        if (config->exploitability_interval > 0 && ((it + 1) % config->exploitability_interval) == 0)
         {
-            double exploitability = cfr_solve_exploitability(game, storage);
+            double exploitability = cfr_solve_exploitability_cached(game, storage, &expl_cache, (int)(it + 1));
             if (out_exploitability)
             {
                 *out_exploitability = exploitability;
@@ -346,7 +371,7 @@ double cfr_solve(
         }
     }
 
-    double final_exploitability = cfr_solve_exploitability(game, storage);
+    double final_exploitability = cfr_solve_exploitability_cached(game, storage, &expl_cache, (int)(last_iter + 1));
     if (out_exploitability)
     {
         *out_exploitability = final_exploitability;
@@ -745,7 +770,7 @@ static void cfr_metrics_buffer_push_internal(cfr_metrics_buffer_t *buffer,
     cfr_metrics_buffer_unlock(buffer);
 }
 
-double cfr_exploitability_proxy(
+double cfr_exploitability(
     cfr_game_t *game,
     cfr_storage_t *storage,
     void *user_data)
