@@ -9,6 +9,7 @@ set(ENGINE_SOURCES
     # target cycle, which CMake only tolerates between static archives.
     ${CMAKE_CURRENT_SOURCE_DIR}/../games/mixed_game.c
     policy/nn_policy.c
+    solvers/cfr/board_canonical.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/holdem_river_adapter.c
