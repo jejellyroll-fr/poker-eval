@@ -42,6 +42,7 @@ typedef struct {
     double bet_half;
     double bet_pot;
     uint32_t bucket_thresh[16];
+    int suit_perm[4]; /* suit canonicalization mapping (label -> original suit) */
 } holdem_river_state_t;
 
 /* Create Hold'em river adapter */
