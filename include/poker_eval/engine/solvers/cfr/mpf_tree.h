@@ -122,6 +122,9 @@ typedef struct mpf_tree_node_t
     char *bet_profile_id;
     char *range_profile_id;
     const mpf_tree_range_profile_t *range_profile;
+    int is_locked;
+    double *locked_strategy; /* owning array, NULL when not locked */
+    int locked_strategy_count;
     mpf_tree_snapshot_t snapshot;
     int has_snapshot;
     mpf_state_t *state_cache;
@@ -132,8 +135,10 @@ typedef struct mpf_tree_node_t
     {
         pthread_t owner;
         mpf_state_t *state;
+        int lock_wired;
     } cache_slots[MPF_NODE_CACHE_SLOTS];
 #endif
+    int lock_wired; /* single-threaded / non-Windows fallback wire flag */
 } mpf_tree_node_t;
 
 typedef struct mpf_tree_def_t

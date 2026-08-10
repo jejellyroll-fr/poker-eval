@@ -174,9 +174,19 @@ typedef struct mpf_state_s
     mpf_perf_stats_t *perf_stats;
     struct mpf_state_s *action_cache[MPF_TREE_ACTION_MAX];
     int heap_owned;
+    cfr_storage_t *lock_storage; /* set via mpf_apply_locked_strategies */
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);
+
+/*
+ * Wire the tree's locked strategies (is_locked / locked_strategy fields on
+ * player nodes) into a CFR storage for a solve rooted at `root_state`.
+ * The root node lock is applied immediately; the remaining nodes are locked
+ * lazily on first entry during the solve (their state keys are only known
+ * then). Returns the number of locks applied immediately.
+ */
+int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage);
 void mpf_perf_stats_reset(mpf_perf_stats_t *stats);
 void mpf_state_cleanup(mpf_state_t *state);
 struct mpf_perf_stats_pool_t *mpf_perf_stats_pool_create(int max_threads_hint);
