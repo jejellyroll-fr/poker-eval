@@ -36,6 +36,10 @@
 
 #define CFR_MAX_PLAYERS 8
 
+double cfr_exploitability_proxy(cfr_game_t *game,
+                                 cfr_storage_t *storage,
+                                 void *user_data);
+
 #if defined(_MSC_VER)
 #define CFR_THREAD_LOCAL __declspec(thread)
 #elif defined(__GNUC__) || defined(__clang__)
