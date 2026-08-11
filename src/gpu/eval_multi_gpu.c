@@ -7,8 +7,8 @@
  * Supports both CUDA and OpenCL backends.
  */
 
-#include "include/eval_multi_gpu.h"
-#include "include/eval_batched_gpu.h"
+#include "poker_eval/gpu/eval_multi_gpu.h"
+#include "poker_eval/gpu/eval_batched_gpu.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -141,7 +141,7 @@ multi_gpu_context_t* multi_gpu_init(const multi_gpu_config_t* config) {
         if (ctx->config.verbose) {
             gpu_device_info_t info;
             gpu_eval_get_device_info(ctx->gpu_contexts[i], &info);
-            printf("  GPU %d: %s\n", i, info.name);
+            printf("  GPU %d: %s\n", i, info.device_name);
         }
     }
 

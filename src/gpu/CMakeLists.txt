@@ -73,11 +73,15 @@ here instead of silently skipping it.")
         )
 
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-            target_compile_options(poker_cuda PRIVATE -Wno-error=pedantic)
-            target_compile_options(poker_cuda_generic PRIVATE -Wno-error=pedantic)
-            target_compile_options(poker_gpu_cfr_cuda PRIVATE -Wno-error=pedantic)
-            target_compile_options(poker_gpu_combinatorics_cuda PRIVATE -Wno-error=pedantic)
-            target_compile_options(poker_cuda_batch PRIVATE -Wno-error=pedantic)
+            # The project enables -Werror globally, which is appended after these
+            # per-target options. Drop it here so warnings from third-party CUDA
+            # headers (e.g. curand_kernel.h's -Wundef / -Wconversion under
+            # nvcc's host preprocessing) stay warnings and the GPU sources link.
+            target_compile_options(poker_cuda PRIVATE -Wno-error)
+            target_compile_options(poker_cuda_generic PRIVATE -Wno-error)
+            target_compile_options(poker_gpu_cfr_cuda PRIVATE -Wno-error)
+            target_compile_options(poker_gpu_combinatorics_cuda PRIVATE -Wno-error)
+            target_compile_options(poker_cuda_batch PRIVATE -Wno-error)
         endif()
 
         target_include_directories(poker_cuda PUBLIC
@@ -218,6 +222,7 @@ here instead of silently skipping it.")
             eval_batched_gpu.c
             eval_batched_cuda.c
             eval_batched_opencl.c
+            eval_multi_gpu.c
             gpu_table_loader.c
         )
         target_include_directories(poker_gpu_unified PUBLIC ${GPU_INCLUDE_DIRS})
@@ -298,6 +303,8 @@ here instead of silently skipping it.")
 
         install(FILES include/eval_gpu.h include/gpu_cfr.h include/gpu_combinatorics.h
                 DESTINATION include)
+        install(FILES include/poker_eval/gpu/eval_multi_gpu.h
+                DESTINATION include/poker_eval/gpu)
     endif()
 
     set(GPU_ACCELERATION_AVAILABLE ${GPU_LIBRARIES} PARENT_SCOPE)

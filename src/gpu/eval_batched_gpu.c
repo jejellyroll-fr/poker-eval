@@ -80,7 +80,8 @@ gpu_eval_context_t* gpu_eval_init(const gpu_eval_config_t* config) {
             ctx->device_info.backend = GPU_BACKEND_CUDA;
             ctx->initialized = true;
             cuda_backend_enable_profiling(ctx->backend_context,
-                                         ctx->config.enable_profiling);
+                                          ctx->config.enable_profiling);
+            cuda_backend_enable_streaming(ctx->backend_context, true);
             cuda_backend_get_device_info(ctx->backend_context, &ctx->device_info);
             if (ctx->device_info.device_id < 0) {
                 ctx->device_info.device_id = ctx->config.device_id;
@@ -599,6 +600,18 @@ void gpu_eval_reset_stats(gpu_eval_context_t* ctx) {
     if (!ctx) return;
     ctx->total_evals = 0;
     ctx->total_time_ms = 0.0;
+}
+
+int gpu_eval_enable_streaming(gpu_eval_context_t* ctx, bool enable) {
+    if (!ctx || !ctx->initialized) return -1;
+#ifdef ENABLE_CUDA
+    if (ctx->device_info.backend == GPU_BACKEND_CUDA) {
+        cuda_backend_enable_streaming(ctx->backend_context, enable);
+        return 0;
+    }
+#endif
+    (void)enable;
+    return -1;
 }
 
 /* ===== Helpers ===== */

@@ -121,6 +121,7 @@ typedef struct {
     cudaEvent_t start_event;
     cudaEvent_t stop_event;
     bool profiling_enabled;
+    bool streaming_enabled;
 } cuda_context_t;
 
 /* ===== Lookup Table Data (will be copied to device) ===== */
@@ -395,6 +396,7 @@ int cuda_backend_init(void** out_context, int device_id, bool verbose) {
     ctx->d_ties = NULL;
     ctx->d_losses = NULL;
     ctx->profiling_enabled = false;
+    ctx->streaming_enabled = true; /* Overlap H2D / compute / D2H by default */
     ctx->host_interleaved = NULL;
     ctx->host_interleaved_capacity = 0;
 
@@ -569,21 +571,62 @@ int cuda_backend_eval_holdem_batch(
         cudaEventRecord(ctx->start_event, ctx->stream);
     }
 
-    /* Copy input to device */
-    size_t hands_size = batch_size * 7 * sizeof(uint8_t);
-    CUDA_CHECK_RETURN(cudaMemcpy(ctx->d_hands, hands, hands_size, cudaMemcpyHostToDevice), -1);
+    if (!ctx->streaming_enabled || ctx->num_streams <= 1 || batch_size < 2048) {
+        /* Small batches: the per-chunk overhead is not worth it, run inline. */
+        size_t hands_size = batch_size * 7 * sizeof(uint8_t);
+        CUDA_CHECK_RETURN(cudaMemcpy(ctx->d_hands, hands, hands_size, cudaMemcpyHostToDevice), -1);
 
-    /* Launch kernel */
-    launch_eval_holdem_batch_kernel_opt(
-        ctx->d_hands,
-        batch_size,
-        ctx->d_values,
-        ctx->stream
-    );
+        launch_eval_holdem_batch_kernel_opt(
+            ctx->d_hands,
+            batch_size,
+            ctx->d_values,
+            ctx->stream
+        );
 
-    /* Copy results back */
-    size_t values_size = batch_size * sizeof(uint32_t);
-    CUDA_CHECK_RETURN(cudaMemcpy(out_values, ctx->d_values, values_size, cudaMemcpyDeviceToHost), -1);
+        size_t values_size = batch_size * sizeof(uint32_t);
+        CUDA_CHECK_RETURN(cudaMemcpy(out_values, ctx->d_values, values_size, cudaMemcpyDeviceToHost), -1);
+    } else {
+        /* Split the batch across the concurrent streams so that the H2D copy of
+         * chunk N+1 overlaps the compute of chunk N and the D2H copy of chunk
+         * N-1 on independent streams. Each stream still serialises its own
+         * copy/launch/copy, but the pipeline keeps the device busy throughout
+         * instead of stalling on a single synchronising stream. */
+        int nstreams = ctx->num_streams;
+        /* Chunk size: at least 1024 hands per chunk, rounded up to a stream. */
+        size_t chunk = batch_size / (size_t)nstreams;
+        if (chunk < 1024) chunk = 1024;
+
+        for (size_t off = 0; off < batch_size; off += chunk) {
+            size_t count = batch_size - off;
+            if (count > chunk) count = chunk;
+
+            int s = (int)((off / chunk) % (size_t)nstreams);
+            cudaStream_t stream = ctx->streams[s];
+            uint8_t* d_hands = ctx->d_hands + off * 7;
+            uint32_t* d_values = ctx->d_values + off;
+            const uint8_t* h_hands = hands + off * 7;
+            uint32_t* h_values = out_values + off;
+
+            size_t hands_size = count * 7 * sizeof(uint8_t);
+            size_t values_size = count * sizeof(uint32_t);
+
+            CUDA_CHECK_RETURN(cudaMemcpyAsync(d_hands, h_hands, hands_size,
+                                              cudaMemcpyHostToDevice, stream), -1);
+            launch_eval_holdem_batch_kernel_opt(
+                d_hands,
+                count,
+                d_values,
+                stream
+            );
+            CUDA_CHECK_RETURN(cudaMemcpyAsync(h_values, d_values, values_size,
+                                              cudaMemcpyDeviceToHost, stream), -1);
+        }
+
+        /* Wait for all streams to finish the pipeline. */
+        for (int s = 0; s < nstreams; s++) {
+            CUDA_CHECK_RETURN(cudaStreamSynchronize(ctx->streams[s]), -1);
+        }
+    }
 
     /* Stop profiling */
     if (ctx->profiling_enabled && out_time_ms) {
@@ -741,6 +784,12 @@ void cuda_backend_enable_profiling(void* context, bool enable) {
     ctx->profiling_enabled = enable;
 }
 
+void cuda_backend_enable_streaming(void* context, bool enable) {
+    if (!context) return;
+    cuda_context_t* ctx = (cuda_context_t*)context;
+    ctx->streaming_enabled = enable;
+}
+
 int cuda_backend_get_device_count(void) {
     int count = 0;
     if (cudaGetDeviceCount(&count) != cudaSuccess) {
@@ -890,6 +939,11 @@ int cuda_backend_eval_equity_holdem(
 }
 
 void cuda_backend_enable_profiling(void* context, bool enable) {
+    (void)context;
+    (void)enable;
+}
+
+void cuda_backend_enable_streaming(void* context, bool enable) {
     (void)context;
     (void)enable;
 }

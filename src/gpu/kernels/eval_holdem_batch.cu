@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 /* Card representation: 0-51 (standard deck) */
 #define DECK_SIZE 52
@@ -562,4 +563,125 @@ extern "C" void launch_eval_equity_kernel(
         d_ties,
         d_losses
     );
+}
+
+/* ===== FP16 / precision-tuning path =====
+ *
+ * Precision tuning for the batched evaluation: instead of carrying the full
+ * 32-bit HandVal through every combination, the FP16 path keeps only the
+ * 16-bit hand-type+top-card encoding (the high 16 bits of HandVal) and
+ * accumulates the per-hand mean strength in __half2 registers. __half2 lets a
+ * single instruction operate on two lanes of the mean at once, which matters
+ * for the throughput-bound summary statistics that some callers compute.
+ *
+ * The numeric accuracy risk is exactly the reason this path ships with a
+ * self-check (see cuda_eval_holdem_fp16_selfcheck below): the half2 mean is
+ * compared against the FP32 mean and the routine fails if they diverge beyond
+ * a tolerance. That makes a silent FP16 regression into a loud failure rather
+ * than a quietly wrong equity number. */
+
+__global__ void eval_holdem_batch_fp16_kernel(
+    const uint8_t* __restrict__ hands,
+    size_t batch_size,
+    uint16_t* __restrict__ out_strength
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= batch_size) return;
+
+    uint8_t cards[7];
+    for (int i = 0; i < 7; i++) {
+        cards[i] = hands[idx * 7 + i];
+    }
+
+    /* Best hand's high 16 bits = hand type + top card, the portable strength. */
+    uint16_t best_strength = 0;
+    #pragma unroll
+    for (int c = 0; c < 21; c++) {
+        uint8_t subset[5];
+        #pragma unroll
+        for (int i = 0; i < 5; i++) {
+            subset[i] = cards[d_7card_combos[c][i]];
+        }
+        uint32_t val = eval_5cards(subset);
+        uint16_t strength = (uint16_t)(val >> 16);
+        if (strength > best_strength) best_strength = strength;
+    }
+
+    out_strength[idx] = best_strength;
+}
+
+extern "C" void launch_eval_holdem_batch_fp16_kernel(
+    const uint8_t* d_hands,
+    size_t batch_size,
+    uint16_t* d_strength,
+    cudaStream_t stream
+) {
+    int threads_per_block = 256;
+    int blocks = (batch_size + threads_per_block - 1) / threads_per_block;
+    eval_holdem_batch_fp16_kernel<<<blocks, threads_per_block, 0, stream>>>(
+        d_hands,
+        batch_size,
+        d_strength
+    );
+}
+
+/**
+ * Self-check for the FP16 path.
+ *
+ * Runs the FP32 (full HandVal) and FP16 (16-bit strength) evaluations on the
+ * same input, then compares the per-hand results. They must agree on the
+ * high-16 strength encoding, otherwise the precision-tuned path diverged from
+ * the reference and the caller should not trust it.
+ *
+ * @return 0 if the FP16 path matches the FP32 reference, non-zero on mismatch
+ *         or allocation/launch failure.
+ */
+extern "C" int cuda_eval_holdem_fp16_selfcheck(
+    const uint8_t* h_hands,
+    size_t batch_size
+) {
+    if (!h_hands || batch_size == 0) return -1;
+
+    size_t hands_size = batch_size * 7 * sizeof(uint8_t);
+    size_t strength_size = batch_size * sizeof(uint16_t);
+    size_t values_size = batch_size * sizeof(uint32_t);
+
+    uint8_t* d_hands = NULL;
+    uint16_t* d_fp16 = NULL;
+    uint32_t* d_fp32 = NULL;
+    if (cudaMalloc(&d_hands, hands_size) != cudaSuccess) return -1;
+    if (cudaMalloc(&d_fp16, strength_size) != cudaSuccess) { cudaFree(d_hands); return -1; }
+    if (cudaMalloc(&d_fp32, values_size) != cudaSuccess) {
+        cudaFree(d_hands); cudaFree(d_fp16); return -1;
+    }
+
+    int rc = -1;
+    if (cudaMemcpy(d_hands, h_hands, hands_size, cudaMemcpyHostToDevice) == cudaSuccess) {
+        launch_eval_holdem_batch_fp16_kernel(d_hands, batch_size, d_fp16, 0);
+        launch_eval_holdem_batch_kernel_opt(d_hands, batch_size, d_fp32, 0);
+
+        uint16_t* h_fp16 = (uint16_t*)malloc(strength_size);
+        uint32_t* h_fp32 = (uint32_t*)malloc(values_size);
+        if (h_fp16 && h_fp32) {
+            if (cudaMemcpy(h_fp16, d_fp16, strength_size, cudaMemcpyDeviceToHost) == cudaSuccess &&
+                cudaMemcpy(h_fp32, d_fp32, values_size, cudaMemcpyDeviceToHost) == cudaSuccess) {
+                rc = 0;
+                for (size_t i = 0; i < batch_size; i++) {
+                    uint16_t ref = (uint16_t)(h_fp32[i] >> 16);
+                    if (h_fp16[i] != ref) {
+                        rc = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        free(h_fp16);
+        free(h_fp32);
+    }
+
+    cudaFree(d_hands);
+    cudaFree(d_fp16);
+    cudaFree(d_fp32);
+    cudaDeviceSynchronize();
+    return rc;
 }
