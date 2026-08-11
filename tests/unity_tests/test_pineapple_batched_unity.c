@@ -15,9 +15,12 @@
 #include "unity.h"
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/enumerate.h>
+#include <poker_eval/core/eval_cache.h>
+#include <poker_eval/core/low_eval.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/equity/batched_montecarlo.h>
+#include <poker_eval/equity/simd_operations.h>
 #include <stdio.h>
 
 void setUp(void) {}
@@ -60,6 +63,34 @@ static double total_equity(enum_result_t *r, int player) {
   if (r->nsamples == 0)
     return 0.0;
   return r->ev[player] / (double)r->nsamples;
+}
+
+/* Exercise every short SIMD batch size. In particular, two players produce
+ * six Pineapple candidates, which used to make the AVX2 low-8 implementation
+ * store four lanes past its eight-element result buffer. */
+static void test_simd_candidate_batch_sizes_match_scalar(void) {
+  StdDeck_CardMask hands[9];
+  HandVal high[9];
+  LowHandVal low[9];
+
+  for (int h = 0; h < 9; ++h) {
+    StdDeck_CardMask_RESET(hands[h]);
+    for (int c = 0; c < 7; ++c) {
+      int rank = (h + c) % 13;
+      int suit = (h * 3 + c) % 4;
+      add_card(&hands[h], rank, suit);
+    }
+  }
+
+  for (int count = 1; count <= 9; ++count) {
+    TEST_ASSERT_EQUAL_INT(0, simd_eval_multiple_hands(hands, count, high));
+    TEST_ASSERT_EQUAL_INT(0, simd_eval_low8_multiple_hands(hands, count, low));
+    for (int i = 0; i < count; ++i) {
+      TEST_ASSERT_EQUAL_UINT(StdDeck_StdRules_EVAL_N_Cached(hands[i], 7),
+                             high[i]);
+      TEST_ASSERT_EQUAL_UINT(pe_eval_low_a5(hands[i]), low[i]);
+    }
+  }
 }
 
 /* Confirm the registered batched evaluators land on the same equities as the
@@ -188,6 +219,7 @@ static void test_crazy_batched_requires_a_flop(void) {
 
 int main(void) {
   UNITY_BEGIN();
+  RUN_TEST(test_simd_candidate_batch_sizes_match_scalar);
   RUN_TEST(test_batched_matches_legacy);
   RUN_TEST(test_pineapple8_hilo_split_matches);
   RUN_TEST(test_crazy_batched_matches_legacy);

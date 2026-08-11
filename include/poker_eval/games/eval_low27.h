@@ -202,6 +202,7 @@ StdDeck_Lowball27_EVAL_N( StdDeck_CardMask cards, int n_cards )
 
   /* Should never happen */
   assert(!"Logic error in StdDeck_Lowball27_EVAL_N");
+  return HandVal_NOTHING;
 }
 
 #undef SC
@@ -210,4 +211,3 @@ StdDeck_Lowball27_EVAL_N( StdDeck_CardMask cards, int n_cards )
 #undef SS
 
 #endif
-
