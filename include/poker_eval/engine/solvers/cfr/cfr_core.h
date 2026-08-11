@@ -45,6 +45,7 @@ typedef struct {
     int n;          /* number of actions */
     double *regret; /* size n */
     double *avg;    /* size n */
+    double *locked; /* size n, NULL when not locked */
     int used;
     double ev_sum;
     double ev_sq_sum;
@@ -232,6 +233,32 @@ void cfr_storage_get_avg_strategy(
 int cfr_storage_has_entry(
     cfr_storage_t* storage,
     uint64_t key
+);
+
+/*
+ * Lock an infoset to a fixed strategy. While locked, the solver uses these
+ * probabilities for the descent and never updates regret or average strategy
+ * at this infoset, so the exported (average) strategy stays exactly the lock.
+ * The infoset's regret is zeroed and the average strategy is pinned to the
+ * lock so best-response and export computations see it from the start.
+ * `probs` should sum to 1.
+ */
+int cfr_storage_set_locked_strategy(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    const double* probs,
+    int n_actions
+);
+
+/*
+ * Get the locked strategy for an infoset, if any.
+ * Returns 1 and sets *out_probs to the stored array when locked, 0 otherwise.
+ */
+int cfr_storage_get_locked_strategy(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    int n_actions,
+    const double** out_probs
 );
 
 int cfr_storage_peek_avg_strategy(

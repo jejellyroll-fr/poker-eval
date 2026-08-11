@@ -244,6 +244,7 @@ static void mpf_update_board(mpf_state_t *st, int revealed);
 static void mpf_init_round_flags(mpf_state_t *st);
 static void mpf_apply_preconfig(const mpf_config_t *cfg, mpf_state_t *st);
 static void mpf_restore_base_bets(mpf_state_t *st);
+static void mpf_wire_node_lock(mpf_tree_node_t *node, uint64_t state_key, cfr_storage_t *storage);
 static void mpf_apply_tree_node(mpf_state_t *st, int node_idx);
 static int mpf_tree_find_next(const mpf_state_t *st, int action);
 static int mpf_tree_collect_actions(const mpf_state_t *st, int *out_actions, int max_actions);
@@ -972,10 +973,21 @@ static void mpf_apply_tree_node(mpf_state_t *st, int node_idx)
         node->cache_slots[slot].owner = self;
         node->cache_slots[slot].state = st;
         node->state_key = (uint64_t)(uintptr_t)st;
+        if (st->lock_storage)
+        {
+            if (!node->cache_slots[slot].lock_wired && node->is_locked &&
+                node->locked_strategy && node->locked_strategy_count > 0 &&
+                cfr_storage_set_locked_strategy(st->lock_storage, node->state_key,
+                                                node->locked_strategy,
+                                                node->locked_strategy_count) == 0)
+                node->cache_slots[slot].lock_wired = 1;
+        }
         pthread_mutex_unlock(&node->cache_lock);
 #else
         node->state_cache = st;
         node->state_key = (uint64_t)(uintptr_t)st;
+        if (st->lock_storage)
+            mpf_wire_node_lock(node, node->state_key, st->lock_storage);
 #endif
 
         mpf_restore_base_bets(st);
@@ -1168,6 +1180,45 @@ static void mpf_apply_preconfig(const mpf_config_t *cfg, mpf_state_t *st)
         st->acted_this_round[st->to_act] = 0;
 }
 
+
+static void mpf_wire_node_lock(mpf_tree_node_t *node, uint64_t state_key, cfr_storage_t *storage)
+{
+    if (!node || !storage || node->lock_wired)
+        return;
+    if (node->type != MPF_TREE_NODE_PLAYER)
+        return;
+    if (!node->is_locked || !node->locked_strategy || node->locked_strategy_count <= 0)
+        return;
+    if (cfr_storage_set_locked_strategy(storage, state_key,
+                                        node->locked_strategy,
+                                        node->locked_strategy_count) == 0)
+        node->lock_wired = 1;
+}
+
+int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
+{
+    if (!root_state || !storage)
+        return -1;
+    root_state->lock_storage = storage;
+    int applied = 0;
+    if (root_state->tree && root_state->tree_node_idx >= 0)
+    {
+        mpf_tree_node_t *node = &root_state->tree->nodes[root_state->tree_node_idx];
+        if (node->is_locked && node->locked_strategy && node->locked_strategy_count > 0 &&
+            node->state_key != 0 && !node->lock_wired)
+        {
+            if (cfr_storage_set_locked_strategy(storage, node->state_key,
+                                                node->locked_strategy,
+                                                node->locked_strategy_count) == 0)
+            {
+                node->lock_wired = 1;
+                ++applied;
+            }
+        }
+    }
+    return applied;
+}
+
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
 {
     if (!cfg || !cfg->ctx || !out_game || !out_state)
@@ -1190,6 +1241,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
 
     out_state->ctx = cfg->ctx;
     out_state->rules = cfg->rules;
+    out_state->lock_storage = NULL;
     out_state->num_players = cfg->num_players;
     out_state->street = cfg->start_street;
     out_state->button_index = (cfg->button_index % cfg->num_players + cfg->num_players) % cfg->num_players;

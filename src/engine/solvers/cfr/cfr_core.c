@@ -497,7 +497,20 @@ static void cfr_traverse_recursive(
     }
 
     strategy = (double *)alloca(sizeof(double) * (size_t)num_actions);
-    cfr_storage_get_strategy(storage, state_key, num_actions, strategy);
+    const double *locked = NULL;
+    int is_locked = 0;
+    if (storage)
+        is_locked = cfr_storage_get_locked_strategy(storage, state_key, num_actions, &locked);
+    if (is_locked)
+    {
+        /* Frozen node: use the locked strategy for the descent and never
+         * accumulate regret or average strategy at this infoset. */
+        memcpy(strategy, locked, sizeof(double) * (size_t)num_actions);
+    }
+    else
+    {
+        cfr_storage_get_strategy(storage, state_key, num_actions, strategy);
+    }
 
     regret_delta = (double *)alloca(sizeof(double) * (size_t)num_actions);
     action_util = (double *)alloca(sizeof(double) * (size_t)num_actions);
@@ -562,21 +575,24 @@ static void cfr_traverse_recursive(
     {
         discount *= (t > 0.0) ? (pow(t, config->dcfr_alpha) / (pow(t, config->dcfr_alpha) + 1.0)) : 1.0;
     }
-    cfr_storage_update_regret(storage, state_key, num_actions, regret_delta, discount);
-
-    avg_weight = reach[acting_player];
-    if (g_cfr_use_flow_focus)
-        avg_weight *= flow_weight;
-    if (config->enable_linear_avg)
-        avg_weight *= t;
-    if (config->enable_dcfr)
+    if (!is_locked)
     {
-        if (fabs(config->dcfr_beta) > 1e-9)
-            avg_weight *= pow(t, config->dcfr_beta);
-        if (fabs(config->dcfr_gamma) > 1e-9)
-            avg_weight *= pow(t, config->dcfr_gamma);
+        cfr_storage_update_regret(storage, state_key, num_actions, regret_delta, discount);
+
+        avg_weight = reach[acting_player];
+        if (g_cfr_use_flow_focus)
+            avg_weight *= flow_weight;
+        if (config->enable_linear_avg)
+            avg_weight *= t;
+        if (config->enable_dcfr)
+        {
+            if (fabs(config->dcfr_beta) > 1e-9)
+                avg_weight *= pow(t, config->dcfr_beta);
+            if (fabs(config->dcfr_gamma) > 1e-9)
+                avg_weight *= pow(t, config->dcfr_gamma);
+        }
+        cfr_storage_update_avg(storage, state_key, num_actions, strategy, avg_weight);
     }
-    cfr_storage_update_avg(storage, state_key, num_actions, strategy, avg_weight);
 
     if (storage)
         cfr_storage_accumulate_ev(storage, state_key, node_util_acting);
