@@ -71,7 +71,10 @@ static int cfr_storage_resize(cfr_storage_t *s, size_t new_cap)
     free(s->tab);
     s->tab = (entry_t *)calloc(new_cap, sizeof(entry_t));
     if (!s->tab)
+    {
+        s->cap = 0;
         return -1;
+    }
     s->cap = new_cap;
     s->used_count = 0;
     return 0;
@@ -399,7 +402,7 @@ void cfr_storage_update_avg(cfr_storage_t *s, uint64_t infoset, int action_count
 /* Dump average strategies to CSV file (key, n, avg0..avgN-1) */
 void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
 {
-    if (!s || !f)
+    if (!s || !f || !s->tab)
         return;
     fprintf(f, "infoset,n");
     for (int i = 0; i < 8; i++)
@@ -424,7 +427,7 @@ void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
 
 size_t cfr_storage_count_infosets(cfr_storage_t *s)
 {
-    if (!s)
+    if (!s || !s->tab)
         return 0;
     size_t cnt = 0;
     for (size_t i = 0; i < s->cap; i++)
@@ -435,7 +438,7 @@ size_t cfr_storage_count_infosets(cfr_storage_t *s)
 
 void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
 {
-    if (!s || !fn)
+    if (!s || !fn || !s->tab)
         return;
     for (size_t i = 0; i < s->cap; i++)
         if (s->tab[i].used)
