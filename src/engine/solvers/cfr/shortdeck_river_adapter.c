@@ -265,6 +265,7 @@ void shortdeck_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t b
     out_game->get_utility = sd_get_utility_wrapper;
     out_game->get_actions = sd_get_actions_wrapper;
     out_game->apply_action = sd_apply_action_wrapper;
+    out_game->get_infoset_key = sd_infoset_key;
     out_game->release_state = sd_release_state_wrapper;
     out_game->current_player = sd_current_player_wrapper;
     out_game->num_players = 2;

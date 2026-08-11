@@ -259,6 +259,7 @@ void stud_build_game(const EvalContext *ctx, mask_t seven0, mask_t seven1, cfr_g
     out_game->get_utility = stud_get_utility_wrapper;
     out_game->get_actions = stud_get_actions_wrapper;
     out_game->apply_action = stud_apply_action_wrapper;
+    out_game->get_infoset_key = stud_infoset_key;
     out_game->release_state = stud_release_state_wrapper;
     out_game->current_player = stud_current_player_wrapper;
     out_game->num_players = 2;

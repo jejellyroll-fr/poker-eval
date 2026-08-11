@@ -288,7 +288,7 @@ typedef struct
 } mpf_key_map_entry_t;
 
 #if defined(_MSC_VER)
-#define MPF_THREAD_LOCAL __declspec(thread)
+#define MPF_THREAD_LOCAL thread
 #elif defined(__GNUC__) || defined(__clang__)
 #define MPF_THREAD_LOCAL __thread
 #else

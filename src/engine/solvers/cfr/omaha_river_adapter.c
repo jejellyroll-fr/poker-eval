@@ -316,6 +316,7 @@ void omaha_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board
     out_game->get_utility = omaha_get_utility_wrapper;
     out_game->get_actions = omaha_get_actions_wrapper;
     out_game->apply_action = omaha_apply_action_wrapper;
+    out_game->get_infoset_key = omaha_infoset_key;
     out_game->release_state = omaha_release_state_wrapper;
     out_game->current_player = omaha_current_player_wrapper;
     out_game->num_players = 2;
