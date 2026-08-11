@@ -43,8 +43,10 @@ static void cfr_storage_free_entries(cfr_storage_t *s)
         {
             free(s->tab[i].regret);
             free(s->tab[i].avg);
+            free(s->tab[i].locked);
             s->tab[i].regret = NULL;
             s->tab[i].avg = NULL;
+            s->tab[i].locked = NULL;
             s->tab[i].used = 0;
         }
     }
@@ -185,6 +187,7 @@ void cfr_storage_destroy(cfr_storage_t *s)
         {
             free(s->tab[i].regret);
             free(s->tab[i].avg);
+            free(s->tab[i].locked);
         }
     free(s->tab);
     free(s);
@@ -218,10 +221,13 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
             { /* resize arrays if action count changed */
                 s->tab[i].regret = (double *)realloc(s->tab[i].regret, n * sizeof(double));
                 s->tab[i].avg = (double *)realloc(s->tab[i].avg, n * sizeof(double));
+                s->tab[i].locked = (double *)realloc(s->tab[i].locked, n * sizeof(double));
                 for (int k = s->tab[i].n; k < n; k++)
                 {
                     s->tab[i].regret[k] = 0.0;
                     s->tab[i].avg[k] = 0.0;
+                    if (s->tab[i].locked)
+                        s->tab[i].locked[k] = 0.0;
                 }
                 s->tab[i].n = n;
             }
@@ -251,6 +257,43 @@ static entry_t *find_entry(cfr_storage_t *s, uint64_t key)
 int cfr_storage_has_entry(cfr_storage_t *s, uint64_t key)
 {
     return find_entry(s, key) ? 1 : 0;
+}
+
+int cfr_storage_set_locked_strategy(cfr_storage_t *s, uint64_t infoset, const double *probs, int n)
+{
+    if (!s || !probs || n <= 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    entry_t *e = get_entry(s, infoset, n);
+    double *locked = (double *)calloc((size_t)n, sizeof(double));
+    if (!locked)
+        return -1;
+    for (int i = 0; i < n; ++i)
+        locked[i] = probs[i];
+    free(e->locked);
+    e->locked = locked;
+    for (int i = 0; i < n; ++i)
+    {
+        e->regret[i] = 0.0;
+        e->avg[i] = probs[i];
+    }
+    return 0;
+}
+
+int cfr_storage_get_locked_strategy(cfr_storage_t *s, uint64_t infoset, int action_count, const double **out_probs)
+{
+    if (out_probs)
+        *out_probs = NULL;
+    if (!s)
+        return 0;
+    entry_t *e = find_entry(s, infoset);
+    if (!e || !e->locked || e->n != action_count)
+        return 0;
+    if (out_probs)
+        *out_probs = e->locked;
+    return 1;
 }
 
 int cfr_storage_peek_avg_strategy(cfr_storage_t *s,
@@ -546,7 +589,7 @@ int cfr_storage_save_checkpoint(cfr_storage_t *s, const char *path, uint64_t ite
     cfr_checkpoint_header_t hdr;
     memset(&hdr, 0, sizeof(hdr));
     memcpy(hdr.magic, "CFRCHKPT", 8);
-    hdr.version = 2;
+    hdr.version = 3;
     hdr.cap = s->cap;
     hdr.entry_count = cfr_storage_entry_count(s);
     hdr.iteration = iteration;
@@ -565,13 +608,29 @@ int cfr_storage_save_checkpoint(cfr_storage_t *s, const char *path, uint64_t ite
         if (!e->used)
             continue;
         uint32_t n = (uint32_t)e->n;
-        if (fwrite(&e->key, sizeof(uint64_t), 1, f) != 1 ||
-            fwrite(&n, sizeof(uint32_t), 1, f) != 1 ||
-            fwrite(&e->ev_sum, sizeof(double), 1, f) != 1 ||
-            fwrite(&e->ev_sq_sum, sizeof(double), 1, f) != 1 ||
-            fwrite(&e->ev_count, sizeof(uint64_t), 1, f) != 1 ||
-            fwrite(e->regret, sizeof(double), e->n, f) != (size_t)e->n ||
-            fwrite(e->avg, sizeof(double), e->n, f) != (size_t)e->n)
+        double *locked_out = e->locked;
+        if (!locked_out)
+        {
+            locked_out = (double *)calloc((size_t)e->n, sizeof(double));
+            if (!locked_out)
+            {
+                int err = errno;
+                fclose(f);
+                errno = err;
+                return -1;
+            }
+        }
+        int lock_ok = fwrite(&e->key, sizeof(uint64_t), 1, f) == 1 &&
+            fwrite(&n, sizeof(uint32_t), 1, f) == 1 &&
+            fwrite(&e->ev_sum, sizeof(double), 1, f) == 1 &&
+            fwrite(&e->ev_sq_sum, sizeof(double), 1, f) == 1 &&
+            fwrite(&e->ev_count, sizeof(uint64_t), 1, f) == 1 &&
+            fwrite(e->regret, sizeof(double), e->n, f) == (size_t)e->n &&
+            fwrite(e->avg, sizeof(double), e->n, f) == (size_t)e->n &&
+            fwrite(locked_out, sizeof(double), e->n, f) == (size_t)e->n;
+        if (!e->locked)
+            free(locked_out);
+        if (!lock_ok)
         {
             int err = errno;
             fclose(f);
@@ -604,7 +663,7 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
         errno = err;
         return -1;
     }
-    if (memcmp(hdr.magic, "CFRCHKPT", 8) != 0 || (hdr.version != 1 && hdr.version != 2))
+    if (memcmp(hdr.magic, "CFRCHKPT", 8) != 0 || (hdr.version != 1 && hdr.version != 2 && hdr.version != 3))
     {
         fclose(f);
         errno = EINVAL;
@@ -676,6 +735,38 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
             fclose(f);
             errno = err;
             return -1;
+        }
+        if (hdr.version >= 3)
+        {
+            double *locked_in = (double *)calloc((size_t)e->n, sizeof(double));
+            if (!locked_in)
+            {
+                int err = errno;
+                fclose(f);
+                errno = err;
+                return -1;
+            }
+            if (fread(locked_in, sizeof(double), e->n, f) != (size_t)e->n)
+            {
+                int err = errno;
+                free(locked_in);
+                fclose(f);
+                errno = err;
+                return -1;
+            }
+            int any = 0;
+            for (int k = 0; k < e->n; ++k)
+                if (locked_in[k] != 0.0)
+                    any = 1;
+            if (any)
+            {
+                free(e->locked);
+                e->locked = locked_in;
+            }
+            else
+            {
+                free(locked_in);
+            }
         }
     }
 
