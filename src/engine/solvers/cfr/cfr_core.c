@@ -584,7 +584,8 @@ static void cfr_traverse_recursive(
     if (storage)
         is_locked = cfr_storage_get_locked_strategy(storage, infoset_key, num_actions, &locked);
     if (is_locked)
-        memcpy(strategy, locked, sizeof(double) * (size_t)num_actions);
+        for (int i = 0; i < num_actions; ++i)
+            strategy[i] = locked[i];
     for (int p = 0; p < num_players; ++p)
         node_util_vec[p] = 0.0;
 
