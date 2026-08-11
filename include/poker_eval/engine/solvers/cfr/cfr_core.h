@@ -96,6 +96,14 @@ struct cfr_game_t {
         void* user_data
     );
 
+    /* Release a state returned by apply_action (optional; may be NULL for
+       games that do not allocate per-state heap storage). */
+    void (*release_state)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        void* user_data
+    );
+
     /* Check if terminal state */
     int (*is_terminal)(
         cfr_game_t* game,
