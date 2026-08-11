@@ -39,7 +39,7 @@ target_include_directories(poker_engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity m)
+target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics m)
 
 install(TARGETS poker_engine
         EXPORT poker-eval-targets

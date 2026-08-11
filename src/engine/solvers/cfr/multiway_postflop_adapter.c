@@ -632,12 +632,24 @@ static int mpf_active_count(const mpf_state_t *st)
     return cnt;
 }
 
+/* Net pot distributed at terminal nodes. Rake is deducted unless the
+ * hand never saw a flop and no-flop-no-drop is configured. */
+static double mpf_terminal_pot(const mpf_state_t *st)
+{
+    const rake_config_t *r = &st->rake;
+    if (r->percentage <= 0.0)
+        return st->pot;
+    if (r->no_flop_no_drop && st->street < MPF_STREET_FLOP && st->board_revealed == 0)
+        return st->pot;
+    return pe_apply_rake(st->pot, r);
+}
+
 static void mpf_mark_winner_fold(mpf_state_t *st, int winner)
 {
     for (int i = 0; i < st->num_players; ++i)
         st->utilities[i] = -st->invested[i];
     if (winner >= 0)
-        st->utilities[winner] += st->pot;
+        st->utilities[winner] += mpf_terminal_pot(st);
     st->util_ready = 1;
 }
 
@@ -662,7 +674,7 @@ static void mpf_compute_utilities(mpf_state_t *st)
     }
     if (act_cnt == 1)
     {
-        st->utilities[active_players[0]] += st->pot;
+        st->utilities[active_players[0]] += mpf_terminal_pot(st);
         st->util_ready = 1;
         return;
     }
@@ -778,8 +790,10 @@ static void mpf_compute_utilities(mpf_state_t *st)
             if (win_cnt > 0)
             {
                 /* Winner(s) of this layer take it all, including folded
-                   players' contributions. */
-                double share = (layer * (double)n_layer_players) / (double)win_cnt;
+                   players' contributions, with rake applied. */
+                double layer_pot = pe_apply_rake(layer * (double)n_layer_players,
+                                                &st->rake);
+                double share = layer_pot / (double)win_cnt;
                 for (int i = 0; i < win_cnt; ++i)
                     st->utilities[winners[i]] += share;
             }
@@ -1322,6 +1336,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         mpf_perf_stats_reset(perf_stats);
 
     out_state->ctx = cfg->ctx;
+    out_state->rake = cfg->rake;
     out_state->rules = cfg->rules;
     out_state->lock_storage = NULL;
     out_state->num_players = cfg->num_players;
