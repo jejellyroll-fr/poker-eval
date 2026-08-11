@@ -177,16 +177,22 @@ static bool arp_cache_lookup(
 
     /* Reallocate if necessary (dest->hands/weights should be valid ptrs or NULL) */
     if (dest->capacity < required_capacity) {
+        /* Assign each pointer as soon as its own realloc succeeds: on a partial
+           failure dest must never keep pointing at a block that was freed. */
         StdDeck_CardMask *new_hands = realloc(dest->hands, required_capacity * sizeof(StdDeck_CardMask));
+        if (new_hands)
+            dest->hands = new_hands;
+
         double *new_weights = realloc(dest->weights, required_capacity * sizeof(double));
+        if (new_weights)
+            dest->weights = new_weights;
 
         if (!new_hands || !new_weights) {
-            /* Allocation failed */
+            /* Allocation failed: whichever realloc succeeded has already been
+               installed, so dest->hands/weights remain valid (never dangling). */
             pthread_mutex_unlock(&global_cache.lock);
             return false;
         }
-        dest->hands = new_hands;
-        dest->weights = new_weights;
         dest->capacity = required_capacity;
     }
 
