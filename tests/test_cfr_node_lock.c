@@ -164,12 +164,10 @@ int main(void)
     game.initial_state = (void *)(uintptr_t)&g_root;
     game.state_size = sizeof(lock_state_t);
     game.num_players = 2;
-    /* Under the engine's 2-player metric, P1's best response takes the min of
-     * its own utility at its decision nodes. Against a guaranteed fold the
-     * best response value is exactly the (fold,a0) payoff, +1: the fold is
-     * exploited (vs -3 with an unconstrained solve). */
+    /* P1 maximizes its own utility, so against a guaranteed fold it selects
+     * a1 and receives +2. */
     double br1 = cfr_best_response_value(&game, storage, 1, NULL);
-    CHECK(fabs(br1 - 1.0) < 1e-9, "opponent best response must exploit the fold (+1)");
+    CHECK(fabs(br1 - 2.0) < 1e-9, "opponent best response must exploit the fold (+2)");
 
     /* --- Lock survives checkpoint round-trip (v3 format) --- */
     const char *cp = "lock_checkpoint.bin";

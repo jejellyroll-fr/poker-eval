@@ -96,8 +96,9 @@ static int run_mode(int mode)
     CHECK(storage != NULL, "failed to create storage");
 
     double exploitability = 0.0;
-    int result = cfr_solve(&game, storage, &cfg, &exploitability);
-    CHECK(result == 0, "cfr_solve should succeed");
+    double result = cfr_solve(&game, storage, &cfg, &exploitability);
+    CHECK(isfinite(result) && result >= 0.0,
+          "cfr_solve should return finite non-negative exploitability");
 
     double br0 = cfr_best_response_value(&game, storage, 0, NULL);
     double br1 = cfr_best_response_value(&game, storage, 1, NULL);

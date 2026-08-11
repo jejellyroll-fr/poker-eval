@@ -229,7 +229,10 @@ double cfr_solve(
     /* One scratch buffer for the whole solve: 3 arrays (strategy,
        regret_delta, action_util) of CFR_MAX_ACTIONS doubles per depth
        level.  Replaces the old per-frame alloca. */
-    double *scratch = (double *)calloc((size_t)depth_limit * 3u * (size_t)CFR_MAX_ACTIONS,
+    /* Depth is numbered from 1 and the guard permits depth == depth_limit,
+       so reserve frames 0 through depth_limit inclusive. */
+    double *scratch = (double *)calloc(((size_t)depth_limit + 1u) * 3u *
+                                           (size_t)CFR_MAX_ACTIONS,
                                        sizeof(double));
     if (!scratch)
     {
@@ -737,23 +740,17 @@ static double best_response_recursive(
 
     if (current_player == br_player)
     {
-        double best_value = (br_player == 0) ? -1e100 : 1e100;
+        /* Terminal utilities are already expressed from br_player's point of
+           view, so every player maximizes their own returned utility. */
+        double best_value = -1e100;
         for (int i = 0; i < num_actions; ++i)
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
             double value = best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data, depth + 1);
             if (game->release_state)
                 game->release_state(game, next_state_key, user_data);
-            if (br_player == 0)
-            {
-                if (value > best_value)
-                    best_value = value;
-            }
-            else
-            {
-                if (value < best_value)
-                    best_value = value;
-            }
+            if (value > best_value)
+                best_value = value;
         }
         return best_value;
     }
@@ -786,7 +783,11 @@ double cfr_best_response_value(
     {
         root_key = (uint64_t)(uintptr_t)(game->initial_state);
     }
-    return best_response_recursive(game, storage, player, 0, root_key, user_data, 0);
+    int root_player = game->current_player
+        ? game->current_player(game, root_key, user_data)
+        : 0;
+    return best_response_recursive(game, storage, player, root_player,
+                                   root_key, user_data, 0);
 }
 
 cfr_metrics_buffer_t *cfr_metrics_buffer_create(int capacity)
