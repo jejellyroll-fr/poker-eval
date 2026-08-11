@@ -94,11 +94,8 @@ them (with replacement).
 #include <stdio.h>
 #include <stdlib.h>
 #include <poker_eval/core/pokereval_export.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/utils/combinations.h>
-
-#ifndef RANDOM
-#define RANDOM rand
-#endif
 
 #define DECK_ENUMERATE_1_CARDS(deck, cards_var, action) \
 do {                                                    \
@@ -760,7 +757,7 @@ do {                                                    	\
     deck##_CardMask_RESET(cards_var);				\
     for (_j=0; _j<num_cards; _j++) {				\
       do {							\
-        _c = RANDOM() % deck##_N_CARDS;				\
+        _c = (int)pe_rng_below(pe_rng_current(), (uint32_t)(deck##_N_CARDS));	\
       } while (deck##_CardMask_CARD_IS_SET(_used, _c));		\
       deck##_CardMask_SET(cards_var, _c);			\
       deck##_CardMask_SET(_used, _c);				\
@@ -887,7 +884,7 @@ do {                                                                       \
       JokerDeck_CardMask_RESET(set_var[_j]);                              \
       for (_k=0; _k<set_sizes[_j]; _k++) {                                 \
         do {                                                               \
-          _c = RANDOM() % JokerDeck_N_CARDS;                               \
+          _c = (int)pe_rng_below(pe_rng_current(), (uint32_t)JokerDeck_N_CARDS); \
         } while (JokerDeck_CardMask_CARD_IS_SET(_used, _c));              \
         JokerDeck_CardMask_SET(set_var[_j], _c);                          \
         JokerDeck_CardMask_SET(_used, _c);                                 \
@@ -909,7 +906,7 @@ do {                                                    	\
       deck##_CardMask_RESET(set_var[_j]);			\
       for (_k=0; _k<set_sizes[_j]; _k++) {			\
         do {							\
-          _c = RANDOM() % deck##_N_CARDS;			\
+          _c = (int)pe_rng_below(pe_rng_current(), (uint32_t)(deck##_N_CARDS));	\
         } while (deck##_CardMask_CARD_IS_SET(_used, _c));	\
         deck##_CardMask_SET(set_var[_j], _c);			\
         deck##_CardMask_SET(_used, _c);				\

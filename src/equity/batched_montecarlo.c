@@ -28,6 +28,7 @@
 #include <poker_eval/equity/sampling_policies.h>
 #include <poker_eval/core/eval_cache.h>
 #include <poker_eval/core/poker_defs.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/core/eval.h>
 #include <poker_eval/core/low_eval.h>
 #include <poker_eval/core/low_qualifier.h>
@@ -272,7 +273,7 @@ void generateStubBatch(StubBatch *batch, StdDeck_CardMask dead,
             for (j = 0; j < count; j++)
             {
                 do {
-                    c = RANDOM() % StdDeck_N_CARDS;
+                    c = (int)pe_rng_below(pe_rng_current(), (uint32_t)StdDeck_N_CARDS);
                 } while (StdDeck_CardMask_CARD_IS_SET(used, c));
 
                 StdDeck_CardMask_SET(batch->hands[i][p], c);
@@ -1729,8 +1730,10 @@ int BatchedMonteCarlo_GetOptimalBatchSize(void)
     return 16;
 }
 
-/* Set random seed for reproducible results */
+/* Set random seed for reproducible results.
+ * Sets the base seed from which every thread derives its own PCG stream,
+ * so multithreaded sampling is reproducible and never touches libc srand. */
 void BatchedMonteCarlo_SetRandomSeed(unsigned int seed)
 {
-    srand(seed);
+    pe_rng_set_base_seed((uint64_t)seed);
 }

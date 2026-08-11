@@ -12,6 +12,7 @@
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/equity/RangeEquity_internal.h>
 #include <poker_eval/equity/range_combo_buffers.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/core/builtin_compat.h>
 #include <stdio.h>
 #include <string.h>
@@ -249,15 +250,19 @@ int CalculateEquityForRanges_MT_v2(
     {
         int thread_id = omp_get_thread_num();
         ThreadLocalResults *local_results = &thread_results[thread_id];
-        int i;
-        #pragma omp for schedule(guided, optimal_chunk_size)
-        for (i = 0; i < valid_matchups_total; i++) {
+        pe_rng_seed_current(pe_rng_derive(pe_rng_base_seed(), (uint64_t)thread_id));
+        /* Deterministic stride: matchup i is always evaluated by thread
+         * i %% num_threads, so per-thread aggregation order (and with the
+         * per-matchup stream seeding below, the sampled equities) is
+         * bit-identical between runs with the same seed and thread count. */
+        for (int i = thread_id; i < valid_matchups_total; i += num_threads) {
             // Prefetch next matchup for cache
             if (i + 1 < valid_matchups_total) {
                 __builtin_prefetch(&work_queue[i + 1], 0, 1);
             }
             MatchupWorkItem *item = &work_queue[i];
             if (!item->valid) continue;
+            pe_rng_seed_current(pe_rng_derive(pe_rng_base_seed(), (uint64_t)i));
             enum_result_t matchup_result;
             if (enumResultAlloc(&matchup_result, num_players, enum_ordering_mode_hi) != 0) {
                 continue;
