@@ -24,6 +24,7 @@ typedef struct {
     double utilities[HRM_MAX_PLAYERS];
     int util_ready;
     int actions_taken;
+    int suit_perm[4]; /* suit canonicalization mapping (label -> original suit) */
 } holdem_multi_state_t;
 
 void hrm_build_game(const EvalContext *ctx,
