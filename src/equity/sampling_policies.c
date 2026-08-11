@@ -253,7 +253,7 @@ void pe_sampling_generate_boards(BoardBatch* batch,
 
         for (int i = 0; i < batch_size; ++i) {
             /* Choose target class with probability ∝ w[c]*count[c] */
-        double u = rand() / ((double)RAND_MAX + 1.0);
+        double u = pe_rng_uniform01(pe_rng_current());
             double target = u * g_ctx.pair_Z;
             double acc = 0.0; int chosen = PE_BPAIR_DISTINCT;
             for (int c = 0; c < 3; ++c) {
@@ -277,7 +277,7 @@ void pe_sampling_generate_boards(BoardBatch* batch,
                     StdDeck_CardMask b;
                     mc_uniform_draw_cards(dead, num_cards_to_draw, &b);
                     double f = board_class_score(b, num_cards_to_draw);
-                    double u = ((double) (rand())) / ((double)RAND_MAX + 1.0);
+                    double u = pe_rng_uniform01(pe_rng_current());
                     if (u < (f / k_importance_fmax)) {
                         batch->boards[i] = b;
                         break;

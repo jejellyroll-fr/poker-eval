@@ -2438,7 +2438,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
         if (numAvailable == 0)
           break;
 
-        int r = rand() % numAvailable;
+        int r = (int)pe_rng_below(pe_rng_current(), (uint32_t)numAvailable);
         int count = 0;
 
         /* Find the r-th available card */

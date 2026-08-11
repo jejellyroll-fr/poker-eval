@@ -134,6 +134,10 @@ sparse_matrix_csr_t* sparse_matrix_create_csr(
 
     /* Fill column indices and values */
     int* current_pos = (int*)calloc(num_infosets, sizeof(int));
+    if (!current_pos) {
+        sparse_matrix_free(matrix);
+        return NULL;
+    }
     for (int i = 0; i < num_transitions; i++) {
         int row = from_indices[i];
         int pos = matrix->row_ptr[row] + current_pos[row];

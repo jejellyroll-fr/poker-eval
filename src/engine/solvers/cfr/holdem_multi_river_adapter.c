@@ -1,4 +1,5 @@
 #include <poker_eval/engine/solvers/cfr/holdem_multi_river_adapter.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/core/eval.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +38,7 @@ static int hrm_get_actions_wrapper(cfr_game_t *game, uint64_t state_key, int *ou
     int n = hrm_get_actions_internal(st);
     for (int i = 0; i < n && i < max_actions; ++i)
         out_actions[i] = i;
-    return n;
+    return n < max_actions ? n : max_actions;
 }
 
 static uint64_t hrm_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, int action, void *user_data)
@@ -48,6 +49,13 @@ static uint64_t hrm_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, i
         return 0;
     hrm_apply_action_internal(st, action, next_state);
     return (uint64_t)(uintptr_t)next_state;
+}
+
+static void hrm_release_state_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
+{
+    (void)game;
+    (void)user_data;
+    free((void *)(uintptr_t)state_key);
 }
 
 static int hrm_active_count(const holdem_multi_state_t *st)
@@ -171,7 +179,53 @@ void hrm_build_game(const EvalContext *ctx,
     out_state->ctx = ctx;
     out_state->num_players = num_players;
     out_state->bet_size = bet_size;
-    out_state->board = board;
+    {
+        mask_t all = board;
+        for (int p = 0; p < num_players; ++p)
+            all |= hands[p];
+        mask_t canon_mask_tmp = MASK_EMPTY;
+        int perm[4];
+        if (pe_board_canonicalize(all, pe_board_count_cards(all), &canon_mask_tmp, perm) == 0)
+        {
+            int label_of[4];
+            for (int s2 = 0; s2 < 4; ++s2)
+                label_of[s2] = -1;
+            for (int l = 0; l < 4; ++l)
+                if (perm[l] >= 0)
+                    label_of[perm[l]] = l;
+            out_state->board = MASK_EMPTY;
+            for (int p = 0; p < num_players; ++p)
+                out_state->hands[p] = MASK_EMPTY;
+            for (int card = 0; card < MODERN_DECK_SIZE; ++card)
+            {
+                if (!mask_is_set(all, card))
+                    continue;
+                int rank = MODERN_GET_RANK(card);
+                int suit = MODERN_GET_SUIT(card);
+                if (label_of[suit] < 0)
+                    continue;
+                mask_t c = mask_set(MASK_EMPTY, MODERN_MAKE_CARD(rank, label_of[suit]));
+                if (mask_is_set(board, card))
+                    out_state->board |= c;
+                else
+                {
+                    for (int q = 0; q < num_players; ++q)
+                        if (mask_is_set(hands[q], card))
+                            out_state->hands[q] |= c;
+                }
+            }
+            for (int l = 0; l < 4; ++l)
+                out_state->suit_perm[l] = perm[l];
+        }
+        else
+        {
+            out_state->board = board;
+            for (int p = 0; p < num_players; ++p)
+                out_state->hands[p] = hands[p];
+            for (int l = 0; l < 4; ++l)
+                out_state->suit_perm[l] = -1;
+        }
+    }
     out_state->to_act = 0;
     out_state->pot = 0.0;
     out_state->util_ready = 0;
@@ -189,6 +243,7 @@ void hrm_build_game(const EvalContext *ctx,
     out_game->get_utility = hrm_get_utility_wrapper;
     out_game->get_actions = hrm_get_actions_wrapper;
     out_game->apply_action = hrm_apply_action_wrapper;
+    out_game->release_state = hrm_release_state_wrapper;
     out_game->current_player = hrm_current_player_wrapper;
     out_game->num_players = num_players;
     out_game->state_size = sizeof(*out_state);

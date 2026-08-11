@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <poker_eval/core/eval_context.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
 
 static bool hr_is_terminal(const void *s, double util[2]);
 static int hr_num_actions(const void *s);
@@ -37,7 +38,7 @@ static int hr_get_actions_wrapper(cfr_game_t *game, uint64_t state_key, int *out
     {
         out_actions[i] = i;
     }
-    return n;
+    return n < max_actions ? n : max_actions;
 }
 
 static uint64_t hr_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, int action, void *user_data)
@@ -45,6 +46,13 @@ static uint64_t hr_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, in
     holdem_river_state_t *next_state = malloc(sizeof(holdem_river_state_t));
     hr_apply_action((void *)state_key, action, next_state);
     return (uint64_t)next_state;
+}
+
+static void hr_release_state_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
+{
+    (void)game;
+    (void)user_data;
+    free((void *)state_key);
 }
 
 static int hr_current_player_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
@@ -358,9 +366,52 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
 {
     memset(out_state, 0, sizeof(*out_state));
     memset(out_game, 0, sizeof(*out_game));
-    out_state->h0 = h0;
-    out_state->h1 = h1;
-    out_state->board = board;
+    /* FEAT-02: canonicalize suits so isomorphic boards share one subtree.
+     * The recorded permutation maps canonical suit labels back to the
+     * original suits at export time. */
+    {
+        mask_t canon = MASK_EMPTY;
+        int perm[4];
+        int n = pe_board_count_cards(h0 | h1 | board);
+        if (pe_board_canonicalize(h0 | h1 | board, n, &canon, perm) == 0)
+        {
+            int label_of[4];
+            for (int s = 0; s < 4; ++s)
+                label_of[s] = -1;
+            for (int l = 0; l < 4; ++l)
+                if (perm[l] >= 0)
+                    label_of[perm[l]] = l;
+            out_state->h0 = MASK_EMPTY;
+            out_state->h1 = MASK_EMPTY;
+            out_state->board = MASK_EMPTY;
+            for (int card = 0; card < MODERN_DECK_SIZE; ++card)
+            {
+                if (!mask_is_set(h0 | h1 | board, card))
+                    continue;
+                int rank = MODERN_GET_RANK(card);
+                int suit = MODERN_GET_SUIT(card);
+                if (label_of[suit] < 0)
+                    continue;
+                mask_t c = mask_set(MASK_EMPTY, MODERN_MAKE_CARD(rank, label_of[suit]));
+                if (mask_is_set(h0, card))
+                    out_state->h0 |= c;
+                else if (mask_is_set(h1, card))
+                    out_state->h1 |= c;
+                else
+                    out_state->board |= c;
+            }
+            for (int l = 0; l < 4; ++l)
+                out_state->suit_perm[l] = perm[l];
+        }
+        else
+        {
+            out_state->h0 = h0;
+            out_state->h1 = h1;
+            out_state->board = board;
+            for (int l = 0; l < 4; ++l)
+                out_state->suit_perm[l] = -1;
+        }
+    }
     out_state->to_act = 0;
     out_state->pot = 1.0;
     out_state->to_call = 0.0;
@@ -384,6 +435,7 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_game->get_utility = hr_get_utility_wrapper;
     out_game->get_actions = hr_get_actions_wrapper;
     out_game->apply_action = hr_apply_action_wrapper;
+    out_game->release_state = hr_release_state_wrapper;
     out_game->current_player = hr_current_player_wrapper;
     out_game->num_players = 2;
     out_game->state_size = sizeof(*out_state);

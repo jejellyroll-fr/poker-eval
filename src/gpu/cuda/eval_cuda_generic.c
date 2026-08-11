@@ -130,6 +130,12 @@ gpu_eval_context_t* cuda_gpu_eval_init_game(
     /* Allocate host conversion buffers */
     ctx->h_boards_converted = (CudaCardMask*)malloc(board_size);
     ctx->h_hole_cards_converted = (CudaCardMask*)malloc(hole_cards_size);
+    if (!ctx->h_boards_converted || !ctx->h_hole_cards_converted) {
+        free(ctx->h_boards_converted);
+        free(ctx->h_hole_cards_converted);
+        free(ctx);
+        return NULL;
+    }
 
     ctx->boards_capacity = max_batch_size;
     ctx->hole_cards_capacity = max_batch_size * 10;
@@ -194,11 +200,18 @@ int cuda_gpu_eval_batch_boards_hilo(
     /* Allocate result arrays if needed */
     if (!result->hand_values_hi) {
         result->hand_values_hi = (HandVal*)malloc(n_boards * n_players * sizeof(HandVal));
+        if (!result->hand_values_hi)
+            return -1;
     }
 
     if (config.eval_low && !result->hand_values_lo) {
         result->hand_values_lo = (HandVal*)malloc(n_boards * n_players * sizeof(HandVal));
         result->lo_qualifies = (int*)malloc(n_boards * n_players * sizeof(int));
+        if (!result->hand_values_lo || !result->lo_qualifies) {
+            free(result->hand_values_lo);
+            free(result->lo_qualifies);
+            return -1;
+        }
     }
 
     /* Copy results back */

@@ -9,6 +9,7 @@ set(ENGINE_SOURCES
     # target cycle, which CMake only tolerates between static archives.
     ${CMAKE_CURRENT_SOURCE_DIR}/../games/mixed_game.c
     policy/nn_policy.c
+    solvers/cfr/board_canonical.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/holdem_river_adapter.c
@@ -39,7 +40,7 @@ target_include_directories(poker_engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity m)
+target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics m)
 
 install(TARGETS poker_engine
         EXPORT poker-eval-targets
