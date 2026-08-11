@@ -50,6 +50,7 @@ typedef struct {
 struct cfr_storage_t {
     entry_t *tab;
     size_t cap;
+    size_t used_count;
 };
 
 /* CFR game interface (vtable) */
