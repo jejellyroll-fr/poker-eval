@@ -260,7 +260,10 @@ static void matmul_simd_avx2(
         {
             __m256 w = _mm256_loadu_ps(&weights[i * in_size + j]);
             __m256 x = _mm256_loadu_ps(&input[j]);
-            sum_vec = _mm256_fmadd_ps(w, x, sum_vec);
+            /* AVX2 does not imply FMA support (and the AVX2 build is not
+             * compiled with -mfma), so keep this path valid on AVX2-only
+             * targets as well as under Clang's stricter intrinsic checks. */
+            sum_vec = _mm256_add_ps(_mm256_mul_ps(w, x), sum_vec);
         }
 
         /* Horizontal sum */

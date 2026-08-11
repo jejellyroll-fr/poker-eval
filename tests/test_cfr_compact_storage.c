@@ -130,8 +130,9 @@ int main(void)
     {
         cfr_storage_t *bulk = cfr_storage_create();
         ASSERT_TRUE(bulk != NULL, "bulk storage");
-        const int BULK_N = 2000;
-        const int ACTIONS = 4;
+        /* C's block-scope const is not an integer constant expression on
+         * MSVC, so use enum constants for the fixed array bound. */
+        enum { BULK_N = 2000, ACTIONS = 4 };
         double probs[ACTIONS];
         long json_bytes = 0;
         for (int i = 0; i < BULK_N; ++i)
