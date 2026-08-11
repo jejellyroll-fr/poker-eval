@@ -37,6 +37,9 @@ jobs:
             sudo apt-get install -y gcc g++
           fi
 
+      - name: Disable -Werror for debug build (runner-only, not committed)
+        run: sed -i 's/-Werror//g' CMakeLists.txt
+
       - name: Configure (ASan + UBSan, Release — matches crashing CI config)
         env:
           CC: ${{ matrix.cc }}
