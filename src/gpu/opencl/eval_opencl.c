@@ -152,6 +152,10 @@ static char *load_kernel_source(const char *filename)
     opencl_debug_log("Loaded kernel '%s' from %s", filename, selected_path);
 
     char *src = (char *)malloc(MAX_SOURCE_SIZE);
+    if (!src) {
+        fclose(f);
+        return NULL;
+    }
     size_t len = fread(src, 1, MAX_SOURCE_SIZE, f);
     src[len] = '\0';
     fclose(f);
@@ -972,6 +976,11 @@ int opencl_gpu_eval_batch_boards_hilo(
     int total_hands = n_boards * n_players;
     gpu_card_mask_t* gpu_boards = (gpu_card_mask_t*)malloc(n_boards * sizeof(gpu_card_mask_t));
     gpu_card_mask_t* gpu_holes = (gpu_card_mask_t*)malloc(total_hands * sizeof(gpu_card_mask_t));
+    if (!gpu_boards || !gpu_holes) {
+        free(gpu_boards);
+        free(gpu_holes);
+        return -1;
+    }
 
     for (int i = 0; i < n_boards; i++) {
         convert_to_gpu_mask(&boards[i], &gpu_boards[i]);
@@ -1025,6 +1034,12 @@ int opencl_gpu_eval_batch_boards_hilo(
     uint32_t* hi_vals = (uint32_t*)malloc(total_hands * sizeof(uint32_t));
     uint32_t* lo_vals = (uint32_t*)malloc(total_hands * sizeof(uint32_t));
     int* lo_qual = (int*)malloc(total_hands * sizeof(int));
+    if (!hi_vals || !lo_vals || !lo_qual) {
+        free(hi_vals);
+        free(lo_vals);
+        free(lo_qual);
+        return -1;
+    }
 
     err = clEnqueueReadBuffer(ctx->base_ctx.queue, ctx->base_ctx.d_results, CL_TRUE,
                              0, total_hands * sizeof(uint32_t), hi_vals, 0, NULL, NULL);
