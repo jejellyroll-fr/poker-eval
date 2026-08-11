@@ -28,6 +28,7 @@
 #include <poker_eval/equity/sampling_policies.h>
 #include <poker_eval/core/eval_cache.h>
 #include <poker_eval/core/poker_defs.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/core/eval.h>
 #include <poker_eval/core/low_eval.h>
 #include <poker_eval/core/low_qualifier.h>
@@ -270,7 +271,7 @@ void generateStubBatch(StubBatch *batch, StdDeck_CardMask dead,
             for (j = 0; j < count; j++)
             {
                 do {
-                    c = RANDOM() % StdDeck_N_CARDS;
+                    c = (int)pe_rng_below(pe_rng_current(), (uint32_t)StdDeck_N_CARDS);
                 } while (StdDeck_CardMask_CARD_IS_SET(used, c));
 
                 StdDeck_CardMask_SET(batch->hands[i][p], c);
@@ -1191,14 +1192,16 @@ static void bmc_eval_pineapple_sample(StdDeck_CardMask *cands, int npockets, int
     LowHandVal lo[ENUM_MAXPLAYERS * 3];
     int count = npockets * 3;
     int sim_ok = bmc_engine_simd_enabled();
+    int simd_ok = 0;
 
     if (sim_ok)
     {
-        simd_eval_multiple_hands(cands, count, hi);
-        if (with_low)
-            simd_eval_low8_multiple_hands(cands, count, lo);
+        simd_ok = (simd_eval_multiple_hands(cands, count, hi) == 0);
+        if (with_low && simd_ok)
+            simd_ok = (simd_eval_low8_multiple_hands(cands, count, lo) == 0);
     }
-    else
+
+    if (!simd_ok)
     {
         for (int p = 0; p < npockets; ++p)
             for (int d = 0; d < 3; ++d)
@@ -1266,11 +1269,6 @@ static void evaluateBatchPineappleImpl(enum_game_t game, StdDeck_CardMask pocket
     }
 }
 
-/* Crazy Pineapple: the two surviving hole cards are committed by
- * enumSampleBatched once per call (with access to the flop and dead), then
- * played against the completing board like a plain Hold'em pocket. */
-static StdDeck_CardMask g_committed_pineapple[ENUM_MAXPLAYERS];
-
 static void evaluateBatchPineappleCrazy(enum_game_t game, StdDeck_CardMask pockets[],
                                         int npockets, StdDeck_CardMask board,
                                         BoardBatch *batch, BatchEvalResults *results)
@@ -1283,13 +1281,13 @@ static void evaluateBatchPineappleCrazy(enum_game_t game, StdDeck_CardMask pocke
         StdDeck_CardMask finalBoard;
 
         StdDeck_CardMask_OR(finalBoard, board, batch->boards[i]);
-        batched_mc_log_range_combo(finalBoard, empty_dead, g_committed_pineapple, npockets);
+        batched_mc_log_range_combo(finalBoard, empty_dead, pockets, npockets);
 
         for (int p = 0; p < npockets; ++p)
         {
             StdDeck_CardMask hand;
             StdDeck_CardMask_RESET(hand);
-            StdDeck_CardMask_OR(hand, g_committed_pineapple[p], finalBoard);
+            StdDeck_CardMask_OR(hand, pockets[p], finalBoard);
             results->hival[p][i] = StdDeck_StdRules_EVAL_N_Cached(hand, 7);
             results->loval[p][i] = LowHandVal_NOTHING;
         }
@@ -1377,8 +1375,8 @@ static void init_registry_impl(void)
 #endif
 
     /* Pineapple family: best two of three hole cards against the board. The
-     * impl dispatches on game for the hi/lo split; the crazy variant needs
-     * the flop-committed pockets stashed by enumSampleBatched. */
+     * impl dispatches on game for the hi/lo split; Crazy Pineapple receives
+     * its flop-committed pockets through the evaluator argument. */
     evaluator_registry[game_pineapple] = evaluateBatchPineappleImpl;
     evaluator_registry[game_pineapple_lazy] = evaluateBatchPineappleImpl;
     evaluator_registry[game_pineapple8] = evaluateBatchPineappleImpl;
@@ -1391,11 +1389,15 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
                       int npockets, int nboard, int niter, int orderflag,
                       enum_result_t *result)
 {
-    BoardBatch batch;
-    BatchEvalResults batchResults;
+    BoardBatch *batch = NULL;
+    BatchEvalResults *batchResults = NULL;
+    StubBatch *stubBatch = NULL;
     int numCards;
     int remaining;
     int currentBatchSize;
+    int ret = 0;
+    StdDeck_CardMask committed_pineapple[ENUM_MAXPLAYERS];
+    StdDeck_CardMask *evaluator_pockets = pockets;
 
     /* Ensure registry is initialized exactly once in a thread-safe way if possible,
        or at least safely for this translation unit.
@@ -1412,15 +1414,26 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
     /* Clear the result structure */
     enumResultClear(result);
 
-    if (npockets > ENUM_MAXPLAYERS)
+    batch = (BoardBatch *)calloc(1, sizeof(BoardBatch));
+    batchResults = (BatchEvalResults *)calloc(1, sizeof(BatchEvalResults));
+    if (!batch || !batchResults) {
+        free(batch);
+        free(batchResults);
         return 1;
+    }
+
+    if (npockets > ENUM_MAXPLAYERS) {
+        ret = 1;
+        goto cleanup;
+    }
 
     /* Ordering is not yet implemented for batched version */
     if (orderflag)
     {
         /* Fall back to regular enumSample for now */
-        return enumSample(game, pockets, board, dead, npockets, nboard,
-                          niter, orderflag, result);
+        ret = enumSample(game, pockets, board, dead, npockets, nboard,
+                         niter, orderflag, result);
+        goto cleanup;
     }
 
     /* Special handling for Stud games which use StubBatch */
@@ -1428,10 +1441,17 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
         game == game_razz || game == game_lowball || game == game_lowball27)
     {
         /* Stud logic using StubBatch */
-        StubBatch stubBatch;
+        stubBatch = (StubBatch *)calloc(1, sizeof(StubBatch));
+        if (!stubBatch) {
+            ret = 1;
+            goto cleanup;
+        }
         int numToDeal[ENUM_MAXPLAYERS];
         enum_gameparams_t *params = enumGameParams(game);
-        if (!params) return 1;
+        if (!params) {
+            ret = 1;
+            goto cleanup;
+        }
 
         for (int p = 0; p < npockets; ++p) {
             numToDeal[p] = params->maxpocket - StdDeck_numCards(pockets[p]);
@@ -1443,29 +1463,30 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
         {
             currentBatchSize = (remaining > BATCH_SIZE) ? BATCH_SIZE : remaining;
 
-            generateStubBatch(&stubBatch, dead, numToDeal, npockets, currentBatchSize);
+            generateStubBatch(stubBatch, dead, numToDeal, npockets, currentBatchSize);
 
             if (game == game_7stud) {
-                evaluateBatchStud(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchStud(game, pockets, npockets, stubBatch, batchResults);
             } else if (game == game_7stud8) {
-                evaluateBatchStud8(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchStud8(game, pockets, npockets, stubBatch, batchResults);
             } else if (game == game_razz) {
-                evaluateBatchRazz(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchRazz(game, pockets, npockets, stubBatch, batchResults);
             } else if (game == game_7studnsq) {
-                evaluateBatchStudNSQ(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchStudNSQ(game, pockets, npockets, stubBatch, batchResults);
             } else if (game == game_lowball27) {
-                evaluateBatchLowball27(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchLowball27(game, pockets, npockets, stubBatch, batchResults);
             } else if (game == game_27_triple_draw) {
-                evaluateBatchTripleDraw27(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchTripleDraw27(game, pockets, npockets, stubBatch, batchResults);
             } else if (game == game_a5_triple_draw) {
-                evaluateBatchTripleDrawA5(game, pockets, npockets, &stubBatch, &batchResults);
+                evaluateBatchTripleDrawA5(game, pockets, npockets, stubBatch, batchResults);
             } else {
                 /* Fallback for other stud variants until vectorized */
-                 return enumSample(game, pockets, board, dead, npockets, nboard,
-                          niter, orderflag, result);
+                ret = enumSample(game, pockets, board, dead, npockets, nboard,
+                                 niter, orderflag, result);
+                goto cleanup;
             }
 
-            processBatchResults(&batchResults, npockets, currentBatchSize, result);
+            processBatchResults(batchResults, npockets, currentBatchSize, result);
             remaining -= currentBatchSize;
         }
     }
@@ -1477,8 +1498,9 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
         BatchEvaluator evaluator = (game < game_NUMGAMES) ? evaluator_registry[game] : NULL;
         if (!evaluator) {
             /* Fall back to regular enumSample for unsupported games */
-            return enumSample(game, pockets, board, dead, npockets, nboard,
-                            niter, orderflag, result);
+            ret = enumSample(game, pockets, board, dead, npockets, nboard,
+                             niter, orderflag, result);
+            goto cleanup;
         }
 
         /* Crazy Pineapple commits its discard once the flop is known; without
@@ -1486,17 +1508,24 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
          * reject. The commit itself is computed once here, not per sample. */
         if (game == game_pineapple_crazy)
         {
-            if (nboard < 3)
-                return 1;
+            if (nboard < 3) {
+                ret = 1;
+                goto cleanup;
+            }
             if (pe_crazy_pineapple_commit(pockets, npockets, board, dead,
-                                          g_committed_pineapple))
-                return 1;
+                                          committed_pineapple)) {
+                ret = 1;
+                goto cleanup;
+            }
+            evaluator_pockets = committed_pineapple;
         }
 
         /* Calculate number of cards to deal */
         numCards = 5 - nboard;
-        if (numCards <= 0)
-            return 1;
+        if (numCards <= 0) {
+            ret = 1;
+            goto cleanup;
+        }
 
         /* Sampled boards must never intersect a pocket or the fixed board.
          * The Monte-Carlo enumeration in enumerate.c computes the same
@@ -1517,10 +1546,10 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
             currentBatchSize = (remaining > BATCH_SIZE) ? BATCH_SIZE : remaining;
 
             /* Generate a batch of random boards */
-            generateBoardBatch(&batch, effective_dead, numCards, currentBatchSize);
+            generateBoardBatch(batch, effective_dead, numCards, currentBatchSize);
 
             /* Evaluate the batch using registered evaluator */
-            evaluator(game, pockets, npockets, board, &batch, &batchResults);
+            evaluator(game, evaluator_pockets, npockets, board, batch, batchResults);
 
             /* Process the batch results */
             {
@@ -1529,25 +1558,25 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
                 {
                     if (npockets == 2)
                     {
-                        processBatchResultsHoldem2P_SIMD(&batchResults, currentBatchSize, result);
+                        processBatchResultsHoldem2P_SIMD(batchResults, currentBatchSize, result);
                     }
                     else
                     {
-                        processBatchResultsHoldemN_SIMDBoards(&batchResults, npockets, currentBatchSize, result);
+                        processBatchResultsHoldemN_SIMDBoards(batchResults, npockets, currentBatchSize, result);
                     }
                 }
                 else
                 {
-                    processBatchResults(&batchResults, npockets, currentBatchSize, result);
+                    processBatchResults(batchResults, npockets, currentBatchSize, result);
                 }
     #else
                 if (game == game_holdem)
                 {
-                    processBatchResultsHoldemN_Branchless(&batchResults, npockets, currentBatchSize, result);
+                    processBatchResultsHoldemN_Branchless(batchResults, npockets, currentBatchSize, result);
                 }
                 else
                 {
-                    processBatchResults(&batchResults, npockets, currentBatchSize, result);
+                    processBatchResults(batchResults, npockets, currentBatchSize, result);
                 }
     #endif
             }
@@ -1560,7 +1589,12 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
     result->nplayers = npockets;
     result->sampleType = ENUM_SAMPLE;
 
-    return 0;
+    ret = 0;
+cleanup:
+    free(stubBatch);
+    free(batchResults);
+    free(batch);
+    return ret;
 }
 
 /* AVX2 block over boards for N players (Hold'em, high only) */
@@ -1837,14 +1871,20 @@ BatchedMonteCarloResult BatchedMonteCarlo_CalculateEquity(
         int remaining = num_samples;
         double wsum = 0.0;
         double ev_accum[2] = {0.0, 0.0};
+        BoardBatch *batch = (BoardBatch *)calloc(1, sizeof(BoardBatch));
+        BatchEvalResults *batchResults = (BatchEvalResults *)calloc(1, sizeof(BatchEvalResults));
+        if (!batch || !batchResults)
+        {
+            free(batch);
+            free(batchResults);
+            return result;
+        }
         while (remaining > 0)
         {
             int currentBatchSize = (remaining > BATCH_SIZE) ? BATCH_SIZE : remaining;
-            BoardBatch batch;
-            BatchEvalResults batchResults;
             /* dead includes only dead; board known is added when evaluating */
-            pe_sampling_generate_boards(&batch, dead, numCards, currentBatchSize);
-            evaluateBatchHoldem(game_holdem, pockets, 2, board, &batch, &batchResults);
+            pe_sampling_generate_boards(batch, dead, numCards, currentBatchSize);
+            evaluateBatchHoldem(game_holdem, pockets, 2, board, batch, batchResults);
             for (int i = 0; i < currentBatchSize; i++)
             {
                 /* Recompute pot fractions */
@@ -1853,26 +1893,26 @@ BatchedMonteCarloResult BatchedMonteCarlo_CalculateEquity(
                 /* No low in this path */
                 for (int p = 0; p < 2; p++)
                 {
-                    if (batchResults.hival[p][i] != HandVal_NOTHING)
+                    if (batchResults->hival[p][i] != HandVal_NOTHING)
                     {
-                        if (batchResults.hival[p][i] > besthi)
+                        if (batchResults->hival[p][i] > besthi)
                         {
-                            besthi = batchResults.hival[p][i];
+                            besthi = batchResults->hival[p][i];
                             hishare = 1;
                         }
-                        else if (batchResults.hival[p][i] == besthi)
+                        else if (batchResults->hival[p][i] == besthi)
                         {
                             hishare++;
                         }
                     }
                 }
                 double hipot = (besthi != HandVal_NOTHING && hishare != 0) ? 1.0 / hishare : 0.0;
-                double w = pe_sampling_importance_weight(batch.boards[i], numCards);
+                double w = pe_sampling_importance_weight(batch->boards[i], numCards);
                 wsum += w;
                 for (int p = 0; p < 2; p++)
                 {
                     double potfrac = 0.0;
-                    if (batchResults.hival[p][i] != HandVal_NOTHING && batchResults.hival[p][i] == besthi)
+                    if (batchResults->hival[p][i] != HandVal_NOTHING && batchResults->hival[p][i] == besthi)
                     {
                         potfrac += hipot;
                     }
@@ -1881,6 +1921,8 @@ BatchedMonteCarloResult BatchedMonteCarlo_CalculateEquity(
             }
             remaining -= currentBatchSize;
         }
+        free(batchResults);
+        free(batch);
         result.samples_evaluated = num_samples;
         if (wsum > 0.0)
         {
@@ -1917,8 +1959,10 @@ int BatchedMonteCarlo_GetOptimalBatchSize(void)
     return 16;
 }
 
-/* Set random seed for reproducible results */
+/* Set random seed for reproducible results.
+ * Sets the base seed from which every thread derives its own PCG stream,
+ * so multithreaded sampling is reproducible and never touches libc srand. */
 void BatchedMonteCarlo_SetRandomSeed(unsigned int seed)
 {
-    srand(seed);
+    pe_rng_set_base_seed((uint64_t)seed);
 }

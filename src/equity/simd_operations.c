@@ -94,14 +94,21 @@ static void detect_cpu_features(void) {
     /* Check for AVX2 support */
     if (__get_cpuid_max(0, NULL) >= 7) {
         __cpuid_count(7, 0, eax, ebx, ecx, edx);
+        /* Runtime CPU support is only usable when this translation unit was
+         * compiled with the corresponding ISA. Generic builds intentionally
+         * omit -mavx2/-mavx512f and must therefore stay on the scalar path. */
+#if defined(__AVX2__)
         if (ebx & (1 << 5)) { /* AVX2 */
             detected_capability = SIMD_AVX2;
         }
+#endif
         
         /* Check for AVX-512F support */
+#if defined(__AVX512F__)
         if (ebx & (1 << 16)) { /* AVX-512F */
             detected_capability = SIMD_AVX512;
         }
+#endif
     }
 }
 #endif
@@ -129,8 +136,10 @@ simd_capability_t simd_detect_capability(void) {
         } else if (force512 && (strcmp(force512, "1") == 0 || strcasecmp(force512, "true") == 0)) {
 #ifdef __AVX512F__
             detected_capability = SIMD_AVX512;
-#else
+#elif defined(__AVX2__)
             detected_capability = SIMD_AVX2;
+#else
+            detected_capability = SIMD_NONE;
 #endif
         } else if (force2 && (strcmp(force2, "1") == 0 || strcasecmp(force2, "true") == 0)) {
 #ifdef __AVX2__
@@ -659,38 +668,43 @@ int simd_eval_batch_hands_neon(const simd_card_batch_t* batch, simd_result_batch
 /* Adaptive batch evaluation */
 int simd_eval_batch_hands_adaptive(const simd_card_batch_t* batch, simd_result_batch_t* results) {
     simd_capability_t cap = simd_detect_capability();
+    int rc = 0;
     
     switch (cap) {
         case SIMD_AVX512:
-            return simd_eval_batch_hands_avx512(batch, results);
+            rc = simd_eval_batch_hands_avx512(batch, results);
+            break;
         case SIMD_AVX2:
-            return simd_eval_batch_hands_avx2(batch, results);
+            rc = simd_eval_batch_hands_avx2(batch, results);
+            break;
         case SIMD_NEON:
-            return simd_eval_batch_hands_neon(batch, results);
+            rc = simd_eval_batch_hands_neon(batch, results);
+            break;
         case SIMD_SSE2:
         case SIMD_NONE:
         default:
-            /* Fallback to scalar evaluation */
-            {
-                int i;
-                results->batch_size = batch->batch_size;
-                
-                for (i = 0; i < batch->batch_size; i++) {
-                    StdDeck_CardMask hand;
-                    hand.cards_n = 0;
-                    
-                /* Reconstruct the hand */
-                hand.cards.spades = batch->spades[i];
-                hand.cards.clubs = batch->clubs[i];
-                hand.cards.diamonds = batch->diamonds[i];
-                hand.cards.hearts = batch->hearts[i];
-                
-                /* Cached standard evaluation */
-                results->results[i] = StdDeck_StdRules_EVAL_N_Cached(hand, 7);
-            }
-            return 0;
-        }
+            rc = -1;
+            break;
     }
+
+    /* A runtime capability can still be unavailable when a caller links a
+     * stubbed or partially compiled SIMD backend. Never leave output
+     * uninitialised in that case. */
+    if (rc != 0) {
+        results->batch_size = batch->batch_size;
+        for (int i = 0; i < batch->batch_size; i++) {
+            StdDeck_CardMask hand;
+            hand.cards_n = 0;
+            hand.cards.spades = batch->spades[i];
+            hand.cards.clubs = batch->clubs[i];
+            hand.cards.diamonds = batch->diamonds[i];
+            hand.cards.hearts = batch->hearts[i];
+            results->results[i] = StdDeck_StdRules_EVAL_N_Cached(hand, 7);
+        }
+        return 0;
+    }
+
+    return 0;
 }
 
 /* High-level interface */
@@ -827,7 +841,11 @@ int simd_eval_low8_multiple_hands(const StdDeck_CardMask* hands, int count, LowH
 #if defined(__AVX2__)
         if (cap >= SIMD_AVX2) {
             int i;
-            for (i = 0; i < batch_size; i += 4) { /* Process 4 at a time using AVX2 */
+            /* Each AVX2 register contains eight uint32 lanes. The batch is
+             * padded to SIMD_AVX512_BATCH_SIZE (8), so a short final batch is
+             * safe to process as one full vector and only `batch_size` values
+             * are copied out below. */
+            for (i = 0; i < batch_size; i += 8) {
                 __m256i spades = _mm256_loadu_si256((const __m256i*)&batch.spades[i]);
                 __m256i clubs = _mm256_loadu_si256((const __m256i*)&batch.clubs[i]);
                 __m256i diamonds = _mm256_loadu_si256((const __m256i*)&batch.diamonds[i]);

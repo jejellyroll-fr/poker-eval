@@ -37,22 +37,23 @@ jobs:
             sudo apt-get install -y gcc g++
           fi
 
-      - name: Configure (ASan + UBSan, Debug)
+      - name: Configure (ASan + UBSan, Release, AVX2)
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
         run: |
           cmake -S . -B build-asan \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_NATIVE_ARCH=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -mavx2" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -mavx2"
 
       - name: Build test
         run: cmake --build build-asan --target test_pineapple_batched_unity --parallel
 
       - name: Run test under ASan
-        run: |
-          ./build-asan/tests/unity_tests/test_pineapple_batched_unity \
-            || true
-        continue-on-error: true
+        env:
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ./build-asan/tests/unity_tests/test_pineapple_batched_unity
