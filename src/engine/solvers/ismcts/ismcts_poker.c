@@ -48,31 +48,36 @@ ismcts_config_t ismcts_poker_default_config(void) {
 
 static ismcts_node_t* node_create(ismcts_solver_t* solver) {
     ismcts_node_t* node;
+    bool from_pool = false;
     
     /* Try to use pooled node */
     if (solver->node_pool && solver->pool_used < solver->pool_size) {
         node = &solver->node_pool[solver->pool_used++];
+        from_pool = true;
     } else {
         node = (ismcts_node_t*)calloc(1, sizeof(ismcts_node_t));
         if (!node) return NULL;
+        solver->live_heap_nodes++;
     }
     
     memset(node, 0, sizeof(ismcts_node_t));
+    node->from_pool = from_pool;
     solver->total_nodes_created++;
     return node;
 }
 
-static void node_free_recursive(ismcts_node_t* node, bool pool_allocated) {
+static void node_free_recursive(ismcts_solver_t* solver, ismcts_node_t* node) {
     if (!node) return;
     
     for (int i = 0; i < node->num_children; i++) {
-        node_free_recursive(node->children[i], pool_allocated);
+        node_free_recursive(solver, node->children[i]);
     }
     
     free(node->children);
     
-    /* Only free node if not from pool */
-    if (!pool_allocated) {
+    /* Only free node if it was heap-allocated (not from the pool) */
+    if (!node->from_pool) {
+        solver->live_heap_nodes--;
         free(node);
     }
 }
@@ -305,7 +310,7 @@ void ismcts_poker_free(ismcts_solver_t* solver) {
     
     /* Free tree nodes */
     if (solver->root) {
-        node_free_recursive(solver->root, solver->node_pool != NULL);
+        node_free_recursive(solver, solver->root);
     }
     
     free(solver->node_pool);
@@ -315,9 +320,10 @@ void ismcts_poker_free(ismcts_solver_t* solver) {
 void ismcts_poker_reset(ismcts_solver_t* solver) {
     if (!solver) return;
     
-    /* Reset tree */
-    if (solver->root && !solver->node_pool) {
-        node_free_recursive(solver->root, false);
+    /* Reset tree: per-node from_pool flags let node_free_recursive free
+     only the calloc-ed overflow nodes, wherever they hang. */
+    if (solver->root) {
+        node_free_recursive(solver, solver->root);
     }
     solver->root = NULL;
     
