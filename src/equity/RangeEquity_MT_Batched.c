@@ -15,6 +15,7 @@
 #include <poker_eval/equity/batched_montecarlo.h>
 #include <poker_eval/equity/RangeEquity_internal.h>
 #include <poker_eval/equity/range_combo_buffers.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@ typedef struct {
     StdDeck_CardMask hands[ENUM_MAXPLAYERS][MATCHUP_BATCH_SIZE];
     int count;  // Number of valid matchups in this batch
     double weights[MATCHUP_BATCH_SIZE];
+    int combos[MATCHUP_BATCH_SIZE]; /* generator counter of each matchup */
 } MatchupBatch;
 
 // Work queue for dynamic scheduling
@@ -134,6 +136,7 @@ static int get_matchup_batch(
     
     while (queue->current_combination < queue->total_combinations && 
            batch->count < MATCHUP_BATCH_SIZE) {
+        const int combo = queue->current_combination;
         
         // Check if current combination is valid
         int valid = 1;
@@ -176,6 +179,7 @@ static int get_matchup_batch(
                 batch->hands[p][batch->count] = current_hands[p];
             }
             batch->weights[batch->count] = matchup_weight;
+            batch->combos[batch->count] = combo;
             batch->count++;
         }
         
@@ -225,6 +229,9 @@ static void process_matchup_batch_batched(
         if (weight <= 0.0) {
             continue;
         }
+        /* Deterministic per-matchup stream: matchup combo always draws from
+         * the same stream, whatever thread evaluates it. */
+        pe_rng_seed_current(pe_rng_derive(pe_rng_base_seed(), (uint64_t)matchup_batch->combos[m]));
         StdDeck_CardMask hands[ENUM_MAXPLAYERS];
         for (int p = 0; p < num_players; p++) {
             hands[p] = matchup_batch->hands[p][m];

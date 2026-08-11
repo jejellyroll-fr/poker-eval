@@ -183,6 +183,7 @@ typedef struct mpf_state_s
     int chance_pending;        /* next street transition deals a card (chance state) */
     int chance_children_count; /* number of dealt children so far */
     struct mpf_state_s *chance_children[52]; /* cached per-outcome children */
+    cfr_storage_t *lock_storage; /* set via mpf_apply_locked_strategies */
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);

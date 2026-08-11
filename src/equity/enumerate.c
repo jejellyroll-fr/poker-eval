@@ -415,9 +415,9 @@ static int evaluate_best_two_hole_holdem8(StdDeck_CardMask pocket,
  * decision. Returns 0 on success, 1 if the flop is unknown or a pocket is
  * malformed.
  */
-static int crazy_pineapple_commit(StdDeck_CardMask pockets[], int npockets,
-                                  StdDeck_CardMask board, StdDeck_CardMask dead,
-                                  StdDeck_CardMask committed[])
+int pe_crazy_pineapple_commit(StdDeck_CardMask pockets[], int npockets,
+                              StdDeck_CardMask board, StdDeck_CardMask dead,
+                              StdDeck_CardMask committed[])
 {
   StdDeck_CardMask flop;
   StdDeck_CardMask decided_dead;
@@ -552,7 +552,7 @@ static int crazy_pineapple_commit(StdDeck_CardMask pockets[], int npockets,
 #define INNER_LOOP_PINEAPPLE_LAZY INNER_LOOP_DISCARD_HOLDEM(3)
 
 /* Crazy Pineapple: the discard is committed on the flop, so the two surviving
-   cards are fixed before this loop runs (see crazy_pineapple_commit) and play
+   cards are fixed before this loop runs (see pe_crazy_pineapple_commit) and play
    out as an ordinary Hold'em pocket. */
 #define INNER_LOOP_PINEAPPLE_CRAZY                            \
   INNER_LOOP({                                                \
@@ -1579,7 +1579,7 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
 
     if (nboard < 3 || nboard > 5)
       return 1;
-    if (crazy_pineapple_commit(pockets, npockets, board, dead, _committed))
+    if (pe_crazy_pineapple_commit(pockets, npockets, board, dead, _committed))
       return 1;
 
     if (nboard == 3)
@@ -2308,7 +2308,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
 
     if (nboard < 3 || nboard > 5)
       return 1;
-    if (crazy_pineapple_commit(pockets, npockets, board, dead, _committed))
+    if (pe_crazy_pineapple_commit(pockets, npockets, board, dead, _committed))
       return 1;
 
     numCards = 5 - nboard;
@@ -2438,7 +2438,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
         if (numAvailable == 0)
           break;
 
-        int r = rand() % numAvailable;
+        int r = (int)pe_rng_below(pe_rng_current(), (uint32_t)numAvailable);
         int count = 0;
 
         /* Find the r-th available card */

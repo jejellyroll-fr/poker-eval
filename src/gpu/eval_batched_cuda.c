@@ -405,6 +405,12 @@ int cuda_backend_init(void** out_context, int device_id, bool verbose) {
     ctx->num_streams = 4; /* Default: 4 concurrent streams */
     ctx->streams = (cudaStream_t*)calloc(ctx->num_streams, sizeof(cudaStream_t));
     ctx->stream_events = (cudaEvent_t*)calloc(ctx->num_streams, sizeof(cudaEvent_t));
+    if (!ctx->streams || !ctx->stream_events) {
+        free(ctx->streams);
+        free(ctx->stream_events);
+        free(ctx);
+        return -1;
+    }
 
     for (int i = 0; i < ctx->num_streams; i++) {
         CUDA_CHECK_RETURN(cudaStreamCreate(&ctx->streams[i]), -1);
@@ -415,6 +421,15 @@ int cuda_backend_init(void** out_context, int device_id, bool verbose) {
     ctx->d_hands_per_stream = (uint8_t**)calloc(ctx->num_streams, sizeof(uint8_t*));
     ctx->d_values_per_stream = (uint32_t**)calloc(ctx->num_streams, sizeof(uint32_t*));
     ctx->per_stream_capacity = (size_t*)calloc(ctx->num_streams, sizeof(size_t));
+    if (!ctx->d_hands_per_stream || !ctx->d_values_per_stream || !ctx->per_stream_capacity) {
+        free(ctx->d_hands_per_stream);
+        free(ctx->d_values_per_stream);
+        free(ctx->per_stream_capacity);
+        free(ctx->streams);
+        free(ctx->stream_events);
+        free(ctx);
+        return -1;
+    }
 
     /* Create events for profiling */
     CUDA_CHECK_RETURN(cudaEventCreate(&ctx->start_event), -1);
