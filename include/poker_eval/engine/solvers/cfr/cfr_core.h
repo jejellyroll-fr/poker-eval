@@ -20,21 +20,12 @@ extern "C" {
 
 #define CFR_MAX_PLAYERS 8
 
-<<<<<<< HEAD
-/* Upper bound on the number of actions any game can expose at a node.
-   Adapters must clamp their returned action count to this; the core
-   allocates fixed arrays and alloca()s based on it. */
-#define CFR_MAX_ACTIONS 16
-
-=======
 /* Upper bound on the number of actions any game exposes at a node. */
 #define CFR_MAX_ACTIONS 16
 
 /* Default recursion depth limit for tree walks; a value of 0 in
    cfr_config_t::max_depth selects this default. */
 #define CFR_DEFAULT_MAX_DEPTH 1000
-
->>>>>>> 46a90d43 (fix(cfr): enforce recursion depth limit and replace per-frame alloca (BUG-08))
 /* Forward declarations */
 typedef struct cfr_game_t cfr_game_t;
 typedef struct cfr_storage_t cfr_storage_t;
@@ -126,6 +117,27 @@ struct cfr_game_t {
         cfr_game_t* game,
         uint64_t state_key,
         int player,
+        void* user_data
+    );
+
+    /* Chance node support (optional). When is_chance returns nonzero, the
+     * state has get_chance_outcomes() equally-likely outcomes, dealt one by
+     * one through apply_chance(). All three callbacks are optional: a game
+     * that leaves them NULL is treated as having no chance nodes. */
+    int (*is_chance)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        void* user_data
+    );
+    int (*get_chance_outcomes)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        void* user_data
+    );
+    uint64_t (*apply_chance)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        int outcome,
         void* user_data
     );
 
