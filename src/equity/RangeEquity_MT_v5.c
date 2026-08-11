@@ -11,6 +11,7 @@
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/equity/RangeEquity_internal.h>
 #include <poker_eval/equity/range_combo_buffers.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -274,6 +275,10 @@ int CalculateEquityForRanges_MT_v5(
                         continue;
                     if (weight <= 0.0)
                         continue;
+                    /* Deterministic per-matchup stream: matchup i always
+                     * draws from the same stream, whatever thread evaluates
+                     * it. */
+                    pe_rng_seed_current(pe_rng_derive(pe_rng_base_seed(), (uint64_t)i));
                     // Check dead/board overlap
                     int valid = 1;
                     if (!use_prefilter)

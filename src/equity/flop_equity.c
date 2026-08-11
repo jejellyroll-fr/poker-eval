@@ -526,7 +526,7 @@ static int flop_calc_equity_monte_carlo(
         /* Sample Turn */
         int t_card = -1, r_card = -1;
         while (1) {
-             t_card = rand() % 52;
+             t_card = (int)pe_rng_below(pe_rng_current(), 52);
              if (!StdDeck_CardMask_CARD_IS_SET(dead, t_card)) break;
         }
         StdDeck_CardMask_SET(board_full, t_card);
@@ -541,7 +541,7 @@ static int flop_calc_equity_monte_carlo(
 
         /* Sample River */
         while (1) {
-             r_card = rand() % 52;
+             r_card = (int)pe_rng_below(pe_rng_current(), 52);
              if (!StdDeck_CardMask_CARD_IS_SET(dead, r_card)) break;
         }
         StdDeck_CardMask_SET(board_full, r_card);
@@ -563,7 +563,7 @@ static int flop_calc_equity_monte_carlo(
              StdDeck_CardMask_RESET(opp_pocket);
              int opp_cards_needed = 2;
              while (opp_cards_needed > 0) {
-                 int c = rand() % 52;
+                 int c = (int)pe_rng_below(pe_rng_current(), 52);
                  if (!StdDeck_CardMask_CARD_IS_SET(dead, c)) {
                      StdDeck_CardMask_SET(opp_pocket, c);
                      StdDeck_CardMask_SET(dead, c);
