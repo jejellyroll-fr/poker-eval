@@ -177,16 +177,22 @@ static bool arp_cache_lookup(
 
     /* Reallocate if necessary (dest->hands/weights should be valid ptrs or NULL) */
     if (dest->capacity < required_capacity) {
+        /* Assign each pointer as soon as its own realloc succeeds: on a partial
+           failure dest must never keep pointing at a block that was freed. */
         StdDeck_CardMask *new_hands = realloc(dest->hands, required_capacity * sizeof(StdDeck_CardMask));
+        if (new_hands)
+            dest->hands = new_hands;
+
         double *new_weights = realloc(dest->weights, required_capacity * sizeof(double));
+        if (new_weights)
+            dest->weights = new_weights;
 
         if (!new_hands || !new_weights) {
-            /* Allocation failed */
+            /* Allocation failed: whichever realloc succeeded has already been
+               installed, so dest->hands/weights remain valid (never dangling). */
             pthread_mutex_unlock(&global_cache.lock);
             return false;
         }
-        dest->hands = new_hands;
-        dest->weights = new_weights;
         dest->capacity = required_capacity;
     }
 
@@ -4464,4 +4470,61 @@ int ARP_ValidateRangeString(const char *range_string, char *error_buffer, size_t
 
     ARP_FreeContext(&ctx);
     return result;
+}
+
+/* ===== Multi-way Ranges ===== */
+
+/*
+ * No cross-player exclusion happens here. A player is dealt a single hand
+ * per deal, so the collision between players is a property of the deal, not
+ * of the ranges: AA vs AA has six valid deals (AsAh vs AdAc), and filtering
+ * every hand that touches any hand of another player's range would empty
+ * most realistic ranges. Per-deal exclusion is the equity engine's job
+ * (see RangeEquity.c), which tests each dealt hand against the selection in
+ * progress. This function only parses N strings against a shared dead-card
+ * mask; the resulting per-player ranges may freely overlap.
+ */
+
+int ARP_ParseMultiwayRanges(const char *const *range_strings,
+                            int num_players,
+                            StdDeck_CardMask dead_cards,
+                            enum_game_t game_type,
+                            arp_multiway_range_t *result)
+{
+    if (!range_strings || num_players < 1 || !result)
+        return 0;
+
+    memset(result, 0, sizeof(arp_multiway_range_t));
+
+    result->ranges = calloc((size_t)num_players, sizeof(arp_range_t));
+    if (!result->ranges)
+        return 0;
+    result->num_players = num_players;
+    result->dead_cards = dead_cards;
+
+    for (int i = 0; i < num_players; i++)
+    {
+        if (!ARP_ParseRange(range_strings[i], dead_cards, game_type,
+                            &result->ranges[i]))
+        {
+            ARP_FreeMultiwayRange(result);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+void ARP_FreeMultiwayRange(arp_multiway_range_t *multiway)
+{
+    if (!multiway)
+        return;
+
+    if (multiway->ranges)
+    {
+        for (int i = 0; i < multiway->num_players; i++)
+            ARP_FreeRange(&multiway->ranges[i]);
+        free(multiway->ranges);
+    }
+    memset(multiway, 0, sizeof(arp_multiway_range_t));
 }

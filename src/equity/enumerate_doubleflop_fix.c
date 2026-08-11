@@ -62,7 +62,7 @@ static int enumSampleDoubleFlop(StdDeck_CardMask pockets[],
             int num_remaining = StdDeck_numCards(deck);
             if (num_remaining == 0) break;
             
-            int r = rand() % num_remaining;
+            int r = (int)pe_rng_below(pe_rng_current(), (uint32_t)num_remaining);
             int count = 0;
             
             for (int c = 0; c < StdDeck_N_CARDS; c++) {

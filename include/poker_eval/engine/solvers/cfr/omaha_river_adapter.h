@@ -61,7 +61,7 @@ extern "C"
         unsigned char bucket_bins; /* nombre de classes */
         unsigned char bucket_thresh_count;
         uint32_t bucket_thresh[OMAHA_MAX_BUCKET_THRESH];
-
+        int suit_perm[4]; /* suit canonicalization mapping (label -> original suit) */
     } omaha_river_state_t;
 
     /* --- Fabrique ------------------------------------------------------------ */

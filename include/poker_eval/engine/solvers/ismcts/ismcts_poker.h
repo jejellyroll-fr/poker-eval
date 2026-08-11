@@ -34,6 +34,10 @@ extern "C" {
 #define ISMCTS_MAX_ROUNDS  4         /* preflop, flop, turn, river */
 #define ISMCTS_MAX_CARDS   7         /* Max cards per player (Omaha 4 hole + 5 board) */
 
+/* Cap on the node pool (pool_size = max_iterations * 2). Bounds the
+ * up-front allocation so absurd max_iterations cannot request gigabytes. */
+#define ISMCTS_MAX_POOL_ITEMS 1048576 /* 2^20 nodes (128 MB @ 128 B/node) */
+
 /* Default configuration values */
 #define ISMCTS_DEFAULT_UCT_C            1.414   /* sqrt(2) */
 #define ISMCTS_DEFAULT_ITERATIONS       10000
@@ -168,6 +172,7 @@ typedef struct ismcts_node_t {
     /* State info */
     int acting_player;           /* Player who acted to reach this node */
     bool is_expanded;            /* True if children have been generated */
+    bool from_pool;              /* True if node lives in solver->node_pool */
 } ismcts_node_t;
 
 /* ===== ISMCTS Configuration ===== */
@@ -206,6 +211,11 @@ typedef struct {
     uint64_t total_iterations;
     uint64_t total_simulations;
     uint64_t total_nodes_created;
+<<<<<<< HEAD
+    int live_heap_nodes;              /* Heap-allocated nodes not yet freed */
+=======
+    int live_children_arrays;    /* Heap-allocated children arrays not yet freed */
+>>>>>>> 4707b4b4 (fix(ismcts): walk the tree on reset so children arrays are freed)
 } ismcts_solver_t;
 
 /* ===== Public API ===== */

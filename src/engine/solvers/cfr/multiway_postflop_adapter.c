@@ -244,6 +244,7 @@ static void mpf_update_board(mpf_state_t *st, int revealed);
 static void mpf_init_round_flags(mpf_state_t *st);
 static void mpf_apply_preconfig(const mpf_config_t *cfg, mpf_state_t *st);
 static void mpf_restore_base_bets(mpf_state_t *st);
+static void mpf_wire_node_lock(mpf_tree_node_t *node, uint64_t state_key, cfr_storage_t *storage);
 static void mpf_apply_tree_node(mpf_state_t *st, int node_idx);
 static int mpf_tree_find_next(const mpf_state_t *st, int action);
 static int mpf_tree_collect_actions(const mpf_state_t *st, int *out_actions, int max_actions);
@@ -631,12 +632,24 @@ static int mpf_active_count(const mpf_state_t *st)
     return cnt;
 }
 
+/* Net pot distributed at terminal nodes. Rake is deducted unless the
+ * hand never saw a flop and no-flop-no-drop is configured. */
+static double mpf_terminal_pot(const mpf_state_t *st)
+{
+    const rake_config_t *r = &st->rake;
+    if (r->percentage <= 0.0)
+        return st->pot;
+    if (r->no_flop_no_drop && st->street < MPF_STREET_FLOP && st->board_revealed == 0)
+        return st->pot;
+    return pe_apply_rake(st->pot, r);
+}
+
 static void mpf_mark_winner_fold(mpf_state_t *st, int winner)
 {
     for (int i = 0; i < st->num_players; ++i)
         st->utilities[i] = -st->invested[i];
     if (winner >= 0)
-        st->utilities[winner] += st->pot;
+        st->utilities[winner] += mpf_terminal_pot(st);
     st->util_ready = 1;
 }
 
@@ -661,7 +674,7 @@ static void mpf_compute_utilities(mpf_state_t *st)
     }
     if (act_cnt == 1)
     {
-        st->utilities[active_players[0]] += st->pot;
+        st->utilities[active_players[0]] += mpf_terminal_pot(st);
         st->util_ready = 1;
         return;
     }
@@ -670,10 +683,8 @@ static void mpf_compute_utilities(mpf_state_t *st)
     for (int i = 0; i < st->board_revealed; ++i)
         board = mask_set(board, st->board_cards[i]);
 
-    eval_t best = 0;
-    int winners[MPF_MAX_PLAYERS];
-    int win_cnt = 0;
-
+    /* Evaluate every active hand once so it can be reused for each side pot. */
+    eval_t hand_val[MPF_MAX_PLAYERS];
     for (int idx = 0; idx < act_cnt; ++idx)
     {
         int p = active_players[idx];
@@ -695,21 +706,107 @@ static void mpf_compute_utilities(mpf_state_t *st)
             value = eval_holdem_high(st->ctx, st->hole[p], board);
             break;
         }
-        if (win_cnt == 0 || value > best)
-        {
-            best = value;
-            winners[0] = p;
-            win_cnt = 1;
-        }
-        else if (value == best)
-        {
-            winners[win_cnt++] = p;
-        }
+        hand_val[p] = value;
     }
 
-    double share = (win_cnt > 0) ? (st->pot / win_cnt) : 0.0;
-    for (int i = 0; i < win_cnt; ++i)
-        st->utilities[winners[i]] += share;
+    /* Award each side pot to the best hand among the players who can
+       win it.  The pot contributed by a layer of invested amounts is
+       shared by the players who invested at least that much; folded
+       players' chips stay in the pot and go to the winner, but a layer
+       contributed by players no remaining player can cover is refunded
+       (matching the poker rule for uncalled bets). */
+    {
+        /* Collect the distinct total investment levels, ascending. */
+        double levels[MPF_MAX_PLAYERS];
+        int n_levels = 0;
+        for (int i = 0; i < st->num_players; ++i)
+        {
+            if (st->invested[i] <= MPF_EPS)
+                continue;
+            double lv = st->invested[i];
+            int dup = 0;
+            for (int j = 0; j < n_levels; ++j)
+            {
+                if (levels[j] == lv)
+                {
+                    dup = 1;
+                    break;
+                }
+            }
+            if (!dup)
+                levels[n_levels++] = lv;
+        }
+        /* Ascending insertion sort (n_levels <= MPF_MAX_PLAYERS). */
+        for (int i = 1; i < n_levels; ++i)
+        {
+            double lv = levels[i];
+            int j = i - 1;
+            while (j >= 0 && levels[j] > lv)
+            {
+                levels[j + 1] = levels[j];
+                --j;
+            }
+            levels[j + 1] = lv;
+        }
+
+        double prev_level = 0.0;
+        for (int li = 0; li < n_levels; ++li)
+        {
+            double layer = levels[li] - prev_level;
+            if (layer <= MPF_EPS)
+                continue;
+
+            /* Contributors: every player (folded included) whose chips
+               reach this layer. */
+            int n_layer_players = 0;
+            int layer_players[MPF_MAX_PLAYERS];
+            for (int i = 0; i < st->num_players; ++i)
+            {
+                if (st->invested[i] >= levels[li] - MPF_EPS)
+                    layer_players[n_layer_players++] = i;
+            }
+
+            /* Active players who are entitled to this layer. */
+            eval_t best = 0;
+            int winners[MPF_MAX_PLAYERS];
+            int win_cnt = 0;
+            for (int k = 0; k < n_layer_players; ++k)
+            {
+                int p = layer_players[k];
+                if (!st->active[p])
+                    continue;
+                if (win_cnt == 0 || hand_val[p] > best)
+                {
+                    best = hand_val[p];
+                    winners[0] = p;
+                    win_cnt = 1;
+                }
+                else if (hand_val[p] == best)
+                {
+                    winners[win_cnt++] = p;
+                }
+            }
+
+            if (win_cnt > 0)
+            {
+                /* Winner(s) of this layer take it all, including folded
+                   players' contributions, with rake applied. */
+                double layer_pot = pe_apply_rake(layer * (double)n_layer_players,
+                                                &st->rake);
+                double share = layer_pot / (double)win_cnt;
+                for (int i = 0; i < win_cnt; ++i)
+                    st->utilities[winners[i]] += share;
+            }
+            else
+            {
+                /* No surviving player covered this layer (uncalled bet):
+                   refund the layer to the players who put it in. */
+                for (int k = 0; k < n_layer_players; ++k)
+                    st->utilities[layer_players[k]] += layer;
+            }
+            prev_level = levels[li];
+        }
+    }
     st->util_ready = 1;
 }
 
@@ -972,10 +1069,21 @@ static void mpf_apply_tree_node(mpf_state_t *st, int node_idx)
         node->cache_slots[slot].owner = self;
         node->cache_slots[slot].state = st;
         node->state_key = (uint64_t)(uintptr_t)st;
+        if (st->lock_storage)
+        {
+            if (!node->cache_slots[slot].lock_wired && node->is_locked &&
+                node->locked_strategy && node->locked_strategy_count > 0 &&
+                cfr_storage_set_locked_strategy(st->lock_storage, node->state_key,
+                                                node->locked_strategy,
+                                                node->locked_strategy_count) == 0)
+                node->cache_slots[slot].lock_wired = 1;
+        }
         pthread_mutex_unlock(&node->cache_lock);
 #else
         node->state_cache = st;
         node->state_key = (uint64_t)(uintptr_t)st;
+        if (st->lock_storage)
+            mpf_wire_node_lock(node, node->state_key, st->lock_storage);
 #endif
 
         mpf_restore_base_bets(st);
@@ -1168,6 +1276,45 @@ static void mpf_apply_preconfig(const mpf_config_t *cfg, mpf_state_t *st)
         st->acted_this_round[st->to_act] = 0;
 }
 
+
+static void mpf_wire_node_lock(mpf_tree_node_t *node, uint64_t state_key, cfr_storage_t *storage)
+{
+    if (!node || !storage || node->lock_wired)
+        return;
+    if (node->type != MPF_TREE_NODE_PLAYER)
+        return;
+    if (!node->is_locked || !node->locked_strategy || node->locked_strategy_count <= 0)
+        return;
+    if (cfr_storage_set_locked_strategy(storage, state_key,
+                                        node->locked_strategy,
+                                        node->locked_strategy_count) == 0)
+        node->lock_wired = 1;
+}
+
+int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
+{
+    if (!root_state || !storage)
+        return -1;
+    root_state->lock_storage = storage;
+    int applied = 0;
+    if (root_state->tree && root_state->tree_node_idx >= 0)
+    {
+        mpf_tree_node_t *node = &root_state->tree->nodes[root_state->tree_node_idx];
+        if (node->is_locked && node->locked_strategy && node->locked_strategy_count > 0 &&
+            node->state_key != 0 && !node->lock_wired)
+        {
+            if (cfr_storage_set_locked_strategy(storage, node->state_key,
+                                                node->locked_strategy,
+                                                node->locked_strategy_count) == 0)
+            {
+                node->lock_wired = 1;
+                ++applied;
+            }
+        }
+    }
+    return applied;
+}
+
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
 {
     if (!cfg || !cfg->ctx || !out_game || !out_state)
@@ -1189,7 +1336,9 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         mpf_perf_stats_reset(perf_stats);
 
     out_state->ctx = cfg->ctx;
+    out_state->rake = cfg->rake;
     out_state->rules = cfg->rules;
+    out_state->lock_storage = NULL;
     out_state->num_players = cfg->num_players;
     out_state->street = cfg->start_street;
     out_state->button_index = (cfg->button_index % cfg->num_players + cfg->num_players) % cfg->num_players;

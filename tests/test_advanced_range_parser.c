@@ -713,6 +713,74 @@ static int test_contains_after_removal(void)
     TEST_PASS("Contains-after-removal tests");
 }
 
+static int test_multiway_ranges(void)
+{
+    printf("\n--- Testing Multi-Way Ranges ---\n");
+
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+    arp_multiway_range_t mw;
+    const char *players[4];
+
+    /* Three ranges, one per player */
+    players[0] = "AA";
+    players[1] = "KK";
+    players[2] = "QQ";
+    TEST_ASSERT(ARP_ParseMultiwayRanges(players, 3, dead, game_holdem, &mw),
+                "AA/KK/QQ should parse as a multi-way range");
+    TEST_ASSERT(mw.num_players == 3, "num_players should be 3");
+    TEST_ASSERT(mw.ranges[0].count == 6 && mw.ranges[1].count == 6 &&
+                mw.ranges[2].count == 6, "each pocket pair keeps its 6 combos");
+    ARP_FreeMultiwayRange(&mw);
+
+    /* Overlapping ranges are kept whole: card exclusion is a property of
+     * the deal, not of the ranges. AA vs AA has six valid deals (e.g.
+     * AsAh vs AdAc), so both ranges stay complete. */
+    players[0] = "AA";
+    players[1] = "AA";
+    TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_holdem, &mw),
+                "AA/AA should parse");
+    TEST_ASSERT(mw.ranges[0].count == 6 && mw.ranges[1].count == 6,
+                "AA/AA keeps every combo: AsAh vs AdAc is dealable");
+    ARP_FreeMultiwayRange(&mw);
+
+    /* The same applies to partially overlapping ranges */
+    players[0] = "AKs";
+    players[1] = "AKo";
+    TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_holdem, &mw),
+                "AKs/AKo should parse");
+    TEST_ASSERT(mw.ranges[0].count == 4 && mw.ranges[1].count == 12,
+                "suited and offsuit ranges keep their combos");
+    ARP_FreeMultiwayRange(&mw);
+
+    /* Dead cards reduce every player's range */
+    StdDeck_CardMask_SET(dead, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_CLUBS));
+    players[0] = "AA";
+    players[1] = "KK";
+    TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_holdem, &mw),
+                "AA/KK with a dead ace should parse");
+    TEST_ASSERT(mw.ranges[0].count == 3, "Ac dead: only 3 AA combos left");
+    TEST_ASSERT(mw.ranges[1].count == 6, "KK is unaffected by the dead ace");
+    ARP_FreeMultiwayRange(&mw);
+
+    /* An invalid player string fails the whole parse */
+    StdDeck_CardMask_RESET(dead);
+    players[0] = "AA";
+    players[1] = "XX";
+    TEST_ASSERT(!ARP_ParseMultiwayRanges(players, 2, dead, game_holdem, &mw),
+                "an invalid player string must fail the parse");
+    ARP_FreeMultiwayRange(&mw);
+
+    /* Omaha patterns keep every combo */
+    players[0] = "AAxxds";
+    players[1] = "KKxxds";
+    TEST_ASSERT(ARP_ParseMultiwayRanges(players, 2, dead, game_omaha, &mw),
+                "Omaha AAxxds/KKxxds should parse");
+    TEST_ASSERT(mw.ranges[0].count == 864 && mw.ranges[1].count == 864,
+                "Omaha ranges keep all 864 combos each");
+    TEST_PASS("Multi-way range tests");
+}
+
 /* Main test runner */
 int main(void)
 {
@@ -770,6 +838,9 @@ int main(void)
         tests_passed++;
     total_tests++;
     if (test_contains_after_removal())
+        tests_passed++;
+    total_tests++;
+    if (test_multiway_ranges())
         tests_passed++;
 
     /* Summary */

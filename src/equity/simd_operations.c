@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <poker_eval/core/pcg_rng.h>
 
 #ifdef __x86_64__
 #include <cpuid.h>
@@ -749,7 +750,7 @@ double simd_benchmark_capability(simd_capability_t cap, int iterations) {
         test_hands[i].cards_n = 0;
         /* Add 7 random cards */
         for (j = 0; j < 7; j++) {
-            int card = (rand() % 52);
+            int card = (int)pe_rng_below(pe_rng_current(), 52);
             test_hands[i].cards_n |= (1ULL << card);
         }
     }

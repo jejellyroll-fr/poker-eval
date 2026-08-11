@@ -13,6 +13,7 @@
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/equity/RangeEquity_internal.h>
 #include <poker_eval/equity/range_combo_buffers.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -104,12 +105,15 @@ static MatchupGenerator* create_matchup_generator(
 static int get_next_valid_matchup(
     MatchupGenerator *gen,
     StdDeck_CardMask hands[ENUM_MAXPLAYERS],
-    double *weight_out
+    double *weight_out,
+    int *combo_out
 ) {
     if (weight_out)
         *weight_out = 0.0;
     int found = 0;
     omp_set_lock(&gen->lock);
+    if (combo_out)
+        *combo_out = gen->current_combination;
     while (gen->current_combination < gen->total_combinations && !found) {
         int valid = 1;
         double matchup_weight = 1.0;
@@ -192,12 +196,16 @@ static void process_matchup_batch(
     }
     for (int b = 0; b < ctx->batch_size; b++) {
         double weight = 0.0;
-        if (!get_next_valid_matchup(ctx->gen, hands, &weight)) {
+        int combo = 0;
+        if (!get_next_valid_matchup(ctx->gen, hands, &weight, &combo)) {
             break;
         }
         if (weight <= 0.0) {
             continue;
         }
+        /* Deterministic per-matchup stream; sampling results do not depend
+         * on which thread picks the matchup up. */
+        pe_rng_seed_current(pe_rng_derive(pe_rng_base_seed(), (uint64_t)combo));
         enumResultClear(&matchup_result);
         StdDeck_CardMask effective_dead_cards;
         StdDeck_CardMask_RESET(effective_dead_cards);
