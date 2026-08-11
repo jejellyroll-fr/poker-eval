@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Compact binary storage format for solved trees: `pe_cfr_save_storage()` /
+  `pe_cfr_load_storage()` plus memory-mapped read-only `.pe_sol` views
+  (`pe_sol_open_mmap`) and a `.pe_tree` binary serializer (`pe_tree_save` /
+  `pe_tree_load`). Strategy weights are quantized to 16-bit fixed point, giving
+  >= 4x smaller files than a JSON dump with < 0.01% EV loss (#145).
 - Pineapple Hi/Lo (`game_pineapple8`): 8-or-better pot split with the best two
   hole cards chosen independently for the high and low hands; `pokenum -pa8`
   (#42).
