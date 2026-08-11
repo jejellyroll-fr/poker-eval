@@ -94,6 +94,11 @@ static void convert_pe_to_arp(const pe_range_t *src, arp_range_t *dst) {
     dst->capacity = src->count;
     dst->hands = malloc(src->count * sizeof(StdDeck_CardMask));
     dst->weights = malloc(src->count * sizeof(double));
+    if (!dst->hands || !dst->weights) {
+        free(dst->hands);
+        free(dst->weights);
+        return;
+    }
     dst->game_type = src->game_type;
     dst->has_weights = 1;
 
