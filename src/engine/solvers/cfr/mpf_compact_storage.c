@@ -496,21 +496,47 @@ int pe_sol_open_mmap(const char *path, pe_sol_mmap_t **out_view)
 
     const unsigned char *p = view->base + PE_SOL_HDR_SIZE;
     const unsigned char *end = view->base + view->size;
+    int truncated = 0;
     for (size_t i = 0; i < view->infoset_count; ++i)
     {
         if (p + 12 > end)
         {
-            view->infoset_count = i;
+            /* Record header is incomplete: the file is truncated/corrupt. */
+            truncated = 1;
             break;
         }
         view->records[i] = p;
         uint32_t n = pe_rd_u32(p + 8);
-        p += 12 + (size_t)n * sizeof(uint16_t);
-        if (p > end)
+        if (n == 0 || n > 4096)
         {
-            view->infoset_count = i + 1;
+            /* Invalid action count: reject the whole file. */
+            truncated = 1;
             break;
         }
+        const unsigned char *next = p + 12 + (size_t)n * sizeof(uint16_t);
+        if (next > end)
+        {
+            /* Declared quantized payload runs past the end of the mapping. */
+            truncated = 1;
+            break;
+        }
+        p = next;
+    }
+
+    if (truncated)
+    {
+#if defined(_WIN32)
+        UnmapViewOfFile(view->base);
+        CloseHandle(view->map_handle);
+        CloseHandle(view->file_handle);
+#else
+        munmap((void *)view->base, view->size);
+        close(view->fd);
+#endif
+        free(view->records);
+        free(view);
+        errno = EINVAL;
+        return -1;
     }
 
     *out_view = view;
@@ -618,6 +644,19 @@ static int pe_wr_i32(struct pe_tree_writer *w, int32_t v)
     b[2] = (unsigned char)((u >> 16) & 0xFF);
     b[3] = (unsigned char)((u >> 24) & 0xFF);
     if (fwrite(b, 1, 4, w->f) != 4)
+    {
+        w->failed = 1;
+        return -1;
+    }
+    return 0;
+}
+
+static int pe_wr_u64(struct pe_tree_writer *w, uint64_t u)
+{
+    unsigned char b[8];
+    for (int i = 0; i < 8; ++i)
+        b[i] = (unsigned char)((u >> (8 * i)) & 0xFF);
+    if (fwrite(b, 1, 8, w->f) != 8)
     {
         w->failed = 1;
         return -1;
@@ -750,11 +789,60 @@ static int pe_write_node(struct pe_tree_writer *w, const mpf_tree_node_t *n)
     if (n->has_snapshot)
     {
         const mpf_tree_snapshot_t *s = &n->snapshot;
+        /* defined + all has_* flags */
+        if (pe_wr_i32(w, s->defined) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_street) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_num_players) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_to_act) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_first_to_act) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_pot) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_to_call) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_current_bet) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_raises_made) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_board) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_board_revealed) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_stacks) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_invested) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_round_contrib) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_active) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->has_acted) != 0)
+            return -1;
+        /* scalars (bounded lengths) */
         if (pe_wr_i32(w, s->board_len) != 0)
             return -1;
-        for (int i = 0; i < s->board_len; ++i)
-            if (pe_wr_i32(w, s->board_cards[i]) != 0)
-                return -1;
+        if (pe_wr_i32(w, s->stacks_len) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->invested_len) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->round_contrib_len) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->active_len) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->acted_len) != 0)
+            return -1;
+        if (pe_wr_i32(w, (int32_t)s->street) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->num_players) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->to_act) != 0)
+            return -1;
+        if (pe_wr_i32(w, s->first_to_act) != 0)
+            return -1;
         if (pe_wr_dbl(w, s->pot) != 0)
             return -1;
         if (pe_wr_dbl(w, s->to_call) != 0)
@@ -765,9 +853,28 @@ static int pe_write_node(struct pe_tree_writer *w, const mpf_tree_node_t *n)
             return -1;
         if (pe_wr_i32(w, s->board_revealed) != 0)
             return -1;
+        /* board cards (fixed 5) */
+        for (int i = 0; i < 5; ++i)
+            if (pe_wr_i32(w, s->board_cards[i]) != 0)
+                return -1;
+        /* per-player arrays (bounded by MPF_MAX_PLAYERS at read time) */
+        for (int i = 0; i < s->stacks_len; ++i)
+            if (pe_wr_dbl(w, s->stacks[i]) != 0)
+                return -1;
+        for (int i = 0; i < s->invested_len; ++i)
+            if (pe_wr_dbl(w, s->invested[i]) != 0)
+                return -1;
+        for (int i = 0; i < s->round_contrib_len; ++i)
+            if (pe_wr_dbl(w, s->round_contrib[i]) != 0)
+                return -1;
+        for (int i = 0; i < s->active_len; ++i)
+            if (pe_wr_i32(w, s->active[i]) != 0)
+                return -1;
+        for (int i = 0; i < s->acted_len; ++i)
+            if (pe_wr_i32(w, s->acted[i]) != 0)
+                return -1;
     }
-    uint32_t sk = (uint32_t)n->state_key;
-    if (pe_wr_i32(w, (int32_t)sk) != 0)
+    if (pe_wr_u64(w, n->state_key) != 0)
         return -1;
     return 0;
 }
@@ -1067,17 +1174,73 @@ static mpf_tree_node_t *pe_read_nodes(pe_tree_reader_t *r, int *count)
         if (nd->has_snapshot)
         {
             mpf_tree_snapshot_t *s = &nd->snapshot;
+            s->defined = pe_rd_i32(r);
+            s->has_street = pe_rd_i32(r);
+            s->has_num_players = pe_rd_i32(r);
+            s->has_to_act = pe_rd_i32(r);
+            s->has_first_to_act = pe_rd_i32(r);
+            s->has_pot = pe_rd_i32(r);
+            s->has_to_call = pe_rd_i32(r);
+            s->has_current_bet = pe_rd_i32(r);
+            s->has_raises_made = pe_rd_i32(r);
+            s->has_board = pe_rd_i32(r);
+            s->has_board_revealed = pe_rd_i32(r);
+            s->has_stacks = pe_rd_i32(r);
+            s->has_invested = pe_rd_i32(r);
+            s->has_round_contrib = pe_rd_i32(r);
+            s->has_active = pe_rd_i32(r);
+            s->has_acted = pe_rd_i32(r);
             s->board_len = pe_rd_i32(r);
-            for (int j = 0; j < s->board_len && !r->failed; ++j)
-                s->board_cards[j] = pe_rd_i32(r);
+            s->stacks_len = pe_rd_i32(r);
+            s->invested_len = pe_rd_i32(r);
+            s->round_contrib_len = pe_rd_i32(r);
+            s->active_len = pe_rd_i32(r);
+            s->acted_len = pe_rd_i32(r);
+            s->street = (mpf_street_t)(int)pe_rd_i32(r);
+            s->num_players = pe_rd_i32(r);
+            s->to_act = pe_rd_i32(r);
+            s->first_to_act = pe_rd_i32(r);
             s->pot = pe_rd_double(r);
             s->to_call = pe_rd_double(r);
             s->current_bet = pe_rd_double(r);
             s->raises_made = pe_rd_i32(r);
             s->board_revealed = pe_rd_i32(r);
+            /* board cards: fixed 5, reject malformed length */
+            if (s->board_len < 0 || s->board_len > 5)
+            {
+                r->failed = 1;
+                return arr;
+            }
+            for (int j = 0; j < 5; ++j)
+                s->board_cards[j] = pe_rd_i32(r);
+            /* per-player arrays: bound against MPF_MAX_PLAYERS */
+            if (s->stacks_len < 0 || s->stacks_len > MPF_MAX_PLAYERS ||
+                s->invested_len < 0 || s->invested_len > MPF_MAX_PLAYERS ||
+                s->round_contrib_len < 0 || s->round_contrib_len > MPF_MAX_PLAYERS ||
+                s->active_len < 0 || s->active_len > MPF_MAX_PLAYERS ||
+                s->acted_len < 0 || s->acted_len > MPF_MAX_PLAYERS)
+            {
+                r->failed = 1;
+                return arr;
+            }
+            for (int j = 0; j < s->stacks_len; ++j)
+                s->stacks[j] = pe_rd_double(r);
+            for (int j = 0; j < s->invested_len; ++j)
+                s->invested[j] = pe_rd_double(r);
+            for (int j = 0; j < s->round_contrib_len; ++j)
+                s->round_contrib[j] = pe_rd_double(r);
+            for (int j = 0; j < s->active_len; ++j)
+                s->active[j] = pe_rd_i32(r);
+            for (int j = 0; j < s->acted_len; ++j)
+                s->acted[j] = pe_rd_i32(r);
         }
-        uint32_t sk = (uint32_t)pe_rd_i32(r);
-        nd->state_key = (uint64_t)sk;
+        if (r->p + 8 > r->end)
+        {
+            r->failed = 1;
+            return arr;
+        }
+        nd->state_key = pe_rd_u64(r->p);
+        r->p += 8;
     }
     return arr;
 }

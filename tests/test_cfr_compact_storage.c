@@ -236,18 +236,36 @@ int main(void)
     tree.nodes[0].street = MPF_STREET_FLOP;
     tree.nodes[0].acting_player = 0;
     tree.nodes[0].has_snapshot = 1;
+    tree.nodes[0].snapshot.defined = 1;
+    tree.nodes[0].snapshot.has_street = 1;
+    tree.nodes[0].snapshot.has_pot = 1;
+    tree.nodes[0].snapshot.has_to_call = 1;
+    tree.nodes[0].snapshot.has_board = 1;
+    tree.nodes[0].snapshot.has_stacks = 1;
+    tree.nodes[0].snapshot.has_invested = 1;
+    tree.nodes[0].snapshot.street = MPF_STREET_FLOP;
+    tree.nodes[0].snapshot.num_players = 2;
+    tree.nodes[0].snapshot.to_act = 0;
     tree.nodes[0].snapshot.pot = 100.0;
     tree.nodes[0].snapshot.to_call = 10.0;
+    tree.nodes[0].snapshot.current_bet = 10.0;
+    tree.nodes[0].snapshot.raises_made = 2;
     tree.nodes[0].snapshot.board_len = 3;
     tree.nodes[0].snapshot.board_cards[0] = 2;
     tree.nodes[0].snapshot.board_cards[1] = 5;
     tree.nodes[0].snapshot.board_cards[2] = 13;
+    tree.nodes[0].snapshot.stacks_len = 2;
+    tree.nodes[0].snapshot.stacks[0] = 200.0;
+    tree.nodes[0].snapshot.stacks[1] = 150.0;
+    tree.nodes[0].snapshot.invested_len = 2;
+    tree.nodes[0].snapshot.invested[0] = 20.0;
+    tree.nodes[0].snapshot.invested[1] = 10.0;
     tree.nodes[0].action_count = 2;
     tree.nodes[0].actions = (mpf_tree_action_t *)calloc(2, sizeof(mpf_tree_action_t));
     tree.nodes[0].actions[0].type = MPF_TREE_ACTION_FOLD;
     tree.nodes[0].actions[0].next_index = 1;
     tree.nodes[0].actions[1].type = MPF_TREE_ACTION_CALL;
-    tree.nodes[0].state_key = 0xDEADBEEF;
+    tree.nodes[0].state_key = 0xDEADBEEFCAFEF00Dull;
 
     tree.nodes[1].id = strdup("child");
     tree.nodes[1].type = MPF_TREE_NODE_TERMINAL;
@@ -273,20 +291,57 @@ int main(void)
     ASSERT_TRUE(rt->nodes[0].type == MPF_TREE_NODE_PLAYER, "tree node0 type");
     ASSERT_TRUE(rt->nodes[0].street == MPF_STREET_FLOP, "tree node0 street");
     ASSERT_TRUE(rt->nodes[0].has_snapshot == 1, "tree node0 snapshot flag");
+    /* Full snapshot round-trip (previously dropped defined / has_ flags / stacks). */
+    ASSERT_TRUE(rt->nodes[0].snapshot.defined == 1, "tree node0 snapshot defined");
+    ASSERT_TRUE(rt->nodes[0].snapshot.has_pot == 1, "tree node0 has_pot");
+    ASSERT_TRUE(rt->nodes[0].snapshot.has_stacks == 1, "tree node0 has_stacks");
+    ASSERT_TRUE(rt->nodes[0].snapshot.has_invested == 1, "tree node0 has_invested");
+    ASSERT_TRUE(rt->nodes[0].snapshot.street == MPF_STREET_FLOP, "tree node0 snap street");
+    ASSERT_TRUE(rt->nodes[0].snapshot.num_players == 2, "tree node0 num_players");
     ASSERT_NEAR(rt->nodes[0].snapshot.pot, 100.0, 1e-12, "tree node0 pot");
     ASSERT_NEAR(rt->nodes[0].snapshot.to_call, 10.0, 1e-12, "tree node0 to_call");
+    ASSERT_NEAR(rt->nodes[0].snapshot.current_bet, 10.0, 1e-12, "tree node0 current_bet");
+    ASSERT_TRUE(rt->nodes[0].snapshot.raises_made == 2, "tree node0 raises_made");
     ASSERT_TRUE(rt->nodes[0].snapshot.board_len == 3, "tree node0 board len");
     ASSERT_TRUE(rt->nodes[0].snapshot.board_cards[1] == 5, "tree node0 board card");
+    ASSERT_TRUE(rt->nodes[0].snapshot.stacks_len == 2, "tree node0 stacks_len");
+    ASSERT_NEAR(rt->nodes[0].snapshot.stacks[0], 200.0, 1e-12, "tree node0 stack0");
+    ASSERT_NEAR(rt->nodes[0].snapshot.stacks[1], 150.0, 1e-12, "tree node0 stack1");
+    ASSERT_TRUE(rt->nodes[0].snapshot.invested_len == 2, "tree node0 invested_len");
+    ASSERT_NEAR(rt->nodes[0].snapshot.invested[1], 10.0, 1e-12, "tree node0 invested1");
     ASSERT_TRUE(rt->nodes[0].action_count == 2, "tree node0 action count");
     ASSERT_TRUE(rt->nodes[0].actions[0].type == MPF_TREE_ACTION_FOLD, "tree action0 type");
     ASSERT_TRUE(rt->nodes[0].actions[0].next_index == 1, "tree action0 next");
-    ASSERT_TRUE(rt->nodes[0].state_key == 0xDEADBEEF, "tree node0 state_key");
+    ASSERT_TRUE(rt->nodes[0].state_key == 0xDEADBEEFCAFEF00Dull, "tree node0 state_key 64-bit");
     ASSERT_TRUE(rt->nodes[1].type == MPF_TREE_NODE_TERMINAL, "tree node1 type");
     ASSERT_TRUE(strcmp(rt->profiles[0].id, "default") == 0, "tree profile id");
     ASSERT_TRUE(rt->profiles[0].bet_size_count == 2, "tree profile bet count");
     ASSERT_NEAR(rt->profiles[0].bet_sizes[1], 1.0, 1e-12, "tree profile bet size");
 
     mpf_tree_free(rt);
+
+    /* ---- Truncated .pe_sol must be rejected by the mmap loader ---- */
+    {
+        char trunc_path[512];
+        ASSERT_TRUE(make_tmp_path(trunc_path, sizeof(trunc_path), ".pe_sol") == 0,
+                    "trunc tmp path");
+        /* Write a valid header but claim one infoset with a payload that is
+         * missing from the file. */
+        FILE *tf = fopen(trunc_path, "wb");
+        ASSERT_TRUE(tf != NULL, "open trunc file");
+        unsigned char hdr[32];
+        memset(hdr, 0, sizeof(hdr));
+        memcpy(hdr, "PESOL001", 8);
+        hdr[8] = 1;  /* version */
+        /* infoset_count = 1 at offset 16 */
+        hdr[16] = 1;
+        fwrite(hdr, 1, sizeof(hdr), tf);
+        fclose(tf);
+        pe_sol_mmap_t *tv = NULL;
+        ASSERT_TRUE(pe_sol_open_mmap(trunc_path, &tv) == -1, "truncated mmap rejected");
+        ASSERT_TRUE(tv == NULL, "truncated mmap returns no view");
+        remove(trunc_path);
+    }
 
     /* ---- Corrupt file rejection ---- */
     FILE *cf = fopen(sol_path, "r+b");
