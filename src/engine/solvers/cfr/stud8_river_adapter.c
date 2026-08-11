@@ -314,6 +314,7 @@ void s8_build_game(const EvalContext *ctx, mask_t seven0, mask_t seven1, cfr_gam
     out_game->get_utility = s8_get_utility_wrapper;
     out_game->get_actions = s8_get_actions_wrapper;
     out_game->apply_action = s8_apply_action_wrapper;
+    out_game->get_infoset_key = s8_infoset_key;
     out_game->release_state = s8_release_state_wrapper;
     out_game->current_player = s8_current_player_wrapper;
     out_game->num_players = 2;
