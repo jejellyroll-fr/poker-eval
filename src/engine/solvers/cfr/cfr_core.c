@@ -384,7 +384,7 @@ static void cfr_traverse_recursive(
     double *out_util,
     void *user_data)
 {
-    int actions[16];
+    int actions[CFR_MAX_ACTIONS];
     int num_actions;
     int acting_player;
     double *strategy;
@@ -428,13 +428,15 @@ static void cfr_traverse_recursive(
         goto cfr_exit;
     }
 
-    num_actions = game->get_actions(game, state_key, actions, 16, user_data);
-    if (num_actions == 0)
+    num_actions = game->get_actions(game, state_key, actions, CFR_MAX_ACTIONS, user_data);
+    if (num_actions <= 0)
     {
         for (int p = 0; p < num_players; ++p)
             out_util[p] = 0.0;
         goto cfr_exit;
     }
+    if (num_actions > CFR_MAX_ACTIONS)
+        num_actions = CFR_MAX_ACTIONS;
 
     if (game->current_player)
     {
@@ -557,10 +559,12 @@ static double best_response_recursive(
         return game->get_utility(game, state_key, br_player, user_data);
     }
 
-    int actions[16];
-    int num_actions = game->get_actions(game, state_key, actions, 16, user_data);
-    if (num_actions == 0)
+    int actions[CFR_MAX_ACTIONS];
+    int num_actions = game->get_actions(game, state_key, actions, CFR_MAX_ACTIONS, user_data);
+    if (num_actions <= 0)
         return 0.0;
+    if (num_actions > CFR_MAX_ACTIONS)
+        num_actions = CFR_MAX_ACTIONS;
 
     if (current_player == br_player)
     {
@@ -774,8 +778,10 @@ static double best_response_recursive_multiway(
 
     int actions[32];
     int num_actions = game->get_actions(game, state_key, actions, 32, user_data);
-    if (num_actions == 0)
+    if (num_actions <= 0)
         return 0.0;
+    if (num_actions > 32)
+        num_actions = 32;
 
     if (current_player == br_player)
     {
@@ -962,10 +968,12 @@ static void policy_value_recursive(
     }
 
     /* Get available actions */
-    int actions[16];
-    int num_actions = ctx->game->get_actions(ctx->game, state_key, actions, 16, ctx->user_data);
-    if (num_actions == 0)
+    int actions[CFR_MAX_ACTIONS];
+    int num_actions = ctx->game->get_actions(ctx->game, state_key, actions, CFR_MAX_ACTIONS, ctx->user_data);
+    if (num_actions <= 0)
         return;
+    if (num_actions > CFR_MAX_ACTIONS)
+        num_actions = CFR_MAX_ACTIONS;
 
     /* Determine acting player */
     int acting_player = 0;

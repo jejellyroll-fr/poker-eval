@@ -610,6 +610,8 @@ add_poker_test(test_cfr_storage_grow)
 set_tests_properties(test_cfr_storage_grow PROPERTIES LABELS "engine;cfr;storage")
 add_poker_test(test_cfr_multiway)
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
+add_poker_test(test_cfr_get_actions_clamp)
+set_tests_properties(test_cfr_get_actions_clamp PROPERTIES LABELS "engine;cfr;bug07")
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")
 

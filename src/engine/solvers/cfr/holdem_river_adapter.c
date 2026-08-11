@@ -37,7 +37,7 @@ static int hr_get_actions_wrapper(cfr_game_t *game, uint64_t state_key, int *out
     {
         out_actions[i] = i;
     }
-    return n;
+    return n < max_actions ? n : max_actions;
 }
 
 static uint64_t hr_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, int action, void *user_data)
