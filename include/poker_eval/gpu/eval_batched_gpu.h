@@ -314,6 +314,24 @@ POKEREVAL_EXPORT void gpu_eval_get_stats(
  */
 POKEREVAL_EXPORT void gpu_eval_reset_stats(gpu_eval_context_t* ctx);
 
+/**
+ * Enable/disable concurrent-stream pipelining on the CUDA backend.
+ *
+ * When enabled (the default), large batches are split across the backend's
+ * concurrent streams so that host-to-device copies, kernel compute, and
+ * device-to-host copies overlap instead of serialising on one stream. Small
+ * batches fall back to a single-stream path where the overlap would add
+ * nothing but scheduling overhead.
+ *
+ * @param ctx     GPU context
+ * @param enable  true to pipeline, false to force the inline single-stream path
+ * @return 0 on success, non-zero if the active backend does not support it
+ */
+POKEREVAL_EXPORT int gpu_eval_enable_streaming(
+    gpu_eval_context_t* ctx,
+    bool enable
+);
+
 /* ===== Helper Functions ===== */
 
 /**

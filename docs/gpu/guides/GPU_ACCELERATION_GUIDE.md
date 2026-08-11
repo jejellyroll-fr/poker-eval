@@ -301,22 +301,35 @@ GPU evaluation failed
 ## Future Enhancements
 
 ### Planned Features
-The following items are not implemented yet and are tracked in issue [#43](https://github.com/jejellyroll-fr/poker-eval/issues/43):
-1. **Advanced RNG**: Better random number generation algorithms (only XORShift32 exists today)
-2. **Streaming**: Overlap computation with memory transfers
-3. **Precision Tuning**: Half-precision (FP16) floating point for memory bandwidth
+All of the originally-planned features below are now implemented and tracked as
+done in issue [#43](https://github.com/jejellyroll-fr/poker-eval/issues/43):
+
+1. **Advanced RNG** ✅ — the Monte Carlo equity kernels now carry a per-simulation
+   128-bit xorshift128+ generator (seeded on-device via splitmix64) instead of
+   the old 32-bit XORShift32 (see `src/gpu/cuda/eval_cuda_kernel.cu`). The
+   longer period and per-simulation, per-run seeding avoid the correlation the
+   XORShift32 path was susceptible to, and it compiles cleanly under the strict
+   `-Werror` project flags without a curand dependency.
+2. **Streaming** ✅ — large batches are split across the backend's concurrent
+   CUDA streams, so host→device copies, kernel compute, and device→host copies
+   of successive chunks overlap instead of serialising on one stream (see
+   `cuda_backend_eval_holdem_batch`). Toggle with `gpu_eval_enable_streaming`.
+3. **Precision Tuning (FP16)** ✅ — a half-precision strength path
+   (`eval_holdem_batch_fp16_kernel`, `__half2` accumulation) is available, and
+   it ships with `cuda_eval_holdem_fp16_selfcheck`, which compares the FP16 path
+   against the FP32 reference and fails loudly on any divergence.
 
 ### Implemented
 - **CUDA build coverage in CI**: The CUDA sources under `src/gpu/` are compiled and linked by the `gpu-cuda-build` workflow (`.github/workflows/gpu-cuda-build.yml`) on every push and pull request, using the official `nvidia/cuda` devel container. No GPU is required — `nvcc` emits cubin/PTX at build time — mirroring how the `gpu-build` workflow already covers the OpenCL backend. Configuration fails hard (`-DPOKER_EVAL_CUDA_REQUIRED=ON`) if the toolkit is missing, so the CUDA path cannot silently rot again. Machine-independent compilation is verified here; runtime behaviour still needs real NVIDIA hardware.
 - **Range Support**: Per-player `StdDeck_CardMask` ranges in the Monte Carlo path (tracked as issue #37). A `NULL` range deals uniformly from the full deck; a non-`NULL` range restricts each player's hole cards to that range (see [Range-vs-Range Monte Carlo](#range-vs-range-monte-carlo)). The CUDA and OpenCL backends draw hole cards by collecting the range-allowed available cards rather than rejection sampling, so tight ranges deal correctly.
-- **Multi-GPU**: Distribute work across multiple GPUs with static/dynamic load balancing — implemented in `src/gpu/eval_multi_gpu.c` (`include/poker_eval/gpu/eval_multi_gpu.h`) and documented in [GPU_BATCHED_EVALUATION.md](./GPU_BATCHED_EVALUATION.md). Note: it is currently not wired into the CMake build (the module is present in the tree but `poker_gpu` targets do not compile it yet).
+- **Multi-GPU**: Distribute work across multiple GPUs with static/dynamic load balancing — implemented in `src/gpu/eval_multi_gpu.c` (`include/poker_eval/gpu/eval_multi_gpu.h`) and documented in [GPU_BATCHED_EVALUATION.md](./GPU_BATCHED_EVALUATION.md). It is now compiled into the `poker_gpu_unified` target and its header is installed to `include/poker_eval/gpu/`.
 
 ### Roadmap
 - **Phase 1**: ✅ Basic batch evaluation and Monte Carlo
 - **Phase 2**: ✅ Range support and advanced features
-- **Phase 3**: 🔄 Multi-GPU (source implemented, awaiting build wiring) and streaming optimizations
+- **Phase 3**: ✅ Multi-GPU (source implemented and now wired into the CMake build) and streaming optimizations
 - **Phase 4**: 📋 Integration with poker analysis tools
-- **Phase 5**: ⏳ Remaining GPU optimizations tracked in [#43](https://github.com/jejellyroll-fr/poker-eval/issues/43) (advanced RNG, streaming, FP16)
+- **Phase 5**: ✅ GPU optimizations tracked in [#43](https://github.com/jejellyroll-fr/poker-eval/issues/43) (advanced RNG, streaming, FP16) — all delivered
 
 ## Contributing
 

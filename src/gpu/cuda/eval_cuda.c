@@ -179,7 +179,11 @@ gpu_eval_context_t* cuda_gpu_eval_init(int device_id, size_t max_batch_size, int
         return NULL;
     }
     
-    err = cudaMalloc(&ctx->d_rng_states, monte_carlo_size * sizeof(uint32_t));
+/* The Monte Carlo kernel seeds a 128-bit xorshift128+ generator per simulation
+ * slot (advanced RNG, replacing the old 32-bit XORShift32 path), so size the
+ * buffer for two uint64 per slot. Seeding is done on-device inside
+ * cuda_monte_carlo_equity. */
+    err = cudaMalloc(&ctx->d_rng_states, monte_carlo_size * 2 * sizeof(uint64_t));
     if (err != cudaSuccess) {
         cudaFree(ctx->d_boards);
         cudaFree(ctx->d_hole_cards);
@@ -362,26 +366,9 @@ int cuda_gpu_monte_carlo_equity(
         if (err != cudaSuccess) { cudaFree(d_ranges); return -1; }
     }
     
-    /* Initialize RNG states */
-    uint32_t* host_rng_states = (uint32_t*)malloc(n_simulations * sizeof(uint32_t));
-    if (!host_rng_states) {
-        if (d_ranges) cudaFree(d_ranges);
-        return -1;
-    }
-    
-    for (int i = 0; i < n_simulations; i++) {
-        host_rng_states[i] = (uint32_t)(rand() ^ (i * 1234567));
-    }
-    
-    err = cudaMemcpyAsync(cuda_ctx->d_rng_states, host_rng_states,
-                          n_simulations * sizeof(uint32_t),
-                          cudaMemcpyHostToDevice, cuda_ctx->stream);
-    free(host_rng_states);
-    if (err != cudaSuccess) {
-        if (d_ranges) cudaFree(d_ranges);
-        return -1;
-    }
-    
+    /* RNG states are seeded on-device inside cuda_monte_carlo_equity via a
+     * dedicated xorshift128+ init kernel, so no host-side seeding is needed here. */
+
     /* Launch Monte Carlo kernel */
     int ret = cuda_monte_carlo_equity(
         d_ranges,

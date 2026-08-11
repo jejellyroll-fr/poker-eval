@@ -102,6 +102,7 @@ extern int cuda_backend_eval_equity_holdem(
     double* out_time_ms
 );
 extern void cuda_backend_enable_profiling(void* context, bool enable);
+extern void cuda_backend_enable_streaming(void* context, bool enable);
 extern int cuda_backend_get_device_count(void);
 
 #ifdef __cplusplus
