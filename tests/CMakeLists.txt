@@ -131,6 +131,7 @@ add_unity_test(test_benchmark_example unity_tests/test_benchmark_example.c)
 add_unity_test(test_pineapple_unity unity_tests/test_pineapple_unity.c)
 add_unity_test(test_pineapple8_unity unity_tests/test_pineapple8_unity.c)
 add_unity_test(test_pineapple_variants_unity unity_tests/test_pineapple_variants_unity.c)
+add_unity_test(test_pineapple_batched_unity unity_tests/test_pineapple_batched_unity.c)
 add_unity_test(test_montecarlo_convergence_unity unity_tests/test_montecarlo_convergence_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
 
@@ -218,6 +219,7 @@ set(TEST_SOURCES
     # Equity tests
     test_simple_equity.c
     test_range_equity_mt.c
+    test_range_equity_seed_determinism.c
     test_range_equity_aavs_kk.c
     test_multiway_equity.c
     test_range_equity_weighted.c
@@ -537,6 +539,8 @@ set_tests_properties(test_plo6_basic PROPERTIES LABELS "games;plo;section7")
 if(OpenMP_FOUND)
     set_tests_properties(test_range_equity_mt PROPERTIES TIMEOUT 180)
     set_property(TEST test_range_equity_mt APPEND PROPERTY LABELS "slow")
+    set_tests_properties(test_range_equity_seed_determinism PROPERTIES TIMEOUT 180)
+    set_property(TEST test_range_equity_seed_determinism APPEND PROPERTY LABELS "slow")
 endif()
 
 # Section 5.5: Economics tests
@@ -606,6 +610,18 @@ add_poker_test(test_cfr_hilo_adapters)
 set_tests_properties(test_cfr_hilo_adapters PROPERTIES LABELS "engine;cfr;hilo")
 add_poker_test(test_cfr_checkpoint)
 set_tests_properties(test_cfr_checkpoint PROPERTIES LABELS "engine;cfr;checkpoint")
+add_poker_test(test_cfr_storage_grow)
+set_tests_properties(test_cfr_storage_grow PROPERTIES LABELS "engine;cfr;storage")
+add_poker_test(test_cfr_storage_entry_grow)
+set_tests_properties(test_cfr_storage_entry_grow PROPERTIES LABELS "engine;cfr;storage")
+add_poker_test(test_cfr_state_release)
+set_tests_properties(test_cfr_state_release PROPERTIES LABELS "engine;cfr;leak")
+add_poker_test(test_cfr_checkpoint_cap)
+set_tests_properties(test_cfr_checkpoint_cap PROPERTIES LABELS "engine;cfr;checkpoint;bug04")
+add_poker_test(test_cfr_checkpoint_header)
+set_tests_properties(test_cfr_checkpoint_header PROPERTIES LABELS "engine;cfr;checkpoint;bug05")
+add_poker_test(test_cfr_depth_guard)
+set_tests_properties(test_cfr_depth_guard PROPERTIES LABELS "engine;cfr;bug08")
 add_poker_test(test_cfr_multiway)
 add_poker_test(test_board_canonical)
 set_tests_properties(test_board_canonical PROPERTIES LABELS "engine;cfr;canonicalize")
@@ -614,8 +630,22 @@ set_tests_properties(test_cfr_chance_nodes PROPERTIES LABELS "engine;cfr;chance"
 add_poker_test(test_cfr_compact_storage)
 set_tests_properties(test_cfr_compact_storage PROPERTIES LABELS "engine;cfr;compact")
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
+add_poker_test(test_cfr_get_actions_clamp)
+set_tests_properties(test_cfr_get_actions_clamp PROPERTIES LABELS "engine;cfr;bug07")
+add_poker_test(test_cfr_node_lock)
+set_tests_properties(test_cfr_node_lock PROPERTIES LABELS "engine;cfr;lock")
+add_poker_test(test_mpf_sidepots)
+set_tests_properties(test_mpf_sidepots PROPERTIES LABELS "engine;cfr;multiway;sidepot")
+add_poker_test(test_mpf_rake)
+set_tests_properties(test_mpf_rake PROPERTIES LABELS "engine;cfr;rake")
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")
+add_poker_test(test_ismcts_pool_cap)
+set_tests_properties(test_ismcts_pool_cap PROPERTIES LABELS "engine;ismcts;solver;bug11")
+add_poker_test(test_ismcts_pool_leak)
+set_tests_properties(test_ismcts_pool_leak PROPERTIES LABELS "engine;ismcts;solver;bug09")
+add_poker_test(test_ismcts_children_leak)
+set_tests_properties(test_ismcts_children_leak PROPERTIES LABELS "engine;ismcts;solver;bug10")
 
 if(TARGET multiway_equity_cli)
     add_test(NAME multiway_equity_cli_basic
@@ -813,6 +843,21 @@ if(BUILD_GPU AND TARGET poker_gpu)
             set_tests_properties(test_opencl_vs_cpu PROPERTIES DISABLED ON)
         endif()
         message(STATUS "OpenCL backend available - adding test_opencl_vs_cpu validation test")
+
+        # Regression test for BUG-13 (OpenCL hilo eval overflow/alloc guards)
+        add_poker_test(test_gpu_opencl_alloc_guards)
+        target_link_libraries(test_gpu_opencl_alloc_guards PRIVATE poker_gpu)
+        target_compile_definitions(test_gpu_opencl_alloc_guards PRIVATE HAVE_OPENCL)
+        target_include_directories(test_gpu_opencl_alloc_guards PRIVATE ${CMAKE_SOURCE_DIR}/src/gpu)
+        set_tests_properties(test_gpu_opencl_alloc_guards PROPERTIES
+            LABELS "gpu;opencl"
+            TIMEOUT 180
+            SKIP_RETURN_CODE ${GPU_SKIP_RETURN_CODE})
+        set_property(TEST test_gpu_opencl_alloc_guards APPEND PROPERTY LABELS "optional")
+        if(NOT GPU_HARDWARE_AVAILABLE)
+            set_tests_properties(test_gpu_opencl_alloc_guards PROPERTIES DISABLED ON)
+        endif()
+        message(STATUS "OpenCL backend available - adding test_gpu_opencl_alloc_guards regression test")
     endif()
 
     # GPU multi-game batch evaluation tests (Stud/Razz/HiLo/Omaha8)

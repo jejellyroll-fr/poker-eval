@@ -320,6 +320,10 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
     }
 
     cl_platform_id* platforms = (cl_platform_id*)malloc(sizeof(cl_platform_id) * num_platforms);
+    if (!platforms) {
+        free(ctx);
+        return NULL;
+    }
     err = clGetPlatformIDs(num_platforms, platforms, NULL);
     if (err != CL_SUCCESS) {
         free(platforms);
@@ -337,6 +341,11 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
 
         if (err == CL_SUCCESS && num_devices > 0) {
             cl_device_id* devices = (cl_device_id*)malloc(sizeof(cl_device_id) * num_devices);
+            if (!devices) {
+                free(platforms);
+                free(ctx);
+                return NULL;
+            }
             err = clGetDeviceIDs(platforms[p], CL_DEVICE_TYPE_GPU, num_devices, devices, NULL);
 
             if (err == CL_SUCCESS) {
@@ -432,9 +441,11 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
         size_t log_size;
         clGetProgramBuildInfo(ctx->program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
         char* log = (char*)malloc(log_size);
-        clGetProgramBuildInfo(ctx->program, device, CL_PROGRAM_BUILD_LOG, log_size, log, NULL);
-        fprintf(stderr, "OpenCL build error:\n%s\n", log);
-        free(log);
+        if (log) {
+            clGetProgramBuildInfo(ctx->program, device, CL_PROGRAM_BUILD_LOG, log_size, log, NULL);
+            fprintf(stderr, "OpenCL build error:\n%s\n", log);
+            free(log);
+        }
 
         clReleaseProgram(ctx->program);
         clReleaseCommandQueue(ctx->queue);
@@ -796,6 +807,8 @@ static double gpu_cfr_compute_exploitability(gpu_cfr_opencl_context_t* ctx) {
 
     /* Read partial sums and finish on CPU */
     float* partial_sums = (float*)malloc(num_groups * sizeof(float));
+    if (!partial_sums)
+        return -1.0;
     err = clEnqueueReadBuffer(ctx->queue, ctx->d_reduction_output, CL_TRUE,
                               0, num_groups * sizeof(float), partial_sums, 0, NULL, NULL);
     if (err != CL_SUCCESS) {

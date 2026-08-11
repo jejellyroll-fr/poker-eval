@@ -270,6 +270,7 @@ static void mpf_tree_node_free(mpf_tree_node_t *node)
     free(node->bet_profile_id);
     free(node->range_profile_id);
     free(node->bet_sizes);
+    free(node->locked_strategy);
     if (node->actions)
     {
         for (int i = 0; i < node->action_count; ++i)
@@ -1236,16 +1237,21 @@ static int mpf_parse_node(const char *json,
     node->actions = NULL;
     node->action_count = 0;
     node->bet_profile_id = NULL;
+    node->is_locked = 0;
+    node->locked_strategy = NULL;
+    node->locked_strategy_count = 0;
     mpf_snapshot_init(&node->snapshot);
     node->has_snapshot = 0;
     node->state_cache = NULL;
     node->state_key = 0;
+    node->lock_wired = 0;
 #if !defined(_WIN32)
     pthread_mutex_init(&node->cache_lock, NULL);
     for (int s = 0; s < MPF_NODE_CACHE_SLOTS; ++s)
     {
         node->cache_slots[s].owner = 0;
         node->cache_slots[s].state = NULL;
+        node->cache_slots[s].lock_wired = 0;
     }
 #endif
 
@@ -1355,6 +1361,46 @@ static int mpf_parse_node(const char *json,
                     return 0;
                 node->has_snapshot = node->snapshot.defined;
             }
+            else if (mpf_token_streq(json, key, "is_locked"))
+            {
+                int flag = 0;
+                if (!mpf_token_to_bool(json, &tokens[value_idx], &flag))
+                {
+                    mpf_tree_error(err, "is_locked must be boolean");
+                    return 0;
+                }
+                node->is_locked = flag ? 1 : 0;
+            }
+            else if (mpf_token_streq(json, key, "locked_strategy"))
+            {
+                const jsmntok_t *arr = &tokens[value_idx];
+                if (arr->type != JSMN_ARRAY)
+                {
+                    mpf_tree_error(err, "locked_strategy must be an array");
+                    return 0;
+                }
+                int count = arr->size;
+                if (count <= 0 || count > MPF_TREE_ACTION_MAX)
+                {
+                    mpf_tree_error(err, "locked_strategy must be a non-empty array");
+                    return 0;
+                }
+                double tmp[MPF_TREE_ACTION_MAX];
+                if (!mpf_parse_double_array(json, tokens, value_idx, tmp,
+                                            MPF_TREE_ACTION_MAX, err, "locked_strategy"))
+                    return 0;
+                free(node->locked_strategy);
+                node->locked_strategy = (double *)calloc((size_t)count, sizeof(double));
+                if (!node->locked_strategy)
+                {
+                    mpf_tree_error(err, "allocation failure for locked_strategy");
+                    return 0;
+                }
+                for (int k = 0; k < count; ++k)
+                    node->locked_strategy[k] = tmp[k];
+                node->locked_strategy_count = count;
+                node->is_locked = 1;
+            }
             next_idx = mpf_json_next(tokens, value_idx);
         }
         else
@@ -1377,6 +1423,11 @@ static int mpf_parse_node(const char *json,
     if (node->type == MPF_TREE_NODE_PLAYER && node->action_count == 0)
     {
         mpf_tree_error(err, "player node missing actions");
+        return 0;
+    }
+    if (node->locked_strategy_count > 0 && node->locked_strategy_count != node->action_count)
+    {
+        mpf_tree_error(err, "locked_strategy count must match node actions");
         return 0;
     }
     return 1;
@@ -2178,6 +2229,13 @@ char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len)
         {
             if (!mpf_buf_append_str(&buf, ",\"pot_sizing\":") ||
                 !mpf_buf_append_str(&buf, node->use_pot_sizing ? "true" : "false"))
+                goto fail;
+        }
+        if (node->is_locked)
+        {
+            if (!mpf_buf_append_str(&buf, ",\"is_locked\":true") ||
+                !mpf_buf_append_str(&buf, ",\"locked_strategy\":") ||
+                !mpf_buf_append_double_list(&buf, node->locked_strategy, node->locked_strategy_count))
                 goto fail;
         }
         if (node->has_snapshot)

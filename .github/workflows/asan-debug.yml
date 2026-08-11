@@ -1,0 +1,59 @@
+name: ASan Debug (pineapple simd)
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+# Non-blocking: this is a debug aid to capture ASan stack traces for the
+# pineapple batched-SIMD segfault (PR #96). It must not gate merges.
+jobs:
+  asan-linux:
+    name: ASan Linux (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            sudo apt-get install -y clang libomp-dev
+          else
+            sudo apt-get install -y gcc g++
+          fi
+
+      - name: Configure (ASan + UBSan, Release, AVX2)
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -S . -B build-asan \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_NATIVE_ARCH=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -mavx2" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -mavx2"
+
+      - name: Build test
+        run: cmake --build build-asan --target test_pineapple_batched_unity --parallel
+
+      - name: Run test under ASan
+        env:
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ./build-asan/tests/unity_tests/test_pineapple_batched_unity

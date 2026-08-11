@@ -173,7 +173,7 @@ int main(int argc, char **argv)
     printf("\nFinal strategy infoset count: %zu\n", cfr_storage_count_infosets(final_storage));
 
     /* Compute exploitability */
-    double exploit = cfr_exploitability_proxy(game, final_storage, NULL);
+    double exploit = cfr_exploitability(game, final_storage, NULL);
     printf("Exploitability proxy: %.6f\n", exploit);
 
     cfr_storage_destroy(final_storage);

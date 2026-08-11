@@ -13,16 +13,12 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/core/modern_combinations.h>
 #include <poker_eval/core/cardmask_compat.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <poker_eval/deck/deck_joker.h>
 #ifdef _MSC_VER
 #include <malloc.h>
-#endif
-
-/* Define RANDOM if not already defined (from enumerate.h) */
-#ifndef RANDOM
-#define RANDOM rand
 #endif
 
 /* Macro helpers to generate unique names */
@@ -77,7 +73,7 @@ static inline mask_t sample_k_from_mask(mask_t avail, int k)
         while (selected < k)
         {
             /* Random bit position in available mask */
-            int pos = RANDOM() % 64;
+            int pos = (int)pe_rng_below(pe_rng_current(), 64);
             mask_t bit = 1ULL << pos;
 
             if ((avail & bit) && !(result & bit))
@@ -104,7 +100,7 @@ static inline mask_t sample_k_from_mask(mask_t avail, int k)
     /* Fisher-Yates partial shuffle for first k positions */
     for (int i = 0; i < k; ++i)
     {
-        int r = i + (RANDOM() % (count - i));
+        int r = i + (int)pe_rng_below(pe_rng_current(), (uint32_t)(count - i));
         int t = idx[i];
         idx[i] = idx[r];
         idx[r] = t;
@@ -177,8 +173,9 @@ static inline uint64_t joker_sample_k(uint64_t avail, int k)
         int selected = 0;
 
         while (selected < k)
+        /* Random bit position: jokers deck */
         {
-            int pos = RANDOM() % JokerDeck_N_CARDS;
+            int pos = (int)pe_rng_below(pe_rng_current(), (uint32_t)JokerDeck_N_CARDS);
             uint64_t bit = 1ULL << pos;
 
             if ((avail & bit) && !(result & bit))
@@ -205,7 +202,7 @@ static inline uint64_t joker_sample_k(uint64_t avail, int k)
     /* Fisher-Yates shuffle */
     for (int i = 0; i < k; ++i)
     {
-        int r = i + (RANDOM() % (count - i));
+        int r = i + (int)pe_rng_below(pe_rng_current(), (uint32_t)(count - i));
         int t = idx[i];
         idx[i] = idx[r];
         idx[r] = t;

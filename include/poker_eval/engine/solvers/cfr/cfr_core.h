@@ -20,6 +20,12 @@ extern "C" {
 
 #define CFR_MAX_PLAYERS 8
 
+/* Upper bound on the number of actions any game exposes at a node. */
+#define CFR_MAX_ACTIONS 16
+
+/* Default recursion depth limit for tree walks; a value of 0 in
+   cfr_config_t::max_depth selects this default. */
+#define CFR_DEFAULT_MAX_DEPTH 1000
 /* Forward declarations */
 typedef struct cfr_game_t cfr_game_t;
 typedef struct cfr_storage_t cfr_storage_t;
@@ -40,6 +46,7 @@ typedef struct {
     int n;          /* number of actions */
     double *regret; /* size n */
     double *avg;    /* size n */
+    double *locked; /* size n, NULL when not locked */
     int used;
     double ev_sum;
     double ev_sq_sum;
@@ -50,6 +57,7 @@ typedef struct {
 struct cfr_storage_t {
     entry_t *tab;
     size_t cap;
+    size_t used_count;
 };
 
 /* CFR game interface (vtable) */
@@ -86,6 +94,14 @@ struct cfr_game_t {
         cfr_game_t* game,
         uint64_t state_key,
         int action,
+        void* user_data
+    );
+
+    /* Release a state returned by apply_action (optional; may be NULL for
+       games that do not allocate per-state heap storage). */
+    void (*release_state)(
+        cfr_game_t* game,
+        uint64_t state_key,
         void* user_data
     );
 
@@ -135,6 +151,7 @@ struct cfr_game_t {
 /* CFR configuration */
 struct cfr_config_t {
     int max_iterations;
+    int max_depth;         /* Max tree recursion depth (0 = CFR_DEFAULT_MAX_DEPTH) */
     int checkpoint_interval;
     double convergence_threshold;
     int enable_dcfr;       /* Discounted CFR */
@@ -157,6 +174,9 @@ struct cfr_config_t {
     int monitor_period;
     int metrics_interval;
     int metrics_history;
+    int exploitability_interval; /* Full best-response exploitability every N
+                                  * iterations (0 = disabled; also drives the
+                                  * periodic convergence check). */
     int metrics_level;
     double metrics_bb_value;
     double metrics_mchips_scale;
@@ -246,6 +266,32 @@ int cfr_storage_has_entry(
     uint64_t key
 );
 
+/*
+ * Lock an infoset to a fixed strategy. While locked, the solver uses these
+ * probabilities for the descent and never updates regret or average strategy
+ * at this infoset, so the exported (average) strategy stays exactly the lock.
+ * The infoset's regret is zeroed and the average strategy is pinned to the
+ * lock so best-response and export computations see it from the start.
+ * `probs` should sum to 1.
+ */
+int cfr_storage_set_locked_strategy(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    const double* probs,
+    int n_actions
+);
+
+/*
+ * Get the locked strategy for an infoset, if any.
+ * Returns 1 and sets *out_probs to the stored array when locked, 0 otherwise.
+ */
+int cfr_storage_get_locked_strategy(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    int n_actions,
+    const double** out_probs
+);
+
 int cfr_storage_peek_avg_strategy(
     cfr_storage_t* storage,
     uint64_t key,
@@ -327,8 +373,16 @@ double cfr_best_response_value(
     void* user_data
 );
 
-/* Calculate exploitability proxy */
-double cfr_exploitability_proxy(
+/*
+ * Compute exact 2-player best-response exploitability.
+ *
+ * Despite its old name ("proxy") this is an exact computation: it walks the
+ * game tree once per player and returns the sum of the best-response values,
+ * so it is expensive and should be run on a configurable period (see
+ * cfr_config_t::exploitability_interval) rather than on every iteration.
+ * For N-player games use cfr_exploitability_multiway instead.
+ */
+double cfr_exploitability(
     cfr_game_t* game,
     cfr_storage_t* storage,
     void* user_data

@@ -38,7 +38,7 @@ static int hr_get_actions_wrapper(cfr_game_t *game, uint64_t state_key, int *out
     {
         out_actions[i] = i;
     }
-    return n;
+    return n < max_actions ? n : max_actions;
 }
 
 static uint64_t hr_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, int action, void *user_data)
@@ -46,6 +46,13 @@ static uint64_t hr_apply_action_wrapper(cfr_game_t *game, uint64_t state_key, in
     holdem_river_state_t *next_state = malloc(sizeof(holdem_river_state_t));
     hr_apply_action((void *)state_key, action, next_state);
     return (uint64_t)next_state;
+}
+
+static void hr_release_state_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
+{
+    (void)game;
+    (void)user_data;
+    free((void *)state_key);
 }
 
 static int hr_current_player_wrapper(cfr_game_t *game, uint64_t state_key, void *user_data)
@@ -428,6 +435,7 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_game->get_utility = hr_get_utility_wrapper;
     out_game->get_actions = hr_get_actions_wrapper;
     out_game->apply_action = hr_apply_action_wrapper;
+    out_game->release_state = hr_release_state_wrapper;
     out_game->current_player = hr_current_player_wrapper;
     out_game->num_players = 2;
     out_game->state_size = sizeof(*out_state);

@@ -317,6 +317,10 @@ nn_policy_t *nn_policy_create(const nn_policy_config_t *config)
     /* Determine layer sizes */
     int num_layers = config->num_layers + 1; /* +1 for output layer */
     policy->layer_sizes = (int *)malloc((num_layers + 1) * sizeof(int));
+    if (!policy->layer_sizes) {
+        nn_policy_free(policy);
+        return NULL;
+    }
 
     policy->layer_sizes[0] = config->input_size;
     for (int i = 1; i <= config->num_layers; i++)
@@ -329,6 +333,10 @@ nn_policy_t *nn_policy_create(const nn_policy_config_t *config)
     policy->weights = (float **)malloc(num_layers * sizeof(float *));
     policy->biases = (float **)malloc(num_layers * sizeof(float *));
     policy->activations = (float **)malloc((num_layers + 1) * sizeof(float *));
+    if (!policy->weights || !policy->biases || !policy->activations) {
+        nn_policy_free(policy);
+        return NULL;
+    }
 
     for (int i = 0; i < num_layers; i++)
     {
@@ -338,6 +346,10 @@ nn_policy_t *nn_policy_create(const nn_policy_config_t *config)
         /* Allocate weights (out_size x in_size) */
         policy->weights[i] = (float *)malloc(out_size * in_size * sizeof(float));
         policy->biases[i] = (float *)calloc(out_size, sizeof(float));
+        if (!policy->weights[i] || !policy->biases[i]) {
+            nn_policy_free(policy);
+            return NULL;
+        }
 
         /* Xavier initialization */
         float scale = sqrtf(2.0f / (float)(in_size + out_size));
@@ -349,10 +361,18 @@ nn_policy_t *nn_policy_create(const nn_policy_config_t *config)
 
         /* Allocate activation buffers */
         policy->activations[i] = (float *)malloc(in_size * sizeof(float));
+        if (!policy->activations[i]) {
+            nn_policy_free(policy);
+            return NULL;
+        }
     }
 
     /* Output activation buffer */
     policy->activations[num_layers] = (float *)malloc(config->output_size * sizeof(float));
+    if (!policy->activations[num_layers]) {
+        nn_policy_free(policy);
+        return NULL;
+    }
 
     return policy;
 }

@@ -375,6 +375,11 @@ JokerExpansionIterator* joker_expansion_create(const JokerExpansionConfig* confi
     /* Allocate cache if enabled */
     if (config->enable_cache && config->cache_size > 0) {
         iter->cache = calloc(config->cache_size, sizeof(JokerCacheEntry));
+        if (!iter->cache) {
+            free(iter->candidate_cards);
+            free(iter);
+            return NULL;
+        }
         iter->cache_capacity = config->cache_size;
         iter->cache_used = 0;
         iter->cache_access_counter = 0;

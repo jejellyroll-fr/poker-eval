@@ -51,9 +51,11 @@ static int multiway_is_terminal(cfr_game_t *game, uint64_t key, void *user) {
     return (depth >= 3);
 }
 
+static void *g_last_utility_user = NULL;
+
 static double multiway_get_utility(cfr_game_t *game, uint64_t key, int player, void *user) {
     (void)game;
-    (void)user;
+    g_last_utility_user = user;
     int depth, a0, a1, a2;
     unpack_state(key, &depth, &a0, &a1, &a2);
     
@@ -206,12 +208,17 @@ static int test_multiway_cfr_solve(void) {
     cfr_storage_t *storage = cfr_storage_create();
     CHECK(storage != NULL, "failed to create storage");
     
+    int sentinel = 42;
+    game.game_data = &sentinel;
+    
     double exploitability = 0.0;
     int result = cfr_solve(&game, storage, &cfg, &exploitability);
     CHECK(result == 0, "cfr_solve should succeed");
     
-    /* Exploitability should decrease with iterations */
-    CHECK(exploitability >= 0.0, "exploitability should be non-negative");
+    /* Multiway exploitability must be a real metric, not the 2-player
+     * proxy fallback (which returned exactly 0.0 for num_players == 3) */
+    CHECK(exploitability > 0.0, "multiway exploitability should be positive");
+    CHECK(g_last_utility_user == &sentinel, "solve must propagate game->game_data as user_data");
     
     cfr_storage_destroy(storage);
     printf(" PASSED (exploitability=%.4f)\n", exploitability);
