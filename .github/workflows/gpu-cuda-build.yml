@@ -48,7 +48,8 @@ jobs:
           for o in eval_cuda_kernel.cu.o eval_cuda_tables.cu.o eval_cuda.c.o \
                    eval_generic_kernel.cu.o eval_low_kernel.cu.o eval_omaha_kernel.cu.o \
                    eval_cuda_generic.c.o gpu_cfr_kernels.cu.o gpu_cfr_cuda.cu.o \
-                   gpu_combinatorics.cu.o eval_holdem_batch.cu.o eval_batched_cuda.c.o; do
+                   gpu_combinatorics.cu.o eval_holdem_batch.cu.o eval_batched_cuda.c.o \
+                   eval_multi_gpu.c.o; do
             find build -name "*${o}" | grep . >/dev/null || { echo "missing object: $o"; exit 1; }
           done
 
