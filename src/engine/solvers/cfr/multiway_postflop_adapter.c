@@ -1,5 +1,6 @@
 #include <poker_eval/engine/solvers/cfr/multiway_postflop_adapter.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/deck/deck_std.h>
 #include <stdlib.h>
 #include <string.h>
@@ -249,21 +250,336 @@ static void mpf_apply_tree_node(mpf_state_t *st, int node_idx);
 static int mpf_tree_find_next(const mpf_state_t *st, int action);
 static int mpf_tree_collect_actions(const mpf_state_t *st, int *out_actions, int max_actions);
 
+static size_t mask_to_array_count(mask_t mask)
+{
+    size_t count = 0;
+    for (int c = 0; c < 52; ++c)
+        if (mask_is_set(mask, c))
+            ++count;
+    return count;
+}
+
+static int mask_to_array(mask_t mask, int *out, int limit);
+
+/* ===== FEAT-03: real chance nodes ======================================
+ * When enable_chance_nodes is set, street transitions on the turn and river
+ * become chance layers: the solver enumerates every unseen card with uniform
+ * weight instead of revealing a fixed pre-dealt board.
+ *
+ * Chance children are dealt from a chance-awaiting parent state. Because many
+ * children stay alive at the same time, they cannot go through the node /
+ * action caches; each parent owns a small per-outcome cache instead, so
+ * pointers (and therefore infoset keys) stay stable across iterations.
+ *
+ * In chance mode the adapter switches from raw state pointers to content
+ * derived infoset keys (keyed_mode): a 64-bit hash of the board/hole canon
+ * pattern (FEAT-02) plus the betting state. This is required because the
+ * same (non-chance) decision reappears under many runouts and must map to a
+ * single storage entry across iterations. The key -> state mapping is kept
+ * in a thread-local table, re-registered every time a state is produced, so
+ * stale entries self-heal. */
+
+#define MPF_KEY_MAP_CAP (1 << 17)
+
+typedef struct
+{
+    uint64_t key;
+    mpf_state_t *state;
+} mpf_key_map_entry_t;
+
+#if defined(_MSC_VER)
+#define MPF_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#define MPF_THREAD_LOCAL __thread
+#else
+#define MPF_THREAD_LOCAL _Thread_local
+#endif
+
+/* Keyed states must remain resolvable when a game is built on one thread and
+ * solved on another.  Entries carry their owning root so separate games can
+ * coexist without clearing each other's mappings. */
+#if !defined(_WIN32)
+static mpf_key_map_entry_t g_mpf_key_map[MPF_KEY_MAP_CAP];
+static pthread_mutex_t g_mpf_key_map_lock = PTHREAD_MUTEX_INITIALIZER;
+#define MPF_KEY_MAP_LOCK() pthread_mutex_lock(&g_mpf_key_map_lock)
+#define MPF_KEY_MAP_UNLOCK() pthread_mutex_unlock(&g_mpf_key_map_lock)
+#else
+static MPF_THREAD_LOCAL mpf_key_map_entry_t g_mpf_key_map[MPF_KEY_MAP_CAP];
+#define MPF_KEY_MAP_LOCK() ((void)0)
+#define MPF_KEY_MAP_UNLOCK() ((void)0)
+#endif
+
+static uint64_t mpf_key_mix(uint64_t key)
+{
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdull;
+    key ^= key >> 33;
+    key *= 0xc4ceb9fe1a85ec53ull;
+    key ^= key >> 33;
+    return key;
+}
+
+static mpf_state_t *mpf_key_map_lookup(uint64_t key, const mpf_state_t *owner)
+{
+    mpf_state_t *result = NULL;
+    MPF_KEY_MAP_LOCK();
+    uint64_t h = mpf_key_mix(key) & (MPF_KEY_MAP_CAP - 1);
+    for (int i = 0; i < MPF_KEY_MAP_CAP; ++i)
+    {
+        uint64_t idx = (h + (uint64_t)i) & (MPF_KEY_MAP_CAP - 1);
+        if (g_mpf_key_map[idx].state && g_mpf_key_map[idx].key == key &&
+            g_mpf_key_map[idx].state->key_map_owner == owner)
+        {
+            result = g_mpf_key_map[idx].state;
+            break;
+        }
+    }
+    MPF_KEY_MAP_UNLOCK();
+    return result;
+}
+
+static void mpf_key_map_register(uint64_t key, mpf_state_t *st)
+{
+    if (!st || !st->key_map_owner)
+        return;
+    MPF_KEY_MAP_LOCK();
+    uint64_t h = mpf_key_mix(key) & (MPF_KEY_MAP_CAP - 1);
+    for (int i = 0; i < MPF_KEY_MAP_CAP; ++i)
+    {
+        uint64_t idx = (h + (uint64_t)i) & (MPF_KEY_MAP_CAP - 1);
+        if (g_mpf_key_map[idx].state == NULL ||
+            (g_mpf_key_map[idx].key == key &&
+             g_mpf_key_map[idx].state->key_map_owner == st->key_map_owner))
+        {
+            g_mpf_key_map[idx].key = key;
+            g_mpf_key_map[idx].state = st;
+            MPF_KEY_MAP_UNLOCK();
+            return;
+        }
+    }
+    /* Map full: evict the new key's primary bucket. The parent whose entry
+     * is displaced here was already re-registered during its own traversal,
+     * so it self-heals on its next visit. */
+    g_mpf_key_map[h].key = key;
+    g_mpf_key_map[h].state = st;
+    MPF_KEY_MAP_UNLOCK();
+}
+
+static void mpf_key_map_unregister_owner(const mpf_state_t *owner)
+{
+    if (!owner)
+        return;
+    MPF_KEY_MAP_LOCK();
+    for (size_t i = 0; i < MPF_KEY_MAP_CAP; ++i)
+    {
+        if (g_mpf_key_map[i].state &&
+            g_mpf_key_map[i].state->key_map_owner == owner)
+            g_mpf_key_map[i].state = NULL;
+    }
+    MPF_KEY_MAP_UNLOCK();
+}
+
+static uint64_t mpf_fnv1a_hash_seeded(uint64_t seed, const void *data, size_t len)
+{
+    const unsigned char *p = (const unsigned char *)data;
+    uint64_t h = seed;
+    for (size_t i = 0; i < len; ++i)
+    {
+        h ^= p[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+static uint64_t mpf_fnv1a_hash(const void *data, size_t len)
+{
+    return mpf_fnv1a_hash_seeded(1469598103934665603ull, data, len);
+}
+
+static uint64_t mpf_quant(double v)
+{
+    if (v < 0.0)
+        v = 0.0;
+    if (v > 1e12)
+        v = 1e12;
+    return (uint64_t)llround(v * 10000.0);
+}
+
+/* Canonical board+hole pattern hash (suit-permutation invariant, FEAT-02). */
+static uint64_t mpf_pattern_hash(const mpf_state_t *st, int player)
+{
+    mask_t set = st->board_mask | st->hole[player];
+    int n = st->board_revealed + st->total_hole_cards;
+    char key[200];
+    char fallback[200];
+    const char *str = fallback;
+    if (pe_board_canonical_key(set, n, key, sizeof(key)) == 0)
+    {
+        str = key;
+    }
+    else
+    {
+        int pos = 0;
+        for (int c = 0; c < MODERN_DECK_SIZE && pos < 100; ++c)
+        {
+            if (mask_is_set(set, c))
+            {
+                fallback[pos++] = (char)('0' + (MODERN_GET_RANK(c) % 10));
+                fallback[pos++] = (char)('0' + MODERN_GET_SUIT(c));
+            }
+        }
+        fallback[pos] = '\0';
+    }
+    return mpf_fnv1a_hash(str, strlen(str));
+}
+
+/* Content-derived infoset key for a decision state (keyed_mode only).
+ * All bet/board fields are folded into a single running hash; each field
+ * re-seeds from the previous field's digest so the key depends on every
+ * field, not just the last one hashed. */
+static uint64_t mpf_infoset_key(const mpf_state_t *st)
+{
+    uint64_t h = 1469598103934665603ull;
+    int p = (st->to_act >= 0 && st->to_act < st->num_players) ? st->to_act : 0;
+    uint64_t fields[4];
+    fields[0] = (uint64_t)(st->street & 0xF) |
+                ((uint64_t)(p & 0xF) << 4) |
+                ((uint64_t)(st->raises_made & 0xFF) << 8) |
+                ((uint64_t)(st->board_revealed & 0xF) << 16);
+    fields[1] = mpf_quant(st->pot);
+    fields[2] = mpf_quant(st->to_call);
+    fields[3] = mpf_quant(st->current_bet);
+    for (int i = 0; i < 4; ++i)
+        h = mpf_fnv1a_hash_seeded(h, &fields[i], sizeof(fields[i]));
+    uint64_t rc = mpf_quant(st->round_contrib[p]);
+    uint64_t acted_flags = 0;
+    uint64_t active_flags = 0;
+    for (int i = 0; i < st->num_players; ++i)
+    {
+        if (st->acted_this_round[i])
+            acted_flags |= (1ull << (uint64_t)(i % 64));
+        if (st->active[i])
+            active_flags |= (1ull << (uint64_t)(i % 64));
+    }
+    h = mpf_fnv1a_hash_seeded(h, &rc, sizeof(rc));
+    h = mpf_fnv1a_hash_seeded(h, &acted_flags, sizeof(acted_flags));
+    h = mpf_fnv1a_hash_seeded(h, &active_flags, sizeof(active_flags));
+    uint64_t bh = mpf_pattern_hash(st, p);
+    h = mpf_fnv1a_hash_seeded(h, &bh, sizeof(bh));
+    return h;
+}
+
+static uint64_t mpf_state_key(const mpf_state_t *st)
+{
+    if (st->keyed_mode)
+        return mpf_infoset_key(st);
+    return (uint64_t)(uintptr_t)st;
+}
+
+/* Enumerate the unused cards (not in any hole, not yet revealed). */
+static int mpf_unused_cards(const mpf_state_t *st, int *out, int max)
+{
+    int used[52];
+    int used_count = 0;
+    for (int p = 0; p < st->num_players; ++p)
+    {
+        int list[6];
+        int cnt = mask_to_array(st->hole[p], list, 6);
+        for (int i = 0; i < cnt && used_count < 52; ++i)
+            used[used_count++] = list[i];
+    }
+    for (int i = 0; i < st->board_revealed; ++i)
+        used[used_count++] = st->board_cards[i];
+    if (used_count > 52)
+        used_count = 52;
+    int count = 0;
+    for (int c = 0; c < 52 && count < max; ++c)
+    {
+        int is_used = 0;
+        for (int i = 0; i < used_count; ++i)
+        {
+            if (used[i] == c)
+            {
+                is_used = 1;
+                break;
+            }
+        }
+        if (!is_used)
+            out[count++] = c;
+    }
+    return count;
+}
+
+static void mpf_enter_chance(mpf_state_t *st)
+{
+    mpf_street_t next_street = st->street;
+    if (st->street == MPF_STREET_FLOP)
+        next_street = MPF_STREET_TURN;
+    else if (st->street == MPF_STREET_TURN)
+        next_street = MPF_STREET_RIVER;
+    st->street = next_street;
+    st->chance_pending = 1;
+    st->to_act = -1;
+    st->util_ready = 0;
+    MPF_PERF_INC_STATE(st, street_transitions);
+}
+
+static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_state_t *out)
+{
+    /* out may be a cached child from a previous iteration holding the whole
+     * betting/chance subtree dealt before. Release it so the re-deal never
+     * drops live references (leak) and cleanup stays single-owner. */
+    mpf_state_cleanup_internal(out);
+    *out = *st;
+    out->perf_stats = st->perf_stats;
+    out->heap_owned = 1;
+    out->util_ready = 0;
+    for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
+        out->action_cache[i] = NULL;
+    for (int i = 0; i < 52; ++i)
+        out->chance_children[i] = NULL;
+    out->chance_children_count = 0;
+    out->board_cards[out->board_revealed] = card_idx;
+    out->board_revealed += 1;
+    mpf_update_board(out, out->board_revealed);
+    out->chance_pending = 0;
+    mpf_reset_round(out, out->street);
+    out->first_to_act = mpf_first_player_after(out, out->button_index + 1);
+    out->to_act = out->first_to_act;
+    if (out->tree_enabled && out->tree && out->tree_node_idx >= 0)
+        mpf_apply_tree_node(out, out->tree_node_idx);
+}
+
+/* ===== state wrapper helpers ========================================== */
+
+static mpf_state_t *mpf_wrapper_state(cfr_game_t *game, uint64_t key)
+{
+    mpf_state_t *root = (mpf_state_t *)game->game_data;
+    if (root && root->keyed_mode)
+        return mpf_key_map_lookup(key, root);
+    return (mpf_state_t *)(uintptr_t)key;
+}
+
 static int mpf_current_player_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
-    const mpf_state_t *st = (const mpf_state_t *)(uintptr_t)key;
-    return st->to_act;
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    return st ? st->to_act : -1;
 }
 
 static int mpf_is_terminal_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
-    const mpf_state_t *st = (const mpf_state_t *)(uintptr_t)key;
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
     return mpf_is_terminal(st);
 }
 
 static double mpf_get_utility_wrapper(cfr_game_t *game, uint64_t key, int player, void *user)
 {
-    mpf_state_t *st = (mpf_state_t *)(uintptr_t)key;
+    mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    if (!st)
+        return 0.0;
     if (!st->util_ready)
         mpf_compute_utilities(st);
     if (player < 0 || player >= st->num_players)
@@ -273,7 +589,10 @@ static double mpf_get_utility_wrapper(cfr_game_t *game, uint64_t key, int player
 
 static int mpf_get_actions_wrapper(cfr_game_t *game, uint64_t key, int *out_actions, int max_actions, void *user)
 {
-    const mpf_state_t *st = (const mpf_state_t *)(uintptr_t)key;
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    if (!st)
+        return 0;
     if (mpf_is_terminal(st))
         return 0;
     int player = st->to_act;
@@ -369,16 +688,38 @@ static eval_t eval_omaha_high(const EvalContext *ctx, mask_t hole, mask_t board,
     return best;
 }
 
+static void mpf_state_release_chance_children(mpf_state_t *st)
+{
+    for (int i = 0; i < st->chance_children_count && i < 52; ++i)
+    {
+        mpf_state_t *child = st->chance_children[i];
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            st->chance_children[i] = NULL;
+        }
+    }
+    st->chance_children_count = 0;
+}
+
 static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_state_t *out)
 {
     mpf_state_t *saved_cache[MPF_TREE_ACTION_MAX];
     memcpy(saved_cache, out->action_cache, sizeof(saved_cache));
     int heap_owned = out->heap_owned;
+    /* out may be a cached slot whose previous incarnation was a chance node;
+     * its dealt subtree must not leak (it is freed before the morph). */
+    mpf_state_release_chance_children(out);
     *out = *st;
     out->perf_stats = st->perf_stats;
     memcpy(out->action_cache, saved_cache, sizeof(saved_cache));
     out->heap_owned = heap_owned;
     out->util_ready = 0;
+    out->chance_children_count = 0;
+    for (int i = 0; i < 52; ++i)
+        out->chance_children[i] = NULL;
     MPF_PERF_INC_STATE(st, state_clone_ops);
 
     int next_tree_idx = mpf_tree_find_next(st, action);
@@ -476,7 +817,6 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
 
     int next = mpf_next_active(out, player + 1);
     out->to_act = next;
-
     if (mpf_round_complete(out))
     {
         if (out->street == MPF_STREET_RIVER)
@@ -484,6 +824,13 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
             out->street = MPF_STREET_SHOWDOWN;
             mpf_compute_utilities(out);
             return;
+        }
+        else if (out->keyed_mode && out->enable_chance_nodes &&
+                 (out->street == MPF_STREET_FLOP || out->street == MPF_STREET_TURN))
+        {
+            /* FEAT-03: the next street is a real chance node; the solver
+             * enumerates every unseen card instead of a fixed runout. */
+            mpf_enter_chance(out);
         }
         else
         {
@@ -494,8 +841,11 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
 
 static uint64_t mpf_apply_action_wrapper(cfr_game_t *game, uint64_t key, int action, void *user)
 {
-    mpf_state_t *st = (mpf_state_t *)(uintptr_t)key;
+    mpf_state_t *st = mpf_wrapper_state(game, key);
     mpf_perf_stats_t *perf = st ? st->perf_stats : NULL;
+    (void)user;
+    if (!st)
+        return 0;
     MPF_PERF_INC_STATS(perf, apply_action_calls);
     int next_tree_idx = -1;
     if (st && st->tree_enabled && st->tree && st->tree_node_idx >= 0)
@@ -609,11 +959,61 @@ static uint64_t mpf_apply_action_wrapper(cfr_game_t *game, uint64_t key, int act
         }
     }
     mpf_apply_action_internal(st, action, next_state);
-    return (uint64_t)(uintptr_t)next_state;
+    if (st && st->keyed_mode && next_state)
+        mpf_key_map_register(mpf_infoset_key(next_state), next_state);
+    return next_state ? mpf_state_key(next_state) : 0;
+}
+
+/* ===== FEAT-03: chance node wrappers ================================== */
+
+static int mpf_is_chance_wrapper(cfr_game_t *game, uint64_t key, void *user)
+{
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    return (st && st->chance_pending) ? 1 : 0;
+}
+
+static int mpf_get_chance_outcomes_wrapper(cfr_game_t *game, uint64_t key, void *user)
+{
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    if (!st || !st->chance_pending)
+        return 0;
+    int cards[52];
+    return mpf_unused_cards(st, cards, 52);
+}
+
+static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int outcome, void *user)
+{
+    mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    if (!st || !st->chance_pending)
+        return 0;
+    int cards[52];
+    int count = mpf_unused_cards(st, cards, 52);
+    if (outcome < 0 || outcome >= count)
+        return 0;
+    mpf_state_t *child = st->chance_children[outcome];
+    if (!child)
+    {
+        child = (mpf_state_t *)malloc(sizeof(mpf_state_t));
+        if (!child)
+            return 0;
+        memset(child, 0, sizeof(*child));
+        st->chance_children[outcome] = child;
+        if (st->chance_children_count <= outcome)
+            st->chance_children_count = outcome + 1;
+    }
+    mpf_chance_deal_internal(st, cards[outcome], child);
+    if (st->keyed_mode)
+        mpf_key_map_register(mpf_infoset_key(child), child);
+    return mpf_state_key(child);
 }
 
 static int mpf_is_terminal(const mpf_state_t *st)
 {
+    if (!st)
+        return 1;
     if (st->util_ready)
         return 1;
     if (mpf_active_count(st) <= 1)
@@ -1382,10 +1782,21 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         board_limit = 5;
     if (board_limit < 0)
         board_limit = 0;
-    for (int i = 0; i < board_limit; ++i)
+    int reveal_at_start = (cfg->start_street == MPF_STREET_FLOP) ? 3 :
+                          (cfg->start_street == MPF_STREET_TURN) ? 4 :
+                          (cfg->start_street == MPF_STREET_RIVER) ? 5 : 0;
+    int load_limit = board_limit;
+    if (cfg->enable_chance_nodes && reveal_at_start > 0 && load_limit > reveal_at_start)
+        load_limit = reveal_at_start; /* turn/river cards are dealt by chance */
+    for (int i = 0; i < load_limit; ++i)
         out_state->board_cards[i] = cfg->board_cards[i];
-    for (int i = board_limit; i < 5; ++i)
-        out_state->board_cards[i] = cfg->board_cards[i];
+    for (int i = load_limit; i < 5; ++i)
+    {
+        if (cfg->enable_chance_nodes && reveal_at_start > 0)
+            out_state->board_cards[i] = -1;
+        else
+            out_state->board_cards[i] = cfg->board_cards[i];
+    }
 
     int pre_defined = cfg->preflop.defined;
     if (!pre_defined && out_state->ante > 0.0)
@@ -1497,6 +1908,13 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->tree = cfg->tree;
     out_state->tree_enabled = (cfg->tree && cfg->tree_enforced) ? 1 : 0;
     out_state->tree_node_idx = -1;
+    out_state->enable_chance_nodes = cfg->enable_chance_nodes ? 1 : 0;
+    out_state->keyed_mode = cfg->enable_chance_nodes ? 1 : 0;
+    out_state->key_map_owner = out_state;
+    out_state->chance_pending = 0;
+    out_state->chance_children_count = 0;
+    for (int i = 0; i < 52; ++i)
+        out_state->chance_children[i] = NULL;
     if (out_state->tree_enabled && out_state->tree)
     {
         out_state->tree_node_idx = out_state->tree->root_index;
@@ -1514,8 +1932,17 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_game->get_actions = mpf_get_actions_wrapper;
     out_game->apply_action = mpf_apply_action_wrapper;
     out_game->current_player = mpf_current_player_wrapper;
+    out_game->is_chance = mpf_is_chance_wrapper;
+    out_game->get_chance_outcomes = mpf_get_chance_outcomes_wrapper;
+    out_game->apply_chance = mpf_apply_chance_wrapper;
     out_game->num_players = cfg->num_players;
     out_game->state_size = sizeof(*out_state);
+
+    if (out_state->keyed_mode)
+    {
+        mpf_key_map_register(mpf_infoset_key(out_state), out_state);
+        out_game->initial_state = (void *)(uintptr_t)mpf_infoset_key(out_state);
+    }
 
     return 0;
 }
@@ -1535,6 +1962,18 @@ static void mpf_state_cleanup_internal(mpf_state_t *state)
             state->action_cache[i] = NULL;
         }
     }
+    for (int i = 0; i < state->chance_children_count && i < 52; ++i)
+    {
+        mpf_state_t *child = state->chance_children[i];
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            state->chance_children[i] = NULL;
+        }
+    }
+    state->chance_children_count = 0;
 }
 
 static int mpf_state_ptr_seen(mpf_state_t **seen, int seen_count, const mpf_state_t *ptr)
@@ -1625,6 +2064,7 @@ void mpf_state_cleanup(mpf_state_t *state)
     if (!state)
         return;
     MPF_ADAPTER_DEBUG("MPF: mpf_state_cleanup on %p\n", (void *)state);
+    mpf_key_map_unregister_owner(state->key_map_owner ? state->key_map_owner : state);
     mpf_state_cleanup_internal(state);
     if (state->tree)
         mpf_tree_release_cache(state->tree, state);

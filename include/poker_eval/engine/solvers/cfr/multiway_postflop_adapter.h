@@ -113,10 +113,6 @@ typedef struct
     int raise_cap;
 
     int enable_pot_sizing; /* 0 = montants absolus, 1 = fractions du pot */
-
-    /* Terminal rake applied to pots won at showdown and on folds.
-     * percentage <= 0.0 disables rake; no_flop_no_drop skips rake when
-     * the pot never saw a flop. */
     rake_config_t rake;
 
     mpf_preflop_cfg_t preflop;
@@ -125,6 +121,7 @@ typedef struct
     int tree_enforced;
     mpf_perf_stats_t *perf_stats;
     struct mpf_perf_stats_pool_t *perf_pool;
+    int enable_chance_nodes; /* deal turn/river runouts via chance instead of a fixed board */
 } mpf_config_t;
 
 typedef struct mpf_state_s
@@ -167,7 +164,6 @@ typedef struct mpf_state_s
     int bet_size_count;
     int raise_cap;
     int enable_pot_sizing;
-    /* Copied from mpf_config_t at build time; propagates to cloned states */
     rake_config_t rake;
     double base_bet_sizes[MPF_MAX_BET_SIZES];
     int base_bet_size_count;
@@ -182,18 +178,18 @@ typedef struct mpf_state_s
     mpf_perf_stats_t *perf_stats;
     struct mpf_state_s *action_cache[MPF_TREE_ACTION_MAX];
     int heap_owned;
-    cfr_storage_t *lock_storage; /* set via mpf_apply_locked_strategies */
+
+    /* FEAT-03: real chance nodes */
+    int keyed_mode;            /* use infoset keys instead of raw state pointers */
+    struct mpf_state_s *key_map_owner; /* game instance owning keyed states */
+    int enable_chance_nodes;   /* deal turn/river runouts via chance */
+    int chance_pending;        /* next street transition deals a card (chance state) */
+    int chance_children_count; /* number of dealt children so far */
+    struct mpf_state_s *chance_children[52]; /* cached per-outcome children */
+    cfr_storage_t *lock_storage;
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);
-
-/*
- * Wire the tree's locked strategies (is_locked / locked_strategy fields on
- * player nodes) into a CFR storage for a solve rooted at `root_state`.
- * The root node lock is applied immediately; the remaining nodes are locked
- * lazily on first entry during the solve (their state keys are only known
- * then). Returns the number of locks applied immediately.
- */
 int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage);
 void mpf_perf_stats_reset(mpf_perf_stats_t *stats);
 void mpf_state_cleanup(mpf_state_t *state);
