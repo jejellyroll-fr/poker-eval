@@ -244,6 +244,7 @@ static void mpf_update_board(mpf_state_t *st, int revealed);
 static void mpf_init_round_flags(mpf_state_t *st);
 static void mpf_apply_preconfig(const mpf_config_t *cfg, mpf_state_t *st);
 static void mpf_restore_base_bets(mpf_state_t *st);
+static void mpf_wire_node_lock(mpf_tree_node_t *node, uint64_t state_key, cfr_storage_t *storage);
 static void mpf_apply_tree_node(mpf_state_t *st, int node_idx);
 static int mpf_tree_find_next(const mpf_state_t *st, int action);
 static int mpf_tree_collect_actions(const mpf_state_t *st, int *out_actions, int max_actions);
