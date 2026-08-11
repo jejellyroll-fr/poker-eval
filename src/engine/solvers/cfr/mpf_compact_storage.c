@@ -106,7 +106,8 @@ static void pe_sol_write_cb(uint64_t key,
     double sum = 0.0;
     for (int i = 0; i < n; ++i)
         sum += avg[i];
-    if (sum <= 0.0)
+    int uniform = sum <= 0.0;
+    if (uniform)
         sum = (double)n;
 
     uint32_t un = (uint32_t)n;
@@ -126,12 +127,12 @@ static void pe_sol_write_cb(uint64_t key,
     double scaled_sum = 0.0;
     for (int i = 0; i < n; ++i)
     {
-        q[i] = pe_quantize(avg[i] / sum);
+        q[i] = pe_quantize(uniform ? (1.0 / (double)n) : (avg[i] / sum));
         scaled_sum += q[i];
     }
     /* Guarantee the quantized row sums to PE_SOL_QMAX by adjusting the largest
      * bucket, eliminating systematic drift in the distribution. */
-    if (scaled_sum < (double)PE_SOL_QMAX - 0.5 && n > 0)
+    if (n > 0 && scaled_sum != (double)PE_SOL_QMAX)
     {
         long diff = (long)PE_SOL_QMAX - (long)scaled_sum;
         int max_idx = 0;
@@ -472,7 +473,24 @@ int pe_sol_open_mmap(const char *path, pe_sol_mmap_t **out_view)
         return -1;
     }
 
-    view->infoset_count = (size_t)pe_rd_u64(view->base + 16);
+    uint64_t raw_infoset_count = pe_rd_u64(view->base + 16);
+    if (raw_infoset_count > (uint64_t)SIZE_MAX ||
+        raw_infoset_count > SIZE_MAX / sizeof(*view->records) ||
+        raw_infoset_count > (view->size - PE_SOL_HDR_SIZE) / 12)
+    {
+#if defined(_WIN32)
+        UnmapViewOfFile(view->base);
+        CloseHandle(view->map_handle);
+        CloseHandle(view->file_handle);
+#else
+        munmap((void *)view->base, view->size);
+        close(view->fd);
+#endif
+        free(view);
+        errno = EINVAL;
+        return -1;
+    }
+    view->infoset_count = (size_t)raw_infoset_count;
 
     if (view->infoset_count > 0)
     {
@@ -789,6 +807,13 @@ static int pe_write_node(struct pe_tree_writer *w, const mpf_tree_node_t *n)
     if (n->has_snapshot)
     {
         const mpf_tree_snapshot_t *s = &n->snapshot;
+        if (s->board_len < 0 || s->board_len > 5 ||
+            s->stacks_len < 0 || s->stacks_len > MPF_MAX_PLAYERS ||
+            s->invested_len < 0 || s->invested_len > MPF_MAX_PLAYERS ||
+            s->round_contrib_len < 0 || s->round_contrib_len > MPF_MAX_PLAYERS ||
+            s->active_len < 0 || s->active_len > MPF_MAX_PLAYERS ||
+            s->acted_len < 0 || s->acted_len > MPF_MAX_PLAYERS)
+            return -1;
         /* defined + all has_* flags */
         if (pe_wr_i32(w, s->defined) != 0)
             return -1;
@@ -1146,6 +1171,19 @@ static mpf_tree_node_t *pe_read_nodes(pe_tree_reader_t *r, int *count)
         r->failed = 1;
         return NULL;
     }
+#if !defined(_WIN32)
+    for (int i = 0; i < n; ++i)
+    {
+        if (pthread_mutex_init(&arr[i].cache_lock, NULL) != 0)
+        {
+            for (int j = 0; j < i; ++j)
+                pthread_mutex_destroy(&arr[j].cache_lock);
+            free(arr);
+            r->failed = 1;
+            return NULL;
+        }
+    }
+#endif
     for (int i = 0; i < n; ++i)
     {
         mpf_tree_node_t *nd = &arr[i];

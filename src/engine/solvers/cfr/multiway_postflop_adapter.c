@@ -294,7 +294,19 @@ typedef struct
 #define MPF_THREAD_LOCAL _Thread_local
 #endif
 
+/* Keyed states must remain resolvable when a game is built on one thread and
+ * solved on another.  Entries carry their owning root so separate games can
+ * coexist without clearing each other's mappings. */
+#if !defined(_WIN32)
+static mpf_key_map_entry_t g_mpf_key_map[MPF_KEY_MAP_CAP];
+static pthread_mutex_t g_mpf_key_map_lock = PTHREAD_MUTEX_INITIALIZER;
+#define MPF_KEY_MAP_LOCK() pthread_mutex_lock(&g_mpf_key_map_lock)
+#define MPF_KEY_MAP_UNLOCK() pthread_mutex_unlock(&g_mpf_key_map_lock)
+#else
 static MPF_THREAD_LOCAL mpf_key_map_entry_t g_mpf_key_map[MPF_KEY_MAP_CAP];
+#define MPF_KEY_MAP_LOCK() ((void)0)
+#define MPF_KEY_MAP_UNLOCK() ((void)0)
+#endif
 
 static uint64_t mpf_key_mix(uint64_t key)
 {
@@ -306,30 +318,41 @@ static uint64_t mpf_key_mix(uint64_t key)
     return key;
 }
 
-static mpf_state_t *mpf_key_map_lookup(uint64_t key)
+static mpf_state_t *mpf_key_map_lookup(uint64_t key, const mpf_state_t *owner)
 {
+    mpf_state_t *result = NULL;
+    MPF_KEY_MAP_LOCK();
     uint64_t h = mpf_key_mix(key) & (MPF_KEY_MAP_CAP - 1);
     for (int i = 0; i < MPF_KEY_MAP_CAP; ++i)
     {
         uint64_t idx = (h + (uint64_t)i) & (MPF_KEY_MAP_CAP - 1);
-        if (g_mpf_key_map[idx].state == NULL)
-            return NULL;
-        if (g_mpf_key_map[idx].key == key)
-            return g_mpf_key_map[idx].state;
+        if (g_mpf_key_map[idx].state && g_mpf_key_map[idx].key == key &&
+            g_mpf_key_map[idx].state->key_map_owner == owner)
+        {
+            result = g_mpf_key_map[idx].state;
+            break;
+        }
     }
-    return NULL;
+    MPF_KEY_MAP_UNLOCK();
+    return result;
 }
 
 static void mpf_key_map_register(uint64_t key, mpf_state_t *st)
 {
+    if (!st || !st->key_map_owner)
+        return;
+    MPF_KEY_MAP_LOCK();
     uint64_t h = mpf_key_mix(key) & (MPF_KEY_MAP_CAP - 1);
     for (int i = 0; i < MPF_KEY_MAP_CAP; ++i)
     {
         uint64_t idx = (h + (uint64_t)i) & (MPF_KEY_MAP_CAP - 1);
-        if (g_mpf_key_map[idx].state == NULL || g_mpf_key_map[idx].key == key)
+        if (g_mpf_key_map[idx].state == NULL ||
+            (g_mpf_key_map[idx].key == key &&
+             g_mpf_key_map[idx].state->key_map_owner == st->key_map_owner))
         {
             g_mpf_key_map[idx].key = key;
             g_mpf_key_map[idx].state = st;
+            MPF_KEY_MAP_UNLOCK();
             return;
         }
     }
@@ -338,6 +361,21 @@ static void mpf_key_map_register(uint64_t key, mpf_state_t *st)
      * so it self-heals on its next visit. */
     g_mpf_key_map[h].key = key;
     g_mpf_key_map[h].state = st;
+    MPF_KEY_MAP_UNLOCK();
+}
+
+static void mpf_key_map_unregister_owner(const mpf_state_t *owner)
+{
+    if (!owner)
+        return;
+    MPF_KEY_MAP_LOCK();
+    for (size_t i = 0; i < MPF_KEY_MAP_CAP; ++i)
+    {
+        if (g_mpf_key_map[i].state &&
+            g_mpf_key_map[i].state->key_map_owner == owner)
+            g_mpf_key_map[i].state = NULL;
+    }
+    MPF_KEY_MAP_UNLOCK();
 }
 
 static uint64_t mpf_fnv1a_hash_seeded(uint64_t seed, const void *data, size_t len)
@@ -517,7 +555,7 @@ static mpf_state_t *mpf_wrapper_state(cfr_game_t *game, uint64_t key)
 {
     mpf_state_t *root = (mpf_state_t *)game->game_data;
     if (root && root->keyed_mode)
-        return mpf_key_map_lookup(key);
+        return mpf_key_map_lookup(key, root);
     return (mpf_state_t *)(uintptr_t)key;
 }
 
@@ -1540,8 +1578,6 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     memset(out_state, 0, sizeof(*out_state));
     memset(out_game, 0, sizeof(*out_game));
 
-    memset(g_mpf_key_map, 0, sizeof(g_mpf_key_map));
-
     mpf_perf_stats_t *perf_stats = NULL;
     if (cfg->perf_pool)
         perf_stats = mpf_perf_stats_pool_acquire(cfg->perf_pool);
@@ -1725,6 +1761,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->tree_node_idx = -1;
     out_state->enable_chance_nodes = cfg->enable_chance_nodes ? 1 : 0;
     out_state->keyed_mode = cfg->enable_chance_nodes ? 1 : 0;
+    out_state->key_map_owner = out_state;
     out_state->chance_pending = 0;
     out_state->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
@@ -1878,6 +1915,7 @@ void mpf_state_cleanup(mpf_state_t *state)
     if (!state)
         return;
     MPF_ADAPTER_DEBUG("MPF: mpf_state_cleanup on %p\n", (void *)state);
+    mpf_key_map_unregister_owner(state->key_map_owner ? state->key_map_owner : state);
     mpf_state_cleanup_internal(state);
     if (state->tree)
         mpf_tree_release_cache(state->tree, state);

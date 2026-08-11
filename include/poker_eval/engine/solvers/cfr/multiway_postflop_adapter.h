@@ -178,6 +178,7 @@ typedef struct mpf_state_s
 
     /* FEAT-03: real chance nodes */
     int keyed_mode;            /* use infoset keys instead of raw state pointers */
+    struct mpf_state_s *key_map_owner; /* game instance owning keyed states */
     int enable_chance_nodes;   /* deal turn/river runouts via chance */
     int chance_pending;        /* next street transition deals a card (chance state) */
     int chance_children_count; /* number of dealt children so far */
