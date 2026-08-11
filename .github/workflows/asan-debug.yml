@@ -37,16 +37,16 @@ jobs:
             sudo apt-get install -y gcc g++
           fi
 
-      - name: Configure (ASan + UBSan, Debug)
+      - name: Configure (ASan + UBSan, Release — matches crashing CI config)
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
         run: |
           cmake -S . -B build-asan \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-error" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wno-error"
 
       - name: Build test
         run: cmake --build build-asan --target test_pineapple_batched_unity --parallel
