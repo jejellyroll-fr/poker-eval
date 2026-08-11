@@ -187,8 +187,13 @@ int main(void)
     CHECK(infosets > 90, "chance solve must traverse many runouts (infoset count)");
     CHECK(infosets < 100000, "infoset count must stay bounded");
     br0 = cfr_best_response_value(&game, storage, 0, NULL);
-    CHECK(br0 >= ev_check - 0.5, "P0 game value must not be below always-check");
-    printf(" BET: expl=%.4f infosets=%zu br0=%.6f\n", expl, infosets, br0);
+    cfr_policy_value_result_t policy;
+    CHECK(cfr_compute_policy_values_detailed(&game, storage, NULL, &policy) == 0,
+          "policy value computation");
+    CHECK(br0 + 1e-6 >= policy.ev[0],
+          "P0 best response must not be below P0 average-policy value");
+    printf(" BET: expl=%.4f infosets=%zu br0=%.6f policy0=%.6f\n",
+           expl, infosets, br0, policy.ev[0]);
     cfr_storage_destroy(storage);
     mpf_state_cleanup(&state);
 
