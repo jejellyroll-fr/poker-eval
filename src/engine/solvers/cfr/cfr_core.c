@@ -124,6 +124,23 @@ static void cfr_metrics_ev_accumulate(uint64_t key,
     acc->count += sample_count;
 }
 
+/* Exploitability metric used by cfr_solve. Multiway games (num_players > 2)
+ * use the full N-player best-response metric; 2-player (or unspecified) games
+ * use the classic proxy. Both receive game->game_data as the traversal
+ * user_data, consistent with the rest of the solve. */
+static double cfr_solve_exploitability(cfr_game_t *game, cfr_storage_t *storage)
+{
+    void *user_data = game->game_data;
+    if (game->num_players > 2)
+    {
+        cfr_exploitability_result_t result;
+        if (cfr_exploitability_multiway(game, storage, user_data, &result) != 0)
+            return 0.0;
+        return result.total_exploitability;
+    }
+    return cfr_exploitability_proxy(game, storage, user_data);
+}
+
 double cfr_solve(
     cfr_game_t *game,
     cfr_storage_t *storage,
@@ -251,7 +268,7 @@ double cfr_solve(
                 snap.num_players = (game->num_players > 0) ? game->num_players : 0;
 
                 if (config->metrics_level >= 1)
-                    snap.exploitability = cfr_exploitability_proxy(game, storage, NULL);
+                    snap.exploitability = cfr_solve_exploitability(game, storage);
 
                 if (config->metrics_level >= 2)
                 {
@@ -311,7 +328,7 @@ double cfr_solve(
 
         if (config->checkpoint_interval > 0 && (it + 1) % config->checkpoint_interval == 0)
         {
-            double exploitability = cfr_exploitability_proxy(game, storage, NULL);
+            double exploitability = cfr_solve_exploitability(game, storage);
             if (out_exploitability)
             {
                 *out_exploitability = exploitability;
@@ -329,7 +346,7 @@ double cfr_solve(
         }
     }
 
-    double final_exploitability = cfr_exploitability_proxy(game, storage, NULL);
+    double final_exploitability = cfr_solve_exploitability(game, storage);
     if (out_exploitability)
     {
         *out_exploitability = final_exploitability;
