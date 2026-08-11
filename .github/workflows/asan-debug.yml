@@ -56,4 +56,4 @@ jobs:
         env:
           ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: ./build-asan/tests/unity_tests/test_pineapple_batched_unity
+        run: ./build-asan/tests/test_pineapple_batched_unity
