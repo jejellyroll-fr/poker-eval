@@ -428,6 +428,27 @@ static void cfr_traverse_recursive(
         goto cfr_exit;
     }
 
+    if (game->is_chance && game->is_chance(game, state_key, user_data))
+    {
+        /* Chance node: propagate the expected utility across all equally
+         * likely runouts. No regrets or strategies are tracked here. */
+        int outcomes = game->get_chance_outcomes
+            ? game->get_chance_outcomes(game, state_key, user_data)
+            : 0;
+        if (outcomes <= 0)
+            goto cfr_exit;
+        for (int c = 0; c < outcomes; ++c)
+        {
+            uint64_t child_key = game->apply_chance(game, state_key, c, user_data);
+            cfr_traverse_recursive(
+                game, storage, config, child_key,
+                reach, num_players, iter, child_util, user_data);
+            for (int p = 0; p < num_players; ++p)
+                out_util[p] += child_util[p] / (double)outcomes;
+        }
+        goto cfr_exit;
+    }
+
     num_actions = game->get_actions(game, state_key, actions, 16, user_data);
     if (num_actions == 0)
     {
@@ -555,6 +576,27 @@ static double best_response_recursive(
     if (game->is_terminal(game, state_key, user_data))
     {
         return game->get_utility(game, state_key, br_player, user_data);
+    }
+
+    if (game->is_chance && game->is_chance(game, state_key, user_data))
+    {
+        int outcomes = game->get_chance_outcomes
+            ? game->get_chance_outcomes(game, state_key, user_data)
+            : 0;
+        if (outcomes <= 0)
+            return 0.0;
+        double chance_value = 0.0;
+        for (int i = 0; i < outcomes; ++i)
+        {
+            uint64_t child_key = game->apply_chance(game, state_key, i, user_data);
+            /* A dealt child starts a fresh street: the acting player may no
+             * longer match the parity from the pre-deal action sequence. */
+            int child_cp = 1 - current_player;
+            if (game->current_player)
+                child_cp = game->current_player(game, child_key, user_data);
+            chance_value += best_response_recursive(game, storage, br_player, child_cp, child_key, user_data) / (double)outcomes;
+        }
+        return chance_value;
     }
 
     int actions[16];
@@ -760,6 +802,23 @@ static double best_response_recursive_multiway(
         return game->get_utility(game, state_key, br_player, user_data);
     }
 
+    /* Chance node - average over runouts */
+    if (game->is_chance && game->is_chance(game, state_key, user_data))
+    {
+        int outcomes = game->get_chance_outcomes
+            ? game->get_chance_outcomes(game, state_key, user_data)
+            : 0;
+        if (outcomes <= 0)
+            return 0.0;
+        double chance_value = 0.0;
+        for (int i = 0; i < outcomes; ++i)
+        {
+            uint64_t child_key = game->apply_chance(game, state_key, i, user_data);
+            chance_value += best_response_recursive_multiway(game, storage, br_player, child_key, user_data) / (double)outcomes;
+        }
+        return chance_value;
+    }
+
     /* Get current player (requires current_player callback) */
     int current_player = -1;
     if (game->current_player)
@@ -958,6 +1017,25 @@ static void policy_value_recursive(
             ctx->ev_sq_sum[p] += reach_prod * util * util;
         }
         ctx->reach_sum += reach_prod;
+        return;
+    }
+
+    /* Chance node - uniform average over runouts */
+    if (ctx->game->is_chance && ctx->game->is_chance(ctx->game, state_key, ctx->user_data))
+    {
+        int outcomes = ctx->game->get_chance_outcomes
+            ? ctx->game->get_chance_outcomes(ctx->game, state_key, ctx->user_data)
+            : 0;
+        if (outcomes <= 0)
+            return;
+        double child_util[CFR_MAX_PLAYERS];
+        for (int c = 0; c < outcomes; ++c)
+        {
+            uint64_t child_key = ctx->game->apply_chance(ctx->game, state_key, c, ctx->user_data);
+            policy_value_recursive(ctx, child_key, reach, child_util);
+            for (int p = 0; p < ctx->num_players; ++p)
+                out_util[p] += child_util[p] / (double)outcomes;
+        }
         return;
     }
 

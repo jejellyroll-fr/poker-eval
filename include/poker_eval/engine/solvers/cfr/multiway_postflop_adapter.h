@@ -119,6 +119,7 @@ typedef struct
     int tree_enforced;
     mpf_perf_stats_t *perf_stats;
     struct mpf_perf_stats_pool_t *perf_pool;
+    int enable_chance_nodes; /* deal turn/river runouts via chance instead of a fixed board */
 } mpf_config_t;
 
 typedef struct mpf_state_s
@@ -174,6 +175,13 @@ typedef struct mpf_state_s
     mpf_perf_stats_t *perf_stats;
     struct mpf_state_s *action_cache[MPF_TREE_ACTION_MAX];
     int heap_owned;
+
+    /* FEAT-03: real chance nodes */
+    int keyed_mode;            /* use infoset keys instead of raw state pointers */
+    int enable_chance_nodes;   /* deal turn/river runouts via chance */
+    int chance_pending;        /* next street transition deals a card (chance state) */
+    int chance_children_count; /* number of dealt children so far */
+    struct mpf_state_s *chance_children[52]; /* cached per-outcome children */
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);

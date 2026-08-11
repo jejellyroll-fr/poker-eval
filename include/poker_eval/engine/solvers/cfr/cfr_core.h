@@ -104,6 +104,27 @@ struct cfr_game_t {
         void* user_data
     );
 
+    /* Chance node support (optional). When is_chance returns nonzero, the
+     * state has get_chance_outcomes() equally-likely outcomes, dealt one by
+     * one through apply_chance(). All three callbacks are optional: a game
+     * that leaves them NULL is treated as having no chance nodes. */
+    int (*is_chance)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        void* user_data
+    );
+    int (*get_chance_outcomes)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        void* user_data
+    );
+    uint64_t (*apply_chance)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        int outcome,
+        void* user_data
+    );
+
     /* Game-specific data */
     void* game_data;
     void* initial_state;
