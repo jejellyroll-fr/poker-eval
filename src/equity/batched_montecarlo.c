@@ -39,9 +39,7 @@
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/equity/sampling_policies.h>
 #include <poker_eval/equity/range_combo_buffers.h>
-#ifdef USE_SIMD
 #include <poker_eval/equity/simd_operations.h>
-#endif
 
 static int batched_mc_debug_enabled(void)
 {
@@ -1141,6 +1139,161 @@ static void processBatchResultsHoldem2P_SIMD(const BatchEvalResults *results,
 #endif /* __AVX2__ */
 #endif /* USE_SIMD */
 
+/* ----------------------------------------------------------------------------
+ * Pineapple board-game evaluators
+ *
+ * game_pineapple and game_pineapple_lazy play the best two of each player's
+ * three hole cards against the full board. game_pineapple8 splits the pot
+ * high and A-5 low (with an 8 qualifier) using the same discarded pair, and
+ * game_pineapple_crazy commits its discard on the flop so the surviving pair
+ * plays as a plain Hold'em pocket.
+ *
+ * Batched would-be-Pineapple boards are evaluated through the runtime-gated
+ * SIMD kernels so a default (non-USE_SIMD) build still accelerates.
+ * ------------------------------------------------------------------------- */
+
+/* Runtime SIMD gate shared by the Pineapple evaluators: true when the CPU's
+ * SIMD kernels can run. Capability detection already falls back to the scalar
+ * path on machines without a capable instruction set, so nothing here reads
+ * environment state — PE_DISABLE_SIMD, when set, is honored by the Hold'em /
+ * Omaha dispatch wrappers above. */
+static int bmc_engine_simd_enabled(void)
+{
+    static int cached = -1;
+    if (cached == -1)
+        cached = (simd_detect_capability() != SIMD_NONE) ? 1 : 0;
+    return cached;
+}
+
+/* Build the 7-card hand produced by keeping all of `pocket` except the card
+ * at triple-position `discard` and adding `board`. */
+static void bmc_pineapple_hand(StdDeck_CardMask *hand, const StdDeck_CardMask *pocket,
+                               const StdDeck_CardMask *board, int discard)
+{
+    int hole[3];
+    int nhole = 0;
+
+    StdDeck_CardMask_RESET(*hand);
+    for (int card = 0; card < StdDeck_N_CARDS && nhole < 3; ++card)
+        if (StdDeck_CardMask_CARD_IS_SET(*pocket, card))
+            hole[nhole++] = card;
+    for (int id = 0; id < nhole; ++id)
+        if (id != discard)
+            StdDeck_CardMask_SET(*hand, hole[id]);
+    StdDeck_CardMask_OR(*hand, *hand, *board);
+}
+
+/* Evaluate the three candidates of every player against one completed board.
+ * `with_low` also fills results->loval with qualified A-5 lows. */
+static void bmc_eval_pineapple_sample(StdDeck_CardMask *cands, int npockets, int sample,
+                                      int with_low, BatchEvalResults *results)
+{
+    HandVal hi[ENUM_MAXPLAYERS * 3];
+    LowHandVal lo[ENUM_MAXPLAYERS * 3];
+    int count = npockets * 3;
+    int sim_ok = bmc_engine_simd_enabled();
+    int simd_ok = 0;
+
+    if (sim_ok)
+    {
+        simd_ok = (simd_eval_multiple_hands(cands, count, hi) == 0);
+        if (with_low && simd_ok)
+            simd_ok = (simd_eval_low8_multiple_hands(cands, count, lo) == 0);
+    }
+
+    if (!simd_ok)
+    {
+        for (int p = 0; p < npockets; ++p)
+            for (int d = 0; d < 3; ++d)
+            {
+                int idx = p * 3 + d;
+                hi[idx] = StdDeck_StdRules_EVAL_N_Cached(cands[idx], 7);
+                if (with_low)
+                    lo[idx] = pe_eval_low_a5(cands[idx]);
+            }
+    }
+
+    for (int p = 0; p < npockets; ++p)
+    {
+        HandVal besthi = HandVal_NOTHING;
+        LowHandVal bestlo = LowHandVal_NOTHING;
+        int bestd = 0;
+        for (int d = 0; d < 3; ++d)
+        {
+            int idx = p * 3 + d;
+            if (hi[idx] > besthi)
+            {
+                besthi = hi[idx];
+                bestd = d;
+            }
+            if (with_low)
+            {
+                /* Mirror the classic pineapple8 rule: each candidate is
+                 * qualified separately and the best remaining low pairs up
+                 * with the best high, as in Omaha Hi/Lo. */
+                LowHandVal qualified = pe_low_qualify5(lo[idx], LOW_QUALIFIER_8)
+                                           ? lo[idx] : LowHandVal_NOTHING;
+                if (qualified != LowHandVal_NOTHING && qualified < bestlo)
+                    bestlo = qualified;
+            }
+        }
+        results->hival[p][sample] = besthi;
+        results->loval[p][sample] = with_low ? bestlo : LowHandVal_NOTHING;
+        if (batched_mc_debug_enabled() && sample < 3)
+            BATCH_DEBUG("BMC pineapple board #%d player %d hi=%u lo=%u discard=%d\n",
+                        sample, p, besthi, results->loval[p][sample], (int)bestd);
+    }
+}
+
+static void evaluateBatchPineappleImpl(enum_game_t game, StdDeck_CardMask pockets[],
+                                       int npockets, StdDeck_CardMask board,
+                                       BoardBatch *batch, BatchEvalResults *results)
+{
+    int with_low = (game == game_pineapple8);
+    StdDeck_CardMask empty_dead;
+    StdDeck_CardMask_RESET(empty_dead);
+
+    for (int i = 0; i < batch->count; ++i)
+    {
+        StdDeck_CardMask finalBoard;
+        StdDeck_CardMask cands[ENUM_MAXPLAYERS * 3];
+
+        StdDeck_CardMask_OR(finalBoard, board, batch->boards[i]);
+        batched_mc_log_range_combo(finalBoard, empty_dead, pockets, npockets);
+
+        for (int p = 0; p < npockets; ++p)
+            for (int d = 0; d < 3; ++d)
+                bmc_pineapple_hand(&cands[p * 3 + d], &pockets[p], &finalBoard, d);
+
+        bmc_eval_pineapple_sample(cands, npockets, i, with_low, results);
+    }
+}
+
+static void evaluateBatchPineappleCrazy(enum_game_t game, StdDeck_CardMask pockets[],
+                                        int npockets, StdDeck_CardMask board,
+                                        BoardBatch *batch, BatchEvalResults *results)
+{
+    StdDeck_CardMask empty_dead;
+    StdDeck_CardMask_RESET(empty_dead);
+
+    for (int i = 0; i < batch->count; ++i)
+    {
+        StdDeck_CardMask finalBoard;
+
+        StdDeck_CardMask_OR(finalBoard, board, batch->boards[i]);
+        batched_mc_log_range_combo(finalBoard, empty_dead, pockets, npockets);
+
+        for (int p = 0; p < npockets; ++p)
+        {
+            StdDeck_CardMask hand;
+            StdDeck_CardMask_RESET(hand);
+            StdDeck_CardMask_OR(hand, pockets[p], finalBoard);
+            results->hival[p][i] = StdDeck_StdRules_EVAL_N_Cached(hand, 7);
+            results->loval[p][i] = LowHandVal_NOTHING;
+        }
+    }
+}
+
 /* Internal type for batch evaluator function */
 typedef void (*BatchEvaluator)(enum_game_t game, StdDeck_CardMask pockets[], int npockets,
                                StdDeck_CardMask board, BoardBatch *batch,
@@ -1220,6 +1373,14 @@ static void init_registry_impl(void)
     evaluator_registry[game_omaha85] = evaluateBatchOmaha;
     evaluator_registry[game_omaha86] = evaluateBatchOmaha;
 #endif
+
+    /* Pineapple family: best two of three hole cards against the board. The
+     * impl dispatches on game for the hi/lo split; Crazy Pineapple receives
+     * its flop-committed pockets through the evaluator argument. */
+    evaluator_registry[game_pineapple] = evaluateBatchPineappleImpl;
+    evaluator_registry[game_pineapple_lazy] = evaluateBatchPineappleImpl;
+    evaluator_registry[game_pineapple8] = evaluateBatchPineappleImpl;
+    evaluator_registry[game_pineapple_crazy] = evaluateBatchPineappleCrazy;
 }
 
 /* Main batched enumSample function */
@@ -1235,6 +1396,8 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
     int remaining;
     int currentBatchSize;
     int ret = 0;
+    StdDeck_CardMask committed_pineapple[ENUM_MAXPLAYERS];
+    StdDeck_CardMask *evaluator_pockets = pockets;
 
     /* Ensure registry is initialized exactly once in a thread-safe way if possible,
        or at least safely for this translation unit.
@@ -1340,12 +1503,41 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
             goto cleanup;
         }
 
+        /* Crazy Pineapple commits its discard once the flop is known; without
+         * one the discard is unknowable, so mirror the classic sample path and
+         * reject. The commit itself is computed once here, not per sample. */
+        if (game == game_pineapple_crazy)
+        {
+            if (nboard < 3) {
+                ret = 1;
+                goto cleanup;
+            }
+            if (pe_crazy_pineapple_commit(pockets, npockets, board, dead,
+                                          committed_pineapple)) {
+                ret = 1;
+                goto cleanup;
+            }
+            evaluator_pockets = committed_pineapple;
+        }
+
         /* Calculate number of cards to deal */
         numCards = 5 - nboard;
         if (numCards <= 0) {
             ret = 1;
             goto cleanup;
         }
+
+        /* Sampled boards must never intersect a pocket or the fixed board.
+         * The Monte-Carlo enumeration in enumerate.c computes the same
+         * effective dead set; doing it here keeps direct callers that only
+         * pass their game dead cards correct (RangeEquity already bakes the
+         * pockets in, so this is idempotent for it). */
+        StdDeck_CardMask effective_dead;
+        StdDeck_CardMask_RESET(effective_dead);
+        StdDeck_CardMask_OR(effective_dead, effective_dead, dead);
+        StdDeck_CardMask_OR(effective_dead, effective_dead, board);
+        for (int p = 0; p < npockets; ++p)
+            StdDeck_CardMask_OR(effective_dead, effective_dead, pockets[p]);
 
         /* Process iterations in batches */
         remaining = niter;
@@ -1354,10 +1546,10 @@ int enumSampleBatched(enum_game_t game, StdDeck_CardMask pockets[],
             currentBatchSize = (remaining > BATCH_SIZE) ? BATCH_SIZE : remaining;
 
             /* Generate a batch of random boards */
-            generateBoardBatch(batch, dead, numCards, currentBatchSize);
+            generateBoardBatch(batch, effective_dead, numCards, currentBatchSize);
 
             /* Evaluate the batch using registered evaluator */
-            evaluator(game, pockets, npockets, board, batch, batchResults);
+            evaluator(game, evaluator_pockets, npockets, board, batch, batchResults);
 
             /* Process the batch results */
             {
