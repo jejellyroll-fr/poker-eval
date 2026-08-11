@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <stdarg.h>
 #ifdef __APPLE__
@@ -969,12 +970,26 @@ int opencl_gpu_eval_batch_boards_hilo(
     gpu_eval_result_hilo_t* result
 ) {
     if (!ctx_base || !result) return -1;
+    if (n_boards <= 0 || n_players <= 0) return -1;
 
     opencl_multigame_context_t* ctx = (opencl_multigame_context_t*)ctx_base;
 
+    /* Hand count in size_t with overflow check (BUG-13): the int product
+     * overflowed to negative, turning the malloc size into a huge size_t
+     * that returned NULL and was then dereferenced. */
+    size_t total_hands = (size_t)n_boards * (size_t)n_players;
+    if ((size_t)n_boards != 0 && total_hands / (size_t)n_boards != (size_t)n_players) {
+        return -1;
+    }
+    /* The kernel and the conversion path index hands with ints; a batch
+     * beyond INT_MAX hands is not representable and must be rejected
+     * before any allocation or conversion is attempted. */
+    if (total_hands > (size_t)INT_MAX) {
+        return -1;
+    }
+
     /* Convert card masks to GPU format */
-    int total_hands = n_boards * n_players;
-    gpu_card_mask_t* gpu_boards = (gpu_card_mask_t*)malloc(n_boards * sizeof(gpu_card_mask_t));
+    gpu_card_mask_t* gpu_boards = (gpu_card_mask_t*)malloc((size_t)n_boards * sizeof(gpu_card_mask_t));
     gpu_card_mask_t* gpu_holes = (gpu_card_mask_t*)malloc(total_hands * sizeof(gpu_card_mask_t));
     if (!gpu_boards || !gpu_holes) {
         free(gpu_boards);
@@ -985,7 +1000,7 @@ int opencl_gpu_eval_batch_boards_hilo(
     for (int i = 0; i < n_boards; i++) {
         convert_to_gpu_mask(&boards[i], &gpu_boards[i]);
     }
-    for (int i = 0; i < total_hands; i++) {
+    for (size_t i = 0; i < total_hands; i++) {
         convert_to_gpu_mask(&hole_cards[i], &gpu_holes[i]);
         /* Debug 2-7 lowball first hand */
         if (i == 0 && ctx->current_config.game == GPU_GAME_LOWBALL27) {
@@ -998,7 +1013,7 @@ int opencl_gpu_eval_batch_boards_hilo(
     /* Upload to device */
     cl_int err;
     err = clEnqueueWriteBuffer(ctx->base_ctx.queue, ctx->base_ctx.d_boards, CL_TRUE,
-                               0, n_boards * sizeof(gpu_card_mask_t), gpu_boards, 0, NULL, NULL);
+                               0, (size_t)n_boards * sizeof(gpu_card_mask_t), gpu_boards, 0, NULL, NULL);
     err |= clEnqueueWriteBuffer(ctx->base_ctx.queue, ctx->base_ctx.d_hole_cards, CL_TRUE,
                                 0, total_hands * sizeof(gpu_card_mask_t), gpu_holes, 0, NULL, NULL);
 
@@ -1025,7 +1040,7 @@ int opencl_gpu_eval_batch_boards_hilo(
     clSetKernelArg(ctx->generic_eval_kernel, arg_idx++, sizeof(cl_mem), &ctx->base_ctx.d_topCardTable);
 
     /* Launch kernel */
-    size_t global_work_size = n_boards;
+    size_t global_work_size = (size_t)n_boards;
     err = clEnqueueNDRangeKernel(ctx->base_ctx.queue, ctx->generic_eval_kernel,
                                  1, NULL, &global_work_size, NULL, 0, NULL, NULL);
     if (err != CL_SUCCESS) return -1;
@@ -1056,21 +1071,30 @@ int opencl_gpu_eval_batch_boards_hilo(
     }
 
     /* Ensure caller buffers are allocated */
+    int allocated_hi = 0, allocated_lo = 0, allocated_qual = 0;
     if (!result->hand_values_hi) {
         result->hand_values_hi = (HandVal*)malloc(total_hands * sizeof(HandVal));
+        allocated_hi = 1;
     }
 
     if (ctx->current_config.eval_low) {
         if (!result->hand_values_lo) {
             result->hand_values_lo = (HandVal*)malloc(total_hands * sizeof(HandVal));
+            allocated_lo = 1;
         }
         if (!result->lo_qualifies) {
             result->lo_qualifies = (int*)malloc(total_hands * sizeof(int));
+            allocated_qual = 1;
         }
     }
 
     if (!result->hand_values_hi ||
         (ctx->current_config.eval_low && (!result->hand_values_lo || !result->lo_qualifies))) {
+        /* Free only what this call allocated: caller-supplied buffers stay
+         * owned by the caller. */
+        if (allocated_hi) { free(result->hand_values_hi); result->hand_values_hi = NULL; }
+        if (allocated_lo) { free(result->hand_values_lo); result->hand_values_lo = NULL; }
+        if (allocated_qual) { free(result->lo_qualifies); result->lo_qualifies = NULL; }
         free(hi_vals);
         free(lo_vals);
         free(lo_qual);
@@ -1079,7 +1103,7 @@ int opencl_gpu_eval_batch_boards_hilo(
 
     /* Fill result structure */
     result->batch_size = total_hands;
-    for (int i = 0; i < total_hands; i++) {
+    for (size_t i = 0; i < total_hands; i++) {
         result->hand_values_hi[i] = hi_vals[i];
         if (ctx->current_config.eval_low) {
             result->hand_values_lo[i] = lo_vals[i];

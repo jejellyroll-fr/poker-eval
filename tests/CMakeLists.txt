@@ -814,6 +814,21 @@ if(BUILD_GPU AND TARGET poker_gpu)
             set_tests_properties(test_opencl_vs_cpu PROPERTIES DISABLED ON)
         endif()
         message(STATUS "OpenCL backend available - adding test_opencl_vs_cpu validation test")
+
+        # Regression test for BUG-13 (OpenCL hilo eval overflow/alloc guards)
+        add_poker_test(test_gpu_opencl_alloc_guards)
+        target_link_libraries(test_gpu_opencl_alloc_guards PRIVATE poker_gpu)
+        target_compile_definitions(test_gpu_opencl_alloc_guards PRIVATE HAVE_OPENCL)
+        target_include_directories(test_gpu_opencl_alloc_guards PRIVATE ${CMAKE_SOURCE_DIR}/src/gpu)
+        set_tests_properties(test_gpu_opencl_alloc_guards PROPERTIES
+            LABELS "gpu;opencl"
+            TIMEOUT 180
+            SKIP_RETURN_CODE ${GPU_SKIP_RETURN_CODE})
+        set_property(TEST test_gpu_opencl_alloc_guards APPEND PROPERTY LABELS "optional")
+        if(NOT GPU_HARDWARE_AVAILABLE)
+            set_tests_properties(test_gpu_opencl_alloc_guards PROPERTIES DISABLED ON)
+        endif()
+        message(STATUS "OpenCL backend available - adding test_gpu_opencl_alloc_guards regression test")
     endif()
 
     # GPU multi-game batch evaluation tests (Stud/Razz/HiLo/Omaha8)
