@@ -67,6 +67,7 @@ typedef struct
 {
     int call_count;
     int last_iteration;
+    double last_exploitability;
 } metrics_listener_ctx_t;
 
 static void metrics_listener(const cfr_metrics_snapshot_t *snapshot, void *user)
@@ -74,6 +75,7 @@ static void metrics_listener(const cfr_metrics_snapshot_t *snapshot, void *user)
     metrics_listener_ctx_t *ctx = (metrics_listener_ctx_t *)user;
     ctx->call_count += 1;
     ctx->last_iteration = snapshot->iteration;
+    ctx->last_exploitability = snapshot->exploitability;
 }
 
 #define CHECK(cond, msg)               \
@@ -129,6 +131,23 @@ int main(void)
     cfr_metrics_snapshot_t previous;
     CHECK(cfr_metrics_buffer_get(buffer, 1, &previous) == 0, "failed to get previous snapshot");
     CHECK(previous.iteration == cfg.max_iterations - 1, "previous snapshot iteration mismatch");
+
+    CHECK(latest.exploitability == 0.0, "exploitability must be disabled when exploitability_interval == 0");
+
+    /* With exploitability_interval set, snapshots must carry the exact
+     * best-response exploitability instead of the 0.0 disabled default. */
+    cfr_config_t cfg2;
+    memset(&cfg2, 0, sizeof(cfg2));
+    cfg2.max_iterations = 5;
+    cfg2.metrics_interval = 1;
+    cfg2.metrics_level = 1;
+    cfg2.metrics_history = 2;
+    cfg2.exploitability_interval = 1;
+    cfg2.metrics_buffer = buffer;
+    cfg2.metrics_fn = metrics_listener;
+    cfg2.metrics_user = &listener_ctx;
+    (void)cfr_solve(&game, storage, &cfg2, NULL);
+    CHECK(listener_ctx.last_exploitability > 0.0, "exploitability should be positive on enabled interval");
 
     cfr_metrics_buffer_destroy(buffer);
     cfr_storage_destroy(storage);
