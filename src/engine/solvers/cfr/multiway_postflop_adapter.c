@@ -285,10 +285,11 @@ typedef struct
 {
     uint64_t key;
     mpf_state_t *state;
+    const mpf_state_t *owner;
 } mpf_key_map_entry_t;
 
 #if defined(_MSC_VER)
-#define MPF_THREAD_LOCAL __declspec(thread)
+#define MPF_THREAD_LOCAL thread
 #elif defined(__GNUC__) || defined(__clang__)
 #define MPF_THREAD_LOCAL __thread
 #else
@@ -328,7 +329,7 @@ static mpf_state_t *mpf_key_map_lookup(uint64_t key, const mpf_state_t *owner)
     {
         uint64_t idx = (h + (uint64_t)i) & (MPF_KEY_MAP_CAP - 1);
         if (g_mpf_key_map[idx].state && g_mpf_key_map[idx].key == key &&
-            g_mpf_key_map[idx].state->key_map_owner == owner)
+            g_mpf_key_map[idx].owner == owner)
         {
             result = g_mpf_key_map[idx].state;
             break;
@@ -349,10 +350,11 @@ static void mpf_key_map_register(uint64_t key, mpf_state_t *st)
         uint64_t idx = (h + (uint64_t)i) & (MPF_KEY_MAP_CAP - 1);
         if (g_mpf_key_map[idx].state == NULL ||
             (g_mpf_key_map[idx].key == key &&
-             g_mpf_key_map[idx].state->key_map_owner == st->key_map_owner))
+             g_mpf_key_map[idx].owner == st->key_map_owner))
         {
             g_mpf_key_map[idx].key = key;
             g_mpf_key_map[idx].state = st;
+            g_mpf_key_map[idx].owner = st->key_map_owner;
             MPF_KEY_MAP_UNLOCK();
             return;
         }
@@ -362,6 +364,7 @@ static void mpf_key_map_register(uint64_t key, mpf_state_t *st)
      * so it self-heals on its next visit. */
     g_mpf_key_map[h].key = key;
     g_mpf_key_map[h].state = st;
+    g_mpf_key_map[h].owner = st->key_map_owner;
     MPF_KEY_MAP_UNLOCK();
 }
 
@@ -372,9 +375,11 @@ static void mpf_key_map_unregister_owner(const mpf_state_t *owner)
     MPF_KEY_MAP_LOCK();
     for (size_t i = 0; i < MPF_KEY_MAP_CAP; ++i)
     {
-        if (g_mpf_key_map[i].state &&
-            g_mpf_key_map[i].state->key_map_owner == owner)
+        if (g_mpf_key_map[i].state && g_mpf_key_map[i].owner == owner)
+        {
             g_mpf_key_map[i].state = NULL;
+            g_mpf_key_map[i].owner = NULL;
+        }
     }
     MPF_KEY_MAP_UNLOCK();
 }

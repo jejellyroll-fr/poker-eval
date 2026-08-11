@@ -12,6 +12,7 @@ typedef struct
 } metrics_state_t;
 
 static metrics_state_t g_root = {0, 0, {0.0, 0.0}};
+static metrics_state_t g_root_p1 = {0, 1, {0.0, 0.0}};
 static metrics_state_t g_win = {1, -1, {1.0, -1.0}};
 static metrics_state_t g_lose = {1, -1, {-1.0, 1.0}};
 
@@ -148,6 +149,13 @@ int main(void)
     cfg2.metrics_user = &listener_ctx;
     (void)cfr_solve(&game, storage, &cfg2, NULL);
     CHECK(listener_ctx.last_exploitability > 0.0, "exploitability should be positive on enabled interval");
+
+    /* A best response maximizes the queried player's own terminal utility.
+       P1 therefore chooses g_lose (+1 for P1), not g_win (-1 for P1). */
+    game.initial_state = &g_root_p1;
+    CHECK(cfr_best_response_value(&game, storage, 1, NULL) > 0.999,
+          "player 1 best response must maximize player 1 utility");
+    game.initial_state = &g_root;
 
     cfr_metrics_buffer_destroy(buffer);
     cfr_storage_destroy(storage);

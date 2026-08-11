@@ -115,6 +115,11 @@ static int build_cfr_game(const EvalContext *ctx, cfr_game_t *game,
         round_contrib[i] = init_state->round_contrib[i];
     }
     *init_state = built_state;
+    /* mpf_build_game points game_data/initial_state at its output argument.
+       The temporary built_state dies when this helper returns, so retarget the
+       game at the persistent copied state before any wrapper reads it. */
+    game->game_data = init_state;
+    game->initial_state = init_state;
     init_state->street = MPF_STREET_SHOWDOWN;
     init_state->util_ready = 0;
     for (int i = 0; i < init_state->num_players; ++i)

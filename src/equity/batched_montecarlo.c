@@ -1197,8 +1197,11 @@ static void bmc_eval_pineapple_sample(StdDeck_CardMask *cands, int npockets, int
     if (sim_ok)
     {
         simd_ok = (simd_eval_multiple_hands(cands, count, hi) == 0);
-        if (with_low && simd_ok)
-            simd_ok = (simd_eval_low8_multiple_hands(cands, count, lo) == 0);
+        /* Pineapple8's scalar reference uses StdDeck_Lowball8_EVAL for each
+         * seven-card candidate.  pe_eval_low_a5 (and the SIMD helper built on
+         * it) has a different representation/qualification path on AVX2,
+         * which changes low winner tallies.  Keep the high evaluation batched,
+         * but use the exact reference evaluator for the low half. */
     }
 
     if (!simd_ok)
@@ -1208,10 +1211,12 @@ static void bmc_eval_pineapple_sample(StdDeck_CardMask *cands, int npockets, int
             {
                 int idx = p * 3 + d;
                 hi[idx] = StdDeck_StdRules_EVAL_N_Cached(cands[idx], 7);
-                if (with_low)
-                    lo[idx] = pe_eval_low_a5(cands[idx]);
             }
     }
+
+    if (with_low)
+        for (int idx = 0; idx < count; ++idx)
+            lo[idx] = StdDeck_Lowball8_EVAL(cands[idx], 7);
 
     for (int p = 0; p < npockets; ++p)
     {
@@ -1231,8 +1236,7 @@ static void bmc_eval_pineapple_sample(StdDeck_CardMask *cands, int npockets, int
                 /* Mirror the classic pineapple8 rule: each candidate is
                  * qualified separately and the best remaining low pairs up
                  * with the best high, as in Omaha Hi/Lo. */
-                LowHandVal qualified = pe_low_qualify5(lo[idx], LOW_QUALIFIER_8)
-                                           ? lo[idx] : LowHandVal_NOTHING;
+                LowHandVal qualified = lo[idx];
                 if (qualified != LowHandVal_NOTHING && qualified < bestlo)
                     bestlo = qualified;
             }

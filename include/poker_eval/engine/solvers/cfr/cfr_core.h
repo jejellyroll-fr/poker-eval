@@ -97,6 +97,10 @@ struct cfr_game_t {
         void* user_data
     );
 
+    /* Return a stable infoset key for storage (optional). This is required
+       when state_key is a temporary heap pointer that release_state frees. */
+    uint64_t (*get_infoset_key)(const void* state);
+
     /* Release a state returned by apply_action (optional; may be NULL for
        games that do not allocate per-state heap storage). */
     void (*release_state)(
