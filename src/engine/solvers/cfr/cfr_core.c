@@ -606,21 +606,15 @@ static double best_response_recursive(
 
     if (current_player == br_player)
     {
-        double best_value = (br_player == 0) ? -1e100 : 1e100;
+        /* The BR player maximizes their own utility at their decision nodes,
+         * for both players (leaf values are always the BR player's utility). */
+        double best_value = -1e100;
         for (int i = 0; i < num_actions; ++i)
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
             double value = best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data);
-            if (br_player == 0)
-            {
-                if (value > best_value)
-                    best_value = value;
-            }
-            else
-            {
-                if (value < best_value)
-                    best_value = value;
-            }
+            if (value > best_value)
+                best_value = value;
         }
         return best_value;
     }

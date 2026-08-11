@@ -278,7 +278,7 @@ static int mask_to_array(mask_t mask, int *out, int limit);
  * in a thread-local table, re-registered every time a state is produced, so
  * stale entries self-heal. */
 
-#define MPF_KEY_MAP_CAP 32768
+#define MPF_KEY_MAP_CAP (1 << 17)
 
 typedef struct
 {
@@ -333,22 +333,28 @@ static void mpf_key_map_register(uint64_t key, mpf_state_t *st)
             return;
         }
     }
-    /* Map full: evict one slot. Keys are re-registered on every traversal,
-     * so the mapping self-heals. */
-    g_mpf_key_map[MPF_KEY_MAP_CAP - 1].key = key;
-    g_mpf_key_map[MPF_KEY_MAP_CAP - 1].state = st;
+    /* Map full: evict the new key's primary bucket. The parent whose entry
+     * is displaced here was already re-registered during its own traversal,
+     * so it self-heals on its next visit. */
+    g_mpf_key_map[h].key = key;
+    g_mpf_key_map[h].state = st;
 }
 
-static uint64_t mpf_fnv1a_hash(const void *data, size_t len)
+static uint64_t mpf_fnv1a_hash_seeded(uint64_t seed, const void *data, size_t len)
 {
     const unsigned char *p = (const unsigned char *)data;
-    uint64_t h = 1469598103934665603ull;
+    uint64_t h = seed;
     for (size_t i = 0; i < len; ++i)
     {
         h ^= p[i];
         h *= 1099511628211ull;
     }
     return h;
+}
+
+static uint64_t mpf_fnv1a_hash(const void *data, size_t len)
+{
+    return mpf_fnv1a_hash_seeded(1469598103934665603ull, data, len);
 }
 
 static uint64_t mpf_quant(double v)
@@ -388,7 +394,10 @@ static uint64_t mpf_pattern_hash(const mpf_state_t *st, int player)
     return mpf_fnv1a_hash(str, strlen(str));
 }
 
-/* Content-derived infoset key for a decision state (keyed_mode only). */
+/* Content-derived infoset key for a decision state (keyed_mode only).
+ * All bet/board fields are folded into a single running hash; each field
+ * re-seeds from the previous field's digest so the key depends on every
+ * field, not just the last one hashed. */
 static uint64_t mpf_infoset_key(const mpf_state_t *st)
 {
     uint64_t h = 1469598103934665603ull;
@@ -402,7 +411,7 @@ static uint64_t mpf_infoset_key(const mpf_state_t *st)
     fields[2] = mpf_quant(st->to_call);
     fields[3] = mpf_quant(st->current_bet);
     for (int i = 0; i < 4; ++i)
-        h = mpf_fnv1a_hash(&fields[i], sizeof(fields[i]));
+        h = mpf_fnv1a_hash_seeded(h, &fields[i], sizeof(fields[i]));
     uint64_t rc = mpf_quant(st->round_contrib[p]);
     uint64_t acted_flags = 0;
     uint64_t active_flags = 0;
@@ -413,11 +422,11 @@ static uint64_t mpf_infoset_key(const mpf_state_t *st)
         if (st->active[i])
             active_flags |= (1ull << (uint64_t)(i % 64));
     }
-    h = mpf_fnv1a_hash(&rc, sizeof(rc));
-    h = mpf_fnv1a_hash(&acted_flags, sizeof(acted_flags));
-    h = mpf_fnv1a_hash(&active_flags, sizeof(active_flags));
+    h = mpf_fnv1a_hash_seeded(h, &rc, sizeof(rc));
+    h = mpf_fnv1a_hash_seeded(h, &acted_flags, sizeof(acted_flags));
+    h = mpf_fnv1a_hash_seeded(h, &active_flags, sizeof(active_flags));
     uint64_t bh = mpf_pattern_hash(st, p);
-    h = mpf_fnv1a_hash(&bh, sizeof(bh));
+    h = mpf_fnv1a_hash_seeded(h, &bh, sizeof(bh));
     return h;
 }
 
@@ -478,6 +487,10 @@ static void mpf_enter_chance(mpf_state_t *st)
 
 static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_state_t *out)
 {
+    /* out may be a cached child from a previous iteration holding the whole
+     * betting/chance subtree dealt before. Release it so the re-deal never
+     * drops live references (leak) and cleanup stays single-owner. */
+    mpf_state_cleanup_internal(out);
     *out = *st;
     out->perf_stats = st->perf_stats;
     out->heap_owned = 1;
@@ -636,11 +649,30 @@ static eval_t eval_omaha_high(const EvalContext *ctx, mask_t hole, mask_t board,
     return best;
 }
 
+static void mpf_state_release_chance_children(mpf_state_t *st)
+{
+    for (int i = 0; i < st->chance_children_count && i < 52; ++i)
+    {
+        mpf_state_t *child = st->chance_children[i];
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            st->chance_children[i] = NULL;
+        }
+    }
+    st->chance_children_count = 0;
+}
+
 static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_state_t *out)
 {
     mpf_state_t *saved_cache[MPF_TREE_ACTION_MAX];
     memcpy(saved_cache, out->action_cache, sizeof(saved_cache));
     int heap_owned = out->heap_owned;
+    /* out may be a cached slot whose previous incarnation was a chance node;
+     * its dealt subtree must not leak (it is freed before the morph). */
+    mpf_state_release_chance_children(out);
     *out = *st;
     out->perf_stats = st->perf_stats;
     memcpy(out->action_cache, saved_cache, sizeof(saved_cache));
@@ -773,6 +805,8 @@ static uint64_t mpf_apply_action_wrapper(cfr_game_t *game, uint64_t key, int act
     mpf_state_t *st = mpf_wrapper_state(game, key);
     mpf_perf_stats_t *perf = st ? st->perf_stats : NULL;
     (void)user;
+    if (!st)
+        return 0;
     MPF_PERF_INC_STATS(perf, apply_action_calls);
     int next_tree_idx = -1;
     if (st && st->tree_enabled && st->tree && st->tree_node_idx >= 0)
@@ -939,6 +973,8 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
 
 static int mpf_is_terminal(const mpf_state_t *st)
 {
+    if (!st)
+        return 1;
     if (st->util_ready)
         return 1;
     if (mpf_active_count(st) <= 1)
@@ -1503,6 +1539,8 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
 
     memset(out_state, 0, sizeof(*out_state));
     memset(out_game, 0, sizeof(*out_game));
+
+    memset(g_mpf_key_map, 0, sizeof(g_mpf_key_map));
 
     mpf_perf_stats_t *perf_stats = NULL;
     if (cfg->perf_pool)
