@@ -32,14 +32,9 @@ jobs:
   asan-ubsan:
     name: ASan + UBSan (full suite)
     runs-on: ubuntu-latest
-    # Non-blocking for now: the sanitizers surface pre-existing leaks and
-    # out-of-bounds the suite did not catch before (issue #97 exists precisely
-    # to find them). Keep it reporting so regressions are visible while the
-    # underlying bugs are fixed on their own tracks. Promote to gating once
-    # the known findings are cleared.
-    continue-on-error: true
-    # Hosted runners are memory-constrained; instrumented binaries are heavy.
-    # Serial execution + per-test timeout keep a sanitizer hang bounded.
+    # Gating on purpose: issue #97 exists to make CI catch leaks and
+    # out-of-bounds that the suite otherwise missed. A red run means a real
+    # memory bug landed and must be fixed, not suppressed.
     timeout-minutes: 90
     env:
       # Halt on the first undefined-behaviour report and on leaks; print a
@@ -88,9 +83,7 @@ jobs:
   valgrind:
     name: Valgrind (CFR solve, leak threshold)
     runs-on: ubuntu-latest
-    # Non-blocking initially: report leaks without freezing merges until the
-    # known findings are cleared, then tighten to gating.
-    continue-on-error: true
+    # Gating: a leak above the threshold fails CI so the finding cannot rot.
     timeout-minutes: 45
 
     steps:
@@ -118,9 +111,9 @@ jobs:
         run: |
           set -uo pipefail
           LOG="$(pwd)/valgrind.log"
-          BIN="./build-vg/bin/bench_cfr_omaha_river"
-          if [ ! -x "$BIN" ]; then
-            echo "Benchmark binary not found at $BIN"; exit 1
+          BIN="$(find build-vg -type f -name bench_cfr_omaha_river -perm -111 -print -quit)"
+          if [ -z "$BIN" ]; then
+            echo "Benchmark binary not found under build-vg"; find build-vg -type f -maxdepth 5 | sort; exit 1
           fi
           # Run the benchmark *through* Valgrind so the log contains a real
           # leak summary. --error-exitcode only affects Valgrind's own return
@@ -132,19 +125,16 @@ jobs:
           echo "=== Valgrind summary ==="
           grep -E "ERROR SUMMARY|definitely lost|indirectly lost|possibly lost|still reachable" "$LOG" || true
 
-          # Report definite/indirect leaks against a small threshold. This job
-          # is intentionally non-gating for now (continue-on-error above): it
-          # surfaces pre-existing leaks found by #97 without freezing merges
-          # until they are fixed on their own tracks. We therefore log the
-          # comparison but do not exit non-zero here.
+          # Fail on definite/indirect leaks above a small threshold so the
+          # finding cannot rot. "still reachable" is tolerated (allocations at
+          # exit that the runtime owns).
           DEF_LOST=$(grep -E "definitely lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes')
           IND_LOST=$(grep -E "indirectly lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes')
           DEF_LOST=${DEF_LOST:-0}; IND_LOST=${IND_LOST:-0}
           THRESHOLD=1024
           echo "definitely lost: ${DEF_LOST} bytes, indirectly lost: ${IND_LOST} bytes, threshold: ${THRESHOLD} bytes"
           if [ "$DEF_LOST" -gt "$THRESHOLD" ] || [ "$IND_LOST" -gt "$THRESHOLD" ]; then
-            echo "NOTE: leak threshold exceeded (tracked separately, non-gating):"
-            cat "$LOG"
+            echo "Leak threshold exceeded:"; cat "$LOG"; exit 1
           fi
 
   cppcheck:

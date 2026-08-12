@@ -285,6 +285,17 @@ int main(void)
 
     ASSERT_TRUE(pe_tree_save(&tree, tree_path) == 0, "save tree");
 
+    /* pe_tree_save serializes the caller-owned tree; release its allocations
+     * before loading the round-tripped copy below. */
+    free(tree.nodes[0].actions);
+    free(tree.nodes[0].id);
+    free(tree.nodes[1].id);
+    free(tree.nodes);
+    free(tree.profiles[0].bet_sizes);
+    free(tree.profiles[0].id);
+    free(tree.profiles);
+    memset(&tree, 0, sizeof(tree));
+
     mpf_tree_def_t *rt = pe_tree_load(tree_path);
     ASSERT_TRUE(rt != NULL, "load tree");
     ASSERT_TRUE(rt->node_count == 2, "tree node count");
