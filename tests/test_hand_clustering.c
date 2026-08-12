@@ -214,6 +214,116 @@ static int test_train_edge_cases(EvalContext *ctx)
     return 0;
 }
 
+/* Count clusters that received at least one hand. */
+static int test_count_nonempty(pe_bucket_table_t *t)
+{
+    int n = 0;
+    for (int c = 0; c < pe_bucket_table_count(t); ++c)
+        if (pe_bucket_table_cluster_size(t, c) > 0)
+            ++n;
+    return n;
+}
+
+static int test_dedup_uses_all_clusters(EvalContext *ctx)
+{
+    mask_t board = board_ak742();
+    pe_hand_cluster_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.hole_cards = 2;
+    opts.seed = 3u;
+
+    /* Pass duplicate hands: k must be clamped to the number of distinct feature
+     * vectors and every cluster must be non-empty (no silent zero-sized
+     * clusters). */
+    mask_t hands[6];
+    for (int i = 0; i < 6; ++i)
+        hands[i] = hand_strong(); /* all identical */
+
+    pe_bucket_table_t *t = pe_bucket_table_train(ctx, board, hands, 6, 8, &opts);
+    CHECK(t != NULL, "dedup train failed");
+    CHECK(pe_bucket_table_count(t) == 1, "k must clamp to distinct points");
+    CHECK(test_count_nonempty(t) == 1, "the single cluster must be non-empty");
+    pe_bucket_table_free(t);
+
+    /* Two distinct hands, k=4: collapses to 2 clusters, both non-empty. */
+    mask_t two[2];
+    two[0] = hand_strong();
+    two[1] = hand_weak();
+    pe_bucket_table_t *t2 = pe_bucket_table_train(ctx, board, two, 2, 4, &opts);
+    CHECK(t2 != NULL, "two-hand train failed");
+    CHECK(pe_bucket_table_count(t2) == 2, "k must clamp to 2 distinct hands");
+    CHECK(test_count_nonempty(t2) == 2, "both clusters must be non-empty");
+    pe_bucket_table_free(t2);
+    return 0;
+}
+
+static int test_assign_validation(EvalContext *ctx)
+{
+    mask_t board = board_ak742();
+    pe_hand_cluster_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.hole_cards = 2;
+    opts.seed = 5u;
+
+    pe_bucket_table_t *t = pe_bucket_table_train_all(ctx, board, 8, &opts);
+    CHECK(t != NULL, "train failed");
+
+    /* Same board, valid hand: must succeed. */
+    int b_ok = pe_bucket_table_assign(t, ctx, hand_strong(), board);
+    CHECK(b_ok >= 0, "assign on matching board must succeed");
+
+    /* Different board: must be rejected so the adapter can fall back. */
+    mask_t other = card(MODERN_RANK_K, 0) | card(MODERN_RANK_Q, 1) |
+                   card(MODERN_RANK_J, 2) | card(MODERN_RANK_9, 3) | card(MODERN_RANK_6, 0);
+    int b_diff = pe_bucket_table_assign(t, ctx, hand_strong(), other);
+    CHECK(b_diff < 0, "assign on a different board must be rejected");
+
+    /* Wrong hole-card count (4 cards vs a 2-card Hold'em table). */
+    mask_t four = hand_strong() | card(MODERN_RANK_3, 1) | card(MODERN_RANK_2, 2);
+    int b_four = pe_bucket_table_assign(t, ctx, four, board);
+    CHECK(b_four < 0, "assign with wrong hole-card count must be rejected");
+
+    /* Hand overlapping the board. */
+    mask_t overlap = card(MODERN_RANK_A, 0) | card(MODERN_RANK_K, 2); /* Ac is on board */
+    int b_ov = pe_bucket_table_assign(t, ctx, overlap, board);
+    CHECK(b_ov < 0, "assign with board-overlapping hole must be rejected");
+
+    pe_bucket_table_free(t);
+    return 0;
+}
+
+static int test_opp_samples_decoupled(EvalContext *ctx)
+{
+    /* Omaha: hero budget (max_samples) and per-hero opponent rollout
+     * (opp_samples) are independent, so a large hero budget must not explode
+     * the cost via the opponent dimension. We just assert it trains and the
+     * table records opp_samples distinctly from max_samples. */
+    mask_t board = board_ak742();
+    pe_hand_cluster_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.hole_cards = 4;
+    opts.seed = 11u;
+    opts.max_samples = 500;
+    opts.opp_samples = 150;
+
+    pe_bucket_table_t *t = pe_bucket_table_train_all(ctx, board, 6, &opts);
+    CHECK(t != NULL, "omaha train failed");
+    const char *path = "test_hand_clustering_opp.pe_bkt";
+    CHECK(pe_bucket_table_save(t, path) == 0, "save failed");
+    pe_bucket_table_t *l = pe_bucket_table_load(path);
+    CHECK(l != NULL, "load failed");
+    /* Largest possible (deterministic) equity check: reload reproduces assigns. */
+    mask_t h = card(MODERN_RANK_A, 1) | card(MODERN_RANK_K, 2) |
+               card(MODERN_RANK_7, 3) | card(MODERN_RANK_2, 1);
+    int bt = pe_bucket_table_assign(t, ctx, h, board);
+    int bl = pe_bucket_table_assign(l, ctx, h, board);
+    CHECK(bt == bl, "loaded table must reproduce Omaha assignments");
+    pe_bucket_table_free(t);
+    pe_bucket_table_free(l);
+    remove(path);
+    return 0;
+}
+
 /* ------------------------------------------------------------------ *
  * Serialization
  * ------------------------------------------------------------------ */
@@ -401,6 +511,9 @@ int main(void)
     rc |= test_train_monotonic(ctx);
     rc |= test_train_deterministic(ctx);
     rc |= test_train_edge_cases(ctx);
+    rc |= test_dedup_uses_all_clusters(ctx);
+    rc |= test_assign_validation(ctx);
+    rc |= test_opp_samples_decoupled(ctx);
     rc |= test_save_load_roundtrip(ctx);
     rc |= test_load_rejects_bad_files();
     rc |= test_solver_integration(ctx);

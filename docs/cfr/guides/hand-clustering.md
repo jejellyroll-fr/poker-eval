@@ -54,14 +54,24 @@ pe_bucket_table_t *table =
 ```
 
 `pe_bucket_table_train_all` covers every legal hole-card combination on the
-board. Training builds the opponent table **once** and reuses it for every
-hand, so cost is `O(hands + opponents)` evaluations, not `O(hands × opponents)`.
+board. For Hold'em (2-card holes) the opponent table is built **once** and
+reused for every hand, so cost is `O(hands + opponents)`. For Omaha (4-card
+holes) the opponent hands are rolled out per hero hand with two **independent**
+budgets to keep cost bounded:
 
-Centroids are seeded with k-means++ and refined with Lloyd iterations. Empty
-clusters are re-seeded onto the worst-represented point so the abstraction
-really uses `k` buckets. Finally clusters are sorted by ascending mean equity,
-so bucket 0 is always the weakest and bucket `k-1` the strongest — making
-bucket ids comparable across tables and readable in strategy dumps.
+- `max_samples` — number of hero hands sampled (Omaha) / exhaustive for Hold'em.
+- `opp_samples` — number of opponent hands rolled out *per* hero hand (Omaha
+  only). This is separate from `max_samples` so the two dimensions do not
+  multiply into an impractical cost. Total Omaha cost is
+  `O(max_samples × opp_samples)`.
+
+Centroids are seeded with k-means++ and refined with Lloyd iterations. Before
+clustering, identical feature vectors are collapsed and `k` is clamped to the
+number of distinct points, so every returned cluster is non-empty and the
+table uses exactly the requested (or fewer) buckets. Finally clusters are
+sorted by ascending mean equity, so bucket 0 is always the weakest and bucket
+`k-1` the strongest — making bucket ids comparable across tables and readable
+in strategy dumps.
 
 ## Serialization
 
@@ -85,6 +95,11 @@ coarse-strength bits in the 64-bit infoset key (8 bits at `<<48`, so `k` up to
 256). A NULL table falls back to the mode-3 abstraction rather than collapsing
 the tree.
 
+Assignment validates the table against the current hand: it rejects a table
+trained for a different board, a different hole-card count, or a hand that
+overlaps the board, returning `-1` so the adapter falls back to the mode-3
+abstraction instead of producing an invalid infoset key.
+
 ### `bench_cfr_omaha_river` flags
 
 | Flag | Meaning |
@@ -93,7 +108,8 @@ the tree.
 | `--cluster-k N` | number of buckets |
 | `--cluster-bins N` | histogram bins (default 8) |
 | `--cluster-seed N` | RNG seed for training/sampling |
-| `--cluster-samples N` | cap on Omaha opponent-hand sampling |
+| `--cluster-samples N` | cap on Omaha **hero-hand** sampling (`max_samples`) |
+| `--cluster-opp-samples N` | per-hero opponent rollout budget (`opp_samples`) |
 | `--bucket-table FILE` | load a prebuilt `.pe_bkt` |
 | `--bucket-table-out FILE` | save the trained `.pe_bkt` (deal 0) |
 
@@ -119,5 +135,6 @@ under deterministic sanitizer/valgrind jobs).
   small EV gap versus the un-abstracted solve, traded off against a much smaller
   infoset count.
 - Omaha features use deterministic sampling rather than exhaustive rollout, so
-  the feature vector is a Monte-Carlo estimate; raise `--cluster-samples` for
-  stability at the cost of training time.
+  the feature vector is a Monte-Carlo estimate; raise `--cluster-opp-samples`
+  for stability at the cost of training time, and `--cluster-samples` to widen
+  the hero-hand coverage.

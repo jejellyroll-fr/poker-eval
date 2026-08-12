@@ -49,8 +49,20 @@ extern "C"
 /* Default number of histogram bins when opts->n_bins is 0. */
 #define PE_HS_DEFAULT_BINS 8
 
-/* Default cap on the number of opponent hands sampled per feature vector. */
-#define PE_HS_DEFAULT_MAX_SAMPLES 2000
+/* Default cap on the number of HERO hands that Omaha training samples
+ * (train_all). A modest number keeps training cheap; the per-hero opponent
+ * rollout is bounded separately by PE_HS_DEFAULT_OPP_SAMPLES. Total Omaha
+ * training cost is O(max_samples * opp_samples). */
+#define PE_HS_DEFAULT_MAX_SAMPLES 1000
+
+/* Default number of opponent hands rolled out PER hero hand in Omaha feature
+ * extraction. Kept small and independent of the hero-hand budget so the two
+ * sampling dimensions do not multiply into an impractical cost. */
+#define PE_HS_DEFAULT_OPP_SAMPLES 200
+
+/* Hard ceilings for the two sampling budgets. */
+#define PE_HS_MAX_OPP_SAMPLES 20000
+
 
     /* ------------------------------------------------------------------ *
      * Feature extraction
@@ -84,7 +96,15 @@ extern "C"
     {
         int n_bins;           /* histogram bins, 0 => PE_HS_DEFAULT_BINS */
         int hole_cards;       /* 2 (hold'em) or 4 (omaha), 0 => 2 */
-        uint32_t max_samples; /* cap on opponent hands, 0 => default */
+        uint32_t max_samples; /* cap on HERO hands trained/sampled, 0 => default.
+                                 For Omaha this bounds the number of distinct
+                                 hands featurized; for Hold'em it is the size of
+                                 the exhaustive hand enumeration (unused, since
+                                 all C(47,2) hands are always covered). */
+        uint32_t opp_samples; /* cap on opponent hands rolled out PER hero hand
+                                 (Omaha only), 0 => default. Kept separate from
+                                 max_samples so the two sampling dimensions do
+                                 not multiply into an impractical cost. */
         uint32_t seed;        /* RNG seed; identical seeds give identical tables */
         int max_iterations;   /* Lloyd iterations, 0 => 100 */
         double hist_weight;   /* weight of the histogram block, 0 => 1.0 */
@@ -93,10 +113,11 @@ extern "C"
     /**
      * Compute the feature vector of one hand on one board.
      *
-     * Opponent hands are enumerated over the remaining deck (exhaustively when
-     * the combination count fits within opts->max_samples, otherwise by
-     * deterministic sampling seeded from opts->seed), so the result is
-     * reproducible for a given (hand, board, opts) triple.
+     * For 2-card hole games the opponent hands are enumerated exhaustively.
+     * For 4-card (Omaha) games the opponent hands are sampled deterministically
+     * (seeded from opts->seed) up to opts->opp_samples per hero hand, so the
+     * result is reproducible for a given (hand, board, opts) triple without the
+     * cost scaling with the hero-hand budget.
      *
      * @param ctx    Evaluation context (must not be NULL)
      * @param hole   Hole cards of the hand being scored

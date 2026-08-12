@@ -268,6 +268,7 @@ int main(int argc, char **argv)
     int cluster_bins = 0;
     unsigned cluster_seed = 0u;
     uint32_t cluster_samples = 0u;
+    uint32_t cluster_opp_samples = 0u;
     const char *bucket_table_in = NULL;
     const char *bucket_table_out = NULL;
     int csv_append = 0;
@@ -316,6 +317,8 @@ int main(int argc, char **argv)
             cluster_seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--cluster-samples") && i + 1 < argc)
             cluster_samples = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--cluster-opp-samples") && i + 1 < argc)
+            cluster_opp_samples = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--bucket-table") && i + 1 < argc)
             bucket_table_in = argv[++i];
         else if (!strcmp(argv[i], "--bucket-table-out") && i + 1 < argc)
@@ -503,6 +506,7 @@ if (!resume_path)
                 copts.n_bins = cluster_bins;
                 copts.seed = cluster_seed ? cluster_seed : seed;
                 copts.max_samples = cluster_samples;
+                copts.opp_samples = cluster_opp_samples;
                 btable = pe_bucket_table_train_all(ctx, canon_board, cluster_k > 0 ? cluster_k : 8, &copts);
                 if (!btable)
                     fprintf(stderr, "deal %d: clustering failed, falling back to bucket_mode 3\n", d);

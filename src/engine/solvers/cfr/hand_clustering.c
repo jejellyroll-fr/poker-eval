@@ -99,7 +99,8 @@ struct pe_bucket_table_t
     int n_bins;      /* histogram bins */
     int hole_cards;  /* 2 or 4 */
     uint32_t seed;   /* training seed (kept for reproducibility/debug) */
-    uint32_t max_samples;
+    uint32_t max_samples; /* hero-hand budget used at training time */
+    uint32_t opp_samples; /* per-hero opponent rollout used at training time */
     double hist_weight;
     mask_t board;
 
@@ -134,6 +135,13 @@ static void pe_opts_normalize(const pe_hand_cluster_opts_t *in, pe_hand_cluster_
         out->hole_cards = 4;
     if (out->max_samples == 0u)
         out->max_samples = PE_HS_DEFAULT_MAX_SAMPLES;
+    /* Per-hero opponent rollout budget for Omaha. Default to a small fixed
+     * count so it does not scale with the (possibly large) hero-hand budget.
+     * It is clamped to at least 1 and to the exact opponent count when smaller. */
+    if (out->opp_samples == 0u)
+        out->opp_samples = PE_HS_DEFAULT_OPP_SAMPLES;
+    if (out->opp_samples > PE_HS_MAX_OPP_SAMPLES)
+        out->opp_samples = PE_HS_MAX_OPP_SAMPLES;
     if (out->max_iterations <= 0)
         out->max_iterations = PE_HS_DEFAULT_ITERATIONS;
     if (!(out->hist_weight > 0.0))
@@ -246,10 +254,12 @@ int pe_hand_features(const EvalContext *ctx,
     else
     {
         /* 4-card hole games: C(46,4) = 163185 matchups is too many for a hot
-         * path, so draw a deterministic sample of distinct opponent hands. */
+         * path, so draw a deterministic sample of distinct opponent hands. The
+         * per-hero opponent budget (opp_samples) is deliberately independent of
+         * the hero-hand budget (max_samples) to avoid O(n_hero * n_opp) cost. */
         pe_pcg32_t rng;
         pe_pcg32_seed(&rng, (uint64_t)o.seed * 0x9E3779B97F4A7C15ULL + (uint64_t)hole + (uint64_t)board);
-        uint32_t target = o.max_samples;
+        uint32_t target = o.opp_samples;
         uint32_t attempts = 0u;
         uint32_t max_attempts = target * 4u + 64u;
         while (samples < target && attempts < max_attempts)
@@ -713,6 +723,57 @@ pe_bucket_table_t *pe_bucket_table_train(const EvalContext *ctx,
     if ((size_t)k > n_valid)
         k = (int)n_valid;
 
+    /* Collapse identical feature vectors before clustering. k-means cannot use
+     * more clusters than there are distinct points; if k exceeds the number of
+     * unique vectors the surplus clusters would be reseeded onto already-claimed
+     * points forever (see the empty-cluster handling in pe_kmeans_run) and the
+     * table would silently use fewer buckets than requested. Deduping and
+     * clamping k avoids that, while keeping every hand's equity contribution via
+     * the unique->original mapping below. */
+    double *uniq_pts = (double *)calloc(n_valid * (size_t)n_features, sizeof(double));
+    double *uniq_eq = (double *)calloc(n_valid, sizeof(double));
+    size_t *uniq_of = (size_t *)calloc(n_valid, sizeof(size_t)); /* unique idx per original */
+    int *uniq_n = (int *)calloc(n_valid, sizeof(int));          /* population per unique */
+    if (!uniq_pts || !uniq_eq || !uniq_of || !uniq_n)
+    {
+        free(points); free(equities); free(assign); free(scratch);
+        free(uniq_pts); free(uniq_eq); free(uniq_of); free(uniq_n);
+        errno = ENOMEM;
+        return NULL;
+    }
+    size_t n_unique = 0;
+    for (size_t i = 0; i < n_valid; ++i)
+    {
+        int found = 0;
+        for (size_t u = 0; u < n_unique; ++u)
+        {
+            const double *a = points + i * (size_t)n_features;
+            const double *b = uniq_pts + u * (size_t)n_features;
+            int same = 1;
+            for (int d = 0; d < n_features; ++d)
+            {
+                /* Feature vectors are produced by identical arithmetic, so an
+                 * exact match is what we want; use a tiny epsilon to keep the
+                 * compiler's float-equality warning quiet and tolerate any
+                 * incidental rounding. */
+                if (fabs(a[d] - b[d]) > 1e-15) { same = 0; break; }
+            }
+            if (same) { uniq_of[i] = u; uniq_n[u]++; found = 1; break; }
+        }
+        if (!found)
+        {
+            memcpy(uniq_pts + n_unique * (size_t)n_features,
+                   points + i * (size_t)n_features,
+                   sizeof(double) * (size_t)n_features);
+            uniq_eq[n_unique] = equities[i];
+            uniq_of[i] = (int)n_unique;
+            uniq_n[n_unique] = 1;
+            ++n_unique;
+        }
+    }
+    if ((size_t)k > n_unique)
+        k = (int)n_unique;
+
     pe_bucket_table_t *t = pe_table_alloc(k, o.n_bins);
     if (!t)
     {
@@ -720,6 +781,7 @@ pe_bucket_table_t *pe_bucket_table_train(const EvalContext *ctx,
         free(equities);
         free(assign);
         free(scratch);
+        free(uniq_pts); free(uniq_eq); free(uniq_of); free(uniq_n);
         errno = ENOMEM;
         return NULL;
     }
@@ -727,22 +789,25 @@ pe_bucket_table_t *pe_bucket_table_train(const EvalContext *ctx,
     t->hole_cards = o.hole_cards;
     t->seed = o.seed;
     t->max_samples = o.max_samples;
+    t->opp_samples = o.opp_samples;
     t->hist_weight = o.hist_weight;
 
     pe_pcg32_t rng;
     pe_pcg32_seed(&rng, (uint64_t)o.seed + 0x5DEECE66DULL);
 
-    pe_kmeanspp_init(points, n_valid, n_features, k, t->centroids, scratch, &rng);
-    for (size_t i = 0; i < n_valid; ++i)
+    pe_kmeanspp_init(uniq_pts, n_unique, n_features, k, t->centroids, scratch, &rng);
+    for (size_t i = 0; i < n_unique; ++i)
         assign[i] = -1;
-    pe_kmeans_run(points, n_valid, n_features, k, o.max_iterations, t->centroids, assign, &rng);
+    pe_kmeans_run(uniq_pts, n_unique, n_features, k, o.max_iterations, t->centroids, assign, &rng);
 
-    /* Per-cluster mean equity and population, from the final assignment. */
+    /* Map each original hand through its unique representative, then accumulate
+     * per-cluster mean equity and population across all original hands. */
     for (size_t i = 0; i < n_valid; ++i)
     {
-        int c = assign[i];
+        size_t u = uniq_of[i];
+        int c = assign[u];
         if (c < 0 || c >= k)
-            c = pe_nearest(points + i * (size_t)n_features, t->centroids, k, n_features, NULL);
+            c = pe_nearest(uniq_pts + u * (size_t)n_features, t->centroids, k, n_features, NULL);
         t->cluster_equity[c] += equities[i];
         t->cluster_size[c]++;
     }
@@ -754,6 +819,7 @@ pe_bucket_table_t *pe_bucket_table_train(const EvalContext *ctx,
             t->cluster_equity[c] = t->centroids[(size_t)c * n_features]; /* hs2 proxy */
     }
 
+    free(uniq_pts); free(uniq_eq); free(uniq_of); free(uniq_n);
     pe_table_sort_by_equity(t);
 
     free(points);
@@ -804,7 +870,10 @@ pe_bucket_table_t *pe_bucket_table_train_all(const EvalContext *ctx,
     else
     {
         /* Enumerating C(47,4) = 178365 Omaha hands and featurizing each one is
-         * prohibitive; sample a deterministic subset instead. */
+         * prohibitive; sample a deterministic (seeded) subset of hero hands
+         * instead. The per-hero opponent rollout is bounded separately by
+         * opts->opp_samples, so total cost stays O(max_samples * opp_samples)
+         * rather than O(max_samples^2)-ish. */
         size_t cap = o.max_samples;
         hands = (mask_t *)calloc(cap, sizeof(mask_t));
         if (!hands)
@@ -882,11 +951,24 @@ int pe_bucket_table_assign(const pe_bucket_table_t *table,
 {
     if (!table || !ctx)
         return -1;
+    /* Reject a table that does not match this board or hole-card game. Without
+     * this, pe_hand_features() would featurize the hand with the wrong path
+     * (e.g. a 4-card Omaha hand scored against Hold'em centroids from a
+     * same-board file) and return a plausible-but-invalid bucket, defeating the
+     * adapter's mode-3 fallback and producing wrong infoset keys. */
+    if (board != table->board)
+        return -1;
+    int n_hole = mask_popcount(hole);
+    if (n_hole != table->hole_cards)
+        return -1;
+    if ((hole & board) != MASK_EMPTY)
+        return -1;
     pe_hand_cluster_opts_t o;
     memset(&o, 0, sizeof(o));
     o.n_bins = table->n_bins;
     o.hole_cards = table->hole_cards;
     o.max_samples = table->max_samples;
+    o.opp_samples = table->opp_samples;
     o.seed = table->seed;
     o.hist_weight = table->hist_weight;
 
@@ -987,8 +1069,9 @@ int pe_bucket_table_assign_cached(pe_bucket_table_t *table,
  *   uint32   n_bins        histogram bins
  *   uint32   hole_cards    2 or 4
  *   uint32   seed          training seed
- *   uint32   max_samples   sampling budget used at training time
- *   uint32   reserved      0
+ *   uint32   max_samples   hero-hand budget used at training time
+ *   uint32   opp_samples   per-hero opponent rollout used at training time
+ *                           (was "reserved" in v1; 0 -> default on load)
  *   uint64   board         card mask the table was trained on
  *   double   hist_weight
  *   then, k times:
@@ -1081,7 +1164,7 @@ int pe_bucket_table_save(const pe_bucket_table_t *table, const char *path)
     if (!rc)
         rc = pe_wr_u32(f, table->max_samples);
     if (!rc)
-        rc = pe_wr_u32(f, 0u); /* reserved */
+        rc = pe_wr_u32(f, table->opp_samples); /* reserved -> opp_samples */
     if (!rc)
         rc = pe_wr_u64(f, (uint64_t)table->board);
     if (!rc)
@@ -1119,7 +1202,7 @@ pe_bucket_table_t *pe_bucket_table_load(const char *path)
         return NULL;
 
     char magic[8];
-    uint32_t version = 0, flags = 0, k = 0, n_bins = 0, hole_cards = 0, seed = 0, max_samples = 0, reserved = 0;
+    uint32_t version = 0, flags = 0, k = 0, n_bins = 0, hole_cards = 0, seed = 0, max_samples = 0;
     uint64_t board = 0;
     double hist_weight = 1.0;
 
@@ -1139,14 +1222,17 @@ pe_bucket_table_t *pe_bucket_table_load(const char *path)
         goto bad_format;
     if (pe_rd_u32(f, &max_samples) != 0)
         goto bad_format;
-    if (pe_rd_u32(f, &reserved) != 0)
+    /* The slot after max_samples was "reserved" in the initial format; it now
+     * carries opp_samples. Older files wrote 0 here, which maps to the default
+     * opponent budget on load (see pe_table_alloc below). */
+    uint32_t opp_samples = 0;
+    if (pe_rd_u32(f, &opp_samples) != 0)
         goto bad_format;
     if (pe_rd_u64(f, &board) != 0)
         goto bad_format;
     if (pe_rd_f64(f, &hist_weight) != 0)
         goto bad_format;
     (void)flags;
-    (void)reserved;
 
     pe_bucket_table_t *t = pe_table_alloc((int)k, (int)n_bins);
     if (!t)
@@ -1159,6 +1245,7 @@ pe_bucket_table_t *pe_bucket_table_load(const char *path)
     t->hole_cards = (int)hole_cards;
     t->seed = seed;
     t->max_samples = max_samples ? max_samples : PE_HS_DEFAULT_MAX_SAMPLES;
+    t->opp_samples = opp_samples ? opp_samples : PE_HS_DEFAULT_OPP_SAMPLES;
     t->hist_weight = (hist_weight > 0.0) ? hist_weight : 1.0;
 
     for (uint32_t c = 0; c < k; ++c)
