@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
     pockets[0] = Strings2CardMask(7, hand0);
     pockets[1] = Strings2CardMask(7, hand1);
 
-    assert(enumExhaustive_dispatch(game_razz, pockets, board, dead, 2, 0 /* nboard */,
+    assert(enumExhaustive(game_razz, pockets, board, dead, 2, 0 /* nboard */,
                           0 /* orderflag */, &result) == 0);
 
     if (verbose)
@@ -124,7 +124,7 @@ int main(int argc, char *argv[])
     pockets[0] = Strings2CardMask(7, hand0);
     pockets[1] = Strings2CardMask(7, hand1);
 
-    assert(enumExhaustive_dispatch(game_razz, pockets, board, dead, 2, 0 /* nboard */,
+    assert(enumExhaustive(game_razz, pockets, board, dead, 2, 0 /* nboard */,
                           0 /* orderflag */, &result) == 0);
 
     if (verbose)

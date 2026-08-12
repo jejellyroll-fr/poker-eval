@@ -445,16 +445,12 @@ function(add_poker_test name)
             set(_timeout 120)
         endif()
 
-        # The legacy Razz regression is a backend correctness check. Keep it
-        # on the classic implementation until the EEDC stud adapter has an
-        # equivalent deterministic result; this also avoids sanitizer-only
-        # failures from the experimental dispatch path.
+        # The legacy Razz regression is a backend correctness check.
         if("${name}" STREQUAL "razz")
             set(_timeout 120)
-            set(_test_environment "MALLOC_CHECK_=3;PE_ENUM_BACKEND=classic")
-        else()
-            set(_test_environment "MALLOC_CHECK_=3")
         endif()
+
+        set(_test_environment "MALLOC_CHECK_=3")
 
         set_tests_properties(${name} PROPERTIES
             TIMEOUT ${_timeout}
