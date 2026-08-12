@@ -196,6 +196,7 @@ int main(void)
 
     /* ---- Memory-mapped view ---- */
     pe_sol_mmap_t *view = NULL;
+    double mmap_probs[4];
     ASSERT_TRUE(pe_sol_open_mmap(sol_path, &view) == 0, "open mmap");
     ASSERT_TRUE(view != NULL, "mmap view non-null");
     ASSERT_TRUE(pe_sol_mmap_infoset_count(view) == 3, "mmap infoset count");
@@ -205,7 +206,7 @@ int main(void)
     for (size_t i = 0; i < pe_sol_mmap_infoset_count(view); ++i)
     {
         uint64_t k = 0;
-        ASSERT_TRUE(pe_sol_mmap_get_strategy(view, i, &k, 4, strat_b, NULL) == 0,
+        ASSERT_TRUE(pe_sol_mmap_get_strategy(view, i, &k, 4, mmap_probs, NULL) == 0,
                     "mmap get strategy");
         if (k == KEY_B)
         {
@@ -214,8 +215,8 @@ int main(void)
         }
     }
     ASSERT_TRUE(found >= 0, "KEY_B found in mmap view");
-    ASSERT_NEAR(strat_b[0], 0.1, 1e-4, "mmap strat_b[0]");
-    ASSERT_NEAR(strat_b[2], 0.7, 1e-4, "mmap strat_b[2]");
+    ASSERT_NEAR(mmap_probs[0], 0.1, 1e-4, "mmap strat_b[0]");
+    ASSERT_NEAR(mmap_probs[2], 0.7, 1e-4, "mmap strat_b[2]");
 
     /* Out-of-range action buffer must be rejected cleanly (ERANGE). */
     double tiny[1];
