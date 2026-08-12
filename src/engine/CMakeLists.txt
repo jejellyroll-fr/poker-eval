@@ -12,6 +12,7 @@ set(ENGINE_SOURCES
     solvers/cfr/board_canonical.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_storage.c
+    solvers/cfr/hand_clustering.c
     solvers/cfr/holdem_river_adapter.c
     solvers/cfr/multiway_postflop_adapter.c
     solvers/cfr/mpf_export.c
