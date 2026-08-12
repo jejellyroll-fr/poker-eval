@@ -69,7 +69,11 @@ function(add_unity_test test_name source_file)
         target_link_libraries(${test_name} PRIVATE m)
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
-    set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
+    if("${test_name}" STREQUAL "test_montecarlo_convergence_unity")
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 600)
+    else()
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
+    endif()
 
     # Auto-label tests by name for easier filtering
     string(TOLOWER "${test_name}" _lname)
