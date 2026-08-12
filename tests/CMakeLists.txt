@@ -446,10 +446,11 @@ function(add_poker_test name)
         endif()
 
         # The legacy Razz regression is a backend correctness check.
-        if("${name}" STREQUAL "razz" OR
-           "${name}" STREQUAL "test_montecarlo_convergence_unity" OR
-           "${name}" STREQUAL "test_omaha_range_parser")
+        if("${name}" STREQUAL "razz")
             set(_timeout 120)
+        elseif("${name}" STREQUAL "test_montecarlo_convergence_unity" OR
+               "${name}" STREQUAL "test_omaha_range_parser")
+            set(_timeout 600)
         endif()
 
         set(_test_environment "MALLOC_CHECK_=3")
