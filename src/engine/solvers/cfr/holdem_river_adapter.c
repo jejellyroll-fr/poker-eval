@@ -270,11 +270,29 @@ static uint64_t hr_infoset_key(const void *s)
 
     /* Private evaluation */
     mask_t hp = (p == 0) ? st->h0 : st->h1;
+
+    if (st->bucket_mode == 4 && st->bucket_table)
+    {
+        /* FEAT-04: learned abstraction. The bucket id supersedes the private
+         * hand class and the coarse strength bin, since it already encodes how
+         * the hand performs against the range. 8 bits at <<48 allow k up to
+         * PE_BUCKET_MAX_CLUSTERS. */
+        int bucket = pe_bucket_table_assign_cached(st->bucket_table, (const EvalContext *)st->ctx, hp, st->board);
+        if (bucket >= 0)
+        {
+            uint64_t tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+            return ((uint64_t)b_cls << 56) | ((uint64_t)(bucket & 0xFF) << 48) | tf | (act << 16) |
+                   (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
+        }
+        /* Assignment failed: fall through to the strength-threshold abstraction
+         * rather than collapsing distinct hands onto one key. */
+    }
+
     eval_t p_eval = pe_eval_7c(st->ctx, hp | st->board);
     hand_class_t pcl = eval_get_hand_class(p_eval);
     int p_cls = ((int)pcl) & 0xF;
 
-    if (st->bucket_mode == 3)
+    if (st->bucket_mode == 3 || st->bucket_mode == 4)
     {
         /* Board + private class + coarse strength bin within class (configurable) */
         uint32_t base = 0;
@@ -428,6 +446,7 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_state->bucket_mode = 3;
     out_state->bucket_bins = 8;
     out_state->bucket_thresh_count = 0;
+    out_state->bucket_table = NULL;
     out_state->extra_feats = 0;
     out_game->initial_state = out_state;
     out_game->game_data = out_state;

@@ -171,12 +171,27 @@ static uint64_t omaha_infoset_key(const void *s)
     if (st->bucket_mode == 1)
         return ((uint64_t)b_cls << 56) | (act << 16) | (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
     mask_t hp = (p == 0) ? st->h0 : st->h1;
+    if (st->bucket_mode == 4 && st->bucket_table)
+    {
+        /* FEAT-04: learned abstraction. The bucket id replaces both the private
+         * hand class and the coarse strength bin: it already encodes how the
+         * hand performs against the range, which is what those two fields were
+         * approximating. 8 bits at <<48 allow k up to PE_BUCKET_MAX_CLUSTERS. */
+        int bucket = pe_bucket_table_assign_cached(st->bucket_table, st->ctx, hp, st->board);
+        if (bucket >= 0)
+        {
+            return ((uint64_t)b_cls << 56) | ((uint64_t)(bucket & 0xFF) << 48) | (act << 16) |
+                   (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
+        }
+        /* Assignment failed (degenerate board/hand): fall through to the
+         * strength-threshold abstraction rather than collapsing the tree. */
+    }
     eval_t p_eval = eval_omaha_best(st->ctx, hp, st->board);
     hand_class_t pcl = eval_get_hand_class(p_eval);
     int p_cls = ((int)pcl) & 0xF;
     if (st->bucket_mode >= 2)
     {
-        if (st->bucket_mode == 3)
+        if (st->bucket_mode == 3 || st->bucket_mode == 4)
         {
             uint32_t base = 0;
             switch (pcl)
@@ -310,6 +325,7 @@ void omaha_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board
     out_state->bucket_mode = 3;
     out_state->bucket_bins = 8;
     out_state->bucket_thresh_count = 0;
+    out_state->bucket_table = NULL;
     out_game->initial_state = out_state;
     out_game->game_data = out_state;
     out_game->is_terminal = omaha_is_terminal_wrapper;

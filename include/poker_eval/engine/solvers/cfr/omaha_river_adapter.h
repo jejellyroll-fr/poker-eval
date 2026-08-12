@@ -13,6 +13,7 @@
 
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/engine/solvers/cfr/hand_clustering.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -57,11 +58,16 @@ extern "C"
         const EvalContext *ctx;
 
         /* Bucketing river */
-        unsigned char bucket_mode; /* 0: none, 1: board, 2: board+player, 3: coarse */
+        unsigned char bucket_mode; /* 0: none, 1: board, 2: board+player, 3: coarse, 4: k-means clusters */
         unsigned char bucket_bins; /* nombre de classes */
         unsigned char bucket_thresh_count;
         uint32_t bucket_thresh[OMAHA_MAX_BUCKET_THRESH];
         int suit_perm[4]; /* suit canonicalization mapping (label -> original suit) */
+
+        /* FEAT-04: abstraction apprise par clustering (bucket_mode == 4).
+         * Table entraînée hors solve et partagée entre deals ; l'état ne la
+         * possède pas et ne la libère pas. NULL => repli sur le mode 3. */
+        pe_bucket_table_t *bucket_table;
     } omaha_river_state_t;
 
     /* --- Fabrique ------------------------------------------------------------ */

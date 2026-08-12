@@ -11,6 +11,7 @@ can jump directly to the topic you need.
 | CFR Export Results | Post-run result exports (JSON / CSV) | ✅ |
 | CFR Performance | Perf counters & instrumentation tips | ✅ |
 | CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | ✅ |
+| Hand Abstraction via Clustering | k-means hand clustering (FEAT-04): features, `.pe_bkt`, solver wiring | ✅ |
 
 ## CLI helpers
 
