@@ -1,0 +1,172 @@
+name: Sanitizers, Valgrind & Static Analysis
+
+# INFRA-01 (issue #97): give CI a memory-error safety net instead of assuming
+# the bugs it is meant to catch are absent.
+#
+#   - ASan + UBSan over the full test suite, gating on every PR/push to master.
+#     LSan is folded in via ASan's leak detection, so BUG-06/09/10/12-class
+#     regressions fail the build the moment they land.
+#   - Valgrind on a short solve (bench_cfr_omaha_river --iters 50) with a leak
+#     byte threshold, so a slow-growing leak still breaks CI rather than
+#     accumulating silently.
+#   - cppcheck --enable=all in non-blocking mode, to start surfacing issues
+#     without gating merges on its (noisy) output yet.
+#
+# Acceptance: the ASan job fails on a deliberately introduced use-after-free.
+# That is verified on a throwaway branch (a test that frees then reads a
+# buffer) — the production suite must stay green, so the broken test is NOT
+# committed here; the capability is what gates, and any UAF in the real suite
+# trips it the same way.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  asan-ubsan:
+    name: ASan + UBSan (full suite)
+    runs-on: ubuntu-latest
+    # Gating on purpose: issue #97 exists to make CI catch leaks and
+    # out-of-bounds that the suite otherwise missed. A red run means a real
+    # memory bug landed and must be fixed, not suppressed.
+    timeout-minutes: 90
+    env:
+      # Halt on the first undefined-behaviour report and on leaks; print a
+      # stack trace so the failure names something other than the runtime.
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential clang libssl-dev ninja-build
+
+      - name: Configure (ASan + UBSan, Debug)
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build-san \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZERS=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF \
+            -DENABLE_NATIVE_ARCH=OFF
+
+      - name: Build
+        run: cmake --build build-san --parallel
+
+      - name: Smoke pass (core regression)
+        run: |
+          cd build-san
+          ctest --output-on-failure -R "test_canonical_regression|test_canonical_invariants|test_omaha_invariants"
+
+      - name: Full test suite under sanitizers
+        run: |
+          cd build-san
+          # Per-test timeout generous: ASan/UBSan slow heavy suites (CFR,
+          # range parsing) well past the 30s the bare build stays under.
+          ctest --output-on-failure --timeout 300
+
+  valgrind:
+    name: Valgrind (CFR solve, leak threshold)
+    runs-on: ubuntu-latest
+    # Gating: a leak above the threshold fails CI so the finding cannot rot.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential valgrind
+
+      - name: Configure (Release)
+        run: |
+          cmake -S . -B build-vg \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF \
+            -DENABLE_NATIVE_ARCH=OFF
+
+      - name: Build
+        run: cmake --build build-vg --parallel
+
+      - name: Run short solve under Valgrind
+        run: |
+          set -uo pipefail
+          LOG="$(pwd)/valgrind.log"
+          BIN="$(find build-vg -type f -name bench_cfr_omaha_river -perm -111 -print -quit)"
+          if [ -z "$BIN" ]; then
+            echo "Benchmark binary not found under build-vg"; find build-vg -type f -maxdepth 5 | sort; exit 1
+          fi
+          # Run the benchmark *through* Valgrind so the log contains a real
+          # leak summary. --error-exitcode only affects Valgrind's own return
+          # code; we capture to a file and parse it below regardless.
+          valgrind --leak-check=full --error-exitcode=42 \
+            --log-file="$LOG" \
+            "$BIN" --iters 50 --deals 50 --csv /tmp/cfr_omaha_river.csv >/dev/null 2>&1 || true
+
+          echo "=== Valgrind summary ==="
+          grep -E "ERROR SUMMARY|definitely lost|indirectly lost|possibly lost|still reachable" "$LOG" || true
+
+          # Fail on definite/indirect leaks above a small threshold so the
+          # finding cannot rot. "still reachable" is tolerated (allocations at
+          # exit that the runtime owns).
+          DEF_LOST=$(grep -E "definitely lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes' || true)
+          IND_LOST=$(grep -E "indirectly lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes' || true)
+          DEF_LOST=${DEF_LOST:-0}; IND_LOST=${IND_LOST:-0}
+          THRESHOLD=1024
+          echo "definitely lost: ${DEF_LOST} bytes, indirectly lost: ${IND_LOST} bytes, threshold: ${THRESHOLD} bytes"
+          if [ "$DEF_LOST" -gt "$THRESHOLD" ] || [ "$IND_LOST" -gt "$THRESHOLD" ]; then
+            echo "Leak threshold exceeded:"; cat "$LOG"; exit 1
+          fi
+
+  cppcheck:
+    name: cppcheck (non-blocking)
+    runs-on: ubuntu-latest
+    # Surface static-analysis findings without gating merges yet.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --std=c99 --quiet \
+            -i build -i third_party -i include/poker_eval/gpu \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            --inline-suppr \
+            src include 2>cppcheck-report.txt || true
+          echo "=== cppcheck findings (non-blocking) ==="
+          cat cppcheck-report.txt || true
+
+      - name: Upload cppcheck report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cppcheck-report
+          path: cppcheck-report.txt
