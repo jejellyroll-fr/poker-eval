@@ -128,8 +128,8 @@ jobs:
           # Fail on definite/indirect leaks above a small threshold so the
           # finding cannot rot. "still reachable" is tolerated (allocations at
           # exit that the runtime owns).
-          DEF_LOST=$(grep -E "definitely lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes')
-          IND_LOST=$(grep -E "indirectly lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes')
+          DEF_LOST=$(grep -E "definitely lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes' || true)
+          IND_LOST=$(grep -E "indirectly lost:" "$LOG" | grep -oE "[0-9,]+ bytes" | head -1 | tr -d ', bytes' || true)
           DEF_LOST=${DEF_LOST:-0}; IND_LOST=${IND_LOST:-0}
           THRESHOLD=1024
           echo "definitely lost: ${DEF_LOST} bytes, indirectly lost: ${IND_LOST} bytes, threshold: ${THRESHOLD} bytes"
