@@ -8,6 +8,7 @@
 #define POKER_EVAL_HOLDEM_RIVER_ADAPTER_H
 
 #include "cfr_core.h"
+#include "hand_clustering.h"
 #include "poker_eval/core/eval_context.h"
 #include "poker_eval/core/modern_cardmask.h"
 
@@ -35,7 +36,7 @@ typedef struct {
     int raises_left;
     double bet_fracs[8];
     int raise_cap;
-    int bucket_mode;
+    int bucket_mode; /* 0: none, 1: board, 2: board+player, 3: coarse, 4: k-means clusters */
     int bucket_bins;
     int bucket_thresh_count;
     int extra_feats;
@@ -43,6 +44,10 @@ typedef struct {
     double bet_pot;
     uint32_t bucket_thresh[16];
     int suit_perm[4]; /* suit canonicalization mapping (label -> original suit) */
+    /* FEAT-04: learned clustering abstraction used when bucket_mode == 4.
+     * Trained outside the solve and shared across deals; the state neither owns
+     * nor frees it. NULL falls back to the bucket_mode 3 abstraction. */
+    pe_bucket_table_t *bucket_table;
 } holdem_river_state_t;
 
 /* Create Hold'em river adapter */

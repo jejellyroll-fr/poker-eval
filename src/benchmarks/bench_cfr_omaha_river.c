@@ -10,6 +10,7 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/engine/solvers/cfr/hand_clustering.h>
 #include <poker_eval/engine/solvers/cfr/omaha_river_adapter.h>
 
 typedef struct
@@ -35,7 +36,14 @@ static void dump_cb(uint64_t key, int n, const double *regret, const double *avg
     unsigned b_cls = (unsigned)((key >> 56) & 0xFull);
     unsigned p_cls = (unsigned)((key >> 52) & 0xFull);
     unsigned coarse = (unsigned)((key >> 48) & 0xFull);
-
+    /* bucket_mode 4 packs an 8-bit learned bucket id over bits 48..55, so the
+     * p_cls / coarse split does not apply there. */
+    unsigned bucket_id = (unsigned)((key >> 48) & 0xFFull);
+    if (C->bucket_mode == 4)
+    {
+        coarse = bucket_id;
+        p_cls = 0u;
+    }
     double sum = 0.0;
     for (int i = 0; i < n; i++)
         sum += avg[i];
@@ -89,7 +97,7 @@ static void dump_cb(uint64_t key, int n, const double *regret, const double *avg
     const char *bname = eval_hand_class_name((hand_class_t)b_cls);
     const char *pname = eval_hand_class_name((hand_class_t)p_cls);
     fprintf(C->f, "%llu,%u,%s,%s,%u,0x%04X,%u,%u,%d,%s,%.6f,%.6f,%.6f,%.6f\n",
-            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3) ? coarse : 0u,
+            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3 || C->bucket_mode == 4) ? coarse : 0u,
             hist, to_call, raises_left, n, buf, sum, H, C->ev_root, C->ev_local);
 }
 
@@ -105,7 +113,14 @@ static void dump_json_cb(uint64_t key, int n, const double *regret, const double
     unsigned b_cls = (unsigned)((key >> 56) & 0xFull);
     unsigned p_cls = (unsigned)((key >> 52) & 0xFull);
     unsigned coarse = (unsigned)((key >> 48) & 0xFull);
-
+    /* bucket_mode 4 packs an 8-bit learned bucket id over bits 48..55, so the
+     * p_cls / coarse split does not apply there. */
+    unsigned bucket_id = (unsigned)((key >> 48) & 0xFFull);
+    if (C->bucket_mode == 4)
+    {
+        coarse = bucket_id;
+        p_cls = 0u;
+    }
     double sum = 0.0;
     for (int i = 0; i < n; i++)
         sum += avg[i];
@@ -123,7 +138,7 @@ static void dump_json_cb(uint64_t key, int n, const double *regret, const double
         fprintf(C->f, ",\n");
     C->first = 0;
     fprintf(C->f, "    {\"key\": %llu, \"player\": %u, \"board_cls\": \"%s\", \"private_cls\": \"%s\", \"coarse_bin\": %u, \"hist\": \"0x%04X\", \"to_call\": %u, \"raises_left\": %u, \"mass\": %.6f, \"entropy\": %.6f, \"ev_root\": %.6f, \"ev_local\": %.6f, \"actions\": [",
-            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3) ? coarse : 0u,
+            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3 || C->bucket_mode == 4) ? coarse : 0u,
             hist, to_call, raises_left, sum, H, C->ev_root, C->ev_local);
 
     for (int i = 0; i < n; i++)
@@ -248,6 +263,14 @@ int main(int argc, char **argv)
     int bucket_mode = 3;
     int bucket_bins = 8;
     const char *bucket_thresh = NULL;
+    /* FEAT-04 clustering abstraction (bucket_mode 4) */
+    int cluster_k = 0;
+    int cluster_bins = 0;
+    unsigned cluster_seed = 0u;
+    uint32_t cluster_samples = 0u;
+    uint32_t cluster_opp_samples = 0u;
+    const char *bucket_table_in = NULL;
+    const char *bucket_table_out = NULL;
     int csv_append = 0;
     int use_dcfr = 0;
     int use_ecfr = 0;
@@ -286,6 +309,20 @@ int main(int argc, char **argv)
             bucket_bins = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--bucket-thresholds") && i + 1 < argc)
             bucket_thresh = argv[++i];
+        else if (!strcmp(argv[i], "--cluster-k") && i + 1 < argc)
+            cluster_k = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--cluster-bins") && i + 1 < argc)
+            cluster_bins = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--cluster-seed") && i + 1 < argc)
+            cluster_seed = (unsigned)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--cluster-samples") && i + 1 < argc)
+            cluster_samples = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--cluster-opp-samples") && i + 1 < argc)
+            cluster_opp_samples = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--bucket-table") && i + 1 < argc)
+            bucket_table_in = argv[++i];
+        else if (!strcmp(argv[i], "--bucket-table-out") && i + 1 < argc)
+            bucket_table_out = argv[++i];
         else if (!strcmp(argv[i], "--csv-append"))
             csv_append = 1;
         else if (!strcmp(argv[i], "--dcfr"))
@@ -442,9 +479,45 @@ if (!resume_path)
                 if (st.bucket_thresh[i] < st.bucket_thresh[i - 1])
                     st.bucket_thresh[i] = st.bucket_thresh[i - 1];
         }
+        /* FEAT-04: learned bucket table. A table is board-specific, so it is
+         * either loaded (and only used when its board matches this deal) or
+         * trained on the canonicalized board of this deal. */
+        pe_bucket_table_t *btable = NULL;
+        if (bucket_mode == 4)
+        {
+            mask_t canon_board = st.board; /* canonicalized by omaha_build_game */
+            if (bucket_table_in)
+            {
+                btable = pe_bucket_table_load(bucket_table_in);
+                if (btable && pe_bucket_table_board(btable) != canon_board)
+                {
+                    fprintf(stderr, "deal %d: bucket table board mismatch, retraining\n", d);
+                    pe_bucket_table_free(btable);
+                    btable = NULL;
+                }
+                else if (!btable)
+                    fprintf(stderr, "deal %d: failed to load %s, retraining\n", d, bucket_table_in);
+            }
+            if (!btable)
+            {
+                pe_hand_cluster_opts_t copts;
+                memset(&copts, 0, sizeof(copts));
+                copts.hole_cards = 4;
+                copts.n_bins = cluster_bins;
+                copts.seed = cluster_seed ? cluster_seed : seed;
+                copts.max_samples = cluster_samples;
+                copts.opp_samples = cluster_opp_samples;
+                btable = pe_bucket_table_train_all(ctx, canon_board, cluster_k > 0 ? cluster_k : 8, &copts);
+                if (!btable)
+                    fprintf(stderr, "deal %d: clustering failed, falling back to bucket_mode 3\n", d);
+                else if (bucket_table_out && d == 0 && pe_bucket_table_save(btable, bucket_table_out) != 0)
+                    fprintf(stderr, "deal %d: failed to save %s\n", d, bucket_table_out);
+            }
+            st.bucket_table = btable;
+        }
+
         cfr_storage_t *storage = cfr_storage_create();
-        cfr_config_t c = {0};
-        c.max_iterations = iters;
+        cfr_config_t c = {0};        c.max_iterations = iters;
         c.enable_dcfr = use_dcfr;
         c.dcfr_alpha = a;
         c.dcfr_beta = b;
@@ -540,6 +613,8 @@ if (!resume_path)
             }
         }
         cfr_storage_destroy(storage);
+        pe_bucket_table_free(btable);
+        st.bucket_table = NULL;
     }
 
     if (fds)

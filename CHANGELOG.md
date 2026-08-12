@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Learned hand abstraction via k-means clustering (FEAT-04, #121): per-hand
+  feature vectors of `E[HS^2]` + equity-distribution histogram, k-means++
+  seeded k-means with deterministic (PCG) training, and a serializable
+  `.pe_bkt` bucket table (`pe_bucket_table_train` / `pe_bucket_table_load`,
+  magic `PEBKT001`). River adapters accept `bucket_mode = 4` to abstract
+  private hands into learned buckets, composed after FEAT-02 board isomorphism.
 - Compact binary storage format for solved trees: `pe_cfr_save_storage()` /
   `pe_cfr_load_storage()` plus memory-mapped read-only `.pe_sol` views
   (`pe_sol_open_mmap`) and a `.pe_tree` binary serializer (`pe_tree_save` /
