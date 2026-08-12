@@ -66,8 +66,9 @@ TestCase tests[] = {
     {"NoPair 7 cartes", {"2c", "3d", "4h", "5s", "7c", "8d", "9h"}, 7, StdRules_HandType_NOPAIR},
     // OnePair
     {"OnePair 5 cartes", {"2c", "2d", "4h", "5s", "7c", NULL, NULL}, 5, StdRules_HandType_ONEPAIR},
-    {"OnePair 6 cartes", {"2c", "2d", "4h", "5s", "7c", "8d", NULL}, 6, StdRules_HandType_ONEPAIR},
-    {"OnePair 7 cartes", {"2c", "2d", "4h", "5s", "7c", "8d", "9h"}, 7, StdRules_HandType_ONEPAIR},
+    /* Lowball evaluates the best five cards, so the pair can be discarded. */
+    {"OnePair 6 cartes", {"2c", "2d", "4h", "5s", "7c", "8d", NULL}, 6, StdRules_HandType_NOPAIR},
+    {"OnePair 7 cartes", {"2c", "2d", "4h", "5s", "7c", "8d", "9h"}, 7, StdRules_HandType_NOPAIR},
     // TwoPair
     {"TwoPair 5 cartes", {"2c", "2d", "4h", "4s", "7c", NULL, NULL}, 5, StdRules_HandType_TWOPAIR},
     {"TwoPair 6 cartes (3 paires)", {"2c", "2d", "4h", "4s", "7c", "7d", NULL}, 6, StdRules_HandType_TWOPAIR},
@@ -75,7 +76,7 @@ TestCase tests[] = {
     // Trips
     {"Trips 5 cartes", {"2c", "2d", "2h", "5s", "7c", NULL, NULL}, 5, StdRules_HandType_TRIPS},
     {"Trips 6 cartes", {"2c", "2d", "2h", "5s", "7c", "8d", NULL}, 6, StdRules_HandType_ONEPAIR},
-    {"Trips 7 cartes", {"2c", "2d", "2h", "5s", "7c", "8d", "9h"}, 7, StdRules_HandType_ONEPAIR},
+    {"Trips 7 cartes", {"2c", "2d", "2h", "5s", "7c", "8d", "9h"}, 7, StdRules_HandType_NOPAIR},
     // FullHouse
     {"FullHouse 5 cartes", {"2c", "2d", "2h", "4s", "4c", NULL, NULL}, 5, StdRules_HandType_FULLHOUSE},
     {"FullHouse 6 cartes", {"2c", "2d", "2h", "4s", "4c", "8d", NULL}, 6, StdRules_HandType_TWOPAIR},

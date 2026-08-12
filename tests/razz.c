@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
     pockets[0] = Strings2CardMask(7, hand0);
     pockets[1] = Strings2CardMask(7, hand1);
 
-    assert(enumExhaustive_dispatch(game_razz, pockets, board, dead, 2, 0 /* nboard */,
+    assert(enumExhaustive(game_razz, pockets, board, dead, 2, 0 /* nboard */,
                           0 /* orderflag */, &result) == 0);
 
     if (verbose)
@@ -124,19 +124,16 @@ int main(int argc, char *argv[])
     pockets[0] = Strings2CardMask(7, hand0);
     pockets[1] = Strings2CardMask(7, hand1);
 
-    assert(enumExhaustive_dispatch(game_razz, pockets, board, dead, 2, 0 /* nboard */,
+    assert(enumExhaustive(game_razz, pockets, board, dead, 2, 0 /* nboard */,
                           0 /* orderflag */, &result) == 0);
 
     if (verbose)
       enumResultPrint(&result, pockets, board);
 
-    /* 6s-full-of-5s (pocket[0]) loses to 4s-full-of-8s (pocket[1]) in razz:
-     * the razz evaluator inverts the stud high ranking, so the hand that
-     * wins in stud (pocket[1]) loses in razz. However pocket[1] wins
-     * because 9-8-4 with two pairs is lower than 7-6-5 with two pairs
-     * when high-card-first is used.*/
-    assert(result.ev[1] > 0.9999);
-    assert(result.ev[0] < 0.0001);
+    /* The first hand wins: 7-6-5 with two pairs beats three nines under
+     * Razz's ace-to-five lowball ranking. */
+    assert(result.ev[0] > 0.9999);
+    assert(result.ev[1] < 0.0001);
   }
 
   return 0;

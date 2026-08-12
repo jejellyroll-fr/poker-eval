@@ -778,6 +778,8 @@ static int test_multiway_ranges(void)
                 "Omaha AAxxds/KKxxds should parse");
     TEST_ASSERT(mw.ranges[0].count == 864 && mw.ranges[1].count == 864,
                 "Omaha ranges keep all 864 combos each");
+    ARP_FreeMultiwayRange(&mw);
+    ARP_ClearCache();
     TEST_PASS("Multi-way range tests");
 }
 

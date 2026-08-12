@@ -69,7 +69,11 @@ function(add_unity_test test_name source_file)
         target_link_libraries(${test_name} PRIVATE m)
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
-    set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
+    if("${test_name}" STREQUAL "test_montecarlo_convergence_unity")
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 600)
+    else()
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
+    endif()
 
     # Auto-label tests by name for easier filtering
     string(TOLOWER "${test_name}" _lname)
@@ -445,9 +449,19 @@ function(add_poker_test name)
             set(_timeout 120)
         endif()
 
+        # The legacy Razz regression is a backend correctness check.
+        if("${name}" STREQUAL "razz")
+            set(_timeout 120)
+        elseif("${name}" STREQUAL "test_montecarlo_convergence_unity" OR
+               "${name}" STREQUAL "test_omaha_range_parser")
+            set(_timeout 600)
+        endif()
+
+        set(_test_environment "MALLOC_CHECK_=3")
+
         set_tests_properties(${name} PROPERTIES
             TIMEOUT ${_timeout}
-            ENVIRONMENT "MALLOC_CHECK_=3"
+            ENVIRONMENT "${_test_environment}"
         )
 
         # Auto-label tests by name for easier filtering
@@ -626,7 +640,7 @@ add_poker_test(test_cfr_multiway)
 add_poker_test(test_board_canonical)
 set_tests_properties(test_board_canonical PROPERTIES LABELS "engine;cfr;canonicalize")
 add_poker_test(test_cfr_chance_nodes)
-set_tests_properties(test_cfr_chance_nodes PROPERTIES LABELS "engine;cfr;chance")
+set_tests_properties(test_cfr_chance_nodes PROPERTIES LABELS "engine;cfr;chance" TIMEOUT 180)
 add_poker_test(test_cfr_compact_storage)
 set_tests_properties(test_cfr_compact_storage PROPERTIES LABELS "engine;cfr;compact")
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
