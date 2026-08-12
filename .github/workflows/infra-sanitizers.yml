@@ -63,7 +63,8 @@ jobs:
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_BINDINGS=OFF \
             -DBUILD_GPU=OFF \
-            -DENABLE_OPENMP=OFF
+            -DENABLE_OPENMP=OFF \
+            -DENABLE_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build build-san --parallel
@@ -102,7 +103,8 @@ jobs:
             -DBUILD_EXAMPLES=ON \
             -DBUILD_BINDINGS=OFF \
             -DBUILD_GPU=OFF \
-            -DENABLE_OPENMP=OFF
+            -DENABLE_OPENMP=OFF \
+            -DENABLE_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build build-vg --parallel
