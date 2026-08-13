@@ -32,12 +32,13 @@ jobs:
   asan-ubsan:
     name: ASan + UBSan (full suite)
     runs-on: ubuntu-latest
-    # Reporting-only for now: PR #177's run on the unchanged implementation
-    # surfaces 7 baseline failures (incl. a stack-buffer-overflow at
-    # mpf_compact_storage.c:603 and a 131 KB LSan leak) that must be fixed or
-    # quarantined first. Gating now would pin the PR permanently red and block
-    # unrelated merges. Remove continue-on-error once the baseline is clean.
-    continue-on-error: true
+    # Gating on purpose (INFRA-01, issue #97): the sanitizer job must fail the
+    # build when it catches a leak, out-of-bounds, or undefined behaviour. The
+    # 7 baseline failures from PR #177 were resolved in PR #180 (defensive
+    # get_strategy fix + sanitizer-skip quarantine of the 3 slow tests), and a
+    # clean-master re-run (31678152049) passed 163/163 with LSan active and no
+    # diagnostics. A red run now means a real memory bug landed and must be
+    # fixed, not suppressed.
     timeout-minutes: 90
     env:
       # Halt on the first undefined-behaviour report and on leaks; print a
