@@ -1780,6 +1780,25 @@ static int mpf_tree_apply_range_profiles(mpf_tree_def_t *tree, mpf_tree_error_t 
         }
         node->range_profile = profile;
 
+        /* FEAT-07: resolve a $cb c-bet range to the previous street's
+           aggressor active range. We infer the aggressor as the player who
+           acted first on the previous street (first_to_act of this node's
+           snapshot when available), and the previous street as the one before
+           the node's own street. */
+        if (profile->has_cb)
+        {
+            mpf_street_t prev = node->street;
+            if (prev > MPF_STREET_PREFLOP)
+                prev = (mpf_street_t)(prev - 1);
+            int aggressor = (node->has_snapshot && node->snapshot.first_to_act >= 0)
+                               ? node->snapshot.first_to_act
+                               : node->acting_player;
+            node->cb_range = mpf_tree_resolve_cb_range(tree->range_profiles,
+                                                      tree->range_profile_count,
+                                                      aggressor, prev,
+                                                      profile->cb_range_id);
+        }
+
         /* FEAT-07: evaluate the profile's spot rules against this node's
            runtime context (SPR + position). The result is cached on the node
            so the solver can skip (or morph) the range when the gate fails. */
