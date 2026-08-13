@@ -76,7 +76,7 @@ jobs:
     
     - name: Install dependencies (Windows MinGW)
       if: runner.os == 'Windows' && matrix.compiler == 'mingw'
-      uses: msys2/setup-msys2@v2
+      uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
       with:
         msystem: UCRT64
         update: true
