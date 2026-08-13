@@ -581,7 +581,11 @@ int pe_sol_mmap_get_strategy(const pe_sol_mmap_t *view,
     const unsigned char *rec = view->records[index];
     uint64_t key = pe_rd_u64(rec);
     uint32_t n = pe_rd_u32(rec + 8);
-    if ((int)n > max_actions)
+    /* Compare as unsigned: n is uint32_t, so a value above INT_MAX would make
+     * (int)n negative and slip past a signed comparison, then let the write
+     * loop run off the end of the caller's out_probs buffer (stack-buffer
+     * overflow). The loader already caps n at 4096, but reject defensively. */
+    if (n > (uint32_t)max_actions)
     {
         errno = ERANGE;
         return -1;
@@ -595,7 +599,9 @@ int pe_sol_mmap_get_strategy(const pe_sol_mmap_t *view,
     double deq_sum = 0.0;
     for (uint32_t i = 0; i < n; ++i)
         deq_sum += pe_dequantize(pe_rd_u16(q + (size_t)i * 2));
-    for (uint32_t i = 0; i < n; ++i)
+    /* Never write past max_actions even if the caller disagrees with n. */
+    uint32_t w = n < (uint32_t)max_actions ? n : (uint32_t)max_actions;
+    for (uint32_t i = 0; i < w; ++i)
     {
         double pr = (deq_sum > 0.0)
                         ? (pe_dequantize(pe_rd_u16(q + (size_t)i * 2)) / deq_sum)

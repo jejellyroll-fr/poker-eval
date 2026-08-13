@@ -1240,3 +1240,16 @@ foreach(_pe_test ${_pe_all_tests})
     set_property(TEST ${_pe_test} APPEND PROPERTY ENVIRONMENT "OMP_TMPDIR=${PE_TEST_TMPDIR}")
     set_property(TEST ${_pe_test} APPEND PROPERTY ENVIRONMENT "KMP_TMPDIR=${PE_TEST_TMPDIR}")
 endforeach()
+
+# These tests are correct but too slow under ASan/UBSan instrumentation to
+# finish inside the sanitizer job's per-test timeout (INFRA-01 #97 follow-up).
+# They remain in the normal (unsanitized) suite; the sanitizer workflow filters
+# them out with -LE sanitizer-skip so the memory-check signal stays useful.
+foreach(_slow_san_test
+        test_montecarlo_convergence_unity
+        test_omaha_range_parser
+        test_cfr_chance_nodes)
+    if(TARGET ${_slow_san_test} OR TEST ${_slow_san_test})
+        set_property(TEST ${_slow_san_test} APPEND PROPERTY LABELS "sanitizer-skip")
+    endif()
+endforeach()
