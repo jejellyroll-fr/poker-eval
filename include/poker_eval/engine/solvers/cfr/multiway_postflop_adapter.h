@@ -33,7 +33,11 @@ enum
 {
     MPF_ACTION_FOLD = 0,
     MPF_ACTION_CALL = 1,
-    MPF_ACTION_RAISE_BASE = 2
+    MPF_ACTION_RAISE_BASE = 2,
+    /* Distinct, non-colliding action id reserved for a pot-limit effective
+     * all-in candidate (auto-jam when the remaining stack is <= threshold * pot).
+     * Sits past the raise band so it never aliases a raise index. */
+    MPF_ACTION_ALL_IN = MPF_ACTION_RAISE_BASE + MPF_MAX_BET_SIZES
 };
 
 typedef enum
@@ -117,6 +121,10 @@ typedef struct
 
     mpf_preflop_cfg_t preflop;
 
+    /* FEAT-06: pot-limit effective all-in + dynamic STPR rules */
+    int is_pot_limit;                 /* 1 for PLO4/5/6 pot-limit structures */
+    double committal_threshold_percent; /* auto-jam when remaining stack <= threshold% * pot */
+
     struct mpf_tree_def_t *tree;
     int tree_enforced;
     mpf_perf_stats_t *perf_stats;
@@ -168,6 +176,11 @@ typedef struct mpf_state_s
     double base_bet_sizes[MPF_MAX_BET_SIZES];
     int base_bet_size_count;
     int base_enable_pot_sizing;
+
+    /* FEAT-06: pot-limit effective all-in + dynamic STPR rules */
+    int is_pot_limit;                 /* 1 for PLO4/5/6 pot-limit structures */
+    double committal_threshold_percent; /* auto-jam when remaining stack <= threshold% * pot */
+    double stpr;                      /* dynamic stack-to-pot ratio at this node (current_stack / pot) */
 
     double utilities[MPF_MAX_PLAYERS];
     int util_ready;
