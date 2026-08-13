@@ -62,9 +62,9 @@ enum
  * storage.
  *
  * `reach` is the opponent's blueprint reach probability for this infoset; it
- * seeds the gadget's chance node so that infosets the opponent rarely reaches
- * carry proportionally less weight. Non-positive values are treated as 0 and
- * such infosets are dropped from the gadget.
+ * determines whether the boundary is included in the gadget's chance node.
+ * Non-positive values are treated as 0 and such infosets are dropped from the
+ * gadget.
  *
  * `cfv` is the blueprint counterfactual value of the infoset for the opponent:
  * the value the re-solve must keep matching. Fill it yourself when you have it
@@ -143,8 +143,8 @@ typedef struct pe_cfr_resolve_config_t
  *
  * The values are written back into `boundary[i].cfv` for every entry whose
  * `infoset` is found during the walk, and `boundary[i].reach` receives the
- * player's own blueprint reach probability. Entries that are never reached keep
- * a zero reach and a zero CFV.
+ * accumulated reach of the other players used to normalize the CFV. Entries
+ * that are never reached keep a zero reach and a zero CFV.
  *
  * Returns PE_CFR_RESOLVE_OK, or a negative PE_CFR_RESOLVE_* code.
  */

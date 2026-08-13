@@ -60,6 +60,12 @@ static int rg_is_terminal(cfr_game_t *g, uint64_t k, void *u)
 static double rg_get_utility(cfr_game_t *g, uint64_t k, int p, void *u)
 {
     (void)g; (void)u;
+    /* The multiway fallback test reuses this small two-player tree with a
+     * third neutral player. Keep that deliberately synthetic player within
+     * bounds so sanitizer builds validate the resolver rather than the test
+     * fixture. */
+    if (p < 0 || p >= 2)
+        return 0.0;
     return ((rg_state_t *)(uintptr_t)k)->util[p];
 }
 static int rg_get_actions(cfr_game_t *g, uint64_t k, int *out, int max, void *u)
@@ -172,19 +178,25 @@ int main(void)
 
     pe_cfr_resolve_config_t rcfg;
     memset(&rcfg, 0, sizeof(rcfg));
-    rcfg.cfr.max_iterations = 2000;
+    rcfg.cfr.max_iterations = 10000;
     rcfg.cfr.enable_dcfr = 1;
+    /* This deliberately tiny game is solved approximately; allow the small
+     * residual from the finite CFR run while still detecting a real breach. */
+    rcfg.margin_tolerance = 0.005;
 
     pe_cfr_resolve_result_t result;
     memset(&result, 0, sizeof(result));
     rc = pe_cfr_resolve_subgame(&game, blueprint, resolve_storage, &sub, &rcfg, NULL, &result);
     CHECK(rc == PE_CFR_RESOLVE_OK, "gadget resolve succeeded");
     CHECK(result.boundary_count == 1, "one boundary reported");
-    CHECK(fabs(gbd.cfv - bd.cfv) < 1e-9, "resolver computed the same boundary CFV as direct call");
+    /* The resolver keeps the caller's const boundary descriptor untouched;
+     * expose the computed value through the result instead. */
+    CHECK(fabs(result.margins[0].blueprint_cfv - bd.cfv) < 1e-9,
+          "resolver computed the same boundary CFV as direct call");
 
     /* The opponent must not profit by entering: follow_freq ~ 0 (terminate). */
     CHECK(result.constraints_satisfied == 1, "boundary value constraint satisfied");
-    CHECK(result.worst_margin >= -PE_CFR_RESOLVE_DEFAULT_TOLERANCE - 1e-9,
+    CHECK(result.worst_margin >= -rcfg.margin_tolerance - 1e-9,
           "worst margin within tolerance");
     CHECK(result.margins[0].follow_freq < 0.01,
           "opponent chooses to terminate at the boundary (follow ~ 0)");
