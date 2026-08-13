@@ -307,6 +307,7 @@ set(TEST_SOURCES
     test_range_cache.c
     test_range_utils.c
     test_range_integration.c
+    test_spot_filter.c
 
     # ICM Calculator tests
     test_icm_calculator.c

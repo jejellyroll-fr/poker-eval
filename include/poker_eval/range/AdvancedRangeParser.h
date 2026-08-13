@@ -63,8 +63,50 @@ extern "C"
         ARP_TOKEN_PLO_CATEGORY,  /* PLO hand categories */
         ARP_TOKEN_LPAREN,        /* ( */
         ARP_TOKEN_RPAREN,        /* ) */
-        ARP_TOKEN_END
+        ARP_TOKEN_END,
+        /* Spot filter / action morphing syntax tokens (FEAT-07, #143).
+           These do not expand to hands themselves; they are carried as
+           metadata so a tree builder can apply them conditionally. */
+        ARP_TOKEN_SPOT_CB,       /* $cb    - c-bet spot: replace with previous
+                                            street aggressor's active range */
+        ARP_TOKEN_SPOT_SPR_GT,   /* SPR>x  - only keep this range when the
+                                            current node SPR exceeds x */
+        ARP_TOKEN_SPOT_SPR_LT,   /* SPR<x  - only keep this range when the
+                                            current node SPR is below x */
+        ARP_TOKEN_SPOT_POS,      /* POS=IP / POS=OOP - position gate */
+        ARP_TOKEN_SPOT_BET,      /* BET    - action morphing keyword (raise) */
+        ARP_TOKEN_SPOT_AUTO      /* AUTO   - auto bet-sizing keyword */
     } arp_token_type_t;
+
+    /* Spot filter kinds. A spot filter is a conditional rule attached to a
+       range token: the range it precedes is only active (or only morphed the
+       same way) when the node's runtime state matches. */
+    typedef enum
+    {
+        ARP_SPOT_NONE = 0,
+        ARP_SPOT_CB,        /* $cb c-bet range filter */
+        ARP_SPOT_SPR_GT,    /* SPR > value */
+        ARP_SPOT_SPR_LT,    /* SPR < value */
+        ARP_SPOT_POS,       /* position == value (IP / OOP) */
+        ARP_SPOT_BET,       /* BET action morph */
+        ARP_SPOT_AUTO       /* AUTO bet sizing morph */
+    } arp_spot_kind_t;
+
+    typedef enum
+    {
+        ARP_SPOT_POS_INVALID = 0,
+        ARP_SPOT_POS_IP,
+        ARP_SPOT_POS_OOP
+    } arp_spot_pos_t;
+
+    /* A single spot filter rule parsed from the range string. */
+    typedef struct
+    {
+        arp_spot_kind_t kind;
+        double value;        /* numeric operand for SPR / threshold tokens */
+        arp_spot_pos_t pos;  /* position for POS= tokens */
+        bool is_cb;          /* set for $cb */
+    } arp_spot_filter_t;
 
     /* Parsed range token */
     typedef struct
@@ -112,6 +154,14 @@ extern "C"
             {
                 char pattern[32];         /* Stud pattern string */
             } stud;
+            struct
+            {
+                arp_spot_kind_t kind; /* Which spot filter this token is */
+                double value;         /* numeric operand (SPR thresholds) */
+                arp_spot_pos_t pos;   /* position for POS= tokens */
+                bool is_cb;           /* set for $cb */
+                char hand[32];        /* residual hand after ':' (e.g. "SPR>3:AA") */
+            } spot;
             float percentage; /* For 20%: 0.20 */
         } data;
     } arp_token_t;
@@ -169,6 +219,11 @@ extern "C"
         enum_game_t game_type; /* Game type this range was created for */
         bool is_omaha;         /* True if this is an Omaha range */
         void *internal_data;   /* Opaque pointer for internal use (e.g., hash table) */
+        /* Spot filter / action morphing rules (FEAT-07, #143). Carried as
+           metadata; the range's hands are unchanged, but a tree builder can
+           apply these rules to gate or morph the range at expansion time. */
+        arp_spot_filter_t *spot_filters;
+        size_t spot_filter_count;
     } arp_range_t;
 
     /* Core API Functions */
@@ -497,6 +552,50 @@ extern "C"
      * @return true if hand is in range, false otherwise
      */
     bool ARP_ContainsHand(const arp_range_t *range, StdDeck_CardMask hand);
+
+    /* Spot Filter / Action Morphing Syntax (FEAT-07, #143) */
+
+    /**
+     * Get the spot-filter rules attached to a parsed range.
+     *
+     * These tokens ($cb, SPR>x, SPR<x, POS=IP/OOP, BET, AUTO) are parsed as
+     * metadata and do not change the hands in the range. A tree builder reads
+     * them to gate or morph the range during node expansion.
+     *
+     * @param range Parsed range (must be non-NULL)
+     * @param out_filters Pointer filled with the filter array (do not free)
+     * @param out_count   Pointer filled with the filter count
+     * @return 1 on success, 0 if range is NULL
+     */
+    int ARP_GetSpotFilters(const arp_range_t *range,
+                           const arp_spot_filter_t **out_filters,
+                           size_t *out_count);
+
+    /**
+     * Validate the spot-filter/action-morphing syntax of a range string
+     * without fully parsing the hands.
+     *
+     * Accepts $cb, SPR>x, SPR<x, POS=IP, POS=OOP, BET and AUTO tokens.
+     *
+     * @param range_string Range string to validate
+     * @param error_buffer Buffer for error message (can be NULL)
+     * @param error_buffer_size Size of error buffer
+     * @return 1 if valid, 0 if invalid
+     */
+    int ARP_ValidateSpotSyntax(const char *range_string,
+                               char *error_buffer, size_t error_buffer_size);
+
+    /**
+     * Evaluate the spot filters of a range against a runtime node context.
+     *
+     * @param filters      Filter array (may be NULL when count == 0)
+     * @param count        Filter count
+     * @param spr          Current node stack-to-pot ratio
+     * @param is_ip        True when the acting player is in position
+     * @return true if every filter in the list passes for this context
+     */
+    bool ARP_EvaluateSpotFilters(const arp_spot_filter_t *filters,
+                                 size_t count, double spr, bool is_ip);
 
     /**
      * Export range to file in readable format
