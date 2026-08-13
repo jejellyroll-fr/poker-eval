@@ -261,7 +261,9 @@ static entry_t *get_entry_at_street(cfr_storage_t *s, uint64_t key, int n, int s
                     ? (double *)realloc(s->tab[i].avg, (size_t)n * sizeof(double))
                     : (keep_for_street(s->keep_avg_strategy_mask, street)
                        ? (double *)calloc((size_t)n, sizeof(double)) : NULL);
-                double *new_locked = (double *)realloc(s->tab[i].locked, (size_t)n * sizeof(double));
+                double *new_locked = s->tab[i].locked
+                    ? (double *)realloc(s->tab[i].locked, (size_t)n * sizeof(double))
+                    : NULL;
                 if (!new_regret ||
                     (keep_for_street(s->keep_avg_strategy_mask, street) && !new_avg) ||
                     (s->tab[i].locked && !new_locked))
@@ -467,10 +469,30 @@ void cfr_storage_get_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, i
     entry_t *e = get_entry_at_street(s, key, n, street);
     if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
     if (e->locked) { for (int i = 0; i < n; ++i) probs[i] = e->locked[i]; return; }
-    double sum = 0.0;
-    for (int i = 0; i < n; ++i) if (e->regret[i] > 0.0) sum += e->regret[i];
-    if (sum > 0.0) for (int i = 0; i < n; ++i) probs[i] = e->regret[i] > 0.0 ? e->regret[i] / sum : 0.0;
-    else for (int i = 0; i < n; ++i) probs[i] = 1.0 / n;
+    if (g_use_ecfr) {
+        double max_pos = 0.0, sum_w = 0.0;
+        for (int i = 0; i < n; ++i)
+            if (e->regret[i] > max_pos) max_pos = e->regret[i];
+        if (max_pos > 0.0) {
+            for (int i = 0; i < n; ++i) {
+                probs[i] = e->regret[i] > 0.0
+                    ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                sum_w += probs[i];
+            }
+            if (sum_w > 0.0) {
+                for (int i = 0; i < n; ++i) probs[i] /= sum_w;
+                return;
+            }
+        }
+    } else {
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i) if (e->regret[i] > 0.0) sum += e->regret[i];
+        if (sum > 0.0) {
+            for (int i = 0; i < n; ++i) probs[i] = e->regret[i] > 0.0 ? e->regret[i] / sum : 0.0;
+            return;
+        }
+    }
+    for (int i = 0; i < n; ++i) probs[i] = 1.0 / n;
 }
 
 void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action_count, double *probs)
@@ -507,6 +529,10 @@ void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action
 
 void cfr_storage_get_avg_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, int street, double *probs)
 {
+    if (s && !keep_for_street(s->keep_avg_strategy_mask, street)) {
+        cfr_storage_get_strategy_at_street(s, key, n, street, probs);
+        return;
+    }
     entry_t *e = get_entry_at_street(s, key, n, street);
     if (!e || !e->avg) { cfr_storage_get_strategy_at_street(s, key, n, street, probs); return; }
     double sum = 0.0;
@@ -542,7 +568,7 @@ void cfr_storage_update_avg(cfr_storage_t *s, uint64_t infoset, int action_count
 }
 
 void cfr_storage_update_avg_at_street(cfr_storage_t *s, uint64_t key, int n, int street, const double *strategy, double weight)
-{ entry_t *e = get_entry_at_street(s, key, n, street); if (!e || !e->avg) return; for (int i=0;i<n;++i) e->avg[i] += strategy[i]*weight; }
+{ if (!s || !keep_for_street(s->keep_avg_strategy_mask, street)) return; entry_t *e = get_entry_at_street(s, key, n, street); if (!e || !e->avg) return; for (int i=0;i<n;++i) e->avg[i] += strategy[i]*weight; }
 
 /* Dump average strategies to CSV file (key, n, avg0..avgN-1) */
 void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
@@ -557,16 +583,25 @@ void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
         if (s->tab[i].used)
         {
             entry_t *e = &s->tab[i];
+            double *avg = e->avg;
+            double *fallback = NULL;
+            if (!avg) {
+                fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
+                if (!fallback) continue;
+                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                avg = fallback;
+            }
             fprintf(f, "%llu,%d", (unsigned long long)e->key, e->n);
             double sum = 0.0;
             for (int k = 0; k < e->n; k++)
-                sum += e->avg[k];
+                sum += avg[k];
             for (int k = 0; k < e->n && k < 8; k++)
             {
-                double p = (sum > 0) ? (e->avg[k] / sum) : (1.0 / e->n);
+                double p = (sum > 0) ? (avg[k] / sum) : (1.0 / e->n);
                 fprintf(f, ",%.6f", p);
             }
             fprintf(f, "\n");
+            free(fallback);
         }
 }
 
@@ -589,7 +624,16 @@ void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
         if (s->tab[i].used)
         {
             entry_t *e = &s->tab[i];
-            fn(e->key, e->n, e->regret, e->avg, user);
+            double *avg = e->avg;
+            double *fallback = NULL;
+            if (!avg) {
+                fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
+                if (!fallback) continue;
+                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                avg = fallback;
+            }
+            fn(e->key, e->n, e->regret, avg, user);
+            free(fallback);
         }
 }
 
@@ -642,7 +686,9 @@ void cfr_storage_accumulate_ev(cfr_storage_t *s, uint64_t infoset, double node_e
 void cfr_storage_accumulate_ev_at_street(cfr_storage_t *s, uint64_t key, int street, double node_ev)
 {
     if (!s || !keep_for_street(s->keep_ev_mask, street)) return;
-    entry_t *e = get_entry_at_street(s, key, 1, street);
+    entry_t *e = find_entry(s, key);
+    if (!e)
+        e = get_entry_at_street(s, key, 1, street);
     if (!e) return;
     e->ev_sum += node_ev;
     e->ev_sq_sum += node_ev * node_ev;
@@ -657,14 +703,23 @@ void cfr_storage_iterate_stats(cfr_storage_t *s, cfr_storage_iter_stats_fn fn, v
         if (s->tab[i].used)
         {
             entry_t *e = &s->tab[i];
+            double *avg = e->avg;
+            double *fallback = NULL;
+            if (!avg) {
+                fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
+                if (!fallback) continue;
+                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                avg = fallback;
+            }
             fn(e->key,
                e->n,
                e->regret,
-               e->avg,
+               avg,
                e->ev_sum,
                e->ev_sq_sum,
                e->ev_count,
                user);
+            free(fallback);
         }
 }
 
