@@ -704,8 +704,14 @@ static int mpf_get_actions_wrapper(cfr_game_t *game, uint64_t key, int *out_acti
             double pay = mpf_raise_total_amount(st, i, need);
             double remaining = mpf_remaining_after(st, pay);
 
-            /* Collapse a raise that would leave a short stack into an all-in. */
-            if (mpf_is_effective_all_in(st, remaining))
+            /* Collapse into an all-in ONLY when the raise was already capped by
+             * the stack, i.e. the player could not make the full sizing anyway.
+             * In that case MPF_ACTION_ALL_IN commits the same (legal) amount as
+             * the capped raise, so it never becomes an illegal pot-limit overbet.
+             * A raise that leaves a short remainder but is still within the
+             * player's stack stays a normal (legal) raise candidate. */
+            int stack_capped = (pay >= st->stacks[player] - MPF_EPS);
+            if (stack_capped && mpf_is_effective_all_in(st, remaining))
             {
                 if (!all_in_emitted)
                 {
@@ -1875,16 +1881,18 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->enable_pot_sizing = cfg->enable_pot_sizing;
 
     /* FEAT-06: pot-limit effective all-in + dynamic STPR. is_pot_limit:
-     *  -1 = auto-derive from rules (PLO4/5/6 => pot-limit), 0 = forced off,
-     *   1 = forced on. */
+     *  0 (or any non-{0,1} value, e.g. after a zero-initialized config) and
+     *  -1 both mean AUTO-DERIVE from the rules (PLO4/5/6 => pot-limit). This
+     *  keeps the primary PLO CLI working even when callers memset the config
+     *  to zero and never set the field explicitly. 1 = forced on. */
     out_state->is_pot_limit = cfg->is_pot_limit;
-    if (out_state->is_pot_limit == -1)
+    if (out_state->is_pot_limit == -1 || out_state->is_pot_limit == 0)
     {
         out_state->is_pot_limit =
             (cfg->rules == MPF_RULE_PLO4 || cfg->rules == MPF_RULE_PLO5 ||
              cfg->rules == MPF_RULE_PLO6) ? 1 : 0;
     }
-    else if (out_state->is_pot_limit != 0 && out_state->is_pot_limit != 1)
+    else if (out_state->is_pot_limit != 1)
     {
         out_state->is_pot_limit = 0;
     }
