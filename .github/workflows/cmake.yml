@@ -76,8 +76,18 @@ jobs:
     
     - name: Install dependencies (Windows MinGW)
       if: runner.os == 'Windows' && matrix.compiler == 'mingw'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: UCRT64
+        update: true
+        install: >-
+          mingw-w64-ucrt-x86_64-toolchain
+          mingw-w64-ucrt-x86_64-ninja
+
+    - name: Configure MinGW environment
+      if: runner.os == 'Windows' && matrix.compiler == 'mingw'
+      shell: pwsh
       run: |
-        choco install mingw ninja
         echo "CC=gcc" >> $env:GITHUB_ENV
         echo "CXX=g++" >> $env:GITHUB_ENV
     
