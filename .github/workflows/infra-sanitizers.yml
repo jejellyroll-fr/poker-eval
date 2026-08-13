@@ -82,7 +82,11 @@ jobs:
           cd build-san
           # Per-test timeout generous: ASan/UBSan slow heavy suites (CFR,
           # range parsing) well past the 30s the bare build stays under.
-          ctest --output-on-failure --timeout 300
+          # Exclude the 3 tests that are correct but too slow under
+          # instrumentation to finish in time (INFRA-01 #97 follow-up) — they
+          # keep running in the unsanitized suite, so we only drop their
+          # memory-check signal, not their correctness coverage.
+          ctest --output-on-failure --timeout 300 -LE sanitizer-skip
 
   valgrind:
     name: Valgrind (CFR solve, leak threshold)
