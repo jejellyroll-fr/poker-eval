@@ -157,20 +157,46 @@ static int run_no_collapse_when_deep(void)
 
 static int run_configurable_threshold(void)
 {
-    /* With a higher threshold (200% of pot), even a bet that leaves a stack
-     * equal to the pot still triggers the auto-jam. */
+    /* Codex P1: a legal pot-sized bet that merely leaves a short remainder must
+     * NOT be turned into an all-in overbet. With stack=40, pot=20, a 100% pot
+     * bet commits 20 (well within the 40 stack); the remainder (20) is <= 200%
+     * of the pot, but the player can still make the legal bet, so the ALL_IN
+     * action (which would commit the entire 40) must stay absent. */
     const double stack = 40.0;
-    const double pot = 20.0; /* 100% pot bet leaves stack == pot */
+    const double pot = 20.0;
 
     setup_plo4(stack, pot, 200.0);
 
     int acts[MPF_ACTION_MAX];
     int n = collect_actions(acts, MPF_ACTION_MAX);
     CHECK(n > 0, "expected actions at threshold node");
-    CHECK(has_action(acts, n, MPF_ACTION_ALL_IN),
-          "raise leaving stack==pot must jam under 200% threshold");
+    CHECK(!has_action(acts, n, MPF_ACTION_ALL_IN),
+          "legal pot bet leaving short remainder must NOT become an all-in overbet");
+    CHECK(has_action(acts, n, MPF_ACTION_RAISE_BASE + 0),
+          "legal 100% pot raise must remain available");
 
-    printf("  configurable threshold ok\n");
+    printf("  no-overbet configurable threshold ok\n");
+    return 0;
+}
+
+static int run_capped_all_in_collapse(void)
+{
+    /* The all-in collapse is only valid when the raise was already capped by the
+     * stack. stack=15, pot=20, 100% pot sizing => the full pot bet (20) exceeds
+     * the 15 stack, so it is capped to 15; the remainder is 0 (<= 1.0*pot), and
+     * the emitted ALL_IN commits the same legal 15 chips. */
+    const double stack = 15.0;
+    const double pot = 20.0;
+
+    setup_plo4(stack, pot, 100.0);
+
+    int acts[MPF_ACTION_MAX];
+    int n = collect_actions(acts, MPF_ACTION_MAX);
+    CHECK(n > 0, "expected actions at capped node");
+    CHECK(has_action(acts, n, MPF_ACTION_ALL_IN),
+          "stack-capped raise must collapse into a legal all-in");
+
+    printf("  capped all-in collapse ok\n");
     return 0;
 }
 
@@ -188,6 +214,7 @@ int main(void)
     CHECK(run_all_in_threshold() == 0, "all-in threshold + dedup");
     CHECK(run_no_collapse_when_deep() == 0, "no collapse when deep");
     CHECK(run_configurable_threshold() == 0, "configurable threshold");
+    CHECK(run_capped_all_in_collapse() == 0, "capped all-in collapse");
     printf("test_mpf_tree passed.\n");
 
     /* Clean up the eval context and game state so LSan/ASan stay green. */

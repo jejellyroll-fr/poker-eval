@@ -122,7 +122,7 @@ typedef struct
     mpf_preflop_cfg_t preflop;
 
     /* FEAT-06: pot-limit effective all-in + dynamic STPR rules */
-    int is_pot_limit;                 /* 1 for PLO4/5/6 pot-limit structures */
+    int is_pot_limit;                 /* 0 (or -1) = auto-detect from rules (PLO4/5/6), 1 = forced on */
     double committal_threshold_percent; /* auto-jam when remaining stack <= threshold% * pot */
 
     struct mpf_tree_def_t *tree;
@@ -178,7 +178,7 @@ typedef struct mpf_state_s
     int base_enable_pot_sizing;
 
     /* FEAT-06: pot-limit effective all-in + dynamic STPR rules */
-    int is_pot_limit;                 /* 1 for PLO4/5/6 pot-limit structures */
+    int is_pot_limit;                 /* 0 (or -1) = auto-detect from rules (PLO4/5/6), 1 = forced on */
     double committal_threshold_percent; /* auto-jam when remaining stack <= threshold% * pot */
     double stpr;                      /* dynamic stack-to-pot ratio at this node (current_stack / pot) */
 
