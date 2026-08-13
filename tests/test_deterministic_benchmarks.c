@@ -82,7 +82,9 @@ static void test_benchmark_reproducibility(void) {
     printf("\n=== Testing Benchmark Reproducibility ===\n");
 
     uint64_t seed = 987654321;
-    int iterations = 1000;
+    /* Keep each timed section comfortably above clock resolution; otherwise
+     * scheduler jitter dominates this test on lightly loaded CI runners. */
+    int iterations = 100000;
 
     /* Run same benchmark twice with same seed */
     TestRNG rng1, rng2;
