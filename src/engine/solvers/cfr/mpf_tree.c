@@ -819,8 +819,8 @@ static int mpf_parse_spot_from_combo(const char *hand, size_t hand_len,
         if ((ptrdiff_t)avail < 0)
             avail = 0;
         size_t n = avail < out_hand_size - 1 ? avail : out_hand_size - 1;
-        if (n > 0)
-            memcpy(out_hand, p, n);
+        for (size_t i = 0; i < n; ++i)
+            out_hand[i] = p[i];
         out_hand[n] = '\0';
         if (out_hand_len)
             *out_hand_len = n;
