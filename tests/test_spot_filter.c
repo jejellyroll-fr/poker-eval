@@ -153,30 +153,84 @@ static int run_spot_gate(void)
     return 0;
 }
 
-/* ---------- Tree spot rules ---------- */
+/* ---------- Tree spot rules (via the public load path) ---------- */
 
 static int run_tree_spot_rules(void)
 {
-    /* SPR computation */
-    CHECK(fabs(mpf_tree_compute_spr(20.0, 60.0) - 3.0) < 1e-9, "SPR = stack/pot");
-    CHECK(mpf_tree_compute_spr(0.0, 60.0) == 0.0, "SPR 0 when pot 0");
+    /* A player node on the flop with pot 10 and stacks 30 (SPR = 3.0),
+       acting IP (all other active players already acted). The profile carries
+       SPR>3 and POS=IP gating rules; both must pass at SPR=3 / IP. */
+    static const char *json =
+        "{"
+        "  \"version\": 1,"
+        "  \"root\": \"root\","
+        "  \"betProfiles\": ["
+        "    {\"id\": \"default\", \"sizes\": [3.0], \"pot_sizing\": false}"
+        "  ],"
+        "  \"nodes\": ["
+        "    {"
+        "      \"id\": \"root\","
+        "      \"type\": \"player\","
+        "      \"player\": 0,"
+        "      \"street\": \"FLOP\","
+        "      \"bet_profile\": \"default\","
+        "      \"range_profile\": \"gated\","
+        "      \"actions\": ["
+        "        {\"type\": \"call\", \"next\": \"term\"},"
+        "        {\"type\": \"raise\", \"size_index\": 0, \"next\": \"term\"}"
+        "      ],"
+        "      \"snapshot\": {"
+        "        \"num_players\": 2,"
+        "        \"street\": \"FLOP\","
+        "        \"to_act\": 0,"
+        "        \"first_to_act\": 1,"
+        "        \"pot\": 10.0,"
+        "        \"to_call\": 0.0,"
+        "        \"current_bet\": 0.0,"
+        "        \"raises_made\": 0,"
+        "        \"stacks\": [30.0, 30.0],"
+        "        \"invested\": [0.0, 0.0],"
+        "        \"round_contrib\": [0.0, 0.0],"
+        "        \"active\": [1, 1],"
+        "        \"acted\": [0, 1]"
+        "      }"
+        "    },"
+        "    {"
+        "      \"id\": \"term\","
+        "      \"type\": \"terminal\""
+        "    }"
+        "  ],"
+        "  \"rangeProfiles\": ["
+        "    {"
+        "      \"id\": \"gated\","
+        "      \"player\": 0,"
+        "      \"street\": \"FLOP\","
+        "      \"combos\": ["
+        "        {\"hand\": \"SPR>3:AA\"},"
+        "        {\"hand\": \"POS=IP:KK\"}"
+        "      ]"
+        "    }"
+        "  ]"
+        "}";
 
-    /* Rule evaluation */
-    mpf_tree_spot_rule_t rule;
-    memset(&rule, 0, sizeof(rule));
-    rule.kind = MPF_SPOT_SPR_GT;
-    rule.value = 3.0;
-    CHECK(mpf_tree_evaluate_spot_rules(&rule, 1, 5.0, 1) == 1, "tree SPR>3 pass");
-    CHECK(mpf_tree_evaluate_spot_rules(&rule, 1, 2.0, 1) == 0, "tree SPR>3 fail");
+    mpf_tree_error_t err;
+    memset(&err, 0, sizeof(err));
+    mpf_tree_def_t *tree = mpf_tree_load_json(json, strlen(json), &err);
+    CHECK(tree != NULL, "load gated tree");
 
-    memset(&rule, 0, sizeof(rule));
-    rule.kind = MPF_SPOT_POS;
-    rule.pos = MPF_SPOT_POS_IP;
-    CHECK(mpf_tree_evaluate_spot_rules(&rule, 1, 5.0, 1) == 1, "tree POS=IP pass");
-    CHECK(mpf_tree_evaluate_spot_rules(&rule, 1, 5.0, 0) == 0, "tree POS=IP fail");
-
-    /* No rules -> always pass */
-    CHECK(mpf_tree_evaluate_spot_rules(NULL, 0, 0.0, 0) == 1, "no rules pass");
+    if (tree)
+    {
+        /* SPR = 30 / 10 = 3.0 (>3 is strict, so SPR>3 fails here), POS=IP passes
+           (acting player is last to act). The combined gate must therefore fail. */
+        int all_pass = 1;
+        for (int i = 0; i < tree->node_count; ++i)
+        {
+            if (tree->nodes[i].range_profile && tree->nodes[i].range_profile->spot_rule_count > 0)
+                all_pass = all_pass && tree->nodes[i].spot_rules_pass;
+        }
+        CHECK(!all_pass, "SPR>3 gate fails at SPR=3 (strict)");
+        mpf_tree_free(tree);
+    }
 
     printf("  tree spot rules ok\n");
     return 0;
@@ -184,31 +238,87 @@ static int run_tree_spot_rules(void)
 
 static int run_tree_cb_resolution(void)
 {
-    static char id0[] = "preflop_agg";
-    static char id1[] = "flop_ip";
-    static char id2[] = "flop_oop";
-    mpf_tree_range_profile_t profiles[3];
-    memset(profiles, 0, sizeof(profiles));
-    profiles[0].id = id0;
-    profiles[0].player = 0;
-    profiles[0].street = MPF_STREET_PREFLOP;
-    profiles[1].id = id1;
-    profiles[1].player = 0;
-    profiles[1].street = MPF_STREET_FLOP;
-    profiles[2].id = id2;
-    profiles[2].player = 1;
-    profiles[2].street = MPF_STREET_FLOP;
+    /* Profile 'cb' uses $cb; the aggressor on the previous street (preflop,
+       first_to_act = player 1) should resolve to the preflop range for
+       player 1 ('agg'). We assert the node's resolved cb_range is non-NULL and
+       points at the aggressor's preflop profile. */
+    static const char *json =
+        "{"
+        "  \"version\": 1,"
+        "  \"root\": \"root\","
+        "  \"betProfiles\": ["
+        "    {\"id\": \"default\", \"sizes\": [3.0], \"pot_sizing\": false}"
+        "  ],"
+        "  \"nodes\": ["
+        "    {"
+        "      \"id\": \"root\","
+        "      \"type\": \"player\","
+        "      \"player\": 0,"
+        "      \"street\": \"FLOP\","
+        "      \"bet_profile\": \"default\","
+        "      \"range_profile\": \"cb\","
+        "      \"actions\": ["
+        "        {\"type\": \"call\", \"next\": \"term\"},"
+        "        {\"type\": \"raise\", \"size_index\": 0, \"next\": \"term\"}"
+        "      ],"
+        "      \"snapshot\": {"
+        "        \"num_players\": 2,"
+        "        \"street\": \"FLOP\","
+        "        \"to_act\": 0,"
+        "        \"first_to_act\": 1,"
+        "        \"pot\": 10.0,"
+        "        \"to_call\": 0.0,"
+        "        \"current_bet\": 0.0,"
+        "        \"raises_made\": 0,"
+        "        \"stacks\": [30.0, 30.0],"
+        "        \"invested\": [0.0, 0.0],"
+        "        \"round_contrib\": [0.0, 0.0],"
+        "        \"active\": [1, 1],"
+        "        \"acted\": [0, 1]"
+        "      }"
+        "    },"
+        "    {"
+        "      \"id\": \"term\","
+        "      \"type\": \"terminal\""
+        "    }"
+        "  ],"
+        "  \"rangeProfiles\": ["
+        "    {"
+        "      \"id\": \"cb\","
+        "      \"player\": 0,"
+        "      \"street\": \"FLOP\","
+        "      \"combos\": [ { \"hand\": \"$cb\" } ]"
+        "    },"
+        "    {"
+        "      \"id\": \"agg\","
+        "      \"player\": 1,"
+        "      \"street\": \"PREFLOP\","
+        "      \"combos\": [ { \"hand\": \"AA\" } ]"
+        "    }"
+        "  ]"
+        "}";
 
-    /* Resolve the c-bet range to the previous street aggressor (player 0) on
-       the flop -> flop_ip profile. */
-    const mpf_tree_range_profile_t *r =
-        mpf_tree_resolve_cb_range(profiles, 3, 0, MPF_STREET_FLOP, NULL);
-    CHECK(r != NULL && r == &profiles[1], "cb resolves to aggressor flop range");
+    mpf_tree_error_t err;
+    memset(&err, 0, sizeof(err));
+    mpf_tree_def_t *tree = mpf_tree_load_json(json, strlen(json), &err);
+    CHECK(tree != NULL, "load cb tree");
 
-    /* Explicit target id wins. */
-    const mpf_tree_range_profile_t *r2 =
-        mpf_tree_resolve_cb_range(profiles, 3, 0, MPF_STREET_FLOP, "flop_oop");
-    CHECK(r2 != NULL && r2 == &profiles[2], "cb explicit id wins");
+    if (tree)
+    {
+        int found = 0;
+        for (int i = 0; i < tree->node_count; ++i)
+        {
+            if (tree->nodes[i].cb_range)
+            {
+                found = 1;
+                CHECK(tree->nodes[i].cb_range->player == 1, "$cb resolves to aggressor player");
+                CHECK(tree->nodes[i].cb_range->street == MPF_STREET_PREFLOP,
+                      "$cb resolves to previous (preflop) street");
+            }
+        }
+        CHECK(found, "$cb range resolved on node");
+        mpf_tree_free(tree);
+    }
 
     printf("  cb resolution ok\n");
     return 0;

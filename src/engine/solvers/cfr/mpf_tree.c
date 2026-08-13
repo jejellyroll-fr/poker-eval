@@ -1722,6 +1722,16 @@ static int mpf_tree_apply_profiles(mpf_tree_def_t *tree, mpf_tree_error_t *err)
     return 1;
 }
 
+/* FEAT-07 spot-filter helpers (defined below, declared here so the profile
+   application pass can call them). */
+static double mpf_tree_compute_spr(double pot, double eff_stack);
+static int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player);
+static int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
+                                        double spr, int is_ip);
+static const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
+    const mpf_tree_range_profile_t *profiles, int profile_count,
+    int aggressor_player, mpf_street_t prev_street, const char *cb_range_id);
+
 static int mpf_tree_apply_range_profiles(mpf_tree_def_t *tree, mpf_tree_error_t *err)
 {
     for (int i = 0; i < tree->node_count; ++i)
@@ -1821,7 +1831,7 @@ static int mpf_tree_apply_range_profiles(mpf_tree_def_t *tree, mpf_tree_error_t 
 
 /* ===== Spot Filter / Action Morphing (FEAT-07, #143) ===== */
 
-double mpf_tree_compute_spr(double pot, double eff_stack)
+static double mpf_tree_compute_spr(double pot, double eff_stack)
 {
     if (pot <= 0.0)
         return 0.0;
@@ -1830,7 +1840,7 @@ double mpf_tree_compute_spr(double pot, double eff_stack)
     return eff_stack / pot;
 }
 
-int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player)
+static int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player)
 {
     if (!snap || !snap->has_snapshot)
         return 0;
@@ -1853,7 +1863,7 @@ int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player)
     return 1;
 }
 
-int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
+static int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
                                  double spr, int is_ip)
 {
     if (count <= 0 || !rules)
@@ -1890,7 +1900,7 @@ int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
     return 1;
 }
 
-const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
+static const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
     const mpf_tree_range_profile_t *profiles, int profile_count,
     int aggressor_player, mpf_street_t prev_street, const char *cb_range_id)
 {

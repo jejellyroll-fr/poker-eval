@@ -208,58 +208,6 @@ int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err);
 char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len);
 void mpf_tree_free(mpf_tree_def_t *tree);
 
-/* Spot Filter / Action Morphing (FEAT-07, #143) */
-
-/**
- * Compute the effective stack-to-pot ratio for a node.
- * @param pot         Current pot size
- * @param eff_stack   Effective remaining stack of the acting player
- * @return SPR = eff_stack / pot (0.0 when pot <= 0)
- */
-double mpf_tree_compute_spr(double pot, double eff_stack);
-
-/**
- * Determine whether the acting player is in position (acts last) given the
- * snapshot. Acts last among active players == IP.
- * @return 1 if in position, 0 otherwise
- */
-int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player);
-
-/**
- * Evaluate a list of spot rules against the runtime node context.
- *
- * SPR/POS rules gate the range/action: the function returns 0 as soon as a
- * gating rule fails. $cb, BET and AUTO are not gating conditions here (they
- * are applied by the tree builder), so they never cause rejection.
- *
- * @param rules    Spot rule array (may be NULL when count == 0)
- * @param count    Spot rule count
- * @param spr      Current node SPR
- * @param is_ip    Whether the acting player is in position
- * @return 1 if all gating rules pass, 0 otherwise
- */
-int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
-                                 double spr, int is_ip);
-
-/**
- * Find the range profile that should supply the c-bet range for a $cb rule.
- *
- * Resolves `$cb` to the active range of the previous street's aggressor. The
- * caller passes the full profile list; the function prefers an explicit
- * `cb_range_id` when set, otherwise returns the profile whose `player` matches
- * `aggressor_player` and whose street is the immediate previous street.
- *
- * @param profiles        Profile array
- * @param profile_count   Profile count
- * @param aggressor_player Player who was the aggressor on the previous street
- * @param prev_street     Street to look the range up for
- * @param cb_range_id     Explicit profile id from $cb (may be NULL)
- * @return Matching profile, or NULL if none found
- */
-const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
-    const mpf_tree_range_profile_t *profiles, int profile_count,
-    int aggressor_player, mpf_street_t prev_street, const char *cb_range_id);
-
 #ifdef __cplusplus
 }
 #endif
