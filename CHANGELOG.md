@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Subgame re-solving / CFR-D gadget (FEAT-05, #122): re-solve a subtree of an
+  already-solved blueprint without re-solving the whole tree, holding the
+  boundary value fixed via the CFR-D gadget (Burch, Johanson & Bowling 2014).
+  New unit `cfr_resolve.c` (header `cfr_resolve.h`) provides
+  `pe_cfr_resolve_subgame`, `pe_cfr_seed_resolve_storage` (trunk-locked mode
+  reusing the FEAT-01 locking machinery), `pe_cfr_blueprint_cfv`,
+  `pe_cfr_subgame_infosets`, and a `pe_cfr_gadget_t` decorator over
+  `cfr_game_t` so the gadget works with any adapter and with FEAT-09 `.pe_sol`
+  blueprints. 2-player games are fully supported; multiway uses the
+  trunk-locked fallback (`PE_CFR_RESOLVE_UNSUPPORTED` otherwise).
 - Learned hand abstraction via k-means clustering (FEAT-04, #121): per-hand
   feature vectors of `E[HS^2]` + equity-distribution histogram, k-means++
   seeded k-means with deterministic (PCG) training, and a serializable
