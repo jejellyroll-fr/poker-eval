@@ -165,6 +165,9 @@ typedef struct mpf_tree_node_t
     mpf_tree_snapshot_t snapshot;
     int has_snapshot;
     int spot_rules_pass; /* FEAT-07: gating result after applying node SPR/pos */
+    /* FEAT-07: when the node's range profile uses $cb, this points at the
+       resolved c-bet range (previous street aggressor's active range). */
+    const mpf_tree_range_profile_t *cb_range;
     mpf_state_t *state_cache;
     uint64_t state_key;
 #if !defined(_WIN32)
