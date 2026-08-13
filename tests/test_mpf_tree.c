@@ -32,13 +32,15 @@
 
 static mpf_state_t g_state;
 static cfr_game_t g_game;
+static EvalContext *g_ctx;
 
 /* Build a heads-up PLO4 game on the flop with the supplied effective stack
- * (the remaining stack behind the acting player) and pot. */
+ * (the remaining stack behind the acting player) and pot. The shared
+ * EvalContext (g_ctx) is created once in main and reused across calls so we do
+ * not leak an eval context (and its lookup tables) per invocation. */
 static void setup_plo4(double eff_stack, double pot, double committal_pct)
 {
-    EvalConfig ecfg = eval_config_default();
-    EvalContext *ctx = eval_context_create(&ecfg);
+    EvalContext *ctx = g_ctx;
 
     mpf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -174,10 +176,24 @@ static int run_configurable_threshold(void)
 
 int main(void)
 {
+    EvalConfig ecfg = eval_config_default();
+    g_ctx = eval_context_create(&ecfg);
+    if (!g_ctx)
+    {
+        fprintf(stderr, "FAIL: EvalContext create\n");
+        return 1;
+    }
+
     printf("mpf_tree FEAT-06: effective all-in + dynamic STPR\n");
     CHECK(run_all_in_threshold() == 0, "all-in threshold + dedup");
     CHECK(run_no_collapse_when_deep() == 0, "no collapse when deep");
     CHECK(run_configurable_threshold() == 0, "configurable threshold");
     printf("test_mpf_tree passed.\n");
+
+    /* Clean up the eval context and game state so LSan/ASan stay green. */
+    mpf_state_cleanup(&g_state);
+    eval_context_destroy(g_ctx);
+    g_ctx = NULL;
+
     return 0;
 }
