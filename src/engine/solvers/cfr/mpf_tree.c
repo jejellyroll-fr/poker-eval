@@ -682,10 +682,11 @@ static int mpf_parse_string_array(const char *json,
    1 on success (including when no spot token is present), 0 on malformed input.
    When `out_rule` is non-NULL and a spot token was found, *out_rule is filled
    and *out_found is set to 1. */
-static int mpf_parse_spot_from_combo(const char *hand,
+static int mpf_parse_spot_from_combo(const char *hand, size_t hand_len,
                                      mpf_tree_spot_rule_t *out_rule,
                                      int *out_found,
                                      char *out_hand, size_t out_hand_size,
+                                     size_t *out_hand_len,
                                      mpf_tree_error_t *err)
 {
     if (out_found)
@@ -696,7 +697,7 @@ static int mpf_parse_spot_from_combo(const char *hand,
     if (!hand)
         return 0;
 
-    size_t len = strlen(hand);
+    size_t len = hand_len;
     const char *p = hand;
 
     /* $cb c-bet spot filter */
@@ -807,10 +808,22 @@ static int mpf_parse_spot_from_combo(const char *hand,
     if (*p == ':')
         p++;
 
+    if (out_hand_len)
+        *out_hand_len = 0;
     if (out_hand && out_hand_size > 0 && *p != '\0')
     {
-        strncpy(out_hand, p, out_hand_size - 1);
-        out_hand[out_hand_size - 1] = '\0';
+        /* Copy the residual hand using the known token length (no reliance on a
+           NUL terminator): clamp to the remaining token bytes and the buffer. */
+        const char *end = hand + hand_len;
+        size_t avail = (size_t)(end - p);
+        if ((ptrdiff_t)avail < 0)
+            avail = 0;
+        size_t n = avail < out_hand_size - 1 ? avail : out_hand_size - 1;
+        if (n > 0)
+            memcpy(out_hand, p, n);
+        out_hand[n] = '\0';
+        if (out_hand_len)
+            *out_hand_len = n;
     }
     return 1;
 }
@@ -851,6 +864,7 @@ static int mpf_parse_range_combos(const char *json,
         }
         mpf_tree_range_combo_t *combo = &profile->combos[i];
         combo->weight = 1.0;
+        size_t combo_hand_len = 0;
         int prop_idx = idx + 1;
         for (int j = 0; j < obj->size; ++j)
         {
@@ -861,14 +875,16 @@ static int mpf_parse_range_combos(const char *json,
                 int value_idx = prop_idx + 1;
                 if (mpf_token_streq(json, key, "hand"))
                 {
+                    int value_idx = prop_idx + 1;
+                    size_t hand_len = (size_t)(tokens[value_idx].end - tokens[value_idx].start);
                     free(combo->hand);
-                    combo->hand = mpf_strndup(json + tokens[value_idx].start,
-                                              (size_t)(tokens[value_idx].end - tokens[value_idx].start));
+                    combo->hand = mpf_strndup(json + tokens[value_idx].start, hand_len);
                     if (!combo->hand)
                     {
                         mpf_tree_error(err, "allocation failure for combo hand");
                         return 0;
                     }
+                    combo_hand_len = hand_len;
                 }
                 else if (mpf_token_streq(json, key, "weight"))
                 {
@@ -893,8 +909,10 @@ static int mpf_parse_range_combos(const char *json,
         mpf_tree_spot_rule_t rule;
         int found = 0;
         char residual[128];
-        if (!mpf_parse_spot_from_combo(combo->hand, &rule, &found, residual,
-                                      sizeof(residual), err))
+        size_t residual_len = 0;
+        if (!mpf_parse_spot_from_combo(combo->hand, combo_hand_len, &rule, &found,
+                                      residual, sizeof(residual), &residual_len,
+                                      err))
             return 0;
 
         if (found)
@@ -918,7 +936,7 @@ static int mpf_parse_range_combos(const char *json,
             free(combo->hand);
             if (residual[0] != '\0')
             {
-                combo->hand = mpf_strndup(residual, strlen(residual));
+                combo->hand = mpf_strndup(residual, residual_len);
                 if (!combo->hand)
                 {
                     mpf_tree_error(err, "allocation failure for residual combo hand");
