@@ -423,6 +423,9 @@ int main(void)
     CHECK(run_tree_spot_rules() == 0, "tree spot rules");
     CHECK(run_tree_cb_resolution() == 0, "cb resolution");
     CHECK(run_tree_json_spot_parsing() == 0, "tree json spot parsing");
+    /* Spot parsing may populate the process-wide percentage cache.  Clear it
+     * here so sanitizer runs account for all allocations made by this test. */
+    ARP_ClearCache();
     printf("test_spot_filter passed.\n");
     return 0;
 }
