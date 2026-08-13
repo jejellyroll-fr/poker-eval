@@ -592,6 +592,61 @@ static double mpf_get_utility_wrapper(cfr_game_t *game, uint64_t key, int player
     return st->utilities[player];
 }
 
+/* FEAT-06: effective all-in + dynamic STPR helpers. */
+
+/* Total chips a raise candidate at index `raise_idx` forces the player to put
+ * into the pot (call portion + the new raise increment). The increment is an
+ * absolute amount, or a fraction of the current pot when pot-sizing is on. */
+static double mpf_raise_total_amount(const mpf_state_t *st, int raise_idx, double need)
+{
+    if (raise_idx < 0 || raise_idx >= st->bet_size_count)
+        return need;
+    double inc = st->bet_sizes[raise_idx];
+    if (st->enable_pot_sizing)
+        inc *= (st->pot > MPF_EPS ? st->pot : (st->current_bet + st->to_call));
+    if (inc < 0.0)
+        inc = 0.0;
+    double pay = need + inc;
+    if (pay > st->stacks[st->to_act])
+        pay = st->stacks[st->to_act];
+    if (pay < need + MPF_EPS)
+        pay = need;
+    return pay;
+}
+
+/* Stack left after committing `pay` chips. */
+static double mpf_remaining_after(const mpf_state_t *st, double pay)
+{
+    double rem = st->stacks[st->to_act] - pay;
+    return rem < 0.0 ? 0.0 : rem;
+}
+
+/* Dynamic Stack-to-Pot Ratio at the current node: effective stack behind the
+ * acting player divided by the current pot. Recomputed at every decision node
+ * rather than seeded from the starting stack (FEAT-06). */
+static double mpf_compute_stpr(const mpf_state_t *st)
+{
+    double eff_stack = st->stacks[st->to_act];
+    if (eff_stack < 0.0)
+        eff_stack = 0.0;
+    if (st->pot <= MPF_EPS)
+        return eff_stack > MPF_EPS ? INFINITY : 0.0;
+    return eff_stack / st->pot;
+}
+
+/* True when a remaining stack of `remaining` chips is small enough to trigger
+ * MonkerSolver-style effective all-in: remaining <= threshold% * pot. */
+static int mpf_is_effective_all_in(const mpf_state_t *st, double remaining)
+{
+    if (!st->is_pot_limit)
+        return 0;
+    double threshold = st->committal_threshold_percent;
+    if (threshold <= 0.0)
+        threshold = 100.0; /* default 1.0 * pot == 100% */
+    double limit = st->pot * (threshold / 100.0);
+    return remaining <= limit + MPF_EPS;
+}
+
 static int mpf_get_actions_wrapper(cfr_game_t *game, uint64_t key, int *out_actions, int max_actions, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
@@ -607,6 +662,9 @@ static int mpf_get_actions_wrapper(cfr_game_t *game, uint64_t key, int *out_acti
         return 0;
     if (st->stacks[player] <= MPF_EPS)
         return 0;
+
+    /* Dynamic STPR at this decision node. */
+    ((mpf_state_t *)st)->stpr = mpf_compute_stpr(st);
 
     if (st->tree_enabled && st->tree && st->tree_node_idx >= 0)
     {
@@ -633,11 +691,50 @@ static int mpf_get_actions_wrapper(cfr_game_t *game, uint64_t key, int *out_acti
 
     if (st->bet_size_count > 0 && st->raises_made < st->raise_cap && st->stacks[player] > need + MPF_EPS)
     {
+        /* Track emitted raise chip amounts so duplicate sizings (e.g. a 100%
+         * pot bet that equals an all-in) are pruned exactly once. */
+        double emitted[MPF_MAX_BET_SIZES];
+        int emitted_count = 0;
+        int all_in_emitted = 0;
+
         for (int i = 0; i < st->bet_size_count; ++i)
         {
             if (count >= max_actions)
                 break;
-            out_actions[count++] = MPF_ACTION_RAISE_BASE + i;
+            double pay = mpf_raise_total_amount(st, i, need);
+            double remaining = mpf_remaining_after(st, pay);
+
+            /* Collapse a raise that would leave a short stack into an all-in. */
+            if (mpf_is_effective_all_in(st, remaining))
+            {
+                if (!all_in_emitted)
+                {
+                    if (count < max_actions)
+                        out_actions[count] = MPF_ACTION_ALL_IN;
+                    count++;
+                    all_in_emitted = 1;
+                }
+                continue;
+            }
+
+            /* Prune duplicate chip amounts. */
+            int dup = 0;
+            for (int j = 0; j < emitted_count; ++j)
+            {
+                if (fabs(emitted[j] - pay) < MPF_EPS)
+                {
+                    dup = 1;
+                    break;
+                }
+            }
+            if (dup)
+                continue;
+            if (emitted_count < MPF_MAX_BET_SIZES)
+                emitted[emitted_count++] = pay;
+
+            if (count < max_actions)
+                out_actions[count] = MPF_ACTION_RAISE_BASE + i;
+            count++;
         }
     }
     return count;
@@ -764,6 +861,28 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
             out->round_contrib[player] += pay;
             out->invested[player] += pay;
             out->pot += pay;
+        }
+        out->acted_this_round[player] = 1;
+    }
+    else if (action == MPF_ACTION_ALL_IN)
+    {
+        /* Effective all-in candidate (FEAT-06): commit the entire stack. */
+        double pay = out->stacks[player];
+        if (pay > 0.0)
+        {
+            out->stacks[player] -= pay;
+            out->round_contrib[player] += pay;
+            out->invested[player] += pay;
+            out->pot += pay;
+        }
+        if (out->round_contrib[player] > out->to_call + MPF_EPS)
+        {
+            out->to_call = out->round_contrib[player];
+            out->current_bet = out->round_contrib[player];
+            out->raises_made += 1;
+            for (int i = 0; i < out->num_players; ++i)
+                if (out->active[i] && i != player)
+                    out->acted_this_round[i] = 0;
         }
         out->acted_this_round[player] = 1;
     }
@@ -1754,6 +1873,25 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     if (out_state->raise_cap < 0)
         out_state->raise_cap = 0;
     out_state->enable_pot_sizing = cfg->enable_pot_sizing;
+
+    /* FEAT-06: pot-limit effective all-in + dynamic STPR. is_pot_limit:
+     *  -1 = auto-derive from rules (PLO4/5/6 => pot-limit), 0 = forced off,
+     *   1 = forced on. */
+    out_state->is_pot_limit = cfg->is_pot_limit;
+    if (out_state->is_pot_limit == -1)
+    {
+        out_state->is_pot_limit =
+            (cfg->rules == MPF_RULE_PLO4 || cfg->rules == MPF_RULE_PLO5 ||
+             cfg->rules == MPF_RULE_PLO6) ? 1 : 0;
+    }
+    else if (out_state->is_pot_limit != 0 && out_state->is_pot_limit != 1)
+    {
+        out_state->is_pot_limit = 0;
+    }
+    out_state->committal_threshold_percent = cfg->committal_threshold_percent;
+    if (out_state->committal_threshold_percent <= 0.0)
+        out_state->committal_threshold_percent = 100.0; /* default 1.0 * pot */
+    out_state->stpr = 0.0;
 
     out_state->bet_size_count = cfg->bet_size_count_common;
     if (out_state->bet_size_count > MPF_MAX_BET_SIZES)
