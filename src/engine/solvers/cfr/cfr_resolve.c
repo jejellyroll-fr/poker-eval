@@ -722,7 +722,8 @@ int pe_cfr_gadget_create(cfr_game_t *game,
 {
     if (!game || !subgame || !out_gadget || !out_game)
         return PE_CFR_RESOLVE_EINVAL;
-    if (subgame->boundary_count == 0)
+    if (subgame->boundary_count == 0 ||
+        subgame->boundary_count > PE_CFR_RESOLVE_MAX_BOUNDARY)
         return PE_CFR_RESOLVE_EINVAL;
     if (game->num_players > 2)
         return PE_CFR_RESOLVE_UNSUPPORTED;
@@ -837,7 +838,8 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
 {
     if (!game || !blueprint || !resolve_storage || !subgame)
         return PE_CFR_RESOLVE_EINVAL;
-    if (subgame->boundary_count == 0)
+    if (subgame->boundary_count == 0 ||
+        subgame->boundary_count > PE_CFR_RESOLVE_MAX_BOUNDARY)
         return PE_CFR_RESOLVE_EINVAL;
 
     /* Multiway games have no single-opponent counterfactual value, so the
@@ -880,8 +882,8 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
             pe_cfr_gadget_destroy(gadget);
             return PE_CFR_RESOLVE_ENOMEM;
         }
-        memcpy(work, subgame->boundary,
-               subgame->boundary_count * sizeof(pe_cfr_boundary_t));
+        for (size_t k = 0; k < subgame->boundary_count; ++k)
+            work[k] = subgame->boundary[k];
         int rc = pe_cfr_blueprint_cfv(game, blueprint, gadget->opponent, user_data,
                                       work, subgame->boundary_count);
         if (rc != PE_CFR_RESOLVE_OK)
@@ -982,8 +984,9 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
             if (gadget)
                 pe_cfr_gadget_follow_frequency(gadget, resolve_storage, infoset, &follow);
 
-            double blueprint_cfv = (gadget && subgame->boundary[i].cfv != 0.0)
-                ? subgame->boundary[i].cfv : gadget->computed_cfv[i];
+            double blueprint_cfv = subgame->boundary[i].cfv;
+            if (gadget && blueprint_cfv == 0.0)
+                blueprint_cfv = gadget->computed_cfv[i];
             double resolved_cfv = resolved_bd[i].cfv;
             double margin = blueprint_cfv - resolved_cfv; /* opponent value */
 
