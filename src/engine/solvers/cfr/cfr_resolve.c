@@ -46,6 +46,7 @@
 #define GADGET_IDX(key)  ((key) & GADGET_IDX_MASK)
 
 #define GADGET_ROOT_KEY GADGET_MK(GADGET_KIND_ROOT, 0)
+#define GADGET_MAX_OUTCOMES PE_CFR_RESOLVE_MAX_BOUNDARY
 
 /* The gadget and its game currently driving a solve. gadget_get_infoset_key
  * resolves the live gadget from the game's game_data, but the one-shot
@@ -63,17 +64,77 @@ struct pe_cfr_gadget_t
     void *user_data;
     int player;    /* resolve_player (refined) */
     int opponent;  /* constrained player (gadget owner) */
-    /* Boundaries with strictly positive reach, indexed by gadget chance
-     * outcome. Zero-reach boundaries are excluded so the core CFR chance
-     * traversal (equiprobable outcomes) does not weight them. */
-    size_t active_idx[PE_CFR_RESOLVE_MAX_BOUNDARY];
+    /* Boundary indexes repeated in proportion to reach. Since gadget chance
+     * outcomes are equiprobable, repetition implements reach weighting. */
+    size_t active_idx[GADGET_MAX_OUTCOMES];
     size_t active_count;
     /* CFVs computed during a re-solve, owned by the gadget. */
     double computed_cfv[PE_CFR_RESOLVE_MAX_BOUNDARY];
     /* Snapshot used by synthetic terminate terminals; the public boundary
      * descriptor is const and must remain untouched. */
     double boundary_cfv[PE_CFR_RESOLVE_MAX_BOUNDARY];
+    double boundary_reach[PE_CFR_RESOLVE_MAX_BOUNDARY];
 };
+
+static void gadget_build_active(pe_cfr_gadget_t *g)
+{
+    g->active_count = 0;
+    double total_reach = 0.0;
+    size_t positive = 0;
+    for (size_t i = 0; i < g->boundary_count; ++i)
+        if (g->boundary_reach[i] > 0.0)
+        {
+            total_reach += g->boundary_reach[i];
+            positive++;
+        }
+    if (positive == 0)
+    {
+        for (size_t i = 0; i < g->boundary_count; ++i)
+            g->active_idx[g->active_count++] = i;
+        return;
+    }
+    size_t counts[PE_CFR_RESOLVE_MAX_BOUNDARY] = {0};
+    double fractions[PE_CFR_RESOLVE_MAX_BOUNDARY] = {0.0};
+    size_t assigned = 0;
+    for (size_t i = 0; i < g->boundary_count; ++i)
+            if (g->boundary_reach[i] > 0.0)
+            {
+                double exact = g->boundary_reach[i] / total_reach *
+                           (double)GADGET_MAX_OUTCOMES;
+            counts[i] = (size_t)exact; /* exact is positive; truncation is floor */
+            fractions[i] = exact - (double)counts[i];
+            if (counts[i] == 0)
+                counts[i] = 1;
+            assigned += counts[i];
+        }
+    if (assigned > GADGET_MAX_OUTCOMES)
+    {
+        memset(counts, 0, sizeof(counts));
+        assigned = 0;
+        for (size_t i = 0; i < g->boundary_count; ++i)
+            if (g->boundary_reach[i] > 0.0)
+            {
+                counts[i] = 1;
+                assigned++;
+            }
+    }
+    while (assigned < GADGET_MAX_OUTCOMES)
+    {
+        size_t best = (size_t)-1;
+        for (size_t i = 0; i < g->boundary_count; ++i)
+            if (g->boundary_reach[i] > 0.0 &&
+                (best == (size_t)-1 || fractions[i] > fractions[best]))
+                best = i;
+        if (best == (size_t)-1)
+            break;
+        counts[best]++;
+        fractions[best] = 0.0;
+        assigned++;
+    }
+    for (size_t i = 0; i < g->boundary_count; ++i)
+        for (size_t n = 0; n < counts[i]; ++n)
+            g->active_idx[g->active_count++] = i;
+}
 
 /* ----------------------------------------------------------------------------
  * Blueprint counterfactual-value walk
@@ -679,26 +740,12 @@ int pe_cfr_gadget_create(cfr_game_t *game,
     g->player = subgame->resolve_player;
     g->opponent = (subgame->resolve_player == 0) ? 1 : 0;
     for (size_t i = 0; i < g->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
+    {
         g->boundary_cfv[i] = subgame->boundary[i].cfv;
+        g->boundary_reach[i] = subgame->boundary[i].reach;
+    }
 
-    /* Build the list of boundaries with strictly positive reach. The core CFR
-     * chance traversal treats outcomes as equiprobable, so a zero-reach
-     * boundary must not appear as an outcome (it would receive weight it should
-     * not have). Boundaries whose reach is not yet known (caller will let the
-     * resolver compute CFVs) are kept provisionally; the driver updates this
-     * list once reaches are known. */
-    g->active_count = 0;
-    for (size_t i = 0; i < subgame->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
-    {
-        if (subgame->boundary[i].reach > 0.0)
-            g->active_idx[g->active_count++] = i;
-    }
-    /* If nothing has positive reach yet (CFVs to be computed), include all. */
-    if (g->active_count == 0)
-    {
-        for (size_t i = 0; i < subgame->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
-            g->active_idx[g->active_count++] = i;
-    }
+    gadget_build_active(g);
 
     memset(out_game, 0, sizeof(cfr_game_t));
     out_game->current_player = gadget_current_player;
@@ -849,7 +896,11 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
         {
             gadget->computed_cfv[k] = work[k].cfv;
             gadget->boundary_cfv[k] = work[k].cfv;
+            gadget->boundary_reach[k] = work[k].reach;
         }
+        /* The computed reach values are now available; rebuild the chance fan
+         * out so the solve uses their actual relative weights. */
+        gadget_build_active(gadget);
         free(work);
     }
 
