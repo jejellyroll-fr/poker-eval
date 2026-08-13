@@ -21,7 +21,9 @@
  *   - the blueprint CFV matches the analytic value,
  *   - trunk-locked seeding locks exactly the infosets outside the subgame,
  *   - the locked root reproduces the blueprint strategy,
- *   - multiway gadget re-solving is rejected (CFR-D is 2-player).
+ *   - the CFR-D gadget re-solve holds the boundary value constraint,
+ *   - multiway gadget re-solving is rejected, but the trunk-locked fallback
+ *     (config->lock_trunk) is accepted.
  */
 
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
@@ -119,9 +121,7 @@ int main(void)
     double sum = sub_avg[0] + sub_avg[1];
     CHECK(fabs(sum - 1.0) < 1e-6, "blueprint boundary strategy normalizes");
 
-    /* Compute the blueprint CFV for P1 at the boundary via the resolver. The
-     * blueprint best-responds, so P0 chooses L (a=1) and P1's value is -5;
-     * the analytic value is -5*sub_avg[0] + 2*(1-sub_avg[0]). */
+    /* Compute the blueprint CFV for P1 at the boundary via the resolver. */
     pe_cfr_boundary_t bd;
     memset(&bd, 0, sizeof(bd));
     bd.infoset = subroot_key;
@@ -195,14 +195,20 @@ int main(void)
     CHECK(fabs(p0_sub[0] + p0_sub[1] - 1.0) < 1e-6, "resolved boundary strategy normalizes");
     CHECK(p0_sub[0] > 0.99, "resolved P0 still plays L at the boundary");
 
-    /* ---- Multiway is unsupported ---- */
+    /* ---- Multiway: gadget unsupported, but trunk-locked fallback works ---- */
     cfr_game_t mw = game;
     mw.num_players = 3;
-    cfr_storage_t *bp3 = cfr_storage_create();
     cfr_storage_t *rs3 = cfr_storage_create();
-    rc = pe_cfr_resolve_subgame(&mw, bp3, rs3, &sub, &rcfg, NULL, NULL);
-    CHECK(rc == PE_CFR_RESOLVE_UNSUPPORTED, "multiway gadget rejected");
-    cfr_storage_destroy(bp3);
+    rc = pe_cfr_resolve_subgame(&mw, blueprint, rs3, &sub, &rcfg, NULL, NULL);
+    CHECK(rc == PE_CFR_RESOLVE_UNSUPPORTED, "multiway gadget without lock_trunk rejected");
+
+    pe_cfr_resolve_config_t rcfg_mw;
+    memset(&rcfg_mw, 0, sizeof(rcfg_mw));
+    rcfg_mw.cfr.max_iterations = 200;
+    rcfg_mw.lock_trunk = 1; /* enable the multiway fallback */
+    rc = pe_cfr_resolve_subgame(&mw, blueprint, rs3, &sub, &rcfg_mw, NULL, NULL);
+    CHECK(rc == PE_CFR_RESOLVE_OK, "multiway trunk-locked fallback accepted");
+    CHECK(cfr_storage_count_infosets(rs3) > 0, "multiway fallback seeded storage");
     cfr_storage_destroy(rs3);
 
     cfr_storage_destroy(blueprint);

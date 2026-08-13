@@ -389,10 +389,10 @@ static void seed_copy_cb(uint64_t key, int n_actions, const double *regret,
     if (in_subgame)
     {
         /* Seed the subgame infoset's average strategy from the blueprint and
-         * leave it unlocked so cfr_solve trains it. */
-        double dummy[CFR_MAX_ACTIONS];
-        (void)dummy;
-        cfr_storage_get_avg_strategy(lc->res, key, n_actions, prob);
+         * leave it unlocked so cfr_solve trains it. resolve_storage starts
+         * empty, so a single weighted accumulation (weight 1) sets the average
+         * exactly to the blueprint probabilities. */
+        cfr_storage_update_avg(lc->res, key, n_actions, prob, 1.0);
         lc->free_n++;
     }
     else
@@ -701,7 +701,10 @@ static void seed_resolve_cb(uint64_t key, int n_actions, const double *regret,
     else
         for (int i = 0; i < n_actions; ++i)
             prob[i] = avg_strategy[i] / sum;
-    cfr_storage_get_avg_strategy(res, key, n_actions, prob);
+    /* Write the blueprint average into the resolve storage. resolve_storage
+     * starts empty, so a single weighted accumulation (weight 1) sets the
+     * average exactly to the blueprint probabilities. */
+    cfr_storage_update_avg(res, key, n_actions, prob, 1.0);
 }
 
 int pe_cfr_resolve_subgame(cfr_game_t *game,
@@ -714,17 +717,26 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
 {
     if (!game || !blueprint || !resolve_storage || !subgame)
         return PE_CFR_RESOLVE_EINVAL;
-    if (game->num_players > 2)
-        return PE_CFR_RESOLVE_UNSUPPORTED;
     if (subgame->boundary_count == 0)
         return PE_CFR_RESOLVE_EINVAL;
 
+    /* Multiway games have no single-opponent counterfactual value, so the
+     * CFR-D gadget is undefined. When the caller enables the trunk-locked
+     * fallback we can still refine the subgame (locking the rest of the tree);
+     * otherwise the call is unsupported. */
+    int multiway = (game->num_players > 2);
+    if (multiway && !(config && config->lock_trunk))
+        return PE_CFR_RESOLVE_UNSUPPORTED;
+
     pe_cfr_gadget_t *gadget = NULL;
     cfr_game_t ggame;
-    if (pe_cfr_gadget_create(game, subgame, user_data, &gadget, &ggame) != PE_CFR_RESOLVE_OK)
+    if (!multiway)
     {
-        pe_cfr_gadget_destroy(gadget);
-        return PE_CFR_RESOLVE_EINVAL;
+        if (pe_cfr_gadget_create(game, subgame, user_data, &gadget, &ggame) != PE_CFR_RESOLVE_OK)
+        {
+            pe_cfr_gadget_destroy(gadget);
+            return PE_CFR_RESOLVE_EINVAL;
+        }
     }
 
     /* Fill blueprint CFVs when the caller left them at zero. */
@@ -737,7 +749,7 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
             break;
         }
     }
-    if (need_cfv)
+    if (!multiway && need_cfv)
     {
         /* subgame->boundary is const; copy into a mutable working array so the
          * resolver can write the computed CFVs back, then copy them across. */
@@ -786,7 +798,12 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
     if (cfg.max_iterations <= 0)
         cfg.max_iterations = 1000;
 
-    g_gadget_active = gadget;
+    /* Multiway (no gadget): solve the full game with the trunk locked; copy the
+     * inner game vtable so cfr_solve can drive it directly. */
+    if (multiway)
+        ggame = *game;
+
+    g_gadget_active = gadget; /* NULL for multiway; get_infoset_key tolerates it */
     double expl = 0.0;
     double r = cfr_solve(&ggame, resolve_storage, &cfg, &expl);
     g_gadget_active = NULL;
@@ -814,7 +831,10 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
         {
             uint64_t infoset = subgame->boundary[i].infoset;
             double follow = 0.0;
-            pe_cfr_gadget_follow_frequency(gadget, resolve_storage, infoset, &follow);
+            /* The follow-frequency is only meaningful for the 2-player gadget;
+             * for multiway (trunk-locked) there is no gadget decision. */
+            if (gadget)
+                pe_cfr_gadget_follow_frequency(gadget, resolve_storage, infoset, &follow);
 
             /* A converged gadget drives the opponent to "terminate" (follow=0)
              * whenever entering the subgame would yield less than alpha_i, and
