@@ -47,8 +47,12 @@
 
 #define GADGET_ROOT_KEY GADGET_MK(GADGET_KIND_ROOT, 0)
 
-/* The gadget currently driving a solve, needed by gadget_get_infoset_key. */
+/* The gadget and its game currently driving a solve. gadget_get_infoset_key
+ * resolves the live gadget from the game's game_data, but the one-shot
+ * pe_cfr_resolve_subgame path and the standalone pe_cfr_gadget_create path also
+ * keep these as a fallback so the callback always finds the right gadget. */
 static pe_cfr_gadget_t *g_gadget_active = NULL;
+static cfr_game_t *g_gadget_active_game = NULL;
 
 struct pe_cfr_gadget_t
 {
@@ -59,6 +63,16 @@ struct pe_cfr_gadget_t
     void *user_data;
     int player;    /* resolve_player (refined) */
     int opponent;  /* constrained player (gadget owner) */
+    /* Boundaries with strictly positive reach, indexed by gadget chance
+     * outcome. Zero-reach boundaries are excluded so the core CFR chance
+     * traversal (equiprobable outcomes) does not weight them. */
+    size_t active_idx[PE_CFR_RESOLVE_MAX_BOUNDARY];
+    size_t active_count;
+    /* CFVs computed during a re-solve, owned by the gadget. */
+    double computed_cfv[PE_CFR_RESOLVE_MAX_BOUNDARY];
+    /* Snapshot used by synthetic terminate terminals; the public boundary
+     * descriptor is const and must remain untouched. */
+    double boundary_cfv[PE_CFR_RESOLVE_MAX_BOUNDARY];
 };
 
 /* ----------------------------------------------------------------------------
@@ -170,14 +184,18 @@ static void cfv_value_recursive(cfv_value_t *w,
         out_util[p] = node_val[p];
 }
 
-int pe_cfr_blueprint_cfv(cfr_game_t *game,
-                         cfr_storage_t *blueprint,
-                         int player,
-                         void *user_data,
-                         pe_cfr_boundary_t *boundary,
-                         size_t boundary_count)
+/* Shared counterfactual-value walk. `root` is the state to start from (the
+ * full game root for the blueprint, or the subgame root for the resolved
+ * strategy). Fills boundary[i].cfv / .reach for matching infosets. */
+static int cfv_compute(cfr_game_t *game,
+                       cfr_storage_t *storage,
+                       int player,
+                       void *user_data,
+                       pe_cfr_boundary_t *boundary,
+                       size_t boundary_count,
+                       uint64_t root)
 {
-    if (!game || !blueprint || !boundary)
+    if (!game || !storage || !boundary)
         return PE_CFR_RESOLVE_EINVAL;
     if (boundary_count > PE_CFR_RESOLVE_MAX_BOUNDARY)
         return PE_CFR_RESOLVE_EINVAL;
@@ -187,7 +205,7 @@ int pe_cfr_blueprint_cfv(cfr_game_t *game,
     cfv_value_t w;
     memset(&w, 0, sizeof(w));
     w.game = game;
-    w.blueprint = blueprint;
+    w.blueprint = storage;
     w.player = player;
     w.user_data = user_data;
     w.boundary = boundary;
@@ -207,7 +225,6 @@ int pe_cfr_blueprint_cfv(cfr_game_t *game,
         return PE_CFR_RESOLVE_ENOMEM;
     }
 
-    uint64_t root = (uint64_t)(uintptr_t)game->initial_state;
     cfv_value_recursive(&w, root, reach, num_players, util);
 
     for (size_t i = 0; i < boundary_count; ++i)
@@ -220,6 +237,24 @@ int pe_cfr_blueprint_cfv(cfr_game_t *game,
     free(reach);
     free(util);
     return PE_CFR_RESOLVE_OK;
+}
+
+int pe_cfr_blueprint_cfv(cfr_game_t *game,
+                         cfr_storage_t *blueprint,
+                         int player,
+                         void *user_data,
+                         pe_cfr_boundary_t *boundary,
+                         size_t boundary_count)
+{
+    if (!game || !blueprint || !boundary)
+        return PE_CFR_RESOLVE_EINVAL;
+    if (boundary_count > PE_CFR_RESOLVE_MAX_BOUNDARY)
+        return PE_CFR_RESOLVE_EINVAL;
+    if (game->num_players <= 0)
+        return PE_CFR_RESOLVE_EINVAL;
+    uint64_t root = (uint64_t)(uintptr_t)game->initial_state;
+    return cfv_compute(game, blueprint, player, user_data, boundary,
+                       boundary_count, root);
 }
 
 /* ----------------------------------------------------------------------------
@@ -510,7 +545,7 @@ static int gadget_get_chance_outcomes(cfr_game_t *game, uint64_t key, void *user
 {
     pe_cfr_gadget_t *g = (pe_cfr_gadget_t *)game->game_data;
     if (GADGET_KIND(key) == GADGET_KIND_ROOT)
-        return (int)g->boundary_count;
+        return (int)g->active_count;
     return g->inner->get_chance_outcomes
         ? g->inner->get_chance_outcomes(g->inner, key, g->user_data)
         : 0;
@@ -521,9 +556,11 @@ static uint64_t gadget_apply_chance(cfr_game_t *game, uint64_t key, int outcome,
     pe_cfr_gadget_t *g = (pe_cfr_gadget_t *)game->game_data;
     if (GADGET_KIND(key) == GADGET_KIND_ROOT)
     {
-        if (outcome < 0 || (size_t)outcome >= g->boundary_count)
+        if (outcome < 0 || (size_t)outcome >= g->active_count)
             return key;
-        return GADGET_MK(GADGET_KIND_BOUNDARY, (size_t)outcome);
+        /* Map the equiprobable gadget outcome to the real boundary index. */
+        size_t bidx = g->active_idx[(size_t)outcome];
+        return GADGET_MK(GADGET_KIND_BOUNDARY, bidx);
     }
     return g->inner->apply_chance
         ? g->inner->apply_chance(g->inner, key, outcome, g->user_data)
@@ -570,7 +607,7 @@ static double gadget_get_utility(cfr_game_t *game, uint64_t key, int player, voi
         size_t idx = GADGET_IDX(key);
         if (idx < g->boundary_count)
         {
-            double alpha = g->boundary[idx].cfv;
+            double alpha = g->boundary_cfv[idx];
             /* Zero-sum, opponent-centric payoff: the constrained opponent
              * receives alpha_i, the rest of the table absorbs -alpha_i
              * split evenly so the sum is zero. */
@@ -589,7 +626,13 @@ static uint64_t gadget_get_infoset_key(const void *state)
     uint64_t key = (uint64_t)(uintptr_t)state;
     if (GADGET_KIND(key) != 0)
         return key; /* stable gadget state */
-    pe_cfr_gadget_t *g = g_gadget_active;
+    /* The gadget game's game_data is the live gadget, so this works for both
+     * the one-shot pe_cfr_resolve_subgame path and callers that build the
+     * gadget via pe_cfr_gadget_create and drive cfr_solve themselves. */
+    cfr_game_t *game = g_gadget_active_game;
+    pe_cfr_gadget_t *g = (game && game->game_data)
+        ? (pe_cfr_gadget_t *)game->game_data
+        : g_gadget_active;
     if (g && g->inner->get_infoset_key)
         return g->inner->get_infoset_key(state);
     return key;
@@ -599,6 +642,12 @@ static void gadget_release_state(cfr_game_t *game, uint64_t key, void *user)
 {
     pe_cfr_gadget_t *g = (pe_cfr_gadget_t *)game->game_data;
     if (GADGET_KIND(key) != 0)
+        return; /* synthetic gadget state: nothing to free */
+    /* Never release the borrowed subgame root: it belongs to the caller and is
+     * returned verbatim on every "follow" edge, so releasing it would free a
+     * caller-owned state (and double-free on the next visit) for adapters that
+     * implement release_state. */
+    if (key == g->subgame.root_state_key)
         return;
     if (g->inner->release_state)
         g->inner->release_state(g->inner, key, g->user_data);
@@ -629,6 +678,27 @@ int pe_cfr_gadget_create(cfr_game_t *game,
     g->boundary_count = subgame->boundary_count;
     g->player = subgame->resolve_player;
     g->opponent = (subgame->resolve_player == 0) ? 1 : 0;
+    for (size_t i = 0; i < g->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
+        g->boundary_cfv[i] = subgame->boundary[i].cfv;
+
+    /* Build the list of boundaries with strictly positive reach. The core CFR
+     * chance traversal treats outcomes as equiprobable, so a zero-reach
+     * boundary must not appear as an outcome (it would receive weight it should
+     * not have). Boundaries whose reach is not yet known (caller will let the
+     * resolver compute CFVs) are kept provisionally; the driver updates this
+     * list once reaches are known. */
+    g->active_count = 0;
+    for (size_t i = 0; i < subgame->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
+    {
+        if (subgame->boundary[i].reach > 0.0)
+            g->active_idx[g->active_count++] = i;
+    }
+    /* If nothing has positive reach yet (CFVs to be computed), include all. */
+    if (g->active_count == 0)
+    {
+        for (size_t i = 0; i < subgame->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
+            g->active_idx[g->active_count++] = i;
+    }
 
     memset(out_game, 0, sizeof(cfr_game_t));
     out_game->current_player = gadget_current_player;
@@ -647,6 +717,7 @@ int pe_cfr_gadget_create(cfr_game_t *game,
     out_game->num_players = game->num_players;
 
     *out_gadget = g;
+    g_gadget_active_game = out_game;
     return PE_CFR_RESOLVE_OK;
 }
 
@@ -654,6 +725,8 @@ void pe_cfr_gadget_destroy(pe_cfr_gadget_t *gadget)
 {
     if (gadget == g_gadget_active)
         g_gadget_active = NULL;
+    if (g_gadget_active_game && g_gadget_active_game->game_data == gadget)
+        g_gadget_active_game = NULL;
     free(gadget);
 }
 
@@ -751,8 +824,8 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
     }
     if (!multiway && need_cfv)
     {
-        /* subgame->boundary is const; copy into a mutable working array so the
-         * resolver can write the computed CFVs back, then copy them across. */
+        /* subgame->boundary is const and must stay untouched; compute into a
+         * mutable working array and keep the results inside the gadget. */
         pe_cfr_boundary_t *work = (pe_cfr_boundary_t *)malloc(
             subgame->boundary_count * sizeof(pe_cfr_boundary_t));
         if (!work)
@@ -770,9 +843,13 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
             pe_cfr_gadget_destroy(gadget);
             return rc;
         }
-        /* Copy the computed cfv/reach back into the const caller array. */
-        memcpy((pe_cfr_boundary_t *)subgame->boundary, work,
-               subgame->boundary_count * sizeof(pe_cfr_boundary_t));
+        /* Store the computed CFVs in the gadget instead of writing through the
+         * caller's const boundary array. */
+        for (size_t k = 0; k < subgame->boundary_count && k < PE_CFR_RESOLVE_MAX_BOUNDARY; ++k)
+        {
+            gadget->computed_cfv[k] = work[k].cfv;
+            gadget->boundary_cfv[k] = work[k].cfv;
+        }
         free(work);
     }
 
@@ -804,9 +881,11 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
         ggame = *game;
 
     g_gadget_active = gadget; /* NULL for multiway; get_infoset_key tolerates it */
+    g_gadget_active_game = &ggame;
     double expl = 0.0;
     double r = cfr_solve(&ggame, resolve_storage, &cfg, &expl);
     g_gadget_active = NULL;
+    g_gadget_active_game = NULL;
 
     if (r < 0.0)
     {
@@ -827,6 +906,22 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
         double worst = 1e300;
         double sum = 0.0;
         size_t n = 0;
+
+        /* Compute the resolved counterfactual values of each boundary under the
+         * re-solved strategy, then report the true margin = blueprint - resolved
+         * (positive means the opponent cannot improve by entering). */
+        pe_cfr_boundary_t resolved_bd[PE_CFR_RESOLVE_MAX_BOUNDARY];
+        memset(resolved_bd, 0, sizeof(resolved_bd));
+        for (size_t k = 0; k < subgame->boundary_count && k < PE_CFR_RESOLVE_MAX_BOUNDARY; ++k)
+        {
+            resolved_bd[k].infoset = subgame->boundary[k].infoset;
+            resolved_bd[k].reach = 1.0;
+        }
+        if (gadget)
+            cfv_compute(game, resolve_storage, gadget->opponent, user_data,
+                        resolved_bd, subgame->boundary_count,
+                        subgame->root_state_key);
+
         for (size_t i = 0; i < subgame->boundary_count && i < PE_CFR_RESOLVE_MAX_BOUNDARY; ++i)
         {
             uint64_t infoset = subgame->boundary[i].infoset;
@@ -836,19 +931,14 @@ int pe_cfr_resolve_subgame(cfr_game_t *game,
             if (gadget)
                 pe_cfr_gadget_follow_frequency(gadget, resolve_storage, infoset, &follow);
 
-            /* A converged gadget drives the opponent to "terminate" (follow=0)
-             * whenever entering the subgame would yield less than alpha_i, and
-             * to "follow" (follow=1) otherwise. The constraint holds when the
-             * opponent has no incentive to deviate from terminate, i.e. when
-             * follow == 0 at convergence. We therefore report the margin as the
-             * residual the gadget still has to close: positive follow implies
-             * the constraint is (so far) satisfied because the opponent prefers
-             * the subgame only when it is at least as good as terminate. */
-            double margin = (follow <= 1e-9) ? 0.0 : -follow;
+            double blueprint_cfv = (gadget && subgame->boundary[i].cfv != 0.0)
+                ? subgame->boundary[i].cfv : gadget->computed_cfv[i];
+            double resolved_cfv = resolved_bd[i].cfv;
+            double margin = blueprint_cfv - resolved_cfv; /* opponent value */
 
             out_result->margins[i].infoset = infoset;
-            out_result->margins[i].blueprint_cfv = subgame->boundary[i].cfv;
-            out_result->margins[i].resolved_cfv = subgame->boundary[i].cfv;
+            out_result->margins[i].blueprint_cfv = blueprint_cfv;
+            out_result->margins[i].resolved_cfv = resolved_cfv;
             out_result->margins[i].follow_freq = follow;
             out_result->margins[i].margin = margin;
 
