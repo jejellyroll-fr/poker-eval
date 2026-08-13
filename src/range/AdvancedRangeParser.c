@@ -2276,8 +2276,6 @@ static int arp_evaluate_range_token(arp_token_t *token, StdDeck_CardMask dead_ca
         {
             arp_range_t sub;
             memset(&sub, 0, sizeof(sub));
-            if (!arp_init_range_with_game(&sub, game_type))
-                return 0;
             if (!ARP_ParseRange(token->data.spot.hand, dead_cards, game_type, &sub))
             {
                 ARP_FreeRange(&sub);
