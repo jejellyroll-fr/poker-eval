@@ -46,6 +46,35 @@ typedef struct mpf_tree_range_combo_t
     double weight;
 } mpf_tree_range_combo_t;
 
+/* Spot filter / action morphing rule (FEAT-07, #143). Parsed out of a
+   range-profile combo string such as "$cb", "SPR>3", "POS=IP", "BET", "AUTO". */
+typedef enum
+{
+    MPF_SPOT_NONE = 0,
+    MPF_SPOT_CB,    /* $cb - use previous street aggressor's active range */
+    MPF_SPOT_SPR_GT,/* SPR > value */
+    MPF_SPOT_SPR_LT,/* SPR < value */
+    MPF_SPOT_POS,   /* position == value */
+    MPF_SPOT_BET,   /* BET action morph (raise) */
+    MPF_SPOT_AUTO   /* AUTO bet-sizing morph (pot sizing) */
+} mpf_tree_spot_kind_t;
+
+typedef enum
+{
+    MPF_SPOT_POS_INVALID = 0,
+    MPF_SPOT_POS_IP,
+    MPF_SPOT_POS_OOP
+} mpf_tree_spot_pos_t;
+
+typedef struct mpf_tree_spot_rule_t
+{
+    mpf_tree_spot_kind_t kind;
+    double value;            /* numeric operand for SPR thresholds */
+    mpf_tree_spot_pos_t pos;/* position for POS= rules */
+    int is_cb;              /* set for $cb */
+    char *hand;             /* residual hand part of the combo (may be NULL) */
+} mpf_tree_spot_rule_t;
+
 typedef struct mpf_tree_range_profile_t
 {
     char *id;
@@ -56,6 +85,13 @@ typedef struct mpf_tree_range_profile_t
     int combo_count;
     char **aliases;
     int alias_count;
+    /* Spot filter / action morphing rules parsed from the combos (FEAT-07). */
+    mpf_tree_spot_rule_t *spot_rules;
+    int spot_rule_count;
+    /* Set when a combo used $cb: the c-bet range is resolved from the range
+       profile belonging to the previous street's aggressor. */
+    int has_cb;
+    char *cb_range_id; /* explicit target profile id for $cb, or NULL */
 } mpf_tree_range_profile_t;
 
 typedef struct mpf_tree_action_t
@@ -106,6 +142,7 @@ typedef struct mpf_tree_snapshot_t
     double round_contrib[MPF_MAX_PLAYERS];
     int active[MPF_MAX_PLAYERS];
     int acted[MPF_MAX_PLAYERS];
+    int has_snapshot;
 } mpf_tree_snapshot_t;
 
 typedef struct mpf_tree_node_t
@@ -127,6 +164,7 @@ typedef struct mpf_tree_node_t
     int locked_strategy_count;
     mpf_tree_snapshot_t snapshot;
     int has_snapshot;
+    int spot_rules_pass; /* FEAT-07: gating result after applying node SPR/pos */
     mpf_state_t *state_cache;
     uint64_t state_key;
 #if !defined(_WIN32)
@@ -166,6 +204,58 @@ mpf_tree_def_t *mpf_tree_load_json_file(const char *path, mpf_tree_error_t *err)
 int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err);
 char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len);
 void mpf_tree_free(mpf_tree_def_t *tree);
+
+/* Spot Filter / Action Morphing (FEAT-07, #143) */
+
+/**
+ * Compute the effective stack-to-pot ratio for a node.
+ * @param pot         Current pot size
+ * @param eff_stack   Effective remaining stack of the acting player
+ * @return SPR = eff_stack / pot (0.0 when pot <= 0)
+ */
+double mpf_tree_compute_spr(double pot, double eff_stack);
+
+/**
+ * Determine whether the acting player is in position (acts last) given the
+ * snapshot. Acts last among active players == IP.
+ * @return 1 if in position, 0 otherwise
+ */
+int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player);
+
+/**
+ * Evaluate a list of spot rules against the runtime node context.
+ *
+ * SPR/POS rules gate the range/action: the function returns 0 as soon as a
+ * gating rule fails. $cb, BET and AUTO are not gating conditions here (they
+ * are applied by the tree builder), so they never cause rejection.
+ *
+ * @param rules    Spot rule array (may be NULL when count == 0)
+ * @param count    Spot rule count
+ * @param spr      Current node SPR
+ * @param is_ip    Whether the acting player is in position
+ * @return 1 if all gating rules pass, 0 otherwise
+ */
+int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
+                                 double spr, int is_ip);
+
+/**
+ * Find the range profile that should supply the c-bet range for a $cb rule.
+ *
+ * Resolves `$cb` to the active range of the previous street's aggressor. The
+ * caller passes the full profile list; the function prefers an explicit
+ * `cb_range_id` when set, otherwise returns the profile whose `player` matches
+ * `aggressor_player` and whose street is the immediate previous street.
+ *
+ * @param profiles        Profile array
+ * @param profile_count   Profile count
+ * @param aggressor_player Player who was the aggressor on the previous street
+ * @param prev_street     Street to look the range up for
+ * @param cb_range_id     Explicit profile id from $cb (may be NULL)
+ * @return Matching profile, or NULL if none found
+ */
+const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
+    const mpf_tree_range_profile_t *profiles, int profile_count,
+    int aggressor_player, mpf_street_t prev_street, const char *cb_range_id);
 
 #ifdef __cplusplus
 }
