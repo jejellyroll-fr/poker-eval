@@ -26,6 +26,14 @@ extern "C" {
 /* Default recursion depth limit for tree walks; a value of 0 in
    cfr_config_t::max_depth selects this default. */
 #define CFR_DEFAULT_MAX_DEPTH 1000
+
+/* Street values used by selective CFR memory retention.  They intentionally
+ * match mpf_street_t, while keeping the core solver independent of MPF. */
+#define CFR_STREET_PREFLOP 0
+#define CFR_STREET_FLOP 1
+#define CFR_STREET_TURN 2
+#define CFR_STREET_RIVER 3
+#define CFR_STREET_SHOWDOWN 4
 /* Forward declarations */
 typedef struct cfr_game_t cfr_game_t;
 typedef struct cfr_storage_t cfr_storage_t;
@@ -58,6 +66,8 @@ struct cfr_storage_t {
     entry_t *tab;
     size_t cap;
     size_t used_count;
+    uint32_t keep_avg_strategy_mask;
+    uint32_t keep_ev_mask;
 };
 
 /* CFR game interface (vtable) */
@@ -100,6 +110,10 @@ struct cfr_game_t {
     /* Return a stable infoset key for storage (optional). This is required
        when state_key is a temporary heap pointer that release_state frees. */
     uint64_t (*get_infoset_key)(const void* state);
+
+    /* Optional street for selective average-strategy/EV retention. Return a
+       CFR_STREET_* value, or a negative value when unknown. */
+    int (*get_street)(cfr_game_t* game, uint64_t state_key, void* user_data);
 
     /* Release a state returned by apply_action (optional; may be NULL for
        games that do not allocate per-state heap storage). */
@@ -181,6 +195,8 @@ struct cfr_config_t {
     int exploitability_interval; /* Full best-response exploitability every N
                                   * iterations (0 = disabled; also drives the
                                   * periodic convergence check). */
+    uint32_t keep_avg_strategy_mask; /* 0 = retain every street */
+    uint32_t keep_ev_mask;           /* 0 = retain every street */
     int metrics_level;
     double metrics_bb_value;
     double metrics_mchips_scale;
@@ -244,6 +260,15 @@ void cfr_storage_get_strategy(
 
 /* Configure strategy extraction mode (called by solver) */
 void cfr_storage_set_strategy_mode(int use_ecfr, double ecfr_lambda);
+void cfr_storage_set_memory_masks(cfr_storage_t *storage,
+                                  uint32_t keep_avg_strategy_mask,
+                                  uint32_t keep_ev_mask);
+
+void cfr_storage_get_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
+void cfr_storage_update_regret_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
+void cfr_storage_update_avg_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
+void cfr_storage_get_avg_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
+void cfr_storage_accumulate_ev_at_street(cfr_storage_t*, uint64_t, int, double);
 
 int cfr_storage_save_checkpoint(
     cfr_storage_t* storage,

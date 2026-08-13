@@ -481,6 +481,15 @@ static uint64_t mpf_state_key(const mpf_state_t *st)
     return (uint64_t)(uintptr_t)st;
 }
 
+static mpf_state_t *mpf_wrapper_state(cfr_game_t *game, uint64_t key);
+
+static int mpf_get_street(cfr_game_t *game, uint64_t key, void *user_data)
+{
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user_data;
+    return st ? (int)st->street : -1;
+}
+
 /* Enumerate the unused cards (not in any hole, not yet revealed). */
 static int mpf_unused_cards(const mpf_state_t *st, int *out, int max)
 {
@@ -2083,6 +2092,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_game->get_actions = mpf_get_actions_wrapper;
     out_game->apply_action = mpf_apply_action_wrapper;
     out_game->current_player = mpf_current_player_wrapper;
+    out_game->get_street = mpf_get_street;
     out_game->is_chance = mpf_is_chance_wrapper;
     out_game->get_chance_outcomes = mpf_get_chance_outcomes_wrapper;
     out_game->apply_chance = mpf_apply_chance_wrapper;
