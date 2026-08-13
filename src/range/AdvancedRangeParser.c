@@ -2748,6 +2748,8 @@ bool ARP_ContainsHand(const arp_range_t *range, StdDeck_CardMask hand) {
     return false;
 }
 
+/* Exported public API (used by consumers/tests in other translation units). */
+// cppcheck-suppress unusedFunction
 int ARP_GetSpotFilters(const arp_range_t *range,
                        const arp_spot_filter_t **out_filters,
                        size_t *out_count)
@@ -2760,6 +2762,8 @@ int ARP_GetSpotFilters(const arp_range_t *range,
     return 1;
 }
 
+/* Exported public API (used by consumers/tests in other translation units). */
+// cppcheck-suppress unusedFunction
 int ARP_ValidateSpotSyntax(const char *range_string,
                            char *error_buffer, size_t error_buffer_size)
 {
@@ -2785,6 +2789,8 @@ int ARP_ValidateSpotSyntax(const char *range_string,
     return result;
 }
 
+/* Exported public API (used by consumers/tests in other translation units). */
+// cppcheck-suppress unusedFunction
 bool ARP_EvaluateSpotFilters(const arp_spot_filter_t *filters,
                              size_t count, double spr, bool is_ip)
 {
