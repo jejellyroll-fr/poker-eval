@@ -12,6 +12,7 @@ can jump directly to the topic you need.
 | CFR Performance | Perf counters & instrumentation tips | ✅ |
 | CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | ✅ |
 | Hand Abstraction via Clustering | k-means hand clustering (FEAT-04): features, `.pe_bkt`, solver wiring | ✅ |
+| Subgame Re-solving | CFR-D gadget re-solving from a blueprint (FEAT-05): value constraints, API, 2-player | ✅ |
 
 ## CLI helpers
 

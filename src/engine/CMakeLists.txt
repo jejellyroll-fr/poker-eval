@@ -15,6 +15,7 @@ set(ENGINE_SOURCES
     solvers/cfr/hand_clustering.c
     solvers/cfr/holdem_river_adapter.c
     solvers/cfr/multiway_postflop_adapter.c
+    solvers/cfr/cfr_resolve.c
     solvers/cfr/mpf_export.c
     solvers/cfr/mpf_compact_storage.c
     solvers/cfr/mpf_tree.c
