@@ -232,7 +232,18 @@ static void mpf_tree_range_profile_free(mpf_tree_range_profile_t *profile)
         free(profile->combos);
         profile->combos = NULL;
     }
+    if (profile->spot_rules)
+    {
+        for (int i = 0; i < profile->spot_rule_count; ++i)
+            free(profile->spot_rules[i].hand);
+        free(profile->spot_rules);
+        profile->spot_rules = NULL;
+    }
+    free(profile->cb_range_id);
+    profile->cb_range_id = NULL;
     profile->combo_count = 0;
+    profile->spot_rule_count = 0;
+    profile->has_cb = 0;
     profile->alias_count = 0;
     profile->player = -1;
     profile->street = MPF_STREET_PREFLOP;
@@ -664,6 +675,159 @@ static int mpf_parse_string_array(const char *json,
     return 1;
 }
 
+/* Parse spot-filter / action-morphing syntax out of a single combo hand
+   string (FEAT-07, #143). Recognized tokens: $cb, SPR>x, SPR<x, POS=IP,
+   POS=OOP, BET, AUTO. The first supported token sets the rule; an optional
+   trailing hand (e.g. "SPR>3:AA") is kept as the residual `out_hand`. Returns
+   1 on success (including when no spot token is present), 0 on malformed input.
+   When `out_rule` is non-NULL and a spot token was found, *out_rule is filled
+   and *out_found is set to 1. */
+static int mpf_parse_spot_from_combo(const char *hand, size_t hand_len,
+                                     mpf_tree_spot_rule_t *out_rule,
+                                     int *out_found,
+                                     char *out_hand, size_t out_hand_size,
+                                     size_t *out_hand_len,
+                                     mpf_tree_error_t *err)
+{
+    if (out_found)
+        *out_found = 0;
+    if (out_hand && out_hand_size > 0)
+        out_hand[0] = '\0';
+
+    if (!hand)
+        return 0;
+
+    size_t len = hand_len;
+    const char *p = hand;
+
+    /* $cb c-bet spot filter */
+    if (len >= 3 && p[0] == '$' && tolower((unsigned char)p[1]) == 'c' &&
+        tolower((unsigned char)p[2]) == 'b')
+    {
+        if (out_rule)
+        {
+            memset(out_rule, 0, sizeof(*out_rule));
+            out_rule->kind = MPF_SPOT_CB;
+            out_rule->is_cb = 1;
+        }
+        if (out_found)
+            *out_found = 1;
+        p += 3;
+    }
+    /* SPR>x / SPR<x */
+    else if (len >= 4 && tolower((unsigned char)p[0]) == 's' &&
+             tolower((unsigned char)p[1]) == 'p' && tolower((unsigned char)p[2]) == 'r')
+    {
+        char op = p[3];
+        if (op != '>' && op != '<')
+            return 0;
+        char *endptr = NULL;
+        double value = strtod(&p[4], &endptr);
+        if (endptr == &p[4])
+        {
+            if (err)
+                mpf_tree_error(err, "SPR rule missing numeric threshold");
+            return 0;
+        }
+        if (out_rule)
+        {
+            memset(out_rule, 0, sizeof(*out_rule));
+            out_rule->kind = (op == '>') ? MPF_SPOT_SPR_GT : MPF_SPOT_SPR_LT;
+            out_rule->value = value;
+        }
+        if (out_found)
+            *out_found = 1;
+        p = endptr;
+    }
+    /* POS=IP / POS=OOP */
+    else if (len >= 4 && tolower((unsigned char)p[0]) == 'p' &&
+             tolower((unsigned char)p[1]) == 'o' && tolower((unsigned char)p[2]) == 's' &&
+             p[3] == '=')
+    {
+        if (len >= 6 && tolower((unsigned char)p[4]) == 'i' && tolower((unsigned char)p[5]) == 'p')
+        {
+            if (out_rule)
+            {
+                memset(out_rule, 0, sizeof(*out_rule));
+                out_rule->kind = MPF_SPOT_POS;
+                out_rule->pos = MPF_SPOT_POS_IP;
+            }
+            p += 6;
+        }
+        else if (len >= 7 && tolower((unsigned char)p[4]) == 'o' &&
+                 tolower((unsigned char)p[5]) == 'o' && tolower((unsigned char)p[6]) == 'p')
+        {
+            if (out_rule)
+            {
+                memset(out_rule, 0, sizeof(*out_rule));
+                out_rule->kind = MPF_SPOT_POS;
+                out_rule->pos = MPF_SPOT_POS_OOP;
+            }
+            p += 7;
+        }
+        else
+        {
+            if (err)
+                mpf_tree_error(err, "POS rule must be IP or OOP");
+            return 0;
+        }
+        if (out_found)
+            *out_found = 1;
+    }
+    /* BET / AUTO standalone keywords */
+    else if (len >= 3)
+    {
+        if (tolower((unsigned char)p[0]) == 'b' && tolower((unsigned char)p[1]) == 'e' &&
+            tolower((unsigned char)p[2]) == 't')
+        {
+            if (out_rule)
+            {
+                memset(out_rule, 0, sizeof(*out_rule));
+                out_rule->kind = MPF_SPOT_BET;
+            }
+            if (out_found)
+                *out_found = 1;
+            p += 3;
+        }
+        else if (len >= 4 && tolower((unsigned char)p[0]) == 'a' &&
+                 tolower((unsigned char)p[1]) == 'u' && tolower((unsigned char)p[2]) == 't' &&
+                 tolower((unsigned char)p[3]) == 'o')
+        {
+            if (out_rule)
+            {
+                memset(out_rule, 0, sizeof(*out_rule));
+                out_rule->kind = MPF_SPOT_AUTO;
+            }
+            if (out_found)
+                *out_found = 1;
+            p += 4;
+        }
+    }
+
+    /* Skip an optional ':' separating the spot token from a residual hand. */
+    if (*p == ':')
+        p++;
+
+    if (out_hand_len)
+        *out_hand_len = 0;
+    if (out_hand && out_hand_size > 0 && *p != '\0')
+    {
+        /* Copy the residual hand using the known token length (no reliance on a
+           NUL terminator): clamp to the remaining token bytes and the buffer. */
+        const char *end = hand + hand_len;
+        size_t avail = (size_t)(end - p);
+        if ((ptrdiff_t)avail < 0)
+            avail = 0;
+        size_t n = avail < out_hand_size - 1 ? avail : out_hand_size - 1;
+        for (size_t i = 0; i < n; ++i)
+            out_hand[i] = p[i];
+        out_hand[n] = '\0';
+        if (out_hand_len)
+            *out_hand_len = n;
+    }
+    return 1;
+}
+
 static int mpf_parse_range_combos(const char *json,
                                   const jsmntok_t *tokens,
                                   int array_index,
@@ -700,6 +864,7 @@ static int mpf_parse_range_combos(const char *json,
         }
         mpf_tree_range_combo_t *combo = &profile->combos[i];
         combo->weight = 1.0;
+        size_t combo_hand_len = 0;
         int prop_idx = idx + 1;
         for (int j = 0; j < obj->size; ++j)
         {
@@ -710,14 +875,16 @@ static int mpf_parse_range_combos(const char *json,
                 int value_idx = prop_idx + 1;
                 if (mpf_token_streq(json, key, "hand"))
                 {
+                    int value_idx = prop_idx + 1;
+                    size_t hand_len = (size_t)(tokens[value_idx].end - tokens[value_idx].start);
                     free(combo->hand);
-                    combo->hand = mpf_strndup(json + tokens[value_idx].start,
-                                              (size_t)(tokens[value_idx].end - tokens[value_idx].start));
+                    combo->hand = mpf_strndup(json + tokens[value_idx].start, hand_len);
                     if (!combo->hand)
                     {
                         mpf_tree_error(err, "allocation failure for combo hand");
                         return 0;
                     }
+                    combo_hand_len = hand_len;
                 }
                 else if (mpf_token_streq(json, key, "weight"))
                 {
@@ -737,11 +904,57 @@ static int mpf_parse_range_combos(const char *json,
             }
             prop_idx = next_prop;
         }
-        if (!combo->hand)
+
+        /* Parse FEAT-07 spot-filter / action-morphing syntax from the combo. */
+        mpf_tree_spot_rule_t rule;
+        int found = 0;
+        char residual[128];
+        size_t residual_len = 0;
+        if (!mpf_parse_spot_from_combo(combo->hand, combo_hand_len, &rule, &found,
+                                      residual, sizeof(residual), &residual_len,
+                                      err))
+            return 0;
+
+        if (found)
+        {
+            mpf_tree_spot_rule_t *grown = realloc(profile->spot_rules,
+                                                 (size_t)(profile->spot_rule_count + 1) * sizeof(mpf_tree_spot_rule_t));
+            if (!grown)
+            {
+                mpf_tree_error(err, "allocation failure for spot rules");
+                return 0;
+            }
+            grown[profile->spot_rule_count++] = rule;
+            profile->spot_rules = grown;
+
+            if (rule.kind == MPF_SPOT_CB)
+                profile->has_cb = 1;
+
+            /* Replace the combo hand with the residual (the hand part after the
+               spot token), if any. A pure spot token leaves an empty hand, which
+               the validator tolerates for spot-only combos. */
+            free(combo->hand);
+            if (residual[0] != '\0')
+            {
+                combo->hand = mpf_strndup(residual, residual_len);
+                if (!combo->hand)
+                {
+                    mpf_tree_error(err, "allocation failure for residual combo hand");
+                    return 0;
+                }
+            }
+            else
+            {
+                combo->hand = NULL;
+            }
+        }
+
+        if (!combo->hand && profile->spot_rule_count == 0)
         {
             mpf_tree_error(err, "combo hand missing");
             return 0;
         }
+
         idx = mpf_json_next(tokens, idx);
     }
     return 1;
@@ -1527,6 +1740,16 @@ static int mpf_tree_apply_profiles(mpf_tree_def_t *tree, mpf_tree_error_t *err)
     return 1;
 }
 
+/* FEAT-07 spot-filter helpers (defined below, declared here so the profile
+   application pass can call them). */
+static double mpf_tree_compute_spr(double pot, double eff_stack);
+static int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player);
+static int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
+                                        double spr, int is_ip);
+static const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
+    const mpf_tree_range_profile_t *profiles, int profile_count,
+    int aggressor_player, mpf_street_t prev_street, const char *cb_range_id);
+
 static int mpf_tree_apply_range_profiles(mpf_tree_def_t *tree, mpf_tree_error_t *err)
 {
     for (int i = 0; i < tree->node_count; ++i)
@@ -1584,8 +1807,149 @@ static int mpf_tree_apply_range_profiles(mpf_tree_def_t *tree, mpf_tree_error_t 
             return 0;
         }
         node->range_profile = profile;
+
+        /* FEAT-07: resolve a $cb c-bet range to the previous street's
+           aggressor active range. We infer the aggressor as the player who
+           acted first on the previous street (first_to_act of this node's
+           snapshot when available), and the previous street as the one before
+           the node's own street. */
+        if (profile->has_cb)
+        {
+            mpf_street_t prev = node->street;
+            if (prev > MPF_STREET_PREFLOP)
+                prev = (mpf_street_t)(prev - 1);
+            int aggressor = (node->has_snapshot && node->snapshot.first_to_act >= 0)
+                               ? node->snapshot.first_to_act
+                               : node->acting_player;
+            node->cb_range = mpf_tree_resolve_cb_range(tree->range_profiles,
+                                                      tree->range_profile_count,
+                                                      aggressor, prev,
+                                                      profile->cb_range_id);
+        }
+
+        /* FEAT-07: evaluate the profile's spot rules against this node's
+           runtime context (SPR + position). The result is cached on the node
+           so the solver can skip (or morph) the range when the gate fails. */
+        if (node->has_snapshot && profile->spot_rule_count > 0)
+        {
+            double spr = mpf_tree_compute_spr(node->snapshot.pot,
+                                              node->snapshot.stacks[node->acting_player]);
+            int is_ip = mpf_tree_is_in_position(&node->snapshot, node->acting_player);
+            node->spot_rules_pass =
+                mpf_tree_evaluate_spot_rules(profile->spot_rules,
+                                             profile->spot_rule_count, spr, is_ip);
+        }
+        else
+        {
+            node->spot_rules_pass = 1;
+        }
     }
     return 1;
+}
+
+/* ===== Spot Filter / Action Morphing (FEAT-07, #143) ===== */
+
+static double mpf_tree_compute_spr(double pot, double eff_stack)
+{
+    if (pot <= 0.0)
+        return 0.0;
+    if (eff_stack < 0.0)
+        eff_stack = 0.0;
+    return eff_stack / pot;
+}
+
+static int mpf_tree_is_in_position(const mpf_tree_snapshot_t *snap, int acting_player)
+{
+    if (!snap || !snap->has_snapshot)
+        return 0;
+    if (acting_player < 0 || acting_player >= snap->num_players)
+        return 0;
+    if (snap->num_players < 2)
+        return 0;
+
+    /* The acting player is IP when they are the last active player to act in
+       the betting order. With the snapshot's acted[] flags we approximate this
+       as: the acting player is IP when all other active players have already
+       acted this round (i.e. they close the action). */
+    for (int p = 0; p < snap->num_players; ++p)
+    {
+        if (p == acting_player)
+            continue;
+        if (snap->active[p] && !snap->acted[p])
+            return 0; /* someone else still has to act -> OOP */
+    }
+    return 1;
+}
+
+static int mpf_tree_evaluate_spot_rules(const mpf_tree_spot_rule_t *rules, int count,
+                                 double spr, int is_ip)
+{
+    if (count <= 0 || !rules)
+        return 1; /* No gating rules -> always passes */
+
+    for (int i = 0; i < count; ++i)
+    {
+        const mpf_tree_spot_rule_t *r = &rules[i];
+        switch (r->kind)
+        {
+        case MPF_SPOT_SPR_GT:
+            if (!(spr > r->value))
+                return 0;
+            break;
+        case MPF_SPOT_SPR_LT:
+            if (!(spr < r->value))
+                return 0;
+            break;
+        case MPF_SPOT_POS:
+            if (r->pos == MPF_SPOT_POS_IP && !is_ip)
+                return 0;
+            if (r->pos == MPF_SPOT_POS_OOP && is_ip)
+                return 0;
+            break;
+        /* $cb, BET and AUTO are applied by the tree builder, not gating. */
+        case MPF_SPOT_CB:
+        case MPF_SPOT_BET:
+        case MPF_SPOT_AUTO:
+        case MPF_SPOT_NONE:
+        default:
+            break;
+        }
+    }
+    return 1;
+}
+
+static const mpf_tree_range_profile_t *mpf_tree_resolve_cb_range(
+    const mpf_tree_range_profile_t *profiles, int profile_count,
+    int aggressor_player, mpf_street_t prev_street, const char *cb_range_id)
+{
+    if (!profiles || profile_count <= 0)
+        return NULL;
+
+    /* Explicit target wins: $cb:<profile_id> */
+    if (cb_range_id)
+    {
+        for (int i = 0; i < profile_count; ++i)
+        {
+            if (profiles[i].id && strcmp(profiles[i].id, cb_range_id) == 0)
+                return &profiles[i];
+            for (int j = 0; j < profiles[i].alias_count; ++j)
+            {
+                if (profiles[i].aliases[j] &&
+                    strcmp(profiles[i].aliases[j], cb_range_id) == 0)
+                    return &profiles[i];
+            }
+        }
+    }
+
+    /* Otherwise the c-bet range is the active range of the previous street's
+       aggressor: the profile for `aggressor_player` on `prev_street`. */
+    for (int i = 0; i < profile_count; ++i)
+    {
+        const mpf_tree_range_profile_t *p = &profiles[i];
+        if (p->player == aggressor_player && p->street == prev_street)
+            return p;
+    }
+    return NULL;
 }
 
 static int mpf_find_node_index(const mpf_tree_def_t *tree, const char *id)
@@ -1672,7 +2036,10 @@ int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err)
         for (int j = 0; j < profile->combo_count; ++j)
         {
             const mpf_tree_range_combo_t *combo = &profile->combos[j];
-            if (!combo->hand || combo->hand[0] == '\0')
+            /* A combo without a hand is valid when it carries a spot filter
+               (e.g. "$cb" or a bare "POS=IP"); the spot rule supplies the
+               range/action instead of a literal hand. */
+            if ((!combo->hand || combo->hand[0] == '\0') && profile->spot_rule_count == 0)
             {
                 mpf_tree_error(err, "range profile combo missing hand");
                 return 0;

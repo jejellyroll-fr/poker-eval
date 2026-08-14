@@ -307,6 +307,7 @@ set(TEST_SOURCES
     test_range_cache.c
     test_range_utils.c
     test_range_integration.c
+    test_spot_filter.c
 
     # ICM Calculator tests
     test_icm_calculator.c
@@ -628,6 +629,8 @@ add_poker_test(test_cfr_storage_grow)
 set_tests_properties(test_cfr_storage_grow PROPERTIES LABELS "engine;cfr;storage")
 add_poker_test(test_cfr_storage_entry_grow)
 set_tests_properties(test_cfr_storage_entry_grow PROPERTIES LABELS "engine;cfr;storage")
+add_poker_test(test_cfr_selective_memory)
+set_tests_properties(test_cfr_selective_memory PROPERTIES LABELS "engine;cfr;storage")
 add_poker_test(test_cfr_state_release)
 set_tests_properties(test_cfr_state_release PROPERTIES LABELS "engine;cfr;leak")
 add_poker_test(test_cfr_checkpoint_cap)

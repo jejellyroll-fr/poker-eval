@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Spot filter and action morphing syntax for range parsing and MPF tree
+  building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
+  range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
+  carried on the parsed range (`arp_range_t.spot_filters`), exposed via
+  `ARP_GetSpotFilters`, `ARP_ValidateSpotSyntax` and `ARP_EvaluateSpotFilters`.
+  The MPF tree loader parses the same syntax out of `rangeProfile.combos`
+  (`mpf_tree_spot_rule_t`), evaluates the conditional SPR/position gates against
+  each node's snapshot during profile application (`mpf_tree_evaluate_spot_rules`,
+  cached on `mpf_tree_node_t.spot_rules_pass`), and resolves `$cb` to the
+  previous street aggressor's active range via `mpf_tree_resolve_cb_range`. New
+  unit `test_spot_filter.c` covers both layers.
 - Subgame re-solving / CFR-D gadget (FEAT-05, #122): re-solve a subtree of an
   already-solved blueprint without re-solving the whole tree, holding the
   boundary value fixed via the CFR-D gadget (Burch, Johanson & Bowling 2014).
