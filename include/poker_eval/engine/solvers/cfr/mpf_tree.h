@@ -46,6 +46,35 @@ typedef struct mpf_tree_range_combo_t
     double weight;
 } mpf_tree_range_combo_t;
 
+/* Spot filter / action morphing rule (FEAT-07, #143). Parsed out of a
+   range-profile combo string such as "$cb", "SPR>3", "POS=IP", "BET", "AUTO". */
+typedef enum
+{
+    MPF_SPOT_NONE = 0,
+    MPF_SPOT_CB,    /* $cb - use previous street aggressor's active range */
+    MPF_SPOT_SPR_GT,/* SPR > value */
+    MPF_SPOT_SPR_LT,/* SPR < value */
+    MPF_SPOT_POS,   /* position == value */
+    MPF_SPOT_BET,   /* BET action morph (raise) */
+    MPF_SPOT_AUTO   /* AUTO bet-sizing morph (pot sizing) */
+} mpf_tree_spot_kind_t;
+
+typedef enum
+{
+    MPF_SPOT_POS_INVALID = 0,
+    MPF_SPOT_POS_IP,
+    MPF_SPOT_POS_OOP
+} mpf_tree_spot_pos_t;
+
+typedef struct mpf_tree_spot_rule_t
+{
+    mpf_tree_spot_kind_t kind;
+    double value;            /* numeric operand for SPR thresholds */
+    mpf_tree_spot_pos_t pos;/* position for POS= rules */
+    int is_cb;              /* set for $cb */
+    char *hand;             /* residual hand part of the combo (may be NULL) */
+} mpf_tree_spot_rule_t;
+
 typedef struct mpf_tree_range_profile_t
 {
     char *id;
@@ -56,6 +85,13 @@ typedef struct mpf_tree_range_profile_t
     int combo_count;
     char **aliases;
     int alias_count;
+    /* Spot filter / action morphing rules parsed from the combos (FEAT-07). */
+    mpf_tree_spot_rule_t *spot_rules;
+    int spot_rule_count;
+    /* Set when a combo used $cb: the c-bet range is resolved from the range
+       profile belonging to the previous street's aggressor. */
+    int has_cb;
+    char *cb_range_id; /* explicit target profile id for $cb, or NULL */
 } mpf_tree_range_profile_t;
 
 typedef struct mpf_tree_action_t
@@ -106,6 +142,7 @@ typedef struct mpf_tree_snapshot_t
     double round_contrib[MPF_MAX_PLAYERS];
     int active[MPF_MAX_PLAYERS];
     int acted[MPF_MAX_PLAYERS];
+    int has_snapshot;
 } mpf_tree_snapshot_t;
 
 typedef struct mpf_tree_node_t
@@ -127,6 +164,10 @@ typedef struct mpf_tree_node_t
     int locked_strategy_count;
     mpf_tree_snapshot_t snapshot;
     int has_snapshot;
+    int spot_rules_pass; /* FEAT-07: gating result after applying node SPR/pos */
+    /* FEAT-07: when the node's range profile uses $cb, this points at the
+       resolved c-bet range (previous street aggressor's active range). */
+    const mpf_tree_range_profile_t *cb_range;
     mpf_state_t *state_cache;
     uint64_t state_key;
 #if !defined(_WIN32)

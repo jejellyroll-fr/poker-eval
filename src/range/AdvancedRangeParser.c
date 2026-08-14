@@ -67,6 +67,10 @@ static int arp_char_to_suit(char c);
 static char arp_rank_to_char(int rank);
 static char arp_suit_to_char(int suit);
 static int arp_tokenize(arp_context_t *ctx);
+/* Try to consume a spot-filter / action-morphing token (FEAT-07, #143) at the
+   current position: $cb, SPR>x, SPR<x, POS=IP/OOP, BET, AUTO. Returns 1 if a
+   spot token was consumed (and ctx->tokens advanced), 0 otherwise. */
+static int arp_try_parse_spot(arp_context_t *ctx, arp_token_t *token);
 static int arp_parse_tokens(arp_context_t *ctx, StdDeck_CardMask dead_cards, enum_game_t game_type, arp_range_t *result);
 typedef struct arp_hash_table_s arp_hash_table_t;
 static void arp_hash_free(arp_hash_table_t *ht);
@@ -818,6 +822,15 @@ static size_t arp_estimate_range_size(const arp_token_t *token) {
 
         case ARP_TOKEN_STUD_PATTERN:
             return 128;
+
+        case ARP_TOKEN_SPOT_CB:
+        case ARP_TOKEN_SPOT_SPR_GT:
+        case ARP_TOKEN_SPOT_SPR_LT:
+        case ARP_TOKEN_SPOT_POS:
+        case ARP_TOKEN_SPOT_BET:
+        case ARP_TOKEN_SPOT_AUTO:
+            /* Spot filters are metadata; they do not expand to hands. */
+            return 0;
 
         default:
             return 256;  /* Default fallback */
@@ -1764,7 +1777,7 @@ static arp_expr_node_t *arp_parse_primary(arp_context_t *ctx)
         return expr;
     }
 
-    /* Handle range tokens */
+    /* Handle range tokens (including spot-filter metadata tokens) */
     if (token->type == ARP_TOKEN_PERCENTAGE ||
         token->type == ARP_TOKEN_PLO_PATTERN ||
         token->type == ARP_TOKEN_PLO_CATEGORY ||
@@ -1774,7 +1787,13 @@ static arp_expr_node_t *arp_parse_primary(arp_context_t *ctx)
         token->type == ARP_TOKEN_SUITED ||
         token->type == ARP_TOKEN_OFFSUIT ||
         token->type == ARP_TOKEN_BOTH ||
-        token->type == ARP_TOKEN_SPECIFIC_HAND)
+        token->type == ARP_TOKEN_SPECIFIC_HAND ||
+        token->type == ARP_TOKEN_SPOT_CB ||
+        token->type == ARP_TOKEN_SPOT_SPR_GT ||
+        token->type == ARP_TOKEN_SPOT_SPR_LT ||
+        token->type == ARP_TOKEN_SPOT_POS ||
+        token->type == ARP_TOKEN_SPOT_BET ||
+        token->type == ARP_TOKEN_SPOT_AUTO)
     {
         arp_expr_node_t *node = arp_create_range_node(token);
         arp_advance_token(ctx);
@@ -2242,6 +2261,43 @@ static int arp_evaluate_range_token(arp_token_t *token, StdDeck_CardMask dead_ca
         return 1;
     }
 
+    case ARP_TOKEN_SPOT_CB:
+    case ARP_TOKEN_SPOT_SPR_GT:
+    case ARP_TOKEN_SPOT_SPR_LT:
+    case ARP_TOKEN_SPOT_POS:
+    case ARP_TOKEN_SPOT_BET:
+    case ARP_TOKEN_SPOT_AUTO:
+    {
+        /* Spot filters are metadata, collected at the context level by
+           arp_parse_with_context. A residual hand (e.g. "SPR>3:AA") is
+           expanded here as a conditional range; an isolated spot token only
+           needs the result range to exist. */
+        if (token->data.spot.hand[0] != '\0')
+        {
+            arp_range_t sub;
+            memset(&sub, 0, sizeof(sub));
+            if (!ARP_ParseRange(token->data.spot.hand, dead_cards, game_type, &sub))
+            {
+                ARP_FreeRange(&sub);
+                return 0;
+            }
+            for (size_t i = 0; i < sub.count; ++i)
+            {
+                if (!arp_add_hand_to_range(result, sub.hands[i],
+                                           token->has_weight ? token->weight : 1.0))
+                {
+                    ARP_FreeRange(&sub);
+                    return 0;
+                }
+            }
+            ARP_FreeRange(&sub);
+            return 1;
+        }
+        if (result->hands == NULL)
+            return arp_init_range_with_game(result, game_type);
+        return 1;
+    }
+
     case ARP_TOKEN_UNKNOWN:
     case ARP_TOKEN_OPERATION:
     case ARP_TOKEN_COMMA:
@@ -2377,8 +2433,64 @@ void ARP_FreeContext(arp_context_t *ctx)
 }
 
 /* Internal helper to parse with an existing context */
+/* Collect every spot-filter token from the fully tokenized context into the
+   result range's spot_filters metadata (FEAT-07, #143). Called once after
+   expression evaluation so the filters are associated with the whole range. */
+static void arp_collect_spot_filters(arp_context_t *ctx, arp_range_t *result)
+{
+    if (!ctx || !result)
+        return;
+
+    for (size_t i = 0; i < ctx->token_count; i++)
+    {
+        arp_token_t *t = &ctx->tokens[i];
+        arp_spot_filter_t spot;
+        memset(&spot, 0, sizeof(spot));
+
+        if (t->type == ARP_TOKEN_SPOT_CB)
+        {
+            spot.kind = ARP_SPOT_CB;
+            spot.is_cb = true;
+        }
+        else if (t->type == ARP_TOKEN_SPOT_SPR_GT)
+        {
+            spot.kind = ARP_SPOT_SPR_GT;
+            spot.value = t->data.spot.value;
+        }
+        else if (t->type == ARP_TOKEN_SPOT_SPR_LT)
+        {
+            spot.kind = ARP_SPOT_SPR_LT;
+            spot.value = t->data.spot.value;
+        }
+        else if (t->type == ARP_TOKEN_SPOT_POS)
+        {
+            spot.kind = ARP_SPOT_POS;
+            spot.pos = t->data.spot.pos;
+        }
+        else if (t->type == ARP_TOKEN_SPOT_BET)
+        {
+            spot.kind = ARP_SPOT_BET;
+        }
+        else if (t->type == ARP_TOKEN_SPOT_AUTO)
+        {
+            spot.kind = ARP_SPOT_AUTO;
+        }
+        else
+        {
+            continue; /* Not a spot token */
+        }
+
+        arp_spot_filter_t *grown = realloc(result->spot_filters,
+                                           (result->spot_filter_count + 1) * sizeof(arp_spot_filter_t));
+        if (!grown)
+            return;
+        grown[result->spot_filter_count++] = spot;
+        result->spot_filters = grown;
+    }
+}
+
 static int arp_parse_with_context(arp_context_t *ctx, StdDeck_CardMask dead_cards,
-                                  enum_game_t game_type, arp_range_t *result)
+                                   enum_game_t game_type, arp_range_t *result)
 {
     if (!ctx || !result)
         return 0;
@@ -2410,6 +2522,7 @@ static int arp_parse_with_context(arp_context_t *ctx, StdDeck_CardMask dead_card
     if (success)
     {
         arp_normalize_range_weights(result);
+        arp_collect_spot_filters(ctx, result);
     }
 
     return success;
@@ -2631,6 +2744,84 @@ bool ARP_ContainsHand(const arp_range_t *range, StdDeck_CardMask hand) {
     }
 
     return false;
+}
+
+/* Exported public API (used by consumers/tests in other translation units). */
+// cppcheck-suppress unusedFunction
+int ARP_GetSpotFilters(const arp_range_t *range,
+                       const arp_spot_filter_t **out_filters,
+                       size_t *out_count)
+{
+    if (!range || !out_filters || !out_count)
+        return 0;
+
+    *out_filters = range->spot_filters;
+    *out_count = range->spot_filter_count;
+    return 1;
+}
+
+/* Exported public API (used by consumers/tests in other translation units). */
+// cppcheck-suppress unusedFunction
+int ARP_ValidateSpotSyntax(const char *range_string,
+                           char *error_buffer, size_t error_buffer_size)
+{
+    if (!range_string)
+        return 0;
+
+    arp_context_t ctx;
+    if (!ARP_InitContext(&ctx, range_string))
+    {
+        if (error_buffer && error_buffer_size > 0)
+            snprintf(error_buffer, error_buffer_size, "Failed to initialize parser");
+        return 0;
+    }
+
+    int result = arp_tokenize(&ctx);
+    if (!result && error_buffer && error_buffer_size > 0)
+    {
+        strncpy(error_buffer, ctx.error_message, error_buffer_size - 1);
+        error_buffer[error_buffer_size - 1] = '\0';
+    }
+
+    ARP_FreeContext(&ctx);
+    return result;
+}
+
+/* Exported public API (used by consumers/tests in other translation units). */
+// cppcheck-suppress unusedFunction
+bool ARP_EvaluateSpotFilters(const arp_spot_filter_t *filters,
+                             size_t count, double spr, bool is_ip)
+{
+    for (size_t i = 0; i < count; i++)
+    {
+        const arp_spot_filter_t *f = &filters[i];
+        switch (f->kind)
+        {
+        case ARP_SPOT_SPR_GT:
+            if (!(spr > f->value))
+                return false;
+            break;
+        case ARP_SPOT_SPR_LT:
+            if (!(spr < f->value))
+                return false;
+            break;
+        case ARP_SPOT_POS:
+            if (f->pos == ARP_SPOT_POS_IP && !is_ip)
+                return false;
+            if (f->pos == ARP_SPOT_POS_OOP && is_ip)
+                return false;
+            break;
+        /* $cb, BET and AUTO are not gating conditions; they are resolved by the
+           tree builder at expansion time, so they never fail a context check. */
+        case ARP_SPOT_CB:
+        case ARP_SPOT_BET:
+        case ARP_SPOT_AUTO:
+        case ARP_SPOT_NONE:
+        default:
+            break;
+        }
+    }
+    return true;
 }
 
 int ARP_ExportRange(
@@ -3571,6 +3762,99 @@ static int arp_expand_percentage(float percentage, enum_game_t game_type, StdDec
 }
 
 /* Basic tokenizer - this is a simplified version for now */
+/* Try to consume a spot-filter / action-morphing token at the current
+   position. Returns 1 (and advances ctx->position + fills *token) when a spot
+   token was recognized, 0 otherwise. See FEAT-07 (#143) for the syntax. */
+static int arp_try_parse_spot(arp_context_t *ctx, arp_token_t *token)
+{
+    if (!ctx || !token)
+        return 0;
+
+    size_t remaining = ctx->length - ctx->position;
+    const char *p = &ctx->input[ctx->position];
+
+    /* $cb c-bet spot filter */
+    if (remaining >= 3 && p[0] == '$' && tolower((unsigned char)p[1]) == 'c' &&
+        tolower((unsigned char)p[2]) == 'b')
+    {
+        token->type = ARP_TOKEN_SPOT_CB;
+        ctx->position += 3;
+        return 1;
+    }
+
+    /* SPR>x / SPR<x */
+    if (remaining >= 4 && tolower((unsigned char)p[0]) == 's' &&
+        tolower((unsigned char)p[1]) == 'p' && tolower((unsigned char)p[2]) == 'r')
+    {
+        char op = p[3];
+        if (op == '>' || op == '<')
+        {
+            char *endptr = NULL;
+            double value = strtod(&p[4], &endptr);
+            if (endptr == &p[4])
+                return 0;
+            token->type = (op == '>') ? ARP_TOKEN_SPOT_SPR_GT : ARP_TOKEN_SPOT_SPR_LT;
+            token->data.spot.value = value;
+            ctx->position = (size_t)(endptr - ctx->input);
+            return 1;
+        }
+        return 0;
+    }
+
+    /* POS=IP / POS=OOP */
+    if (remaining >= 4 && tolower((unsigned char)p[0]) == 'p' &&
+        tolower((unsigned char)p[1]) == 'o' && tolower((unsigned char)p[2]) == 's' &&
+        p[3] == '=')
+    {
+        if (remaining >= 6 && tolower((unsigned char)p[4]) == 'i' &&
+            tolower((unsigned char)p[5]) == 'p')
+        {
+            token->type = ARP_TOKEN_SPOT_POS;
+            token->data.spot.pos = ARP_SPOT_POS_IP;
+            ctx->position += 6;
+            return 1;
+        }
+        if (remaining >= 7 && tolower((unsigned char)p[4]) == 'o' &&
+            tolower((unsigned char)p[5]) == 'o' && tolower((unsigned char)p[6]) == 'p')
+        {
+            token->type = ARP_TOKEN_SPOT_POS;
+            token->data.spot.pos = ARP_SPOT_POS_OOP;
+            ctx->position += 7;
+            return 1;
+        }
+        return 0;
+    }
+
+    /* BET / AUTO standalone keywords (>= 3 chars so we don't eat a hand like "B...") */
+    if (remaining >= 3)
+    {
+        if (tolower((unsigned char)p[0]) == 'b' && tolower((unsigned char)p[1]) == 'e' &&
+            tolower((unsigned char)p[2]) == 't')
+        {
+            char nxt = (remaining > 3) ? p[3] : '\0';
+            if (!isalnum((unsigned char)nxt) && nxt != '_')
+            {
+                token->type = ARP_TOKEN_SPOT_BET;
+                ctx->position += 3;
+                return 1;
+            }
+        }
+        if (tolower((unsigned char)p[0]) == 'a' && tolower((unsigned char)p[1]) == 'u' &&
+            tolower((unsigned char)p[2]) == 't' && tolower((unsigned char)p[3]) == 'o')
+        {
+            char nxt = (remaining > 4) ? p[4] : '\0';
+            if (!isalnum((unsigned char)nxt) && nxt != '_')
+            {
+                token->type = ARP_TOKEN_SPOT_AUTO;
+                ctx->position += 4;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int arp_tokenize(arp_context_t *ctx)
 {
     if (!ctx)
@@ -3614,6 +3898,47 @@ static int arp_tokenize(arp_context_t *ctx)
         token->weight = 1.0;
         token->has_weight = false;
         bool allow_weight = false;
+
+        /* Spot filter / action morphing syntax (FEAT-07, #143). $cb is led by
+           '$'; SPR/POS/BET/AUTO are led by a letter. Consume these as metadata
+           tokens before any hand/percentage parsing. */
+        if (c == '$' || isalpha((unsigned char)c))
+        {
+            if (arp_try_parse_spot(ctx, token))
+            {
+                /* An optional ':' separates the spot token from a residual
+                   hand (e.g. "SPR>3:AA"); consume it and capture the hand into
+                   the token so it expands as a conditional range. */
+                if (ctx->position < ctx->length && ctx->input[ctx->position] == ':')
+                {
+                    ctx->position++;
+                    size_t hstart = ctx->position;
+                    while (ctx->position < ctx->length)
+                    {
+                        char ch = ctx->input[ctx->position];
+                        if (isalnum((unsigned char)ch) || ch == 's' || ch == 'o' ||
+                            ch == 'x' || ch == '+' || ch == '-')
+                            ctx->position++;
+                        else
+                            break;
+                    }
+                    size_t hlen = ctx->position - hstart;
+                    if (hlen > 0 && hlen < sizeof(token->data.spot.hand))
+                    {
+                        memcpy(token->data.spot.hand, &ctx->input[hstart], hlen);
+                        token->data.spot.hand[hlen] = '\0';
+                    }
+                }
+                ctx->token_count++;
+                continue;
+            }
+            if (c == '$')
+            {
+                snprintf(ctx->error_message, sizeof(ctx->error_message),
+                         "Unexpected character '%c' at position %zu", c, ctx->position);
+                return 0;
+            }
+        }
 
         /* Parse different token types */
         if (c == ',')
@@ -4335,6 +4660,16 @@ static int arp_parse_tokens(arp_context_t *ctx, StdDeck_CardMask dead_cards, enu
             /* Parentheses are handled in expression parsing */
             break;
 
+        /* Spot filter / action morphing tokens (FEAT-07, #143): metadata only,
+           they contribute no hands in this legacy evaluation path. */
+        case ARP_TOKEN_SPOT_CB:
+        case ARP_TOKEN_SPOT_SPR_GT:
+        case ARP_TOKEN_SPOT_SPR_LT:
+        case ARP_TOKEN_SPOT_POS:
+        case ARP_TOKEN_SPOT_BET:
+        case ARP_TOKEN_SPOT_AUTO:
+            break;
+
         case ARP_TOKEN_UNKNOWN:
         case ARP_TOKEN_END:
         default:
@@ -4411,6 +4746,13 @@ void ARP_FreeRange(arp_range_t *range)
         free(ht);
         range->internal_data = NULL;
     }
+
+    if (range->spot_filters)
+    {
+        free(range->spot_filters);
+        range->spot_filters = NULL;
+    }
+    range->spot_filter_count = 0;
 
     memset(range, 0, sizeof(arp_range_t));
 }

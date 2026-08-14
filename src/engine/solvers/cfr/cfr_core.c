@@ -73,6 +73,11 @@ static uint64_t cfr_storage_key(cfr_game_t *game, uint64_t state_key)
     return state_key;
 }
 
+static int cfr_storage_street(cfr_game_t *game, uint64_t state_key)
+{
+    return game->get_street ? game->get_street(game, state_key, game->game_data) : -1;
+}
+
 struct cfr_metrics_buffer_t
 {
     cfr_metrics_snapshot_t *items;
@@ -188,6 +193,7 @@ double cfr_solve(
     }
 
     cfr_storage_set_strategy_mode(config->enable_ecfr, config->ecfr_lambda);
+    cfr_storage_set_memory_masks(storage, config->keep_avg_strategy_mask, config->keep_ev_mask);
     g_cfr_use_flow_focus = config->enable_mccfvfp ? 1 : 0;
     g_cfr_flow_pow = (fabs(config->mccfvfp_flow_pow) > 1e-9) ? config->mccfvfp_flow_pow : 1.0;
 
@@ -484,6 +490,7 @@ static void cfr_traverse_recursive(
     const double *locked = NULL;
     int is_locked = 0;
     uint64_t infoset_key;
+    int street;
 
     for (int p = 0; p < num_players; ++p)
         out_util[p] = 0.0;
@@ -515,13 +522,14 @@ static void cfr_traverse_recursive(
     }
     g_cfr_node_count++;
     infoset_key = cfr_storage_key(game, state_key);
+    street = cfr_storage_street(game, state_key);
 
     if (game->is_terminal(game, state_key, user_data))
     {
         for (int p = 0; p < num_players; ++p)
             out_util[p] = game->get_utility(game, state_key, p, user_data);
         if (storage)
-            cfr_storage_accumulate_ev(storage, infoset_key, out_util[0]);
+            cfr_storage_accumulate_ev_at_street(storage, infoset_key, street, out_util[0]);
         goto cfr_exit;
     }
 
@@ -580,7 +588,7 @@ static void cfr_traverse_recursive(
     regret_delta = scratch + frame_off + (size_t)CFR_MAX_ACTIONS;
     action_util = scratch + frame_off + 2u * (size_t)CFR_MAX_ACTIONS;
 
-    cfr_storage_get_strategy(storage, infoset_key, num_actions, strategy);
+    cfr_storage_get_strategy_at_street(storage, infoset_key, num_actions, street, strategy);
 
     /* Frozen node (locked strategy): override the computed strategy and
        never accumulate regret or average strategy at this infoset. */
@@ -656,7 +664,7 @@ static void cfr_traverse_recursive(
     }
     if (!is_locked)
     {
-        cfr_storage_update_regret(storage, infoset_key, num_actions, regret_delta, discount);
+        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, discount);
 
         avg_weight = reach[acting_player];
         if (g_cfr_use_flow_focus)
@@ -670,11 +678,11 @@ static void cfr_traverse_recursive(
             if (fabs(config->dcfr_gamma) > 1e-9)
                 avg_weight *= pow(t, config->dcfr_gamma);
         }
-        cfr_storage_update_avg(storage, infoset_key, num_actions, strategy, avg_weight);
+        cfr_storage_update_avg_at_street(storage, infoset_key, num_actions, street, strategy, avg_weight);
     }
 
     if (storage)
-        cfr_storage_accumulate_ev(storage, infoset_key, node_util_acting);
+        cfr_storage_accumulate_ev_at_street(storage, infoset_key, street, node_util_acting);
 
     for (int p = 0; p < num_players; ++p)
         out_util[p] = node_util_vec[p];

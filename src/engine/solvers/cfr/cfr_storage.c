@@ -21,6 +21,11 @@
 static CFR_THREAD_LOCAL int g_use_ecfr = 0;
 static CFR_THREAD_LOCAL double g_ecfr_lambda = 1.0;
 
+static int keep_for_street(uint32_t mask, int street)
+{
+    return mask == 0 || street < 0 || street >= 32 || (mask & (1u << street));
+}
+
 typedef struct {
     char magic[8];
     uint32_t version;
@@ -192,6 +197,13 @@ cfr_storage_t *cfr_storage_create(void)
     return s;
 }
 
+void cfr_storage_set_memory_masks(cfr_storage_t *s, uint32_t avg_mask, uint32_t ev_mask)
+{
+    if (!s) return;
+    s->keep_avg_strategy_mask = avg_mask;
+    s->keep_ev_mask = ev_mask;
+}
+
 void cfr_storage_destroy(cfr_storage_t *s)
 {
     if (!s)
@@ -207,7 +219,7 @@ void cfr_storage_destroy(cfr_storage_t *s)
     free(s);
 }
 
-static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
+static entry_t *get_entry_at_street(cfr_storage_t *s, uint64_t key, int n, int street)
 {
     if (!s || !s->tab || s->cap == 0 || n <= 0)
         return NULL;
@@ -220,8 +232,9 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
         if (!s->tab[i].used)
         {
             double *regret = (double *)calloc((size_t)n, sizeof(double));
-            double *avg = (double *)calloc((size_t)n, sizeof(double));
-            if (!regret || !avg)
+            double *avg = keep_for_street(s->keep_avg_strategy_mask, street)
+                ? (double *)calloc((size_t)n, sizeof(double)) : NULL;
+            if (!regret || (keep_for_street(s->keep_avg_strategy_mask, street) && !avg))
             {
                 free(regret);
                 free(avg);
@@ -244,9 +257,16 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
                 /* Use temporaries so a failed realloc keeps the original
                    array alive (no leak, no NULL). */
                 double *new_regret = (double *)realloc(s->tab[i].regret, (size_t)n * sizeof(double));
-                double *new_avg = (double *)realloc(s->tab[i].avg, (size_t)n * sizeof(double));
-                double *new_locked = (double *)realloc(s->tab[i].locked, (size_t)n * sizeof(double));
-                if (!new_regret || !new_avg || !new_locked)
+                double *new_avg = s->tab[i].avg
+                    ? (double *)realloc(s->tab[i].avg, (size_t)n * sizeof(double))
+                    : (keep_for_street(s->keep_avg_strategy_mask, street)
+                       ? (double *)calloc((size_t)n, sizeof(double)) : NULL);
+                double *new_locked = s->tab[i].locked
+                    ? (double *)realloc(s->tab[i].locked, (size_t)n * sizeof(double))
+                    : NULL;
+                if (!new_regret ||
+                    (keep_for_street(s->keep_avg_strategy_mask, street) && !new_avg) ||
+                    (s->tab[i].locked && !new_locked))
                 {
                     /* Commit whichever resizes succeeded; the others keep
                        their original blocks valid.  n is left unchanged, so
@@ -266,7 +286,7 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
                 for (int k = s->tab[i].n; k < n; k++)
                 {
                     s->tab[i].regret[k] = 0.0;
-                    s->tab[i].avg[k] = 0.0;
+                    if (s->tab[i].avg) s->tab[i].avg[k] = 0.0;
                     if (s->tab[i].locked)
                         s->tab[i].locked[k] = 0.0;
                 }
@@ -276,6 +296,11 @@ static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
         }
         i = (i + 1) & m;
     }
+}
+
+static entry_t *get_entry(cfr_storage_t *s, uint64_t key, int n)
+{
+    return get_entry_at_street(s, key, n, -1);
 }
 
 static entry_t *find_entry(cfr_storage_t *s, uint64_t key)
@@ -318,7 +343,8 @@ int cfr_storage_set_locked_strategy(cfr_storage_t *s, uint64_t infoset, const do
     for (int i = 0; i < n; ++i)
     {
         e->regret[i] = 0.0;
-        e->avg[i] = probs[i];
+        if (e->avg)
+            e->avg[i] = probs[i];
     }
     return 0;
 }
@@ -438,6 +464,37 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
     }
 }
 
+void cfr_storage_get_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, int street, double *probs)
+{
+    entry_t *e = get_entry_at_street(s, key, n, street);
+    if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
+    if (e->locked) { for (int i = 0; i < n; ++i) probs[i] = e->locked[i]; return; }
+    if (g_use_ecfr) {
+        double max_pos = 0.0, sum_w = 0.0;
+        for (int i = 0; i < n; ++i)
+            if (e->regret[i] > max_pos) max_pos = e->regret[i];
+        if (max_pos > 0.0) {
+            for (int i = 0; i < n; ++i) {
+                probs[i] = e->regret[i] > 0.0
+                    ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                sum_w += probs[i];
+            }
+            if (sum_w > 0.0) {
+                for (int i = 0; i < n; ++i) probs[i] /= sum_w;
+                return;
+            }
+        }
+    } else {
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i) if (e->regret[i] > 0.0) sum += e->regret[i];
+        if (sum > 0.0) {
+            for (int i = 0; i < n; ++i) probs[i] = e->regret[i] > 0.0 ? e->regret[i] / sum : 0.0;
+            return;
+        }
+    }
+    for (int i = 0; i < n; ++i) probs[i] = 1.0 / n;
+}
+
 void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action_count, double *probs)
 {
     entry_t *e = get_entry(s, infoset, action_count);
@@ -447,6 +504,7 @@ void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action
             probs[i] = 1.0 / action_count;
         return;
     }
+    if (!e->avg) { cfr_storage_get_strategy_at_street(s, infoset, action_count, -1, probs); return; }
     double sum = 0.0;
     for (int i = 0; i < action_count; i++)
     {
@@ -469,6 +527,20 @@ void cfr_storage_get_avg_strategy(cfr_storage_t *s, uint64_t infoset, int action
     }
 }
 
+void cfr_storage_get_avg_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, int street, double *probs)
+{
+    if (s && !keep_for_street(s->keep_avg_strategy_mask, street)) {
+        cfr_storage_get_strategy_at_street(s, key, n, street, probs);
+        return;
+    }
+    entry_t *e = get_entry_at_street(s, key, n, street);
+    if (!e || !e->avg) { cfr_storage_get_strategy_at_street(s, key, n, street, probs); return; }
+    double sum = 0.0;
+    for (int i = 0; i < n; ++i) sum += e->avg[i];
+    if (sum > 0.0) for (int i = 0; i < n; ++i) probs[i] = e->avg[i] / sum;
+    else for (int i = 0; i < n; ++i) probs[i] = 1.0 / n;
+}
+
 void cfr_storage_update_regret(cfr_storage_t *s, uint64_t infoset, int action_count, const double *regret_delta, double discount)
 {
     entry_t *e = get_entry(s, infoset, action_count);
@@ -480,16 +552,23 @@ void cfr_storage_update_regret(cfr_storage_t *s, uint64_t infoset, int action_co
     }
 }
 
+void cfr_storage_update_regret_at_street(cfr_storage_t *s, uint64_t key, int n, int street, const double *d, double discount)
+{ entry_t *e = get_entry_at_street(s, key, n, street); if (!e) return; for (int i=0;i<n;++i) e->regret[i] = e->regret[i]*discount+d[i]; }
+
 void cfr_storage_update_avg(cfr_storage_t *s, uint64_t infoset, int action_count, const double *strategy, double weight)
 {
     entry_t *e = get_entry(s, infoset, action_count);
     if (!e)
         return;
+    if (!e->avg) return;
     for (int i = 0; i < action_count; i++)
     {
         e->avg[i] += strategy[i] * weight;
     }
 }
+
+void cfr_storage_update_avg_at_street(cfr_storage_t *s, uint64_t key, int n, int street, const double *strategy, double weight)
+{ if (!s || !keep_for_street(s->keep_avg_strategy_mask, street)) return; entry_t *e = get_entry_at_street(s, key, n, street); if (!e || !e->avg) return; for (int i=0;i<n;++i) e->avg[i] += strategy[i]*weight; }
 
 /* Dump average strategies to CSV file (key, n, avg0..avgN-1) */
 void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
@@ -504,16 +583,25 @@ void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
         if (s->tab[i].used)
         {
             entry_t *e = &s->tab[i];
+            double *avg = e->avg;
+            double *fallback = NULL;
+            if (!avg) {
+                fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
+                if (!fallback) continue;
+                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                avg = fallback;
+            }
             fprintf(f, "%llu,%d", (unsigned long long)e->key, e->n);
             double sum = 0.0;
             for (int k = 0; k < e->n; k++)
-                sum += e->avg[k];
+                sum += avg[k];
             for (int k = 0; k < e->n && k < 8; k++)
             {
-                double p = (sum > 0) ? (e->avg[k] / sum) : (1.0 / e->n);
+                double p = (sum > 0) ? (avg[k] / sum) : (1.0 / e->n);
                 fprintf(f, ",%.6f", p);
             }
             fprintf(f, "\n");
+            free(fallback);
         }
 }
 
@@ -536,7 +624,16 @@ void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
         if (s->tab[i].used)
         {
             entry_t *e = &s->tab[i];
-            fn(e->key, e->n, e->regret, e->avg, user);
+            double *avg = e->avg;
+            double *fallback = NULL;
+            if (!avg) {
+                fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
+                if (!fallback) continue;
+                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                avg = fallback;
+            }
+            fn(e->key, e->n, e->regret, avg, user);
+            free(fallback);
         }
 }
 
@@ -558,8 +655,9 @@ void cfr_storage_accumulate_ev(cfr_storage_t *s, uint64_t infoset, double node_e
         {
             /* Create minimal entry */
             double *regret = (double *)calloc(1, sizeof(double));
-            double *avg = (double *)calloc(1, sizeof(double));
-            if (!regret || !avg)
+            double *avg = s->keep_ev_mask == 0
+                ? (double *)calloc(1, sizeof(double)) : NULL;
+            if (!regret || (s->keep_ev_mask == 0 && !avg))
             {
                 free(regret);
                 free(avg);
@@ -585,6 +683,18 @@ void cfr_storage_accumulate_ev(cfr_storage_t *s, uint64_t infoset, double node_e
     s->tab[i].ev_count += 1;
 }
 
+void cfr_storage_accumulate_ev_at_street(cfr_storage_t *s, uint64_t key, int street, double node_ev)
+{
+    if (!s || !keep_for_street(s->keep_ev_mask, street)) return;
+    entry_t *e = find_entry(s, key);
+    if (!e)
+        e = get_entry_at_street(s, key, 1, street);
+    if (!e) return;
+    e->ev_sum += node_ev;
+    e->ev_sq_sum += node_ev * node_ev;
+    e->ev_count += 1;
+}
+
 void cfr_storage_iterate_stats(cfr_storage_t *s, cfr_storage_iter_stats_fn fn, void *user)
 {
     if (!s || !fn)
@@ -593,14 +703,23 @@ void cfr_storage_iterate_stats(cfr_storage_t *s, cfr_storage_iter_stats_fn fn, v
         if (s->tab[i].used)
         {
             entry_t *e = &s->tab[i];
+            double *avg = e->avg;
+            double *fallback = NULL;
+            if (!avg) {
+                fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
+                if (!fallback) continue;
+                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                avg = fallback;
+            }
             fn(e->key,
                e->n,
                e->regret,
-               e->avg,
+               avg,
                e->ev_sum,
                e->ev_sq_sum,
                e->ev_count,
                user);
+            free(fallback);
         }
 }
 
@@ -666,6 +785,14 @@ int cfr_storage_save_checkpoint(cfr_storage_t *s, const char *path, uint64_t ite
             continue;
         uint32_t n = (uint32_t)e->n;
         double *locked_out = e->locked;
+        double *avg_out = e->avg;
+        int free_avg_out = 0;
+        if (!avg_out)
+        {
+            avg_out = (double *)calloc((size_t)e->n, sizeof(double));
+            if (!avg_out) { fclose(f); return -1; }
+            free_avg_out = 1;
+        }
         if (!locked_out)
         {
             locked_out = (double *)calloc((size_t)e->n, sizeof(double));
@@ -683,10 +810,12 @@ int cfr_storage_save_checkpoint(cfr_storage_t *s, const char *path, uint64_t ite
             fwrite(&e->ev_sq_sum, sizeof(double), 1, f) == 1 &&
             fwrite(&e->ev_count, sizeof(uint64_t), 1, f) == 1 &&
             fwrite(e->regret, sizeof(double), e->n, f) == (size_t)e->n &&
-            fwrite(e->avg, sizeof(double), e->n, f) == (size_t)e->n &&
+            fwrite(avg_out, sizeof(double), e->n, f) == (size_t)e->n &&
             fwrite(locked_out, sizeof(double), e->n, f) == (size_t)e->n;
         if (!e->locked)
             free(locked_out);
+        if (free_avg_out)
+            free(avg_out);
         if (!lock_ok)
         {
             int err = errno;
@@ -803,7 +932,7 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
             return -1;
         }
         entry_t *e = get_entry(s, key, (int)n);
-        if (!e || !e->regret || !e->avg)
+        if (!e || !e->regret)
         {
             int err = errno;
             fclose(f);
@@ -813,13 +942,23 @@ int cfr_storage_load_checkpoint(cfr_storage_t *s, const char *path, uint64_t *ou
         e->ev_sum = ev_sum;
         e->ev_sq_sum = ev_sq_sum;
         e->ev_count = ev_count;
-        if (fread(e->regret, sizeof(double), e->n, f) != (size_t)e->n ||
-            fread(e->avg, sizeof(double), e->n, f) != (size_t)e->n)
+        if (fread(e->regret, sizeof(double), e->n, f) != (size_t)e->n)
         {
             int err = errno;
             fclose(f);
             errno = err;
             return -1;
+        }
+        if (e->avg) {
+            if (fread(e->avg, sizeof(double), e->n, f) != (size_t)e->n) {
+                int err = errno; fclose(f); errno = err; return -1;
+            }
+        } else {
+            double *discard = (double *)malloc(sizeof(double) * e->n);
+            if (!discard || fread(discard, sizeof(double), e->n, f) != (size_t)e->n) {
+                free(discard); int err = errno; fclose(f); errno = err; return -1;
+            }
+            free(discard);
         }
         if (hdr.version >= 3)
         {
