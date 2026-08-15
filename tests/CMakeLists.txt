@@ -309,6 +309,9 @@ set(TEST_SOURCES
     test_range_integration.c
     test_spot_filter.c
 
+    # FEAT-10 (#146): sparse stack-config indexer + compact reach map
+    test_mpf_stack_index.c
+
     # ICM Calculator tests
     test_icm_calculator.c
 

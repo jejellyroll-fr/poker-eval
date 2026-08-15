@@ -322,7 +322,7 @@ int main(void)
         CHECK(storage != NULL, "storage");
         cfr_solve(&game, storage, &sconf, &exploit);
         v_no_rake = cfr_compute_policy_value(&game, storage, 0, NULL);
-        rs_no.root_key = (uint64_t)(uintptr_t)&st;
+        rs_no.root_key = mpf_state_infoset_key(&st);
         cfr_storage_iterate(storage, root_strategy_cb, &rs_no);
         CHECK(rs_no.found, "root strategy found (no-rake)");
         cfr_storage_destroy(storage);
@@ -335,7 +335,7 @@ int main(void)
         CHECK(storage != NULL, "storage2");
         cfr_solve(&game, storage, &sconf, &exploit);
         v_rake = cfr_compute_policy_value(&game, storage, 0, NULL);
-        rs_rake.root_key = (uint64_t)(uintptr_t)&st;
+        rs_rake.root_key = mpf_state_infoset_key(&st);
         cfr_storage_iterate(storage, root_strategy_cb, &rs_rake);
         CHECK(rs_rake.found, "root strategy found (rake)");
         cfr_storage_destroy(storage);
