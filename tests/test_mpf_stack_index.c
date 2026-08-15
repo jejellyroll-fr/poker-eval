@@ -262,7 +262,7 @@ static int solve_count_infosets(const double *stacks, size_t *out_infosets,
     }
     cfr_config_t scfg;
     memset(&scfg, 0, sizeof(scfg));
-    scfg.max_iterations = 3;
+    scfg.max_iterations = 1;  /* one pass: infoset count is iteration-independent */
 
     double expl = cfr_solve(&game, storage, &scfg, &expl);
     CHECK(expl >= 0.0, "6p cfr_solve");

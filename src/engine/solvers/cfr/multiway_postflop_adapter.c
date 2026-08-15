@@ -601,6 +601,8 @@ static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_st
     out->perf_stats = st->perf_stats;
     out->heap_owned = 1;
     out->util_ready = 0;
+    /* Cloned state borrows the shared sparse index but never owns it. */
+    out->owns_stack_index = 0;
     for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
         out->action_cache[i] = NULL;
     for (int i = 0; i < 52; ++i)
@@ -886,6 +888,8 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
     out->perf_stats = st->perf_stats;
     memcpy(out->action_cache, saved_cache, sizeof(saved_cache));
     out->heap_owned = heap_owned;
+    /* Cloned state borrows the shared sparse index but never owns it. */
+    out->owns_stack_index = 0;
     out->util_ready = 0;
     out->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
