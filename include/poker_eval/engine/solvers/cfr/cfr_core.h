@@ -56,6 +56,13 @@ typedef struct {
     double *avg;    /* size n */
     double *locked; /* size n, NULL when not locked */
     int used;
+    /* Periodic relock EV-loss measurement (FEAT-11): best-response value the
+     * locked player could obtain, the value it gets while forced to the lock,
+     * and their difference (the true EV cost of the lock). */
+    double lock_br_value;
+    double lock_forced_value;
+    double lock_ev_loss;
+    int lock_ev_valid;
     double ev_sum;
     double ev_sq_sum;
     uint64_t ev_count;
@@ -197,6 +204,21 @@ struct cfr_config_t {
                                   * periodic convergence check). */
     uint32_t keep_avg_strategy_mask; /* 0 = retain every street */
     uint32_t keep_ev_mask;           /* 0 = retain every street */
+
+    /* Periodic relocking engine (FEAT-11).
+     *
+     * When enable_periodic_relock is set, locked infosets are NOT frozen:
+     * CFR keeps running there (regret/average strategy keep accumulating for
+     * the non-locked actions), and every lock_period iterations the current
+     * strategy is re-enforced to the locked target frequencies. This makes
+     * target frequencies converge instantly while the un-locked actions keep
+     * true (bounty-free) best-response EVs. The exact EV loss forced by the
+     * sub-optimal lock is recorded per infoset via
+     * cfr_storage_get_lock_ev_loss(). lock_period <= 0 disables relocking
+     * inside this mode, which then degrades to the freeze behaviour of #118. */
+    int enable_periodic_relock;
+    int lock_period;
+
     int metrics_level;
     double metrics_bb_value;
     double metrics_mchips_scale;
@@ -268,6 +290,8 @@ void cfr_storage_get_strategy_at_street(cfr_storage_t*, uint64_t, int, int, doub
 void cfr_storage_update_regret_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
 void cfr_storage_update_avg_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
 void cfr_storage_get_avg_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
+void cfr_storage_get_regret_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
+void cfr_storage_overwrite_avg_at_street(cfr_storage_t*, uint64_t, int, int, const double*);
 void cfr_storage_accumulate_ev_at_street(cfr_storage_t*, uint64_t, int, double);
 
 int cfr_storage_save_checkpoint(
@@ -319,6 +343,37 @@ int cfr_storage_get_locked_strategy(
     uint64_t infoset,
     int n_actions,
     const double** out_probs
+);
+
+/*
+ * Periodic relocking EV-loss measurement (FEAT-11).
+ *
+ * While the periodic relock engine runs, the solver records, on each relock
+ * iteration, the exact EV loss at a locked infoset: the difference between the
+ * value the locked player could obtain under its best-response to the current
+ * opponent strategy and the value it obtains while being forced to play the
+ * locked frequencies. Because no synthetic regret bounty is injected, this is
+ * the true exploitability cost of the lock.
+ *
+ * cfr_storage_record_lock_ev_loss() is called by the solver with the acting
+ * player's best-response value vs. its forced value. cfr_storage_get_lock_ev_loss()
+ * returns the most recent recorded loss for an infoset (0 when none). Pass
+ * out_br and out_forced to also receive the stored best-response and forced
+ * values. Any of the out_* pointers may be NULL.
+ */
+void cfr_storage_record_lock_ev_loss(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    double br_value,
+    double forced_value
+);
+
+int cfr_storage_get_lock_ev_loss(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    double* out_loss,
+    double* out_br,
+    double* out_forced
 );
 
 int cfr_storage_peek_avg_strategy(

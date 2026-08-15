@@ -590,13 +590,30 @@ static void cfr_traverse_recursive(
 
     cfr_storage_get_strategy_at_street(storage, infoset_key, num_actions, street, strategy);
 
-    /* Frozen node (locked strategy): override the computed strategy and
-       never accumulate regret or average strategy at this infoset. */
+    /* Frozen node (locked strategy). */
     if (storage)
         is_locked = cfr_storage_get_locked_strategy(storage, infoset_key, num_actions, &locked);
+
+    int relock_mode = config->enable_periodic_relock && config->lock_period > 0;
+    int relock_iter = relock_mode && (((iter + 1) % config->lock_period) == 0);
+
     if (is_locked)
-        for (int i = 0; i < num_actions; ++i)
-            strategy[i] = locked[i];
+    {
+        if (relock_mode && !relock_iter)
+        {
+            /* Periodic relock (FEAT-11): let the node drift under normal
+               regret-matching so the un-locked actions keep true (bounty-free)
+               EVs, then re-assert the target only on relock iterations. */
+            cfr_storage_get_regret_strategy_at_street(storage, infoset_key, num_actions, street, strategy);
+        }
+        else
+        {
+            /* Freeze mode (#118) or a relock iteration: force the descent
+               strategy to the locked target frequencies. */
+            for (int i = 0; i < num_actions; ++i)
+                strategy[i] = locked[i];
+        }
+    }
     for (int p = 0; p < num_players; ++p)
         node_util_vec[p] = 0.0;
 
@@ -679,6 +696,23 @@ static void cfr_traverse_recursive(
                 avg_weight *= pow(t, config->dcfr_gamma);
         }
         cfr_storage_update_avg_at_street(storage, infoset_key, num_actions, street, strategy, avg_weight);
+    }
+    else if (relock_mode)
+    {
+        /* Periodic relock (FEAT-11). Regret keeps accumulating normally so the
+           un-locked actions retain true best-response EVs; on a relock iteration
+           the average strategy is snapped back to the locked target and the
+           exact EV loss of the forced mix is recorded. */
+        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, discount);
+        if (relock_iter)
+        {
+            cfr_storage_overwrite_avg_at_street(storage, infoset_key, num_actions, street, locked);
+            double br_value = -1e300;
+            for (int i = 0; i < num_actions; ++i)
+                if (action_util[i] > br_value)
+                    br_value = action_util[i];
+            cfr_storage_record_lock_ev_loss(storage, infoset_key, br_value, node_util_acting);
+        }
     }
 
     if (storage)
