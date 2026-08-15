@@ -8,7 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Spot filter and action morphing syntax for range parsing and MPF tree
+- Sparse state indexer for multiway asymmetrical stacks (FEAT-10, #146):
+  a hash-mapped sparse table (`mpf_stack_index_t`, new
+  `mpf_stack_index.h/.c`) maps the canonicalized *active* stack configuration
+  of a state to a dense 32-bit `cfg_id`, so equivalent committed-stack
+  structures reached via different action orders deduplicate instead of
+  blowing up the state space. `mpf_state_t` now carries `stack_index` /
+  `stack_cfg_id` (root-owned, freed in `mpf_state_cleanup`); the root creates
+  the index in `mpf_build_game`, child states inherit it and resolve their id
+  in `mpf_apply_action_wrapper`, and `mpf_infoset_key` folds the id into the
+  hash under `keyed_mode`. A compact, bounds-checked `mpf_reach_map_t` stores
+  per-(cfg_id, player) reach weights without the fixed `MPF_MAX_PLAYERS`
+  stride. The content-derived infoset key (`mpf_infoset_key`) now folds the
+  *stack-configuration hash* directly into the key (canonicalized active
+  mask + per-player round_contrib/remaining via `mpf_stack_config_from_arrays` /
+  `mpf_stack_config_hash`), so asymmetrical stack structures map to
+  distinct-but-deduplicated infosets across the whole multiway solve. The
+  index is wired into storage lookups by `get_infoset_key` (active whenever not
+  already in `keyed_mode`), and `mpf_node_storage_key` keeps the tree-exporter /
+  locked-strategy bookkeeping aligned with the new key. New unit
+  `test_mpf_stack_index.c` covers id assignment/dedup, inactive-player masking,
+  idempotency, reach-map bounds, rehash determinism, an infoset-key-includes
+  stacks assertion, a 6-player asymmetric integration smoke test, and a
+  memory-ratio benchmark (6 distinct stacks vs symmetric stays < 1.5x infoset
+  count, satisfying the FEAT-10 acceptance criterion).
   building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
   range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
   carried on the parsed range (`arp_range_t.spot_filters`), exposed via
