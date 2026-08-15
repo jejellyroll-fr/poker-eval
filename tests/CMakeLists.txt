@@ -1261,7 +1261,8 @@ endforeach()
 foreach(_slow_san_test
         test_montecarlo_convergence_unity
         test_omaha_range_parser
-        test_cfr_chance_nodes)
+        test_cfr_chance_nodes
+        test_mpf_stack_index)
     if(TARGET ${_slow_san_test} OR TEST ${_slow_san_test})
         set_property(TEST ${_slow_san_test} APPEND PROPERTY LABELS "sanitizer-skip")
     endif()
