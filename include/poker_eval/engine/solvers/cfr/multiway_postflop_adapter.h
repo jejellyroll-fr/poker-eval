@@ -192,6 +192,17 @@ typedef struct mpf_state_s
     struct mpf_state_s *action_cache[MPF_TREE_ACTION_MAX];
     int heap_owned;
 
+    /* FEAT-10 (#146): sparse index of distinct committed-stack configurations.
+       Owned by the game root; shared (read-only) by all derived states so the
+       id namespace is stable across the whole traversal. */
+    struct mpf_stack_index_t *stack_index;
+    /* Cached sparse config id for this state (0 until resolved by
+       mpf_state_resolve_cfg_id). Folded into the infoset key so asymmetric
+       stacks become distinct-but-deduplicated infosets. */
+    uint32_t stack_cfg_id;
+    /* Set only on the root state: it owns (and must free) stack_index. */
+    int owns_stack_index;
+
     /* FEAT-03: real chance nodes */
     int keyed_mode;            /* use infoset keys instead of raw state pointers */
     struct mpf_state_s *key_map_owner; /* game instance owning keyed states */
@@ -206,6 +217,20 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
 int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage);
 void mpf_perf_stats_reset(mpf_perf_stats_t *stats);
 void mpf_state_cleanup(mpf_state_t *state);
+
+/* FEAT-10 (#146): diagnostic accessors for the sparse stack-config index.
+   Return the number of distinct committed-stack configurations discovered so
+   far (== highest assigned cfg id) and the current bucket capacity. Both are
+   safe to call with a NULL/zero-indexed state (return 0). */
+size_t mpf_state_stack_index_count(const mpf_state_t *state);
+size_t mpf_state_stack_index_capacity(const mpf_state_t *state);
+
+/* Content-derived infoset key for a state (the same hash the solver uses to
+   index storage, including the FEAT-10 sparse stack-config id). Exposed so
+   tests/diagnostics can locate a state's storage entry without reaching into
+   the adapter's static helpers. */
+uint64_t mpf_state_infoset_key(const mpf_state_t *state);
+
 struct mpf_perf_stats_pool_t *mpf_perf_stats_pool_create(int max_threads_hint);
 void mpf_perf_stats_pool_destroy(struct mpf_perf_stats_pool_t *pool);
 void mpf_perf_stats_pool_reset(struct mpf_perf_stats_pool_t *pool);

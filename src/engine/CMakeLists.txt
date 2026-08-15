@@ -19,6 +19,7 @@ set(ENGINE_SOURCES
     solvers/cfr/mpf_export.c
     solvers/cfr/mpf_compact_storage.c
     solvers/cfr/mpf_tree.c
+    solvers/cfr/mpf_stack_index.c
     solvers/cfr/jsmn.c
     solvers/cfr/holdem_multi_river_adapter.c
     solvers/cfr/holdem_turn_adapter.c
