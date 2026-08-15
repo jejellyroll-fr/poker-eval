@@ -1925,17 +1925,10 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     if (cfg->num_players < 2 || cfg->num_players > MPF_MAX_PLAYERS)
         return -1;
 
-    /* FEAT-10 (#146): if out_state is being reused (e.g. a test calling
-       mpf_build_game repeatedly on the same struct), free any previously
-       owned sparse index before we wipe the struct, otherwise the old
-       index leaks. */
-    if (out_state->owns_stack_index && out_state->stack_index)
-    {
-        mpf_stack_index_destroy(out_state->stack_index);
-        out_state->stack_index = NULL;
-        out_state->owns_stack_index = 0;
-    }
-
+    /* NOTE: callers that reuse the same out_state across mpf_build_game
+       calls (e.g. test_mpf_tree's setup_plo4, test_mpf_perf_stats) must
+       mpf_state_cleanup() it first; we cannot safely free a possibly-
+       uninitialized previous index here, so we just wipe the struct. */
     memset(out_state, 0, sizeof(*out_state));
     memset(out_game, 0, sizeof(*out_game));
 
