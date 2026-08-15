@@ -288,6 +288,12 @@ double cfr_solve(
         }
         else
         {
+            /* Start a fresh reach-weighted EV-loss accumulation when this is a
+               periodic relock iteration, so the recorded loss reflects only the
+               current pass over the infoset's states. */
+            if (config->enable_periodic_relock && config->lock_period > 0 &&
+                (((it + 1) % config->lock_period) == 0))
+                cfr_storage_begin_lock_ev_pass(storage);
             g_cfr_depth_exceeded = 0;
             cfr_traverse_recursive(game, storage, config, root_key, reach, num_players, it, util, NULL,
                                    scratch, depth_limit);
@@ -711,7 +717,12 @@ static void cfr_traverse_recursive(
             for (int i = 0; i < num_actions; ++i)
                 if (action_util[i] > br_value)
                     br_value = action_util[i];
-            cfr_storage_record_lock_ev_loss(storage, infoset_key, br_value, node_util_acting);
+            /* Counterfactual reach of the acting player at this infoset, used to
+               reach-weight the EV-loss aggregation across all its states. */
+            double reach_weight = reach[acting_player];
+            if (reach_weight < 0.0)
+                reach_weight = 0.0;
+            cfr_storage_record_lock_ev_loss(storage, infoset_key, br_value, node_util_acting, reach_weight);
         }
     }
 

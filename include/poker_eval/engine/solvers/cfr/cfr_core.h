@@ -56,12 +56,17 @@ typedef struct {
     double *avg;    /* size n */
     double *locked; /* size n, NULL when not locked */
     int used;
-    /* Periodic relock EV-loss measurement (FEAT-11): best-response value the
-     * locked player could obtain, the value it gets while forced to the lock,
-     * and their difference (the true EV cost of the lock). */
-    double lock_br_value;
-    double lock_forced_value;
-    double lock_ev_loss;
+    /* Periodic relock EV-loss measurement (FEAT-11). The loss is accumulated
+     * counterfactually reach-weighted across every state that maps to this
+     * infoset during a single relock traversal, so a poker infoset (many
+     * states -> one key) reports an aggregate rather than the last-visited
+     * state. lock_ev_num/den hold the weighted sum of (br - forced) and the
+     * total reach; lock_br_num holds the weighted sum of the per-state
+     * best-action value. The reported loss is num/den, br is br_num/den, and
+     * forced = br - loss. */
+    double lock_ev_num;
+    double lock_ev_den;
+    double lock_br_num;
     int lock_ev_valid;
     double ev_sum;
     double ev_sq_sum;
@@ -348,24 +353,37 @@ int cfr_storage_get_locked_strategy(
 /*
  * Periodic relocking EV-loss measurement (FEAT-11).
  *
- * While the periodic relock engine runs, the solver records, on each relock
- * iteration, the exact EV loss at a locked infoset: the difference between the
- * value the locked player could obtain under its best-response to the current
- * opponent strategy and the value it obtains while being forced to play the
- * locked frequencies. Because no synthetic regret bounty is injected, this is
- * the true exploitability cost of the lock.
+ * While the periodic relock engine runs, the solver accumulates, over each
+ * relock traversal, the EV loss at a locked infoset: the counterfactually
+ * reach-weighted gap between the value the locked player could obtain by
+ * playing its single best action and the value it obtains while being forced
+ * to the locked frequencies. Because no synthetic regret bounty is injected,
+ * this is a bounty-free (exact in the no-distortion sense) cost of the lock.
  *
- * cfr_storage_record_lock_ev_loss() is called by the solver with the acting
- * player's best-response value vs. its forced value. cfr_storage_get_lock_ev_loss()
- * returns the most recent recorded loss for an infoset (0 when none). Pass
- * out_br and out_forced to also receive the stored best-response and forced
- * values. Any of the out_* pointers may be NULL.
+ * The loss is aggregated across every state that maps to the infoset (a poker
+ * infoset has many states -> one key), weighted by the acting player's
+ * counterfactual reach, so the reported value reflects the whole infoset
+ * rather than whichever state was traversed last. It is a one-step best-action
+ * gap, not a fully recursive best response: when the locked player acts again
+ * downstream, sub-tree values use the current (converged) strategies rather
+ * than a recursive maximization.
+ *
+ * cfr_storage_begin_lock_ev_pass() resets the accumulators for all locked
+ * infosets and is called once by the solver at the start of each relock
+ * iteration. cfr_storage_record_lock_ev_loss() adds one state's weighted
+ * contribution. cfr_storage_get_lock_ev_loss() returns the aggregated loss for
+ * an infoset (0 / not-valid when none recorded). Pass out_br and out_forced to
+ * also receive the weighted best-action value and the forced value. Any of the
+ * out_* pointers may be NULL.
  */
+void cfr_storage_begin_lock_ev_pass(cfr_storage_t* storage);
+
 void cfr_storage_record_lock_ev_loss(
     cfr_storage_t* storage,
     uint64_t infoset,
     double br_value,
-    double forced_value
+    double forced_value,
+    double reach_weight
 );
 
 int cfr_storage_get_lock_ev_loss(

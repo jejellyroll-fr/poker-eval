@@ -346,6 +346,12 @@ int cfr_storage_set_locked_strategy(cfr_storage_t *s, uint64_t infoset, const do
         if (e->avg)
             e->avg[i] = probs[i];
     }
+    /* Replacing a lock invalidates any previously recorded EV loss, which
+     * belonged to the old target frequencies. */
+    e->lock_ev_num = 0.0;
+    e->lock_ev_den = 0.0;
+    e->lock_br_num = 0.0;
+    e->lock_ev_valid = 0;
     return 0;
 }
 
@@ -363,7 +369,24 @@ int cfr_storage_get_locked_strategy(cfr_storage_t *s, uint64_t infoset, int acti
     return 1;
 }
 
-void cfr_storage_record_lock_ev_loss(cfr_storage_t *s, uint64_t infoset, double br_value, double forced_value)
+void cfr_storage_begin_lock_ev_pass(cfr_storage_t *s)
+{
+    if (!s || !s->tab)
+        return;
+    for (size_t i = 0; i < s->cap; ++i)
+    {
+        entry_t *e = &s->tab[i];
+        if (!e->used || !e->locked)
+            continue;
+        e->lock_ev_num = 0.0;
+        e->lock_ev_den = 0.0;
+        e->lock_br_num = 0.0;
+        e->lock_ev_valid = 0;
+    }
+}
+
+void cfr_storage_record_lock_ev_loss(cfr_storage_t *s, uint64_t infoset,
+                                     double br_value, double forced_value, double reach_weight)
 {
     if (!s)
         return;
@@ -372,9 +395,10 @@ void cfr_storage_record_lock_ev_loss(cfr_storage_t *s, uint64_t infoset, double 
     entry_t *e = find_entry(s, infoset);
     if (!e || !e->locked)
         return;
-    e->lock_br_value = br_value;
-    e->lock_forced_value = forced_value;
-    e->lock_ev_loss = br_value - forced_value;
+    double w = reach_weight > 0.0 ? reach_weight : 0.0;
+    e->lock_ev_den += w;
+    e->lock_ev_num += w * (br_value - forced_value);
+    e->lock_br_num += w * br_value;
     e->lock_ev_valid = 1;
 }
 
@@ -384,14 +408,16 @@ int cfr_storage_get_lock_ev_loss(cfr_storage_t *s, uint64_t infoset,
     if (!s)
         return 0;
     entry_t *e = find_entry(s, infoset);
-    if (!e || !e->lock_ev_valid)
+    if (!e || !e->lock_ev_valid || e->lock_ev_den <= 0.0)
         return 0;
+    double loss = e->lock_ev_num / e->lock_ev_den;
+    double br = e->lock_br_num / e->lock_ev_den;
     if (out_loss)
-        *out_loss = e->lock_ev_loss;
+        *out_loss = loss;
     if (out_br)
-        *out_br = e->lock_br_value;
+        *out_br = br;
     if (out_forced)
-        *out_forced = e->lock_forced_value;
+        *out_forced = br - loss;
     return 1;
 }
 
