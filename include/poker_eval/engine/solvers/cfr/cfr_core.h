@@ -356,17 +356,20 @@ int cfr_storage_get_locked_strategy(
  * While the periodic relock engine runs, the solver accumulates, over each
  * relock traversal, the EV loss at a locked infoset: the counterfactually
  * reach-weighted gap between the value the locked player could obtain by
- * playing its single best action and the value it obtains while being forced
- * to the locked frequencies. Because no synthetic regret bounty is injected,
- * this is a bounty-free (exact in the no-distortion sense) cost of the lock.
+ * playing its best response and the value it obtains while being forced to the
+ * locked frequencies. Because no synthetic regret bounty is injected, this is
+ * a bounty-free (exact in the no-distortion sense) cost of the lock.
+ *
+ * The best-response value is fully recursive: for each action the solver
+ * recomputes the child subtree's best response for the locked player
+ * (opponents follow their average strategy, the locked player maximizes at
+ * every downstream decision), so the loss isolates the cost of the forced mix
+ * at THIS infoset only, with the player free everywhere below.
  *
  * The loss is aggregated across every state that maps to the infoset (a poker
  * infoset has many states -> one key), weighted by the acting player's
  * counterfactual reach, so the reported value reflects the whole infoset
- * rather than whichever state was traversed last. It is a one-step best-action
- * gap, not a fully recursive best response: when the locked player acts again
- * downstream, sub-tree values use the current (converged) strategies rather
- * than a recursive maximization.
+ * rather than whichever state was traversed last.
  *
  * cfr_storage_begin_lock_ev_pass() resets the accumulators for all locked
  * infosets and is called once by the solver at the start of each relock
