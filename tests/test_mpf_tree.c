@@ -67,6 +67,12 @@ static void setup_plo4(double eff_stack, double pot, double committal_pct)
     cfg.board_cards[1] = MODERN_MAKE_CARD(MODERN_RANK_7, MODERN_SUIT_DIAMONDS);
     cfg.board_cards[2] = MODERN_MAKE_CARD(MODERN_RANK_K, MODERN_SUIT_HEARTS);
 
+    /* FEAT-10 (#146): setup_plo4 is called repeatedly on the same g_state.
+       Release any previously owned sparse stack index before wiping the
+       struct, otherwise the old index leaks (mpf_state_cleanup is a safe
+       no-op when g_state has not been built yet). */
+    mpf_state_cleanup(&g_state);
+
     memset(&g_state, 0, sizeof(g_state));
     memset(&g_game, 0, sizeof(g_game));
     if (mpf_build_game(&cfg, &g_game, &g_state) != 0)

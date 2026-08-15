@@ -71,6 +71,9 @@ function(add_unity_test test_name source_file)
     add_test(NAME ${test_name} COMMAND ${test_name})
     if("${test_name}" STREQUAL "test_montecarlo_convergence_unity")
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 600)
+    elseif("${test_name}" STREQUAL "test_mpf_stack_index")
+        # Includes a 6-player asym/sym memory-ratio benchmark that is slow under ASan/UBSan.
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     else()
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
     endif()
@@ -308,6 +311,9 @@ set(TEST_SOURCES
     test_range_utils.c
     test_range_integration.c
     test_spot_filter.c
+
+    # FEAT-10 (#146): sparse stack-config indexer + compact reach map
+    test_mpf_stack_index.c
 
     # ICM Calculator tests
     test_icm_calculator.c
@@ -1255,7 +1261,8 @@ endforeach()
 foreach(_slow_san_test
         test_montecarlo_convergence_unity
         test_omaha_range_parser
-        test_cfr_chance_nodes)
+        test_cfr_chance_nodes
+        test_mpf_stack_index)
     if(TARGET ${_slow_san_test} OR TEST ${_slow_san_test})
         set_property(TEST ${_slow_san_test} APPEND PROPERTY LABELS "sanitizer-skip")
     endif()

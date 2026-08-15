@@ -1,5 +1,6 @@
 #include <poker_eval/engine/solvers/cfr/multiway_postflop_adapter.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+#include <poker_eval/engine/solvers/cfr/mpf_stack_index.h>
 #include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/deck/deck_std.h>
 #include <stdlib.h>
@@ -471,6 +472,19 @@ static uint64_t mpf_infoset_key(const mpf_state_t *st)
     h = mpf_fnv1a_hash_seeded(h, &active_flags, sizeof(active_flags));
     uint64_t bh = mpf_pattern_hash(st, p);
     h = mpf_fnv1a_hash_seeded(h, &bh, sizeof(bh));
+    /* FEAT-10 (#146): fold the committed-stack configuration hash into the
+       infoset key so asymmetrical (and equivalent-by-action-order) stack
+       structures map to distinct-but-deduplicated infosets. We hash the
+       configuration directly (not the sparse handle) so the key is stable
+       across games and parts. */
+    if (st->stack_index)
+    {
+        mpf_stack_config_t scfg;
+        mpf_stack_config_from_arrays(&scfg, st->num_players,
+                                    st->round_contrib, st->stacks, st->active);
+        uint64_t sh = mpf_stack_config_hash(&scfg);
+        h = mpf_fnv1a_hash_seeded(h, &sh, sizeof(sh));
+    }
     return h;
 }
 
@@ -479,6 +493,45 @@ static uint64_t mpf_state_key(const mpf_state_t *st)
     if (st->keyed_mode)
         return mpf_infoset_key(st);
     return (uint64_t)(uintptr_t)st;
+}
+
+/* cfr_game get_infoset_key callback: hash a state pointer into its infoset key.
+   Wired (FEAT-10 #146) so storage indexes by the content-derived infoset key
+   (which now folds in the sparse stack-config id) rather than the raw pointer. */
+static uint64_t mpf_get_infoset_key_wrapper(const void *state)
+{
+    const mpf_state_t *st = (const mpf_state_t *)state;
+    if (!st)
+        return 0;
+    return mpf_infoset_key(st);
+}
+
+/* Storage key for a tree node's state: when the sparse stack index is active
+   the solver writes storage under the infoset hash, so the node key must be
+   that same hash (not the raw pointer) for the exporter/collector to find the
+   entries. Falls back to the pointer when no index is present. */
+static uint64_t mpf_node_storage_key(const mpf_state_t *st)
+{
+    if (st && st->stack_index)
+        return mpf_infoset_key(st);
+    return (uint64_t)(uintptr_t)st;
+}
+
+/* FEAT-10 (#146): resolve (and cache) the sparse stack-config id for a state.
+   The id is derived from the committed-stack configuration of the active
+   players, so equivalent configs reachable via different action orders share
+   one id. Safe to call repeatedly; only inserts when the id is still 0. */
+static void mpf_state_resolve_cfg_id(mpf_state_t *st)
+{
+    if (!st || st->stack_cfg_id != 0 || !st->stack_index)
+        return;
+    mpf_stack_config_t cfg;
+    mpf_stack_config_from_arrays(&cfg, st->num_players,
+                                st->round_contrib, st->stacks,
+                                st->active);
+    uint32_t id = 0;
+    if (mpf_stack_index_put(st->stack_index, &cfg, &id) == 0)
+        st->stack_cfg_id = id;
 }
 
 static mpf_state_t *mpf_wrapper_state(cfr_game_t *game, uint64_t key);
@@ -548,6 +601,8 @@ static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_st
     out->perf_stats = st->perf_stats;
     out->heap_owned = 1;
     out->util_ready = 0;
+    /* Cloned state borrows the shared sparse index but never owns it. */
+    out->owns_stack_index = 0;
     for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
         out->action_cache[i] = NULL;
     for (int i = 0; i < 52; ++i)
@@ -833,6 +888,8 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
     out->perf_stats = st->perf_stats;
     memcpy(out->action_cache, saved_cache, sizeof(saved_cache));
     out->heap_owned = heap_owned;
+    /* Cloned state borrows the shared sparse index but never owns it. */
+    out->owns_stack_index = 0;
     out->util_ready = 0;
     out->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
@@ -1098,6 +1155,13 @@ static uint64_t mpf_apply_action_wrapper(cfr_game_t *game, uint64_t key, int act
         }
     }
     mpf_apply_action_internal(st, action, next_state);
+    /* FEAT-10 (#146): child inherits the shared sparse stack index and gets
+       its own (cached) config id so the infoset key distinguishes stacks. */
+    if (next_state)
+    {
+        next_state->stack_index = st ? st->stack_index : NULL;
+        mpf_state_resolve_cfg_id(next_state);
+    }
     if (st && st->keyed_mode && next_state)
         mpf_key_map_register(mpf_infoset_key(next_state), next_state);
     return next_state ? mpf_state_key(next_state) : 0;
@@ -1607,7 +1671,7 @@ static void mpf_apply_tree_node(mpf_state_t *st, int node_idx)
         }
         node->cache_slots[slot].owner = self;
         node->cache_slots[slot].state = st;
-        node->state_key = (uint64_t)(uintptr_t)st;
+        node->state_key = mpf_node_storage_key(st);
         if (st->lock_storage)
         {
             if (!node->cache_slots[slot].lock_wired && node->is_locked &&
@@ -1620,7 +1684,7 @@ static void mpf_apply_tree_node(mpf_state_t *st, int node_idx)
         pthread_mutex_unlock(&node->cache_lock);
 #else
         node->state_cache = st;
-        node->state_key = (uint64_t)(uintptr_t)st;
+        node->state_key = mpf_node_storage_key(st);
         if (st->lock_storage)
             mpf_wire_node_lock(node, node->state_key, st->lock_storage);
 #endif
@@ -1861,6 +1925,10 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     if (cfg->num_players < 2 || cfg->num_players > MPF_MAX_PLAYERS)
         return -1;
 
+    /* NOTE: callers that reuse the same out_state across mpf_build_game
+       calls (e.g. test_mpf_tree's setup_plo4, test_mpf_perf_stats) must
+       mpf_state_cleanup() it first; we cannot safely free a possibly-
+       uninitialized previous index here, so we just wipe the struct. */
     memset(out_state, 0, sizeof(*out_state));
     memset(out_game, 0, sizeof(*out_game));
 
@@ -1909,6 +1977,15 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     if (out_state->committal_threshold_percent <= 0.0)
         out_state->committal_threshold_percent = 100.0; /* default 1.0 * pot */
     out_state->stpr = 0.0;
+
+    /* FEAT-10 (#146): own the sparse stack-config index at the root so the
+       whole traversal shares one deterministic config-id namespace. */
+    /* FEAT-10 (#146): own the sparse stack-config index at the root so the
+       whole traversal shares one deterministic config-id namespace. The
+       root config id is resolved at the END of build_game (see below) once
+       stacks/round_contrib/active are fully populated. */
+    out_state->stack_index = mpf_stack_index_create(256);
+    out_state->owns_stack_index = (out_state->stack_index != NULL) ? 1 : 0;
 
     out_state->bet_size_count = cfg->bet_size_count_common;
     if (out_state->bet_size_count > MPF_MAX_BET_SIZES)
@@ -2085,6 +2162,12 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         mpf_restore_base_bets(out_state);
     }
 
+    /* FEAT-10 (#146): now that stacks/round_contrib/active are fully
+       populated (including any tree-node or preconfig overrides), resolve
+       the root's sparse stack-config id so the infoset key distinguishes
+       asymmetrical stacks from the very first storage write. */
+    mpf_state_resolve_cfg_id(out_state);
+
     out_game->initial_state = out_state;
     out_game->game_data = out_state;
     out_game->is_terminal = mpf_is_terminal_wrapper;
@@ -2096,6 +2179,13 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_game->is_chance = mpf_is_chance_wrapper;
     out_game->get_chance_outcomes = mpf_get_chance_outcomes_wrapper;
     out_game->apply_chance = mpf_apply_chance_wrapper;
+    /* FEAT-10 (#146): route storage lookups through the content-derived infoset
+       key (which folds in the sparse stack-config id) instead of the raw state
+       pointer, so asymmetric stack configs deduplicate into shared infosets.
+       Wired only when not already in keyed_mode, because there state_key is
+       already a content hash and reinterpreting it as a pointer would crash. */
+    if (!out_state->keyed_mode)
+        out_game->get_infoset_key = mpf_get_infoset_key_wrapper;
     out_game->num_players = cfg->num_players;
     out_game->state_size = sizeof(*out_state);
 
@@ -2193,7 +2283,7 @@ static void mpf_tree_release_cache(mpf_tree_def_t *tree, const mpf_state_t *root
         {
             if (node->cache_slots[s].state)
             {
-                node->state_key = (uint64_t)(uintptr_t)node->cache_slots[s].state;
+                node->state_key = mpf_node_storage_key(node->cache_slots[s].state);
                 break;
             }
         }
@@ -2227,6 +2317,13 @@ void mpf_state_cleanup(mpf_state_t *state)
     MPF_ADAPTER_DEBUG("MPF: mpf_state_cleanup on %p\n", (void *)state);
     mpf_key_map_unregister_owner(state->key_map_owner ? state->key_map_owner : state);
     mpf_state_cleanup_internal(state);
+    /* FEAT-10 (#146): only the owning root frees the shared sparse index. */
+    if (state->owns_stack_index && state->stack_index)
+    {
+        mpf_stack_index_destroy(state->stack_index);
+        state->stack_index = NULL;
+        state->owns_stack_index = 0;
+    }
     if (state->tree)
         mpf_tree_release_cache(state->tree, state);
 }
@@ -2235,4 +2332,30 @@ void mpf_state_cleanup_cached(mpf_state_t *state)
 {
     MPF_ADAPTER_DEBUG("MPF: mpf_state_cleanup_cached on %p\n", (void *)state);
     mpf_state_cleanup_internal(state);
+}
+
+/* FEAT-10 (#146): diagnostic accessors for the sparse stack-config index. */
+size_t mpf_state_stack_index_count(const mpf_state_t *state)
+{
+    if (!state || !state->stack_index)
+        return 0;
+    return mpf_stack_index_count(state->stack_index);
+}
+
+size_t mpf_state_stack_index_capacity(const mpf_state_t *state)
+{
+    if (!state || !state->stack_index)
+        return 0;
+    return mpf_stack_index_capacity(state->stack_index);
+}
+
+uint64_t mpf_state_infoset_key(const mpf_state_t *state)
+{
+    if (!state)
+        return 0;
+    /* Ensure the sparse config id is resolved so the key matches what the
+       solver stored under. */
+    mpf_state_t *mut = (mpf_state_t *)state;
+    mpf_state_resolve_cfg_id(mut);
+    return mpf_infoset_key(state);
 }
