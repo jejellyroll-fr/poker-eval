@@ -330,6 +330,7 @@ int main(int argc, char **argv)
     /* FEAT-13 (#190/#192): strength buckets + texture filter abstraction. */
     int buckets_per_street = 0; /* 0 = disabled */
     int texture_filter = 0;     /* pe_texture_filter_level_t, 0 = disabled */
+    int shared_storage = 0;     /* reuse one storage across deals (texture merge) */
     const char *bucket_thresh = NULL;
     int csv_append = 0;
     int use_dcfr = 0;
@@ -372,6 +373,8 @@ int main(int argc, char **argv)
             buckets_per_street = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--texture-filter") && i + 1 < argc)
             texture_filter = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--shared-storage"))
+            shared_storage = 1;
         else if (!strcmp(argv[i], "--dcfr"))
             use_dcfr = 1;
         else if (!strcmp(argv[i], "--ecfr"))
@@ -488,6 +491,9 @@ if (!resume_path)
     }
     double total_time = 0.0;
     pe_strength_table_t *stable = NULL;
+    cfr_storage_t *shared_storage_ptr = NULL;
+    if (shared_storage)
+        shared_storage_ptr = cfr_storage_create();
     FILE *fds = NULL;
     if (dealset)
     {
@@ -597,7 +603,7 @@ if (!resume_path)
         /* With --shared-storage a single storage is reused across deals so
          * texture-merging (bucket_mode 6) collapses infosets that arise on
          * texture-equivalent river boards reached from different turn deals. */
-        cfr_storage_t *storage = cfr_storage_create();
+        cfr_storage_t *storage = shared_storage ? shared_storage_ptr : cfr_storage_create();
         cfr_config_t c = {0};
         c.max_iterations = iters;
         c.enable_dcfr = use_dcfr;
@@ -673,7 +679,8 @@ if (!resume_path)
                 }
             }
         }
-        cfr_storage_destroy(storage);
+        if (!shared_storage)
+            cfr_storage_destroy(storage);
         pe_strength_table_free(stable);
         st.river_state.strength_table = NULL;
     }
@@ -681,6 +688,8 @@ if (!resume_path)
         fclose(fds);
     if (fcsv)
         fclose(fcsv);
+    if (shared_storage_ptr)
+        cfr_storage_destroy(shared_storage_ptr);
     if (deals > 0)
     {
         fprintf(stderr, "[turn ] completed in %.2fs\n", total_time);
