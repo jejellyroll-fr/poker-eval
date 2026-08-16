@@ -58,13 +58,21 @@ static void cfr_traverse_recursive(
     double *scratch,
     int depth_limit);
 
-// Forward declaration: recursive best-response value used by the periodic
+// Forward declarations: recursive best-response values used by the periodic
 // relock EV-loss measurement (FEAT-11).
 static double best_response_recursive(
     cfr_game_t *game,
     cfr_storage_t *storage,
     int br_player,
     int current_player,
+    uint64_t state_key,
+    void *user_data,
+    int depth);
+
+static double best_response_recursive_multiway(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    int br_player,
     uint64_t state_key,
     void *user_data,
     int depth);
@@ -737,15 +745,27 @@ static void cfr_traverse_recursive(
                after the best-response walk to avoid use-after-free. */
             double br_value = -1e300;
             double forced_value = 0.0;
+            /* Use the multiway recursive best response whenever the game exposes
+               a current_player callback (correct for N players and for 2-player
+               games that provide one); otherwise fall back to the 2-player
+               variant that derives the opponent as 1 - acting_player. */
+            int use_multiway_br = game->current_player ? 1 : 0;
             for (int i = 0; i < num_actions; ++i)
             {
                 uint64_t br_child_key = game->apply_action(game, state_key, actions[i], user_data);
-                int br_child_player = game->current_player
-                    ? game->current_player(game, br_child_key, user_data)
-                    : (1 - acting_player);
-                double v = best_response_recursive(game, storage, acting_player,
-                                                   br_child_player, br_child_key,
-                                                   user_data, g_cfr_recursion_depth + 1);
+                double v;
+                if (use_multiway_br)
+                {
+                    v = best_response_recursive_multiway(game, storage, acting_player,
+                                                         br_child_key, user_data,
+                                                         g_cfr_recursion_depth + 1);
+                }
+                else
+                {
+                    v = best_response_recursive(game, storage, acting_player,
+                                                1 - acting_player, br_child_key,
+                                                user_data, g_cfr_recursion_depth + 1);
+                }
                 if (v > br_value)
                     br_value = v;
                 forced_value += locked[i] * v;
