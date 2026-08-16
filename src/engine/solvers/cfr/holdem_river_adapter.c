@@ -288,6 +288,55 @@ static uint64_t hr_infoset_key(const void *s)
          * rather than collapsing distinct hands onto one key. */
     }
 
+    /* FEAT-13 (#190/#192): strength buckets (EHS/EHS2 k-means). The bucket
+     * replaces the private hand class and coarse strength bin, as in FEAT-04 but
+     * with the 2-D EHS/EHS2 abstraction. 8 bits at <<48 allow k up to
+     * PE_SBK_MAX_BUCKETS. */
+    if (st->bucket_mode == 5 && st->strength_table)
+    {
+        int bucket = pe_strength_table_assign_cached(st->strength_table, (const EvalContext *)st->ctx, hp, st->board);
+        if (bucket >= 0)
+        {
+            uint64_t tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+            return ((uint64_t)b_cls << 56) | ((uint64_t)(bucket & 0xFF) << 48) | tf | (act << 16) |
+                   (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
+        }
+        /* Assignment failed: fall through to coarse strength-threshold. */
+    }
+    /* FEAT-13 (#190/#192): board-texture merging. The texture-merged board id
+     * REPLACES the board class in the key so texture-equivalent boards share a
+     * node. The compact id (< 16) is split across the former b_cls (<<56) and
+     * bucket-id (<<48) fields; two boards with the same texture id produce
+     * identical keys regardless of suits/ranks. */
+    if (st->bucket_mode == 6 && st->texture_level > 0)
+    {
+        uint64_t tid = pe_board_texture_id(st->board, (pe_texture_filter_level_t)st->texture_level);
+        uint64_t tex_hi = (tid >> 4) & 0xF;
+        uint64_t tex_lo = (tid & 0xF);
+        uint64_t tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+        return ((tex_hi << 56) | (tex_lo << 48) | tf | (act << 16) |
+                (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
+    }
+    /* FEAT-13 (#190/#192): combined strength buckets + texture merging (mode 7).
+     * MonkerSolver "Strength Buckets + Texture Filter" pairing: strength bucket
+     * at <<48, texture at tex_hi (<<56) and tex_lo (<<44). */
+    if (st->bucket_mode == 7 && st->strength_table && st->texture_level > 0)
+    {
+        int bucket = pe_strength_table_assign_cached(st->strength_table, (const EvalContext *)st->ctx, hp, st->board);
+        uint64_t tid = pe_board_texture_id(st->board, (pe_texture_filter_level_t)st->texture_level);
+        uint64_t tex_hi = (tid >> 4) & 0xF;
+        uint64_t tex_lo = (tid & 0xF);
+        uint64_t tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+        if (bucket >= 0)
+        {
+            return ((tex_hi << 56) | ((uint64_t)(bucket & 0xFF) << 48) | (tex_lo << 44) | tf |
+                    (act << 16) | (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
+        }
+        /* Strength assignment failed: fall through to texture-only merge. */
+        return ((tex_hi << 56) | (tex_lo << 48) | tf | (act << 16) |
+                (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
+    }
+
     eval_t p_eval = pe_eval_7c(st->ctx, hp | st->board);
     hand_class_t pcl = eval_get_hand_class(p_eval);
     int p_cls = ((int)pcl) & 0xF;
@@ -447,6 +496,8 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_state->bucket_bins = 8;
     out_state->bucket_thresh_count = 0;
     out_state->bucket_table = NULL;
+    out_state->strength_table = NULL;
+    out_state->texture_level = 0;
     out_state->extra_feats = 0;
     out_game->initial_state = out_state;
     out_game->game_data = out_state;
