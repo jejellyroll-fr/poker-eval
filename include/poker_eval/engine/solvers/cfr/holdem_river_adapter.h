@@ -9,6 +9,8 @@
 
 #include "cfr_core.h"
 #include "hand_clustering.h"
+#include "strength_bucketing.h"
+#include "board_texture.h"
 #include "poker_eval/core/eval_context.h"
 #include "poker_eval/core/modern_cardmask.h"
 
@@ -48,6 +50,14 @@ typedef struct {
      * Trained outside the solve and shared across deals; the state neither owns
      * nor frees it. NULL falls back to the bucket_mode 3 abstraction. */
     pe_bucket_table_t *bucket_table;
+    /* FEAT-13 (#190/#192): strength buckets (EHS/EHS2) + board-texture merging.
+     * bucket_mode == 5 : strength buckets via pe_strength_table_t (board-specific,
+     *   not owned by the state; NULL falls back to mode 3).
+     * bucket_mode == 6 : board-texture merging via pe_board_texture_id, keyed on
+     *   texture_level (pe_texture_filter_level_t, 0 = disabled).
+     * bucket_mode == 7 : both combined (MonkerSolver Strength+Texture pairing). */
+    pe_strength_table_t *strength_table;
+    int texture_level;
 } holdem_river_state_t;
 
 /* Create Hold'em river adapter */
