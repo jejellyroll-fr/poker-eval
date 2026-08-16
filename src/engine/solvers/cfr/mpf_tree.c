@@ -1138,16 +1138,13 @@ int mpf_tree_normalize_lock(const double *locked,
 
     if (free_count == 0)
     {
-        /* No free actions: clamp the locked sum exactly to 1.0 if needed. */
+        /* Every action is pinned: there is no free action to absorb the
+           residual, so the supplied frequencies must already sum to 1.0. */
         double sum = 0.0;
         for (int i = 0; i < action_count; ++i)
             sum += out[i];
-        if (fabs(sum - 1.0) > 1e-9 && sum > 1e-12)
-        {
-            double scale = 1.0 / sum;
-            for (int i = 0; i < action_count; ++i)
-                out[i] *= scale;
-        }
+        if (fabs(sum - 1.0) > 1e-9)
+            return -1; /* residual mass with nowhere to go */
         return 0;
     }
 
@@ -1311,6 +1308,7 @@ static int mpf_parse_action_lock(const char *json,
     out->action_index = -1;
     out->label = NULL;
     out->freq = 0.0;
+    int has_freq = 0;
     int idx = obj_index + 1;
     for (int i = 0; i < obj->size; ++i)
     {
@@ -1343,6 +1341,7 @@ static int mpf_parse_action_lock(const char *json,
                 }
                 if (out->freq < 0.0)
                     out->freq = 0.0;
+                has_freq = 1;
             }
         }
         idx = mpf_json_next(tokens, idx);
@@ -1350,6 +1349,11 @@ static int mpf_parse_action_lock(const char *json,
     if (!out->label)
     {
         mpf_tree_error(err, "action lock missing action/label");
+        return 0;
+    }
+    if (!has_freq)
+    {
+        mpf_tree_error(err, "action lock missing freq/frequency");
         return 0;
     }
     return 1;
@@ -1429,10 +1433,15 @@ static int mpf_parse_opponent_model_nodes(const char *json,
                     mpf_tree_error(err, "action freq must be numeric");
                     goto fail;
                 }
+                /* Reject out-of-range frequencies instead of clamping, so the
+                   object form behaves identically to the array form. */
+                if (nl->actions[a].freq < -1e-12 || nl->actions[a].freq > 1.0 + 1e-12)
+                {
+                    mpf_tree_error(err, "action freq must be in [0,1]");
+                    goto fail;
+                }
                 if (nl->actions[a].freq < 0.0)
                     nl->actions[a].freq = 0.0;
-                if (nl->actions[a].freq > 1.0)
-                    nl->actions[a].freq = 1.0;
                 nl->actions[a].action_index = -1;
                 a += 1;
                 aidx = mpf_json_next(tokens, aval_idx);
@@ -1479,7 +1488,6 @@ mpf_tree_opponent_model_t *mpf_tree_parse_opponent_model(const char *json,
                                                          size_t len,
                                                          mpf_tree_error_t *err)
 {
-    (void)len;
     if (!json)
     {
         mpf_tree_error(err, "null model json");
@@ -1488,7 +1496,7 @@ mpf_tree_opponent_model_t *mpf_tree_parse_opponent_model(const char *json,
     jsmn_parser parser;
     jsmn_init(&parser);
     jsmntok_t tokens[MPF_TREE_MAX_TOKENS];
-    int parsed = jsmn_parse(&parser, json, strlen(json), tokens, MPF_TREE_MAX_TOKENS);
+    int parsed = jsmn_parse(&parser, json, len, tokens, MPF_TREE_MAX_TOKENS);
     if (parsed < 0)
     {
         mpf_tree_error(err, "failed to parse opponent model json");
@@ -1606,8 +1614,6 @@ int mpf_tree_apply_opponent_model(mpf_tree_def_t *tree,
             mpf_tree_error(err, "opponent model: sum of locked frequencies exceeds 1.0");
             return -1;
         }
-        if (residual < 0.0)
-            residual = 0.0;
 
         double *out = (double *)calloc((size_t)node->action_count, sizeof(double));
         if (!out)
@@ -1630,6 +1636,13 @@ int mpf_tree_apply_opponent_model(mpf_tree_def_t *tree,
         node->locked_strategy = out;
         node->locked_strategy_count = node->action_count;
         node->is_locked = 1;
+        /* Reset any previously wired lock so the solver re-applies this
+           (possibly new) locked_strategy instead of the stale one. */
+        node->lock_wired = 0;
+#if !defined(_WIN32)
+        for (int s = 0; s < MPF_NODE_CACHE_SLOTS; ++s)
+            node->cache_slots[s].lock_wired = 0;
+#endif
     }
     return 0;
 }
@@ -2230,8 +2243,6 @@ static int mpf_parse_node(const char *json,
                 mpf_tree_error(err, "sum of locked frequencies exceeds 1.0");
                 return 0;
             }
-            if (residual < 0.0)
-                residual = 0.0;
             double *out = (double *)calloc((size_t)node->action_count, sizeof(double));
             if (!out)
             {
