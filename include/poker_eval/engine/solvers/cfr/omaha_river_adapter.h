@@ -14,6 +14,8 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
 #include <poker_eval/engine/solvers/cfr/hand_clustering.h>
+#include <poker_eval/engine/solvers/cfr/strength_bucketing.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -58,7 +60,11 @@ extern "C"
         const EvalContext *ctx;
 
         /* Bucketing river */
-        unsigned char bucket_mode; /* 0: none, 1: board, 2: board+player, 3: coarse, 4: k-means clusters */
+        unsigned char bucket_mode; /* 0: none, 1: board, 2: board+player, 3: coarse,
+                                    * 4: k-means clusters (FEAT-04),
+                                    * 5: strength buckets EHS/EHS2 (FEAT-13),
+                                    * 6: board-texture merging (FEAT-13),
+                                    * 7: strength buckets + texture merging (FEAT-13) */
         unsigned char bucket_bins; /* nombre de classes */
         unsigned char bucket_thresh_count;
         uint32_t bucket_thresh[OMAHA_MAX_BUCKET_THRESH];
@@ -68,6 +74,16 @@ extern "C"
          * Table entraînée hors solve et partagée entre deals ; l'état ne la
          * possède pas et ne la libère pas. NULL => repli sur le mode 3. */
         pe_bucket_table_t *bucket_table;
+
+        /* FEAT-13 (#190): abstraction multi-street force + texture.
+         * bucket_mode == 5 : strength buckets EHS/EHS2 (pe_strength_table_t),
+         *   entraînée/chargée par deal et partagée entre deals (l'état ne la
+         *   possède pas) ; NULL => repli sur le mode 3.
+         * bucket_mode == 6 : fusion texture — pe_board_texture_id() du board
+         *   est XORE dans la clé d'infoset pour merger les boards
+         *   textures-indistinctes au niveau texture_level. */
+        pe_strength_table_t *strength_table;
+        int texture_level; /* pe_texture_filter_level_t, 0 = disabled */
     } omaha_river_state_t;
 
     /* --- Fabrique ------------------------------------------------------------ */
