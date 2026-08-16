@@ -207,6 +207,74 @@ static int test_validation_sum_exceeds_one(void)
     return 0;
 }
 
+static int test_validation_all_pinned_below_one(void)
+{
+    /* P1 @1149: every action pinned but frequencies sum below 1.0 leaves no
+       free action to absorb the residual -> must be rejected. */
+    mpf_tree_error_t err;
+    memset(&err, 0, sizeof(err));
+    mpf_tree_def_t *tree = mpf_tree_load_json(k_tree_json, strlen(k_tree_json), &err);
+    CHECK(tree != NULL, err.message);
+
+    const char *model =
+        "{"
+        "  \"nodes\": {"
+        "    \"root\": ["
+        "      {\"action\": \"FOLD\", \"freq\": 0.2},"
+        "      {\"action\": \"CALL\", \"freq\": 0.2},"
+        "      {\"action\": \"RAISE_50\", \"freq\": 0.2},"
+        "      {\"action\": \"RAISE_100\", \"freq\": 0.2}"
+        "    ]"
+        "  }"
+        "}";
+    int rc = pe_cfr_apply_opponent_model(tree, model, strlen(model), &err);
+    CHECK(rc != 0, "all-pinned sum<1 must be rejected");
+    mpf_tree_free(tree);
+    return 0;
+}
+
+static int test_array_form_requires_freq(void)
+{
+    /* P2 @1354: an array-form entry with an action but no freq is rejected. */
+    mpf_tree_error_t err;
+    memset(&err, 0, sizeof(err));
+    mpf_tree_def_t *tree = mpf_tree_load_json(k_tree_json, strlen(k_tree_json), &err);
+    CHECK(tree != NULL, err.message);
+
+    const char *model =
+        "{"
+        "  \"nodes\": {"
+        "    \"root\": ["
+        "      {\"action\": \"RAISE_50\"}"
+        "    ]"
+        "  }"
+        "}";
+    CHECK(pe_cfr_apply_opponent_model(tree, model, strlen(model), &err) != 0,
+          "array-form missing freq must be rejected");
+    mpf_tree_free(tree);
+    return 0;
+}
+
+static int test_object_form_rejects_out_of_range(void)
+{
+    /* P2 @1435: object form must reject out-of-range freqs (not clamp). */
+    mpf_tree_error_t err;
+    memset(&err, 0, sizeof(err));
+    mpf_tree_def_t *tree = mpf_tree_load_json(k_tree_json, strlen(k_tree_json), &err);
+    CHECK(tree != NULL, err.message);
+
+    const char *model =
+        "{"
+        "  \"nodes\": {"
+        "    \"root\": { \"RAISE_50\": 1.2 }"
+        "  }"
+        "}";
+    CHECK(pe_cfr_apply_opponent_model(tree, model, strlen(model), &err) != 0,
+          "object-form out-of-range freq must be rejected");
+    mpf_tree_free(tree);
+    return 0;
+}
+
 static int test_serialize_roundtrip(void)
 {
     mpf_tree_error_t err;
@@ -361,6 +429,12 @@ int main(void)
     if (test_multi_action_same_node() != 0)
         return 1;
     if (test_validation_sum_exceeds_one() != 0)
+        return 1;
+    if (test_validation_all_pinned_below_one() != 0)
+        return 1;
+    if (test_array_form_requires_freq() != 0)
+        return 1;
+    if (test_object_form_rejects_out_of_range() != 0)
         return 1;
     if (test_serialize_roundtrip() != 0)
         return 1;
