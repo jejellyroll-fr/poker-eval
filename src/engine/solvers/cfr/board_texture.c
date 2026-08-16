@@ -250,29 +250,22 @@ uint64_t pe_board_texture_id(mask_t board, pe_texture_filter_level_t level)
     switch (level)
     {
     case PE_TEXTURE_FILTER_LARGE:
-        /* coarse class + paired rank + high card + monotone flag */
-        id = ((uint64_t)b.texture_class << 40) |
-             ((uint64_t)(b.paired_rank < 0 ? 13 : b.paired_rank) << 36) |
-             ((uint64_t)b.high_card_rank << 32) |
-             ((uint64_t)(b.is_monotone ? 1 : 0) << 31) |
-             ((uint64_t)b.n_cards << 28);
+        /* coarse texture class (0..3) + suit count (2..4 -> 0..2). Compact so
+         * the id fits the 8-bit texture field of an infoset key. */
+        id = ((uint64_t)b.texture_class << 2) |
+             ((uint64_t)(b.n_suits > 2 ? b.n_suits - 2 : 0) & 0x3);
         break;
     case PE_TEXTURE_FILTER_MEDIUM:
-        /* wet/dry axis + pairedness */
-        id = ((uint64_t)(b.texture_class == PE_BOARD_TEXTURE_WET ? 1 : 0) << 8) |
-             ((uint64_t)(b.is_paired ? 1 : 0) << 7) |
-             ((uint64_t)b.n_cards << 4);
+        /* wet/dry axis + pairedness, 2 bits. */
+        id = ((uint64_t)(b.texture_class == PE_BOARD_TEXTURE_WET ? 1 : 0) << 1) |
+             ((uint64_t)(b.is_paired ? 1 : 0));
         break;
     case PE_TEXTURE_FILTER_SMALL:
-        /* wet/dry axis only */
-        id = ((uint64_t)(b.texture_class == PE_BOARD_TEXTURE_WET ? 1 : 0) << 4) |
-             ((uint64_t)b.n_cards);
+        /* wet/dry axis only, 1 bit. */
+        id = (uint64_t)(b.texture_class == PE_BOARD_TEXTURE_WET ? 1 : 0);
         break;
     default:
         return (uint64_t)board;
     }
-    /* Keep the suit pattern for two-tone vs rainbow distinctions at LARGE. */
-    if (level == PE_TEXTURE_FILTER_LARGE)
-        id |= ((uint64_t)b.n_suits << 24);
     return id;
 }

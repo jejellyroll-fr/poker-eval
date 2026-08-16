@@ -67,6 +67,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_strength_bucketing.c` (feature range, train+assign ordering,
   deterministic training + save/load round-trip, AA-stronger-than-air
   hierarchy) cover the pair.
+- Wire FEAT-13 abstraction into the Omaha HU river adapter (FEAT-13 suite, #190):
+  `omaha_river_state_t` gains `strength_table` (FEAT-13 `pe_strength_table_t *`,
+  board-specific, not owned by the state) and `texture_level` (the configured
+  `pe_texture_filter_level_t`). `omaha_infoset_key` gains three bucket modes
+  that consume the FEAT-13 primitives alongside the existing FEAT-04 mode 4:
+    - `bucket_mode == 5` : strength buckets (EHS/EHS2) — the FEAT-13 strength
+      bucket id replaces the private-hand class + coarse strength bin, exactly
+      like FEAT-04's learned clusters but with the 2-D EHS/EHS2 abstraction.
+    - `bucket_mode == 6` : board-texture merging — `pe_board_texture_id` of the
+      board REPLACES the board class in the infoset key (compact id < 16, packed
+      across the former b_cls and bucket-id fields) so texture-equivalent boards
+      share one node at the chosen filter level (Small/Medium/Large).
+    - `bucket_mode == 7` : both — strength bucket (bits 48..55) combined with
+      texture merge (tex_hi at <<56, tex_lo at <<44), the MonkerSolver "Strength
+      Buckets + Texture Filter" pairing.
+  `bench_cfr_omaha_river.c` exposes `--buckets-per-street`, `--texture-filter`
+  (0..3) and `--shared-storage` (one storage reused across deals so texture
+  merging actually collapses infosets that occur on different texture-equivalent
+  boards) and populates `cfr_config_t::strength_buckets_per_street` /
+  `texture_filter_level`. With `--shared-storage`, mode 6 (Small) collapses the
+  river infoset count from 105 (baseline mode 3) to 42 across 80 random deals —
+  a 60% reduction; the ≥90% target from #149 is multi-street (turn→river) and is
+  exercised once the adapters drive the abstraction from `cfr_config_t` in a
+  tree solve, which is follow-up work.
   building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
   range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
   carried on the parsed range (`arp_range_t.spot_filters`), exposed via
