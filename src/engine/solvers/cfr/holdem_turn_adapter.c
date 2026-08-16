@@ -31,6 +31,9 @@ void ht_build_game_sampled_river(const EvalContext *ctx, mask_t h0, mask_t h1, m
     if (rv >= 0)
         out_state->full_board = mask_set(out_state->full_board, rv);
     hr_build_game(ctx, h0, h1, out_state->full_board, out_game, &out_state->river_state);
+    /* FEAT-13 (#192): remember the turn board so texture merging can also
+     * collapse turn nodes reached from different turn runs. */
+    out_state->river_state.turn_board = board4;
     /* Compute turn features on board4:
      *  bit0=pair_on_board4
      *  bit1=flush_draw_board4 (>=3 same suit)
