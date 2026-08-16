@@ -56,6 +56,18 @@ typedef struct {
     double *avg;    /* size n */
     double *locked; /* size n, NULL when not locked */
     int used;
+    /* Periodic relock EV-loss measurement (FEAT-11). The loss is accumulated
+     * counterfactually reach-weighted across every state that maps to this
+     * infoset during a single relock traversal, so a poker infoset (many
+     * states -> one key) reports an aggregate rather than the last-visited
+     * state. lock_ev_num/den hold the weighted sum of (br - forced) and the
+     * total reach; lock_br_num holds the weighted sum of the per-state
+     * best-action value. The reported loss is num/den, br is br_num/den, and
+     * forced = br - loss. */
+    double lock_ev_num;
+    double lock_ev_den;
+    double lock_br_num;
+    int lock_ev_valid;
     double ev_sum;
     double ev_sq_sum;
     uint64_t ev_count;
@@ -197,6 +209,21 @@ struct cfr_config_t {
                                   * periodic convergence check). */
     uint32_t keep_avg_strategy_mask; /* 0 = retain every street */
     uint32_t keep_ev_mask;           /* 0 = retain every street */
+
+    /* Periodic relocking engine (FEAT-11).
+     *
+     * When enable_periodic_relock is set, locked infosets are NOT frozen:
+     * CFR keeps running there (regret/average strategy keep accumulating for
+     * the non-locked actions), and every lock_period iterations the current
+     * strategy is re-enforced to the locked target frequencies. This makes
+     * target frequencies converge instantly while the un-locked actions keep
+     * true (bounty-free) best-response EVs. The exact EV loss forced by the
+     * sub-optimal lock is recorded per infoset via
+     * cfr_storage_get_lock_ev_loss(). lock_period <= 0 disables relocking
+     * inside this mode, which then degrades to the freeze behaviour of #118. */
+    int enable_periodic_relock;
+    int lock_period;
+
     int metrics_level;
     double metrics_bb_value;
     double metrics_mchips_scale;
@@ -268,6 +295,8 @@ void cfr_storage_get_strategy_at_street(cfr_storage_t*, uint64_t, int, int, doub
 void cfr_storage_update_regret_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
 void cfr_storage_update_avg_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
 void cfr_storage_get_avg_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
+void cfr_storage_get_regret_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
+void cfr_storage_overwrite_avg_at_street(cfr_storage_t*, uint64_t, int, int, const double*);
 void cfr_storage_accumulate_ev_at_street(cfr_storage_t*, uint64_t, int, double);
 
 int cfr_storage_save_checkpoint(
@@ -319,6 +348,53 @@ int cfr_storage_get_locked_strategy(
     uint64_t infoset,
     int n_actions,
     const double** out_probs
+);
+
+/*
+ * Periodic relocking EV-loss measurement (FEAT-11).
+ *
+ * While the periodic relock engine runs, the solver accumulates, over each
+ * relock traversal, the EV loss at a locked infoset: the counterfactually
+ * reach-weighted gap between the value the locked player could obtain by
+ * playing its best response and the value it obtains while being forced to the
+ * locked frequencies. Because no synthetic regret bounty is injected, this is
+ * a bounty-free (exact in the no-distortion sense) cost of the lock.
+ *
+ * The best-response value is fully recursive: for each action the solver
+ * recomputes the child subtree's best response for the locked player
+ * (opponents follow their average strategy, the locked player maximizes at
+ * every downstream decision), so the loss isolates the cost of the forced mix
+ * at THIS infoset only, with the player free everywhere below.
+ *
+ * The loss is aggregated across every state that maps to the infoset (a poker
+ * infoset has many states -> one key), weighted by the acting player's
+ * counterfactual reach, so the reported value reflects the whole infoset
+ * rather than whichever state was traversed last.
+ *
+ * cfr_storage_begin_lock_ev_pass() resets the accumulators for all locked
+ * infosets and is called once by the solver at the start of each relock
+ * iteration. cfr_storage_record_lock_ev_loss() adds one state's weighted
+ * contribution. cfr_storage_get_lock_ev_loss() returns the aggregated loss for
+ * an infoset (0 / not-valid when none recorded). Pass out_br and out_forced to
+ * also receive the weighted best-action value and the forced value. Any of the
+ * out_* pointers may be NULL.
+ */
+void cfr_storage_begin_lock_ev_pass(cfr_storage_t* storage);
+
+void cfr_storage_record_lock_ev_loss(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    double br_value,
+    double forced_value,
+    double reach_weight
+);
+
+int cfr_storage_get_lock_ev_loss(
+    cfr_storage_t* storage,
+    uint64_t infoset,
+    double* out_loss,
+    double* out_br,
+    double* out_forced
 );
 
 int cfr_storage_peek_avg_strategy(

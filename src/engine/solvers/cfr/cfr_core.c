@@ -58,6 +58,25 @@ static void cfr_traverse_recursive(
     double *scratch,
     int depth_limit);
 
+// Forward declarations: recursive best-response values used by the periodic
+// relock EV-loss measurement (FEAT-11).
+static double best_response_recursive(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    int br_player,
+    int current_player,
+    uint64_t state_key,
+    void *user_data,
+    int depth);
+
+static double best_response_recursive_multiway(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    int br_player,
+    uint64_t state_key,
+    void *user_data,
+    int depth);
+
 static CFR_THREAD_LOCAL int g_cfr_current_iter = 0;
 static CFR_THREAD_LOCAL int g_cfr_recursion_depth = 0;
 static CFR_THREAD_LOCAL int g_cfr_max_depth = 0;
@@ -288,6 +307,12 @@ double cfr_solve(
         }
         else
         {
+            /* Start a fresh reach-weighted EV-loss accumulation when this is a
+               periodic relock iteration, so the recorded loss reflects only the
+               current pass over the infoset's states. */
+            if (config->enable_periodic_relock && config->lock_period > 0 &&
+                (((it + 1) % config->lock_period) == 0))
+                cfr_storage_begin_lock_ev_pass(storage);
             g_cfr_depth_exceeded = 0;
             cfr_traverse_recursive(game, storage, config, root_key, reach, num_players, it, util, NULL,
                                    scratch, depth_limit);
@@ -590,13 +615,30 @@ static void cfr_traverse_recursive(
 
     cfr_storage_get_strategy_at_street(storage, infoset_key, num_actions, street, strategy);
 
-    /* Frozen node (locked strategy): override the computed strategy and
-       never accumulate regret or average strategy at this infoset. */
+    /* Frozen node (locked strategy). */
     if (storage)
         is_locked = cfr_storage_get_locked_strategy(storage, infoset_key, num_actions, &locked);
+
+    int relock_mode = config->enable_periodic_relock && config->lock_period > 0;
+    int relock_iter = relock_mode && (((iter + 1) % config->lock_period) == 0);
+
     if (is_locked)
-        for (int i = 0; i < num_actions; ++i)
-            strategy[i] = locked[i];
+    {
+        if (relock_mode && !relock_iter)
+        {
+            /* Periodic relock (FEAT-11): let the node drift under normal
+               regret-matching so the un-locked actions keep true (bounty-free)
+               EVs, then re-assert the target only on relock iterations. */
+            cfr_storage_get_regret_strategy_at_street(storage, infoset_key, num_actions, street, strategy);
+        }
+        else
+        {
+            /* Freeze mode (#118) or a relock iteration: force the descent
+               strategy to the locked target frequencies. */
+            for (int i = 0; i < num_actions; ++i)
+                strategy[i] = locked[i];
+        }
+    }
     for (int p = 0; p < num_players; ++p)
         node_util_vec[p] = 0.0;
 
@@ -679,6 +721,64 @@ static void cfr_traverse_recursive(
                 avg_weight *= pow(t, config->dcfr_gamma);
         }
         cfr_storage_update_avg_at_street(storage, infoset_key, num_actions, street, strategy, avg_weight);
+    }
+    else if (relock_mode)
+    {
+        /* Periodic relock (FEAT-11). Regret keeps accumulating normally so the
+           un-locked actions retain true best-response EVs; on a relock iteration
+           the average strategy is snapped back to the locked target and the
+           exact EV loss of the forced mix is recorded. */
+        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, discount);
+        if (relock_iter)
+        {
+            cfr_storage_overwrite_avg_at_street(storage, infoset_key, num_actions, street, locked);
+            /* Exact EV loss (FEAT-11): the acting player is locked only at this
+               infoset, so below it plays freely. For each action i we recompute
+               the child subtree's recursive best-response value for the acting
+               player (opponents follow their average strategy, the acting
+               player maximizes at every downstream decision). The loss then
+               isolates the cost of the forced mix at THIS node:
+                 br_value    = max_i  BR(child_i)
+                 forced_value = sum_i locked[i] * BR(child_i)
+               both using the same "free below" baseline. Child keys are derived
+               fresh here (the descent already released them) and released again
+               after the best-response walk to avoid use-after-free. */
+            double br_value = -1e300;
+            double forced_value = 0.0;
+            /* Use the multiway recursive best response whenever the game exposes
+               a current_player callback (correct for N players and for 2-player
+               games that provide one); otherwise fall back to the 2-player
+               variant that derives the opponent as 1 - acting_player. */
+            int use_multiway_br = game->current_player ? 1 : 0;
+            for (int i = 0; i < num_actions; ++i)
+            {
+                uint64_t br_child_key = game->apply_action(game, state_key, actions[i], user_data);
+                double v;
+                if (use_multiway_br)
+                {
+                    v = best_response_recursive_multiway(game, storage, acting_player,
+                                                         br_child_key, user_data,
+                                                         g_cfr_recursion_depth + 1);
+                }
+                else
+                {
+                    v = best_response_recursive(game, storage, acting_player,
+                                                1 - acting_player, br_child_key,
+                                                user_data, g_cfr_recursion_depth + 1);
+                }
+                if (v > br_value)
+                    br_value = v;
+                forced_value += locked[i] * v;
+                if (game->release_state)
+                    game->release_state(game, br_child_key, user_data);
+            }
+            /* Counterfactual reach of the acting player at this infoset, used to
+               reach-weight the EV-loss aggregation across all its states. */
+            double reach_weight = reach[acting_player];
+            if (reach_weight < 0.0)
+                reach_weight = 0.0;
+            cfr_storage_record_lock_ev_loss(storage, infoset_key, br_value, forced_value, reach_weight);
+        }
     }
 
     if (storage)

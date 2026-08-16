@@ -346,6 +346,12 @@ int cfr_storage_set_locked_strategy(cfr_storage_t *s, uint64_t infoset, const do
         if (e->avg)
             e->avg[i] = probs[i];
     }
+    /* Replacing a lock invalidates any previously recorded EV loss, which
+     * belonged to the old target frequencies. */
+    e->lock_ev_num = 0.0;
+    e->lock_ev_den = 0.0;
+    e->lock_br_num = 0.0;
+    e->lock_ev_valid = 0;
     return 0;
 }
 
@@ -360,6 +366,58 @@ int cfr_storage_get_locked_strategy(cfr_storage_t *s, uint64_t infoset, int acti
         return 0;
     if (out_probs)
         *out_probs = e->locked;
+    return 1;
+}
+
+void cfr_storage_begin_lock_ev_pass(cfr_storage_t *s)
+{
+    if (!s || !s->tab)
+        return;
+    for (size_t i = 0; i < s->cap; ++i)
+    {
+        entry_t *e = &s->tab[i];
+        if (!e->used || !e->locked)
+            continue;
+        e->lock_ev_num = 0.0;
+        e->lock_ev_den = 0.0;
+        e->lock_br_num = 0.0;
+        e->lock_ev_valid = 0;
+    }
+}
+
+void cfr_storage_record_lock_ev_loss(cfr_storage_t *s, uint64_t infoset,
+                                     double br_value, double forced_value, double reach_weight)
+{
+    if (!s)
+        return;
+    /* The infoset must already exist; look it up without forcing creation so
+     * we only record loss for infosets that are actually locked. */
+    entry_t *e = find_entry(s, infoset);
+    if (!e || !e->locked)
+        return;
+    double w = reach_weight > 0.0 ? reach_weight : 0.0;
+    e->lock_ev_den += w;
+    e->lock_ev_num += w * (br_value - forced_value);
+    e->lock_br_num += w * br_value;
+    e->lock_ev_valid = 1;
+}
+
+int cfr_storage_get_lock_ev_loss(cfr_storage_t *s, uint64_t infoset,
+                                 double *out_loss, double *out_br, double *out_forced)
+{
+    if (!s)
+        return 0;
+    entry_t *e = find_entry(s, infoset);
+    if (!e || !e->lock_ev_valid || e->lock_ev_den <= 0.0)
+        return 0;
+    double loss = e->lock_ev_num / e->lock_ev_den;
+    double br = e->lock_br_num / e->lock_ev_den;
+    if (out_loss)
+        *out_loss = loss;
+    if (out_br)
+        *out_br = br;
+    if (out_forced)
+        *out_forced = br - loss;
     return 1;
 }
 
@@ -569,6 +627,57 @@ void cfr_storage_update_avg(cfr_storage_t *s, uint64_t infoset, int action_count
 
 void cfr_storage_update_avg_at_street(cfr_storage_t *s, uint64_t key, int n, int street, const double *strategy, double weight)
 { if (!s || !keep_for_street(s->keep_avg_strategy_mask, street)) return; entry_t *e = get_entry_at_street(s, key, n, street); if (!e || !e->avg) return; for (int i=0;i<n;++i) e->avg[i] += strategy[i]*weight; }
+
+/* Regret-matched descent strategy ignoring any lock (FEAT-11). Used by the
+ * periodic relock engine on non-relock iterations so a locked infoset is allowed
+ * to drift under normal CFR while its export is re-asserted to target only on
+ * relock iterations. */
+void cfr_storage_get_regret_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, int street, double *probs)
+{
+    entry_t *e = get_entry_at_street(s, key, n, street);
+    if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
+    if (g_use_ecfr) {
+        double max_pos = 0.0, sum_w = 0.0;
+        for (int i = 0; i < n; ++i)
+            if (e->regret[i] > max_pos) max_pos = e->regret[i];
+        if (max_pos > 0.0) {
+            for (int i = 0; i < n; ++i) {
+                probs[i] = e->regret[i] > 0.0 ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                sum_w += probs[i];
+            }
+            if (sum_w > 0.0) { for (int i = 0; i < n; ++i) probs[i] /= sum_w; return; }
+        }
+    } else {
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i) if (e->regret[i] > 0.0) sum += e->regret[i];
+        if (sum > 0.0) {
+            for (int i = 0; i < n; ++i) probs[i] = e->regret[i] > 0.0 ? e->regret[i] / sum : 0.0;
+            return;
+        }
+    }
+    for (int i = 0; i < n; ++i) probs[i] = 1.0 / n;
+}
+
+/* Overwrite the average strategy of an infoset with the given target
+ * frequencies (FEAT-11). Unlike cfr_storage_update_avg_at_street this replaces
+ * the accumulated average rather than adding to it, which is how the periodic
+ * relock engine re-asserts a locked node's target frequencies instantly. */
+void cfr_storage_overwrite_avg_at_street(cfr_storage_t *s, uint64_t key, int n, int street, const double *target)
+{
+    if (!s || !keep_for_street(s->keep_avg_strategy_mask, street))
+        return;
+    entry_t *e = get_entry_at_street(s, key, n, street);
+    if (!e)
+        return;
+    if (!e->avg)
+    {
+        e->avg = (double *)calloc((size_t)n, sizeof(double));
+        if (!e->avg)
+            return;
+    }
+    for (int i = 0; i < n; ++i)
+        e->avg[i] = target[i];
+}
 
 /* Dump average strategies to CSV file (key, n, avg0..avgN-1) */
 void cfr_storage_dump_avg(cfr_storage_t *s, FILE *f)
