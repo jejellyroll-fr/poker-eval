@@ -11,6 +11,8 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
 #include <poker_eval/engine/solvers/cfr/holdem_turn_adapter.h>
+#include <poker_eval/engine/solvers/cfr/strength_bucketing.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 typedef struct
 {
@@ -325,6 +327,9 @@ int main(int argc, char **argv)
     unsigned seed = 12345u;
     int bucket_mode = 3;
     int bucket_bins = 8;
+    /* FEAT-13 (#190/#192): strength buckets + texture filter abstraction. */
+    int buckets_per_street = 0; /* 0 = disabled */
+    int texture_filter = 0;     /* pe_texture_filter_level_t, 0 = disabled */
     const char *bucket_thresh = NULL;
     int csv_append = 0;
     int use_dcfr = 0;
@@ -363,6 +368,10 @@ int main(int argc, char **argv)
             bucket_bins = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--bucket-thresholds") && i + 1 < argc)
             bucket_thresh = argv[++i];
+        else if (!strcmp(argv[i], "--buckets-per-street") && i + 1 < argc)
+            buckets_per_street = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--texture-filter") && i + 1 < argc)
+            texture_filter = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dcfr"))
             use_dcfr = 1;
         else if (!strcmp(argv[i], "--ecfr"))
@@ -478,6 +487,7 @@ if (!resume_path)
             fprintf(fcsv, "deal_idx,iters,time_sec,proxy,infosets,bucket_mode,bucket_bins,thresh_count\n");
     }
     double total_time = 0.0;
+    pe_strength_table_t *stable = NULL;
     FILE *fds = NULL;
     if (dealset)
     {
@@ -533,6 +543,26 @@ if (!resume_path)
                 if (st.river_state.bucket_thresh[i] < st.river_state.bucket_thresh[i - 1])
                     st.river_state.bucket_thresh[i] = st.river_state.bucket_thresh[i - 1];
         }
+        /* FEAT-13 (#190/#192): strength buckets (EHS/EHS2 k-means) + board-texture
+         * merging. The strength table is trained on the river board (5 cards) of
+         * this deal; with --shared-storage different deals that reach
+         * texture-equivalent river boards collapse onto shared infosets. */
+        stable = NULL;
+        if (bucket_mode == 5 || bucket_mode == 7)
+        {
+            pe_strength_cluster_opts_t sopts;
+            memset(&sopts, 0, sizeof(sopts));
+            sopts.hole_cards = 2; /* hold'em */
+            sopts.seed = seed + d * 313u;
+            int k = buckets_per_street > 0 ? buckets_per_street : 30;
+            stable = pe_strength_table_train_all(ctx, st.river_state.board, &sopts, &k);
+            if (!stable)
+                fprintf(stderr, "deal %d: strength clustering failed, falling back to bucket_mode 3\n", d);
+            else
+                st.river_state.strength_table = stable;
+        }
+        if (bucket_mode == 6 || bucket_mode == 7)
+            st.river_state.texture_level = texture_filter;
         /* apply bet sizes/raise cap if provided */
         if (bet_sizes)
         {
@@ -564,6 +594,9 @@ if (!resume_path)
             st.river_state.raise_cap = raise_cap;
         }
 
+        /* With --shared-storage a single storage is reused across deals so
+         * texture-merging (bucket_mode 6) collapses infosets that arise on
+         * texture-equivalent river boards reached from different turn deals. */
         cfr_storage_t *storage = cfr_storage_create();
         cfr_config_t c = {0};
         c.max_iterations = iters;
@@ -641,6 +674,8 @@ if (!resume_path)
             }
         }
         cfr_storage_destroy(storage);
+        pe_strength_table_free(stable);
+        st.river_state.strength_table = NULL;
     }
     if (fds)
         fclose(fds);

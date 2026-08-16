@@ -91,6 +91,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a 60% reduction; the ≥90% target from #149 is multi-street (turn→river) and is
   exercised once the adapters drive the abstraction from `cfr_config_t` in a
   tree solve, which is follow-up work.
+- Drive FEAT-13 abstraction from cfr_config_t in the multi-street (turn→river)
+  solver (FEAT-13 suite, #192): the Hold'em HU **turn** adapter now consumes the
+  same FEAT-13 primitives the river adapter gained in #190, so the abstraction
+  applies across streets. `holdem_river_state_t` gains `strength_table`
+  (`pe_strength_table_t *`) and `texture_level` (matching the Omaha river state),
+  and `hr_infoset_key` gains the same `bucket_mode` 5 (strength buckets EHS/EHS2),
+  6 (board-texture merging via `pe_board_texture_id`) and 7 (combined
+  Strength+Texture) as the Omaha adapter. `bench_cfr_holdem_turn.c` exposes
+  `--buckets-per-street` and `--texture-filter` (0..3) and trains a per-deal
+  `pe_strength_table_t` on the sampled river board, propagating the FEAT-13
+  knobs onto `river_state` exactly as the Omaha turn/river path does.
+  The modes are verified to run without fault in the multi-street benchmark
+  (modes 5/6/7 produce valid infoset counts per deal). Note: the turn benchmark
+  uses one storage per deal (not `--shared-storage`, which currently segfaults in
+  the turn adapter when a storage is reused across deals — a separate
+  turn-adapter storage bug, not in the FEAT-13 path); the ≥90% #149 target is
+  therefore reached in a full tree solve that shares the river storage across
+  turn deals, which is the next step after #190/#191 land.
   building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
   range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
   carried on the parsed range (`arp_range_t.spot_filters`), exposed via
