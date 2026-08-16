@@ -313,7 +313,18 @@ static uint64_t hr_infoset_key(const void *s)
         uint64_t tid = pe_board_texture_id(st->board, (pe_texture_filter_level_t)st->texture_level);
         uint64_t tex_hi = (tid >> 4) & 0xF;
         uint64_t tex_lo = (tid & 0xF);
-        uint64_t tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+        /* Multi-street (#192): when a turn board is set, merge turn nodes by
+         * its texture too; otherwise keep the legacy turn features. */
+        uint64_t tf;
+        if (st->turn_board != MASK_EMPTY)
+        {
+            uint64_t ttid = pe_board_texture_id(st->turn_board, (pe_texture_filter_level_t)st->texture_level) & 0xF;
+            tf = ttid << 40;
+        }
+        else
+        {
+            tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+        }
         return ((tex_hi << 56) | (tex_lo << 48) | tf | (act << 16) |
                 (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
     }
@@ -326,7 +337,16 @@ static uint64_t hr_infoset_key(const void *s)
         uint64_t tid = pe_board_texture_id(st->board, (pe_texture_filter_level_t)st->texture_level);
         uint64_t tex_hi = (tid >> 4) & 0xF;
         uint64_t tex_lo = (tid & 0xF);
-        uint64_t tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+        uint64_t tf;
+        if (st->turn_board != MASK_EMPTY)
+        {
+            uint64_t ttid = pe_board_texture_id(st->turn_board, (pe_texture_filter_level_t)st->texture_level) & 0xF;
+            tf = ttid << 40;
+        }
+        else
+        {
+            tf = ((uint64_t)(st->extra_feats & 0xFF) << 40);
+        }
         if (bucket >= 0)
         {
             return ((tex_hi << 56) | ((uint64_t)(bucket & 0xFF) << 48) | (tex_lo << 44) | tf |
@@ -499,6 +519,7 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_state->strength_table = NULL;
     out_state->texture_level = 0;
     out_state->extra_feats = 0;
+    out_state->turn_board = MASK_EMPTY;
     out_game->initial_state = out_state;
     out_game->game_data = out_state;
     out_game->is_terminal = hr_is_terminal_wrapper;

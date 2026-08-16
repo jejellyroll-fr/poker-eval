@@ -101,14 +101,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Strength+Texture) as the Omaha adapter. `bench_cfr_holdem_turn.c` exposes
   `--buckets-per-street` and `--texture-filter` (0..3) and trains a per-deal
   `pe_strength_table_t` on the sampled river board, propagating the FEAT-13
-  knobs onto `river_state` exactly as the Omaha turn/river path does.
-  The modes are verified to run without fault in the multi-street benchmark
-  (modes 5/6/7 produce valid infoset counts per deal). Note: the turn benchmark
-  uses one storage per deal (not `--shared-storage`, which currently segfaults in
-  the turn adapter when a storage is reused across deals — a separate
-  turn-adapter storage bug, not in the FEAT-13 path); the ≥90% #149 target is
-  therefore reached in a full tree solve that shares the river storage across
-  turn deals, which is the next step after #190/#191 land.
+knobs onto `river_state` exactly as the Omaha turn/river path does.
+   The modes are verified to run without fault in the multi-street benchmark
+   (modes 5/6/7 produce valid infoset counts per deal). `--shared-storage`
+   (one `cfr_storage_t` reused across deals) is now available from the turn
+   benchmark too, and the board-texture modes also merge the *turn* board:
+   `holdem_river_state_t` gains `turn_board`, propagated by the turn adapter,
+   so `hr_infoset_key` modes 6/7 key turn nodes by their own texture id instead
+   of the per-deal detailed features — the key change that lets texture-
+   equivalent turn boards reached from different deals collapse onto shared
+   infosets. Measured on 1000 random turn deals (20 iters/deal, HU hold'em):
+   baseline `bucket_mode 3` accumulates **2030** infosets while
+   `bucket_mode 6 --texture-filter 1` (SMALL) plateaus at **60** infosets,
+   a **~97% state-space reduction**, meeting the ≥90% target of #149 in the
+   multi-street turn→river setting.
   building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
   range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
   carried on the parsed range (`arp_range_t.spot_filters`), exposed via

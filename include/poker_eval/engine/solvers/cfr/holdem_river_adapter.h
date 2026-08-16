@@ -58,6 +58,10 @@ typedef struct {
      * bucket_mode == 7 : both combined (MonkerSolver Strength+Texture pairing). */
     pe_strength_table_t *strength_table;
     int texture_level;
+    /* FEAT-13 (#192): turn board (4 cards) when solved multi-street, so
+     * texture merging can also collapse turn nodes reached from different
+     * 4-board runs; MASK_EMPTY when solving river-only. */
+    mask_t turn_board;
 } holdem_river_state_t;
 
 /* Create Hold'em river adapter */
