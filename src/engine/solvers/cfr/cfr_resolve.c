@@ -178,16 +178,24 @@ static void cfv_value_recursive(cfv_value_t *w,
             out_util[p] = 0.0;
         if (outcomes <= 0 || !g->apply_chance)
             return;
+        double chance_weight_sum = 0.0;
         for (int c = 0; c < outcomes; ++c)
         {
+            double cw = cfr_chance_weight(g, key, c, w->user_data);
+            chance_weight_sum += cw;
             uint64_t ck = g->apply_chance(g, key, c, w->user_data);
             double cu[CFR_MAX_PLAYERS];
             cfv_value_recursive(w, ck, reach, num_players, cu);
             for (int p = 0; p < num_players; ++p)
-                out_util[p] += cu[p] / (double)outcomes;
+                out_util[p] += cw * cu[p];
             if (g->release_state)
                 g->release_state(g, ck, w->user_data);
         }
+        double chance_norm = (chance_weight_sum > 0.0)
+                                 ? chance_weight_sum
+                                 : (double)outcomes;
+        for (int p = 0; p < num_players; ++p)
+            out_util[p] /= chance_norm;
         return;
     }
 
@@ -612,6 +620,17 @@ static int gadget_get_chance_outcomes(cfr_game_t *game, uint64_t key, void *user
         : 0;
 }
 
+static double gadget_get_chance_weight(cfr_game_t *game, uint64_t key, int outcome, void *user)
+{
+    pe_cfr_gadget_t *g = (pe_cfr_gadget_t *)game->game_data;
+    (void)user;
+    if (GADGET_KIND(key) == GADGET_KIND_ROOT)
+        return 1.0; /* gadget boundaries are equiprobable */
+    return g->inner->get_chance_weight
+        ? g->inner->get_chance_weight(g->inner, key, outcome, g->user_data)
+        : 1.0;
+}
+
 static uint64_t gadget_apply_chance(cfr_game_t *game, uint64_t key, int outcome, void *user)
 {
     pe_cfr_gadget_t *g = (pe_cfr_gadget_t *)game->game_data;
@@ -758,6 +777,7 @@ int pe_cfr_gadget_create(cfr_game_t *game,
     out_game->get_utility = gadget_get_utility;
     out_game->is_chance = gadget_is_chance;
     out_game->get_chance_outcomes = gadget_get_chance_outcomes;
+    out_game->get_chance_weight = gadget_get_chance_weight;
     out_game->apply_chance = gadget_apply_chance;
     out_game->game_data = g;
     out_game->initial_state = (void *)(uintptr_t)GADGET_ROOT_KEY;
