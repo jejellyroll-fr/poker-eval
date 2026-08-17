@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1107,6 +1108,558 @@ void mpf_tree_free(mpf_tree_def_t *tree)
     free(tree);
 }
 
+int mpf_tree_normalize_lock(const double *locked,
+                            int action_count,
+                            const double *base_weights,
+                            double *out)
+{
+    if (!locked || !out || action_count <= 0 || action_count > MPF_TREE_ACTION_MAX)
+        return -1;
+
+    double residual = 1.0;
+    int free_count = 0;
+    for (int i = 0; i < action_count; ++i)
+    {
+        if (locked[i] >= 0.0)
+        {
+            out[i] = locked[i];
+            residual -= out[i];
+        }
+        else
+        {
+            out[i] = -1.0;
+            free_count += 1;
+        }
+    }
+    if (residual < -1e-9)
+        return -1; /* locked sum exceeds 1.0 */
+    if (residual < 0.0)
+        residual = 0.0;
+
+    if (free_count == 0)
+    {
+        /* Every action is pinned: there is no free action to absorb the
+           residual, so the supplied frequencies must already sum to 1.0. */
+        double sum = 0.0;
+        for (int i = 0; i < action_count; ++i)
+            sum += out[i];
+        if (fabs(sum - 1.0) > 1e-9)
+            return -1; /* residual mass with nowhere to go */
+        return 0;
+    }
+
+    /* Distribute the free residual proportionally to base_weights, falling
+       back to a uniform split when no usable weights are supplied. */
+    double wsum = 0.0;
+    if (base_weights)
+    {
+        for (int i = 0; i < action_count; ++i)
+            if (locked[i] < 0.0 && base_weights[i] > 0.0)
+                wsum += base_weights[i];
+    }
+    if (wsum <= 1e-12)
+    {
+        double each = residual / (double)free_count;
+        for (int i = 0; i < action_count; ++i)
+            if (locked[i] < 0.0)
+                out[i] = each;
+    }
+    else
+    {
+        for (int i = 0; i < action_count; ++i)
+        {
+            if (locked[i] < 0.0)
+                out[i] = (base_weights[i] > 0.0) ? (residual * base_weights[i] / wsum) : 0.0;
+        }
+    }
+
+    /* Numerical guard: re-normalize so all actions sum to 1.0. */
+    double total = 0.0;
+    for (int i = 0; i < action_count; ++i)
+        total += out[i];
+    if (total > 1e-12)
+    {
+        for (int i = 0; i < action_count; ++i)
+            out[i] /= total;
+    }
+    return 0;
+}
+
+/* FEAT-12: Opponent Models & Multi-Action Nodelock. */
+
+/* Produce a canonical label for action `i` of `node`, matching the
+ * MonkerSolver-style labels used in opponent model JSON (e.g. "RAISE_50"). */
+static void mpf_action_label(const mpf_tree_node_t *node, int i, char *buf, size_t cap)
+{
+    const mpf_tree_action_t *a = &node->actions[i];
+    if (a->type == MPF_TREE_ACTION_FOLD)
+    {
+        snprintf(buf, cap, "FOLD");
+    }
+    else if (a->type == MPF_TREE_ACTION_CALL)
+    {
+        snprintf(buf, cap, "CALL");
+    }
+    else if (a->type == MPF_TREE_ACTION_RAISE)
+    {
+        int sz = a->size_index;
+        double pct = (sz >= 0 && sz < node->bet_size_count) ? node->bet_sizes[sz] : 0.0;
+        /* Emit MonkerSolver-style labels: a fractional pot size becomes
+           RAISE_<pct*100> (e.g. 0.5 -> RAISE_50, 1.0 -> RAISE_100). A bare
+           integer size index (no bet size) falls back to RAISE_<idx>. */
+        if (pct > 0.0)
+            snprintf(buf, cap, "RAISE_%d", (int)(pct * 100.0 + 0.5));
+        else
+            snprintf(buf, cap, "RAISE_%d", sz);
+    }
+    else
+    {
+        snprintf(buf, cap, "ACTION_%d", i);
+    }
+}
+
+/* Resolve a label (or integer index) to an action index within `node`.
+ * Returns the index, or -1 if not found. */
+static int mpf_resolve_action_label(const mpf_tree_node_t *node,
+                                    const char *label,
+                                    int label_len)
+{
+    if (!node || label_len <= 0)
+        return -1;
+    /* Pure integer index? */
+    char tmp[64];
+    if (label_len < (int)sizeof(tmp))
+    {
+        memcpy(tmp, label, (size_t)label_len);
+        tmp[label_len] = '\0';
+        char *endptr = NULL;
+        long v = strtol(tmp, &endptr, 10);
+        if (endptr != tmp && *endptr == '\0' && v >= 0 && v < node->action_count)
+            return (int)v;
+    }
+    for (int i = 0; i < node->action_count; ++i)
+    {
+        char lbl[64];
+        mpf_action_label(node, i, lbl, sizeof(lbl));
+        if ((int)strlen(lbl) == label_len && strncmp(lbl, label, (size_t)label_len) == 0)
+            return i;
+        /* Also accept a bare "RAISE_<idx>" form. */
+        char ridx[64];
+        snprintf(ridx, sizeof(ridx), "RAISE_%d", node->actions[i].size_index);
+        if ((int)strlen(ridx) == label_len && strncmp(ridx, label, (size_t)label_len) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static void mpf_tree_node_lock_free(mpf_tree_node_lock_t *nl)
+{
+    if (!nl)
+        return;
+    free(nl->node_id);
+    if (nl->actions)
+    {
+        for (int i = 0; i < nl->action_count; ++i)
+            free(nl->actions[i].label);
+        free(nl->actions);
+    }
+    nl->node_id = NULL;
+    nl->actions = NULL;
+    nl->action_count = 0;
+}
+
+void mpf_tree_opponent_model_free(mpf_tree_opponent_model_t *model)
+{
+    if (!model)
+        return;
+    free(model->name);
+    if (model->nodes)
+    {
+        for (int i = 0; i < model->node_count; ++i)
+            mpf_tree_node_lock_free(&model->nodes[i]);
+        free(model->nodes);
+    }
+    free(model);
+}
+
+/* Parse a model object of the form:
+ *   { "name": "...",
+ *     "nodes": { "<node_id>": { "<action>": <freq>, ... }, ... } }
+ * Per-node value may also be an array of { "action": <label|index>,
+ * "freq": <number> } objects. */
+static int mpf_parse_opponent_model_nodes(const char *json,
+                                           const jsmntok_t *tokens,
+                                           int obj_index,
+                                           mpf_tree_opponent_model_t *model,
+                                           mpf_tree_error_t *err);
+
+static int mpf_parse_action_lock(const char *json,
+                                 const jsmntok_t *tokens,
+                                 int obj_index,
+                                 mpf_tree_action_lock_t *out,
+                                 mpf_tree_error_t *err)
+{
+    const jsmntok_t *obj = &tokens[obj_index];
+    if (obj->type != JSMN_OBJECT)
+    {
+        mpf_tree_error(err, "action lock entry must be an object");
+        return 0;
+    }
+    out->action_index = -1;
+    out->label = NULL;
+    out->freq = 0.0;
+    int has_freq = 0;
+    int idx = obj_index + 1;
+    for (int i = 0; i < obj->size; ++i)
+    {
+        const jsmntok_t *key = &tokens[idx];
+        int value_idx = idx + 1;
+        if (key->type == JSMN_STRING)
+        {
+            if (mpf_token_streq(json, key, "action") || mpf_token_streq(json, key, "label"))
+            {
+                free(out->label);
+                out->label = mpf_strndup(json + tokens[value_idx].start,
+                                         (size_t)(tokens[value_idx].end - tokens[value_idx].start));
+                if (!out->label)
+                {
+                    mpf_tree_error(err, "allocation failure for action label");
+                    return 0;
+                }
+            }
+            else if (mpf_token_streq(json, key, "freq") || mpf_token_streq(json, key, "frequency"))
+            {
+                if (!mpf_token_to_double(json, &tokens[value_idx], &out->freq))
+                {
+                    mpf_tree_error(err, "freq must be numeric");
+                    return 0;
+                }
+                if (out->freq < -1e-12 || out->freq > 1.0 + 1e-12)
+                {
+                    mpf_tree_error(err, "freq must be in [0,1]");
+                    return 0;
+                }
+                if (out->freq < 0.0)
+                    out->freq = 0.0;
+                has_freq = 1;
+            }
+        }
+        idx = mpf_json_next(tokens, idx);
+    }
+    if (!out->label)
+    {
+        mpf_tree_error(err, "action lock missing action/label");
+        return 0;
+    }
+    if (!has_freq)
+    {
+        mpf_tree_error(err, "action lock missing freq/frequency");
+        return 0;
+    }
+    return 1;
+}
+
+static int mpf_parse_opponent_model_nodes(const char *json,
+                                           const jsmntok_t *tokens,
+                                           int obj_index,
+                                           mpf_tree_opponent_model_t *model,
+                                           mpf_tree_error_t *err)
+{
+    const jsmntok_t *obj = &tokens[obj_index];
+    if (obj->type != JSMN_OBJECT)
+    {
+        mpf_tree_error(err, "opponent model nodes must be an object");
+        return 0;
+    }
+    /* Count node entries. jsmn counts keys+values, so pairs = size / 2. */
+    int count = obj->size / 2;
+    mpf_tree_node_lock_t *nodes = (mpf_tree_node_lock_t *)calloc((size_t)count, sizeof(mpf_tree_node_lock_t));
+    if (!nodes)
+    {
+        mpf_tree_error(err, "allocation failure for model nodes");
+        return 0;
+    }
+    int idx = obj_index + 1;
+    int n = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        const jsmntok_t *key = &tokens[idx];
+        int value_idx = idx + 1;
+        if (key->type != JSMN_STRING)
+        {
+            mpf_tree_error(err, "node id must be a string");
+            goto fail;
+        }
+        mpf_tree_node_lock_t *nl = &nodes[n];
+        nl->node_id = mpf_strndup(json + key->start, (size_t)(key->end - key->start));
+        if (!nl->node_id)
+        {
+            mpf_tree_error(err, "allocation failure for node id");
+            goto fail;
+        }
+        const jsmntok_t *val = &tokens[value_idx];
+        if (val->type == JSMN_OBJECT)
+        {
+            /* { "<action>": <freq>, ... } -- jsmn counts keys+values, so the
+               number of pairs is val->size / 2. */
+            int pairs = val->size / 2;
+            nl->action_count = pairs;
+            nl->actions = (mpf_tree_action_lock_t *)calloc((size_t)pairs, sizeof(mpf_tree_action_lock_t));
+            if (!nl->actions)
+            {
+                mpf_tree_error(err, "allocation failure for action locks");
+                goto fail;
+            }
+            int aidx = value_idx + 1;
+            int a = 0;
+            for (int j = 0; j < pairs; ++j)
+            {
+                const jsmntok_t *akey = &tokens[aidx];
+                int aval_idx = aidx + 1;
+                if (akey->type != JSMN_STRING)
+                {
+                    mpf_tree_error(err, "action label must be a string");
+                    goto fail;
+                }
+                nl->actions[a].label = mpf_strndup(json + akey->start,
+                                                   (size_t)(akey->end - akey->start));
+                if (!nl->actions[a].label)
+                {
+                    mpf_tree_error(err, "allocation failure for action label");
+                    goto fail;
+                }
+                if (!mpf_token_to_double(json, &tokens[aval_idx], &nl->actions[a].freq))
+                {
+                    mpf_tree_error(err, "action freq must be numeric");
+                    goto fail;
+                }
+                /* Reject out-of-range frequencies instead of clamping, so the
+                   object form behaves identically to the array form. */
+                if (nl->actions[a].freq < -1e-12 || nl->actions[a].freq > 1.0 + 1e-12)
+                {
+                    mpf_tree_error(err, "action freq must be in [0,1]");
+                    goto fail;
+                }
+                if (nl->actions[a].freq < 0.0)
+                    nl->actions[a].freq = 0.0;
+                nl->actions[a].action_index = -1;
+                a += 1;
+                aidx = mpf_json_next(tokens, aval_idx);
+            }
+        }
+        else if (val->type == JSMN_ARRAY)
+        {
+            /* [ { "action": ..., "freq": ... }, ... ] */
+            nl->action_count = val->size;
+            nl->actions = (mpf_tree_action_lock_t *)calloc((size_t)val->size, sizeof(mpf_tree_action_lock_t));
+            if (!nl->actions)
+            {
+                mpf_tree_error(err, "allocation failure for action locks");
+                goto fail;
+            }
+            int aidx = value_idx + 1;
+            for (int j = 0; j < val->size; ++j)
+            {
+                if (!mpf_parse_action_lock(json, tokens, aidx, &nl->actions[j], err))
+                    goto fail;
+                aidx = mpf_json_next(tokens, aidx);
+            }
+        }
+        else
+        {
+            mpf_tree_error(err, "node lock value must be an object or array");
+            goto fail;
+        }
+        n += 1;
+        idx = mpf_json_next(tokens, value_idx);
+    }
+    model->nodes = nodes;
+    model->node_count = n;
+    return 1;
+
+fail:
+    for (int k = 0; k < count; ++k)
+        mpf_tree_node_lock_free(&nodes[k]);
+    free(nodes);
+    return 0;
+}
+
+mpf_tree_opponent_model_t *mpf_tree_parse_opponent_model(const char *json,
+                                                         size_t len,
+                                                         mpf_tree_error_t *err)
+{
+    if (!json)
+    {
+        mpf_tree_error(err, "null model json");
+        return NULL;
+    }
+    jsmn_parser parser;
+    jsmn_init(&parser);
+    jsmntok_t tokens[MPF_TREE_MAX_TOKENS];
+    int parsed = jsmn_parse(&parser, json, len, tokens, MPF_TREE_MAX_TOKENS);
+    if (parsed < 0)
+    {
+        mpf_tree_error(err, "failed to parse opponent model json");
+        return NULL;
+    }
+    if (parsed == 0 || tokens[0].type != JSMN_OBJECT)
+    {
+        mpf_tree_error(err, "opponent model must be a json object");
+        return NULL;
+    }
+    mpf_tree_opponent_model_t *model = (mpf_tree_opponent_model_t *)calloc(1, sizeof(mpf_tree_opponent_model_t));
+    if (!model)
+    {
+        mpf_tree_error(err, "allocation failure for opponent model");
+        return NULL;
+    }
+    int idx = 1;
+    for (int i = 0; i < tokens[0].size; ++i)
+    {
+        const jsmntok_t *key = &tokens[idx];
+        int value_idx = idx + 1;
+        if (key->type == JSMN_STRING)
+        {
+            if (mpf_token_streq(json, key, "name"))
+            {
+                free(model->name);
+                model->name = mpf_strndup(json + tokens[value_idx].start,
+                                          (size_t)(tokens[value_idx].end - tokens[value_idx].start));
+                if (!model->name)
+                {
+                    mpf_tree_error(err, "allocation failure for model name");
+                    mpf_tree_opponent_model_free(model);
+                    return NULL;
+                }
+            }
+            else if (mpf_token_streq(json, key, "nodes"))
+            {
+                if (!mpf_parse_opponent_model_nodes(json, tokens, value_idx, model, err))
+                {
+                    mpf_tree_opponent_model_free(model);
+                    return NULL;
+                }
+            }
+        }
+        idx = mpf_json_next(tokens, idx);
+    }
+    if (model->node_count == 0)
+    {
+        mpf_tree_error(err, "opponent model has no nodes");
+        mpf_tree_opponent_model_free(model);
+        return NULL;
+    }
+    return model;
+}
+
+int mpf_tree_apply_opponent_model(mpf_tree_def_t *tree,
+                                  const mpf_tree_opponent_model_t *model,
+                                  mpf_tree_error_t *err)
+{
+    if (!tree || !model)
+    {
+        mpf_tree_error(err, "null tree or model");
+        return -1;
+    }
+    for (int n = 0; n < model->node_count; ++n)
+    {
+        const mpf_tree_node_lock_t *nl = &model->nodes[n];
+        mpf_tree_node_t *node = NULL;
+        for (int i = 0; i < tree->node_count; ++i)
+        {
+            if (tree->nodes[i].id && strcmp(tree->nodes[i].id, nl->node_id) == 0)
+            {
+                node = &tree->nodes[i];
+                break;
+            }
+        }
+        if (!node)
+        {
+            mpf_tree_error(err, "opponent model references unknown node id");
+            return -1;
+        }
+        if (node->type != MPF_TREE_NODE_PLAYER)
+        {
+            mpf_tree_error(err, "opponent model node is not a player node");
+            return -1;
+        }
+        /* Resolve action labels to indices. */
+        double locked[MPF_TREE_ACTION_MAX];
+        double residual = 1.0;
+        for (int i = 0; i < node->action_count; ++i)
+            locked[i] = -1.0;
+        for (int a = 0; a < nl->action_count; ++a)
+        {
+            const mpf_tree_action_lock_t *al = &nl->actions[a];
+            int ai = -1;
+            if (al->action_index >= 0)
+                ai = al->action_index;
+            else if (al->label)
+                ai = mpf_resolve_action_label(node, al->label, (int)strlen(al->label));
+            if (ai < 0 || ai >= node->action_count)
+            {
+                mpf_tree_error(err, "opponent model references unknown action in node");
+                return -1;
+            }
+            if (locked[ai] >= 0.0)
+            {
+                mpf_tree_error(err, "opponent model locks the same action twice");
+                return -1;
+            }
+            locked[ai] = al->freq;
+            residual -= al->freq;
+        }
+        if (residual < -1e-9)
+        {
+            mpf_tree_error(err, "opponent model: sum of locked frequencies exceeds 1.0");
+            return -1;
+        }
+
+        double *out = (double *)calloc((size_t)node->action_count, sizeof(double));
+        if (!out)
+        {
+            mpf_tree_error(err, "allocation failure for locked_strategy");
+            return -1;
+        }
+        if (mpf_tree_normalize_lock(locked, node->action_count, node->locked_strategy,
+                                    out) != 0)
+        {
+            free(out);
+            mpf_tree_error(err, "failed to normalize opponent model lock");
+            return -1;
+        }
+        /* Persist as per-action locks so the tree serialization round-trips,
+         * and set the full locked_strategy vector for the solver path. */
+        for (int i = 0; i < node->action_count; ++i)
+            node->actions[i].lock_freq = locked[i] >= 0.0 ? locked[i] : -1.0;
+        free(node->locked_strategy);
+        node->locked_strategy = out;
+        node->locked_strategy_count = node->action_count;
+        node->is_locked = 1;
+        /* Reset any previously wired lock so the solver re-applies this
+           (possibly new) locked_strategy instead of the stale one. */
+        node->lock_wired = 0;
+#if !defined(_WIN32)
+        for (int s = 0; s < MPF_NODE_CACHE_SLOTS; ++s)
+            node->cache_slots[s].lock_wired = 0;
+#endif
+    }
+    return 0;
+}
+
+int pe_cfr_apply_opponent_model(mpf_tree_def_t *tree,
+                                const char *model_json,
+                                size_t len,
+                                mpf_tree_error_t *err)
+{
+    mpf_tree_opponent_model_t *model = mpf_tree_parse_opponent_model(model_json, len, err);
+    if (!model)
+        return -1;
+    int rc = mpf_tree_apply_opponent_model(tree, model, err);
+    mpf_tree_opponent_model_free(model);
+    return rc;
+}
+
 static int mpf_parse_bet_sizes(const char *json,
                                const jsmntok_t *tokens,
                                int array_index,
@@ -1344,6 +1897,7 @@ static int mpf_parse_actions(const char *json,
         node->actions[i].weight = 0.0;
         node->actions[i].next_index = -1;
         node->actions[i].next_id = NULL;
+        node->actions[i].lock_freq = -1.0; /* FEAT-12: unlocked by default */
     }
     int idx = array_index + 1;
     for (int i = 0; i < arr->size; ++i)
@@ -1409,6 +1963,21 @@ static int mpf_parse_actions(const char *json,
                         return 0;
                     }
                     action->weight = w;
+                }
+                else if (mpf_token_streq(json, key, "freq"))
+                {
+                    double f = 0.0;
+                    if (!mpf_token_to_double(json, &tokens[value_idx], &f))
+                    {
+                        mpf_tree_error(err, "freq must be numeric");
+                        return 0;
+                    }
+                    if (f < -1e-12 || f > 1.0 + 1e-12)
+                    {
+                        mpf_tree_error(err, "freq must be in [0,1]");
+                        return 0;
+                    }
+                    action->lock_freq = (f < 0.0) ? 0.0 : f;
                 }
                 next_prop = mpf_json_next(tokens, value_idx);
             }
@@ -1642,6 +2211,60 @@ static int mpf_parse_node(const char *json,
     {
         mpf_tree_error(err, "locked_strategy count must match node actions");
         return 0;
+    }
+    /* FEAT-12: derive the full locked_strategy vector from per-action freq
+       locks when any action carries a lock_freq. This enables multi-action
+       (partial) locking: the explicit locked_strategy array is the full-vector
+       form from #118 and takes precedence if also present. */
+    if (node->type == MPF_TREE_NODE_PLAYER && node->action_count > 0)
+    {
+        int has_partial = 0;
+        for (int i = 0; i < node->action_count && !has_partial; ++i)
+            if (node->actions[i].lock_freq >= 0.0)
+                has_partial = 1;
+        if (has_partial)
+        {
+            double locked[MPF_TREE_ACTION_MAX];
+            double residual = 1.0;
+            for (int i = 0; i < node->action_count; ++i)
+            {
+                if (node->actions[i].lock_freq >= 0.0)
+                {
+                    locked[i] = node->actions[i].lock_freq;
+                    residual -= locked[i];
+                }
+                else
+                {
+                    locked[i] = -1.0;
+                }
+            }
+            if (residual < -1e-9)
+            {
+                mpf_tree_error(err, "sum of locked frequencies exceeds 1.0");
+                return 0;
+            }
+            double *out = (double *)calloc((size_t)node->action_count, sizeof(double));
+            if (!out)
+            {
+                mpf_tree_error(err, "allocation failure for locked_strategy");
+                return 0;
+            }
+            /* Base weights: prefer a previously parsed full locked_strategy
+               vector as the residual template, else uniform. */
+            const double *base = NULL;
+            if (node->locked_strategy_count == node->action_count)
+                base = node->locked_strategy;
+            if (mpf_tree_normalize_lock(locked, node->action_count, base, out) != 0)
+            {
+                free(out);
+                mpf_tree_error(err, "failed to normalize locked frequencies");
+                return 0;
+            }
+            free(node->locked_strategy);
+            node->locked_strategy = out;
+            node->locked_strategy_count = node->action_count;
+            node->is_locked = 1;
+        }
     }
     return 1;
 }
@@ -2081,6 +2704,18 @@ int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err)
                         mpf_tree_error(err, "raise action references invalid size_index");
                         return 0;
                     }
+                }
+            }
+            /* FEAT-12: validate that the locked frequencies sum to <= 1.0. */
+            if (node->is_locked && node->locked_strategy && node->locked_strategy_count == node->action_count)
+            {
+                double sum = 0.0;
+                for (int j = 0; j < node->locked_strategy_count; ++j)
+                    sum += node->locked_strategy[j];
+                if (sum > 1.0 + 1e-6)
+                {
+                    mpf_tree_error(err, "locked frequencies exceed 1.0");
+                    return 0;
                 }
             }
         }
@@ -2784,6 +3419,12 @@ char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len)
                     const char *next_label = action->next_id ? action->next_id : (tree->nodes[action->next_index].id);
                     if (!mpf_buf_append_str(&buf, ",\"next\":") ||
                         !mpf_buf_append_quoted(&buf, next_label))
+                        goto fail;
+                }
+                if (action->lock_freq >= 0.0)
+                {
+                    if (!mpf_buf_append_str(&buf, ",\"freq\":") ||
+                        !mpf_buf_append_double(&buf, action->lock_freq))
                         goto fail;
                 }
                 if (!mpf_buf_append_str(&buf, "}"))

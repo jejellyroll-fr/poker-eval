@@ -101,7 +101,35 @@ typedef struct mpf_tree_action_t
     double weight;      /* used for chance nodes */
     int next_index;     /* resolved index or -1 */
     char *next_id;      /* temporary before resolution */
+    /* FEAT-12: per-action frequency lock. Values in [0,1] pin this action to a
+       fixed target frequency; -1.0 means the action is not individually locked
+       (its frequency is left free and absorbs the normalized residual). */
+    double lock_freq;
 } mpf_tree_action_t;
+
+/* FEAT-12: opponent model loaded from a .json profile (MonkerSolver-style).
+   Keys are node ids; each entry maps action labels (e.g. "RAISE_50",
+   "RAISE_100", "CALL") or action indices to target frequencies. */
+typedef struct mpf_tree_action_lock_t
+{
+    int action_index;   /* resolved action index within the node, or -1 */
+    char *label;        /* action label as written in the model, or NULL */
+    double freq;        /* target frequency in [0,1] */
+} mpf_tree_action_lock_t;
+
+typedef struct mpf_tree_node_lock_t
+{
+    char *node_id;                          /* target node id */
+    mpf_tree_action_lock_t *actions;        /* per-action locks */
+    int action_count;
+} mpf_tree_node_lock_t;
+
+typedef struct mpf_tree_opponent_model_t
+{
+    char *name;                 /* optional profile name */
+    mpf_tree_node_lock_t *nodes;/* per-node lock specs */
+    int node_count;
+} mpf_tree_opponent_model_t;
 
 typedef struct mpf_tree_snapshot_t
 {
@@ -207,6 +235,52 @@ mpf_tree_def_t *mpf_tree_load_json_file(const char *path, mpf_tree_error_t *err)
 int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err);
 char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len);
 void mpf_tree_free(mpf_tree_def_t *tree);
+
+/* FEAT-12: Opponent Models & Multi-Action Nodelock.
+ *
+ * Parse a MonkerSolver-style opponent model JSON into a structured form that
+ * can be applied to a tree. The model maps node ids to per-action frequency
+ * locks (e.g. {"RAISE_50": 0.3, "RAISE_100": 0.2, "CALL": 0.5}).
+ *
+ * Returns NULL on parse failure (err is populated). The caller owns the
+ * returned model and must release it with mpf_tree_opponent_model_free.
+ */
+mpf_tree_opponent_model_t *mpf_tree_parse_opponent_model(const char *json,
+                                                         size_t len,
+                                                         mpf_tree_error_t *err);
+
+/* Apply a parsed opponent model to a tree: for each node lock spec, resolve the
+ * action labels to the node's actions, validate that the sum of locked
+ * frequencies is <= 1.0, and normalize the residual across the remaining
+ * un-locked actions. The resulting full-frequency lock vector is stored on the
+ * node (reusing the existing locked_strategy machinery from #118), so the
+ * solver path is unchanged.
+ *
+ * Returns 0 on success, -1 on error (err is populated). */
+int mpf_tree_apply_opponent_model(mpf_tree_def_t *tree,
+                                  const mpf_tree_opponent_model_t *model,
+                                  mpf_tree_error_t *err);
+
+/* Convenience: parse a model JSON and apply it in one step. Equivalent to
+ * mpf_tree_parse_opponent_model followed by mpf_tree_apply_opponent_model,
+ * freeing the intermediate model. Returns 0 on success, -1 on error. */
+int pe_cfr_apply_opponent_model(mpf_tree_def_t *tree,
+                                const char *model_json,
+                                size_t len,
+                                mpf_tree_error_t *err);
+
+void mpf_tree_opponent_model_free(mpf_tree_opponent_model_t *model);
+
+/* Normalize a partial per-action lock vector into a complete strategy vector.
+ * locked[i] >= 0 marks a pinned frequency; -1.0 marks a free action. The free
+ * residual (1 - sum(locked)) is distributed across the free actions in
+ * proportion to `base_weights` (or uniformly when base_weights is NULL or all
+ * zero). Writes `out` (length action_count). Returns 0 on success, -1 if the
+ * locked sum exceeds 1.0 (within epsilon). */
+int mpf_tree_normalize_lock(const double *locked,
+                            int action_count,
+                            const double *base_weights,
+                            double *out);
 
 #ifdef __cplusplus
 }
