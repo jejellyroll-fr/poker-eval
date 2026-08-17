@@ -32,6 +32,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stacks assertion, a 6-player asymmetric integration smoke test, and a
   memory-ratio benchmark (6 distinct stacks vs symmetric stays < 1.5x infoset
   count, satisfying the FEAT-10 acceptance criterion).
+- Multi-street board-texture & strength abstraction bucketing (FEAT-13, #149):
+  a postflop node-abstraction layer in the style of MonkerSolver's
+  "Strength Buckets + Texture Filter" settings, intended to shrink the
+  multi-street PLO/Hold'em state space by merging isomorphic / similar streets.
+  Two new modules:
+    - `board_texture.{c,h}` classifies a board of any size (3 = flop, 4 = turn,
+      5 = river) into structural properties (paired / monotone / two-tone /
+      rainbow / connected / high-card) and folds them into a coarse texture
+      *filter level* (`PE_TEXTURE_FILTER_NONE / SMALL / MEDIUM / LARGE /
+      PERFECT`, matching MonkerSolver's None→Perfect ladder) plus a
+      `pe_board_texture_id()` helper that returns a stable merge key so that
+      texture-indistinguishable boards share one CFR infoset. Density estimates
+      (`pe_board_texture_density`) translate a filter level into a per-street
+      abstraction budget.
+    - `strength_bucketing.{c,h}` buckets hands on the classic 2-D EHS/EHS2
+      abstraction (Gilpin & Sandholm): `pe_strength_features` scores a hand by
+      E[HS] and E[HS^2] against the opponent range (exhaustive for 2-card holes,
+      deterministic sample for 4-card Omaha), and `pe_strength_table_train` /
+      `_train_all` k-means-cluster (`pe_sbk_cluster`, k-means++ + Lloyd,
+      deterministic PCG32) those points into `n_buckets` strength buckets. The
+      resulting table is serializable (`.pe_sbk`, same magic/version/LE
+      conventions as FEAT-09) and assignable on the CFR hot path via
+      `pe_strength_table_assign_cached` (memoized per (hole, board)). Centroids
+      are sorted ascending so bucket 0 is always weakest.
+  The two halves compose into the full FEAT-13 abstraction: combine
+  `pe_strength_table_assign` (strength bucket) with `pe_board_texture_id`
+  (texture-merged board) to realize street-by-street node abstraction. The
+  configuration knobs `cfr_config_t::strength_buckets_per_street` and
+  `cfr_config_t::texture_filter_level` are added so solvers can opt into the
+  abstraction; both default to 0 (disabled), preserving existing behaviour.
+  New units `test_board_texture.c` (monotone/rainbow/paired/connected/turn-river
+  card counts, density monotonicity, texture-id merging) and
+  `test_strength_bucketing.c` (feature range, train+assign ordering,
+  deterministic training + save/load round-trip, AA-stronger-than-air
+  hierarchy) cover the pair.
   building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
   range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
   carried on the parsed range (`arp_range_t.spot_filters`), exposed via

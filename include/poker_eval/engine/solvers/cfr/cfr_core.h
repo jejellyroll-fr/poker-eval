@@ -210,6 +210,16 @@ struct cfr_config_t {
     uint32_t keep_avg_strategy_mask; /* 0 = retain every street */
     uint32_t keep_ev_mask;           /* 0 = retain every street */
 
+    /* Postflop abstraction (FEAT-13): street-by-street node abstraction in the
+     * style of MonkerSolver. strength_buckets_per_street is the target number
+     * of strength buckets (the EHS/EHS2 k-means count from strength_bucketing.h)
+     * used per street; texture_filter_level selects how aggressively boards are
+     * merged by texture (Perfect / Large / Medium / Small / None, see
+     * board_texture.h). When 0, the strength bucketing abstraction is disabled
+     * and the solver falls back to its existing coarse strength binning. */
+    int strength_buckets_per_street;          /* 0 = disabled */
+    int texture_filter_level;                 /* pe_texture_filter_level_t */
+
     /* Periodic relocking engine (FEAT-11).
      *
      * When enable_periodic_relock is set, locked infosets are NOT frozen:

@@ -10,6 +10,8 @@ set(ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../games/mixed_game.c
     policy/nn_policy.c
     solvers/cfr/board_canonical.c
+    solvers/cfr/board_texture.c
+    solvers/cfr/strength_bucketing.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/hand_clustering.c
