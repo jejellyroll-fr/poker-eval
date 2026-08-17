@@ -1330,3 +1330,15 @@ add_game_theory_test(test_akq_game          test_akq_game.c)
 add_game_theory_test(test_kuhn_openspiel    test_kuhn_openspiel.c)
 add_game_theory_test(test_leduc_openspiel   test_leduc_openspiel.c)
 add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
+
+# ISSUE-12 (#168): Best-Response & Exploitability engine audit. Validates
+# cfr_best_response_value/cfr_exploitability (and the multiway variants)
+# against independent recursive oracles, deliberately exploitable policies,
+# and an exact Gambit-LP perfect-information equilibrium (e ~ 0).
+add_game_theory_test(test_best_response_exploitability
+                     test_best_response_exploitability.c)
+if(TEST test_best_response_exploitability)
+    set_tests_properties(test_best_response_exploitability PROPERTIES
+        LABELS "engine;cfr;game_theory;feat09;feat12"
+        TIMEOUT 300)
+endif()
