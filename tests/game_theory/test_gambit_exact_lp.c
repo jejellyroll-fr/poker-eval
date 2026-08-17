@@ -32,11 +32,26 @@ static const double GAME_A[2][2] = {
     { -1.0, 1.0 }
 };
 
-/* Independent brute-force minimax over pure strategies (exact value). */
+/* Independent brute-force minimax (NOT the LP): grid-search the column
+ * player's mixed strategy y and take max_y min_i (A y)_i. For the 2x2
+ * reference game this reproduces the closed-form value 0.2 by exhaustive
+ * refinement, giving a genuinely independent cross-check of seqform_lp_solve. */
 static double brute_minimax(const double *A, int m, int n)
 {
-    (void)A; (void)m; (void)n;
-    return 0.2; /* closed form for the constructed game */
+    if (n != 2) return 0.0; /* only the 2x2 reference game is exercised here */
+    const int STEPS = 20000;
+    double best = -1e300;
+    for (int t = 0; t <= STEPS; ++t) {
+        double y0 = (double)t / (double)STEPS;
+        double y1 = 1.0 - y0;
+        double mn = 1e300;
+        for (int i = 0; i < m; ++i) {
+            double v = A[(size_t)i * 2 + 0] * y0 + A[(size_t)i * 2 + 1] * y1;
+            if (v < mn) mn = v;
+        }
+        if (mn > best) best = mn;
+    }
+    return best;
 }
 
 /* ---- CFR vtable for the same game (simultaneous matrix game) ----- */
