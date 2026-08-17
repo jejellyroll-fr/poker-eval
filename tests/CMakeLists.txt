@@ -1279,3 +1279,54 @@ foreach(_slow_san_test
         set_property(TEST ${_slow_san_test} APPEND PROPERTY LABELS "sanitizer-skip")
     endif()
 endforeach()
+
+# ============================================================================
+# ISSUE-09 (#165): Analytical Game Benchmark Suite & External Oracles
+# Solver qualification layer. Tests live in tests/game_theory/ and exercise
+# the CFR core against Chen & Ankenman closed-form equilibria, an independent
+# brute-force tree enumeration oracle, and a self-contained sequence-form LP
+# (Gambit-style) exact solver.
+# ============================================================================
+function(add_game_theory_test test_name source_file)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/game_theory/${source_file}")
+        message(STATUS "Skipping ${test_name}: game_theory/${source_file} not found")
+        return()
+    endif()
+    add_executable(${test_name} game_theory/${source_file} game_theory/analytical_oracles.c)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(${test_name} PRIVATE -Wno-error -Wno-stack-usage)
+    elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        target_compile_options(${test_name} PRIVATE -Wno-error)
+    endif()
+    target_include_directories(${test_name} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/game_theory
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/include/inlines
+        ${CMAKE_BINARY_DIR}/include
+    )
+    if(TARGET poker_eval_modular)
+        target_link_libraries(${test_name} PRIVATE poker_eval_modular)
+    elseif(TARGET poker-eval)
+        target_link_libraries(${test_name} PRIVATE poker-eval)
+    else()
+        target_link_libraries(${test_name} PRIVATE poker-eval-static)
+    endif()
+    if(NOT APPLE)
+        target_link_libraries(${test_name} PRIVATE m)
+    endif()
+    set_target_properties(${test_name} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    add_test(NAME ${test_name} COMMAND ${test_name})
+    set_tests_properties(${test_name} PROPERTIES
+        TIMEOUT 180
+        LABELS "engine;cfr;game_theory;feat09"
+        ENVIRONMENT "MALLOC_CHECK_=3")
+    if(TEST ${test_name})
+        set_property(TEST ${test_name} APPEND PROPERTY LABELS "sanitizer-skip")
+    endif()
+endfunction()
+
+add_game_theory_test(test_akq_game          test_akq_game.c)
+add_game_theory_test(test_kuhn_openspiel    test_kuhn_openspiel.c)
+add_game_theory_test(test_leduc_openspiel   test_leduc_openspiel.c)
+add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
