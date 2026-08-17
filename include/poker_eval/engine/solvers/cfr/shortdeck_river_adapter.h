@@ -19,6 +19,8 @@
 
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/engine/solvers/cfr/strength_bucketing.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -74,10 +76,24 @@ extern "C"
         double bet_fracs[SD_MAX_BET_SIZES]; /* ex : {1/3, 1/2, 3/4, 1.0} */
 
         /* Bucketing river (voir .c : modes 0..3) */
-        int bucket_mode;                              /* 0: none, 1: board, 2: board+player, 3: coarse */
+        int bucket_mode;                              /* 0: none, 1: board, 2: board+player, 3: coarse,
+                                                       * 5: strength buckets EHS/EHS2 (FEAT-13),
+                                                       * 6: board-texture merging (FEAT-13),
+                                                       * 7: strength buckets + texture merging (FEAT-13) */
         uint8_t bucket_bins;                          /* nb de classes "coarse" (fallback si pas de thresholds) */
         uint16_t bucket_thresh_count;                 /* nb de seuils dans bucket_thresh[] */
         uint32_t bucket_thresh[SD_MAX_BUCKET_THRESH]; /* seuils ascendants sur l’offset intra-classe */
+
+        /* FEAT-13 (#190): abstraction multi-street force + texture.
+         * bucket_mode == 5 : strength buckets EHS/EHS2 (pe_strength_table_t),
+         *   entraînée/chargée par deal et partagée entre deals (l'état ne la
+         *   possède pas) ; NULL => repli sur le mode 2.
+         * bucket_mode == 6 : fusion texture — pe_board_texture_id() du board
+         *   est XORE dans la clé d'infoset pour merger les boards
+         *   textures-indistinctes au niveau texture_level.
+         * bucket_mode == 7 : combinaison des deux (strength + texture). */
+        pe_strength_table_t *strength_table;
+        int texture_level; /* pe_texture_filter_level_t, 0 = disabled */
 
     } shortdeck_state_t;
 
