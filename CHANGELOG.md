@@ -115,6 +115,29 @@ knobs onto `river_state` exactly as the Omaha turn/river path does.
    `bucket_mode 6 --texture-filter 1` (SMALL) plateaus at **60** infosets,
    a **~97% state-space reduction**, meeting the ≥90% target of #149 in the
    multi-street turn→river setting.
+- Wire FEAT-13 abstraction into the Omaha8 (hi/lo 4-card) and Short Deck
+  Hold'em HU river adapters (FEAT-13 suite, #190): `omaha8_river_state_t` and
+  `shortdeck_river_state_t` gain `strength_table` (board-specific
+  `pe_strength_table_t *`, not owned by the state) and `texture_level` (the
+  configured `pe_texture_filter_level_t`), and both infoset keys gain the same
+  `bucket_mode` 5 (strength buckets EHS/EHS2), 6 (board-texture merging via
+  `pe_board_texture_id`) and 7 (combined Strength+Texture) key layouts as the
+  Omaha adapter from #190. `bench_cfr_omaha8_river.c` and
+  `bench_cfr_shortdeck_river.c` expose `--buckets-per-street`,
+  `--texture-filter` (0..3) and `--shared-storage`, and train a per-deal
+  `pe_strength_table_t` on the sampled board (hole_cards 4 for Omaha8, 2 for
+  Short Deck), populating `cfr_config_t::strength_buckets_per_street` /
+  `texture_filter_level`. With `--shared-storage` across 20 random deals
+  (200 iters/deal), board-texture merging (mode 6, SMALL) collapses the river
+  infoset count from **2645** (baseline mode 3) to **819** for Short Deck
+  (−69%) and from 649 to 585 for Omaha8 (−10%); modes 5/7 run cleanly and
+  produce the expected per-deal counts. Fixes a pre-existing Short Deck bench
+  bug: random deals sampled card indices `16..51`, but the 36-card 6+ deck
+  (per `create_deck_mask(EVAL_DECK_SHORT)`) only contains
+  `{4..12, 17..25, 30..38, 43..51}`, so 9 of the sampled cards were rejected
+  by the evaluator (degenerate all-tie showdowns in mode 3, and
+  `pe_strength_table_train_all` failures in modes 5/7); the bench now draws
+  from the actual deck via a `shortdeck_cards[36]` pool.
   building (FEAT-07, #143): the range parser now tokenizes `$cb` (c-bet spot
   range), `SPR>x` / `SPR<x`, `POS=IP` / `POS=OOP`, `BET` and `AUTO` as metadata
   carried on the parsed range (`arp_range_t.spot_filters`), exposed via
