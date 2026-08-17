@@ -151,9 +151,15 @@ struct cfr_game_t {
     );
 
     /* Chance node support (optional). When is_chance returns nonzero, the
-     * state has get_chance_outcomes() equally-likely outcomes, dealt one by
-     * one through apply_chance(). All three callbacks are optional: a game
-     * that leaves them NULL is treated as having no chance nodes. */
+     * state has get_chance_outcomes() outcomes, dealt one by one through
+     * apply_chance(). All three callbacks are optional: a game that leaves
+     * them NULL is treated as having no chance nodes.
+     *
+     * Outcomes are equally likely unless get_chance_weight is provided
+     * (FEAT-14, #150): it returns a non-negative weight for outcome index
+     * `outcome` (0..get_chance_outcomes()-1), and the solver normalizes the
+     * weights of the current state before averaging. A NULL callback (or a
+     * weight <= 0) behaves exactly like the uniform case. */
     int (*is_chance)(
         cfr_game_t* game,
         uint64_t state_key,
@@ -162,6 +168,12 @@ struct cfr_game_t {
     int (*get_chance_outcomes)(
         cfr_game_t* game,
         uint64_t state_key,
+        void* user_data
+    );
+    double (*get_chance_weight)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        int outcome,
         void* user_data
     );
     uint64_t (*apply_chance)(
@@ -478,6 +490,18 @@ double cfr_solve(
     cfr_storage_t* storage,
     const cfr_config_t* config,
     double* out_exploitability
+);
+
+/* Chance-outcome weight (FEAT-14, #150): returns the weight of outcome index
+ * `outcome` at `state_key`, or 1.0 when the game provides no get_chance_weight
+ * callback (uniform outcomes). Solver walks feed this into the normalized
+ * chance-node average, so games can skew deal probabilities (e.g. card
+ * bunching) without duplicating the normalization logic at every call site. */
+double cfr_chance_weight(
+    cfr_game_t* game,
+    uint64_t state_key,
+    int outcome,
+    void* user_data
 );
 
 /* Best response value (for exploitability calculation) */

@@ -3,6 +3,7 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/modern_cardmask.h>
+#include <poker_eval/range/AdvancedRangeParser.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -315,6 +316,119 @@ static int parse_int_list(const char *str, int *out, int max)
     }
     free(dup);
     return count;
+}
+
+/* FEAT-14 (#150): folded-range card bunching. Per-seat parsed ranges: for
+ * each seat, the per-card probability that the card was in the seat's
+ * (folded) initial hand, derived from an ARP range string. */
+typedef struct
+{
+    int provided[MPF_MAX_PLAYERS];
+    double prob[MPF_MAX_PLAYERS][52];
+} fold_range_set_t;
+
+static enum_game_t bench_arp_game(mpf_rule_t rules)
+{
+    switch (rules)
+    {
+    case MPF_RULE_PLO4:
+        return game_omaha;
+    case MPF_RULE_PLO5:
+        return game_omaha5;
+    case MPF_RULE_PLO6:
+        return game_omaha6;
+    default:
+        return game_holdem;
+    }
+}
+
+/* Parse a "P1:AA,KK,QQ|P2:TT+" specification into per-seat per-card marginal
+ * probabilities (weighted over the range's hands). Returns 0 on success,
+ * -1 on parse failure (message in err). */
+static int parse_fold_ranges(const char *spec, int players, mpf_rule_t rules,
+                             fold_range_set_t *out, char *err, size_t err_size)
+{
+    if (!out)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    if (!spec || !*spec)
+        return 0;
+    char *dup = strdup(spec);
+    if (!dup)
+    {
+        if (err && err_size)
+            snprintf(err, err_size, "out of memory");
+        return -1;
+    }
+    int rc = 0;
+    char *tok = strtok(dup, "|");
+    while (tok)
+    {
+        char *colon = strchr(tok, ':');
+        if (!colon)
+        {
+            if (err && err_size)
+                snprintf(err, err_size, "fold range '%s' must be SEAT:RANGE", tok);
+            rc = -1;
+            break;
+        }
+        *colon = '\0';
+        const char *seat_label = tok;
+        const char *range_str = colon + 1;
+        int seat = -1;
+        if (seat_label[0] == 'P' && isdigit((unsigned char)seat_label[1]))
+            seat = atoi(seat_label + 1) - 1;
+        else if (isdigit((unsigned char)seat_label[0]))
+            seat = atoi(seat_label) - 1;
+        if (seat < 0 || seat >= players)
+        {
+            if (err && err_size)
+                snprintf(err, err_size, "invalid seat '%s' (players=%d)", seat_label, players);
+            rc = -1;
+            break;
+        }
+        StdDeck_CardMask dead;
+        StdDeck_CardMask_RESET(dead);
+        arp_range_t range;
+        memset(&range, 0, sizeof(range));
+        if (!ARP_ParseRange(range_str, dead, bench_arp_game(rules), &range) ||
+            range.count == 0)
+        {
+            if (err && err_size)
+                snprintf(err, err_size, "cannot parse range '%s' for %s", range_str, seat_label);
+            rc = -1;
+            break;
+        }
+        double total = 0.0;
+        for (size_t i = 0; i < range.count; ++i)
+        {
+            double w = range.has_weights && range.weights ? range.weights[i] : 1.0;
+            if (w > 0.0)
+                total += w;
+        }
+        if (total <= 0.0)
+        {
+            if (err && err_size)
+                snprintf(err, err_size, "range '%s' for %s has zero total weight", range_str, seat_label);
+            rc = -1;
+            break;
+        }
+        for (size_t i = 0; i < range.count; ++i)
+        {
+            double w = range.has_weights && range.weights ? range.weights[i] : 1.0;
+            if (w <= 0.0)
+                continue;
+            for (int c = 0; c < 52; ++c)
+            {
+                if (StdDeck_CardMask_CARD_IS_SET(range.hands[i], c))
+                    out->prob[seat][c] += w / total;
+            }
+        }
+        out->provided[seat] = 1;
+        tok = strtok(NULL, "|");
+    }
+    free(dup);
+    return rc;
 }
 
 static void deal_random_cards(bool used[52], int *out_cards, int need, unsigned *seed, bool shortdeck)
@@ -690,6 +804,10 @@ int main(int argc, char **argv)
     int pre_raises_flag = 0;
     char *pre_to_act_label = NULL;
     int pre_to_act_index = -1;
+    int bunching_enabled = 0;
+    int chance_enabled = 0;
+    char *fold_range_str = NULL;
+    fold_range_set_t fold_ranges = {{0}};
 
     for (int i = 1; i < argc; ++i)
     {
@@ -765,6 +883,12 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--preflop-to-act") && i + 1 < argc)
             pre_to_act_label = argv[++i];
+        else if (!strcmp(argv[i], "--bunching"))
+            bunching_enabled = 1;
+        else if (!strcmp(argv[i], "--chance"))
+            chance_enabled = 1;
+        else if (!strcmp(argv[i], "--fold-range") && i + 1 < argc)
+            fold_range_str = argv[++i];
         else if (!strcmp(argv[i], "--hero") && i + 1 < argc)
             hero_label = argv[++i];
         else if (!strcmp(argv[i], "--hero-output") && i + 1 < argc)
@@ -809,6 +933,11 @@ int main(int argc, char **argv)
             fprintf(stderr, "  --monitor-period N            (par défaut = progress ou 20)\n");
             fprintf(stderr, "  --checkpoint state.bin [--checkpoint-interval N --checkpoint-final]\n");
             fprintf(stderr, "  --resume state.bin\n");
+            fprintf(stderr, "  --bunching                    (FEAT-14: card-bunching chance deals;\n");
+            fprintf(stderr, "                                 auto-enables --chance)\n");
+            fprintf(stderr, "  --chance                      (deal turn/river via chance nodes)\n");
+            fprintf(stderr, "  --fold-range \"P1:AA,KK,QQ|P2:TT+\" (folded players' preflop ranges;\n");
+            fprintf(stderr, "                                 requires --preflop-active to mark the fold)\n");
             fprintf(stderr, "  --seed N --progress K\n");
             return 0;
         }
@@ -878,6 +1007,7 @@ int main(int argc, char **argv)
     cfg.start_street = start_street;
     cfg.raise_cap = raise_cap;
     cfg.enable_pot_sizing = 0;
+    cfg.enable_chance_nodes = chance_enabled ? 1 : 0;
 
     mpf_preflop_cfg_t *pre_cfg = &cfg.preflop;
     memset(pre_cfg, 0, sizeof(*pre_cfg));
@@ -1063,11 +1193,77 @@ int main(int argc, char **argv)
         }
     }
 
+    /* FEAT-14 (#150): folded-range card bunching validation. */
+    memset(&fold_ranges, 0, sizeof(fold_ranges));
+    if (bunching_enabled || fold_range_str)
+    {
+        char err[256];
+        err[0] = '\0';
+        if (!fold_range_str)
+        {
+            fprintf(stderr, "--bunching requires --fold-range \"P1:AA,...|P2:...\"\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        if (!pre_active_flag)
+        {
+            fprintf(stderr, "--bunching requires --preflop-active to mark the folded seats\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        if (parse_fold_ranges(fold_range_str, players, game_rules, &fold_ranges, err, sizeof(err)) != 0)
+        {
+            fprintf(stderr, "--fold-range: %s\n", err[0] ? err : "parse failed");
+            exit_code = 1;
+            goto cleanup;
+        }
+        int provided_count = 0;
+        for (int i = 0; i < players; ++i)
+        {
+            if (!fold_ranges.provided[i])
+                continue;
+            if (pre_active[i] != 0)
+            {
+                fprintf(stderr, "--fold-range seat P%d must be folded (set 0 in --preflop-active)\n", i + 1);
+                exit_code = 1;
+                goto cleanup;
+            }
+            if (base_hole_specified[i])
+            {
+                fprintf(stderr, "--fold-range seat P%d must NOT have a specified hole in --hands "
+                                "(its cards are modeled by the range)\n", i + 1);
+                exit_code = 1;
+                goto cleanup;
+            }
+            provided_count++;
+        }
+        if (provided_count < 2)
+        {
+            fprintf(stderr, "--bunching models preflop folds: provide ranges for at least 2 folded seats\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        fprintf(stderr, "[bunching] enabled, range-modeled folded seats:");
+        for (int i = 0; i < players; ++i)
+            if (fold_ranges.provided[i])
+                fprintf(stderr, " P%d", i + 1);
+        fprintf(stderr, "\n");
+    }
+
     mpf_config_t base_cfg = cfg;
     for (int i = 0; i < players; ++i)
     {
         base_cfg.hole[i] = MASK_EMPTY;
         base_cfg.hole_specified[i] = 0;
+    }
+    base_cfg.enable_card_bunching = bunching_enabled ? 1 : 0;
+    if (bunching_enabled)
+        base_cfg.enable_chance_nodes = 1; /* bunching weights only apply to chance deals */
+    for (int i = 0; i < players; ++i)
+    {
+        base_cfg.folded_range_provided[i] = fold_ranges.provided[i] ? 1 : 0;
+        for (int c = 0; c < 52; ++c)
+            base_cfg.folded_range_prob[i][c] = fold_ranges.prob[i][c];
     }
 
     double ev_sum[MPF_MAX_PLAYERS];
@@ -1123,8 +1319,22 @@ int main(int argc, char **argv)
             }
         }
 
+        /* FEAT-14 (#150): range-modeled folded seats keep an unknown hole
+           (hole_specified stays 0); their cards are modeled by the fold range
+           and must not be burned from the stub before the chance deals. */
         for (int i = 0; i < players; ++i)
         {
+            if (fold_ranges.provided[i])
+            {
+                run_cfg.hole[i] = MASK_EMPTY;
+                run_cfg.hole_specified[i] = 0;
+            }
+        }
+
+        for (int i = 0; i < players; ++i)
+        {
+            if (fold_ranges.provided[i])
+                continue; /* folded seats modeled by their range: no hole dealt */
             int current_cards[6];
             int have = mask_to_array_local(run_cfg.hole[i], current_cards, 6);
             int need = hole_cards_per_player - have;
