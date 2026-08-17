@@ -281,6 +281,24 @@ double cfr_solve(
         return -1.0;
     }
 
+    /* num_players is fixed for the whole solve; hoist it (and the per-player
+     * reach/util scratch) OUT of the iteration loop. Allocating reach/util with
+     * alloca inside the loop grew the stack frame by ~2*num_players doubles on
+     * EVERY iteration (alloca is only reclaimed at function return), overflowing
+     * the stack on high-iteration solves (segfault on Windows/Linux at ~10^5
+     * iterations). Fixed-size arrays reused each iteration are correct because
+     * they are fully re-initialised at the top of every pass. */
+    int num_players = (game->num_players > 0) ? game->num_players : 2;
+    if (num_players > CFR_MAX_PLAYERS)
+    {
+        fprintf(stderr, "[cfr] error: num_players=%d exceeds max supported (%d)\n",
+                num_players, CFR_MAX_PLAYERS);
+        free(scratch);
+        return -1.0;
+    }
+    double reach[CFR_MAX_PLAYERS];
+    double util[CFR_MAX_PLAYERS];
+
     for (int it = start_iter; it < config->max_iterations; ++it)
     {
         if (config->stop_flag && *config->stop_flag)
@@ -298,17 +316,7 @@ double cfr_solve(
         g_cfr_recursion_depth = 0;
         g_cfr_max_depth = 0;
         g_cfr_node_count = 0;
-        int num_players = (game->num_players > 0) ? game->num_players : 2;
-        if (num_players > CFR_MAX_PLAYERS)
-        {
-            fprintf(stderr, "[cfr] error: num_players=%d exceeds max supported (%d)\n",
-                    num_players, CFR_MAX_PLAYERS);
-            free(scratch);
-            return -1.0;
-        }
 
-        double *reach = (double *)alloca(sizeof(double) * (size_t)num_players);
-        double *util = (double *)alloca(sizeof(double) * (size_t)num_players);
         for (int rp = 0; rp < num_players; ++rp)
             reach[rp] = 1.0;
 
