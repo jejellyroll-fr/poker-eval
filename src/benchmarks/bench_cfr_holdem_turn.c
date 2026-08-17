@@ -561,6 +561,7 @@ if (!resume_path)
             sopts.hole_cards = 2; /* hold'em */
             sopts.seed = seed + d * 313u;
             int k = buckets_per_street > 0 ? buckets_per_street : 30;
+            sopts.n_buckets = k;
             stable = pe_strength_table_train_all(ctx, st.river_state.board, &sopts, &k);
             if (!stable)
                 fprintf(stderr, "deal %d: strength clustering failed, falling back to bucket_mode 3\n", d);
@@ -606,6 +607,8 @@ if (!resume_path)
         cfr_storage_t *storage = shared_storage ? shared_storage_ptr : cfr_storage_create();
         cfr_config_t c = {0};
         c.max_iterations = iters;
+        c.strength_buckets_per_street = buckets_per_street;
+        c.texture_filter_level = texture_filter;
         c.enable_dcfr = use_dcfr;
         c.dcfr_alpha = a;
         c.dcfr_beta = b;

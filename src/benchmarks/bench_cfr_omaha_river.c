@@ -548,6 +548,7 @@ if (!resume_path)
             sopts.opp_samples = cluster_opp_samples;
             int k = buckets_per_street > 0 ? buckets_per_street
                                            : (cluster_k > 0 ? cluster_k : 50);
+            sopts.n_buckets = k;
             stable = pe_strength_table_train_all(ctx, canon_board, &sopts, &k);
             if (!stable)
                 fprintf(stderr, "deal %d: strength clustering failed, falling back to bucket_mode 3\n", d);

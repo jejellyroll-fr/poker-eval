@@ -13,6 +13,7 @@
 #include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PE_MAX_FLUSH_DRAW_SUIT 4
@@ -30,6 +31,7 @@ const char *pe_texture_filter_name(pe_texture_filter_level_t level)
     case PE_TEXTURE_FILTER_MEDIUM:  return "Medium";
     case PE_TEXTURE_FILTER_LARGE:   return "Large";
     case PE_TEXTURE_FILTER_PERFECT: return "Perfect";
+    case PE_TEXTURE_FILTER_COUNT:
     default:                        return "Unknown";
     }
 }
@@ -42,6 +44,7 @@ const char *pe_board_texture_class_name(pe_board_texture_class_t cls)
     case PE_BOARD_TEXTURE_WET:     return "Wet";
     case PE_BOARD_TEXTURE_PAIRED:  return "Paired";
     case PE_BOARD_TEXTURE_MONOTONE:return "Monotone";
+    case PE_BOARD_TEXTURE_COUNT:
     default:                       return "Unknown";
     }
 }
@@ -55,6 +58,7 @@ double pe_board_texture_density(pe_texture_filter_level_t level)
     case PE_TEXTURE_FILTER_MEDIUM:  return 0.5;
     case PE_TEXTURE_FILTER_SMALL:   return 0.25;
     case PE_TEXTURE_FILTER_NONE:    return 0.0;
+    case PE_TEXTURE_FILTER_COUNT:
     default:                        return 0.0;
     }
 }
@@ -264,6 +268,9 @@ uint64_t pe_board_texture_id(mask_t board, pe_texture_filter_level_t level)
         /* wet/dry axis only, 1 bit. */
         id = (uint64_t)(b.texture_class == PE_BOARD_TEXTURE_WET ? 1 : 0);
         break;
+    case PE_TEXTURE_FILTER_NONE:
+    case PE_TEXTURE_FILTER_PERFECT:
+    case PE_TEXTURE_FILTER_COUNT:
     default:
         return (uint64_t)board;
     }
