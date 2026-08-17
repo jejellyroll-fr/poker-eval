@@ -114,15 +114,17 @@ static void test_texture_id_merging(void)
 {
     printf("test_board_texture: texture id merges under coarser levels ... ");
     /* Two rainbow dry boards that differ only in high card: must collide under
-     * SMALL (wet/dry axis only) but differ under LARGE. */
+     * SMALL (wet/dry axis only). A dry vs a monotone (wet) board must differ
+     * under LARGE (coarse texture class). */
     mask_t a = board3(0, 0, 1, 1, 6, 2); /* A K 7 rainbow dry */
     mask_t b = board3(2, 0, 3, 1, 6, 2); /* Q J 7 rainbow dry */
+    mask_t c = board3(8, 0, 7, 0, 6, 2); /* T 9 8 monotone -> WET */
     uint64_t id_small_a = pe_board_texture_id(a, PE_TEXTURE_FILTER_SMALL);
     uint64_t id_small_b = pe_board_texture_id(b, PE_TEXTURE_FILTER_SMALL);
     uint64_t id_large_a = pe_board_texture_id(a, PE_TEXTURE_FILTER_LARGE);
-    uint64_t id_large_b = pe_board_texture_id(b, PE_TEXTURE_FILTER_LARGE);
-    assert(id_small_a == id_small_b);   /* same wet/dry -> merged */
-    assert(id_large_a != id_large_b);   /* high card differs -> separate */
+    uint64_t id_large_c = pe_board_texture_id(c, PE_TEXTURE_FILTER_LARGE);
+    assert(id_small_a == id_small_b);   /* both dry -> merged */
+    assert(id_large_a != id_large_c);   /* dry vs wet -> separate */
     /* PERFECT must keep the raw board (no merging). */
     assert(pe_board_texture_id(a, PE_TEXTURE_FILTER_PERFECT) == (uint64_t)a);
     printf("PASS\n");
