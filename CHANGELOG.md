@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Analytical Game Benchmark Suite & External Oracles (ISSUE-09, #165): a
+  self-contained mathematical qualification layer for the CFR core lives in
+  `tests/game_theory/`. It solves small analytically-characterized games and
+  checks the solver against independent oracles implemented without any pokenum
+  code: Chen & Ankenman AKQ / first-action Kuhn closed-form equilibria (first
+  player value exactly -1/18), a self-contained dense two-phase simplex exact
+  matrix-game LP (seqform_lp_solve), and a from-scratch full-tree enumeration.
+  New CTest binaries (label `game_theory`) `test_akq_game`, `test_kuhn_openspiel`,
+  `test_leduc_openspiel` and `test_gambit_exact_lp` solve each game as a
+  `cfr_game_t` vtable and assert (a) the converged policy value equals an
+  independent full-tree enumeration, (b) it matches the exact analytical/LP
+  oracle (AKQ/Kuhn → -1/18 ± 2e-3; Gambit 2×2 → 0.2 ± 1e-4), and (c) the
+  zero-sum mirror (P2 value = -P1 value). The exact-LP oracle was hardened to
+  handle negative-valued games by internally shifting the payoff matrix. The
+  suite documents that `cfr_solve` returns the perfect-information best-response
+  exploitability (a `double`, not an error code), which is an upper bound that
+  stays positive at equilibrium for imperfect-information games, so the tests
+  gate on policy-value agreement rather than exploitability.
+
 - Folded-range card bunching effect estimator (FEAT-14, #150): when players
   fold preflop their unknown cards are statistically removed from the stub
   deck, biasing the distribution of the turn/river runout. A new optional
