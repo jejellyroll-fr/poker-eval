@@ -32,16 +32,6 @@
 #define AKQ_PH_P2BET   3   /* P2 to act after P1 bet */
 #define AKQ_TERM       4
 
-static uint64_t akq_key(int hand, int phase) {
-    return (uint64_t)((hand << 4) | phase);
-}
-static void akq_unpack(uint64_t k, int *hand, int *phase, int *last) {
-    *phase = (int)(k & 0xF);
-    int h = (int)((k >> 4) & 0xF);
-    *hand = h & 0x3;
-    *last = (int)((k >> 8) & 0x3);
-}
-
 /* p1,p2 private hands; phase = terminal sub-type; last = last action. */
 static uint64_t akq_make(int p1, int p2, int phase, int last) {
     return (uint64_t)((p1 & 3) | ((p2 & 3) << 2) | (phase << 4) | ((last & 3) << 8));
