@@ -10,6 +10,8 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/engine/solvers/cfr/strength_bucketing.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 #include <poker_eval/engine/solvers/cfr/omaha8_river_adapter.h>
 
 typedef struct
@@ -44,6 +46,14 @@ static void dump_cb(uint64_t key,
     unsigned b_cls = (unsigned)((key >> 56) & 0xFull);
     unsigned p_cls = (unsigned)((key >> 52) & 0xFull);
     unsigned coarse = (unsigned)((key >> 48) & 0xFull);
+    /* bucket_mode 5/6 pack an 8-bit learned strength/texture bucket id over
+     * bits 48..55, so the p_cls / coarse split does not apply there. */
+    unsigned bucket_id = (unsigned)((key >> 48) & 0xFFull);
+    if (C->bucket_mode == 5 || C->bucket_mode == 6)
+    {
+        coarse = bucket_id;
+        p_cls = 0u;
+    }
     double sum = 0.0;
     for (int i = 0; i < n; i++)
         sum += avg[i];
@@ -97,7 +107,7 @@ static void dump_cb(uint64_t key,
     const char *bname = eval_hand_class_name((hand_class_t)b_cls);
     const char *pname = eval_hand_class_name((hand_class_t)p_cls);
     fprintf(C->f, "%llu,%u,%s,%s,%u,0,,0,,0x%04X,%u,%u,%d,%s,%.6f,%.6f,%.6f,%.6f\n",
-            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3) ? coarse : 0u,
+            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3 || C->bucket_mode == 5 || C->bucket_mode == 6) ? coarse : 0u,
             hist, to_call, raises_left, n, buf, sum, H, C->ev_root, C->ev_local);
 }
 
@@ -123,6 +133,14 @@ static void dump_json_cb(uint64_t key,
     unsigned b_cls = (unsigned)((key >> 56) & 0xFull);
     unsigned p_cls = (unsigned)((key >> 52) & 0xFull);
     unsigned coarse = (unsigned)((key >> 48) & 0xFull);
+    /* bucket_mode 5/6 pack an 8-bit learned strength/texture bucket id over
+     * bits 48..55, so the p_cls / coarse split does not apply there. */
+    unsigned bucket_id = (unsigned)((key >> 48) & 0xFFull);
+    if (C->bucket_mode == 5 || C->bucket_mode == 6)
+    {
+        coarse = bucket_id;
+        p_cls = 0u;
+    }
     double sum = 0.0;
     for (int i = 0; i < n; i++)
         sum += avg[i];
@@ -139,7 +157,7 @@ static void dump_json_cb(uint64_t key,
         fprintf(C->f, ",\n");
     C->first = 0;
     fprintf(C->f, "    {\"key\": %llu, \"player\": %u, \"board_cls\": \"%s\", \"private_cls\": \"%s\", \"coarse_bin\": %u, \"hist\": \"0x%04X\", \"to_call\": %u, \"raises_left\": %u, \"mass\": %.6f, \"entropy\": %.6f, \"ev_root\": %.6f, \"ev_local\": %.6f, \"actions\": [",
-            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3) ? coarse : 0u,
+            (unsigned long long)key, p, bname ? bname : "-", pname ? pname : "-", (C->bucket_mode == 3 || C->bucket_mode == 5 || C->bucket_mode == 6) ? coarse : 0u,
             hist, to_call, raises_left, sum, H, C->ev_root, C->ev_local);
     for (int i = 0; i < n; i++)
     {
@@ -229,6 +247,9 @@ int main(int argc, char **argv)
     int bucket_mode = 3;
     int bucket_bins = 8;
     const char *bucket_thresh = NULL;
+    /* FEAT-13 (#190): strength buckets + texture filter abstraction. */
+    int buckets_per_street = 0; /* 0 = disabled */
+    int texture_filter = 0;     /* pe_texture_filter_level_t, 0 = disabled */
     int csv_append = 0;
     int use_dcfr = 0;
     int use_ecfr = 0;
@@ -248,6 +269,9 @@ int main(int argc, char **argv)
     const char *resume_path = NULL;
     int checkpoint_final = 0;
     int checkpoint_interval = 0;
+    int shared_storage = 0; /* FEAT-13 (#190): reuse one storage across deals so
+                              * texture merging actually collapses infosets that
+                              * occur on different (texture-equivalent) boards. */
     for (int i = 1; i < argc; i++)
     {
         if (!strcmp(argv[i], "--deals") && i + 1 < argc)
@@ -268,6 +292,10 @@ int main(int argc, char **argv)
             bucket_bins = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--bucket-thresholds") && i + 1 < argc)
             bucket_thresh = argv[++i];
+        else if (!strcmp(argv[i], "--buckets-per-street") && i + 1 < argc)
+            buckets_per_street = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--texture-filter") && i + 1 < argc)
+            texture_filter = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--dcfr"))
             use_dcfr = 1;
         else if (!strcmp(argv[i], "--ecfr"))
@@ -300,6 +328,8 @@ int main(int argc, char **argv)
             checkpoint_final = 1;
         else if (!strcmp(argv[i], "--checkpoint-interval") && i + 1 < argc)
             checkpoint_interval = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--shared-storage"))
+            shared_storage = 1;
         else if (!strcmp(argv[i], "--tree-profile") && i + 1 < argc)
             tree_profile = argv[++i];
         else if (!strcmp(argv[i], "--progress") && i + 1 < argc)
@@ -392,6 +422,9 @@ int main(int argc, char **argv)
         }
     }
     char line[256];
+    cfr_storage_t *shared_storage_ptr = NULL;
+    if (shared_storage)
+        shared_storage_ptr = cfr_storage_create();
     for (int d = 0; d < deals; ++d)
     {
         mask_t h0, h1, bd;
@@ -458,6 +491,29 @@ int main(int argc, char **argv)
                 if (st.bucket_thresh[i] < st.bucket_thresh[i - 1])
                     st.bucket_thresh[i] = st.bucket_thresh[i - 1];
         }
+        /* FEAT-13 (#190): strength buckets (EHS/EHS2 k-means) and board-texture
+         * merging. A strength table is board-specific, trained on the board of
+         * this deal (deterministic, shared between deals of the same board).
+         * The texture level is just stored on the state. */
+        pe_strength_table_t *stable = NULL;
+        if (bucket_mode == 5 || bucket_mode == 7)
+        {
+            pe_strength_cluster_opts_t sopts;
+            memset(&sopts, 0, sizeof(sopts));
+            sopts.hole_cards = 4;
+            sopts.seed = seed;
+            int k = buckets_per_street > 0 ? buckets_per_street : 50;
+            sopts.n_buckets = k;
+            stable = pe_strength_table_train_all(ctx, st.board, &sopts, &k);
+            if (!stable)
+                fprintf(stderr, "deal %d: strength clustering failed, falling back to bucket_mode 2\n", d);
+            else
+                st.strength_table = stable;
+        }
+        if (bucket_mode == 6 || bucket_mode == 7)
+        {
+            st.texture_level = texture_filter;
+        }
         if (bet_sizes)
         {
             int n = 0;
@@ -487,7 +543,11 @@ int main(int argc, char **argv)
         {
             st.raise_cap = raise_cap;
         }
-        cfr_storage_t *storage = cfr_storage_create();
+        /* With --shared-storage a single storage is reused across deals so
+         * texture-merging (bucket_mode 6) collapses infosets that arise on
+         * different texture-equivalent boards; otherwise each deal gets its
+         * own storage (the per-deal infoset count, as before). */
+        cfr_storage_t *storage = shared_storage ? shared_storage_ptr : cfr_storage_create();
         cfr_config_t c = {0};
         c.max_iterations = iters;
         c.enable_dcfr = use_dcfr;
@@ -502,6 +562,10 @@ int main(int argc, char **argv)
         c.resume_path = resume_path;
         c.checkpoint_final = checkpoint_final;
         c.checkpoint_interval = checkpoint_interval;
+        /* FEAT-13 (#190): expose the abstraction knobs on the config so the
+         * solver can opt into street-by-street node abstraction. */
+        c.strength_buckets_per_street = buckets_per_street;
+        c.texture_filter_level = texture_filter;
         if (progress_interval > 0)
             c.progress_interval = progress_interval;
         else if (verbose)
@@ -561,8 +625,13 @@ int main(int argc, char **argv)
                 }
             }
         }
-        cfr_storage_destroy(storage);
+        if (!shared_storage)
+            cfr_storage_destroy(storage);
+        pe_strength_table_free(stable);
+        st.strength_table = NULL;
     }
+    if (shared_storage)
+        cfr_storage_destroy(shared_storage_ptr);
     if (fds)
         fclose(fds);
     if (fcsv)
