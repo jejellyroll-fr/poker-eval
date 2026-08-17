@@ -21,6 +21,22 @@
 
 #define HERO_HAND_STR_LEN 32
 
+/* The 36 cards of the Short Deck (6+ only) game, as modern mask indices:
+ * rank 4..12 (6..A) per suit, matching create_deck_mask(EVAL_DECK_SHORT)
+ * in eval_context.c. Random deals must be drawn from this pool; indices
+ * outside it (e.g. 16, 26..29, 39..42) are rejected by the evaluator. */
+static const int shortdeck_cards[36] = {
+    4, 5, 6, 7, 8, 9, 10, 11, 12,       /* clubs */
+    17, 18, 19, 20, 21, 22, 23, 24, 25, /* diamonds */
+    30, 31, 32, 33, 34, 35, 36, 37, 38, /* hearts */
+    43, 44, 45, 46, 47, 48, 49, 50, 51  /* spades */
+};
+
+static bool is_shortdeck_card(int card)
+{
+    return card >= 0 && card < 52 && MODERN_GET_RANK(card) >= 4;
+}
+
 typedef struct
 {
     char hand[HERO_HAND_STR_LEN];
@@ -220,10 +236,15 @@ static int card_from_token(const char *tok)
     char tmp[3] = {0};
     tmp[0] = (char)toupper((unsigned char)tok[0]);
     tmp[1] = (char)tolower((unsigned char)tok[1]);
-    int card = -1;
-    if (StdDeck_stringToCard(tmp, &card) != 1)
+    int sd = -1;
+    if (StdDeck_stringToCard(tmp, &sd) != 2)
         return -1;
-    return card;
+    /* StdDeck suits are h=0, d=1, c=2, s=3 (suitChars "hdcs"); modern masks
+     * are c=0, d=1, h=2, s=3. The adapter consumes modern indices, so the
+     * parsed card must be converted or its suit is silently rotated. */
+    static const int modern_suit[4] = {MODERN_SUIT_HEARTS, MODERN_SUIT_DIAMONDS,
+                                       MODERN_SUIT_CLUBS, MODERN_SUIT_SPADES};
+    return MODERN_MAKE_CARD(StdDeck_RANK(sd), modern_suit[StdDeck_SUIT(sd)]);
 }
 
 static int is_rank_char(int c)
@@ -296,15 +317,17 @@ static int parse_int_list(const char *str, int *out, int max)
     return count;
 }
 
-static void deal_random_cards(bool used[52], int *out_cards, int need, unsigned *seed)
+static void deal_random_cards(bool used[52], int *out_cards, int need, unsigned *seed, bool shortdeck)
 {
     uint64_t state = (uint64_t)(*seed);
+    int range = shortdeck ? 36 : 52;
     for (int i = 0; i < need; ++i)
     {
         for (;;)
         {
             state = state * 6364136223846793005ull + 1ull;
-            int card = (int)(((state >> 32) % 52u));
+            int draw = (int)(((state >> 32) % (uint64_t)range));
+            int card = shortdeck ? shortdeck_cards[draw] : draw;
             if (!used[card])
             {
                 used[card] = true;
@@ -999,7 +1022,8 @@ int main(int argc, char **argv)
                                 break;
                             }
                             int card = card_from_token(cards + idx);
-                            if (card < 0 || base_used[card] || mask_is_set(m, card))
+                            if (card < 0 || base_used[card] || mask_is_set(m, card) ||
+                                (game_rules == MPF_RULE_SHORTDECK && !is_shortdeck_card(card)))
                             {
                                 ok = 0;
                                 break;
@@ -1028,7 +1052,8 @@ int main(int argc, char **argv)
         for (int i = 0; i < base_board_count; ++i)
         {
             int card = base_board_cards[i];
-            if (card < 0 || card >= 52 || base_used[card])
+            if (card < 0 || card >= 52 || base_used[card] ||
+                (game_rules == MPF_RULE_SHORTDECK && !is_shortdeck_card(card)))
             {
                 fprintf(stderr, "Invalid or duplicate board card in --board\n");
                 exit_code = 1;
@@ -1106,7 +1131,7 @@ int main(int argc, char **argv)
             if (need > 0)
             {
                 int new_cards[6];
-                deal_random_cards(used, new_cards, need, &local_seed);
+                deal_random_cards(used, new_cards, need, &local_seed, game_rules == MPF_RULE_SHORTDECK);
                 for (int k = 0; k < need; ++k)
                     mask_add_card(&run_cfg.hole[i], new_cards[k]);
                 run_cfg.hole_specified[i] = 1;
@@ -1123,7 +1148,8 @@ int main(int argc, char **argv)
         }
         if (board_count_run < 5)
         {
-            deal_random_cards(used, board_cards_run + board_count_run, 5 - board_count_run, &local_seed);
+            deal_random_cards(used, board_cards_run + board_count_run, 5 - board_count_run, &local_seed,
+                              game_rules == MPF_RULE_SHORTDECK);
             board_count_run = 5;
         }
         run_cfg.board_card_count = 5;
