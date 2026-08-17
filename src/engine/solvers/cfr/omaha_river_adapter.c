@@ -186,6 +186,52 @@ static uint64_t omaha_infoset_key(const void *s)
         /* Assignment failed (degenerate board/hand): fall through to the
          * strength-threshold abstraction rather than collapsing the tree. */
     }
+    /* FEAT-13 (#190): strength buckets (EHS/EHS2 k-means). The bucket replaces
+     * the private hand class and coarse strength bin, exactly like FEAT-04 but
+     * with the 2-D EHS/EHS2 abstraction. 8 bits at <<48 allow k up to
+     * PE_SBK_MAX_BUCKETS. */
+    if (st->bucket_mode == 5 && st->strength_table)
+    {
+        int bucket = pe_strength_table_assign_cached(st->strength_table, st->ctx, hp, st->board);
+        if (bucket >= 0)
+        {
+            return ((uint64_t)b_cls << 56) | ((uint64_t)(bucket & 0xFF) << 48) | (act << 16) |
+                   (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4);
+        }
+        /* Assignment failed: fall through to coarse strength-threshold. */
+    }
+    /* FEAT-13 (#190): board-texture merging. Texture-indistinguishable boards
+     * (per the configured filter level) must share one infoset, so the texture
+     * id REPLACES the board class in the key: the high bits carry the texture
+     * id (split across the former b_cls and bucket-id fields) and the former
+     * private-hand class field is zeroed. Two boards with the same texture id
+     * therefore produce identical keys regardless of suits/ranks. */
+    if (st->bucket_mode == 6 && st->texture_level > 0)
+    {
+        uint64_t tid = pe_board_texture_id(st->board, (pe_texture_filter_level_t)st->texture_level);
+        uint64_t tex_hi = (tid >> 4) & 0xF;   /* goes where b_cls was (<<56) */
+        uint64_t tex_lo = (tid & 0xF);        /* goes where bucket id was (<<48) */
+        return ((tex_hi << 56) | (tex_lo << 48) | (act << 16) |
+                (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
+    }
+    /* FEAT-13 (#190): combined strength buckets + texture merging (mode 7).
+     * Both abstractions are applied at once: the hand is bucketed by EHS/EHS2
+     * (bits 48..55) and the board is merged by texture (tex_hi at <<56,
+     * tex_lo at <<44). This is the MonkerSolver "Strength Buckets + Texture
+     * Filter" pairing and gives the largest state-space reduction. */
+    if (st->bucket_mode == 7 && st->strength_table && st->texture_level > 0)
+    {
+        int bucket = pe_strength_table_assign_cached(st->strength_table, st->ctx, hp, st->board);
+        uint64_t tid = pe_board_texture_id(st->board, (pe_texture_filter_level_t)st->texture_level);
+        uint64_t tex_hi = (tid >> 4) & 0xF;
+        uint64_t tex_lo = (tid & 0xF);
+        if (bucket >= 0)
+        {
+            return ((tex_hi << 56) | ((uint64_t)(bucket & 0xFF) << 48) | (tex_lo << 44) |
+                    (act << 16) | (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
+        }
+        /* Strength assignment failed: fall through to texture-only merge. */
+    }
     eval_t p_eval = eval_omaha_best(st->ctx, hp, st->board);
     hand_class_t pcl = eval_get_hand_class(p_eval);
     int p_cls = ((int)pcl) & 0xF;
@@ -326,6 +372,8 @@ void omaha_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board
     out_state->bucket_bins = 8;
     out_state->bucket_thresh_count = 0;
     out_state->bucket_table = NULL;
+    out_state->strength_table = NULL;
+    out_state->texture_level = 0;
     out_game->initial_state = out_state;
     out_game->game_data = out_state;
     out_game->is_terminal = omaha_is_terminal_wrapper;
