@@ -555,17 +555,6 @@ pe_strength_table_t *pe_strength_table_train_all(const EvalContext *ctx,
     int n_free = pe_sbk_collect_free(board, free_cards, MODERN_DECK_SIZE);
     int hc = o.hole_cards;
 
-    /* Decide how many hero hands to enumerate. */
-    size_t cap = (size_t)o.max_samples;
-    size_t limit = (size_t)n_free;
-    if (hc == 4)
-    {
-        /* C(n_free,4) could be huge; enumerate but respect the cap. */
-        limit = n_free;
-    }
-    if (cap == 0)
-        cap = (size_t)PE_SBK_DEFAULT_MAX_SAMPLES;
-
     /* Count combinations up front (cheap) to size buffers. */
     unsigned long long total = 1;
     int denom = 1;
@@ -579,8 +568,14 @@ pe_strength_table_t *pe_strength_table_train_all(const EvalContext *ctx,
         return NULL;
 
     size_t want = (size_t)combos;
-    if (want > cap)
-        want = cap;
+    if (hc == 4)
+    {
+        size_t cap = (size_t)o.max_samples;
+        if (cap == 0)
+            cap = (size_t)PE_SBK_DEFAULT_MAX_SAMPLES;
+        if (want > cap)
+            want = cap;
+    }
 
     mask_t *hands = (mask_t *)calloc(want, sizeof(mask_t));
     double *ehs = (double *)calloc(want, sizeof(double));
@@ -703,8 +698,17 @@ int pe_strength_table_assign(const pe_strength_table_t *table,
 {
     if (!table || !ctx)
         return -1;
+    pe_strength_cluster_opts_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.n_buckets = table->k;
+    opts.hole_cards = table->hole_cards;
+    opts.seed = table->seed;
+    opts.max_samples = table->max_samples;
+    opts.opp_samples = table->opp_samples;
+    opts.max_iterations = table->max_iterations;
+
     pe_strength_features_t f;
-    if (pe_strength_features(ctx, hole, board, NULL, &f) != 0)
+    if (pe_strength_features(ctx, hole, board, &opts, &f) != 0)
         return -1;
     return pe_sbk_nearest(f.ehs, f.ehs2, table);
 }
