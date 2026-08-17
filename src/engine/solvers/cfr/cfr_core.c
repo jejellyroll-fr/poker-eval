@@ -36,6 +36,22 @@
 
 #define CFR_MAX_PLAYERS 8
 
+/* FEAT-14 (#150): non-uniform chance deals. Returns the weight of chance
+ * outcome index `outcome` at the given state, defaulting to 1.0 when the game
+ * exposes no get_chance_weight callback (equally-likely outcomes). Negative
+ * or NaN weights are clamped to 0 so a misbehaving callback can never poison
+ * the chance average. */
+double cfr_chance_weight(cfr_game_t *game, uint64_t state_key, int outcome,
+                         void *user_data)
+{
+    if (!game || !game->get_chance_weight)
+        return 1.0;
+    double w = game->get_chance_weight(game, state_key, outcome, user_data);
+    if (!(w > 0.0))
+        return 0.0;
+    return w;
+}
+
 #if defined(_MSC_VER)
 #define CFR_THREAD_LOCAL __declspec(thread)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -565,17 +581,30 @@ static void cfr_traverse_recursive(
             : 0;
         if (outcomes <= 0 || !game->apply_chance)
             goto cfr_exit;
+        /* FEAT-14 (#150): weight chance outcomes (card bunching) and
+           normalize by the total weight instead of assuming equally-likely
+           outcomes. */
+        double chance_weight_sum = 0.0;
+        for (int p = 0; p < num_players; ++p)
+            out_util[p] = 0.0;
         for (int c = 0; c < outcomes; ++c)
         {
+            double w = cfr_chance_weight(game, state_key, c, user_data);
+            chance_weight_sum += w;
             uint64_t child_key = game->apply_chance(game, state_key, c, user_data);
             cfr_traverse_recursive(game, storage, config, child_key,
                                    reach, num_players, iter, child_util,
                                    user_data, scratch, depth_limit);
             for (int p = 0; p < num_players; ++p)
-                out_util[p] += child_util[p] / (double)outcomes;
+                out_util[p] += w * child_util[p];
             if (game->release_state)
                 game->release_state(game, child_key, user_data);
         }
+        double chance_norm = (chance_weight_sum > 0.0)
+                                 ? chance_weight_sum
+                                 : (double)outcomes;
+        for (int p = 0; p < num_players; ++p)
+            out_util[p] /= chance_norm;
         goto cfr_exit;
     }
 
@@ -824,19 +853,24 @@ static double best_response_recursive(
         if (outcomes <= 0 || !game->apply_chance)
             return 0.0;
         double chance_value = 0.0;
+        double chance_weight_sum = 0.0;
         for (int i = 0; i < outcomes; ++i)
         {
+            double w = cfr_chance_weight(game, state_key, i, user_data);
+            chance_weight_sum += w;
             uint64_t child_key = game->apply_chance(game, state_key, i, user_data);
             int child_player = game->current_player
                 ? game->current_player(game, child_key, user_data)
                 : 1 - current_player;
-            chance_value += best_response_recursive(
+            chance_value += w * best_response_recursive(
                 game, storage, br_player, child_player, child_key,
-                user_data, depth + 1) / (double)outcomes;
+                user_data, depth + 1);
             if (game->release_state)
                 game->release_state(game, child_key, user_data);
         }
-        return chance_value;
+        return chance_value / ((chance_weight_sum > 0.0)
+                                   ? chance_weight_sum
+                                   : (double)outcomes);
     }
 
     int actions[CFR_MAX_ACTIONS];
@@ -1067,16 +1101,20 @@ static double best_response_recursive_multiway(
         if (outcomes <= 0 || !game->apply_chance)
             return 0.0;
         double chance_value = 0.0;
+        double chance_weight_sum = 0.0;
         for (int i = 0; i < outcomes; ++i)
         {
+            double w = cfr_chance_weight(game, state_key, i, user_data);
+            chance_weight_sum += w;
             uint64_t child_key = game->apply_chance(game, state_key, i, user_data);
-            chance_value += best_response_recursive_multiway(
-                game, storage, br_player, child_key, user_data, depth + 1)
-                / (double)outcomes;
+            chance_value += w * best_response_recursive_multiway(
+                game, storage, br_player, child_key, user_data, depth + 1);
             if (game->release_state)
                 game->release_state(game, child_key, user_data);
         }
-        return chance_value;
+        return chance_value / ((chance_weight_sum > 0.0)
+                                   ? chance_weight_sum
+                                   : (double)outcomes);
     }
 
     /* Get current player (requires current_player callback) */
@@ -1308,16 +1346,26 @@ static void policy_value_recursive(
         if (outcomes <= 0 || !ctx->game->apply_chance)
             return;
         double child_util[CFR_MAX_PLAYERS];
+        double chance_weight_sum = 0.0;
+        for (int p = 0; p < ctx->num_players; ++p)
+            out_util[p] = 0.0;
         for (int c = 0; c < outcomes; ++c)
         {
+            double w = cfr_chance_weight(ctx->game, state_key, c, ctx->user_data);
+            chance_weight_sum += w;
             uint64_t child_key = ctx->game->apply_chance(
                 ctx->game, state_key, c, ctx->user_data);
             policy_value_recursive(ctx, child_key, reach, child_util, depth + 1);
             for (int p = 0; p < ctx->num_players; ++p)
-                out_util[p] += child_util[p] / (double)outcomes;
+                out_util[p] += w * child_util[p];
             if (ctx->game->release_state)
                 ctx->game->release_state(ctx->game, child_key, ctx->user_data);
         }
+        double chance_norm = (chance_weight_sum > 0.0)
+                                 ? chance_weight_sum
+                                 : (double)outcomes;
+        for (int p = 0; p < ctx->num_players; ++p)
+            out_util[p] /= chance_norm;
         return;
     }
 

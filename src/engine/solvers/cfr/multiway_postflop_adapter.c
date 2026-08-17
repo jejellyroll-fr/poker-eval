@@ -577,6 +577,120 @@ static int mpf_unused_cards(const mpf_state_t *st, int *out, int max)
     return count;
 }
 
+/* ===== FEAT-14 (#150): folded-range card bunching ======================
+ * When players fold preflop, the cards in their (unknown) hands are
+ * statistically removed from the stub deck: a card that folded players play
+ * often is less likely to remain available for the turn/river. Each folded
+ * player with a provided range distribution and an *unspecified* hole
+ * contributes a per-card survival factor (1 - f_p(c)), where f_p(c) is the
+ * probability that card c was in player p's folded hand. The deal weight of
+ * card c is then survival(c) normalized over all currently unseen cards, so
+ * weights sum to 1 at every chance node and the uniform mode (all survival
+ * factors 1) is recovered exactly when the estimator is disabled. */
+
+static double mpf_bunching_state_survival(const mpf_state_t *st, int card)
+{
+    double s = 1.0;
+    for (int p = 0; p < st->num_players; ++p)
+    {
+        /* Only players who have already folded (and therefore whose cards
+         * are not in the stub) can deplete the deck. */
+        if (st->active[p])
+            continue;
+        if (!st->folded_range_provided[p])
+            continue;
+        /* A fully-specified hole is already removed deterministically by the
+         * unused-card enumeration; applying the range on top would
+         * double-remove those cards. */
+        if (mask_to_array_count(st->hole[p]) >= st->total_hole_cards)
+            continue;
+        double f = st->folded_range_prob[p][card];
+        if (f < 0.0)
+            f = 0.0;
+        if (f > 1.0)
+            f = 1.0;
+        s *= (1.0 - f);
+    }
+    return s;
+}
+
+static int mpf_bunching_enabled(const mpf_state_t *st)
+{
+    return (st && st->enable_chance_nodes && st->enable_card_bunching) ? 1 : 0;
+}
+
+/* Per-outcome chance weight (FEAT-14): normalized survival probability of
+ * the dealt card. Returns 1.0 (uniform) whenever the estimator is disabled
+ * or the outcome index is out of range. */
+static double mpf_get_chance_weight_wrapper(cfr_game_t *game, uint64_t key, int outcome, void *user)
+{
+    const mpf_state_t *st = mpf_wrapper_state(game, key);
+    (void)user;
+    if (!mpf_bunching_enabled(st))
+        return 1.0;
+    int cards[52];
+    int count = mpf_unused_cards(st, cards, 52);
+    if (outcome < 0 || outcome >= count)
+        return 1.0;
+    int card = cards[outcome];
+    double w_target = 0.0;
+    int found = 0;
+    double wsum = 0.0;
+    for (int i = 0; i < count; ++i)
+    {
+        double s = mpf_bunching_state_survival(st, cards[i]);
+        if (cards[i] == card)
+        {
+            w_target = s;
+            found = 1;
+        }
+        wsum += s;
+    }
+    if (!found || wsum <= 0.0)
+        return 1.0 / (double)count;
+    return w_target / wsum;
+}
+
+int mpf_bunching_compute_survival(const mpf_config_t *cfg, double out_survival[52])
+{
+    if (!cfg || !out_survival)
+        return -1;
+    for (int c = 0; c < 52; ++c)
+        out_survival[c] = 1.0;
+    if (!cfg->enable_card_bunching)
+        return 0;
+    int hole_cards = 2;
+    if (cfg->rules == MPF_RULE_PLO4)
+        hole_cards = 4;
+    else if (cfg->rules == MPF_RULE_PLO5)
+        hole_cards = 5;
+    else if (cfg->rules == MPF_RULE_PLO6)
+        hole_cards = 6;
+    for (int p = 0; p < cfg->num_players; ++p)
+    {
+        int folded = 0;
+        if (cfg->preflop.defined && cfg->preflop.has_active)
+            folded = cfg->preflop.active[p] ? 0 : 1;
+        if (!folded)
+            continue;
+        if (!cfg->folded_range_provided[p])
+            continue;
+        if (cfg->hole_specified[p] &&
+            mask_to_array_count(cfg->hole[p]) >= hole_cards)
+            continue;
+        for (int c = 0; c < 52; ++c)
+        {
+            double f = cfg->folded_range_prob[p][c];
+            if (f < 0.0)
+                f = 0.0;
+            if (f > 1.0)
+                f = 1.0;
+            out_survival[c] *= (1.0 - f);
+        }
+    }
+    return 0;
+}
+
 static void mpf_enter_chance(mpf_state_t *st)
 {
     mpf_street_t next_street = st->street;
@@ -2152,6 +2266,17 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
         out_state->chance_children[i] = NULL;
+    /* FEAT-14 (#150): folded-range card bunching configuration. Copied into
+       the state (and inherited by every derived child through the state
+       clone in mpf_apply_action_internal / mpf_chance_deal_internal) so the
+       chance-deal weights can be evaluated at any node of the traversal. */
+    out_state->enable_card_bunching = cfg->enable_card_bunching ? 1 : 0;
+    for (int p = 0; p < cfg->num_players; ++p)
+    {
+        out_state->folded_range_provided[p] = cfg->folded_range_provided[p] ? 1 : 0;
+        for (int c = 0; c < 52; ++c)
+            out_state->folded_range_prob[p][c] = cfg->folded_range_prob[p][c];
+    }
     if (out_state->tree_enabled && out_state->tree)
     {
         out_state->tree_node_idx = out_state->tree->root_index;
@@ -2178,6 +2303,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_game->get_street = mpf_get_street;
     out_game->is_chance = mpf_is_chance_wrapper;
     out_game->get_chance_outcomes = mpf_get_chance_outcomes_wrapper;
+    out_game->get_chance_weight = mpf_get_chance_weight_wrapper;
     out_game->apply_chance = mpf_apply_chance_wrapper;
     /* FEAT-10 (#146): route storage lookups through the content-derived infoset
        key (which folds in the sparse stack-config id) instead of the raw state

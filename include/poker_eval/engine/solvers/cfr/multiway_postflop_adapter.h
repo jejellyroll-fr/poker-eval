@@ -130,6 +130,20 @@ typedef struct
     mpf_perf_stats_t *perf_stats;
     struct mpf_perf_stats_pool_t *perf_pool;
     int enable_chance_nodes; /* deal turn/river runouts via chance instead of a fixed board */
+
+    /* FEAT-14 (#150): folded-range card bunching estimator. When
+     * enable_card_bunching is set, turn/river chance deals are weighted by
+     * the probability that each unseen card survived the folded players'
+     * hands (i.e. it is NOT statistically depleted from the stub). Only
+     * players who folded preflop with an *unknown* hole (hole mask not fully
+     * specified) are modeled: fully-specified holes are already removed
+     * deterministically by the unused-card enumeration. folded_range_prob[p]
+     * must hold, for each card index 0..51, the probability that card was in
+     * player p's initial hand, conditioned on the action that made them fold
+     * (e.g. derived from player p's preflop opening range distribution). */
+    int enable_card_bunching;
+    int folded_range_provided[MPF_MAX_PLAYERS];
+    double folded_range_prob[MPF_MAX_PLAYERS][52];
 } mpf_config_t;
 
 typedef struct mpf_state_s
@@ -211,12 +225,39 @@ typedef struct mpf_state_s
     int chance_children_count; /* number of dealt children so far */
     struct mpf_state_s *chance_children[52]; /* cached per-outcome children */
     cfr_storage_t *lock_storage;
+
+    /* FEAT-14 (#150): folded-range card bunching (copied from mpf_config_t).
+       Survival probabilities for turn/river chance deals are computed from
+       the folded players' per-card range marginals; see
+       mpf_bunching_compute_survival(). */
+    int enable_card_bunching;
+    int folded_range_provided[MPF_MAX_PLAYERS];
+    double folded_range_prob[MPF_MAX_PLAYERS][52];
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);
 int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage);
 void mpf_perf_stats_reset(mpf_perf_stats_t *stats);
 void mpf_state_cleanup(mpf_state_t *state);
+
+/* FEAT-14 (#150): folded-range card bunching estimator.
+ *
+ * Computes, for every card index 0..51, the probability that the card
+ * survived the folded players' hands — i.e. that it is NOT statistically
+ * depleted from the stub deck — as
+ *
+ *     survival[c] = product over folded players p of (1 - cfg->folded_range_prob[p][c])
+ *
+ * over the players that are inactive in the preflop configuration AND have
+ * folded_range_provided[p] set AND whose hole is not fully specified (a fully
+ * specified hole is already removed deterministically). When the estimator is
+ * disabled (or no player qualifies) every survival[c] is 1.0, which yields
+ * uniform chance deals. The turn/river deal weight of a card is then
+ * survival[card] / sum over unseen cards of survival[c], so the weights are
+ * automatically normalized at every chance node.
+ *
+ * Returns 0 on success, -1 on a NULL config or NULL out_survival. */
+int mpf_bunching_compute_survival(const mpf_config_t *cfg, double out_survival[52]);
 
 /* FEAT-10 (#146): diagnostic accessors for the sparse stack-config index.
    Return the number of distinct committed-stack configurations discovered so
