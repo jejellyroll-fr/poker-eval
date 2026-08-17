@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Folded-range card bunching effect estimator (FEAT-14, #150): when players
+  fold preflop their unknown cards are statistically removed from the stub
+  deck, biasing the distribution of the turn/river runout. A new optional
+  chance-deal weighting hook (`cfr_game_t::get_chance_weight`, default NULL =
+  uniform 1.0) lets a game steer the solver's chance-node distribution; the
+  solver (`cfr_traverse_recursive`, `best_response_recursive(_multiway)`,
+  `policy_value_recursive`, CFV walk in `cfr_resolve.c`) normalizes the
+  per-outcome weights to sum to 1 at every chance node. The multiway
+  postflop adapter implements the estimator: each preflop-folded player with
+  a provided range distribution (`mpf_config_t::folded_range_provided` /
+  `folded_range_prob[player][card]`, e.g. from a preflop raise/fold model)
+  and an unspecified hole contributes a per-card survival factor
+  `(1 - f_p(c))`, and the deal weight of card `c` is its survival normalized
+  over all currently unseen cards (`mpf_bunching_compute_survival` exposes
+  the same factors from a config). Players with a fully-specified hole keep
+  their deterministic removal and are excluded from the range factor;
+  disabling the estimator (`enable_card_bunching = 0`) recovers uniform
+  deals exactly. The solver unit tests get `test_cfr_bunching.c` (weight
+  unit test vs the analytic survival formula, best-response vs an
+  independent manual weighted expectation, and a 2-folded-players bias/EV
+  shift/zero-sum check). `bench_cfr_holdem_multi` gains `--bunching`,
+  `--chance` and `--fold-range "P1:AA,KK|P2:QQ,JJ"` options (folded seats
+  marked with `--preflop-active 0`) to smoke-test the estimator end to end.
 - Sparse state indexer for multiway asymmetrical stacks (FEAT-10, #146):
   a hash-mapped sparse table (`mpf_stack_index_t`, new
   `mpf_stack_index.h/.c`) maps the canonicalized *active* stack configuration
