@@ -186,6 +186,18 @@ knobs onto `river_state` exactly as the Omaha turn/river path does.
   path as well as the MT variants (#63).
 
 ### Fixed
+- `bench_cfr_holdem_multi` dealt Short Deck hands and boards from the full
+  52-card deck: 9 of the sampled indices (ranks 2..5, e.g. 16, 26..29, 39..42)
+  are not part of the 36-card 6+ deck the evaluator accepts, producing
+  `EVAL_INVALID` showdowns and degenerate solves. Random deals are now drawn
+  from the valid 36-card pool, and explicit `--board` / `--hands` cards outside
+  the deck are rejected (same fix as the Short Deck river bench in #195, #196).
+- `bench_cfr_holdem_multi` `--board` and `--hands` were silently ignored: the
+  card parser checked `StdDeck_stringToCard(...) != 1` although that function
+  returns 2 on success, so every token was rejected and the board/hands were
+  always dealt randomly. The return check is fixed and parsed cards are now
+  converted from StdDeck indices to the modern mask indices the adapter
+  consumes (StdDeck suits h,d,c,s -> modern c,d,h,s).
 - GPU Monte Carlo hole-card dealing drew cards by rejection sampling, which
   could exhaust its attempts and silently leave a player with a short hand when
   a range was tight. The CUDA and OpenCL backends now collect the
