@@ -244,7 +244,6 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     int present[13];
     int suit_count[4];
     int flush_ranks[5];
-    int all_ranks[7];
     int ranks_sorted[7];
     int n = 0;            /* number of cards collected */
     int max_suit = 0, max_suit_count = 0;
@@ -279,11 +278,7 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
         counts[r]++;
         present[r] = 1;
         suit_count[s]++;
-        all_ranks[n] = r;
         n++;
-        if (n >= 7) {
-            /* ignore extras beyond a 7-card evaluation window */
-        }
     }
     if (n == 0) {
         return HandVal_NOTHING;
