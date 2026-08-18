@@ -41,6 +41,34 @@ typedef struct cfr_config_t cfr_config_t;
 struct cfr_metrics_snapshot_t;
 typedef struct cfr_metrics_buffer_t cfr_metrics_buffer_t;
 
+/* ============================================================================
+ * Generic Terminal Utility Abstraction (ISSUE-14, #170)
+ *
+ * Standard poker solvers evaluate terminal nodes with linear chip deltas.  Real
+ * solving needs non-linear, non-zero-sum payoffs: tournament equity (ICM),
+ * rake / uncalled-bet adjustments, or risk-averse utility functions.  Rather than
+ * hard-coding payout formulas (Malmuth-Harville, rake rules, ...) inside the CFR
+ * core, terminal evaluation is delegated to an optional pe_utility_fn callback,
+ * leaving the individual feature engines (ICM, rake, risk profiles) to be built
+ * on top of this generic layer.
+ *
+ * When a pe_utility_fn is configured on a game that also implements the
+ * cfr_game_t::get_final_stacks callback, the core derives the players' final
+ * stacks once and produces every player's payoff via
+ * utility_fn(final_stacks, num_players, player, user_data).  When utility_fn is
+ * NULL the solver performs exactly the legacy get_utility-per-player evaluation
+ * with zero overhead, so default linear-chip behaviour is 100% backward
+ * compatible.
+ * ============================================================================ */
+typedef double (*pe_utility_fn)(const int32_t *final_stacks, int num_players,
+                                int player_id, void *user_data);
+
+typedef struct {
+    pe_utility_fn utility_fn; /* Custom payoff fn (NULL = default linear chips) */
+    void *user_data;          /* Opaque context passed to utility_fn */
+    int is_non_linear;        /* Hint for leaf caching / regret accumulation */
+} pe_cfr_utility_config_t;
+
 typedef void (*cfr_monitor_fn)(int iteration,
                                cfr_game_t *game,
                                cfr_storage_t *storage,
@@ -150,6 +178,20 @@ struct cfr_game_t {
         void* user_data
     );
 
+    /* Optional: fill `out_stacks[0..num_players-1]` with each player's final
+     * stack at a terminal node (ISSUE-14, #170).  Only consulted when
+     * cfr_game_t::utility.utility_fn is configured: terminal payoffs are then
+     * computed generically via utility_fn(final_stacks, ...) with the stack
+     * vector derived once per terminal node (memoized) instead of once per
+     * player.  May be NULL: when NULL, terminal evaluation falls back to
+     * get_utility. */
+    int (*get_final_stacks)(
+        cfr_game_t* game,
+        uint64_t state_key,
+        int32_t* out_stacks,
+        void* user_data
+    );
+
     /* Chance node support (optional). When is_chance returns nonzero, the
      * state has get_chance_outcomes() outcomes, dealt one by one through
      * apply_chance(). All three callbacks are optional: a game that leaves
@@ -188,6 +230,10 @@ struct cfr_game_t {
     void* initial_state;
     size_t state_size;
     int num_players;
+
+    /* Generic terminal utility override (ISSUE-14, #170).  NULL utility_fn keeps
+     * the legacy linear get_utility evaluation with zero overhead. */
+    pe_cfr_utility_config_t utility;
 };
 
 /* CFR configuration */
@@ -211,6 +257,11 @@ struct cfr_config_t {
     const char *checkpoint_path; /* Where to write checkpoints */
     const char *resume_path;     /* Optional checkpoint to resume from */
     int checkpoint_final;        /* Save final state on exit */
+
+    /* Optional default terminal utility config (ISSUE-14, #170).  Applied to the
+     * game at the start of cfr_solve when the game itself has not set a
+     * cfr_game_t::utility explicitly. */
+    pe_cfr_utility_config_t utility;
     cfr_monitor_fn monitor_fn;
     void *monitor_user;
     int monitor_period;
@@ -491,6 +542,19 @@ double cfr_solve(
     const cfr_config_t* config,
     double* out_exploitability
 );
+
+/* Generic terminal utility configuration (ISSUE-14, #170).
+ *
+ * Installs `utility_config` on the game so all subsequent terminal evaluations
+ * (main CFR walk, best response / exploitability, policy values) route through
+ * utility_config.utility_fn when the game also implements get_final_stacks.
+ * Passing a config with utility_fn == NULL restores the legacy linear-chip
+ * evaluation.
+ *
+ * @return 0 on success, -1 when game is NULL.
+ */
+int pe_cfr_set_utility_function(cfr_game_t* game,
+                                pe_cfr_utility_config_t utility_config);
 
 /* Chance-outcome weight (FEAT-14, #150): returns the weight of outcome index
  * `outcome` at `state_key`, or 1.0 when the game provides no get_chance_weight

@@ -673,6 +673,11 @@ add_poker_test(test_cfr_periodic_relock_multiway)
 set_tests_properties(test_cfr_periodic_relock_multiway PROPERTIES LABELS "engine;cfr;lock;feat11;multiway")
 add_poker_test(test_cfr_subgame_resolve)
 set_tests_properties(test_cfr_subgame_resolve PROPERTIES LABELS "engine;cfr;resolve;feat05" TIMEOUT 180)
+
+# ISSUE-14 (#170): generic multi-utility guardrail of terminal payoffs through
+# pe_utility_fn / pe_cfr_set_utility_function (non-linear, non-zero-sum).
+add_poker_test(test_cfr_issue170_utility)
+set_tests_properties(test_cfr_issue170_utility PROPERTIES LABELS "engine;cfr;utility;issue170" TIMEOUT 120)
 add_poker_test(test_mpf_sidepots)
 set_tests_properties(test_mpf_sidepots PROPERTIES LABELS "engine;cfr;multiway;sidepot")
 add_poker_test(test_mpf_rake)
