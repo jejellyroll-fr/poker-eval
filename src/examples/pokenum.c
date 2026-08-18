@@ -544,9 +544,9 @@ main(int argc, char **argv) {
         setenv("PE_ENUM_BACKEND", backend_override, 1);
       }
       StdDeck_CardMask spockets[ENUM_MAXPLAYERS], sboard, sdead;
-      pe_range_t *parsedRanges[ENUM_MAXPLAYERS];
-      StdDeck_CardMask *rangeHands[ENUM_MAXPLAYERS];
-      double *rangeWeights[ENUM_MAXPLAYERS];
+      pe_range_t *parsedRanges[ENUM_MAXPLAYERS] = {0};
+      StdDeck_CardMask *rangeHands[ENUM_MAXPLAYERS] = {0};
+      double *rangeWeights[ENUM_MAXPLAYERS] = {0};
       int anyRange = 0;
       for (int i = 0; i < npockets; ++i) {
         spockets[i] = pockets[i].std;

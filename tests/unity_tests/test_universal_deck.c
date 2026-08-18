@@ -295,7 +295,8 @@ static void test_delegation_or(void) {
 static void test_delegation_string(void) {
   pe_deck_spec_t spec;
   char ubuf[16], pbuf[16];
-  int u_card, u_type, p_card;
+  int u_card, p_card;
+  deck_type_t u_type;
 
   TEST_ASSERT_EQUAL_INT(0, pe_deck_get_predefined(PE_DECK_PRESET_STD, &spec));
 
