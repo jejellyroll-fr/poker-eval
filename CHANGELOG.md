@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- UniversalDeck delegation to the generalized deck layer (ISSUE-03 phase 2,
+  #203): the internal implementation of `Universal_*` (mask ops, string
+  conversions) now delegates to `pe_deck_spec_t` / `pe_card_mask_t` from
+  `generalized_deck` under `USE_INT64`. The `UniversalCardMask` union gained a
+  `pe_card_mask_t cards` alias of the same 64 bits, so standard/joker masks and
+  the generalized mask share the dense bit layout and the delegation is exact.
+  The public API, `ConvertStdToJoker` / `ConvertJokerToStd` semantics and the
+  non-`USE_INT64` per-type branches are unchanged, keeping 100% backward
+  compatibility; `Universal_*` is not on the 52-card hot path, so evaluation
+  performance is unaffected. New `test_universal_deck` delegation tests assert
+  `Universal_*` agrees bit-for-bit with `pe_deck_*`.
+
 - Generalized deck specification abstraction (ISSUE-03, #159): a new additive
   module `src/core/generalized_deck.c` + `include/poker_eval/deck/generalized_deck.h`
   describes any deck of up to 64 cards through a dynamic `pe_deck_spec_t`
