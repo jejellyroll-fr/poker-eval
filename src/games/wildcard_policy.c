@@ -184,8 +184,7 @@ HandVal pe_eval_wildcard_hand(const pe_deck_spec_t *deck_spec,
                               int num_cards) {
     pe_hand_ranking_config_t cfg;
     int n_nat, n_std_cards;
-    int fixed[16], n_fixed = 0;
-    int wild[16], n_wild = 0;
+    int n_wild = 0;
     int cand[64], npool = 0;
     pe_card_mask_t fixed_mask = 0;
 
@@ -231,19 +230,12 @@ HandVal pe_eval_wildcard_hand(const pe_deck_spec_t *deck_spec,
             continue;
         }
         if (pe_wc_is_joker(deck_spec, c)) {
-            if (n_wild < 16) {
-                wild[n_wild++] = c;
-            }
+            n_wild++;
             continue;
         }
         if (pe_wc_natural_is_wild(deck_spec, policy, c, extra_rank)) {
-            if (n_wild < 16) {
-                wild[n_wild++] = c;
-            }
+            n_wild++;
             continue;
-        }
-        if (n_fixed < 16) {
-            fixed[n_fixed++] = c;
         }
         pe_deck_mask_set(deck_spec, &fixed_mask, c);
     }
