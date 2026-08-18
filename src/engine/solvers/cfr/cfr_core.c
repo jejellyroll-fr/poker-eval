@@ -52,6 +52,14 @@ double cfr_chance_weight(cfr_game_t *game, uint64_t state_key, int outcome,
     return w;
 }
 
+int pe_cfr_set_utility_function(cfr_game_t *game, pe_cfr_utility_config_t utility_config)
+{
+    if (!game)
+        return -1;
+    game->utility = utility_config;
+    return 0;
+}
+
 #if defined(_MSC_VER)
 #define CFR_THREAD_LOCAL __declspec(thread)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -111,6 +119,46 @@ static uint64_t cfr_storage_key(cfr_game_t *game, uint64_t state_key)
 static int cfr_storage_street(cfr_game_t *game, uint64_t state_key)
 {
     return game->get_street ? game->get_street(game, state_key, game->game_data) : -1;
+}
+
+/* ============================================================================
+ * Terminal utility evaluation (ISSUE-14, #170)
+ *
+ * Every terminal utility read in the solver flows through these helpers.  When a
+ * pe_utility_fn is configured on the game AND the game provides get_final_stacks,
+ * the final stack vector is derived once (memoized for the call) and each
+ * player's payoff is produced by utility_fn, which keeps expensive non-linear
+ * evaluations (ICM, rake, risk adjustments) stable and avoids re-deriving stacks
+ * once per player.  Otherwise the helper performs the exact legacy
+ * get_utility-per-player loop, so default linear-chip behaviour is preserved.
+ * ============================================================================ */
+static void cfr_terminal_utilities(cfr_game_t *game, uint64_t state_key,
+                                   int num_players, double *out,
+                                   void *user_data)
+{
+    if (game && game->utility.utility_fn && game->get_final_stacks)
+    {
+        int32_t stacks[CFR_MAX_PLAYERS];
+        if (game->get_final_stacks(game, state_key, stacks, user_data) == 0)
+        {
+            for (int p = 0; p < num_players; ++p)
+                out[p] = game->utility.utility_fn(stacks, num_players, p,
+                                                  game->utility.user_data);
+            return;
+        }
+        /* get_final_stacks failed: fall back to the legacy evaluation. */
+    }
+    for (int p = 0; p < num_players; ++p)
+        out[p] = game->get_utility(game, state_key, p, user_data);
+}
+
+/* Single-player variant used by best-response / exploitability traversals. */
+static double cfr_terminal_utility(cfr_game_t *game, uint64_t state_key,
+                                   int player, int num_players, void *user_data)
+{
+    double u[CFR_MAX_PLAYERS];
+    cfr_terminal_utilities(game, state_key, num_players, u, user_data);
+    return (player >= 0 && player < num_players) ? u[player] : 0.0;
 }
 
 struct cfr_metrics_buffer_t
@@ -296,6 +344,13 @@ double cfr_solve(
         free(scratch);
         return -1.0;
     }
+
+    /* ISSUE-14 (#170): apply a default terminal utility config from the config
+     * when the game has not been configured explicitly, so the main walk, the
+     * best-response/exploitability pass and policy-value computations all see it. */
+    if (!game->utility.utility_fn && config->utility.utility_fn)
+        game->utility = config->utility;
+
     double reach[CFR_MAX_PLAYERS];
     double util[CFR_MAX_PLAYERS];
 
@@ -575,8 +630,7 @@ static void cfr_traverse_recursive(
 
     if (game->is_terminal(game, state_key, user_data))
     {
-        for (int p = 0; p < num_players; ++p)
-            out_util[p] = game->get_utility(game, state_key, p, user_data);
+        cfr_terminal_utilities(game, state_key, num_players, out_util, user_data);
         if (storage)
             cfr_storage_accumulate_ev_at_street(storage, infoset_key, street, out_util[0]);
         goto cfr_exit;
@@ -850,7 +904,8 @@ static double best_response_recursive(
     }
     if (game->is_terminal(game, state_key, user_data))
     {
-        return game->get_utility(game, state_key, br_player, user_data);
+        int np = game->num_players > 0 ? game->num_players : 2;
+        return cfr_terminal_utility(game, state_key, br_player, np, user_data);
     }
 
     if (game->is_chance && game->is_chance(game, state_key, user_data))
@@ -1086,7 +1141,8 @@ static double best_response_recursive_multiway(
     /* Terminal state - return utility for BR player */
     if (game->is_terminal(game, state_key, user_data))
     {
-        return game->get_utility(game, state_key, br_player, user_data);
+        int np = game->num_players > 0 ? game->num_players : 2;
+        return cfr_terminal_utility(game, state_key, br_player, np, user_data);
     }
 
     if (depth > CFR_DEFAULT_MAX_DEPTH)
@@ -1331,15 +1387,18 @@ static void policy_value_recursive(
         for (int p = 0; p < ctx->num_players; ++p)
             reach_prod *= reach[p];
 
-        /* Accumulate terminal utilities */
+        /* Accumulate terminal utilities, routed through the generic utility
+         * abstraction (ISSUE-14, #170) when configured. */
+        double term_util[CFR_MAX_PLAYERS];
+        cfr_terminal_utilities(ctx->game, state_key, ctx->num_players, term_util,
+                               ctx->user_data);
         for (int p = 0; p < ctx->num_players; ++p)
         {
-            double util = ctx->game->get_utility(ctx->game, state_key, p, ctx->user_data);
-            out_util[p] = util;
+            out_util[p] = term_util[p];
 
             /* Weighted accumulation for expected value */
-            ctx->ev_sum[p] += reach_prod * util;
-            ctx->ev_sq_sum[p] += reach_prod * util * util;
+            ctx->ev_sum[p] += reach_prod * term_util[p];
+            ctx->ev_sq_sum[p] += reach_prod * term_util[p] * term_util[p];
         }
         ctx->reach_sum += reach_prod;
         return;
