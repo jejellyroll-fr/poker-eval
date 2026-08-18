@@ -22,6 +22,7 @@
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/deck/deck_joker.h>
+#include <poker_eval/deck/generalized_deck.h>
 #include <poker_eval/core/pokereval_export.h>
 
 /* Deck type enumeration */
@@ -34,6 +35,7 @@ typedef enum {
 typedef union {
   StdDeck_CardMask std;
   JokerDeck_CardMask joker;
+  pe_card_mask_t cards; /* Alias of the same 64 bits under USE_INT64 */
 } UniversalCardMask;
 
 /* Universal deck context */
