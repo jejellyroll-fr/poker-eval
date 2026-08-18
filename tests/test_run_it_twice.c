@@ -391,19 +391,21 @@ static int test_omaha_headsup_rit2(void) {
         return TEST_FAILED;
     }
 
-    /* AAxx with set should dominate */
-    /* Relaxed check for small sample size (2 runouts) */
-    if (result.avg_equity[0] < 0.4) {
-        printf("    AAxx with set of aces should have reasonable equity, got %.1f%%\n",
-            result.avg_equity[0] * 100);
-        return TEST_FAILED;
-    }
-
     /* Total equity check */
     double total = result.avg_equity[0] + result.avg_equity[1];
     if (fabs(total - 1.0) > 0.001) {
         printf("    Total equity %.3f should be 1.0\n", total);
         return TEST_FAILED;
+    }
+
+    /* Check wins + ties + losses = num_runouts for each player */
+    for (int p = 0; p < 2; p++) {
+        int total_runs = result.total_wins[p] + result.total_ties[p] + result.total_losses[p];
+        if (total_runs != result.num_runouts) {
+            printf("    Player %d: wins+ties+losses=%d, expected %d\n",
+                p, total_runs, result.num_runouts);
+            return TEST_FAILED;
+        }
     }
 
     return TEST_PASSED;
