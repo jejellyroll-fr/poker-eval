@@ -14,6 +14,7 @@ set(GAMES_SOURCES
     badugi_eval.c
     triple_draw.c
     deck_manila.c
+    wildcard_policy.c
     # mixed_game.c is compiled by the engine module: see src/engine/CMakeLists.txt
     lowball.c
     rules_omaha5.c
@@ -37,6 +38,7 @@ set(GAMES_HEADERS
     inlines/eval_manila.h
     lowball_algorithm.h
     mixed_game.h
+    wildcard_policy.h
     inlines/eval_omaha.h
     inlines/eval_low.h
     inlines/eval_low8.h
