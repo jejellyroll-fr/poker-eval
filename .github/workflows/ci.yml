@@ -13,14 +13,15 @@ jobs:
   test-release:
     name: Release Build & Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v5
 
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential libssl-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential libssl-dev || true
 
     - name: Configure Release Build
       run: |
@@ -91,6 +92,7 @@ jobs:
   test-experimental:
     name: Experimental API Build & Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # One Linux job is enough to catch signature drift; no need to run the
     # flag across the whole platform matrix. Everything behind
     # POKER_EVAL_EXPERIMENTAL (Modern Equity API) is otherwise never
@@ -101,8 +103,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential libssl-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential libssl-dev || true
 
     - name: Configure Experimental API Build
       run: |

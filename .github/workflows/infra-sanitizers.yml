@@ -51,8 +51,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential clang libssl-dev ninja-build
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential clang libssl-dev ninja-build || true
 
       - name: Configure (ASan + UBSan, Debug)
         env:
@@ -100,8 +100,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential valgrind
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential valgrind
 
       - name: Configure (Release)
         run: |

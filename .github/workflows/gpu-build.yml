@@ -11,6 +11,7 @@ on:
 # the OpenCL ICD loader and headers are enough to compile and link.
 jobs:
   gpu-build:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +23,9 @@ jobs:
 
       - name: Install OpenCL (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y opencl-headers ocl-icd-opencl-dev
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends opencl-headers ocl-icd-opencl-dev
 
       - name: Configure
         run: |
