@@ -159,6 +159,8 @@ add_unity_test(test_deck_unity unity_tests/test_deck_unity.c)
 add_unity_test(test_handval_unity unity_tests/test_handval_unity.c)
 # ISSUE-04 (#160): configurable hand ranking rules
 add_unity_test(test_configurable_ranking test_configurable_ranking.c)
+# ISSUE-02 (#158): automated hand distribution & combinatorial probability engine
+add_unity_test(test_hand_distribution test_hand_distribution.c)
 # ISSUE-05 (#161): generalized wildcard policy
 add_unity_test(test_wildcard_policy test_wildcard_policy.c)
 # This Unity test relies on MT auto-selection symbols; skip when OpenMP is disabled
@@ -224,7 +226,6 @@ set(TEST_SOURCES
     test_mpf_perf_stats.c
 
     # Distribution tests
-    test_hand_distribution.c
     omaha_distribution_test.c
     stud_distribution_test.c
 
