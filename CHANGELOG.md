@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Generalized deck specification abstraction (ISSUE-03, #159): a new additive
+  module `src/core/generalized_deck.c` + `include/poker_eval/deck/generalized_deck.h`
+  describes any deck of up to 64 cards through a dynamic `pe_deck_spec_t`
+  descriptor (num_cards, num_ranks, num_suits, active_rank_mask 2..A, num_jokers,
+  name) and a 64-bit `pe_card_mask_t`. It ships 7 predefined presets
+  (`royal_20`, `spanish_32`, `short_36`, `std_52`, `joker_53`, `joker_54`,
+  `california_60`) plus `pe_deck_create_custom`, and bitmask operations
+  (set/unset/is_set/count, full-mask) and card/mask string conversions that
+  stay exact for any deck size in [20..64]. The existing StdDeck/JokerDeck/
+  UniversalDeck APIs are untouched and remain 100% backward compatible; a
+  Unity test (`test_generalized_deck`) validates presets, round-tripping and
+  the 64-card edge case.
+
 - Analytical Game Benchmark Suite & External Oracles (ISSUE-09, #165): a
   self-contained mathematical qualification layer for the CFR core lives in
   `tests/game_theory/`. It solves small analytically-characterized games and
