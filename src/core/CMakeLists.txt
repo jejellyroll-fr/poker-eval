@@ -7,6 +7,7 @@ set(CORE_SOURCES
     deck_joker.c
     deck_short.c
     deck_astud.c
+    generalized_deck.c
     evx.c
     # Core helpers and modern implementations
     card.c
@@ -53,6 +54,7 @@ set(CORE_HEADERS
     deck_joker.h
     deck_short.h
     deck_astud.h
+    generalized_deck.h
     deck_undef.h
     pokereval_export.h
     evx_defs.h
