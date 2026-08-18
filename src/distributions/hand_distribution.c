@@ -84,8 +84,9 @@ int pe_compute_hand_distribution_ex(const pe_deck_spec_t *deck_spec,
     memset(counts, 0, sizeof(counts));
     out_dist->deck_size = n;
     out_dist->hand_size = k;
-    out_dist->deck_name = deck_spec->deck_name;
-    out_dist->ranking_name = NULL;
+    snprintf(out_dist->deck_name, sizeof(out_dist->deck_name), "%s",
+             deck_spec->deck_name);
+    out_dist->ranking_name[0] = '\0';
     out_dist->game = game_NUMGAMES;
 
     idx = (int *)malloc((size_t)k * sizeof(int));
@@ -157,8 +158,10 @@ int pe_compute_hand_distribution_for_preset(const char *deck_preset,
     if (pe_compute_hand_distribution_ex(&spec, &cfg, hand_size, out_dist) != 0) {
         return -1;
     }
-    out_dist->deck_name = spec.deck_name;
-    out_dist->ranking_name = ranking_preset;
+    snprintf(out_dist->deck_name, sizeof(out_dist->deck_name), "%s",
+             deck_preset ? deck_preset : "");
+    snprintf(out_dist->ranking_name, sizeof(out_dist->ranking_name), "%s",
+             ranking_preset ? ranking_preset : "");
     return 0;
 }
 
@@ -233,10 +236,10 @@ int pe_hand_distribution_print_markdown(const pe_hand_distribution_t *dist,
         return -1;
     }
     fprintf(out, "## Hand Distribution");
-    if (dist->deck_name) {
+    if (dist->deck_name[0] != '\0') {
         fprintf(out, " — %s", dist->deck_name);
     }
-    if (dist->ranking_name) {
+    if (dist->ranking_name[0] != '\0') {
         fprintf(out, " (%s ranking)", dist->ranking_name);
     }
     fprintf(out, "\n\n");
@@ -262,12 +265,10 @@ int pe_hand_distribution_print_json(const pe_hand_distribution_t *dist,
         return -1;
     }
     fprintf(out, "{\n");
-    fprintf(out, "  \"deck_name\": \"%s\",\n",
-            dist->deck_name ? dist->deck_name : "");
+    fprintf(out, "  \"deck_name\": \"%s\",\n", dist->deck_name);
     fprintf(out, "  \"deck_size\": %d,\n", dist->deck_size);
     fprintf(out, "  \"hand_size\": %d,\n", dist->hand_size);
-    fprintf(out, "  \"ranking_name\": \"%s\",\n",
-            dist->ranking_name ? dist->ranking_name : "");
+    fprintf(out, "  \"ranking_name\": \"%s\",\n", dist->ranking_name);
     fprintf(out, "  \"total_combinations\": %llu,\n",
             (unsigned long long)dist->total_combinations);
     fprintf(out, "  \"categories\": [\n");

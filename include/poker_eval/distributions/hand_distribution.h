@@ -58,8 +58,8 @@ typedef struct {
  * top-to-bottom the way Bollman's reference tables are presented. */
 typedef struct {
     enum_game_t   game;        /* originating game, or game_NUMGAMES if none */
-    const char   *deck_name;   /* deck preset / spec name */
-    const char   *ranking_name;/* ranking preset name */
+    char          deck_name[32];   /* deck preset / spec name */
+    char          ranking_name[32];/* ranking preset name */
     int           deck_size;
     int           hand_size;
     uint64_t      total_combinations;
