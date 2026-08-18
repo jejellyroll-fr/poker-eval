@@ -141,7 +141,7 @@ static void test_preset_unknown(void) {
 static void test_probabilities_sum_to_one(void) {
     pe_hand_distribution_t dist;
     TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
-        PE_DECK_PRESET_STD, "standard", 5, &dist));
+        PE_DECK_PRESET_ROYAL, "standard", 5, &dist));
     double sum = 0.0;
     for (int i = 0; i < dist.num_categories; i++) {
         sum += dist.categories[i].probability;
@@ -155,7 +155,7 @@ static void test_probabilities_sum_to_one(void) {
 static void test_print_helpers(void) {
     pe_hand_distribution_t dist;
     TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
-        PE_DECK_PRESET_STD, "standard", 5, &dist));
+        PE_DECK_PRESET_ROYAL, "standard", 5, &dist));
     TEST_ASSERT_EQUAL_INT(0,
         pe_hand_distribution_print_markdown(&dist, stdout));
     TEST_ASSERT_EQUAL_INT(0,

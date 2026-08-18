@@ -231,6 +231,21 @@ static int pe_category_rank(const pe_hand_ranking_config_t *cfg,
     return -1;
 }
 
+static inline int pe_pop_lowest_card(pe_card_mask_t *m) {
+#if defined(__GNUC__) || defined(__clang__)
+    int bit = __builtin_ctzll(*m);
+#elif defined(_MSC_VER) && defined(_WIN64)
+    unsigned long bit;
+    _BitScanForward64(&bit, *m);
+#else
+    int bit = 0;
+    uint64_t temp = *m;
+    while ((temp & 1) == 0) { temp >>= 1; bit++; }
+#endif
+    *m &= *m - 1;
+    return bit;
+}
+
 /*
  * Evaluate the hand described by (spec, hand_mask, num_cards) against cfg.
  * Returns a normalized HandVal with HANDTYPE == configured rank of the best
@@ -254,6 +269,7 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     int best_rank = -1;
     pe_hand_category_t best_cat = (pe_hand_category_t)(-1);
     int i, c, r, s;
+    pe_card_mask_t m;
 
     if (deck_spec == NULL || config == NULL || num_cards <= 0) {
         return HandVal_NOTHING;
@@ -266,9 +282,11 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     memset(present, 0, sizeof(present));
     memset(suit_count, 0, sizeof(suit_count));
 
-    for (c = 0; c < deck_spec->num_cards; c++) {
-        if (!pe_deck_mask_is_set(deck_spec, hand_mask, c)) {
-            continue;
+    m = hand_mask;
+    while (m != 0) {
+        c = pe_pop_lowest_card(&m);
+        if (c >= deck_spec->num_cards) {
+            return HandVal_NOTHING;
         }
         r = pe_global_rank(deck_spec, c);
         s = pe_suit_of(deck_spec, c);
@@ -294,9 +312,10 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     /* Copy the ranks of the dominant suit (for flush signatures). */
     {
         int fc = 0;
-        for (c = 0; c < deck_spec->num_cards && fc < 5; c++) {
-            if (pe_deck_mask_is_set(deck_spec, hand_mask, c) &&
-                pe_suit_of(deck_spec, c) == max_suit) {
+        m = hand_mask;
+        while (m != 0 && fc < 5) {
+            c = pe_pop_lowest_card(&m);
+            if (pe_suit_of(deck_spec, c) == max_suit) {
                 flush_ranks[fc++] = pe_global_rank(deck_spec, c);
             }
         }
@@ -439,17 +458,13 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
             case PE_CAT_FOUR_CARD_FLUSH: {
                 int kicker = -1;
                 /* find the off-suit kicker for a 5-card hand */
-                for (i = 0; i < n; i++) {
-                    int is_flush = 0;
-                    for (c = 0; c < deck_spec->num_cards; c++) {
-                        if (pe_deck_mask_is_set(deck_spec, hand_mask, c) &&
-                            pe_suit_of(deck_spec, c) == max_suit &&
-                            pe_global_rank(deck_spec, c) == ranks_sorted[i]) {
-                            is_flush = 1;
-                            break;
-                        }
+                m = hand_mask;
+                while (m != 0) {
+                    c = pe_pop_lowest_card(&m);
+                    if (pe_suit_of(deck_spec, c) != max_suit) {
+                        kicker = pe_global_rank(deck_spec, c);
+                        break;
                     }
-                    if (!is_flush) { kicker = ranks_sorted[i]; break; }
                 }
                 hv |= pe_pack_ranks(flush_ranks, max_suit_count);
                 if (kicker >= 0 && num_cards == 5) {
