@@ -136,6 +136,8 @@ static void cfr_terminal_utilities(cfr_game_t *game, uint64_t state_key,
                                    int num_players, double *out,
                                    void *user_data)
 {
+    if (num_players > CFR_MAX_PLAYERS)
+        num_players = CFR_MAX_PLAYERS;
     if (game && game->utility.utility_fn && game->get_final_stacks)
     {
         int32_t stacks[CFR_MAX_PLAYERS];
@@ -152,13 +154,23 @@ static void cfr_terminal_utilities(cfr_game_t *game, uint64_t state_key,
         out[p] = game->get_utility(game, state_key, p, user_data);
 }
 
-/* Single-player variant used by best-response / exploitability traversals. */
+/* Single-player variant used by best-response / exploitability traversals:
+ * evaluates exactly one player's utility instead of the whole vector. */
 static double cfr_terminal_utility(cfr_game_t *game, uint64_t state_key,
                                    int player, int num_players, void *user_data)
 {
-    double u[CFR_MAX_PLAYERS];
-    cfr_terminal_utilities(game, state_key, num_players, u, user_data);
-    return (player >= 0 && player < num_players) ? u[player] : 0.0;
+    if (num_players > CFR_MAX_PLAYERS)
+        num_players = CFR_MAX_PLAYERS;
+    if (game && game->utility.utility_fn && game->get_final_stacks &&
+        player >= 0 && player < num_players)
+    {
+        int32_t stacks[CFR_MAX_PLAYERS];
+        if (game->get_final_stacks(game, state_key, stacks, user_data) == 0)
+            return game->utility.utility_fn(stacks, num_players, player,
+                                            game->utility.user_data);
+        /* get_final_stacks failed: fall back to the legacy evaluation. */
+    }
+    return game->get_utility(game, state_key, player, user_data);
 }
 
 struct cfr_metrics_buffer_t

@@ -14,7 +14,7 @@
  *     values when utility_fn == NULL).
  *   * cfr_config_t::utility is applied to the game at solve time.
  *   * CFR converges under non-linear payoffs (finite, normalized strategies and
- *     a finite, non-negative exploitability).
+ *     a finite exploitability metric).
  */
 
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
