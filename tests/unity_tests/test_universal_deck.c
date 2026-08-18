@@ -10,6 +10,7 @@
 #include <poker_eval/core/universal_deck.h>
 #include <poker_eval/deck/deck_joker.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/deck/generalized_deck.h>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -222,6 +223,95 @@ static void test_convert_joker_to_std(void) {
   TEST_ASSERT_FALSE(StdDeck_CardMask_IS_EMPTY(std));
 }
 
+/* ISSUE-03 phase 2 (#203): Universal_* mask ops delegate to pe_deck_*, so the
+ * two layers must produce identical bits and counts for the standard deck. */
+static void test_delegation_std_mask(void) {
+  pe_deck_spec_t spec;
+  pe_card_mask_t pm = 0;
+  UniversalCardMask mask;
+
+  TEST_ASSERT_EQUAL_INT(0, pe_deck_get_predefined(PE_DECK_PRESET_STD, &spec));
+  Universal_CardMask_RESET(&mask, UNIVERSAL_DECK_STANDARD);
+  Universal_CardMask_SET(&mask, 7, UNIVERSAL_DECK_STANDARD);
+  Universal_CardMask_SET(&mask, 40, UNIVERSAL_DECK_STANDARD);
+
+  pe_deck_mask_set(&spec, &pm, 7);
+  pe_deck_mask_set(&spec, &pm, 40);
+
+  TEST_ASSERT_TRUE(
+      Universal_CardMask_CARD_IS_SET(mask, 7, UNIVERSAL_DECK_STANDARD));
+  TEST_ASSERT_TRUE(
+      Universal_CardMask_CARD_IS_SET(mask, 40, UNIVERSAL_DECK_STANDARD));
+  TEST_ASSERT_FALSE(
+      Universal_CardMask_CARD_IS_SET(mask, 8, UNIVERSAL_DECK_STANDARD));
+  TEST_ASSERT_EQUAL_UINT64(pm, mask.cards);
+  TEST_ASSERT_EQUAL_INT(
+      pe_deck_mask_count(&spec, pm),
+      Universal_numCards(mask, UNIVERSAL_DECK_STANDARD));
+}
+
+/* Same delegation consistency check for the joker deck, including the joker
+ * card index (card 52). */
+static void test_delegation_joker_mask(void) {
+  pe_deck_spec_t spec;
+  pe_card_mask_t pm = 0;
+  UniversalCardMask mask;
+
+  TEST_ASSERT_EQUAL_INT(0,
+                        pe_deck_get_predefined(PE_DECK_PRESET_JOKER_53, &spec));
+  Universal_CardMask_RESET(&mask, UNIVERSAL_DECK_JOKER);
+  Universal_CardMask_SET(&mask, 10, UNIVERSAL_DECK_JOKER);
+  Universal_CardMask_SET(&mask, 52, UNIVERSAL_DECK_JOKER);
+
+  pe_deck_mask_set(&spec, &pm, 10);
+  pe_deck_mask_set(&spec, &pm, 52);
+
+  TEST_ASSERT_TRUE(
+      Universal_CardMask_CARD_IS_SET(mask, 10, UNIVERSAL_DECK_JOKER));
+  TEST_ASSERT_TRUE(
+      Universal_CardMask_CARD_IS_SET(mask, 52, UNIVERSAL_DECK_JOKER));
+  TEST_ASSERT_EQUAL_UINT64(pm, mask.cards);
+  TEST_ASSERT_EQUAL_INT(
+      pe_deck_mask_count(&spec, pm),
+      Universal_numCards(mask, UNIVERSAL_DECK_JOKER));
+}
+
+/* Universal_CardMask_OR matches the bitwise OR of the generalized bits. */
+static void test_delegation_or(void) {
+  UniversalCardMask a, b, r;
+  Universal_CardMask_RESET(&a, UNIVERSAL_DECK_STANDARD);
+  Universal_CardMask_RESET(&b, UNIVERSAL_DECK_STANDARD);
+  Universal_CardMask_SET(&a, 1, UNIVERSAL_DECK_STANDARD);
+  Universal_CardMask_SET(&b, 44, UNIVERSAL_DECK_STANDARD);
+
+  Universal_CardMask_OR(&r, a, b, UNIVERSAL_DECK_STANDARD);
+  TEST_ASSERT_TRUE(Universal_CardMask_CARD_IS_SET(r, 1, UNIVERSAL_DECK_STANDARD));
+  TEST_ASSERT_TRUE(
+      Universal_CardMask_CARD_IS_SET(r, 44, UNIVERSAL_DECK_STANDARD));
+  TEST_ASSERT_EQUAL_UINT64(a.cards | b.cards, r.cards);
+}
+
+/* Universal_* string conversions agree with the generalized parsers. */
+static void test_delegation_string(void) {
+  pe_deck_spec_t spec;
+  char ubuf[16], pbuf[16];
+  int u_card, p_card;
+  deck_type_t u_type;
+
+  TEST_ASSERT_EQUAL_INT(0, pe_deck_get_predefined(PE_DECK_PRESET_STD, &spec));
+
+  TEST_ASSERT_TRUE(Universal_StringToCard("Ks", &u_card, &u_type) > 0);
+  TEST_ASSERT_EQUAL_INT(UNIVERSAL_DECK_STANDARD, u_type);
+  TEST_ASSERT_TRUE(pe_deck_string_to_card(&spec, "Ks", &p_card) > 0);
+  TEST_ASSERT_EQUAL_INT(p_card, u_card);
+
+  TEST_ASSERT_TRUE(
+      Universal_CardToString(u_card, ubuf, UNIVERSAL_DECK_STANDARD) > 0);
+  TEST_ASSERT_TRUE(
+      pe_deck_card_to_string(&spec, u_card, pbuf, sizeof(pbuf)) > 0);
+  TEST_ASSERT_EQUAL_STRING(pbuf, ubuf);
+}
+
 int main(void) {
   UNITY_BEGIN();
 
@@ -252,5 +342,12 @@ int main(void) {
   RUN_TEST(test_convert_std_to_joker);
   RUN_TEST(test_convert_joker_to_std);
 
+  /* ISSUE-03 phase 2 (#203): delegation into the generalized deck layer */
+  RUN_TEST(test_delegation_std_mask);
+  RUN_TEST(test_delegation_joker_mask);
+  RUN_TEST(test_delegation_or);
+  RUN_TEST(test_delegation_string);
+
   return UNITY_END();
 }
+
