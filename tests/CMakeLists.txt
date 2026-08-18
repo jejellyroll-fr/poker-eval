@@ -157,6 +157,8 @@ add_unity_test(test_generalized_deck unity_tests/test_generalized_deck.c)
 add_unity_test(test_modern_combinations unity_tests/test_modern_combinations.c)
 add_unity_test(test_deck_unity unity_tests/test_deck_unity.c)
 add_unity_test(test_handval_unity unity_tests/test_handval_unity.c)
+# ISSUE-04 (#160): configurable hand ranking rules
+add_unity_test(test_configurable_ranking test_configurable_ranking.c)
 # This Unity test relies on MT auto-selection symbols; skip when OpenMP is disabled
 if(ENABLE_OPENMP)
     add_unity_test(test_range_equity_unity unity_tests/test_range_equity_unity.c)

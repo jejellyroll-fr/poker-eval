@@ -24,6 +24,7 @@ set(CORE_SOURCES
     status.c
     deterministic_benchmark.c
     joker_expansion_controlled.c
+    configurable_ranking.c
     ../games/lowball_algorithm.c
     low_eval.c
     low_qualifier.c
@@ -49,6 +50,7 @@ set(CORE_HEADERS
     poker_config.h
     handval.h
     handval_low.h
+    configurable_ranking.h
     deck.h
     deck_std.h
     deck_joker.h
