@@ -13,7 +13,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -56,13 +56,9 @@ jobs:
     - name: Install dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ninja-build lcov
-        if [ "${{ matrix.compiler }}" = "clang" ]; then
-          sudo apt-get install -y clang libomp-dev
-        else
-          sudo apt-get install -y gcc g++
-        fi
+        sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lcov libomp-dev || true
     
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
