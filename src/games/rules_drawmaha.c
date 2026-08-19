@@ -10,6 +10,7 @@
 #include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/core/eval.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/equity/draw_optimizer.h>
 
 int Drawmaha_InitDrawState(DrawmahaDrawState *state, StdDeck_CardMask initial_hand)
 {
@@ -55,19 +56,15 @@ int Drawmaha_ExecuteDraw(DrawmahaDrawState *state,
 }
 
 int Drawmaha_FindOptimalDraw(StdDeck_CardMask hand,
-                             StdDeck_CardMask board,
-                             StdDeck_CardMask dead_cards,
-                             int *optimal_discard_mask)
+                              StdDeck_CardMask board,
+                              StdDeck_CardMask dead_cards,
+                              int *optimal_discard_mask)
 {
     if (optimal_discard_mask == NULL) return 1;
-    double best_equity = -1.0;
-    int best_mask = 0;
-    for (int mask = 0; mask < 32; mask++) {
-        if (!Drawmaha_IsValidDrawMask(mask)) continue;
-        double equity = 0.5; /* Placeholder */
-        if (equity > best_equity) { best_equity = equity; best_mask = mask; }
-    }
-    *optimal_discard_mask = best_mask;
+    pe_draw_result_t result;
+    if (pe_compute_draw_optima(game_drawmaha, hand, board, dead_cards, &result) != 0)
+        return 1;
+    *optimal_discard_mask = result.optimal_mask;
     return 0;
 }
 
@@ -103,12 +100,16 @@ int Drawmaha_EvaluateHand(StdDeck_CardMask hand,
 }
 
 int Drawmaha_CalculateDrawEquity(StdDeck_CardMask hand,
-                                 StdDeck_CardMask board,
-                                 StdDeck_CardMask dead_cards,
-                                 double *draw_equities)
+                                  StdDeck_CardMask board,
+                                  StdDeck_CardMask dead_cards,
+                                  double *draw_equities)
 {
     if (!draw_equities) return 1;
-    for (int i = 0; i < 32; i++) draw_equities[i] = 0.5;
+    pe_draw_result_t result;
+    if (pe_compute_draw_optima(game_drawmaha, hand, board, dead_cards, &result) != 0)
+        return 1;
+    for (int i = 0; i < 32; i++)
+        draw_equities[i] = result.options[i].expected_equity;
     return 0;
 }
 
