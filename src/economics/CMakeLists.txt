@@ -4,6 +4,7 @@ set(ECONOMICS_SOURCES
     rake.c
     icm.c
     tournament.c
+    paytable_ev.c
 )
 
 add_library(poker_economics ${ECONOMICS_SOURCES})
