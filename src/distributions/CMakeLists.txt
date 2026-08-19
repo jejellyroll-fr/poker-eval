@@ -8,6 +8,7 @@ set(DISTRIBUTIONS_SOURCES
     plo_nomenclature.c
     plo_integration.c
     hand_distribution.c
+    transition_distribution.c
 )
 
 # Distributions header files
@@ -21,6 +22,7 @@ set(DISTRIBUTIONS_HEADERS
     plo_integration.h
     card_converter.h
     card.h
+    transition_distribution.h
 )
 
 # Add distributions library

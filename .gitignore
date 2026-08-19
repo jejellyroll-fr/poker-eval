@@ -86,3 +86,4 @@ tmp/
 /tests/benchmark_plo_preflop
 /tests/test_omaha5_6
 /tests/test_plo5_6_enum
+.DS_Store
