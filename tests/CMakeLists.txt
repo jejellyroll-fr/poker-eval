@@ -336,6 +336,7 @@ set(TEST_SOURCES
     test_rake.c
     test_icm.c
     test_a5_triple_draw.c
+    test_paytable_ev.c
 )
 # Benchmark tests (separate category)
 set(BENCHMARK_TESTS
@@ -575,6 +576,7 @@ endif()
 # Section 5.5: Economics tests
 set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
+set_tests_properties(test_paytable_ev PROPERTIES LABELS "economics;paytable")
 
 set_tests_properties(test_a5_triple_draw PROPERTIES LABELS "games;draw")
 
