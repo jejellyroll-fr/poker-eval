@@ -15,6 +15,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 static int g_failures = 0;
 
@@ -141,6 +142,10 @@ static void test_joker_poker_kings_or_better(void)
 
     /* Joker Poker - Kings or Better EV = 1.006463. */
     CHECK(fabs(res.total_ev - 1.006463) < 1e-5);
+
+    /* Longest registered name (27 chars): must round-trip into game_name[32]
+     * intact, i.e. neither truncated nor left unterminated. */
+    CHECK(strcmp(res.game_name, "joker_poker_kings_or_better") == 0);
     CHECK(fabs(res.std_dev - 5.1230) < 0.01);
 
     printf("OK Joker Poker Kings or Better (EV=%.6f, sigma=%.4f)\n",

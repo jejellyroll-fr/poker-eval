@@ -187,9 +187,8 @@ int pe_paytable_get_game(pe_video_poker_game_t game,
     if (rc != 0)
         return rc;
 
-    strncpy(out_result->game_name, def->game_name,
-            sizeof(out_result->game_name) - 1);
-    out_result->game_name[sizeof(out_result->game_name) - 1] = '\0';
+    snprintf(out_result->game_name, sizeof(out_result->game_name), "%s",
+             def->game_name);
 
     for (int i = 0; i < n; ++i) {
         out_result->rows[i].category_name = def->categories[i].name;
