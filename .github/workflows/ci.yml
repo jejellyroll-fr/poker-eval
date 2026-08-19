@@ -18,11 +18,6 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
-    - name: Install dependencies
-      run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential libssl-dev || true
-
     - name: Configure Release Build
       run: |
         mkdir build
@@ -100,11 +95,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-
-    - name: Install dependencies
-      run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential libssl-dev || true
 
     - name: Configure Experimental API Build
       run: |

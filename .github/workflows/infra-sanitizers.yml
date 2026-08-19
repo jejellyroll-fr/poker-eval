@@ -49,11 +49,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install dependencies
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential clang libssl-dev ninja-build || true
-
       - name: Configure (ASan + UBSan, Debug)
         env:
           CC: clang
