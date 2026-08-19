@@ -93,15 +93,15 @@ jobs:
     name: Valgrind (CFR solve, leak threshold)
     runs-on: ubuntu-latest
     # Gating: a leak above the threshold fails CI so the finding cannot rot.
-    timeout-minutes: 45
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake build-essential valgrind
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends valgrind || true
 
       - name: Configure (Release)
         run: |
@@ -174,6 +174,7 @@ jobs:
   cppcheck:
     name: cppcheck (non-blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Surface static-analysis findings without gating merges yet.
     continue-on-error: true
 
@@ -182,8 +183,8 @@ jobs:
 
       - name: Install cppcheck
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cppcheck
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cppcheck || true
 
       - name: Run cppcheck
         run: |
