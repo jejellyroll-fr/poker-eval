@@ -141,6 +141,7 @@ add_unity_test(test_pineapple_variants_unity unity_tests/test_pineapple_variants
 add_unity_test(test_pineapple_batched_unity unity_tests/test_pineapple_batched_unity.c)
 add_unity_test(test_montecarlo_convergence_unity unity_tests/test_montecarlo_convergence_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
+add_unity_test(test_draw_optimizer test_draw_optimizer.c)
 
 # New extended Unity tests for 80% coverage
 add_unity_test(test_range_equity_per_matchup_budget unity_tests/test_range_equity_per_matchup_budget.c)

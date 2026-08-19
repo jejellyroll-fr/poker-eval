@@ -58,6 +58,16 @@ set_property(TARGET poker_games PROPERTY POSITION_INDEPENDENT_CODE ON)
 # through mixed_game.c only, which the engine module now compiles.
 target_link_libraries(poker_games poker_core)
 
+# Drawmaha calls pe_compute_draw_optima, which lives in the equity module. equity
+# already depends on poker_games, so a direct target link would form a cycle that
+# CMake forbids for shared libraries. Following the project's documented policy
+# ("shared libraries resolve this at load time"), defer the symbol to runtime when
+# building shared libraries on Apple; the final link still provides it via
+# poker_equity.
+if(APPLE AND BUILD_SHARED_LIBS)
+  target_link_options(poker_games PRIVATE -Wl,-undefined,dynamic_lookup)
+endif()
+
 # Set include directories
 target_include_directories(poker_games PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
