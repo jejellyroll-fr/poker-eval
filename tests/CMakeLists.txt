@@ -3,6 +3,24 @@ if(NOT ENABLE_OPENMP)
     set(OpenMP_FOUND FALSE)
 endif()
 
+# Keep assert() live in test binaries whatever the build type.
+#
+# Release configures -DNDEBUG (both from CMAKE_C_FLAGS_RELEASE and from the
+# top-level add_compile_options), which expands assert() to nothing. The
+# "Release Build & Tests" CI job runs the whole suite in that configuration, so
+# every assertion-based test silently degraded into a no-op that always passed
+# regardless of what the code did (see issue #211).
+#
+# This is a directory-level option, so it applies to every target defined in
+# tests/ and lands after the inherited -DNDEBUG on the command line, where the
+# last -D/-U wins. The library itself is untouched and still ships with
+# assertions disabled in Release.
+if(MSVC)
+    add_compile_options(/UNDEBUG)
+else()
+    add_compile_options(-UNDEBUG)
+endif()
+
 # Some OpenMP runtimes fall back to /tmp for temp files and warn if it is not writable.
 set(PE_TEST_TMPDIR "${CMAKE_BINARY_DIR}/tmp")
 file(MAKE_DIRECTORY "${PE_TEST_TMPDIR}")
