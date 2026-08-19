@@ -24,8 +24,8 @@ jobs:
       - name: Install OpenCL (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends opencl-headers ocl-icd-opencl-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends opencl-headers ocl-icd-opencl-dev || true
 
       - name: Configure
         run: |
