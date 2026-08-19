@@ -74,7 +74,6 @@ int pe_compute_transition_distribution(enum_game_t game,
     (void)game;
 
     int hero_count, board_count, remaining;
-    int used[StdDeck_N_CARDS];
     int rem[StdDeck_N_CARDS];
     int n_rem = 0;
     StdDeck_CardMask start_mask;
@@ -99,10 +98,26 @@ int pe_compute_transition_distribution(enum_game_t game,
         return -1;
     }
 
+    /* The documented contract is a flop (3 cards) or turn (4 cards) board:
+     * with any other size there is no well-defined turn/river street
+     * structure to enumerate. */
+    if (board_count < 3 || board_count > 4) {
+        return -1;
+    }
+
     /* Build the mask of all unavailable cards (hero + board + dead). */
     StdDeck_CardMask_RESET(start_mask);
     StdDeck_CardMask_OR(start_mask, start_mask, hero_hand);
     StdDeck_CardMask_OR(start_mask, start_mask, current_board);
+
+    /* A card shared between hero_hand and current_board would desynchronise
+     * the card count passed to the evaluator from the mask's actual contents
+     * (StdRules_EVAL_N derives its pair/trips/quads detection from n_cards
+     * minus the number of distinct ranks), silently yielding a wrong
+     * category. */
+    if (pe_mask_card_count(start_mask) != hero_count + board_count) {
+        return -1;
+    }
 
     StdDeck_CardMask_RESET(rem_mask);
     StdDeck_CardMask_OR(rem_mask, rem_mask, start_mask);
@@ -110,8 +125,7 @@ int pe_compute_transition_distribution(enum_game_t game,
 
     /* Enumerate the remaining deck. */
     for (int i = 0; i < StdDeck_N_CARDS; i++) {
-        used[i] = StdDeck_CardMask_CARD_IS_SET(rem_mask, i) ? 1 : 0;
-        if (!used[i]) {
+        if (!StdDeck_CardMask_CARD_IS_SET(rem_mask, i)) {
             rem[n_rem++] = i;
         }
     }
@@ -126,6 +140,39 @@ int pe_compute_transition_distribution(enum_game_t game,
 
     if (remaining < 1) {
         return -1;
+    }
+
+    if (board_count == 4) {
+        /* Turn board: the turn already happened, so exactly one card (the
+         * river) is still to come. Enumerate that single street and report it
+         * through the river fields; the turn fields and the transition matrix
+         * (which needs two streets) are left zeroed. */
+        double flush = 0.0, straight = 0.0, pair = 0.0, fullhouse = 0.0,
+               no_imp = 0.0;
+        double denom = (double)remaining;
+        for (int a = 0; a < remaining; a++) {
+            StdDeck_CardMask river_mask;
+            HandVal hv;
+            int cat;
+            StdDeck_CardMask_RESET(river_mask);
+            StdDeck_CardMask_OR(river_mask, river_mask, start_mask);
+            StdDeck_CardMask_SET(river_mask, rem[a]);
+            hv = StdDeck_StdRules_EVAL_N(river_mask,
+                                         hero_count + board_count + 1);
+            cat = (int)HandVal_HANDTYPE(hv);
+
+            if (pe_is_flush_family(cat))         flush += 1.0;
+            if (pe_is_straight_family(cat))      straight += 1.0;
+            if (cat == StdRules_HandType_ONEPAIR)   pair += 1.0;
+            if (cat == StdRules_HandType_FULLHOUSE) fullhouse += 1.0;
+            if (cat <= start_cat)                   no_imp += 1.0;
+        }
+        out_result->stats.prob_river_flush     = flush / denom;
+        out_result->stats.prob_river_straight  = straight / denom;
+        out_result->stats.prob_river_pair      = pair / denom;
+        out_result->stats.prob_river_fullhouse = fullhouse / denom;
+        out_result->stats.prob_no_improvement  = no_imp / denom;
+        return 0;
     }
 
     /* Turn street: one card from the remaining deck. */
@@ -195,9 +242,9 @@ int pe_compute_transition_distribution(enum_game_t game,
         }
     }
 
-    /* With only one card to come (e.g. a turn board) the river cannot add a
-     * second street, so the river stats and the transition matrix are left
-     * empty. */
+    /* The flop path (board_count == 3) above enumerated both streets. The
+     * turn-board path returned earlier with single-street river statistics,
+     * leaving the turn fields and the transition matrix zeroed. */
 
     return 0;
 }

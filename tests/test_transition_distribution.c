@@ -6,7 +6,9 @@
  *   - flush draw turn/river odds:  9/47  ~= 19.1489%,  ~= 34.9676%
  *   - open-ended straight draw:    8/47  ~= 17.0213%,  ~= 31.4524%
  *   - the turn -> river transition matrix rows are proper probability
- *     distributions (sum to 1).
+ *     distributions (sum to 1);
+ *   - a turn board enumerates only the river (single street, no matrix);
+ *   - invalid inputs (board size, hand/board overlap) are rejected.
  */
 
 #include "unity.h"
@@ -30,7 +32,7 @@ static StdDeck_CardMask add(StdDeck_CardMask a, StdDeck_CardMask b) {
     return m;
 }
 
-/* AKhh on Qh 7h 2c : a flush draw (4 to a flush). */
+/* AKhh on Qh 7h 2d : a flush draw (4 to a flush). */
 static StdDeck_CardMask flush_draw_hand(void) {
     StdDeck_CardMask h = card(12, 0); /* Ah */
     h = add(h, card(11, 0));          /* Kh */
@@ -39,11 +41,11 @@ static StdDeck_CardMask flush_draw_hand(void) {
 static StdDeck_CardMask flush_draw_board(void) {
     StdDeck_CardMask b = card(10, 0); /* Qh */
     b = add(b, card(5, 0));           /* 7h */
-    b = add(b, card(0, 1));           /* 2c */
+    b = add(b, card(0, 1));           /* 2d */
     return b;
 }
 
-/* 9h 8h on 7c 6c 2d : open-ended straight draw (needs a 5 or a T). */
+/* 9h 8h on 7d 6d 2c : open-ended straight draw (needs a 5 or a T). */
 static StdDeck_CardMask oesd_hand(void) {
     StdDeck_CardMask h = card(7, 0);  /* 9h */
     h = add(h, card(6, 0));           /* 8h */
@@ -138,6 +140,68 @@ static void test_invalid_args(void) {
         game_holdem, flush_draw_hand(), flush_draw_board(), dead, NULL));
 }
 
+/* A turn board leaves a single card to come: the river fields must describe
+ * that one card, and the turn fields / transition matrix (which need two
+ * streets) must stay zeroed. */
+static void test_turn_board_enumerates_only_the_river(void) {
+    StdDeck_CardMask board, dead;
+    pe_transition_result_t r;
+    StdDeck_CardMask_RESET(dead);
+    board = add(flush_draw_board(), card(1, 3)); /* Qh 7h 2d + 3s */
+
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_transition_distribution(
+        game_holdem, flush_draw_hand(), board, dead, &r));
+
+    /* 46 unseen cards, 9 of which complete the heart flush. */
+    TEST_ASSERT_EQUAL_INT(46, r.num_remaining);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 9.0 / 46.0, r.stats.prob_river_flush);
+
+    /* The turn already happened: no turn street to enumerate. */
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, r.stats.prob_turn_flush);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, r.stats.prob_turn_straight);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, r.stats.prob_turn_pair);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, r.stats.prob_turn_set);
+    for (int i = 0; i < PE_TRANSITION_MAX_CATEGORY; i++) {
+        for (int j = 0; j < PE_TRANSITION_MAX_CATEGORY; j++) {
+            TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, r.transition_matrix[i][j]);
+        }
+    }
+}
+
+/* A card shared between the hero hand and the board would desynchronise the
+ * card count handed to the evaluator from the mask contents, silently
+ * producing a wrong category, so it must be rejected. */
+static void test_rejects_hand_board_overlap(void) {
+    StdDeck_CardMask board, dead;
+    pe_transition_result_t r;
+    StdDeck_CardMask_RESET(dead);
+    board = add(card(12, 0), add(card(5, 0), card(0, 1))); /* Ah 7h 2d */
+
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_transition_distribution(
+        game_holdem, flush_draw_hand(), board, dead, &r)); /* hero holds Ah */
+}
+
+/* Only a flop (3) or a turn (4) board defines a street structure to
+ * enumerate. */
+static void test_rejects_invalid_board_size(void) {
+    StdDeck_CardMask board, dead;
+    pe_transition_result_t r;
+    StdDeck_CardMask_RESET(dead);
+
+    /* Pre-flop / partial board. */
+    StdDeck_CardMask_RESET(board);
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_transition_distribution(
+        game_holdem, flush_draw_hand(), board, dead, &r));
+    board = add(card(10, 0), card(5, 0));
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_transition_distribution(
+        game_holdem, flush_draw_hand(), board, dead, &r));
+
+    /* Complete board: nothing left to come. */
+    board = add(flush_draw_board(), add(card(1, 3), card(3, 3)));
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_transition_distribution(
+        game_holdem, flush_draw_hand(), board, dead, &r));
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -148,5 +212,8 @@ int main(void) {
     RUN_TEST(test_transition_matrix_is_probability_distribution);
     RUN_TEST(test_category_names);
     RUN_TEST(test_invalid_args);
+    RUN_TEST(test_turn_board_enumerates_only_the_river);
+    RUN_TEST(test_rejects_hand_board_overlap);
+    RUN_TEST(test_rejects_invalid_board_size);
     return UNITY_END();
 }

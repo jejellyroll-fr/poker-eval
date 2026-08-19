@@ -83,12 +83,21 @@ POKEREVAL_EXPORT const char *pe_transition_category_name(int category);
  * @param game          Game context (used for validation / future game-specific
  *                      handling; the evaluator itself is the standard best-5
  *                      high-hand evaluator over Hero + board + streets).
- * @param hero_hand     Hero's pocket cards (mask).
- * @param current_board The current board (flop or turn).
+ * @param hero_hand     Hero's pocket cards (mask). Must not share a card with
+ *                      current_board (returns -1 otherwise).
+ * @param current_board The current board: exactly 3 cards (flop) or 4 cards
+ *                      (turn). Any other size returns -1.
  * @param dead_cards    Additional cards known to be unavailable (mask).
  * @param out_result    Output structure, zero-initialised on success.
  *
- * @return 0 on success, -1 on invalid arguments.
+ * @return 0 on success, -1 on invalid arguments (NULL out_result, empty hero
+ *         hand, board size other than 3 or 4, a card shared between hero_hand
+ *         and current_board, or no cards left to draw).
+ *
+ * From a flop the turn fields describe the next card and the river fields the
+ * remaining two cards. From a turn there is only one card (the river) still to
+ * come: the river fields then describe that final card and the turn fields and
+ * the transition_matrix (which needs two streets) are left zeroed.
  */
 POKEREVAL_EXPORT int pe_compute_transition_distribution(
     enum_game_t game,
