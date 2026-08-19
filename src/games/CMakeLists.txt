@@ -19,6 +19,7 @@ set(GAMES_SOURCES
     lowball.c
     rules_omaha5.c
     rules_omaha6.c
+    draw_optimizer.c
 )
 
 # Games header files
@@ -56,6 +57,9 @@ set_property(TARGET poker_games PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # Link with core module. poker_engine is deliberately absent: the dependency ran
 # through mixed_game.c only, which the engine module now compiles.
+# The draw optimizer (draw_optimizer.c) is compiled into this module so that
+# Drawmaha can call pe_compute_draw_optima without creating a games<->equity link
+# cycle.
 target_link_libraries(poker_games poker_core)
 
 # Set include directories
