@@ -26,7 +26,6 @@ set(EQUITY_SOURCES
     run_it_twice.c
     pe_equity.c
     poker_eval_modern_equity.c
-    draw_optimizer.c
 )
 
 # Equity header files

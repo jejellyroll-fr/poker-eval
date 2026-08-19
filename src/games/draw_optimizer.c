@@ -70,6 +70,9 @@ static uint32 pe_eval_space(pe_value_space_t s, StdDeck_CardMask hand)
         return (uint32)StdDeck_BadaceyRules_EVAL_5(hand);
     case VS_BADEUCY:
         return (uint32)StdDeck_BadeucyRules_EVAL_5(hand);
+    case VS_DRAWMAHA:
+    case VS_COUNT:
+        return 0;
     default:
         return 0;
     }
@@ -212,7 +215,7 @@ static double omaha_frac(double val, const double *opp, int nopp)
     int lo = 0, hi = nopp - 1, idx = -1;
     while (lo <= hi) {
         int mid = (lo + hi) >> 1;
-        if (opp[mid] == val) {
+        if ((uint32)opp[mid] == (uint32)val) {
             idx = mid;
             break;
         } else if (opp[mid] < val) {
@@ -229,9 +232,9 @@ static double omaha_frac(double val, const double *opp, int nopp)
     if (idx >= 0) {
         /* count ties at idx */
         int j = idx;
-        while (j >= 0 && opp[j] == val) { equal++; j--; }
+        while (j >= 0 && (uint32)opp[j] == (uint32)val) { equal++; j--; }
         j = idx + 1;
-        while (j < nopp && opp[j] == val) { equal++; j++; }
+        while (j < nopp && (uint32)opp[j] == (uint32)val) { equal++; j++; }
     }
     return ((double)less + 0.5 * (double)equal) / (double)nopp;
 }
@@ -261,35 +264,28 @@ static double pe_hand_value(pe_value_space_t s, StdDeck_CardMask hand,
 
 static int game_to_space(enum_game_t game, pe_value_space_t *out)
 {
-    switch (game) {
-    case game_5draw:
-    case game_5drawnsq:
+    /* Map each supported draw game to its value space. Any other game is
+     * unsupported; the caller treats a non-zero return as an error. */
+    if (game == game_5draw || game == game_5drawnsq) {
         *out = VS_HIGH;
-        return 0;
-    case game_5draw8:
-    case game_lowball:
-    case game_a5_triple_draw:
+    } else if (game == game_5draw8 || game == game_lowball ||
+               game == game_a5_triple_draw) {
         *out = VS_LOWA5;
-        return 0;
-    case game_lowball27:
-    case game_27_triple_draw:
+    } else if (game == game_lowball27 || game == game_27_triple_draw) {
         *out = VS_LOW27;
-        return 0;
-    case game_badugi:
+    } else if (game == game_badugi) {
         *out = VS_BADUGI;
-        return 0;
-    case game_badacey:
+    } else if (game == game_badacey) {
         *out = VS_BADACEY;
-        return 0;
-    case game_badeucy:
+    } else if (game == game_badeucy) {
         *out = VS_BADEUCY;
-        return 0;
-    case game_drawmaha:
+    } else if (game == game_drawmaha) {
         *out = VS_DRAWMAHA;
-        return 0;
-    default:
+    } else {
+        *out = VS_COUNT;
         return 1;
     }
+    return 0;
 }
 
 /* ---- public API -------------------------------------------------------- */
