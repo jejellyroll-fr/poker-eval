@@ -95,6 +95,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends valgrind || true
 
@@ -178,6 +179,7 @@ jobs:
 
       - name: Install cppcheck
         run: |
+          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cppcheck || true
 

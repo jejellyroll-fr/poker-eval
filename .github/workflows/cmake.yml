@@ -56,8 +56,9 @@ jobs:
     - name: Install dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
+        sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
         sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 || true
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 ninja-build lcov libomp-dev || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lcov libomp-dev || true
     
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
