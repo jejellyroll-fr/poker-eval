@@ -74,6 +74,13 @@ static void test_generic_math(void)
     nan_payout[1] = 2.0;
     CHECK(pe_paytable_compute_ev(nan_payout, prob, 2, &res) == -1);
 
+    /* Infinite entries are rejected too. */
+    double inf_payout[2] = { HUGE_VAL, 2.0 };
+    CHECK(pe_paytable_compute_ev(inf_payout, prob, 2, &res) == -1);
+
+    double inf_prob[2] = { HUGE_VAL, 0.0 };
+    CHECK(pe_paytable_compute_ev(payout, inf_prob, 2, &res) == -1);
+
     printf("OK generic math\n");
 }
 

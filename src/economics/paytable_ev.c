@@ -10,6 +10,7 @@
 
 #include <poker_eval/economics/paytable_ev.h>
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,17 +27,21 @@ int pe_paytable_compute_ev(const double *payout_matrix,
 
     /*
      * Sanity check: entries must be finite, payouts non-negative and
-     * probabilities within [0, 1].  The isfinite() guards are required because
-     * NaN compares false against every bound, so a NaN would otherwise slip
-     * through both the per-entry and the prob_sum checks below and poison the
-     * whole result.
+     * probabilities within [0, 1].
+     *
+     * The checks are written as negated range tests rather than as
+     * "x < 0.0 || x > 1.0" because every comparison against NaN is false: a
+     * NaN would otherwise pass both the per-entry tests and the prob_sum test
+     * below (NaN is neither < 0.999 nor > 1.001) and poison the whole result.
+     * Negating the range makes NaN fail instead, and the DBL_MAX bound rejects
+     * +infinity. isfinite() is deliberately avoided here: MinGW expands it
+     * through a float-typed branch that trips -Werror=float-conversion.
      */
     double prob_sum = 0.0;
     for (int i = 0; i < num_outcomes; ++i) {
-        if (!isfinite(payout_matrix[i]) || payout_matrix[i] < 0.0)
+        if (!(payout_matrix[i] >= 0.0 && payout_matrix[i] <= DBL_MAX))
             return -1;
-        if (!isfinite(probability_matrix[i]) ||
-            probability_matrix[i] < 0.0 || probability_matrix[i] > 1.0)
+        if (!(probability_matrix[i] >= 0.0 && probability_matrix[i] <= 1.0))
             return -1;
         prob_sum += probability_matrix[i];
     }
@@ -56,9 +61,10 @@ int pe_paytable_compute_ev(const double *payout_matrix,
     double variance = exp_x2 - ev * ev;
     if (variance < 0.0)
         variance = 0.0; /* guard against tiny floating point negativity */
-    double std_dev = sqrt(variance);
 
     if (out_result) {
+        const double std_dev = sqrt(variance);
+
         memset(out_result, 0, sizeof(*out_result));
         out_result->num_rows = num_outcomes;
         out_result->total_ev = ev;
