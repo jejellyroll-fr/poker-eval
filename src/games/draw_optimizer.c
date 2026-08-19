@@ -147,6 +147,13 @@ static void table_build(pe_value_space_t s)
 
 static pe_strength_table_t *table_get(pe_value_space_t s)
 {
+    /* Guard the array access: game_to_space produces VS_COUNT for unsupported
+     * games, so an unchecked g_tables[s] indexing is out of bounds (the caller
+     * rejects such games before reaching here, but GCC's value-range analysis
+     * of the inlined path still flags -- and rightly so -- the unchecked
+     * subscript). */
+    if ((int)s < 0 || (int)s >= VS_COUNT)
+        return NULL;
     pe_strength_table_t *t = &g_tables[s];
     if (!t->built)
         table_build(s);
@@ -157,7 +164,7 @@ static pe_strength_table_t *table_get(pe_value_space_t s)
 static double pe_strength(pe_value_space_t s, uint32 value)
 {
     pe_strength_table_t *t = table_get(s);
-    if (t->n == 0 || t->total == 0)
+    if (t == NULL || t->n == 0 || t->total == 0)
         return 0.0;
 
     int lo = 0, hi = t->n - 1, idx = -1;
@@ -239,6 +246,67 @@ static double omaha_frac(double val, const double *opp, int nopp)
     return ((double)less + 0.5 * (double)equal) / (double)nopp;
 }
 
+/* Unseen-card pool: deck minus hand, board and dead cards. Returns the number
+ * of cards written (ascending card order) into pool[]. */
+static int unseen_pool(StdDeck_CardMask hand, StdDeck_CardMask board,
+                       StdDeck_CardMask dead_cards, int *pool)
+{
+    StdDeck_CardMask used, avail;
+    StdDeck_CardMask_RESET(used);
+    StdDeck_CardMask_OR(used, used, hand);
+    StdDeck_CardMask_OR(used, used, board);
+    StdDeck_CardMask_OR(used, used, dead_cards);
+    StdDeck_CardMask_NOT(avail, used);
+
+    int npool = 0;
+    for (int c = 0; c < StdDeck_N_CARDS; c++)
+        if (StdDeck_CardMask_CARD_IS_SET(avail, c))
+            pool[npool++] = c;
+    return npool;
+}
+
+/* Sorted Omaha hi values of every possible opponent 2-card pocket built from
+ * the unseen pool (the board must have at least 3 cards for this to make
+ * sense). Pockets whose evaluation fails are skipped rather than sentinel
+ * marked: every stored value is a non-negative integer-valued double, which
+ * keeps the (uint32) casts in omaha_frac() well-defined. On success stores a
+ * malloc'd array and its size; the caller frees it. */
+static void build_omaha_opponents(const int *pool, int npool,
+                                  StdDeck_CardMask board,
+                                  double **opp_out, int *nopp_out)
+{
+    *opp_out = NULL;
+    *nopp_out = 0;
+    if (npool < 2)
+        return;
+
+    int max_opp = npool * (npool - 1) / 2;
+    double *opp = (double *)malloc((size_t)max_opp * sizeof(double));
+    if (opp == NULL)
+        return;
+
+    int oi = 0;
+    for (int i = 0; i < npool; i++) {
+        for (int j = i + 1; j < npool; j++) {
+            StdDeck_CardMask oh;
+            StdDeck_CardMask_RESET(oh);
+            StdDeck_CardMask_SET(oh, pool[i]);
+            StdDeck_CardMask_SET(oh, pool[j]);
+            HandVal ov;
+            if (StdDeck_OmahaHi_EVAL(oh, board, &ov) == 0)
+                opp[oi++] = (double)(uint32)ov;
+        }
+    }
+
+    if (oi == 0) {
+        free(opp);
+        return;
+    }
+    qsort(opp, (size_t)oi, sizeof(double), cmp_double);
+    *opp_out = opp;
+    *nopp_out = oi;
+}
+
 /* Value of a single resulting hand for the given space. For Drawmaha the value
  * is the 0.5 * high_strength + 0.5 * Omaha_strength combination; opp/nopp are
  * the sorted Omaha values of every possible opponent 2-card pocket (NULL when
@@ -307,39 +375,9 @@ int pe_draw_hand_strength(enum_game_t game, StdDeck_CardMask hand,
     int nopp = 0;
 
     if (s == VS_DRAWMAHA && StdDeck_numCards(board) >= 3) {
-        StdDeck_CardMask used, avail;
-        StdDeck_CardMask_RESET(used);
-        StdDeck_CardMask_OR(used, used, hand);
-        StdDeck_CardMask_OR(used, used, board);
-        StdDeck_CardMask_OR(used, used, dead_cards);
-        StdDeck_CardMask_NOT(avail, used);
-
         int pool[StdDeck_N_CARDS];
-        int npool = 0;
-        for (int c = 0; c < StdDeck_N_CARDS; c++)
-            if (StdDeck_CardMask_CARD_IS_SET(avail, c))
-                pool[npool++] = c;
-
-        nopp = npool * (npool - 1) / 2;
-        if (nopp > 0) {
-            opp = (double *)malloc((size_t)nopp * sizeof(double));
-            int oi = 0;
-            for (int i = 0; i < npool; i++) {
-                for (int j = i + 1; j < npool; j++) {
-                    StdDeck_CardMask oh;
-                    StdDeck_CardMask_RESET(oh);
-                    StdDeck_CardMask_SET(oh, pool[i]);
-                    StdDeck_CardMask_SET(oh, pool[j]);
-                    HandVal ov;
-                    if (StdDeck_OmahaHi_EVAL(oh, board, &ov) == 0)
-                        opp[oi++] = (double)(uint32)ov;
-                    else
-                        opp[oi++] = -1.0;
-                }
-            }
-            nopp = oi;
-            qsort(opp, (size_t)nopp, sizeof(double), cmp_double);
-        }
+        int npool = unseen_pool(hand, board, dead_cards, pool);
+        build_omaha_opponents(pool, npool, board, &opp, &nopp);
     }
 
     *out_strength = pe_hand_value(s, hand, board, opp, nopp);
@@ -361,18 +399,8 @@ int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
         return 1;
 
     /* Unseen cards = deck minus hand, board and dead. */
-    StdDeck_CardMask used, avail;
-    StdDeck_CardMask_RESET(used);
-    StdDeck_CardMask_OR(used, used, hand);
-    StdDeck_CardMask_OR(used, used, board);
-    StdDeck_CardMask_OR(used, used, dead_cards);
-    StdDeck_CardMask_NOT(avail, used);
-
     int pool[StdDeck_N_CARDS];
-    int npool = 0;
-    for (int c = 0; c < StdDeck_N_CARDS; c++)
-        if (StdDeck_CardMask_CARD_IS_SET(avail, c))
-            pool[npool++] = c;
+    int npool = unseen_pool(hand, board, dead_cards, pool);
 
     /* Ordered hand cards (ascending card index) so discard bit i refers to the
      * i-th card of the hand, matching the Drawmaha mask convention. */
@@ -386,28 +414,8 @@ int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
      * every possible opponent 2-card pocket once. */
     double *opp = NULL;
     int nopp = 0;
-    if (s == VS_DRAWMAHA && StdDeck_numCards(board) >= 3) {
-        nopp = npool * (npool - 1) / 2;
-        if (nopp > 0) {
-            opp = (double *)malloc((size_t)nopp * sizeof(double));
-            int oi = 0;
-            for (int i = 0; i < npool; i++) {
-                for (int j = i + 1; j < npool; j++) {
-                    StdDeck_CardMask oh;
-                    StdDeck_CardMask_RESET(oh);
-                    StdDeck_CardMask_SET(oh, pool[i]);
-                    StdDeck_CardMask_SET(oh, pool[j]);
-                    HandVal ov;
-                    if (StdDeck_OmahaHi_EVAL(oh, board, &ov) == 0)
-                        opp[oi++] = (double)(uint32)ov;
-                    else
-                        opp[oi++] = -1.0;
-                }
-            }
-            nopp = oi;
-            qsort(opp, (size_t)nopp, sizeof(double), cmp_double);
-        }
-    }
+    if (s == VS_DRAWMAHA && StdDeck_numCards(board) >= 3)
+        build_omaha_opponents(pool, npool, board, &opp, &nopp);
 
     for (int mask = 0; mask < 32; mask++) {
         int k = 0;
