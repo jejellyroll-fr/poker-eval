@@ -7,11 +7,13 @@ set(DISTRIBUTIONS_SOURCES
     holdem_distributions.c
     plo_nomenclature.c
     plo_integration.c
+    hand_distribution.c
 )
 
 # Distributions header files
 set(DISTRIBUTIONS_HEADERS
     hand_distributions.h
+    hand_distribution.h
     omaha_distributions.h
     stud_distributions.h
     holdem_distributions.h

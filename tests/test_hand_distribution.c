@@ -1,146 +1,180 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <poker_eval/distributions/HoldemAgnosticHand.h>
-#include <poker_eval/distributions/omaha_distributions.h>
-#include <poker_eval/deck/deck_std.h>
+/**
+ * test_hand_distribution.c
+ *
+ * ISSUE-02 (#158): exact combinatorial hand distribution engine built on the
+ * generalized deck (ISSUE-03 #159) and configurable ranking (ISSUE-04 #160)
+ * infrastructure. Validates the canonical 5-card distributions for the
+ * 52-card standard deck, the 36-card Short Deck, and the 20-card Royal deck,
+ * plus the game-based convenience wrapper (Short Deck hold'em).
+ */
 
-static void print_holdem_hands(const HandList* handList, const char* description) {
-    printf("\n=== %s ===\n", description);
-    printf("Total hands: %d\n", handList->count);
-    
-    // Print first 10 hands as examples
-    int max_display = (handList->count < 10) ? handList->count : 10;
-    for (int i = 0; i < max_display; ++i) {
-        char handStr[60];
-        StdDeck_maskString(handList->hands[i], handStr);
-        printf("Hand %d: %s\n", i+1, handStr);
+#include "unity.h"
+#include <poker_eval/core/enumdefs.h>
+#include <poker_eval/deck/generalized_deck.h>
+#include <poker_eval/core/configurable_ranking.h>
+#include <poker_eval/distributions/hand_distribution.h>
+
+/* Look up a category's count by id within a computed distribution. */
+static uint64_t count_of(const pe_hand_distribution_t *d, int category_id) {
+    int i;
+    for (i = 0; i < d->num_categories; i++) {
+        if (d->categories[i].category_id == category_id) {
+            return d->categories[i].count;
+        }
     }
-    if (handList->count > 10) {
-        printf("... and %d more hands\n", handList->count - 10);
-    }
+    return 0;
 }
 
-static void print_omaha_hands(const OmahaHandList* handList, const char* description) {
-    printf("\n=== %s ===\n", description);
-    printf("Total hands: %d\n", handList->count);
-    
-    // Print first 10 hands as examples
-    int max_display = (handList->count < 10) ? handList->count : 10;
-    for (int i = 0; i < max_display; ++i) {
-        char handStr[60];
-        StdDeck_maskString(handList->hands[i], handStr);
-        printf("Hand %d: %s\n", i+1, handStr);
+static void assert_total(const pe_hand_distribution_t *d, uint64_t total) {
+    TEST_ASSERT_EQUAL_UINT64(total, d->total_combinations);
+    uint64_t sum = 0;
+    for (int i = 0; i < d->num_categories; i++) {
+        sum += d->categories[i].count;
     }
-    if (handList->count > 10) {
-        printf("... and %d more hands\n", handList->count - 10);
-    }
+    TEST_ASSERT_EQUAL_UINT64(total, sum);
 }
 
-static void test_holdem_distributions(void) {
-    printf("\n========== TESTING HOLDEM HAND DISTRIBUTIONS ==========\n");
-    
-    HandList handList;
-    
-    // Test 1: Specific suited hand
-    memset(&handList, 0, sizeof(HandList));
-    (void)HoldemAgnosticHand_Instantiate("AKs", "", &handList);
-    print_holdem_hands(&handList, "Test 1: AKs (suited AK)");
-    printf("Expected: 4 hands (AhKh, AdKd, AcKc, AsKs)\n");
-    
-    // Test 2: Specific offsuit hand
-    memset(&handList, 0, sizeof(HandList));
-    (void)HoldemAgnosticHand_Instantiate("AKo", "", &handList);
-    print_holdem_hands(&handList, "Test 2: AKo (offsuit AK)");
-    printf("Expected: 12 hands (all AK combinations except suited ones)\n");
-    
-    // Test 3: Any AK
-    memset(&handList, 0, sizeof(HandList));
-    (void)HoldemAgnosticHand_Instantiate("AK", "", &handList);
-    print_holdem_hands(&handList, "Test 3: AK (any AK)");
-    printf("Expected: 16 hands (all AK combinations)\n");
-    
-    // Test 4: Pocket pair
-    memset(&handList, 0, sizeof(HandList));
-    (void)HoldemAgnosticHand_Instantiate("AA", "", &handList);
-    print_holdem_hands(&handList, "Test 4: AA (pocket aces)");
-    printf("Expected: 6 hands (all AA combinations)\n");
-    
-    // Test 5: With dead cards
-    memset(&handList, 0, sizeof(HandList));
-    (void)HoldemAgnosticHand_Instantiate("AK", "AsKh", &handList);
-    print_holdem_hands(&handList, "Test 5: AK with AsKh dead");
-    printf("Expected: 9 hands (16 - 7 blocked combinations)\n");
+/* Standard 52-card deck, 5-card hands, standard ranking. */
+static void test_std_52_distribution(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
+        PE_DECK_PRESET_STD, "standard", 5, &dist));
+
+    TEST_ASSERT_EQUAL_INT(52, dist.deck_size);
+    TEST_ASSERT_EQUAL_INT(5, dist.hand_size);
+    assert_total(&dist, 2598960ULL);
+
+    /* Canonical Bollman counts for the standard 5-card poker hands. */
+    TEST_ASSERT_EQUAL_UINT64(40ULL,    count_of(&dist, PE_CAT_STRAIGHT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(624ULL,   count_of(&dist, PE_CAT_FOUR_OF_A_KIND));
+    TEST_ASSERT_EQUAL_UINT64(3744ULL,  count_of(&dist, PE_CAT_FULL_HOUSE));
+    TEST_ASSERT_EQUAL_UINT64(5108ULL,  count_of(&dist, PE_CAT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(10200ULL, count_of(&dist, PE_CAT_STRAIGHT));
+    TEST_ASSERT_EQUAL_UINT64(54912ULL, count_of(&dist, PE_CAT_THREE_OF_A_KIND));
+    TEST_ASSERT_EQUAL_UINT64(123552ULL,count_of(&dist, PE_CAT_TWO_PAIR));
+    TEST_ASSERT_EQUAL_UINT64(1098240ULL,count_of(&dist, PE_CAT_ONE_PAIR));
+    TEST_ASSERT_EQUAL_UINT64(1302540ULL,count_of(&dist, PE_CAT_HIGH_CARD));
 }
 
-static void test_omaha_distributions(void) {
-    printf("\n\n========== TESTING OMAHA HAND DISTRIBUTIONS ==========\n");
-    
-    OmahaHandQuery query;
-    OmahaHandList handList = {0};
-    StdDeck_CardMask deadCards;
-    StdDeck_CardMask_RESET(deadCards);
-    
-    // Test 1: AAxx (pair of aces with any two cards)
-    OmahaHandList_Free(&handList);
-    if (OmahaHand_Parse("AAxx", &query)) {
-        (void)OmahaHand_Instantiate(&query, deadCards, &handList);
-        print_omaha_hands(&handList, "Test 1: AAxx (pair of aces + any 2 cards)");
-        printf("Expected: Many hands (C(4,2) * C(50,2) = 6 * 1225 = 7350 minus conflicts)\n");
-    } else {
-        printf("Failed to parse AAxx\n");
-    }
-    
-    // Test 2: AAxx double-suited
-    OmahaHandList_Free(&handList);
-    if (OmahaHand_Parse("AAxxds", &query)) {
-        (void)OmahaHand_Instantiate(&query, deadCards, &handList);
-        print_omaha_hands(&handList, "Test 2: AAxxds (double-suited aces)");
-        printf("Expected: Fewer hands (only double-suited combinations)\n");
-    } else {
-        printf("Failed to parse AAxxds\n");
-    }
-    
-    // Test 3: Specific hand AsKhQdJc
-    OmahaHandList_Free(&handList);
-    if (OmahaHand_Parse("AsKhQdJc", &query)) {
-        (void)OmahaHand_Instantiate(&query, deadCards, &handList);
-        print_omaha_hands(&handList, "Test 3: AsKhQdJc (specific hand)");
-        printf("Expected: 1 hand\n");
-    } else {
-        printf("Failed to parse AsKhQdJc\n");
-    }
-    
-    // Test 4: AKQJds (double-suited broadway)
-    OmahaHandList_Free(&handList);
-    if (OmahaHand_Parse("AKQJds", &query)) {
-        (void)OmahaHand_Instantiate(&query, deadCards, &handList);
-        print_omaha_hands(&handList, "Test 4: AKQJds (double-suited broadway)");
-        printf("Expected: Multiple double-suited combinations\n");
-    } else {
-        printf("Failed to parse AKQJds\n");
-    }
-    
-    // Test 5: AAAx (trip aces)
-    OmahaHandList_Free(&handList);
-    if (OmahaHand_Parse("AAAx", &query)) {
-        (void)OmahaHand_Instantiate(&query, deadCards, &handList);
-        print_omaha_hands(&handList, "Test 5: AAAx (trip aces + any card)");
-        printf("Expected: C(4,3) * 48 = 4 * 48 = 192 hands\n");
-    } else {
-        printf("Failed to parse AAAx\n");
-    }
+/* 36-card Short Deck, 5-card hands, Short Deck (flush > full house) ranking. */
+static void test_short_36_distribution(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
+        PE_DECK_PRESET_SHORT, "short_deck", 5, &dist));
 
-    OmahaHandList_Free(&handList);
+    TEST_ASSERT_EQUAL_INT(36, dist.deck_size);
+    assert_total(&dist, 376992ULL);
+
+    /* Exact combinatorial counts for the 36-card (6..A) Short Deck. The issue's
+     * section-2 figures (Flush = 504, Full House = 1440) count flushes inclusive
+     * of straight flushes and do not match exact combinatorics; the engine
+     * reports the standard convention (straight flushes excluded, as for the
+     * 52-card 5108 figure), so Flush = C(9,5)*4 - 20 = 484 and
+     * Full House = 9 * C(4,3) * 8 * C(4,2) = 1728. */
+    TEST_ASSERT_EQUAL_UINT64(20ULL,   count_of(&dist, PE_CAT_STRAIGHT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(484ULL,  count_of(&dist, PE_CAT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(1728ULL, count_of(&dist, PE_CAT_FULL_HOUSE));
+
+    /* Flush now outranks Full House in the Short Deck ordering. */
+    int flush_rank = -1, fh_rank = -1;
+    for (int i = 0; i < dist.num_categories; i++) {
+        if (dist.categories[i].category_id == PE_CAT_FLUSH) flush_rank = i;
+        if (dist.categories[i].category_id == PE_CAT_FULL_HOUSE) fh_rank = i;
+    }
+    TEST_ASSERT_TRUE(flush_rank >= 0 && fh_rank >= 0);
+    TEST_ASSERT_TRUE(flush_rank < fh_rank); /* smaller index == stronger */
 }
+
+/* 20-card Royal deck (T..A), 5-card hands, standard ranking. */
+static void test_royal_20_distribution(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
+        PE_DECK_PRESET_ROYAL, "standard", 5, &dist));
+
+    TEST_ASSERT_EQUAL_INT(20, dist.deck_size);
+    assert_total(&dist, 15504ULL);
+
+    /* 20-card Royal deck (T..A): only the Broadway straight exists. 4 straight
+     * flushes (one per suit) and 4^5 - 4 = 1020 non-flush straights; no
+     * non-straight-flush flush is possible with only 5 ranks. */
+    TEST_ASSERT_EQUAL_UINT64(4ULL,   count_of(&dist, PE_CAT_STRAIGHT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(1020ULL, count_of(&dist, PE_CAT_STRAIGHT));
+    TEST_ASSERT_EQUAL_UINT64(0ULL,   count_of(&dist, PE_CAT_FLUSH));
+}
+
+/* Game-based convenience wrapper: Short Deck hold'em. */
+static void test_game_wrapper_sdholdem(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution(game_sdholdem, &dist));
+    TEST_ASSERT_EQUAL_INT(game_sdholdem, dist.game);
+    assert_total(&dist, 376992ULL);
+    TEST_ASSERT_EQUAL_UINT64(484ULL,  count_of(&dist, PE_CAT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(1728ULL, count_of(&dist, PE_CAT_FULL_HOUSE));
+}
+
+/* Game-based convenience wrapper: a standard-deck game maps to the std table. */
+static void test_game_wrapper_standard(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution(game_holdem, &dist));
+    TEST_ASSERT_EQUAL_INT(game_holdem, dist.game);
+    assert_total(&dist, 2598960ULL);
+    TEST_ASSERT_EQUAL_UINT64(40ULL, count_of(&dist, PE_CAT_STRAIGHT_FLUSH));
+    TEST_ASSERT_EQUAL_UINT64(624ULL, count_of(&dist, PE_CAT_FOUR_OF_A_KIND));
+}
+
+/* Unsupported game returns failure. */
+static void test_game_wrapper_unsupported(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_hand_distribution((enum_game_t)-1, &dist));
+}
+
+/* Unknown preset returns failure. */
+static void test_preset_unknown(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_hand_distribution_for_preset(
+        "no_such_deck", "standard", 5, &dist));
+    TEST_ASSERT_EQUAL_INT(-1, pe_compute_hand_distribution_for_preset(
+        PE_DECK_PRESET_STD, "no_such_ranking", 5, &dist));
+}
+
+/* Probability sums to ~1.0 across categories. */
+static void test_probabilities_sum_to_one(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
+        PE_DECK_PRESET_ROYAL, "standard", 5, &dist));
+    double sum = 0.0;
+    for (int i = 0; i < dist.num_categories; i++) {
+        sum += dist.categories[i].probability;
+    }
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, sum);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0,
+        dist.categories[dist.num_categories - 1].cumulative_probability);
+}
+
+/* Markdown and JSON formatting helpers run without error. */
+static void test_print_helpers(void) {
+    pe_hand_distribution_t dist;
+    TEST_ASSERT_EQUAL_INT(0, pe_compute_hand_distribution_for_preset(
+        PE_DECK_PRESET_ROYAL, "standard", 5, &dist));
+    TEST_ASSERT_EQUAL_INT(0,
+        pe_hand_distribution_print_markdown(&dist, stdout));
+    TEST_ASSERT_EQUAL_INT(0,
+        pe_hand_distribution_print_json(&dist, stdout));
+}
+
+void setUp(void) {}
+void tearDown(void) {}
 
 int main(void) {
-    printf("=== POKER HAND DISTRIBUTION TEST ===\n");
-    printf("Testing hand distribution functionality for Holdem and Omaha\n");
-    
-    test_holdem_distributions();
-    test_omaha_distributions();
-    
-    printf("\n\n=== TEST COMPLETED ===\n");
-    return 0;
+    UNITY_BEGIN();
+    RUN_TEST(test_std_52_distribution);
+    RUN_TEST(test_short_36_distribution);
+    RUN_TEST(test_royal_20_distribution);
+    RUN_TEST(test_game_wrapper_sdholdem);
+    RUN_TEST(test_game_wrapper_standard);
+    RUN_TEST(test_game_wrapper_unsupported);
+    RUN_TEST(test_preset_unknown);
+    RUN_TEST(test_probabilities_sum_to_one);
+    RUN_TEST(test_print_helpers);
+    return UNITY_END();
 }
