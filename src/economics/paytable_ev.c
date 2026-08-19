@@ -21,15 +21,22 @@ int pe_paytable_compute_ev(const double *payout_matrix,
 {
     if (!payout_matrix || !probability_matrix)
         return -1;
-    if (num_outcomes < 1 || num_outcomes > 16)
+    if (num_outcomes < 1 || num_outcomes > PE_PAYTABLE_MAX_ROWS)
         return -1;
 
-    /* Optional sanity check: probabilities must be non-negative and finite. */
+    /*
+     * Sanity check: entries must be finite, payouts non-negative and
+     * probabilities within [0, 1].  The isfinite() guards are required because
+     * NaN compares false against every bound, so a NaN would otherwise slip
+     * through both the per-entry and the prob_sum checks below and poison the
+     * whole result.
+     */
     double prob_sum = 0.0;
     for (int i = 0; i < num_outcomes; ++i) {
-        if (payout_matrix[i] < 0.0)
+        if (!isfinite(payout_matrix[i]) || payout_matrix[i] < 0.0)
             return -1;
-        if (probability_matrix[i] < 0.0 || probability_matrix[i] > 1.0)
+        if (!isfinite(probability_matrix[i]) ||
+            probability_matrix[i] < 0.0 || probability_matrix[i] > 1.0)
             return -1;
         prob_sum += probability_matrix[i];
     }
@@ -88,7 +95,7 @@ typedef struct {
     const char *game_name;
     long long total_combinations;
     int num_categories;
-    pe_vp_category_t categories[16];
+    pe_vp_category_t categories[PE_PAYTABLE_MAX_ROWS];
 } pe_vp_game_def_t;
 
 static const pe_vp_game_def_t VP_GAMES[PE_VIDEO_POKER_COUNT] = {
@@ -156,9 +163,13 @@ int pe_paytable_get_game(pe_video_poker_game_t game,
 
     const pe_vp_game_def_t *def = &VP_GAMES[game];
     const int n = def->num_categories;
+    if (n < 1 || n > PE_PAYTABLE_MAX_ROWS)
+        return -1;
 
-    double payouts[16];
-    double probs[16];
+    /* Zero-initialised: only the first n entries are written below, and GCC
+     * cannot prove that from the table, so it warns under -Werror. */
+    double payouts[PE_PAYTABLE_MAX_ROWS] = { 0.0 };
+    double probs[PE_PAYTABLE_MAX_ROWS] = { 0.0 };
 
     for (int i = 0; i < n; ++i) {
         payouts[i] = def->categories[i].payout;

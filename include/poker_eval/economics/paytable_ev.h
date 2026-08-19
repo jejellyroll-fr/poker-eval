@@ -21,6 +21,9 @@
 extern "C" {
 #endif
 
+/* Maximum number of paytable categories handled by this engine. */
+#define PE_PAYTABLE_MAX_ROWS 16
+
 /* A single paytable outcome (hand category). */
 typedef struct {
     int category_id;             /* Index of the category (0-based) */
@@ -33,8 +36,8 @@ typedef struct {
 /* Result of a paytable EV analysis. */
 typedef struct {
     char game_name[32];          /* Game / paytable identifier */
-    pe_paytable_row_t rows[16];  /* Per-category breakdown */
-    int num_rows;                /* Number of categories (<= 16) */
+    pe_paytable_row_t rows[PE_PAYTABLE_MAX_ROWS]; /* Per-category breakdown */
+    int num_rows;                /* Number of categories (<= PE_PAYTABLE_MAX_ROWS) */
     double total_ev;             /* Expected return per unit wager */
     double house_edge;           /* 1.0 - total_ev */
     double variance;             /* Var(X) */
@@ -47,10 +50,13 @@ typedef struct {
  *
  * @param payout_matrix      Array of payout multipliers X_i (length num_outcomes)
  * @param probability_matrix Array of outcome probabilities P_i (length num_outcomes)
- * @param num_outcomes       Number of outcomes (must be in [1, 16])
+ * @param num_outcomes       Number of outcomes (must be in
+ *                           [1, PE_PAYTABLE_MAX_ROWS])
  * @param out_result         Output result structure (may be NULL if only the
  *                           return code is needed)
- * @return 0 on success, -1 on invalid input
+ * @return 0 on success, -1 on invalid input (NULL matrix, out-of-range
+ *         num_outcomes, non-finite or negative entries, or probabilities that
+ *         do not sum to 1 within 1e-3)
  */
 POKEREVAL_EXPORT int pe_paytable_compute_ev(
     const double *payout_matrix,
