@@ -13,6 +13,11 @@ Standalone reference oracles (`analytical_oracles.[ch]`):
   double precision. It works for arbitrarily-signed games (it internally shifts
   the payoff matrix so the simplex stays feasible) and is cross-checked against a
   brute-force minimax grid in `test_gambit_exact_lp`.
+- **OpenSpiel 2.0.2 multiway Kuhn** – exact rational EV and NashConv fixtures
+  generated from uniform `TabularPolicy` profiles for
+  `kuhn_poker(players=3)` and `kuhn_poker(players=4)`. The in-tree game mirrors
+  OpenSpiel's `N+1`-card deck and betting termination rules, while remaining
+  dependency-free in CI.
 
 ## Tests
 
@@ -20,6 +25,7 @@ Standalone reference oracles (`analytical_oracles.[ch]`):
 |------|------|-----------------|
 | `test_akq_game` | AKQ check-or-bet (`A>K>Q`, ante 1 → pot 2, bet 1) | CFR policy value → `-1/18` ± 2e-3, `solver == independent enumeration`, zero-sum mirror, converged bluff/call frequencies |
 | `test_kuhn_openspiel` | 2-player first-action Kuhn subgame (`J<Q<K`) | CFR policy value → `-1/18` ± 2e-3, `solver == independent enumeration`, zero-sum mirror |
+| `test_kuhn_multiway_openspiel` | OpenSpiel-compatible Kuhn (3p/4p) | Uniform-policy EVs, per-player unilateral improvements, and NashConv match OpenSpiel 2.0.2 exactly |
 | `test_leduc_openspiel` | Leduc Hold'em (6 cards, 2 rounds, max 2 raises) | `solver == independent full-tree enumeration` ± 1e-3, zero-sum mirror, >100 infosets (proves the full chance tree is traversed) |
 | `test_gambit_exact_lp` | 2×2 simultaneous matrix game (+ an exact sequence-form LP oracle) | LP exact value `0.2`; CFR policy value → `0.2` ± 1e-4; solver == brute minimax; zero-sum mirror |
 | `test_best_response_exploitability` (ISSUE-12, #168) | Kuhn 2p, 3-player Kuhn poker, perfect-information Gambit game | Engine `cfr_best_response_value`/`cfr_exploitability` (and multiway variants) equal an independent recursive oracle; deliberately exploitable policies (Always Fold → BR=+1, Always Call → BR=+0.5) match closed forms; Kuhn 2p policy value converges to `-1/18` over iterations; 3-player Kuhn NashConv == independent oracle; exact Gambit-LP equilibrium → exploitability `e < 1e-7` |
