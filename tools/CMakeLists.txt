@@ -16,3 +16,7 @@ target_link_libraries(mpf_run_with_metrics PRIVATE poker_eval_modular m)
 add_executable(mpf_dump_results mpf_dump_results.c)
 target_include_directories(mpf_dump_results PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(mpf_dump_results PRIVATE poker_eval_modular m)
+
+add_executable(poker-eval-trainer gto_trainer.c)
+target_include_directories(poker-eval-trainer PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(poker-eval-trainer PRIVATE poker_eval_modular m)
