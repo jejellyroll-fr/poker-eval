@@ -35,10 +35,20 @@ static void test_rake_distribution(void)
     (void)total_rake;
 }
 
+static void test_uncalled_bet_is_not_raked(void)
+{
+    rake_config_t config = {0.10, 100.0, 0.0, 0};
+    /* 10 chips are called and 90 are returned to the bettor. */
+    assert(fabs(pe_apply_rake_excluding_uncalled(100.0, 90.0, &config) - 99.0) < 1e-9);
+    /* Invalid/excess unmatched amounts are safely clamped. */
+    assert(fabs(pe_apply_rake_excluding_uncalled(100.0, 150.0, &config) - 100.0) < 1e-9);
+}
+
 int main(void)
 {
     test_rake_calculation();
     test_rake_distribution();
+    test_uncalled_bet_is_not_raked();
     printf("All Rake tests passed!\n");
     return 0;
 }
