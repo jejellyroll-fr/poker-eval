@@ -170,6 +170,9 @@ static void test_registry_helpers(void)
     CHECK(pe_paytable_get_game(PE_VIDEO_POKER_JACKS_OR_BETTER_9_6, NULL) == -1);
     CHECK(pe_paytable_game_ev(PE_VIDEO_POKER_COUNT, &ev) == -1);
     CHECK(pe_paytable_game_ev(PE_VIDEO_POKER_JACKS_OR_BETTER_9_6, NULL) == -1);
+    CHECK(pe_paytable_derive_game(PE_VIDEO_POKER_COUNT, &res) == -1);
+    CHECK(pe_paytable_derive_game(PE_VIDEO_POKER_JACKS_OR_BETTER_9_6,
+                                  NULL) == -1);
 
     /* pe_paytable_print must tolerate a NULL result. */
     pe_paytable_print(NULL);

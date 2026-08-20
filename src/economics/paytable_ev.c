@@ -9,6 +9,7 @@
  */
 
 #include <poker_eval/economics/paytable_ev.h>
+#include <poker_eval/economics/video_poker_strategy.h>
 
 #include <float.h>
 #include <math.h>
@@ -206,6 +207,54 @@ int pe_paytable_game_ev(pe_video_poker_game_t game, double *out_ev)
     if (rc != 0)
         return rc;
     *out_ev = res.total_ev;
+    return 0;
+}
+
+int pe_paytable_derive_game(pe_video_poker_game_t game,
+                            pe_paytable_result_t *out_result)
+{
+    if (game < 0 || game >= PE_VIDEO_POKER_COUNT || !out_result)
+        return -1;
+
+    const pe_vp_game_def_t *def = &VP_GAMES[game];
+    pe_video_poker_variant_t variant;
+    switch (game) {
+    case PE_VIDEO_POKER_JACKS_OR_BETTER_9_6:
+        variant = PE_VP_JACKS_OR_BETTER;
+        break;
+    case PE_VIDEO_POKER_DEUCES_WILD_FULL_PAY:
+        variant = PE_VP_DEUCES_WILD;
+        break;
+    case PE_VIDEO_POKER_JOKER_POKER_KINGS_OR_BETTER:
+        variant = PE_VP_JOKER_POKER;
+        break;
+    case PE_VIDEO_POKER_COUNT:
+    default:
+        return -1;
+    }
+
+    double payouts[PE_PAYTABLE_MAX_ROWS] = { 0.0 };
+    for (int i = 0; i < def->num_categories; ++i)
+        payouts[i] = def->categories[i].payout;
+
+    pe_vp_derived_strategy_t derived;
+    if (pe_video_poker_derive_strategy(variant, payouts,
+                                       def->num_categories, &derived) != 0)
+        return -1;
+
+    double probabilities[PE_PAYTABLE_MAX_ROWS] = { 0.0 };
+    for (int i = 0; i < derived.num_categories; ++i)
+        probabilities[i] = (double)derived.categories[i].combinations /
+                           (double)derived.total_combinations;
+
+    if (pe_paytable_compute_ev(payouts, probabilities,
+                                derived.num_categories, out_result) != 0)
+        return -1;
+
+    snprintf(out_result->game_name, sizeof(out_result->game_name), "%s",
+             def->game_name);
+    for (int i = 0; i < derived.num_categories; ++i)
+        out_result->rows[i].category_name = derived.categories[i].name;
     return 0;
 }
 
