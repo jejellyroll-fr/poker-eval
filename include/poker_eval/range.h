@@ -46,7 +46,9 @@
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/pokereval_export.h>
 #include <stdio.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,6 +107,19 @@ typedef struct {
     int allow_weights;     /**< Allow weight syntax like "AA:0.5" (default: 1) */
     double default_weight; /**< Default weight for unweighted hands (default: 1.0) */
 } pe_parse_opts_t;
+
+/**
+ * @brief Strategy likelihood callback returning P(action | combo).
+ *
+ * The combo index is stable for the duration of the update and the card mask
+ * identifies the exact two-card combination being evaluated.
+ */
+typedef double (*pe_action_likelihood_fn)(
+    uint16_t combo_index,
+    StdDeck_CardMask combo_cards,
+    int action_id,
+    void *user_data
+);
 
 /**
  * @brief Range compilation options
@@ -193,6 +208,24 @@ void pe_range_free(pe_range_t *range);
  * @return PE_STATUS_OUT_OF_MEMORY if allocation fails
  */
 pe_status_t pe_range_create(enum_game_t variant, pe_range_t **out_range);
+
+/**
+ * @brief Apply Bayes' rule to a range after observing an action.
+ *
+ * Each weight is multiplied by P(action | combo), then normalized by the
+ * action evidence. The range's original total weight is preserved, so this
+ * works both for probability-normalized ranges and for the usual combo-count
+ * representation. Combos with zero likelihood receive weight zero.
+ *
+ * @return PE_STATUS_OK, PE_STATUS_INVALID_ARG, or PE_STATUS_ERROR when the
+ *         range is empty/invalid or the observed action has zero evidence.
+ */
+POKEREVAL_EXPORT pe_status_t pe_range_bayesian_update(
+    pe_range_t *range,
+    int observed_action,
+    pe_action_likelihood_fn likelihood_fn,
+    void *user_data
+);
 
 /**
  * @brief Compile a range (sort, deduplicate, optimize)

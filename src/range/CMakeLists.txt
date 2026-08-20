@@ -5,6 +5,7 @@ set(RANGE_SOURCES
     AdvancedRangeParser.c
     StudRangeParser.c
     pe_range.c
+    range_bayesian.c
 )
 
 # Headers (for installation)
