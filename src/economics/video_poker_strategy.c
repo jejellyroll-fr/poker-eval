@@ -684,9 +684,13 @@ static vp_cnt_slot_t *vp_cnt_insert(vp_cnt_slot_t *table, uint64_t hash,
     for (;;) {
         vp_cnt_slot_t *s = &table[idx];
         if (s->key[0] == '\0') {
+            size_t key_len = 0;
             s->hash = hash;
-            strncpy(s->key, key, 10);
-            s->key[10] = '\0';
+            while (key_len < sizeof(s->key) - 1 && key[key_len] != '\0') {
+                s->key[key_len] = key[key_len];
+                key_len++;
+            }
+            s->key[key_len] = '\0';
             return s;
         }
         if (s->hash == hash && strncmp(s->key, key, 10) == 0)
