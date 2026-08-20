@@ -690,6 +690,8 @@ set_tests_properties(test_cfr_checkpoint_header PROPERTIES LABELS "engine;cfr;ch
 add_poker_test(test_cfr_depth_guard)
 set_tests_properties(test_cfr_depth_guard PROPERTIES LABELS "engine;cfr;bug08")
 add_poker_test(test_cfr_multiway)
+add_poker_test(test_cfr_icm_utility)
+set_tests_properties(test_cfr_icm_utility PROPERTIES LABELS "engine;cfr;icm;feat17")
 add_poker_test(test_board_canonical)
 set_tests_properties(test_board_canonical PROPERTIES LABELS "engine;cfr;canonicalize")
 add_poker_test(test_hand_clustering)
