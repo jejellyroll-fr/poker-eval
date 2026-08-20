@@ -3,17 +3,14 @@
  */
 
 #include <poker_eval/economics/rake.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
-#include <stdint.h>
 #include <string.h>
 
 static int pe_rake_is_nonfinite(double value)
 {
-    uint64_t bits = 0;
-    memcpy(&bits, &value, sizeof(bits));
-    return (bits & UINT64_C(0x7ff0000000000000)) ==
-           UINT64_C(0x7ff0000000000000);
+    return isnan(value) || value > DBL_MAX || value < -DBL_MAX;
 }
 
 /* ============================================================================
