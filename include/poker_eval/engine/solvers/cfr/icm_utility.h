@@ -12,6 +12,10 @@ extern "C" {
 typedef struct pe_cfr_icm_context_s {
     double payouts[ICM_MAX_PLAYERS];
     int num_payouts;
+    int cache_valid;
+    int cache_num_players;
+    int32_t cache_stacks[ICM_MAX_PLAYERS];
+    double cache_values[ICM_MAX_PLAYERS];
 } pe_cfr_icm_context_t;
 
 /* Initialize a context from a tournament payout ladder. */

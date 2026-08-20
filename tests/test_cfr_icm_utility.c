@@ -20,6 +20,10 @@ int main(void)
     assert(strong > short_stack);
     assert(fabs(strong + short_stack - 100.0) < 1e-9);
 
+    const int32_t busted[] = {2000, 0};
+    assert(fabs(pe_cfr_icm_utility(busted, 2, 0, &context) - 65.0) < 1e-9);
+    assert(fabs(pe_cfr_icm_utility(busted, 2, 1, &context) - 35.0) < 1e-9);
+
     assert(pe_cfr_icm_context_init(&context, payouts, 0) != 0);
     assert(pe_cfr_icm_utility(NULL, 2, 0, &context) == 0.0);
     puts("CFR ICM utility tests passed");
