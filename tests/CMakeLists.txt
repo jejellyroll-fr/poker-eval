@@ -1260,6 +1260,8 @@ endif()
 
 # Phase 1: New Range Parser Tests
 add_poker_test(test_pe_range_holdem)
+add_poker_test(test_range_bayesian)
+set_tests_properties(test_range_bayesian PROPERTIES LABELS "range;bayesian;issue167")
 set_tests_properties(test_pe_range_holdem PROPERTIES LABELS "range;phase1")
 
 # Phase 2: Range Ops Tests
