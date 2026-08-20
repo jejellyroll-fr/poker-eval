@@ -1129,8 +1129,9 @@ int pe_video_poker_derive_strategy(pe_video_poker_variant_t variant,
 #pragma omp parallel
     {
         long long local[PE_PAYTABLE_MAX_ROWS] = { 0 };
+        int i;
 #pragma omp for schedule(dynamic, 8)
-        for (int i = 0; i < (int)VP_CLASS_TABLE_SIZE; i++) {
+        for (i = 0; i < (int)VP_CLASS_TABLE_SIZE; i++) {
             vp_class_slot_t *s = &table[i];
             if (s->key[0] == '\0')
                 continue;
