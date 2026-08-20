@@ -1,5 +1,6 @@
 #include <poker_eval/range.h>
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -22,7 +23,7 @@ pe_status_t pe_range_bayesian_update(pe_range_t *range,
     for (size_t i = 0; i < range->count; ++i)
     {
         const double weight = range->combos[i].weight;
-        if (!isfinite(weight) || weight < 0.0)
+        if (!(weight >= 0.0 && weight <= DBL_MAX))
         {
             free(likelihoods);
             return PE_STATUS_ERROR;
@@ -32,7 +33,7 @@ pe_status_t pe_range_bayesian_update(pe_range_t *range,
                                                 range->combos[i].hand,
                                                 observed_action,
                                                 user_data);
-        if (!isfinite(likelihood) || likelihood < 0.0 || likelihood > 1.0)
+        if (!(likelihood >= 0.0 && likelihood <= 1.0))
         {
             free(likelihoods);
             return PE_STATUS_INVALID_ARG;
@@ -43,8 +44,8 @@ pe_status_t pe_range_bayesian_update(pe_range_t *range,
         evidence += weight * likelihood;
     }
 
-    if (!isfinite(prior_total) || prior_total <= 0.0 ||
-        !isfinite(evidence) || evidence <= 0.0)
+    if (!(prior_total > 0.0 && prior_total <= DBL_MAX) ||
+        !(evidence > 0.0 && evidence <= DBL_MAX))
     {
         free(likelihoods);
         return PE_STATUS_ERROR;
