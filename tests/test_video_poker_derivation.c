@@ -27,6 +27,7 @@
 
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/economics/paytable_ev.h>
 #include <poker_eval/economics/video_poker_strategy.h>
 
 static int derive_and_print(const char *label, pe_video_poker_variant_t variant,
@@ -147,6 +148,22 @@ static void test_8_5_job(void)
     printf("  8/5 JoB return %.6f (published 0.972984)\n", s.total_ev);
 }
 
+/* The named paytable API must use the same derivation engine, rather than
+ * merely returning the published reference frequencies. */
+static void test_named_paytable_derivation(void)
+{
+    pe_paytable_result_t result;
+    assert(pe_paytable_derive_game(PE_VIDEO_POKER_JACKS_OR_BETTER_9_6,
+                                   &result) == 0);
+    assert(result.num_rows == 10);
+    assert(result.total_ev >= 0.9954 && result.total_ev <= 0.9955);
+    assert(result.house_edge >= 0.0045 && result.house_edge <= 0.0046);
+    assert(result.std_dev >= 4.41 && result.std_dev <= 4.43);
+    assert(strcmp(result.game_name, "jacks_or_better_9_6") == 0);
+    printf("  named paytable derivation ok (EV=%.6f, sigma=%.4f)\n",
+           result.total_ev, result.std_dev);
+}
+
 /* Validation errors must be rejected before any work is done. */
 static void test_validation_errors(void)
 {
@@ -177,6 +194,7 @@ int main(void)
     test_full_pay_dw();
     test_joker_kob();
     test_8_5_job();
+    test_named_paytable_derivation();
     printf("=== All Video Poker Strategy derivation tests passed ===\n");
     return 0;
 }
