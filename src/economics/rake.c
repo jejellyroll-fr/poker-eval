@@ -24,6 +24,19 @@ double pe_apply_rake(double pot, const rake_config_t *config)
     return pot - rake;
 }
 
+double pe_apply_rake_excluding_uncalled(double pot,
+                                        double uncalled,
+                                        const rake_config_t *config)
+{
+    if (!isfinite(pot) || pot < 0.0)
+        return 0.0;
+    if (!isfinite(uncalled) || uncalled < 0.0)
+        uncalled = 0.0;
+    if (uncalled > pot)
+        uncalled = pot;
+    return uncalled + pe_apply_rake(pot - uncalled, config);
+}
+
 double pe_distribute_pot_with_rake(double pot,
                                    int num_winners,
                                    double *winnings,

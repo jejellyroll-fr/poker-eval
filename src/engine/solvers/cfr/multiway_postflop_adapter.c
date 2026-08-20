@@ -1349,16 +1349,43 @@ static int mpf_active_count(const mpf_state_t *st)
     return cnt;
 }
 
+/* The unmatched part of the active player's wager is returned before rake.
+ * Folded players cannot create an uncalled excess: only the surviving
+ * player's highest contribution can be unmatched. */
+static double mpf_uncalled_amount(const mpf_state_t *st)
+{
+    if (!st || mpf_active_count(st) != 1)
+        return 0.0;
+    int active_player = -1;
+    for (int i = 0; i < st->num_players; ++i)
+        if (st->active[i])
+            active_player = i;
+    if (active_player < 0)
+        return 0.0;
+
+    double second_highest = 0.0;
+    for (int i = 0; i < st->num_players; ++i)
+    {
+        if (i == active_player)
+            continue;
+        if (st->invested[i] > second_highest)
+            second_highest = st->invested[i];
+    }
+    double uncalled = st->invested[active_player] - second_highest;
+    return uncalled > MPF_EPS ? uncalled : 0.0;
+}
+
 /* Net pot distributed at terminal nodes. Rake is deducted unless the
  * hand never saw a flop and no-flop-no-drop is configured. */
 static double mpf_terminal_pot(const mpf_state_t *st)
 {
     const rake_config_t *r = &st->rake;
+    const double uncalled = mpf_uncalled_amount(st);
     if (r->percentage <= 0.0)
         return st->pot;
     if (r->no_flop_no_drop && st->street < MPF_STREET_FLOP && st->board_revealed == 0)
         return st->pot;
-    return pe_apply_rake(st->pot, r);
+    return pe_apply_rake_excluding_uncalled(st->pot, uncalled, r);
 }
 
 static void mpf_mark_winner_fold(mpf_state_t *st, int winner)
