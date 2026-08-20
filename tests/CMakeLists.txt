@@ -160,6 +160,8 @@ add_unity_test(test_pineapple_batched_unity unity_tests/test_pineapple_batched_u
 add_unity_test(test_montecarlo_convergence_unity unity_tests/test_montecarlo_convergence_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
 add_unity_test(test_draw_optimizer test_draw_optimizer.c)
+add_unity_test(test_draw_optimizer_fn test_draw_optimizer_fn.c)
+add_unity_test(test_video_poker_strategy test_video_poker_strategy.c)
 
 # New extended Unity tests for 80% coverage
 add_unity_test(test_range_equity_per_matchup_budget unity_tests/test_range_equity_per_matchup_budget.c)
@@ -595,6 +597,20 @@ endif()
 set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
 set_tests_properties(test_paytable_ev PROPERTIES LABELS "economics;paytable")
+set_tests_properties(test_draw_optimizer_fn PROPERTIES LABELS "economics;paytable")
+set_tests_properties(test_video_poker_strategy PROPERTIES LABELS "economics;paytable;fast")
+
+# ISSUE-07 step 3 (#214): the full optimal-strategy derivation takes minutes
+# with OpenMP and hours without it, so it is only registered when OpenMP is
+# available and carries the "slow" label.
+if(OpenMP_FOUND)
+    add_poker_test(test_video_poker_derivation)
+    set_tests_properties(test_video_poker_derivation PROPERTIES TIMEOUT 3600)
+    set_tests_properties(test_video_poker_derivation PROPERTIES
+        LABELS "economics;paytable;slow")
+else()
+    message(WARNING "Skipping test_video_poker_derivation: OpenMP not enabled")
+endif()
 
 set_tests_properties(test_a5_triple_draw PROPERTIES LABELS "games;draw")
 

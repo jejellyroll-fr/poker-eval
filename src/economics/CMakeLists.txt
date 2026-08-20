@@ -5,6 +5,7 @@ set(ECONOMICS_SOURCES
     icm.c
     tournament.c
     paytable_ev.c
+    video_poker_strategy.c
 )
 
 add_library(poker_economics ${ECONOMICS_SOURCES})
@@ -16,6 +17,14 @@ target_include_directories(poker_economics PRIVATE
 
 # Link with core for basic definitions if needed
 target_link_libraries(poker_economics PUBLIC poker_core m)
+
+# The video poker strategy derivation uses the generalized draw optimizer
+# (poker_games) and groups deals by suit isomorphism (local canonical key).
+target_link_libraries(poker_economics PRIVATE poker_games)
+
+if(POKER_EVAL_WITH_OPENMP)
+    target_link_libraries(poker_economics PRIVATE OpenMP::OpenMP_C)
+endif()
 
 install(TARGETS poker_economics
         EXPORT poker-eval-targets
