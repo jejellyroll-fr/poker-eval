@@ -385,17 +385,35 @@ int pe_draw_hand_strength(enum_game_t game, StdDeck_CardMask hand,
     return 0;
 }
 
-int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
-                           StdDeck_CardMask board, StdDeck_CardMask dead_cards,
-                           pe_draw_result_t *out_result)
+/* ---- value-function based enumeration ---------------------------------- */
+
+/* Context glue for the built-in per-game value function: lets the shared
+ * enumeration below call pe_hand_value() through the generic callback. */
+typedef struct {
+    pe_value_space_t s;
+    StdDeck_CardMask board;
+    const double *opp;
+    int nopp;
+} pe_space_value_ctx_t;
+
+static double pe_space_value(StdDeck_CardMask hand, void *vctx)
 {
-    if (out_result == NULL)
+    pe_space_value_ctx_t *c = (pe_space_value_ctx_t *)vctx;
+    return pe_hand_value(c->s, hand, c->board, c->opp, c->nopp);
+}
+
+/* Shared 32-mask expected-value enumeration. `value_fn` maps a resulting
+ * 5-card hand to a comparable number (higher is better); the expected value
+ * of each discard mask is the mean of value_fn over all replacement sets
+ * drawn from the unseen pool (52 cards minus hand, board and dead). */
+static int draw_optima_enum(StdDeck_CardMask hand, StdDeck_CardMask board,
+                            StdDeck_CardMask dead_cards,
+                            pe_draw_value_fn value_fn, void *ctx,
+                            pe_draw_result_t *out_result)
+{
+    if (out_result == NULL || value_fn == NULL)
         return 1;
     if (StdDeck_numCards(hand) != 5)
-        return 1;
-
-    pe_value_space_t s;
-    if (game_to_space(game, &s) != 0)
         return 1;
 
     /* Unseen cards = deck minus hand, board and dead. */
@@ -409,13 +427,6 @@ int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
     for (int c = 0; c < StdDeck_N_CARDS; c++)
         if (StdDeck_CardMask_CARD_IS_SET(hand, c))
             hc[nh++] = c;
-
-    /* For Drawmaha with a sufficient board, precompute the Omaha strength of
-     * every possible opponent 2-card pocket once. */
-    double *opp = NULL;
-    int nopp = 0;
-    if (s == VS_DRAWMAHA && StdDeck_numCards(board) >= 3)
-        build_omaha_opponents(pool, npool, board, &opp, &nopp);
 
     for (int mask = 0; mask < 32; mask++) {
         int k = 0;
@@ -441,7 +452,7 @@ int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
         uint64_t ncombos = 0;
 
         if (k == 0) {
-            sum = pe_hand_value(s, kept, board, opp, nopp);
+            sum = value_fn(kept, ctx);
             ncombos = 1;
         } else {
             int combo[5];
@@ -454,7 +465,7 @@ int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
                     StdDeck_CardMask_SET(drawn, pool[combo[b]]);
                 StdDeck_CardMask res;
                 StdDeck_CardMask_OR(res, kept, drawn);
-                sum += pe_hand_value(s, res, board, opp, nopp);
+                sum += value_fn(res, ctx);
                 ncombos++;
             } while (next_combination(combo, k, npool));
         }
@@ -466,12 +477,52 @@ int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
     out_result->num_options = 32;
     int best = 0;
     for (int m = 1; m < 32; m++)
-        if (out_result->options[m].expected_equity >
-            out_result->options[best].expected_equity)
+        if (out_result->options[m].cards_drawn <= npool &&
+            out_result->options[m].expected_equity >
+                out_result->options[best].expected_equity)
             best = m;
     out_result->optimal_mask = best;
     out_result->max_equity = out_result->options[best].expected_equity;
 
-    free(opp);
     return 0;
+}
+
+int pe_compute_draw_optima(enum_game_t game, StdDeck_CardMask hand,
+                           StdDeck_CardMask board, StdDeck_CardMask dead_cards,
+                           pe_draw_result_t *out_result)
+{
+    if (out_result == NULL)
+        return 1;
+    if (StdDeck_numCards(hand) != 5)
+        return 1;
+
+    pe_value_space_t s;
+    if (game_to_space(game, &s) != 0)
+        return 1;
+
+    /* For Drawmaha with a sufficient board, precompute the Omaha strength of
+     * every possible opponent 2-card pocket once. */
+    double *opp = NULL;
+    int nopp = 0;
+    if (s == VS_DRAWMAHA && StdDeck_numCards(board) >= 3) {
+        int pool[StdDeck_N_CARDS];
+        int npool = unseen_pool(hand, board, dead_cards, pool);
+        build_omaha_opponents(pool, npool, board, &opp, &nopp);
+    }
+
+    pe_space_value_ctx_t vctx = { s, board, opp, nopp };
+    int rc = draw_optima_enum(hand, board, dead_cards, pe_space_value, &vctx,
+                              out_result);
+
+    free(opp);
+    return rc;
+}
+
+int pe_compute_draw_optima_fn(StdDeck_CardMask hand, StdDeck_CardMask board,
+                              StdDeck_CardMask dead_cards,
+                              pe_draw_value_fn value_fn, void *ctx,
+                              pe_draw_result_t *out_result)
+{
+    return draw_optima_enum(hand, board, dead_cards, value_fn, ctx,
+                            out_result);
 }

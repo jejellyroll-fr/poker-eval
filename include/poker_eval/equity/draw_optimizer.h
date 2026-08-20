@@ -70,4 +70,41 @@ POKEREVAL_EXPORT int pe_draw_hand_strength(
     StdDeck_CardMask dead_cards,
     double *out_strength);
 
+/* Value function callback for pe_compute_draw_optima_fn: maps a resulting
+ * 5-card hand to a comparable number, with higher values preferred by the
+ * optimizer. Unlike the built-in equity value (a normalized strength in
+ * [0, 1] against a random hand of the same kind), the callback is free to
+ * return any comparable quantity -- e.g. a video poker paytable payout, an
+ * unbounded multiplier. `ctx` is an opaque caller context.
+ *
+ * The callback is invoked from within pe_compute_draw_optima_fn only, and
+ * must be reentrant: the optimizer is thread-safe and callers may share one
+ * callback/context across OpenMP threads. */
+typedef double (*pe_draw_value_fn)(StdDeck_CardMask hand, void *ctx);
+
+/* Computes EV for all 32 discard masks using a caller-supplied value
+ * function instead of the built-in per-game equity. This generalises the
+ * objective of pe_compute_draw_optima: a paytable-aware caller can pass a
+ * function returning the expected *payout* of the resulting hand, which the
+ * equity objective cannot express (e.g. breaking a made flush to draw to a
+ * royal is correct under a paytable that pays 800-to-1, and never correct
+ * under an equity objective).
+ *
+ * The enumeration is otherwise identical to pe_compute_draw_optima: the
+ * unseen pool is the 52-card deck minus hand, board and dead cards, and the
+ * expected value of discard mask D is the mean of value_fn over every
+ * replacement set. pe_draw_result_t.expected_equity therefore carries the
+ * callback's value space (which need not be [0, 1]).
+ *
+ * Returns 0 on success, non-zero on error (NULL out_result or value_fn, or a
+ * hand that is not exactly 5 cards). pe_compute_draw_optima's behaviour is
+ * unchanged; it remains the entry point for the built-in equity objective. */
+POKEREVAL_EXPORT int pe_compute_draw_optima_fn(
+    StdDeck_CardMask hand,
+    StdDeck_CardMask board,
+    StdDeck_CardMask dead_cards,
+    pe_draw_value_fn value_fn,
+    void *ctx,
+    pe_draw_result_t *out_result);
+
 #endif /* POKER_EVAL_DRAW_OPTIMIZER_H */
