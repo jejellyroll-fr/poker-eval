@@ -681,6 +681,18 @@ typedef struct cfr_exploitability_result_t {
     double nash_distance;                   /* Distance to Nash equilibrium estimate */
 } cfr_exploitability_result_t;
 
+/* Multiway stability audit (ISSUE-15, #171). The CCE gap is the largest
+ * unilateral deviation gain; total_exploitability remains the NashConv sum
+ * exposed by cfr_exploitability_multiway(). */
+typedef struct cfr_multiway_audit_result_t {
+    int num_players;
+    double cce_gap;
+    double max_player_exploitability[CFR_MAX_PLAYERS];
+    double total_pot_ev_imbalance;
+    int has_collusive_ev_transfer;
+    int has_nonfinite_metrics;
+} cfr_multiway_audit_result_t;
+
 /**
  * Calculate exploitability for multiway games
  *
@@ -699,6 +711,16 @@ int cfr_exploitability_multiway(
     cfr_storage_t* storage,
     void* user_data,
     cfr_exploitability_result_t* out_result
+);
+
+/* Audit the current multiway average strategy. The conservation flag is a
+ * diagnostic heuristic: in a zero-sum chip game, a non-zero total policy EV
+ * indicates payoff leakage or an apparent transfer that needs investigation. */
+int cfr_audit_multiway(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    void *user_data,
+    cfr_multiway_audit_result_t *out_result
 );
 
 /**
