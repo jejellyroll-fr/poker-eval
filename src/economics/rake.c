@@ -3,10 +3,18 @@
  */
 
 #include <poker_eval/economics/rake.h>
-#include <float.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
+
+static int pe_rake_is_nonfinite(double value)
+{
+    uint64_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    return (bits & UINT64_C(0x7ff0000000000000)) ==
+           UINT64_C(0x7ff0000000000000);
+}
 
 /* ============================================================================
  * BASIC RAKE FUNCTIONS (backwards compatible)
@@ -29,9 +37,9 @@ double pe_apply_rake_excluding_uncalled(double pot,
                                         double uncalled,
                                         const rake_config_t *config)
 {
-    if (pot != pot || pot > DBL_MAX || pot < 0.0)
+    if (pe_rake_is_nonfinite(pot) || pot < 0.0)
         return 0.0;
-    if (uncalled != uncalled || uncalled > DBL_MAX || uncalled < 0.0)
+    if (pe_rake_is_nonfinite(uncalled) || uncalled < 0.0)
         uncalled = 0.0;
     if (uncalled > pot)
         uncalled = pot;
