@@ -15,6 +15,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <errno.h>
+#include <float.h>
 #if !defined(_WIN32)
 #include <poker_eval/core/pthread_compat.h>
 #endif
@@ -1319,6 +1320,325 @@ int cfr_exploitability_multiway(
     out_result->nash_distance = sqrt(sq_sum) / num_players;
     
     return 0;
+}
+
+static int cfr_audit_metric_finite(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
+
+typedef struct
+{
+    uint64_t key;
+    int num_actions;
+    int actions[CFR_MAX_ACTIONS];
+    int selected;
+    double action_values[CFR_MAX_ACTIONS];
+} cfr_audit_infoset_t;
+
+typedef struct
+{
+    cfr_game_t *game;
+    cfr_storage_t *storage;
+    int br_player;
+    void *user_data;
+    cfr_audit_infoset_t *infosets;
+    size_t count;
+    size_t capacity;
+    int failed;
+} cfr_audit_br_context_t;
+
+static cfr_audit_infoset_t *cfr_audit_find_infoset(
+    cfr_audit_br_context_t *ctx, uint64_t key, int num_actions,
+    const int *actions)
+{
+    for (size_t i = 0; i < ctx->count; ++i)
+        if (ctx->infosets[i].key == key)
+        {
+            if (ctx->infosets[i].num_actions != num_actions)
+                ctx->failed = 1;
+            return &ctx->infosets[i];
+        }
+
+    if (ctx->count == ctx->capacity)
+    {
+        size_t capacity = ctx->capacity ? ctx->capacity * 2 : 64;
+        cfr_audit_infoset_t *grown = (cfr_audit_infoset_t *)realloc(
+            ctx->infosets, capacity * sizeof(*grown));
+        if (!grown)
+        {
+            ctx->failed = 1;
+            return NULL;
+        }
+        ctx->infosets = grown;
+        ctx->capacity = capacity;
+    }
+
+    cfr_audit_infoset_t *entry = &ctx->infosets[ctx->count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->key = key;
+    entry->num_actions = num_actions;
+    entry->selected = 0;
+    for (int i = 0; i < num_actions; ++i)
+        entry->actions[i] = actions[i];
+    return entry;
+}
+
+static double cfr_audit_br_value(cfr_audit_br_context_t *ctx,
+                                 uint64_t state_key,
+                                 int depth);
+
+static void cfr_audit_collect(cfr_audit_br_context_t *ctx,
+                              uint64_t state_key,
+                              double counterfactual_reach,
+                              int depth)
+{
+    cfr_game_t *game = ctx->game;
+    if (ctx->failed || depth > CFR_DEFAULT_MAX_DEPTH ||
+        game->is_terminal(game, state_key, ctx->user_data))
+        return;
+
+    if (game->is_chance && game->is_chance(game, state_key, ctx->user_data))
+    {
+        int outcomes = game->get_chance_outcomes
+            ? game->get_chance_outcomes(game, state_key, ctx->user_data) : 0;
+        double total_weight = 0.0;
+        for (int i = 0; i < outcomes; ++i)
+            total_weight += cfr_chance_weight(game, state_key, i, ctx->user_data);
+        if (outcomes <= 0 || total_weight <= 0.0)
+            return;
+        for (int i = 0; i < outcomes; ++i)
+        {
+            uint64_t child = game->apply_chance(game, state_key, i,
+                                                ctx->user_data);
+            double weight = cfr_chance_weight(game, state_key, i,
+                                              ctx->user_data) / total_weight;
+            cfr_audit_collect(ctx, child, counterfactual_reach * weight,
+                              depth + 1);
+            if (game->release_state)
+                game->release_state(game, child, ctx->user_data);
+        }
+        return;
+    }
+
+    int current_player = game->current_player
+        ? game->current_player(game, state_key, ctx->user_data) : -1;
+    int actions[CFR_MAX_ACTIONS];
+    int num_actions = game->get_actions(game, state_key, actions,
+                                        CFR_MAX_ACTIONS, ctx->user_data);
+    if (current_player < 0 || num_actions <= 0 || num_actions > CFR_MAX_ACTIONS)
+        return;
+
+    if (current_player == ctx->br_player)
+    {
+        cfr_audit_infoset_t *entry = cfr_audit_find_infoset(
+            ctx, cfr_storage_key(game, state_key), num_actions, actions);
+        if (!entry)
+            return;
+        size_t entry_index = (size_t)(entry - ctx->infosets);
+        for (int i = 0; i < num_actions; ++i)
+        {
+            uint64_t child = game->apply_action(game, state_key, actions[i],
+                                                ctx->user_data);
+            double child_value = cfr_audit_br_value(ctx, child, depth + 1);
+            /* Recursive discovery can realloc the infoset table. Reacquire
+             * the entry by index before accumulating its action value. */
+            entry = &ctx->infosets[entry_index];
+            entry->action_values[i] += counterfactual_reach * child_value;
+            /* Explore every own-action branch when collecting infosets: a
+             * future information set must not disappear just because the
+             * current provisional BR policy does not select this action. */
+            cfr_audit_collect(ctx, child, counterfactual_reach, depth + 1);
+            if (game->release_state)
+                game->release_state(game, child, ctx->user_data);
+        }
+        return;
+    }
+
+    double avg_strategy[CFR_MAX_ACTIONS];
+    cfr_storage_get_avg_strategy(ctx->storage,
+                                 cfr_storage_key(game, state_key),
+                                 num_actions, avg_strategy);
+    for (int i = 0; i < num_actions; ++i)
+    {
+        uint64_t child = game->apply_action(game, state_key, actions[i],
+                                            ctx->user_data);
+        cfr_audit_collect(ctx, child, counterfactual_reach * avg_strategy[i],
+                          depth + 1);
+        if (game->release_state)
+            game->release_state(game, child, ctx->user_data);
+    }
+}
+
+static double cfr_audit_br_value(cfr_audit_br_context_t *ctx,
+                                 uint64_t state_key,
+                                 int depth)
+{
+    cfr_game_t *game = ctx->game;
+    if (ctx->failed || depth > CFR_DEFAULT_MAX_DEPTH)
+        return 0.0;
+    if (game->is_terminal(game, state_key, ctx->user_data))
+        return cfr_terminal_utility(game, state_key, ctx->br_player,
+                                    game->num_players > 0 ? game->num_players : 2,
+                                    ctx->user_data);
+
+    if (game->is_chance && game->is_chance(game, state_key, ctx->user_data))
+    {
+        int outcomes = game->get_chance_outcomes
+            ? game->get_chance_outcomes(game, state_key, ctx->user_data) : 0;
+        double total_weight = 0.0;
+        double value = 0.0;
+        for (int i = 0; i < outcomes; ++i)
+            total_weight += cfr_chance_weight(game, state_key, i,
+                                              ctx->user_data);
+        if (outcomes <= 0 || total_weight <= 0.0)
+            return 0.0;
+        for (int i = 0; i < outcomes; ++i)
+        {
+            uint64_t child = game->apply_chance(game, state_key, i,
+                                                ctx->user_data);
+            value += cfr_chance_weight(game, state_key, i,
+                                       ctx->user_data) / total_weight *
+                     cfr_audit_br_value(ctx, child, depth + 1);
+            if (game->release_state)
+                game->release_state(game, child, ctx->user_data);
+        }
+        return value;
+    }
+
+    int current_player = game->current_player
+        ? game->current_player(game, state_key, ctx->user_data) : -1;
+    int actions[CFR_MAX_ACTIONS];
+    int num_actions = game->get_actions(game, state_key, actions,
+                                        CFR_MAX_ACTIONS, ctx->user_data);
+    if (current_player < 0 || num_actions <= 0 || num_actions > CFR_MAX_ACTIONS)
+        return 0.0;
+
+    if (current_player == ctx->br_player)
+    {
+        cfr_audit_infoset_t *entry = cfr_audit_find_infoset(
+            ctx, cfr_storage_key(game, state_key), num_actions, actions);
+        int selected = entry ? entry->selected : 0;
+        if (selected < 0 || selected >= num_actions)
+            selected = 0;
+        uint64_t child = game->apply_action(game, state_key, actions[selected],
+                                            ctx->user_data);
+        double value = cfr_audit_br_value(ctx, child, depth + 1);
+        if (game->release_state)
+            game->release_state(game, child, ctx->user_data);
+        return value;
+    }
+
+    double avg_strategy[CFR_MAX_ACTIONS];
+    cfr_storage_get_avg_strategy(ctx->storage,
+                                 cfr_storage_key(game, state_key),
+                                 num_actions, avg_strategy);
+    double value = 0.0;
+    for (int i = 0; i < num_actions; ++i)
+    {
+        uint64_t child = game->apply_action(game, state_key, actions[i],
+                                            ctx->user_data);
+        value += avg_strategy[i] * cfr_audit_br_value(ctx, child, depth + 1);
+        if (game->release_state)
+            game->release_state(game, child, ctx->user_data);
+    }
+    return value;
+}
+
+static double cfr_best_response_value_infoset(cfr_game_t *game,
+                                              cfr_storage_t *storage,
+                                              int player,
+                                              void *user_data)
+{
+    cfr_audit_br_context_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.game = game;
+    ctx.storage = storage;
+    ctx.br_player = player;
+    ctx.user_data = user_data;
+
+    uint64_t root_key = (uint64_t)game->initial_state;
+    if (!root_key && game->initial_state)
+        root_key = (uint64_t)(uintptr_t)game->initial_state;
+
+    for (int iteration = 0; iteration < 32; ++iteration)
+    {
+        for (size_t i = 0; i < ctx.count; ++i)
+            memset(ctx.infosets[i].action_values, 0,
+                   sizeof(ctx.infosets[i].action_values));
+        size_t before = ctx.count;
+        cfr_audit_collect(&ctx, root_key, 1.0, 0);
+        if (ctx.failed)
+        {
+            free(ctx.infosets);
+            return 0.0;
+        }
+
+        int changed = (ctx.count != before);
+        for (size_t i = 0; i < ctx.count; ++i)
+        {
+            int best = 0;
+            for (int action = 1; action < ctx.infosets[i].num_actions; ++action)
+                if (ctx.infosets[i].action_values[action] >
+                    ctx.infosets[i].action_values[best])
+                    best = action;
+            if (best != ctx.infosets[i].selected)
+            {
+                ctx.infosets[i].selected = best;
+                changed = 1;
+            }
+        }
+        if (!changed && iteration > 0)
+            break;
+    }
+
+    double result = cfr_audit_br_value(&ctx, root_key, 0);
+    free(ctx.infosets);
+    return result;
+}
+
+int cfr_audit_multiway(cfr_game_t *game,
+                       cfr_storage_t *storage,
+                       void *user_data,
+                       cfr_multiway_audit_result_t *out_result)
+{
+    if (!game || !storage || !out_result)
+        return -1;
+
+    cfr_policy_value_result_t policy;
+    int num_players = game->num_players > 0 ? game->num_players : 2;
+    if (num_players <= 0 || num_players > CFR_MAX_PLAYERS ||
+        cfr_compute_policy_values_detailed(game, storage, user_data, &policy) != 0)
+        return -1;
+
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->num_players = num_players;
+    double policy_sum = 0.0;
+    double cce_gap = 0.0;
+    for (int p = 0; p < num_players; ++p)
+    {
+        const double br_value = cfr_best_response_value_infoset(
+            game, storage, p, user_data);
+        const double player_exploitability = br_value - policy.ev[p];
+        out_result->max_player_exploitability[p] = player_exploitability;
+        if (!cfr_audit_metric_finite(br_value) ||
+            !cfr_audit_metric_finite(policy.ev[p]) ||
+            !cfr_audit_metric_finite(player_exploitability))
+            out_result->has_nonfinite_metrics = 1;
+        if (player_exploitability > cce_gap)
+            cce_gap = player_exploitability;
+        policy_sum += policy.ev[p];
+    }
+
+    out_result->cce_gap = cce_gap > 0.0 ? cce_gap : 0.0;
+    out_result->total_pot_ev_imbalance = fabs(policy_sum);
+    if (!cfr_audit_metric_finite(out_result->total_pot_ev_imbalance) ||
+        !cfr_audit_metric_finite(out_result->cce_gap))
+        out_result->has_nonfinite_metrics = 1;
+    out_result->has_collusive_ev_transfer =
+        game->utility.utility_fn == NULL &&
+        out_result->total_pot_ev_imbalance > 1e-9;
+    return out_result->has_nonfinite_metrics ? -1 : 0;
 }
 
 void cfr_exploitability_print(const cfr_exploitability_result_t *result)
