@@ -3,6 +3,7 @@
  */
 
 #include <poker_eval/economics/rake.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,9 +29,9 @@ double pe_apply_rake_excluding_uncalled(double pot,
                                         double uncalled,
                                         const rake_config_t *config)
 {
-    if (!isfinite(pot) || pot < 0.0)
+    if (pot != pot || pot > DBL_MAX || pot < 0.0)
         return 0.0;
-    if (!isfinite(uncalled) || uncalled < 0.0)
+    if (uncalled != uncalled || uncalled > DBL_MAX || uncalled < 0.0)
         uncalled = 0.0;
     if (uncalled > pot)
         uncalled = pot;
