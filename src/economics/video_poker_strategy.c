@@ -386,8 +386,10 @@ static vp_class_slot_t *vp_class_insert(vp_class_slot_t *table, uint64_t hash,
         vp_class_slot_t *s = &table[idx];
         if (s->key[0] == '\0') { /* empty slot */
             s->hash = hash;
-            strncpy(s->key, key, 10);
-            s->key[10] = '\0';
+            size_t key_len = strnlen(key, sizeof(s->key) - 1);
+            for (size_t i = 0; i < key_len; i++)
+                s->key[i] = key[i];
+            s->key[key_len] = '\0';
             s->orbit = 0;
             return s;
         }
@@ -459,14 +461,23 @@ static void vp_suit_key_core(const int *r, const int *s, int n, char *key)
             g = h;
         }
         *p = '\0';
-        if (best[0] == '\0' || strcmp(buf, best) < 0)
-            memcpy(best, buf, (size_t)(p - buf) + 1);
+        if (best[0] == '\0' || strcmp(buf, best) < 0) {
+            size_t best_len = (size_t)(p - buf) + 1;
+            if (best_len <= sizeof(best)) {
+                for (size_t i = 0; i < best_len; i++)
+                    best[i] = buf[i];
+            }
+        }
     } while (vp_next_perm(perm, 4));
 
     /* Copy only the encoded key and its terminator.  Callers may reserve a
      * prefix byte (the joker marker), so copying the full local buffer here
      * would write one byte past their destination. */
-    memcpy(key, best, (size_t)(2 * n + 1));
+    size_t key_len = (size_t)(2 * n) + 1;
+    if (key_len <= sizeof(best)) {
+        for (size_t i = 0; i < key_len; i++)
+            key[i] = best[i];
+    }
 }
 
 static void vp_suit_key(StdDeck_CardMask hand, int n, char *key)
@@ -881,9 +892,15 @@ static int vp_derive_class(vp_ctx_t *ctx, vp_cnt_slot_t *cnt,
             if (ctx->variant == PE_VP_JOKER_POKER && !deal_has_joker &&
                 bits < ndisc) {
                 char jkey[11];
+                size_t key_len = (5 - ndisc + bits) == 0
+                                     ? 1
+                                     : (size_t)(2 * (5 - ndisc + bits));
                 jkey[0] = 'j';
-                memcpy(jkey + 1, key, sizeof(jkey) - 1);
-                jkey[sizeof(jkey) - 1] = '\0';
+                if (key_len + 2 > sizeof(jkey))
+                    return -1;
+                for (size_t i = 0; i < key_len; i++)
+                    jkey[i + 1] = key[i];
+                jkey[key_len + 1] = '\0';
                 sj = vp_cnt_find(cnt, vp_key_hash(jkey), jkey);
                 if (sj == NULL)
                     return -1;
@@ -918,7 +935,8 @@ static int vp_derive_class(vp_ctx_t *ctx, vp_cnt_slot_t *cnt,
         if (ev > best_ev) {
             best_ev = ev;
             best_mask = mask;
-            memcpy(best_n, N, sizeof(best_n));
+            for (int c = 0; c < ncats; c++)
+                best_n[c] = N[c];
         }
     }
 
