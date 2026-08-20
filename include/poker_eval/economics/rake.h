@@ -115,6 +115,18 @@ typedef struct {
 POKEREVAL_EXPORT double pe_apply_rake(double pot, const rake_config_t *config);
 
 /**
+ * Apply rake only to the called portion of a pot.
+ *
+ * @param pot Total contributions in the pot.
+ * @param uncalled Amount of the last unmatched wager to return without rake.
+ * @return Net pot including the returned uncalled amount.
+ */
+POKEREVAL_EXPORT double pe_apply_rake_excluding_uncalled(
+    double pot,
+    double uncalled,
+    const rake_config_t *config);
+
+/**
  * Distribute pot after rake to winners (basic version)
  * @param pot Total pot before rake
  * @param num_winners Number of winners
