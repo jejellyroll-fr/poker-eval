@@ -1251,6 +1251,8 @@ add_unity_test(test_tournament test_tournament.c)
 set_tests_properties(test_tournament PROPERTIES LABELS "economics;tournament")
 add_unity_test(test_rake_extended test_rake_extended.c)
 set_tests_properties(test_rake_extended PROPERTIES LABELS "economics;rake")
+add_poker_test(test_bankroll)
+set_tests_properties(test_bankroll PROPERTIES LABELS "economics;bankroll;issue169")
 
 # Phase 4 Range Equity Tests
 add_poker_test(test_range_equity)

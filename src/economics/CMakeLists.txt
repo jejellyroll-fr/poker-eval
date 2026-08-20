@@ -6,6 +6,7 @@ set(ECONOMICS_SOURCES
     tournament.c
     paytable_ev.c
     video_poker_strategy.c
+    bankroll.c
 )
 
 add_library(poker_economics ${ECONOMICS_SOURCES})
