@@ -32,8 +32,9 @@ typedef double (*pe_bet_size_ev_fn)(double bet_size_fraction,
                                     void *ctx);
 
 /* Find the best candidate and build a mixed strategy over tied candidates.
- * Candidates must be finite and strictly positive. Ties use a relative
- * tolerance so small floating-point noise does not remove a mix. */
+ * Candidates must be finite and strictly positive. Fractions that map to the
+ * same capped amount are consolidated into one canonical action. Ties use a
+ * relative tolerance so small floating-point noise does not remove a mix. */
 POKEREVAL_EXPORT int pe_optimal_bet_size(
     double pot,
     double effective_stack,

@@ -25,6 +25,13 @@ static double indifferent_value(double fraction, double amount, void *ctx)
     return *(const double *)ctx;
 }
 
+static double amount_value(double fraction, double amount, void *ctx)
+{
+    (void)fraction;
+    (void)ctx;
+    return amount;
+}
+
 static void test_polarized_and_condensed_ranges(void)
 {
     const double candidates[] = {0.25, 0.5, 1.0};
@@ -68,11 +75,25 @@ static void test_invalid_inputs(void)
                                polarized_value, NULL, &result) == -1);
 }
 
+static void test_capped_amounts_are_consolidated(void)
+{
+    const double candidates[] = {0.5, 1.0, 2.0};
+    pe_bet_sizing_result_t result;
+
+    assert(pe_optimal_bet_size(100.0, 25.0, candidates, 3,
+                               amount_value, NULL, &result) == 0);
+    assert(result.num_sizes == 1);
+    assert(result.optimal_index == 0);
+    assert(result.sizes[0].bet_amount == 25.0);
+    assert(result.sizes[0].frequency == 1.0);
+}
+
 int main(void)
 {
     test_polarized_and_condensed_ranges();
     test_indifferent_candidates_are_mixed();
     test_invalid_inputs();
+    test_capped_amounts_are_consolidated();
     puts("bet sizing tests passed");
     return 0;
 }
