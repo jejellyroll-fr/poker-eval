@@ -463,7 +463,10 @@ static void vp_suit_key_core(const int *r, const int *s, int n, char *key)
             memcpy(best, buf, (size_t)(p - buf) + 1);
     } while (vp_next_perm(perm, 4));
 
-    memcpy(key, best, 11);
+    /* Copy only the encoded key and its terminator.  Callers may reserve a
+     * prefix byte (the joker marker), so copying the full local buffer here
+     * would write one byte past their destination. */
+    memcpy(key, best, (size_t)(2 * n + 1));
 }
 
 static void vp_suit_key(StdDeck_CardMask hand, int n, char *key)
@@ -879,7 +882,8 @@ static int vp_derive_class(vp_ctx_t *ctx, vp_cnt_slot_t *cnt,
                 bits < ndisc) {
                 char jkey[11];
                 jkey[0] = 'j';
-                memcpy(jkey + 1, key, 10);
+                memcpy(jkey + 1, key, sizeof(jkey) - 1);
+                jkey[sizeof(jkey) - 1] = '\0';
                 sj = vp_cnt_find(cnt, vp_key_hash(jkey), jkey);
                 if (sj == NULL)
                     return -1;
@@ -1102,13 +1106,13 @@ int pe_video_poker_derive_strategy(pe_video_poker_variant_t variant,
     {
         long long local[PE_PAYTABLE_MAX_ROWS] = { 0 };
 #pragma omp for schedule(dynamic, 8)
-        for (size_t i = 0; i < VP_CLASS_TABLE_SIZE; i++) {
+        for (int i = 0; i < (int)VP_CLASS_TABLE_SIZE; i++) {
             vp_class_slot_t *s = &table[i];
             if (s->key[0] == '\0')
                 continue;
             long long per_class[PE_PAYTABLE_MAX_ROWS] = { 0 };
             if (vp_derive_class(&ctx, cnt, s->rep, per_class, NULL) != 0) {
-#pragma omp atomic write
+#pragma omp critical(vp_derivation_error)
                 err = 1;
                 continue;
             }
