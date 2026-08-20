@@ -14,7 +14,7 @@ static int has_card(StdDeck_CardMask hand, int card)
     return StdDeck_CardMask_CARD_IS_SET(hand, card) != 0;
 }
 
-static double four_bet_likelihood(uint16_t index,
+static double four_bet_likelihood(size_t index,
                                   StdDeck_CardMask hand,
                                   int action,
                                   void *user_data)
@@ -27,7 +27,7 @@ static double four_bet_likelihood(uint16_t index,
     return has_card(hand, ace_spades) ? 1.0 : 0.0;
 }
 
-static double impossible_action(uint16_t index,
+static double impossible_action(size_t index,
                                 StdDeck_CardMask hand,
                                 int action,
                                 void *user_data)
@@ -39,7 +39,7 @@ static double impossible_action(uint16_t index,
     return 0.0;
 }
 
-static double invalid_likelihood(uint16_t index,
+static double invalid_likelihood(size_t index,
                                  StdDeck_CardMask hand,
                                  int action,
                                  void *user_data)
@@ -49,6 +49,18 @@ static double invalid_likelihood(uint16_t index,
     (void)action;
     (void)user_data;
     return 1.5;
+}
+
+static double tiny_likelihood(size_t index,
+                              StdDeck_CardMask hand,
+                              int action,
+                              void *user_data)
+{
+    (void)index;
+    (void)hand;
+    (void)action;
+    (void)user_data;
+    return ldexp(1.0, -1074);
 }
 
 static void test_bayesian_update(void)
@@ -86,10 +98,27 @@ static void test_invalid_or_zero_evidence(void)
     pe_range_free(range);
 }
 
+static void test_subnormal_evidence_is_safe(void)
+{
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_RESET(dead);
+    pe_range_t *range = NULL;
+    assert(pe_range_parse(game_holdem, "AsAh,KsKh", dead, NULL, &range) ==
+           PE_STATUS_OK);
+    assert(pe_range_bayesian_update(range, 1, tiny_likelihood, NULL) ==
+           PE_STATUS_OK);
+    assert(isfinite(range->combos[0].weight));
+    assert(isfinite(range->combos[1].weight));
+    assert(fabs(range->combos[0].weight - 1.0) < 1e-12);
+    assert(fabs(range->combos[1].weight - 1.0) < 1e-12);
+    pe_range_free(range);
+}
+
 int main(void)
 {
     test_bayesian_update();
     test_invalid_or_zero_evidence();
+    test_subnormal_evidence_is_safe();
     puts("range bayesian tests passed");
     return 0;
 }

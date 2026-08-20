@@ -47,6 +47,7 @@
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/pokereval_export.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 
@@ -115,7 +116,7 @@ typedef struct {
  * identifies the exact two-card combination being evaluated.
  */
 typedef double (*pe_action_likelihood_fn)(
-    uint16_t combo_index,
+    size_t combo_index,
     StdDeck_CardMask combo_cards,
     int action_id,
     void *user_data
@@ -220,7 +221,7 @@ pe_status_t pe_range_create(enum_game_t variant, pe_range_t **out_range);
  * @return PE_STATUS_OK, PE_STATUS_INVALID_ARG, or PE_STATUS_ERROR when the
  *         range is empty/invalid or the observed action has zero evidence.
  */
-POKEREVAL_EXPORT pe_status_t pe_range_bayesian_update(
+extern POKEREVAL_EXPORT pe_status_t pe_range_bayesian_update(
     pe_range_t *range,
     int observed_action,
     pe_action_likelihood_fn likelihood_fn,
