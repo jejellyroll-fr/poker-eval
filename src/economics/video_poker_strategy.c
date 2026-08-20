@@ -482,6 +482,7 @@ static void vp_suit_key_core(const int *r, const int *s, int n, char *key)
 
 static void vp_suit_key(StdDeck_CardMask hand, int n, char *key)
 {
+    key[0] = '\0';
     int r[5], s[5];
     int i = 0;
     for (int c = 0; c < StdDeck_N_CARDS && i < n; c++)
@@ -512,6 +513,7 @@ static void vp_suit_key(StdDeck_CardMask hand, int n, char *key)
  * natural suit relabeling can never collide with it. */
 static void vp_set_key(StdDeck_CardMask set, int t, char *key)
 {
+    key[0] = '\0';
     int r[5], s[5];
     int i = 0;
     int has_joker = 0;
@@ -582,7 +584,7 @@ static long long vp_build_classes(vp_class_slot_t *table, int *nclasses_out)
                         StdDeck_CardMask_SET(m, c);
                         StdDeck_CardMask_SET(m, d);
                         StdDeck_CardMask_SET(m, e);
-                        char key[11];
+                        char key[11] = {0};
                         vp_suit_key(m, 5, key);
                         vp_class_slot_t *s =
                             vp_class_insert(table, vp_key_hash(key), key);
@@ -615,7 +617,7 @@ static long long vp_build_joker_classes(vp_class_slot_t *table,
                     StdDeck_CardMask_SET(m, b);
                     StdDeck_CardMask_SET(m, c);
                     StdDeck_CardMask_SET(m, d);
-                    char key[11];
+                    char key[11] = {0};
                     vp_suit_key(m, 4, key);
                     vp_class_slot_t *s =
                         vp_class_insert(table, vp_key_hash(key), key);
