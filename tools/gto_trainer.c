@@ -85,9 +85,10 @@ int main(int argc, char **argv)
 
         printf("Spot %d/%d  infoset=0x%016llx\n", round + 1, rounds,
                (unsigned long long)key);
+        printf("Available actions:");
         for (int action = 0; action < actions; ++action)
-            printf("  action %d: %.1f%%\n", action, probabilities[action] * 100.0);
-        printf("Your action: ");
+            printf(" %d", action);
+        printf("\nYour action: ");
         fflush(stdout);
         char answer[32];
         if (!fgets(answer, sizeof(answer), stdin) || answer[0] == 'q' || answer[0] == 'Q')
@@ -101,10 +102,14 @@ int main(int argc, char **argv)
             continue;
         }
         ++answered;
-        if ((int)selected == best)
+        printf("Solved strategy:\n");
+        for (int action = 0; action < actions; ++action)
+            printf("  action %d: %.1f%%\n", action, probabilities[action] * 100.0);
+        if (probabilities[selected] >= probabilities[best])
         {
             ++correct;
-            printf("Correct: action %d has the highest solved frequency.\n\n", best);
+            printf("Correct: action %ld has the highest solved frequency.\n\n",
+                   selected);
         }
         else
         {
