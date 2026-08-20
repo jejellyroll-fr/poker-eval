@@ -15,6 +15,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <errno.h>
+#include <float.h>
 #if !defined(_WIN32)
 #include <poker_eval/core/pthread_compat.h>
 #endif
@@ -1319,6 +1320,53 @@ int cfr_exploitability_multiway(
     out_result->nash_distance = sqrt(sq_sum) / num_players;
     
     return 0;
+}
+
+static int cfr_audit_metric_finite(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
+
+int cfr_audit_multiway(cfr_game_t *game,
+                       cfr_storage_t *storage,
+                       void *user_data,
+                       cfr_multiway_audit_result_t *out_result)
+{
+    if (!game || !storage || !out_result)
+        return -1;
+
+    cfr_exploitability_result_t exploitability;
+    if (cfr_exploitability_multiway(game, storage, user_data,
+                                    &exploitability) != 0 ||
+        exploitability.num_players <= 0 ||
+        exploitability.num_players > CFR_MAX_PLAYERS)
+        return -1;
+
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->num_players = exploitability.num_players;
+    double policy_sum = 0.0;
+    double cce_gap = 0.0;
+    for (int p = 0; p < exploitability.num_players; ++p)
+    {
+        const double player_exploitability = exploitability.exploitability[p];
+        out_result->max_player_exploitability[p] = player_exploitability;
+        if (!cfr_audit_metric_finite(exploitability.br_value[p]) ||
+            !cfr_audit_metric_finite(exploitability.policy_value[p]) ||
+            !cfr_audit_metric_finite(player_exploitability))
+            out_result->has_nonfinite_metrics = 1;
+        if (player_exploitability > cce_gap)
+            cce_gap = player_exploitability;
+        policy_sum += exploitability.policy_value[p];
+    }
+
+    out_result->cce_gap = cce_gap > 0.0 ? cce_gap : 0.0;
+    out_result->total_pot_ev_imbalance = fabs(policy_sum);
+    if (!cfr_audit_metric_finite(out_result->total_pot_ev_imbalance) ||
+        !cfr_audit_metric_finite(out_result->cce_gap))
+        out_result->has_nonfinite_metrics = 1;
+    out_result->has_collusive_ev_transfer =
+        out_result->total_pot_ev_imbalance > 1e-9;
+    return out_result->has_nonfinite_metrics ? -1 : 0;
 }
 
 void cfr_exploitability_print(const cfr_exploitability_result_t *result)
