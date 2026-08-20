@@ -12,6 +12,7 @@ set(ENGINE_SOURCES
     solvers/cfr/board_canonical.c
     solvers/cfr/board_texture.c
     solvers/cfr/strength_bucketing.c
+    solvers/cfr/draw_abstraction.c
     solvers/cfr/cfr_core.c
     solvers/cfr/bet_sizing.c
     solvers/cfr/cfr_storage.c
