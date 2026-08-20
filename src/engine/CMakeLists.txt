@@ -13,6 +13,7 @@ set(ENGINE_SOURCES
     solvers/cfr/board_texture.c
     solvers/cfr/strength_bucketing.c
     solvers/cfr/cfr_core.c
+    solvers/cfr/bet_sizing.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/hand_clustering.c
     solvers/cfr/holdem_river_adapter.c
