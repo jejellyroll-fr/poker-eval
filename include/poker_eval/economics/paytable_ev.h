@@ -95,6 +95,23 @@ POKEREVAL_EXPORT int pe_paytable_game_ev(
     double *out_ev
 );
 
+/*
+ * Derive a named game's optimal-hold frequencies and compute its complete
+ * paytable statistics from those frequencies. Unlike pe_paytable_get_game(),
+ * which loads the published reference table, this function runs the exact
+ * suit-isomorphism-reduced strategy derivation and is therefore intended for
+ * validation or offline analysis. It may take minutes and benefits from an
+ * OpenMP-enabled build.
+ *
+ * @param game        One of PE_VIDEO_POKER_*
+ * @param out_result  Output result structure
+ * @return 0 on success, -1 on invalid input or derivation failure
+ */
+POKEREVAL_EXPORT int pe_paytable_derive_game(
+    pe_video_poker_game_t game,
+    pe_paytable_result_t *out_result
+);
+
 /* Pretty-print a paytable result to stdout (debug / CLI). */
 POKEREVAL_EXPORT void pe_paytable_print(const pe_paytable_result_t *result);
 
