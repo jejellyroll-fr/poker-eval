@@ -16,6 +16,7 @@ int pe_draw_features(pe_draw_variant_t variant,
 {
     const int max_cards = pe_draw_max_cards(variant);
     if (!out || max_cards == 0 || hand == MASK_EMPTY ||
+        !mask_is_valid(hand) || !mask_is_valid(discard) ||
         (discard & ~hand) != MASK_EMPTY ||
         mask_popcount(hand) > max_cards)
         return -1;
@@ -35,8 +36,12 @@ int pe_draw_features(pe_draw_variant_t variant,
         const int suit = MODERN_GET_SUIT(card);
         rank_counts[rank]++;
         suit_counts[suit]++;
-        out->rank_sum = (uint16_t)(out->rank_sum + (uint16_t)(rank + 2));
-        if (rank + 2 <= 8)
+        /* Badugi uses ace-to-five lowball ordering; 2-7 Triple Draw
+         * treats aces as high, like the rest of the 2-7 evaluator. */
+        const int draw_rank = (variant == PE_DRAW_BADUGI &&
+                               rank == MODERN_RANK_A) ? 1 : rank + 2;
+        out->rank_sum = (uint16_t)(out->rank_sum + (uint16_t)draw_rank);
+        if (draw_rank <= 8)
             out->low_cards++;
     }
     for (int rank = 0; rank < MODERN_RANK_COUNT; ++rank)

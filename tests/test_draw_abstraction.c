@@ -27,7 +27,18 @@ int main(void)
     assert(f.cards_discarded == 1);
     assert(f.distinct_ranks == 3);
     assert(f.distinct_suits == 3);
+    assert(f.rank_sum == 7); /* A=1, 4=4, 2=2, 7 discarded */
+    assert(f.low_cards == 3);
     assert(pe_draw_abstraction_key(PE_DRAW_BADUGI, badugi, MASK_EMPTY) != 0);
+
+    pe_draw_features_t ace_features;
+    assert(pe_draw_features(PE_DRAW_BADUGI, mask_set(MASK_EMPTY, badugi_cards[0]),
+                            MASK_EMPTY, &ace_features) == 0);
+    assert(ace_features.rank_sum == 1 && ace_features.low_cards == 1);
+    assert(pe_draw_features(PE_DRAW_TRIPLE_DRAW_27,
+                            mask_set(MASK_EMPTY, badugi_cards[0]),
+                            MASK_EMPTY, &ace_features) == 0);
+    assert(ace_features.rank_sum == 14 && ace_features.low_cards == 0);
 
     const int paired[] = {
         MODERN_MAKE_CARD(MODERN_RANK_2, MODERN_SUIT_CLUBS),
@@ -41,6 +52,13 @@ int main(void)
     assert(f.cards_kept == 5 && f.paired_ranks == 1);
     assert(pe_draw_features(PE_DRAW_BADUGI, triple, MASK_EMPTY, &f) != 0);
     assert(pe_draw_abstraction_key(PE_DRAW_BADUGI, triple, MASK_EMPTY) == 0);
+
+    assert(pe_draw_features(PE_DRAW_BADUGI, (mask_t)1ULL << 52,
+                            MASK_EMPTY, &f) != 0);
+    assert(pe_draw_features(PE_DRAW_BADUGI, badugi, (mask_t)1ULL << 52,
+                            &f) != 0);
+    assert(pe_draw_abstraction_key(PE_DRAW_BADUGI, (mask_t)1ULL << 52,
+                                   MASK_EMPTY) == 0);
 
     puts("Draw abstraction tests passed");
     return 0;
