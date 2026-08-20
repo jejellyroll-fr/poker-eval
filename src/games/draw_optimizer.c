@@ -477,8 +477,9 @@ static int draw_optima_enum(StdDeck_CardMask hand, StdDeck_CardMask board,
     out_result->num_options = 32;
     int best = 0;
     for (int m = 1; m < 32; m++)
-        if (out_result->options[m].expected_equity >
-            out_result->options[best].expected_equity)
+        if (out_result->options[m].cards_drawn <= npool &&
+            out_result->options[m].expected_equity >
+                out_result->options[best].expected_equity)
             best = m;
     out_result->optimal_mask = best;
     out_result->max_equity = out_result->options[best].expected_equity;

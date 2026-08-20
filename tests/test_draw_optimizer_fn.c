@@ -66,6 +66,13 @@ static double value_has_queen_spades(StdDeck_CardMask hand, void *ctx)
     return StdDeck_CardMask_CARD_IS_SET(hand, qs) ? 1.0 : 0.0;
 }
 
+static double value_always_negative(StdDeck_CardMask hand, void *ctx)
+{
+    (void)hand;
+    (void)ctx;
+    return -1.0;
+}
+
 /* Value = hand strength: used to prove equivalence with the legacy API. */
 typedef struct {
     enum_game_t game;
@@ -253,6 +260,36 @@ static void test_exact_enumeration_small_pool(void)
     printf("  exact enumeration cross-check ok\n");
 }
 
+/* 5. Impossible masks must not beat valid masks when callback values are
+ *    negative. */
+static void test_impossible_masks_are_excluded(void)
+{
+    StdDeck_CardMask hand = make_hand(
+        StdDeck_MAKE_CARD(StdDeck_Rank_2, StdDeck_Suit_CLUBS),
+        StdDeck_MAKE_CARD(StdDeck_Rank_3, StdDeck_Suit_DIAMONDS),
+        StdDeck_MAKE_CARD(StdDeck_Rank_4, StdDeck_Suit_HEARTS),
+        StdDeck_MAKE_CARD(StdDeck_Rank_5, StdDeck_Suit_SPADES),
+        StdDeck_MAKE_CARD(StdDeck_Rank_6, StdDeck_Suit_CLUBS));
+    StdDeck_CardMask board;
+    StdDeck_CardMask_RESET(board);
+    StdDeck_CardMask allowed = hand;
+    StdDeck_CardMask_SET(allowed, StdDeck_MAKE_CARD(StdDeck_Rank_TEN,
+                                                    StdDeck_Suit_HEARTS));
+    StdDeck_CardMask_SET(allowed, StdDeck_MAKE_CARD(StdDeck_Rank_JACK,
+                                                    StdDeck_Suit_DIAMONDS));
+    StdDeck_CardMask dead;
+    StdDeck_CardMask_NOT(dead, allowed);
+
+    pe_draw_result_t res;
+    assert(pe_compute_draw_optima_fn(hand, board, dead,
+                                     value_always_negative, NULL, &res) == 0);
+    assert(res.optimal_mask == 0);
+    assert(res.max_equity == -1.0);
+    assert(res.options[7].cards_drawn == 3);
+    assert(res.options[7].expected_equity == 0.0);
+    printf("  impossible masks excluded from argmax ok\n");
+}
+
 /* 5. Equivalence: with hand strength as the value function the generic entry
  *    point must reproduce the legacy pe_compute_draw_optima bit for bit. */
 static void test_equivalence_with_legacy(void)
@@ -325,6 +362,7 @@ int main(void)
     test_discard_all_value_fn();
     test_paytable_objective_spot_check();
     test_exact_enumeration_small_pool();
+    test_impossible_masks_are_excluded();
     test_equivalence_with_legacy();
     test_error_handling();
     printf("=== All Draw Optimizer (fn) tests passed ===\n");
