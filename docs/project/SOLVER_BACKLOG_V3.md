@@ -18,6 +18,16 @@ visait un fichier inexistant).
   ticket. Un test rouge est un blocage à rapporter, pas un obstacle à contourner.
 - Si une hypothèse du ticket se révèle fausse, ou si une dépendance manque : **arrêter** et
   rapporter le blocage. Ne pas élargir le périmètre pour compenser.
+- **Deux extensions sont toujours autorisées**, sans figurer dans la liste « Fichiers » :
+  1. ajouter ses propres sources au fichier CMake qui déclare la cible concernée
+     (`src/CMakeLists.txt`, `src/gpu/CMakeLists.txt`, `tests/CMakeLists.txt`) — un fichier
+     créé mais jamais compilé n'est pas un ticket terminé ;
+  2. **étendre** un en-tête dont le ticket dépend, quand il doit y ajouter un champ, une
+     valeur d'énumération ou un prototype — jamais le restructurer, jamais en modifier une
+     valeur existante.
+
+  Toute autre modification hors liste reste un blocage à rapporter. Les listes « Fichiers »
+  nomment donc ce qui porte la **substance** du ticket, pas sa plomberie.
 - Un ticket = un commit logique.
 - Rapport final obligatoire : fichiers modifiés, résumé du diff, commandes de test
   exécutées, et leur sortie réelle.
@@ -150,7 +160,7 @@ cmake --preset release && cmake --build build/release
 `src/solver/domain/registry.c` (nouveau), `tests/test_pe_capabilities.c` (nouveau),
 `tests/CMakeLists.txt`
 
-Définir les 24 bits de capability listés au §5 de l'architecture, plus
+Définir les 25 bits de capability listés au §5 de l'architecture, plus
 `pe_caps_to_string()` et `pe_caps_parse()`.
 
 **DoD** — Chaque bit a un nom unique, aucun chevauchement de valeur, et le round-trip
@@ -169,7 +179,9 @@ ctest --test-dir build/debug -R test_pe_capabilities --output-on-failure
 `src/solver/domain/config.c` (nouveau), `tests/test_pe_solver_config.c` (nouveau),
 `tests/CMakeLists.txt`
 
-Déclarer `pe_traversal_mode_t`, `pe_regret_mode_t`, `pe_policy_mode_t`,
+Déclarer `pe_algorithm_preset_t` (la liste de noms seulement — la résolution d'un preset
+vers des composants appartient à `CTR-06`, qui ne possède pas cet en-tête),
+`pe_traversal_mode_t`, `pe_regret_mode_t`, `pe_policy_mode_t`,
 `pe_averaging_mode_t`, `pe_pruning_mode_t`, `pe_precision_mode_t`, `pe_compute_kind_t`,
 `pe_stage_backends_t`, et les structures `pe_algorithm_config_t` /
 `pe_execution_config_t` / `pe_solver_config_t` du §5. Ajouter
@@ -233,6 +245,7 @@ ctest --test-dir build/debug -R test_pe_rng --output-on-failure
 
 **Fichiers** `include/poker_eval/solver/pe_solver_plan.h` (nouveau),
 `src/solver/domain/registry.c`, `src/solver/domain/plan.c` (nouveau),
+`include/poker_eval/solver/pe_solver_config.h` (extension),
 `tests/test_pe_registry.c` (nouveau), `tests/CMakeLists.txt`
 
 Implémenter la table des presets du §5 (`cfr`, `cfr-vector`, `cfr+`, `dcfr`,
@@ -521,8 +534,9 @@ ctest --test-dir build/debug -L game_theory --output-on-failure
 **Priorité** `P0` · **Taille** `M` · **Dépendances** `STO-04`, `CTR-06`
 
 **Fichiers** `src/solver/domain/solver.c`, `src/solver/domain/plan.c`,
-`include/poker_eval/solver/pe_solver.h`, `tests/test_pe_estimate.c` (nouveau),
-`tests/CMakeLists.txt`
+`include/poker_eval/solver/pe_solver.h`,
+`include/poker_eval/solver/pe_solver_config.h` (extension : `max_ram_bytes`),
+`tests/test_pe_estimate.c` (nouveau), `tests/CMakeLists.txt`
 
 Implémenter `pe_solver_estimate()` : à partir du plan résolu, du nombre d'infosets
 attendus, du nombre de combos et de la précision, produire une estimation RAM et VRAM.
@@ -1759,7 +1773,9 @@ ctest --test-dir build/debug -L game_theory --output-on-failure
 
 **Priorité** `P1` · **Taille** `L` · **Dépendances** `API-02`
 
-**Fichiers** `tools/mpf_run_with_metrics.c`, `tools/CMakeLists.txt`
+**Fichiers** `tools/mpf_run_with_metrics.c`, `tools/CMakeLists.txt`,
+`include/poker_eval/solver/pe_solver_config.h` (extension : conversions nom ↔ énumération),
+`src/solver/domain/registry.c`
 
 Ajouter `--algorithm <preset>`, `--backend <kind>`, les surcharges expertes
 (`--traversal`, `--regret`, `--averaging`, `--alpha/--beta/--gamma`, `--precision`, les
