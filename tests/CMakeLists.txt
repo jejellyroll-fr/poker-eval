@@ -743,6 +743,8 @@ add_poker_test(test_pe_solver_config)
 set_tests_properties(test_pe_solver_config PROPERTIES LABELS "solver;solver-v3;ctr03")
 add_poker_test(test_pe_ports)
 set_tests_properties(test_pe_ports PROPERTIES LABELS "solver;solver-v3;ctr04")
+add_poker_test(test_pe_rng)
+set_tests_properties(test_pe_rng PROPERTIES LABELS "solver;solver-v3;ctr05")
 
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")

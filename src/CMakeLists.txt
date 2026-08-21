@@ -24,6 +24,7 @@ add_library(poker_solver
     solver/domain/solver.c
     solver/domain/registry.c
     solver/domain/config.c
+    solver/domain/rng.c
     solver/adapters/telemetry_null.c
     solver/adapters/telemetry_callback.c
 )
@@ -32,6 +33,11 @@ target_include_directories(poker_solver PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/include
 )
+
+# The only link dependency of the domain, and it is a leaf: PCG32 lives in
+# poker_core, which itself links nothing but libm. No engine, no evaluator, no
+# GPU backend — those arrive through the driven ports.
+target_link_libraries(poker_solver PUBLIC poker_core)
 
 install(TARGETS poker_solver
         EXPORT poker-eval-targets
