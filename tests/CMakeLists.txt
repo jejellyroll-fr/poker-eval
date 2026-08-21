@@ -1391,6 +1391,8 @@ add_game_theory_test(test_kuhn_multiway_openspiel
                      test_kuhn_multiway_openspiel.c)
 add_game_theory_test(test_leduc_openspiel   test_leduc_openspiel.c)
 add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
+add_game_theory_test(test_extended_analytical_games
+                     test_extended_analytical_games.c)
 
 # ISSUE-12 (#168): Best-Response & Exploitability engine audit. Validates
 # cfr_best_response_value/cfr_exploitability (and the multiway variants)
