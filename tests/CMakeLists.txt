@@ -1290,6 +1290,7 @@ set_tests_properties(test_enumerate_multigame PROPERTIES
     LABELS "equity;coverage;phase5" TIMEOUT 120)
 
 add_unity_test(test_enumerate_dispatch test_enumerate_dispatch.c)
+add_poker_test(test_missing_game_variants)
 set_tests_properties(test_enumerate_dispatch PROPERTIES
     LABELS "equity;coverage;phase5" TIMEOUT 30)
 
