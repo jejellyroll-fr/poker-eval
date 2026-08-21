@@ -1387,6 +1387,8 @@ endfunction()
 
 add_game_theory_test(test_akq_game          test_akq_game.c)
 add_game_theory_test(test_kuhn_openspiel    test_kuhn_openspiel.c)
+add_game_theory_test(test_kuhn_multiway_openspiel
+                     test_kuhn_multiway_openspiel.c)
 add_game_theory_test(test_leduc_openspiel   test_leduc_openspiel.c)
 add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
 
