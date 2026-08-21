@@ -292,6 +292,27 @@ static inline HandVal italian_adjust_handval(HandVal value)
          HandVal_HANDTYPE_VALUE(category);
 }
 
+/* A ten-card board is represented by the public card-mask argument in deck
+ * order: the first five cards belong to board one and the next five to board
+ * two.  For the usual nboard <= 5 form, the supplied prefix is shared by both
+ * boards and the remaining cards are dealt independently. */
+static void split_double_board(StdDeck_CardMask supplied,
+                               StdDeck_CardMask *board1,
+                               StdDeck_CardMask *board2)
+{
+  int seen = 0;
+  StdDeck_CardMask_RESET(*board1);
+  StdDeck_CardMask_RESET(*board2);
+  for (int card = 0; card < StdDeck_N_CARDS; ++card)
+    if (StdDeck_CardMask_CARD_IS_SET(supplied, card))
+    {
+      if (seen++ < 5)
+        StdDeck_CardMask_SET(*board1, card);
+      else
+        StdDeck_CardMask_SET(*board2, card);
+    }
+}
+
 #define INNER_LOOP_HOLDEM                                 \
   INNER_LOOP({                                            \
     StdDeck_CardMask _hand;                               \
@@ -952,11 +973,25 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     err = 0;                                                  \
   })
 
+static int archie_high_qualifies(StdDeck_CardMask hand)
+{
+  int rank_count[StdDeck_Rank_COUNT] = {0};
+  for (int card = 0; card < StdDeck_N_CARDS; ++card)
+    if (StdDeck_CardMask_CARD_IS_SET(hand, card))
+      ++rank_count[StdDeck_RANK(card)];
+  for (int rank = StdDeck_Rank_9; rank <= StdDeck_Rank_ACE; ++rank)
+    if (rank_count[rank] >= 2)
+      return 1;
+  return 0;
+}
+
 #define INNER_LOOP_ARCHIE                                     \
   INNER_LOOP({                                                \
     StdDeck_CardMask _hand;                                   \
     StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
-    hival[i] = StdDeck_StdRules_EVAL_N(_hand, 5);             \
+    hival[i] = archie_high_qualifies(_hand)                   \
+                   ? StdDeck_StdRules_EVAL_N(_hand, 5)        \
+                   : HandVal_NOTHING;                         \
     loval[i] = StdDeck_Lowball8_EVAL(_hand, 5);               \
     loval[i] = apply_low_qualifier(loval[i], LOW_QUALIFIER_8); \
     err = 0;                                                  \
@@ -1272,12 +1307,14 @@ static int chinese13_evaluate_rows(StdDeck_CardMask hand, chinese13_rows_t *out)
     for (i = 0; i < npockets; ++i)                                                      \
     {                                                                                  \
       double ev = 0.0;                                                                 \
+      double hi_unit1 = bestlo1 == LowHandVal_NOTHING ? 0.5 : 0.25;                    \
+      double hi_unit2 = bestlo2 == LowHandVal_NOTHING ? 0.5 : 0.25;                    \
       if (hival1[i] == besthi1 && besthi1 != HandVal_NOTHING)                          \
-        ev += get_hishare_reciprocal(hishare1) * 0.25;                                  \
+        ev += get_hishare_reciprocal(hishare1) * hi_unit1;                              \
       if (loval1[i] == bestlo1 && bestlo1 != LowHandVal_NOTHING)                       \
         ev += get_hishare_reciprocal(loshare1) * 0.25;                                 \
       if (hival2[i] == besthi2 && besthi2 != HandVal_NOTHING)                          \
-        ev += get_hishare_reciprocal(hishare2) * 0.25;                                  \
+        ev += get_hishare_reciprocal(hishare2) * hi_unit2;                              \
       if (loval2[i] == bestlo2 && bestlo2 != LowHandVal_NOTHING)                       \
         ev += get_hishare_reciprocal(loshare2) * 0.25;                                 \
       result->ev[i] += ev;                                                             \
@@ -1540,46 +1577,39 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
   else if (game == game_doubleboard_omaha85)
   {
     StdDeck_CardMask sharedCards1, sharedCards2;
-#define DOUBLEBOARD_OMAHA_EVAL(board_mask, hi, lo)                                  \
+    StdDeck_CardMask board_base1, board_base2;
+    int need1, need2;
+    if (nboard < 0 || nboard > 10)
+      return 1;
+    if (nboard > 5)
+      split_double_board(board, &board_base1, &board_base2);
+    else
+      board_base1 = board_base2 = board;
+    need1 = 5 - StdDeck_numCards(board_base1);
+    need2 = 5 - StdDeck_numCards(board_base2);
+#define DOUBLEBOARD_OMAHA_EVAL(base_board, extra_cards, hi, lo)                     \
     do                                                                              \
     {                                                                               \
       StdDeck_CardMask _final_board;                                                \
-      StdDeck_CardMask_OR(_final_board, board, (board_mask));                       \
+      StdDeck_CardMask_OR(_final_board, (base_board), (extra_cards));               \
       StdDeck_OmahaHiLow8_EVAL(pockets[i], _final_board, &(hi), &(lo));              \
       (lo) = apply_low_qualifier((lo), LOW_QUALIFIER_8);                             \
     } while (0)
-    if (nboard == 0)
+    if (need1 > 0 || need2 > 0)
     {
-      ENUM_STDDECK_ENUMERATE_KxK_FROM_DEAD(5, 5, effective_dead, sharedCards1, sharedCards2,
+      ENUM_STDDECK_ENUMERATE_KxK_FROM_DEAD(need1, need2, effective_dead,
+                                           sharedCards1, sharedCards2,
                                            INNER_LOOP_DOUBLEBOARD_OMAHA85({
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards1, hival1[i], loval1[i]); }, {
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards2, hival2[i], loval2[i]); }));
+          DOUBLEBOARD_OMAHA_EVAL(board_base1, sharedCards1, hival1[i], loval1[i]); }, {
+          DOUBLEBOARD_OMAHA_EVAL(board_base2, sharedCards2, hival2[i], loval2[i]); }));
     }
-    else if (nboard == 3)
-    {
-      ENUM_STDDECK_ENUMERATE_KxK_FROM_DEAD(2, 2, effective_dead, sharedCards1, sharedCards2,
-                                           INNER_LOOP_DOUBLEBOARD_OMAHA85({
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards1, hival1[i], loval1[i]); }, {
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards2, hival2[i], loval2[i]); }));
-    }
-    else if (nboard == 4)
-    {
-      ENUM_STDDECK_ENUMERATE_KxK_FROM_DEAD(1, 1, effective_dead, sharedCards1, sharedCards2,
-                                           INNER_LOOP_DOUBLEBOARD_OMAHA85({
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards1, hival1[i], loval1[i]); }, {
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards2, hival2[i], loval2[i]); }));
-    }
-    else if (nboard == 5)
+    else
     {
       StdDeck_CardMask_RESET(sharedCards1);
       StdDeck_CardMask_RESET(sharedCards2);
       INNER_LOOP_DOUBLEBOARD_OMAHA85({
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards1, hival1[i], loval1[i]); }, {
-          DOUBLEBOARD_OMAHA_EVAL(sharedCards2, hival2[i], loval2[i]); });
-    }
-    else
-    {
-      return 1;
+          DOUBLEBOARD_OMAHA_EVAL(board_base1, sharedCards1, hival1[i], loval1[i]); }, {
+          DOUBLEBOARD_OMAHA_EVAL(board_base2, sharedCards2, hival2[i], loval2[i]); });
     }
 #undef DOUBLEBOARD_OMAHA_EVAL
   }
@@ -2340,8 +2370,8 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     else
     {
       StdDeck_CardMask_RESET(sharedCards);
-      INNER_LOOP_HOLDEM;
-      return 1;
+      for (int iter = 0; iter < niter; ++iter)
+        INNER_LOOP_HOLDEM;
     }
   }
   else if (game == game_sdholdem)
@@ -2869,16 +2899,22 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
   }
   else if (game == game_doubleboard_omaha85)
   {
-    if (nboard < 0 || nboard > 5)
+    if (nboard < 0 || nboard > 10)
       return 1;
-    int cardsNeeded = 5 - nboard;
+    StdDeck_CardMask board_base1, board_base2;
+    if (nboard > 5)
+      split_double_board(board, &board_base1, &board_base2);
+    else
+      board_base1 = board_base2 = board;
+    int cardsNeeded1 = 5 - StdDeck_numCards(board_base1);
+    int cardsNeeded2 = 5 - StdDeck_numCards(board_base2);
     for (int iter = 0; iter < niter; ++iter)
     {
-      StdDeck_CardMask available, board1 = board, board2 = board;
+      StdDeck_CardMask available, board1 = board_base1, board2 = board_base2;
       StdDeck_CardMask drawn;
       StdDeck_CardMask_RESET(drawn);
       StdDeck_CardMask_NOT(available, effective_dead);
-      for (int j = 0; j < cardsNeeded * 2; ++j)
+      for (int j = 0; j < cardsNeeded1 + cardsNeeded2; ++j)
       {
         int count = StdDeck_numCards(available);
         if (count == 0)
@@ -2892,7 +2928,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
             continue;
           StdDeck_CardMask_SET(drawn, card);
           StdDeck_CardMask_UNSET(available, card);
-          if (j < cardsNeeded)
+          if (j < cardsNeeded1)
             StdDeck_CardMask_SET(board1, card);
           else
             StdDeck_CardMask_SET(board2, card);
@@ -2901,11 +2937,13 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       }
       {
         StdDeck_CardMask sharedCards1 = board1, sharedCards2 = board2;
+        StdDeck_CardMask no_extra;
+        StdDeck_CardMask_RESET(no_extra);
 #define DOUBLEBOARD_OMAHA_EVAL_SAMPLE(board_mask, hi, lo)                           \
         do                                                                          \
         {                                                                           \
           StdDeck_CardMask _final_board;                                             \
-          StdDeck_CardMask_OR(_final_board, board, (board_mask));                    \
+          StdDeck_CardMask_OR(_final_board, (board_mask), no_extra);                 \
           StdDeck_OmahaHiLow8_EVAL(pockets[i], _final_board, &(hi), &(lo));           \
           (lo) = apply_low_qualifier((lo), LOW_QUALIFIER_8);                         \
         } while (0)
