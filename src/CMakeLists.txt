@@ -16,6 +16,25 @@ add_subdirectory(gpu)
 add_subdirectory(examples)
 add_subdirectory(ofc)
 
+# Solver module (architecture v3). The hexagon's domain is declared here rather
+# than through add_subdirectory: it is a single translation unit for now, and
+# CTR-01 is scoped to this file. It deliberately links nothing — the domain
+# depends on ports, never on the engine, the evaluator or a GPU backend.
+add_library(poker_solver
+    solver/domain/solver.c
+)
+
+target_include_directories(poker_solver PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+)
+
+install(TARGETS poker_solver
+        EXPORT poker-eval-targets
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin)
+
 # The modular libraries above are declared without an explicit type, so they
 # follow BUILD_SHARED_LIBS. Apply the properties a shared build needs in one
 # place rather than in each module.
@@ -30,6 +49,7 @@ set(POKER_EVAL_MODULES
     poker_betting
     poker_economics
     poker_ofc
+    poker_solver
 )
 
 foreach(module IN LISTS POKER_EVAL_MODULES)
@@ -70,6 +90,7 @@ elseif(UNIX AND NOT APPLE)
         poker_betting
         poker_economics
         poker_ofc
+        poker_solver
         -Wl,--end-group
     )
 else()
@@ -88,6 +109,7 @@ else()
         poker_betting
         poker_economics
         poker_ofc
+        poker_solver
     )
 endif()
 
