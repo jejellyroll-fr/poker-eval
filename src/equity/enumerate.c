@@ -321,9 +321,17 @@ static void split_double_board(StdDeck_CardMask supplied,
     }
 }
 
-static _Thread_local int double_board_override_valid;
-static _Thread_local StdDeck_CardMask double_board_override1;
-static _Thread_local StdDeck_CardMask double_board_override2;
+#if defined(_MSC_VER)
+#define PE_ENUM_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define PE_ENUM_THREAD_LOCAL _Thread_local
+#else
+#define PE_ENUM_THREAD_LOCAL __thread
+#endif
+
+static PE_ENUM_THREAD_LOCAL int double_board_override_valid;
+static PE_ENUM_THREAD_LOCAL StdDeck_CardMask double_board_override1;
+static PE_ENUM_THREAD_LOCAL StdDeck_CardMask double_board_override2;
 
 #define INNER_LOOP_HOLDEM                                 \
   INNER_LOOP({                                            \
