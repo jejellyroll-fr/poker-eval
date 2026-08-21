@@ -28,6 +28,11 @@ visait un fichier inexistant).
 
   Toute autre modification hors liste reste un blocage à rapporter. Les listes « Fichiers »
   nomment donc ce qui porte la **substance** du ticket, pas sa plomberie.
+- **Avant d'introduire un composant de base** — RNG, hachage, allocateur, tri, table de
+  bits — chercher d'abord s'il existe : `grep -rn "<symbole visé>" include src`. Le
+  backlog a été rédigé sans inventaire des utilitaires déjà présents ; `CTR-05` demandait
+  de recréer un PCG32 qui existait déjà sous exactement les noms qu'il proposait. Une
+  commande évite un doublon et une collision de symboles.
 - Un ticket = un commit logique.
 - Rapport final obligatoire : fichiers modifiés, résumé du diff, commandes de test
   exécutées, et leur sortie réelle.
@@ -235,26 +240,49 @@ l'appelant après `create` ne change pas celle que `pe_solver_get_config()` rend
 ctest --test-dir build/debug -R test_pe_ports --output-on-failure
 ```
 
-## CTR-05 — RNG sans état global
+## CTR-05 — Dérivation de flux RNG reproductibles
 
 **Priorité** `P0` · **Taille** `M` · **Dépendances** `CTR-01`
 
 **Fichiers** `include/poker_eval/solver/pe_rng.h` (nouveau),
 `src/solver/domain/rng.c` (nouveau), `tests/test_pe_rng.c` (nouveau),
-`tests/CMakeLists.txt`
+`src/equity/pcg_rng.c` → `src/core/pcg_rng.c` (déplacement),
+`src/core/CMakeLists.txt`, `src/equity/CMakeLists.txt`
 
-PCG32 à état explicite. `pe_rng_seed(rng, seed)`, `pe_rng_stream(parent, thread_id,
-iteration, player, sample)` qui dérive un flux reproductible sans partage d'état, et
-`pe_rng_uniform01()` / `pe_rng_below(n)`.
+**Ne pas réécrire de générateur.** `include/poker_eval/core/pcg_rng.h` fournit déjà
+`pe_rng_t`, `pe_rng_seed()`, `pe_rng_next()`, `pe_rng_below()` (rejection sampling non
+biaisé), `pe_rng_uniform01()`, `pe_rng_mix()` et `pe_rng_derive()`. Les recréer
+dupliquerait un composant testé et collisionnerait à l'édition de liens.
 
-**DoD** — Aucune variable `static` mutable dans `rng.c` (vérifié par relecture et par
-`nm --defined-only` : pas de symbole en section `.bss`/`.data` du module). Deux flux
-dérivés avec des `thread_id` différents produisent des suites distinctes ; le même triplet
-produit la même suite sur deux exécutions.
+Déplacer `pcg_rng.c` de `src/equity/` vers `src/core/` — son en-tête vit déjà dans
+`include/poker_eval/core/`, l'implémentation sous `equity/` est un accident — pour que le
+domaine puisse s'en servir sans linker le moteur d'équité. `poker_equity` linke
+`poker_core`, donc les appelants existants ne bougent pas.
+
+Ajouter ensuite la seule pièce manquante : `pe_solver_rng_stream(seed, thread_id,
+iteration, player, sample)`, plus `pe_solver_rng_root(seed)` et `pe_solver_rng_key(...)`.
+
+Deux contraintes, et ce sont elles la substance du ticket :
+
+1. un flux se dérive de la **graine racine**, jamais de l'état courant d'un générateur
+   vivant — sinon les nombres qu'un worker reçoit dépendent de l'avancement des autres, et
+   le même solve cesse de se reproduire dès qu'on ajoute un thread ;
+2. les quatre coordonnées sont mélangées **deux à deux**, pas repliées ensemble : un repli
+   commutatif fait collisionner `(1,0,0,0)` et `(0,1,0,0)`, donnant le même flux à deux
+   threads.
+
+**DoD** — `rng.c` ne porte aucun état : `nm --defined-only` sur l'objet **d'un build sans
+instrumentation de couverture** ne montre que des symboles `T`, rien en `.bss` ni `.data`.
+Le même quadruplet rend la même suite ; deux quadruplets qui ne diffèrent que par le champ
+porteur rendent des suites distinctes ; avancer un générateur de 100 000 tirages ne change
+pas ce qu'une dérivation produit. Les symboles `pe_rng_*` sont passés de
+`libpoker_equity` à `libpoker_core`, et la suite entière reste verte.
 
 **Vérification**
 ```bash
 ctest --test-dir build/debug -R test_pe_rng --output-on-failure
+nm --defined-only build/release/src/CMakeFiles/poker_solver.dir/solver/domain/rng.c.o
+ctest --test-dir build/debug   # le déplacement touche tous les consommateurs du RNG
 ```
 
 ## CTR-06 — Registry, résolution de preset et plan d'exécution
