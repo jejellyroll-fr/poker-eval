@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/core/eval.h>
@@ -104,6 +105,16 @@ static enum_gameparams_t enum_gameparams[] = {
     {game_manila, 2, 2, 5, 0, 1, LOW_QUALIFIER_NONE, "Manila Poker"},
     {game_pineapple_crazy, 3, 3, 5, 0, 1, LOW_QUALIFIER_NONE, "Crazy Pineapple"},
     {game_pineapple_lazy, 3, 3, 5, 0, 1, LOW_QUALIFIER_NONE, "Lazy Pineapple (Tahoe)"},
+    {game_royal, 2, 2, 5, 0, 1, LOW_QUALIFIER_NONE, "Royal Hold'em (20-card deck)"},
+    {game_astud, 3, 7, 0, 0, 1, LOW_QUALIFIER_NONE, "Asian / Spanish Stud"},
+    {game_italian, 2, 2, 5, 0, 1, LOW_QUALIFIER_NONE, "Italian Poker"},
+    {game_archie, 5, 5, 0, 1, 1, LOW_QUALIFIER_8, "Archie Triple Draw Hi/Lo"},
+    {game_badugi_hilo, 4, 4, 0, 1, 1, LOW_QUALIFIER_NONE, "Badugi Hi/Lo"},
+    {game_drawmaha49, 5, 5, 5, 0, 1, LOW_QUALIFIER_NONE, "Drawmaha 49"},
+    {game_drawmaha_zero, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Drawmaha Zero"},
+    {game_drawmaha_dugi, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Drawmaha Low-Dugi"},
+    {game_doubleboard_omaha85, 5, 5, 10, 1, 1, LOW_QUALIFIER_8, "Double-board Omaha 5 Hi/Lo"},
+    {game_chinese13, 13, 13, 0, 0, 1, LOW_QUALIFIER_NONE, "Classic Chinese Poker 13-card"},
 };
 
 /* INNER_LOOP is executed in every iteration of the combinatorial enumerator
@@ -267,6 +278,17 @@ static enum_gameparams_t enum_gameparams[] = {
     result->nsamples++;                                                      \
   } while (0);
 
+static inline HandVal italian_adjust_handval(HandVal value)
+{
+  unsigned int category = HandVal_HANDTYPE(value);
+  if (category == StdRules_HandType_FLUSH)
+    category = StdRules_HandType_FULLHOUSE;
+  else if (category == StdRules_HandType_FULLHOUSE)
+    category = StdRules_HandType_FLUSH;
+  return (value & ~HandVal_HANDTYPE_MASK) |
+         HandVal_HANDTYPE_VALUE(category);
+}
+
 #define INNER_LOOP_HOLDEM                                 \
   INNER_LOOP({                                            \
     StdDeck_CardMask _hand;                               \
@@ -274,6 +296,8 @@ static enum_gameparams_t enum_gameparams[] = {
     StdDeck_CardMask_OR(_finalBoard, board, sharedCards); \
     StdDeck_CardMask_OR(_hand, pockets[i], _finalBoard);  \
     hival[i] = StdDeck_StdRules_EVAL_N_Cached(_hand, 7);  \
+    if (game == game_italian)                              \
+      hival[i] = italian_adjust_handval(hival[i]);         \
     loval[i] = LowHandVal_NOTHING;                        \
     err = 0;                                              \
   })
@@ -885,6 +909,98 @@ int pe_crazy_pineapple_commit(StdDeck_CardMask pockets[], int npockets,
     err = 0;                                                  \
   })
 
+#define INNER_LOOP_ARCHIE                                     \
+  INNER_LOOP({                                                \
+    StdDeck_CardMask _hand;                                   \
+    StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
+    hival[i] = StdDeck_StdRules_EVAL_N(_hand, 5);             \
+    loval[i] = StdDeck_Lowball8_EVAL(_hand, 5);               \
+    loval[i] = apply_low_qualifier(loval[i], LOW_QUALIFIER_8); \
+    err = 0;                                                  \
+  })
+
+/* Badugi's native value is ordered high-is-better.  Reversing the complete
+ * value gives the enum engine's low-is-better ordering while preserving the
+ * four-card qualification and the card tie breakers. */
+#define INNER_LOOP_BADUGI_HILO                               \
+  INNER_LOOP({                                                \
+    StdDeck_CardMask _hand;                                   \
+    BadugiHandVal _badugi;                                    \
+    StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
+    _badugi = StdDeck_BadugiRules_EVAL_N(                     \
+        _hand, StdDeck_numCards(_hand));                      \
+    hival[i] = (_badugi == BadugiHandVal_NOTHING)             \
+                   ? HandVal_NOTHING                          \
+                   : (HandVal)_badugi;                        \
+    loval[i] = (_badugi == BadugiHandVal_NOTHING)             \
+                   ? LowHandVal_NOTHING                        \
+                   : (LowHandVal)(UINT32_MAX - _badugi);     \
+    err = 0;                                                  \
+  })
+
+static HandVal chinese13_evaluate(StdDeck_CardMask hand)
+{
+  int cards[13];
+  int n = 0;
+  HandVal best = HandVal_NOTHING;
+
+  for (int card = 0; card < StdDeck_N_CARDS && n < 13; ++card)
+    if (StdDeck_CardMask_CARD_IS_SET(hand, card))
+      cards[n++] = card;
+  if (n != 13)
+    return HandVal_NOTHING;
+
+  for (int t0 = 0; t0 < 11; ++t0)
+    for (int t1 = t0 + 1; t1 < 12; ++t1)
+      for (int t2 = t1 + 1; t2 < 13; ++t2)
+      {
+        StdDeck_CardMask top, remaining;
+        StdDeck_CardMask_RESET(top);
+        StdDeck_CardMask_SET(top, cards[t0]);
+        StdDeck_CardMask_SET(top, cards[t1]);
+        StdDeck_CardMask_SET(top, cards[t2]);
+        StdDeck_CardMask_NOT(remaining, top);
+        StdDeck_CardMask_AND(remaining, remaining, hand);
+
+        int middle_cards[10];
+        int middle_count = 0;
+        for (int card = 0; card < StdDeck_N_CARDS; ++card)
+          if (StdDeck_CardMask_CARD_IS_SET(remaining, card))
+            middle_cards[middle_count++] = card;
+
+        for (int m0 = 0; m0 < 6; ++m0)
+          for (int m1 = m0 + 1; m1 < 7; ++m1)
+            for (int m2 = m1 + 1; m2 < 8; ++m2)
+              for (int m3 = m2 + 1; m3 < 9; ++m3)
+                for (int m4 = m3 + 1; m4 < 10; ++m4)
+                {
+                  StdDeck_CardMask middle, bottom;
+                  StdDeck_CardMask_RESET(middle);
+                  StdDeck_CardMask_SET(middle, middle_cards[m0]);
+                  StdDeck_CardMask_SET(middle, middle_cards[m1]);
+                  StdDeck_CardMask_SET(middle, middle_cards[m2]);
+                  StdDeck_CardMask_SET(middle, middle_cards[m3]);
+                  StdDeck_CardMask_SET(middle, middle_cards[m4]);
+                  StdDeck_CardMask_XOR(bottom, remaining, middle);
+
+                  HandVal top_value = StdDeck_StdRules_EVAL_N(top, 3);
+                  HandVal middle_value = StdDeck_StdRules_EVAL_N(middle, 5);
+                  HandVal bottom_value = StdDeck_StdRules_EVAL_N(bottom, 5);
+                  if (bottom_value >= middle_value && middle_value >= top_value &&
+                      (best == HandVal_NOTHING || bottom_value > best))
+                    best = bottom_value;
+                }
+      }
+  return best;
+}
+
+#define INNER_LOOP_CHINESE13                                \
+  INNER_LOOP({                                                \
+    hival[i] = chinese13_evaluate(pockets[i]);               \
+    loval[i] = LowHandVal_NOTHING;                           \
+    err = 0;                                                  \
+  })
+
 #define INNER_LOOP_DOUBLEFLOP_HOLDEM(evalwrap1, evalwrap2)                             \
   do                                                                                   \
   {                                                                                    \
@@ -1063,16 +1179,39 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     StdDeck_CardMask_OR(effective_dead, effective_dead, pockets[idx]);
   }
   StdDeck_CardMask_OR(effective_dead, effective_dead, board);
+  if (game == game_royal)
+  {
+    for (int rank = StdDeck_Rank_2; rank <= StdDeck_Rank_9; ++rank)
+      for (int suit = StdDeck_Suit_FIRST; suit <= StdDeck_Suit_LAST; ++suit)
+        StdDeck_CardMask_SET(effective_dead, StdDeck_MAKE_CARD(rank, suit));
+  }
+  else if (game == game_astud)
+  {
+    for (int rank = StdDeck_Rank_2; rank <= StdDeck_Rank_6; ++rank)
+      for (int suit = StdDeck_Suit_FIRST; suit <= StdDeck_Suit_LAST; ++suit)
+        StdDeck_CardMask_SET(effective_dead, StdDeck_MAKE_CARD(rank, suit));
+  }
+  else if (game == game_italian)
+  {
+    int first_rank = npockets <= 4 ? StdDeck_Rank_8 :
+                     (npockets == 5 ? StdDeck_Rank_7 : StdDeck_Rank_5);
+    for (int rank = StdDeck_Rank_2; rank < first_rank; ++rank)
+      for (int suit = StdDeck_Suit_FIRST; suit <= StdDeck_Suit_LAST; ++suit)
+        StdDeck_CardMask_SET(effective_dead, StdDeck_MAKE_CARD(rank, suit));
+  }
   if (orderflag)
   {
     enum_ordering_mode_t mode;
     switch (game)
     {
     case game_holdem:
+    case game_royal:
+    case game_italian:
     case game_omaha:
     case game_omaha5:
     case game_omaha6:
     case game_7stud:
+    case game_astud:
     case game_5draw:
     case game_sdholdem:
       mode = enum_ordering_mode_hi;
@@ -1091,12 +1230,17 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     case game_5draw8:
     case game_5drawnsq:
     case game_pineapple8:
+    case game_archie:
+    case game_badugi_hilo:
       mode = enum_ordering_mode_hilo;
       break;
     case game_doubleflop_holdem:
       mode = enum_ordering_mode_hihi;
       break;
     case game_drawmaha:
+    case game_drawmaha49:
+    case game_drawmaha_zero:
+    case game_drawmaha_dugi:
     case game_pineapple:
     case game_pineapple_crazy:
     case game_pineapple_lazy:
@@ -1111,6 +1255,8 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     case game_irish:
     case game_ofc:
     case game_manila:
+    case game_doubleboard_omaha85:
+    case game_chinese13:
       mode = enum_ordering_mode_hi;
       break;
     case game_NUMGAMES:
@@ -1121,7 +1267,7 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
   }
 
-  if (game == game_holdem)
+  if (game == game_holdem || game == game_royal || game == game_italian)
   {
     StdDeck_CardMask sharedCards;
     if (nboard == 0)
@@ -1171,7 +1317,7 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
     }
   }
-  else if (game == game_doubleflop_holdem)
+  else if (game == game_doubleflop_holdem || game == game_doubleboard_omaha85)
   {
     StdDeck_CardMask sharedCards1, sharedCards2;
     if (nboard == 0)
@@ -1647,7 +1793,7 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
     }
   }
-  else if (game == game_7stud)
+  else if (game == game_7stud || game == game_astud)
   {
     StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
     int numToDeal[ENUM_MAXPLAYERS];
@@ -1687,6 +1833,15 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       numToDeal[idx] = 4 - StdDeck_numCards(pockets[idx]);
     ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
                                             unsharedCards, INNER_LOOP_BADUGI);
+  }
+  else if (game == game_badugi_hilo)
+  {
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 4 - StdDeck_numCards(pockets[idx]);
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
+                                            unsharedCards, INNER_LOOP_BADUGI_HILO);
   }
   else if (game == game_5draw)
   {
@@ -1777,7 +1932,8 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
     ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead, unsharedCards, INNER_LOOP_LOWBALL27);
   }
-  else if (game == game_drawmaha)
+  else if (game == game_drawmaha || game == game_drawmaha49 ||
+           game == game_drawmaha_zero || game == game_drawmaha_dugi)
   {
     StdDeck_CardMask sharedCards;
     if (nboard == 0)
@@ -1828,6 +1984,28 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
     ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead, unsharedCards, INNER_LOOP_A5_TRIPLE_DRAW);
   }
+  else if (game == game_archie)
+  {
+    if (nboard != 0)
+      return 1;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead,
+                                            unsharedCards, INNER_LOOP_ARCHIE);
+  }
+  else if (game == game_chinese13)
+  {
+    if (nboard != 0)
+      return 1;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 13 - StdDeck_numCards(pockets[idx]);
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead,
+                                            unsharedCards, INNER_LOOP_CHINESE13);
+  }
   else
   {
     return 1;
@@ -1858,16 +2036,39 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     StdDeck_CardMask_OR(effective_dead, effective_dead, pockets[idx]);
   }
   StdDeck_CardMask_OR(effective_dead, effective_dead, board);
+  if (game == game_royal)
+  {
+    for (int rank = StdDeck_Rank_2; rank <= StdDeck_Rank_9; ++rank)
+      for (int suit = StdDeck_Suit_FIRST; suit <= StdDeck_Suit_LAST; ++suit)
+        StdDeck_CardMask_SET(effective_dead, StdDeck_MAKE_CARD(rank, suit));
+  }
+  else if (game == game_astud)
+  {
+    for (int rank = StdDeck_Rank_2; rank <= StdDeck_Rank_6; ++rank)
+      for (int suit = StdDeck_Suit_FIRST; suit <= StdDeck_Suit_LAST; ++suit)
+        StdDeck_CardMask_SET(effective_dead, StdDeck_MAKE_CARD(rank, suit));
+  }
+  else if (game == game_italian)
+  {
+    int first_rank = npockets <= 4 ? StdDeck_Rank_8 :
+                     (npockets == 5 ? StdDeck_Rank_7 : StdDeck_Rank_5);
+    for (int rank = StdDeck_Rank_2; rank < first_rank; ++rank)
+      for (int suit = StdDeck_Suit_FIRST; suit <= StdDeck_Suit_LAST; ++suit)
+        StdDeck_CardMask_SET(effective_dead, StdDeck_MAKE_CARD(rank, suit));
+  }
   if (orderflag)
   {
     enum_ordering_mode_t mode;
     switch (game)
     {
     case game_holdem:
+    case game_royal:
+    case game_italian:
     case game_omaha:
     case game_omaha5:
     case game_omaha6:
     case game_7stud:
+    case game_astud:
     case game_5draw:
     case game_sdholdem:
       mode = enum_ordering_mode_hi;
@@ -1886,12 +2087,17 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     case game_5draw8:
     case game_5drawnsq:
     case game_pineapple8:
+    case game_archie:
+    case game_badugi_hilo:
       mode = enum_ordering_mode_hilo;
       break;
     case game_doubleflop_holdem:
       mode = enum_ordering_mode_hihi;
       break;
     case game_drawmaha:
+    case game_drawmaha49:
+    case game_drawmaha_zero:
+    case game_drawmaha_dugi:
     case game_pineapple:
     case game_pineapple_crazy:
     case game_pineapple_lazy:
@@ -1906,6 +2112,8 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     case game_irish:
     case game_ofc:
     case game_manila:
+    case game_doubleboard_omaha85:
+    case game_chinese13:
       mode = enum_ordering_mode_hi;
       break;
     case game_NUMGAMES:
@@ -1916,7 +2124,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
   }
 
-  if (game == game_holdem)
+  if (game == game_holdem || game == game_royal || game == game_italian)
   {
     StdDeck_CardMask sharedCards;
     numCards = 5 - nboard;
@@ -2094,7 +2302,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       return 1;
     }
   }
-  else if (game == game_7stud)
+  else if (game == game_7stud || game == game_astud)
   {
     StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
     int numToDeal[ENUM_MAXPLAYERS];
@@ -2224,7 +2432,8 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
                                    npockets, numToDeal,
                                    dead, niter, INNER_LOOP_LOWBALL27);
   }
-  else if (game == game_drawmaha)
+  else if (game == game_drawmaha || game == game_drawmaha49 ||
+           game == game_drawmaha_zero || game == game_drawmaha_dugi)
   {
     StdDeck_CardMask sharedCards;
     numCards = 5 - nboard;
@@ -2357,6 +2566,18 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
                                    npockets, numToDeal,
                                    dead, niter, INNER_LOOP_A5_TRIPLE_DRAW);
   }
+  else if (game == game_archie)
+  {
+    if (nboard != 0)
+      return 1;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
+    DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
+                                   npockets, numToDeal,
+                                   dead, niter, INNER_LOOP_ARCHIE);
+  }
   else if (game == game_badugi)
   {
     if (nboard != 0)
@@ -2370,6 +2591,30 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
                                    npockets, numToDeal,
                                    effective_dead, niter, INNER_LOOP_BADUGI);
+  }
+  else if (game == game_badugi_hilo)
+  {
+    if (nboard != 0)
+      return 1;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 4 - StdDeck_numCards(pockets[idx]);
+    DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
+                                   npockets, numToDeal,
+                                   effective_dead, niter, INNER_LOOP_BADUGI_HILO);
+  }
+  else if (game == game_chinese13)
+  {
+    if (nboard != 0)
+      return 1;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    for (idx = 0; idx < npockets; idx++)
+      numToDeal[idx] = 13 - StdDeck_numCards(pockets[idx]);
+    DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
+                                   npockets, numToDeal,
+                                   dead, niter, INNER_LOOP_CHINESE13);
   }
   else if (game == game_irish)
   {
@@ -2408,7 +2653,7 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
       }
     }
   }
-  else if (game == game_doubleflop_holdem)
+  else if (game == game_doubleflop_holdem || game == game_doubleboard_omaha85)
   {
     fprintf(stderr, "DEBUG: Entering double flop Monte Carlo, niter=%d\n", niter);
 

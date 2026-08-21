@@ -69,6 +69,18 @@ typedef enum {
      enum, so inserting in the middle silently mismatches every later game. */
   game_pineapple_crazy,
   game_pineapple_lazy,
+  /* Extended variant registry (ISSUE-08/#164).  Keep appended: the
+     enum_gameparams table is indexed by enum_game_t. */
+  game_royal,
+  game_astud,
+  game_italian,
+  game_archie,
+  game_badugi_hilo,
+  game_drawmaha49,
+  game_drawmaha_zero,
+  game_drawmaha_dugi,
+  game_doubleboard_omaha85,
+  game_chinese13,
   game_NUMGAMES
 } enum_game_t;
 
