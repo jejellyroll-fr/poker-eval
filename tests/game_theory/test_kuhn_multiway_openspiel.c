@@ -23,6 +23,8 @@
 #define KM_COUNT_SHIFT 19
 #define KM_DEALT_SHIFT 22
 #define KM_PLAYERS_SHIFT 23
+#define KM_INFOSET_MARK (1ULL << 60)
+#define KM_TERMINAL_MARK (1ULL << 61)
 
 #define CHECK(cond, msg)                                                   \
     do                                                                     \
@@ -50,17 +52,18 @@ typedef struct
 {
     int players;
     int chance_outcomes;
+    size_t infosets;
     double policy_value[KM_MAX_PLAYERS];
     double improvement[KM_MAX_PLAYERS];
     double nash_conv;
 } km_open_spiel_reference_t;
 
 static const km_open_spiel_reference_t KM_REFERENCES[] = {
-    {3, 24,
+    {3, 24, 48,
      {15.0 / 64.0, -3.0 / 64.0, -3.0 / 16.0, 0.0},
      {35.0 / 64.0, 133.0 / 192.0, 79.0 / 96.0, 0.0},
      33.0 / 16.0},
-    {4, 120,
+    {4, 120, 160,
      {119.0 / 384.0, 7.0 / 384.0, -49.0 / 384.0, -77.0 / 384.0},
      {265.0 / 384.0, 1589.0 / 1920.0, 603.0 / 640.0,
       1951.0 / 1920.0},
@@ -189,10 +192,14 @@ static uint64_t km_infoset_key(const void *opaque_state)
 
     const int players = km_players(state);
     const int count = km_action_count(state);
+    const int bettor = km_first_bettor(state);
+    if ((bettor < 0 && count == players) ||
+        (bettor >= 0 && count == players + bettor))
+        return KM_TERMINAL_MARK | state;
     const int player = count % players;
     const uint64_t history =
         (state >> KM_HISTORY_SHIFT) & ((1ULL << (2 * players - 1)) - 1ULL);
-    return (1ULL << 60) | ((uint64_t)players << 56) |
+    return KM_INFOSET_MARK | ((uint64_t)players << 56) |
            ((uint64_t)player << 52) | ((uint64_t)km_card(state, player) << 48) |
            ((uint64_t)count << 8) | history;
 }
@@ -258,6 +265,26 @@ static void km_init_game(cfr_game_t *game, int players)
     game->num_players = players;
 }
 
+static void km_count_decision_infoset(uint64_t key, int num_actions,
+                                      const double *regret,
+                                      const double *avg_strategy,
+                                      void *user_data)
+{
+    (void)key;
+    (void)regret;
+    (void)avg_strategy;
+    if (num_actions > 0 && (key & KM_INFOSET_MARK) != 0u &&
+        (key & KM_TERMINAL_MARK) == 0u)
+        ++*(size_t *)user_data;
+}
+
+static size_t km_decision_infoset_count(cfr_storage_t *storage)
+{
+    size_t count = 0;
+    cfr_storage_iterate(storage, km_count_decision_infoset, &count);
+    return count;
+}
+
 static int km_test_reference(const km_open_spiel_reference_t *reference)
 {
     cfr_game_t game;
@@ -295,6 +322,35 @@ static int km_test_reference(const km_open_spiel_reference_t *reference)
 
     printf("  %d-player Kuhn: policy and NashConv %.12g match OpenSpiel\n",
            reference->players, nash_conv);
+
+    cfr_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.max_iterations = 250;
+    config.enable_dcfr = 1;
+    config.dcfr_alpha = 1.5;
+    config.dcfr_beta = 0.0;
+    config.dcfr_gamma = 2.0;
+    double exploitability_proxy = 0.0;
+    cfr_solve(&game, storage, &config, &exploitability_proxy);
+    CHECK(isfinite(exploitability_proxy), "CFR solve result is finite");
+    const size_t visited_infosets = km_decision_infoset_count(storage);
+    printf("    CFR visited %zu infosets (OpenSpiel: %zu)\n", visited_infosets,
+           reference->infosets);
+    CHECK(visited_infosets == reference->infosets,
+          "CFR visits every OpenSpiel infoset");
+
+    cfr_multiway_audit_result_t solved_audit;
+    CHECK(cfr_audit_multiway(&game, storage, NULL, &solved_audit) == 0,
+          "solved infoset-consistent exploitability audit");
+    double solved_nash_conv = 0.0;
+    for (int player = 0; player < reference->players; ++player)
+        solved_nash_conv += solved_audit.max_player_exploitability[player];
+    const double convergence_target = reference->nash_conv * 0.025;
+    CHECK(solved_nash_conv < convergence_target,
+          "CFR reduces OpenSpiel uniform NashConv by at least 97.5%");
+    printf("    NashConv %.12g < convergence target %.12g\n",
+           solved_nash_conv, convergence_target);
+
     cfr_storage_destroy(storage);
     return 0;
 }
