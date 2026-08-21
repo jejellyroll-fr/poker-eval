@@ -3,10 +3,10 @@
  *
  * Copyright (C) 2026 poker-eval contributors
  *
- * CTR-02 populates this module with the capability table and its text form.
- * CTR-06 extends it with preset resolution and the validation matrix; the two
- * belong together because validating a preset is exactly a question about
- * capabilities.
+ * CTR-02 populated this module with the capability table and its text form;
+ * CTR-06 adds the preset table and the axis names. The two belong together
+ * because validating a preset is exactly a question about capabilities, and
+ * because refusing a combination means being able to name what conflicts.
  *
  * The table is the single place a capability's name is written. pe_cap_name,
  * pe_cap_from_name, pe_caps_to_string and pe_caps_parse all read it, so a name
@@ -14,6 +14,7 @@
  */
 
 #include <poker_eval/solver/pe_capabilities.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -315,4 +316,199 @@ int pe_caps_parse(const char *text, uint64_t *out_caps)
 
     *out_caps = caps;
     return 0;
+}
+
+/* ================================================================== *
+ * CTR-06 — presets and axis names
+ *
+ * The preset table is the whole of "presets are surface": a name maps to a
+ * combination of axes and nothing else. Expanding one never bypasses the
+ * validation in plan.c.
+ * ================================================================== */
+
+
+typedef struct
+{
+    pe_algorithm_preset_t preset;
+    const char *name;
+    pe_traversal_mode_t traversal;
+    pe_regret_mode_t regret;
+    pe_policy_mode_t policy;
+    pe_averaging_mode_t averaging;
+} pe_algo_preset_entry_t;
+
+/* Architecture v3 §5, "Matrice d'algorithmes initiale", row for row.
+ *
+ * The two sampling presets take PE_AVG_UNIFORM here. The matrix calls for a
+ * sampling-aware averaging that does not exist until LNB-02; rather than
+ * inventing a placeholder mode, they carry uniform and the resolver refuses
+ * the plan on a missing capability. That keeps the refusal visible instead of
+ * hiding it behind an averaging mode nobody implemented. */
+static const pe_algo_preset_entry_t k_preset_table[] = {
+    { PE_PRESET_CUSTOM, "custom",
+      PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_VANILLA,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+
+    { PE_PRESET_CFR, "cfr",
+      PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_VANILLA,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+
+    { PE_PRESET_CFR_VECTOR, "cfr-vector",
+      PE_TRAVERSAL_FULL_VECTOR, PE_REGRET_VANILLA,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+
+    { PE_PRESET_CFR_PLUS, "cfr+",
+      PE_TRAVERSAL_FULL_VECTOR, PE_REGRET_PLUS,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_DELAYED_LINEAR },
+
+    { PE_PRESET_DCFR, "dcfr",
+      PE_TRAVERSAL_FULL_VECTOR, PE_REGRET_DCFR,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_POWER },
+
+    { PE_PRESET_CFR_PLUS_CHANCE, "cfr+-chance",
+      PE_TRAVERSAL_CHANCE_VECTOR, PE_REGRET_PLUS,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_DELAYED_LINEAR },
+
+    { PE_PRESET_EXTERNAL_MCCFR, "external-mccfr",
+      PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_VANILLA,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+
+    { PE_PRESET_EXTERNAL_DCFR, "external-dcfr",
+      PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_DCFR,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_POWER },
+
+    { PE_PRESET_OUTCOME_MCCFR, "outcome-mccfr",
+      PE_TRAVERSAL_OUTCOME_SAMPLING, PE_REGRET_VANILLA,
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+
+    { PE_PRESET_ECFR, "ecfr",
+      PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_LEGACY_EXP,
+      PE_POLICY_EXPONENTIAL, PE_AVG_UNIFORM }
+};
+
+typedef char pe_preset_table_size_check[
+    (sizeof(k_preset_table) / sizeof(k_preset_table[0]) == PE_PRESET_COUNT) ? 1 : -1];
+
+static const pe_algo_preset_entry_t *pe_preset_entry(pe_algorithm_preset_t preset)
+{
+    size_t i;
+    for (i = 0; i < PE_PRESET_COUNT; ++i)
+    {
+        if (k_preset_table[i].preset == preset)
+            return &k_preset_table[i];
+    }
+    return NULL;
+}
+
+const char *pe_preset_name(pe_algorithm_preset_t preset)
+{
+    const pe_algo_preset_entry_t *e = pe_preset_entry(preset);
+    return (e != NULL) ? e->name : NULL;
+}
+
+pe_algorithm_preset_t pe_preset_from_name(const char *name)
+{
+    size_t i;
+    size_t len;
+
+    if (name == NULL)
+        return PE_PRESET_COUNT;
+
+    len = strlen(name);
+    if (len == 0)
+        return PE_PRESET_COUNT;
+
+    for (i = 0; i < PE_PRESET_COUNT; ++i)
+    {
+        if (pe_name_equal_ci(k_preset_table[i].name, name, len))
+            return k_preset_table[i].preset;
+    }
+    return PE_PRESET_COUNT;
+}
+
+int pe_preset_expand(pe_algorithm_preset_t preset, pe_algorithm_config_t *inout)
+{
+    const pe_algo_preset_entry_t *e;
+
+    if (inout == NULL)
+        return -1;
+
+    /* CUSTOM means the axes already in the configuration are what the caller
+       wants; overwriting them here would make the preset field impossible to
+       leave alone. */
+    if (preset == PE_PRESET_CUSTOM)
+        return 0;
+
+    e = pe_preset_entry(preset);
+    if (e == NULL)
+        return -1;
+
+    /* Pruning and the numeric parameters are deliberately untouched: a preset
+       says which algorithm, not how it is tuned, so `--algorithm dcfr
+       --alpha 2.0` works without the preset stamping alpha back. */
+    inout->traversal = e->traversal;
+    inout->regret = e->regret;
+    inout->policy = e->policy;
+    inout->averaging = e->averaging;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * Axis names
+ * ------------------------------------------------------------------ */
+
+#define PE_NAME_OF(value, table)                                        \
+    (((size_t)(value) < sizeof(table) / sizeof((table)[0]))             \
+         ? (table)[(size_t)(value)]                                     \
+         : NULL)
+
+const char *pe_traversal_name(pe_traversal_mode_t mode)
+{
+    static const char *const names[] = {
+        "full-vector", "chance-vector", "full-scalar",
+        "external-sampling", "outcome-sampling"
+    };
+    return PE_NAME_OF(mode, names);
+}
+
+const char *pe_regret_name(pe_regret_mode_t mode)
+{
+    static const char *const names[] = { "vanilla", "plus", "dcfr", "legacy-exp" };
+    return PE_NAME_OF(mode, names);
+}
+
+const char *pe_policy_name(pe_policy_mode_t mode)
+{
+    static const char *const names[] = { "regret-matching", "exponential" };
+    return PE_NAME_OF(mode, names);
+}
+
+const char *pe_averaging_name(pe_averaging_mode_t mode)
+{
+    static const char *const names[] = { "uniform", "linear", "power", "delayed-linear" };
+    return PE_NAME_OF(mode, names);
+}
+
+const char *pe_pruning_name(pe_pruning_mode_t mode)
+{
+    static const char *const names[] = { "none", "rbp" };
+    return PE_NAME_OF(mode, names);
+}
+
+const char *pe_precision_name(pe_precision_mode_t mode)
+{
+    static const char *const names[] = { "f64", "f32", "mixed", "fixed16" };
+    return PE_NAME_OF(mode, names);
+}
+
+const char *pe_compute_kind_name(pe_compute_kind_t kind)
+{
+    static const char *const names[] = { "auto", "cpu_ref", "cpu_par", "cuda", "opencl" };
+    return PE_NAME_OF(kind, names);
+}
+
+const char *pe_valid_severity_name(pe_valid_severity_t severity)
+{
+    static const char *const names[] = { "ok", "warning", "fallback", "error" };
+    return PE_NAME_OF(severity, names);
 }
