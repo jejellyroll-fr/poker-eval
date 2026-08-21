@@ -52,6 +52,14 @@ ctest --test-dir build/debug -L cfr          --output-on-failure   # solveur
 ctest --test-dir build/debug -R test_cfr_    --output-on-failure   # unitaires CFR
 ```
 
+**Sanitizers.** L'option du projet est `ENABLE_SANITIZERS` (`address,undefined`) ; les
+noms `ENABLE_ASAN` et `ENABLE_TSAN` n'existent pas. Vérifier que le build sanitizer
+démarre réellement avant de s'appuyer dessus : sur au moins une machine de développement,
+tout binaire ainsi construit se bloque avant `main`, y compris des tests antérieurs à ce
+backlog. Si c'est le cas, contrôler la mémoire avec `valgrind` (Linux) ou
+`leaks --atExit --` (macOS) et **le dire dans le rapport** au lieu de déclarer le DoD
+atteint.
+
 Un nouveau test `tests/game_theory/*.c` s'enregistre avec `add_game_theory_test()` dans
 [`tests/CMakeLists.txt`](../../tests/CMakeLists.txt) ; un test hors qualification suit la
 convention `tests/test_*.c` déjà en place.
@@ -202,19 +210,29 @@ ctest --test-dir build/debug -R test_pe_solver_config --output-on-failure
 **Fichiers** `include/poker_eval/solver/pe_ports.h` (nouveau),
 `include/poker_eval/solver/pe_telemetry.h` (nouveau),
 `src/solver/adapters/telemetry_null.c` (nouveau),
-`src/solver/adapters/telemetry_callback.c` (nouveau), `src/CMakeLists.txt`
+`src/solver/adapters/telemetry_callback.c` (nouveau),
+`src/solver/domain/solver.c`, `tests/test_pe_ports.c` (nouveau)
 
 Déclarer `pe_solver_deps_t` portant les ports secondaires (`compute`, `evaluator`,
 `storage`, `persist`, `telemetry`). Implémenter deux adaptateurs de télémétrie : un
-`null` qui ignore tout, un `callback` qui route vers une fonction utilisateur.
+`null` qui ignore tout, un `callback` qui route vers une fonction utilisateur. Câbler
+`pe_solver_create()` pour qu'il alloue l'instance, copie la configuration et résolve les
+ports **une seule fois**, de sorte qu'aucun appel en aval ne teste un port à NULL.
 
-**DoD** — `pe_solver_create()` avec `deps.telemetry = NULL` installe automatiquement
-l'adaptateur `null` et ne déréférence jamais un pointeur nul. Un test émet 100 événements
-sur l'adaptateur `callback` et les compte.
+Ajouter les deux accesseurs d'introspection `pe_solver_get_config()` et
+`pe_solver_get_telemetry()` : sans eux le DoD n'est pas observable — émettre dans un
+adaptateur NULL est exactement aussi silencieux qu'émettre dans le sink, donc « le sink a
+bien été installé » ne se vérifie qu'en relisant ce qui a été résolu.
+
+**DoD** — `pe_solver_create()` avec `deps.telemetry = NULL` installe l'adaptateur `null`,
+et `pe_solver_get_telemetry()` rend `pe_telemetry_null()` — pas `NULL`. Un adaptateur
+injecté est celui que le solveur conserve. La configuration est copiée : écraser celle de
+l'appelant après `create` ne change pas celle que `pe_solver_get_config()` rend. Un test
+émet 100 événements sur l'adaptateur `callback` et les compte.
 
 **Vérification**
 ```bash
-ctest --test-dir build/debug -R test_pe_solver_config --output-on-failure
+ctest --test-dir build/debug -R test_pe_ports --output-on-failure
 ```
 
 ## CTR-05 — RNG sans état global
@@ -808,13 +826,18 @@ de regret par (action, combo). Les nœuds terminaux sont délégués aux tickets
 `VEC-06`.
 
 **DoD** — La traversée compile et parcourt un arbre jouet à un seul nœud de décision sans
-lire de mémoire non initialisée (build ASan propre).
+lire de mémoire non initialisée.
 
 **Vérification**
 ```bash
-cmake --preset debug -DENABLE_ASAN=ON -B build/asan && cmake --build build/asan
+cmake -S . -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON
+cmake --build build/asan --target test_pe_vector
 ctest --test-dir build/asan -R test_pe_vector --output-on-failure
 ```
+
+Si le build sanitizer ne tourne pas sur la machine (voir « Sanitizers » plus haut),
+contrôler la mémoire avec `valgrind` sous Linux ou `leaks --atExit --` sous macOS, et le
+dire dans le rapport plutôt que de déclarer le DoD atteint.
 
 ## VEC-03 — Regret matching vectoriel
 
@@ -1233,12 +1256,19 @@ de chance racine ou sur les sous-arbres du premier niveau de décision. **Aucune
 directe sur les regrets** : tout passe par les lots de `PAR-01`/`PAR-02`.
 
 **DoD** — Le backend s'enregistre, `capabilities()` annonce `CPU_PARALLEL` et
-`DETERMINISTIC`, et un solve à 8 threads se termine sans erreur ASan/TSan.
+`DETERMINISTIC`, et un solve à 8 threads se termine sans erreur de sanitizer.
+
+`ENABLE_SANITIZERS` active `address,undefined` : **il n'y a pas de ThreadSanitizer dans ce
+projet**. La détection de course se fait donc par la gate de parité `PAR-04` — un résultat
+bit-identique entre 1, 2, 4 et 8 threads est une preuve plus forte qu'un run TSan propre —
+et non par un sanitizer. Ajouter TSan est un ticket à part, pas une dépendance de
+celui-ci.
 
 **Vérification**
 ```bash
-cmake --preset debug -DENABLE_TSAN=ON -B build/tsan && cmake --build build/tsan
-ctest --test-dir build/tsan -L cfr --output-on-failure
+cmake -S . -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON
+cmake --build build/asan
+ctest --test-dir build/asan -L cfr --output-on-failure
 ```
 
 ## PAR-04 — Gate de parité `cpu_ref` / `cpu_par`
