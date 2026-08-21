@@ -11,6 +11,7 @@
  */
 
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_ports.h>
 
 #include <string.h>
 
@@ -79,4 +80,16 @@ pe_solver_config_t pe_solver_config_default(void)
     cfg.max_iterations = 1000;
 
     return cfg;
+}
+
+pe_solver_deps_t pe_solver_deps_default(void)
+{
+    pe_solver_deps_t deps;
+
+    /* Unlike the configuration, zero is meaningful here: every port left NULL
+       asks the solver for that port's default adapter. This function exists so
+       calling code can say so explicitly instead of relying on the reader
+       knowing which of the two structures treats {0} as valid. */
+    memset(&deps, 0, sizeof(deps));
+    return deps;
 }

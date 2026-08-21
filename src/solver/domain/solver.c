@@ -3,19 +3,42 @@
  *
  * Copyright (C) 2026 poker-eval contributors
  *
- * CTR-01 stands the hexagon up without wiring anything into it: every entry
- * point of pe_solver.h exists and links, argument checking is in place, and
- * the bodies report PE_ERR_NOT_IMPLEMENTED. Nothing here includes cfr_core,
- * the GPU headers or <stdio.h> — the domain reaches the outside world only
- * through the driven ports, which CTR-04 introduces.
+ * CTR-01 stood the hexagon up without wiring anything into it. CTR-04 gives it
+ * a real create/destroy: the instance now owns a copy of its configuration and
+ * a resolved set of driven ports, where "resolved" means every port left NULL
+ * by the caller has been replaced by its default adapter. Nothing downstream
+ * ever tests a port for NULL — that check happens once, here.
  *
- * Later tickets replace these bodies one at a time; the argument checks are
- * already the final behaviour and do not change when a body lands.
+ * Nothing in this file includes cfr_core, the GPU headers or <stdio.h>: the
+ * domain reaches the outside world only through the ports.
+ *
+ * The remaining entry points are still stubs reporting PE_ERR_NOT_IMPLEMENTED;
+ * their argument checks are already the final behaviour and do not change when
+ * a body lands.
  */
 
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_telemetry.h>
 
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*
+ * The instance. Opaque to callers: everything reaches it through pe_solver.h,
+ * so the layout is free to change as later tickets add the storage, the plan
+ * and the run state.
+ */
+struct pe_solver_t {
+    pe_solver_config_t config;
+
+    /* Resolved dependencies: no member is NULL once creation succeeds, except
+       ports whose absence is meaningful (persist, where NULL means "refuse to
+       save" rather than "write somewhere"). */
+    pe_solver_deps_t deps;
+};
 
 /* ------------------------------------------------------------------ *
  * Lifecycle
@@ -24,18 +47,71 @@
 pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
                               const pe_solver_deps_t *deps)
 {
-    /* CTR-04 injects the default adapters and allocates the instance; until
-       then there is nothing to hand back. `deps` is allowed to be NULL by the
-       contract, so only `cfg` is required. */
-    (void)cfg;
-    (void)deps;
-    return NULL;
+    pe_solver_t *solver;
+    pe_telemetry_event_t event;
+
+    /* `deps` is optional by contract; the configuration is not. */
+    if (cfg == NULL)
+        return NULL;
+
+    solver = (pe_solver_t *)calloc(1, sizeof(*solver));
+    if (solver == NULL)
+        return NULL;
+
+    /* The configuration is copied, so the caller may release theirs on
+       return. The dependencies are not: they are borrowed pointers whose
+       adapters must outlive the solver. */
+    solver->config = *cfg;
+
+    if (deps != NULL)
+        solver->deps = *deps;
+    else
+        memset(&solver->deps, 0, sizeof(solver->deps));
+
+    /* Resolve the ports exactly once. Substituting the sink here is what lets
+       every later emit call be unconditional. */
+    if (solver->deps.telemetry == NULL)
+        solver->deps.telemetry = pe_telemetry_null();
+
+    /* The first event a solver ever produces. It exists to prove the port is
+       wired: a caller that installed an adapter sees it, and its absence means
+       the injection silently dropped the adapter. */
+    event.level = PE_LOG_INFO;
+    event.category = "solver";
+    event.message = "solver created";
+    event.iteration = 0;
+    pe_telemetry_emit(solver->deps.telemetry, &event);
+
+    return solver;
 }
 
 void pe_solver_destroy(pe_solver_t *solver)
 {
-    /* Documented as safe on NULL, and it already is. */
-    (void)solver;
+    if (solver == NULL)
+        return;
+
+    /* Give a buffering adapter its chance before the pointer goes away. */
+    pe_telemetry_flush(solver->deps.telemetry);
+
+    free(solver);
+}
+
+/* ------------------------------------------------------------------ *
+ * Introspection of what was actually installed
+ * ------------------------------------------------------------------ */
+
+const pe_solver_config_t *pe_solver_get_config(const pe_solver_t *solver)
+{
+    if (solver == NULL)
+        return NULL;
+    return &solver->config;
+}
+
+const pe_telemetry_ops_t *pe_solver_get_telemetry(const pe_solver_t *solver)
+{
+    if (solver == NULL)
+        return NULL;
+    return solver->deps.telemetry;
 }
 
 /* ------------------------------------------------------------------ *

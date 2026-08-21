@@ -104,6 +104,20 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
 void pe_solver_destroy(pe_solver_t *solver);
 
 /* ------------------------------------------------------------------ *
+ * Introspection of what was actually installed
+ * ------------------------------------------------------------------ */
+
+/**
+ * The configuration the solver is running, as copied at creation.
+ *
+ * The solver owns this copy, so it is unaffected by anything the caller does
+ * to theirs after pe_solver_create returns. Valid until pe_solver_destroy.
+ *
+ * @return The configuration, or NULL when `solver` is NULL.
+ */
+const pe_solver_config_t *pe_solver_get_config(const pe_solver_t *solver);
+
+/* ------------------------------------------------------------------ *
  * Validation and introspection — no solve, no allocation of solve memory
  * ------------------------------------------------------------------ */
 

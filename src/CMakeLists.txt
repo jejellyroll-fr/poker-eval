@@ -24,6 +24,8 @@ add_library(poker_solver
     solver/domain/solver.c
     solver/domain/registry.c
     solver/domain/config.c
+    solver/adapters/telemetry_null.c
+    solver/adapters/telemetry_callback.c
 )
 
 target_include_directories(poker_solver PRIVATE
