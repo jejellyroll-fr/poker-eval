@@ -734,6 +734,12 @@ add_poker_test(test_mpf_tree)
 set_tests_properties(test_mpf_tree PROPERTIES LABELS "engine;cfr;multiway;feat06" TIMEOUT 180)
 add_poker_test(test_bet_sizing)
 set_tests_properties(test_bet_sizing PROPERTIES LABELS "engine;cfr;bet-sizing;issue166")
+# Architecture v3 solver (docs/project/SOLVER_ARCHITECTURE_V3.md). These tests
+# exercise the hexagon's domain and its ports; they are labelled "solver-v3" so
+# the whole layer can be run on its own as it grows.
+add_poker_test(test_pe_capabilities)
+set_tests_properties(test_pe_capabilities PROPERTIES LABELS "solver;solver-v3;ctr02")
+
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")
 add_poker_test(test_ismcts_pool_cap)

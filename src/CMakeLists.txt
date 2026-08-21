@@ -22,6 +22,7 @@ add_subdirectory(ofc)
 # depends on ports, never on the engine, the evaluator or a GPU backend.
 add_library(poker_solver
     solver/domain/solver.c
+    solver/domain/registry.c
 )
 
 target_include_directories(poker_solver PRIVATE
