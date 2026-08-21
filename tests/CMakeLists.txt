@@ -739,6 +739,8 @@ set_tests_properties(test_bet_sizing PROPERTIES LABELS "engine;cfr;bet-sizing;is
 # the whole layer can be run on its own as it grows.
 add_poker_test(test_pe_capabilities)
 set_tests_properties(test_pe_capabilities PROPERTIES LABELS "solver;solver-v3;ctr02")
+add_poker_test(test_pe_solver_config)
+set_tests_properties(test_pe_solver_config PROPERTIES LABELS "solver;solver-v3;ctr03")
 
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")

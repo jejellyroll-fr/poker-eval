@@ -23,6 +23,7 @@ add_subdirectory(ofc)
 add_library(poker_solver
     solver/domain/solver.c
     solver/domain/registry.c
+    solver/domain/config.c
 )
 
 target_include_directories(poker_solver PRIVATE
