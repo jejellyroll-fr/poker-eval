@@ -47,6 +47,32 @@ typedef struct {
 void get_kuhn_analytical_solution(kuhn_equilibrium_t *out);
 
 /* ------------------------------------------------------------------ */
+/* Additional Chen & Ankenman-style benchmark oracles                 */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    double weak_jam_freq;
+    double caller_call_freq;
+    double p1_ev;
+} jam_or_fold_equilibrium_t;
+
+void get_jam_or_fold_analytical_solution(jam_or_fold_equilibrium_t *out);
+
+/* Continuous action benchmark.  The production CFR interface is finite,
+ * therefore the test samples [0, 1] at a uniform grid.  For u(x,y)=x-y the
+ * continuous game value and every finite-grid value are exactly zero. */
+typedef struct {
+    double value;
+    double lower_endpoint;
+    double upper_endpoint;
+} continuous_equilibrium_t;
+
+void get_continuous_analytical_solution(continuous_equilibrium_t *out);
+
+/* The two-street matrix benchmark uses A = {{2,-1},{-1,1}}, whose value is
+ * 1/5.  Independent streets therefore have value 2/5. */
+double get_two_street_analytical_value(void);
+
+/* ------------------------------------------------------------------ */
 /* Sequence-form LP exact solver (Gambit-style oracle)                 */
 /* Solves a two-player zero-sum extensive game given its sequence form */
 /* payoff matrix A (player 1's utility) and sequence-count vectors.    */

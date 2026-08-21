@@ -46,6 +46,33 @@ void get_kuhn_analytical_solution(kuhn_equilibrium_t *out)
     out->p2_ev =  1.0 / 18.0;
 }
 
+/* ------------------------- Jam-or-Fold ----------------------------- */
+void get_jam_or_fold_analytical_solution(jam_or_fold_equilibrium_t *out)
+{
+    if (!out) return;
+    /* Equal-prior strong/weak push-fold game:
+     *   fold = -1, jam/fold = +1, jam/call = +2 (strong), -2 (weak).
+     * The weak hand jams at 1/3, making the caller indifferent at 2/3;
+     * conversely that call frequency makes the weak hand indifferent between
+     * folding and jamming.  This fixed point is independent of CFR. */
+    out->weak_jam_freq = 1.0 / 3.0;
+    out->caller_call_freq = 2.0 / 3.0;
+    out->p1_ev = 1.0 / 3.0;
+}
+
+void get_continuous_analytical_solution(continuous_equilibrium_t *out)
+{
+    if (!out) return;
+    out->value = 0.0;
+    out->lower_endpoint = 0.0;
+    out->upper_endpoint = 1.0;
+}
+
+double get_two_street_analytical_value(void)
+{
+    return 2.0 * 0.2;
+}
+
 /* ==================================================================== */
 /* Dense two-phase simplex LP solver                                    */
 /*                                                                      */
