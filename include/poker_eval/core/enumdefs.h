@@ -148,6 +148,14 @@ extern POKEREVAL_EXPORT int enumExhaustive(enum_game_t game, StdDeck_CardMask po
                           StdDeck_CardMask board, StdDeck_CardMask dead,
                           int npockets, int nboard, int orderflag,
                           enum_result_t *result);
+/* Double-board Omaha uses separate masks so board membership is not lost in
+ * the unordered StdDeck_CardMask representation. */
+extern POKEREVAL_EXPORT int enumExhaustiveDoubleBoard(
+    enum_game_t game, StdDeck_CardMask pockets[],
+    StdDeck_CardMask board1, int nboard1,
+    StdDeck_CardMask board2, int nboard2,
+    StdDeck_CardMask dead, int npockets, int orderflag,
+    enum_result_t *result);
 extern POKEREVAL_EXPORT int enumExhaustive_dispatch(enum_game_t game, StdDeck_CardMask pockets[],
                                   StdDeck_CardMask board, StdDeck_CardMask dead,
                                   int npockets, int nboard, int orderflag,
@@ -164,6 +172,12 @@ extern POKEREVAL_EXPORT int enumSample(enum_game_t game, StdDeck_CardMask pocket
                       StdDeck_CardMask board, StdDeck_CardMask dead,
                       int npockets, int nboard, int niter, int orderflag,
                       enum_result_t *result);
+extern POKEREVAL_EXPORT int enumSampleDoubleBoard(
+    enum_game_t game, StdDeck_CardMask pockets[],
+    StdDeck_CardMask board1, int nboard1,
+    StdDeck_CardMask board2, int nboard2,
+    StdDeck_CardMask dead, int npockets, int niter, int orderflag,
+    enum_result_t *result);
 extern POKEREVAL_EXPORT enum_gameparams_t *enumGameParams(enum_game_t game);
 
 /* Commit each player's Crazy Pineapple discard. `board` must contain at

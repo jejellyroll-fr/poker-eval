@@ -70,6 +70,14 @@ static inline LowHandVal apply_low_qualifier(LowHandVal value, low_qualifier_t q
   return pe_low_qualify5(value, qualifier) ? value : LowHandVal_NOTHING;
 }
 
+static int mask_uses_only_ranks(StdDeck_CardMask mask, int first_rank)
+{
+  for (int card = 0; card < StdDeck_N_CARDS; ++card)
+    if (StdDeck_CardMask_CARD_IS_SET(mask, card) && StdDeck_RANK(card) < first_rank)
+      return 0;
+  return 1;
+}
+
 static enum_gameparams_t enum_gameparams[] = {
     /* must be in same order as enum_game_t */
     /* {game, minpocket, maxpocket, maxboard, haslopot, hashipot, low_qualifier, name} */
@@ -312,6 +320,10 @@ static void split_double_board(StdDeck_CardMask supplied,
         StdDeck_CardMask_SET(*board2, card);
     }
 }
+
+static _Thread_local int double_board_override_valid;
+static _Thread_local StdDeck_CardMask double_board_override1;
+static _Thread_local StdDeck_CardMask double_board_override2;
 
 #define INNER_LOOP_HOLDEM                                 \
   INNER_LOOP({                                            \
@@ -973,25 +985,30 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     err = 0;                                                  \
   })
 
-static int archie_high_qualifies(StdDeck_CardMask hand)
+static HandVal archie_high_value(StdDeck_CardMask hand)
 {
+  HandVal value = StdDeck_StdRules_EVAL_N(hand, 5);
+  int category = HandVal_HANDTYPE(value);
+  if (category > StdRules_HandType_ONEPAIR)
+    return value;
+  if (category != StdRules_HandType_ONEPAIR)
+    return HandVal_NOTHING;
+
   int rank_count[StdDeck_Rank_COUNT] = {0};
   for (int card = 0; card < StdDeck_N_CARDS; ++card)
     if (StdDeck_CardMask_CARD_IS_SET(hand, card))
       ++rank_count[StdDeck_RANK(card)];
   for (int rank = StdDeck_Rank_9; rank <= StdDeck_Rank_ACE; ++rank)
     if (rank_count[rank] >= 2)
-      return 1;
-  return 0;
+      return value;
+  return HandVal_NOTHING;
 }
 
 #define INNER_LOOP_ARCHIE                                     \
   INNER_LOOP({                                                \
     StdDeck_CardMask _hand;                                   \
     StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
-    hival[i] = archie_high_qualifies(_hand)                   \
-                   ? StdDeck_StdRules_EVAL_N(_hand, 5)        \
-                   : HandVal_NOTHING;                         \
+    hival[i] = archie_high_value(_hand);                       \
     loval[i] = StdDeck_Lowball8_EVAL(_hand, 5);               \
     loval[i] = apply_low_qualifier(loval[i], LOW_QUALIFIER_8); \
     err = 0;                                                  \
@@ -1309,19 +1326,49 @@ static int chinese13_evaluate_rows(StdDeck_CardMask hand, chinese13_rows_t *out)
       double ev = 0.0;                                                                 \
       double hi_unit1 = bestlo1 == LowHandVal_NOTHING ? 0.5 : 0.25;                    \
       double hi_unit2 = bestlo2 == LowHandVal_NOTHING ? 0.5 : 0.25;                    \
+      int eligible = 0, outright = 0;                                                   \
       if (hival1[i] == besthi1 && besthi1 != HandVal_NOTHING)                          \
+      {                                                                                  \
         ev += get_hishare_reciprocal(hishare1) * hi_unit1;                              \
+        ++eligible;                                                                     \
+        if (hishare1 == 1) ++outright, ++result->nwinhi[i];                             \
+        else ++result->ntiehi[i];                                                       \
+        ++result->nsharehi[i][hishare1];                                                \
+      }                                                                                  \
+      else if (besthi1 != HandVal_NOTHING)                                              \
+        ++eligible, ++result->nlosehi[i];                                               \
       if (loval1[i] == bestlo1 && bestlo1 != LowHandVal_NOTHING)                       \
+      {                                                                                  \
         ev += get_hishare_reciprocal(loshare1) * 0.25;                                 \
+        ++eligible;                                                                     \
+        if (loshare1 == 1) ++outright, ++result->nwinlo[i];                             \
+        else ++result->ntielo[i];                                                       \
+        ++result->nsharelo[i][loshare1];                                                \
+      }                                                                                  \
+      else if (bestlo1 != LowHandVal_NOTHING)                                           \
+        ++eligible, ++result->nloselo[i];                                               \
       if (hival2[i] == besthi2 && besthi2 != HandVal_NOTHING)                          \
+      {                                                                                  \
         ev += get_hishare_reciprocal(hishare2) * hi_unit2;                              \
+        ++eligible;                                                                     \
+        if (hishare2 == 1) ++outright, ++result->nwinhi[i];                             \
+        else ++result->ntiehi[i];                                                       \
+        ++result->nsharehi[i][hishare2];                                                \
+      }                                                                                  \
+      else if (besthi2 != HandVal_NOTHING)                                              \
+        ++eligible, ++result->nlosehi[i];                                               \
       if (loval2[i] == bestlo2 && bestlo2 != LowHandVal_NOTHING)                       \
+      {                                                                                  \
         ev += get_hishare_reciprocal(loshare2) * 0.25;                                 \
+        ++eligible;                                                                     \
+        if (loshare2 == 1) ++outright, ++result->nwinlo[i];                             \
+        else ++result->ntielo[i];                                                       \
+        ++result->nsharelo[i][loshare2];                                                \
+      }                                                                                  \
+      else if (bestlo2 != LowHandVal_NOTHING)                                           \
+        ++eligible, ++result->nloselo[i];                                               \
       result->ev[i] += ev;                                                             \
-      if (hival1[i] == besthi1 || hival2[i] == besthi2)                                \
-        ++result->nwinhi[i];                                                           \
-      if (loval1[i] == bestlo1 || loval2[i] == bestlo2)                                \
-        ++result->nwinlo[i];                                                           \
+      if (eligible > 0 && outright == eligible) ++result->nscoop[i];                   \
     }                                                                                  \
     result->nsamples++;                                                                \
   } while (0)
@@ -1365,6 +1412,18 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     StdDeck_CardMask_OR(effective_dead, effective_dead, pockets[idx]);
   }
   StdDeck_CardMask_OR(effective_dead, effective_dead, board);
+  if (game == game_royal || game == game_astud || game == game_italian)
+  {
+    int first_rank = game == game_royal ? StdDeck_Rank_TEN :
+                     game == game_astud ? StdDeck_Rank_7 :
+                     npockets <= 4 ? StdDeck_Rank_8 :
+                     npockets == 5 ? StdDeck_Rank_7 : StdDeck_Rank_5;
+    for (idx = 0; idx < npockets; ++idx)
+      if (!mask_uses_only_ranks(pockets[idx], first_rank))
+        return 1;
+    if (!mask_uses_only_ranks(board, first_rank))
+      return 1;
+  }
   if (game == game_royal)
   {
     for (int rank = StdDeck_Rank_2; rank <= StdDeck_Rank_9; ++rank)
@@ -1581,7 +1640,9 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     int need1, need2;
     if (nboard < 0 || nboard > 10)
       return 1;
-    if (nboard > 5)
+    if (double_board_override_valid)
+      board_base1 = double_board_override1, board_base2 = double_board_override2;
+    else if (nboard > 5)
       split_double_board(board, &board_base1, &board_base2);
     else
       board_base1 = board_base2 = board;
@@ -2251,6 +2312,28 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
   return 0;
 }
 
+int enumExhaustiveDoubleBoard(enum_game_t game, StdDeck_CardMask pockets[],
+                              StdDeck_CardMask board1, int nboard1,
+                              StdDeck_CardMask board2, int nboard2,
+                              StdDeck_CardMask dead, int npockets,
+                              int orderflag, enum_result_t *result)
+{
+  StdDeck_CardMask overlap;
+  StdDeck_CardMask_AND(overlap, board1, board2);
+  if (game != game_doubleboard_omaha85 || nboard1 < 0 || nboard1 > 5 ||
+      nboard2 < 0 || nboard2 > 5 || StdDeck_CardMask_ANY_SET(overlap, overlap))
+    return 1;
+  StdDeck_CardMask effective_dead = dead;
+  StdDeck_CardMask_OR(effective_dead, effective_dead, board2);
+  double_board_override1 = board1;
+  double_board_override2 = board2;
+  double_board_override_valid = 1;
+  int rc = enumExhaustive(game, pockets, board1, effective_dead, npockets,
+                          nboard1 + nboard2, orderflag, result);
+  double_board_override_valid = 0;
+  return rc;
+}
+
 int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
                StdDeck_CardMask board, StdDeck_CardMask dead,
                int npockets, int nboard, int niter, int orderflag,
@@ -2270,6 +2353,18 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     StdDeck_CardMask_OR(effective_dead, effective_dead, pockets[idx]);
   }
   StdDeck_CardMask_OR(effective_dead, effective_dead, board);
+  if (game == game_royal || game == game_astud || game == game_italian)
+  {
+    int first_rank = game == game_royal ? StdDeck_Rank_TEN :
+                     game == game_astud ? StdDeck_Rank_7 :
+                     npockets <= 4 ? StdDeck_Rank_8 :
+                     npockets == 5 ? StdDeck_Rank_7 : StdDeck_Rank_5;
+    for (idx = 0; idx < npockets; ++idx)
+      if (!mask_uses_only_ranks(pockets[idx], first_rank))
+        return 1;
+    if (!mask_uses_only_ranks(board, first_rank))
+      return 1;
+  }
   if (game == game_royal)
   {
     for (int rank = StdDeck_Rank_2; rank <= StdDeck_Rank_9; ++rank)
@@ -2902,7 +2997,9 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     if (nboard < 0 || nboard > 10)
       return 1;
     StdDeck_CardMask board_base1, board_base2;
-    if (nboard > 5)
+    if (double_board_override_valid)
+      board_base1 = double_board_override1, board_base2 = double_board_override2;
+    else if (nboard > 5)
       split_double_board(board, &board_base1, &board_base2);
     else
       board_base1 = board_base2 = board;
@@ -3169,6 +3266,28 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
   }
 
   return 0;
+}
+
+int enumSampleDoubleBoard(enum_game_t game, StdDeck_CardMask pockets[],
+                          StdDeck_CardMask board1, int nboard1,
+                          StdDeck_CardMask board2, int nboard2,
+                          StdDeck_CardMask dead, int npockets, int niter,
+                          int orderflag, enum_result_t *result)
+{
+  StdDeck_CardMask overlap;
+  StdDeck_CardMask_AND(overlap, board1, board2);
+  if (game != game_doubleboard_omaha85 || nboard1 < 0 || nboard1 > 5 ||
+      nboard2 < 0 || nboard2 > 5 || StdDeck_CardMask_ANY_SET(overlap, overlap))
+    return 1;
+  StdDeck_CardMask effective_dead = dead;
+  StdDeck_CardMask_OR(effective_dead, effective_dead, board2);
+  double_board_override1 = board1;
+  double_board_override2 = board2;
+  double_board_override_valid = 1;
+  int rc = enumSample(game, pockets, board1, effective_dead, npockets,
+                      nboard1 + nboard2, niter, orderflag, result);
+  double_board_override_valid = 0;
+  return rc;
 }
 
 void enumResultClear(enum_result_t *result)

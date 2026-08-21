@@ -86,6 +86,13 @@ static void test_enumeration_paths(void)
         StdDeck_MAKE_CARD(StdDeck_Rank_3, StdDeck_Suit_CLUBS),
         StdDeck_MAKE_CARD(StdDeck_Rank_4, StdDeck_Suit_DIAMONDS)
     };
+    const int archie_weak_pocket[] = {
+        StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
+        StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_HEARTS),
+        StdDeck_MAKE_CARD(StdDeck_Rank_JACK, StdDeck_Suit_CLUBS),
+        StdDeck_MAKE_CARD(StdDeck_Rank_7, StdDeck_Suit_DIAMONDS),
+        StdDeck_MAKE_CARD(StdDeck_Rank_2, StdDeck_Suit_SPADES)
+    };
     const int astud_pocket[] = {
         StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES),
         StdDeck_MAKE_CARD(StdDeck_Rank_KING, StdDeck_Suit_HEARTS),
@@ -121,6 +128,7 @@ static void test_enumeration_paths(void)
     StdDeck_CardMask board = cards(royal_board, 5);
     StdDeck_CardMask draw = cards(draw_pocket, 5);
     StdDeck_CardMask badugi = cards(badugi_pocket, 4);
+    StdDeck_CardMask archie_weak = cards(archie_weak_pocket, 5);
     StdDeck_CardMask astud = cards(astud_pocket, 7);
     StdDeck_CardMask chinese = cards(chinese_pocket, 13);
     StdDeck_CardMask board2 = cards(second_board, 5);
@@ -137,7 +145,7 @@ static void test_enumeration_paths(void)
                           1, 5, 0, &result) == 0);
     assert(enumExhaustive(game_astud, &astud, empty, empty,
                           1, 0, 0, &result) == 0);
-    assert(enumExhaustive(game_archie, &draw, empty, empty,
+    assert(enumExhaustive(game_archie, &archie_weak, empty, empty,
                           1, 0, 0, &result) == 0);
     assert(result.nwinhi[0] == 0);
     assert(enumExhaustive(game_badugi_hilo, &badugi, empty, empty,
@@ -148,6 +156,12 @@ static void test_enumeration_paths(void)
                       1, 10, 1, 0, &result) == 0);
     assert(enumExhaustive(game_doubleboard_omaha85, &draw, board10, empty,
                           1, 10, 0, &result) == 0);
+    assert(enumSampleDoubleBoard(game_doubleboard_omaha85, &draw,
+                                 board, 5, board2, 5, empty,
+                                 1, 1, 0, &result) == 0);
+    assert(enumExhaustiveDoubleBoard(game_doubleboard_omaha85, &draw,
+                                     board, 5, board2, 5, empty,
+                                     1, 0, &result) == 0);
     assert(enumSample(game_royal, &pocket, board, empty,
                       1, 5, 1, 0, &result) == 0);
     assert(enumSample(game_italian, &pocket, board, empty,

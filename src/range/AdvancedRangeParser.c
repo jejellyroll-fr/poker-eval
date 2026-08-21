@@ -648,6 +648,7 @@ static int arp_is_omaha_game(enum_game_t game_type)
     case game_omaha8:
     case game_omaha85:
     case game_omaha86:
+    case game_doubleboard_omaha85:
         return 1;
     case game_holdem:
     case game_holdem8:
@@ -686,7 +687,6 @@ static int arp_is_omaha_game(enum_game_t game_type)
     case game_drawmaha49:
     case game_drawmaha_zero:
     case game_drawmaha_dugi:
-    case game_doubleboard_omaha85:
     case game_chinese13:
     case game_NUMGAMES:
         return 0;
