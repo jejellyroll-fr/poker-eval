@@ -206,6 +206,16 @@ deck_type_t Universal_DetermineRequiredDeckType(enum_game_t game) {
   case game_irish:
   case game_ofc:
   case game_manila:
+  case game_royal:
+  case game_astud:
+  case game_italian:
+  case game_archie:
+  case game_badugi_hilo:
+  case game_drawmaha49:
+  case game_drawmaha_zero:
+  case game_drawmaha_dugi:
+  case game_doubleboard_omaha85:
+  case game_chinese13:
   case game_NUMGAMES:
   default:
     return UNIVERSAL_DECK_STANDARD;

@@ -129,6 +129,8 @@ static int is_hilo(enum_game_t game) {
         case game_holdem8:
         case game_courchevel8:
         case game_pineapple8:
+        case game_archie:
+        case game_badugi_hilo:
             return 1;
         case game_holdem:
         case game_omaha:
@@ -157,6 +159,14 @@ static int is_hilo(enum_game_t game) {
         case game_irish:
         case game_ofc:
         case game_manila:
+        case game_royal:
+        case game_astud:
+        case game_italian:
+        case game_drawmaha49:
+        case game_drawmaha_zero:
+        case game_drawmaha_dugi:
+        case game_doubleboard_omaha85:
+        case game_chinese13:
         case game_NUMGAMES:
         default:
             return 0;
