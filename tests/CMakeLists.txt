@@ -709,6 +709,8 @@ set_tests_properties(test_cfr_bunching PROPERTIES LABELS "engine;cfr;bunching;fe
 add_poker_test(test_cfr_compact_storage)
 set_tests_properties(test_cfr_compact_storage PROPERTIES LABELS "engine;cfr;compact")
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
+add_poker_test(test_cfr_strategy_mode)
+set_tests_properties(test_cfr_strategy_mode PROPERTIES LABELS "engine;cfr;strategy-mode;ext01")
 add_poker_test(test_cfr_get_actions_clamp)
 set_tests_properties(test_cfr_get_actions_clamp PROPERTIES LABELS "engine;cfr;bug07")
 add_poker_test(test_cfr_node_lock)

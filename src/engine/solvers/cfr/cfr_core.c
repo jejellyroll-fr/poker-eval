@@ -288,7 +288,7 @@ double cfr_solve(
         return -1.0;
     }
 
-    cfr_storage_set_strategy_mode(config->enable_ecfr, config->ecfr_lambda);
+    cfr_storage_set_strategy_mode_for(storage, config->enable_ecfr, config->ecfr_lambda);
     cfr_storage_set_memory_masks(storage, config->keep_avg_strategy_mask, config->keep_ev_mask);
     g_cfr_use_flow_focus = config->enable_mccfvfp ? 1 : 0;
     g_cfr_flow_pow = (fabs(config->mccfvfp_flow_pow) > 1e-9) ? config->mccfvfp_flow_pow : 1.0;
@@ -545,7 +545,9 @@ double cfr_solve(
         fflush(stderr);
     }
 
-    cfr_storage_set_strategy_mode(0, 1.0);
+    /* Restore the default so a storage reused for a second solve does not
+       inherit this one's ECFR temperature. */
+    cfr_storage_set_strategy_mode_for(storage, 0, 1.0);
     g_cfr_use_flow_focus = 0;
     g_cfr_flow_pow = 1.0;
 

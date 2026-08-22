@@ -18,8 +18,6 @@
 #define CFR_THREAD_LOCAL _Thread_local
 #endif
 
-static CFR_THREAD_LOCAL int g_use_ecfr = 0;
-static CFR_THREAD_LOCAL double g_ecfr_lambda = 1.0;
 
 static int keep_for_street(uint32_t mask, int street)
 {
@@ -173,13 +171,21 @@ static size_t next_pow2(size_t x)
     return p;
 }
 
+void cfr_storage_set_strategy_mode_for(cfr_storage_t *s, int use_ecfr, double ecfr_lambda)
+{
+    if (!s)
+        return;
+    s->use_ecfr = use_ecfr ? 1 : 0;
+    s->ecfr_lambda = (ecfr_lambda <= 0.0) ? 1.0 : ecfr_lambda;
+}
+
+/* EXT-01: the process-wide setter is gone. Keeping a static here would restore
+   exactly the non-reentrancy this ticket removes, so the shim does nothing and
+   the header marks it deprecated to say so at compile time. */
 void cfr_storage_set_strategy_mode(int use_ecfr, double ecfr_lambda)
 {
-    g_use_ecfr = use_ecfr ? 1 : 0;
-    if (ecfr_lambda <= 0.0)
-        g_ecfr_lambda = 1.0;
-    else
-        g_ecfr_lambda = ecfr_lambda;
+    (void)use_ecfr;
+    (void)ecfr_lambda;
 }
 
 cfr_storage_t *cfr_storage_create(void)
@@ -188,6 +194,11 @@ cfr_storage_t *cfr_storage_create(void)
     if (!s)
         return NULL;
     s->cap = 1 << 16; /* 65536 */
+    /* calloc leaves ecfr_lambda at 0.0, which would turn exp(lambda * r) into
+       a constant and silently produce a uniform policy. The neutral
+       temperature is 1.0, so it is set rather than assumed. */
+    s->use_ecfr = 0;
+    s->ecfr_lambda = 1.0;
     s->tab = (entry_t *)calloc(s->cap, sizeof(entry_t));
     if (!s->tab)
     {
@@ -459,7 +470,7 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
             probs[i] = 1.0 / action_count;
         return;
     }
-    if (!g_use_ecfr)
+    if (!s->use_ecfr)
     {
         double sum_pos = 0.0;
         for (int i = 0; i < action_count; i++)
@@ -498,7 +509,7 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
                 double rp = e->regret[i];
                 if (rp > 0.0)
                 {
-                    double w = exp(g_ecfr_lambda * (rp - max_pos));
+                    double w = exp(s->ecfr_lambda * (rp - max_pos));
                     probs[i] = w;
                     sum_w += w;
                 }
@@ -527,14 +538,14 @@ void cfr_storage_get_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, i
     entry_t *e = get_entry_at_street(s, key, n, street);
     if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
     if (e->locked) { for (int i = 0; i < n; ++i) probs[i] = e->locked[i]; return; }
-    if (g_use_ecfr) {
+    if (s->use_ecfr) {
         double max_pos = 0.0, sum_w = 0.0;
         for (int i = 0; i < n; ++i)
             if (e->regret[i] > max_pos) max_pos = e->regret[i];
         if (max_pos > 0.0) {
             for (int i = 0; i < n; ++i) {
                 probs[i] = e->regret[i] > 0.0
-                    ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                    ? exp(s->ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
                 sum_w += probs[i];
             }
             if (sum_w > 0.0) {
@@ -636,13 +647,13 @@ void cfr_storage_get_regret_strategy_at_street(cfr_storage_t *s, uint64_t key, i
 {
     entry_t *e = get_entry_at_street(s, key, n, street);
     if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
-    if (g_use_ecfr) {
+    if (s->use_ecfr) {
         double max_pos = 0.0, sum_w = 0.0;
         for (int i = 0; i < n; ++i)
             if (e->regret[i] > max_pos) max_pos = e->regret[i];
         if (max_pos > 0.0) {
             for (int i = 0; i < n; ++i) {
-                probs[i] = e->regret[i] > 0.0 ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                probs[i] = e->regret[i] > 0.0 ? exp(s->ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
                 sum_w += probs[i];
             }
             if (sum_w > 0.0) { for (int i = 0; i < n; ++i) probs[i] /= sum_w; return; }

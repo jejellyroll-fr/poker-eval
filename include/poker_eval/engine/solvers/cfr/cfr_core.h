@@ -108,6 +108,11 @@ struct cfr_storage_t {
     size_t used_count;
     uint32_t keep_avg_strategy_mask;
     uint32_t keep_ev_mask;
+    /* Strategy extraction mode (EXT-01). Held per storage rather than in a
+     * process-wide static: the previous global made the solver non-reentrant,
+     * so two solves in one process silently shared an ECFR temperature. */
+    int use_ecfr;
+    double ecfr_lambda;
 };
 
 /* CFR game interface (vtable) */
@@ -358,7 +363,28 @@ void cfr_storage_get_strategy(
     double* out_strategy
 );
 
-/* Configure strategy extraction mode (called by solver) */
+/*
+ * Configure strategy extraction for one storage (EXT-01).
+ *
+ * `use_ecfr` selects the exponential (ECFR) policy over regret matching, and
+ * `ecfr_lambda` is its temperature; a non-positive lambda is clamped to 1.0.
+ * The setting belongs to the storage, so two solves running in one process
+ * cannot disturb each other.
+ */
+void cfr_storage_set_strategy_mode_for(cfr_storage_t *storage,
+                                       int use_ecfr,
+                                       double ecfr_lambda);
+
+/*
+ * Deprecated (EXT-01): the process-wide variant. It has no storage to act on
+ * and is now a no-op. Call cfr_storage_set_strategy_mode_for() instead.
+ *
+ * Kept so that out-of-tree callers still link, and marked deprecated so they
+ * find out at compile time rather than by silently losing their setting.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated("use cfr_storage_set_strategy_mode_for(storage, ...)")))
+#endif
 void cfr_storage_set_strategy_mode(int use_ecfr, double ecfr_lambda);
 void cfr_storage_set_memory_masks(cfr_storage_t *storage,
                                   uint32_t keep_avg_strategy_mask,
