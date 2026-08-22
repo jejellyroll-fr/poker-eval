@@ -20,6 +20,7 @@
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_telemetry.h>
 
 #include <stddef.h>
@@ -118,14 +119,44 @@ const pe_telemetry_ops_t *pe_solver_get_telemetry(const pe_solver_t *solver)
  * Validation and introspection
  * ------------------------------------------------------------------ */
 
+/*
+ * Capabilities available to a plan.
+ *
+ * Until the game-rules port exists there is nothing to ask, so validation
+ * assumes everything is provided and checks what it can: the combination, the
+ * parameter ranges and the memory budget. A capability that is genuinely
+ * absent will be caught once a game can say so — the resolver already refuses
+ * on missing capabilities, it is the source of the mask that is provisional.
+ */
+static uint64_t pe_solver_available_caps(const pe_solver_t *solver)
+{
+    (void)solver;
+    return (uint64_t)PE_CAP_ALL;
+}
+
 pe_status_t pe_solver_validate(const pe_solver_t *solver,
                                pe_diagnostics_t *out)
 {
-    /* `out` is optional: a caller may want the status alone. */
-    (void)out;
+    pe_execution_plan_t plan;
+    pe_estimate_t estimate;
+    pe_diagnostics_t local;
+    pe_diagnostics_t *diag = (out != NULL) ? out : &local;
+
     if (solver == NULL)
         return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+
+    if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
+                        &plan, diag) == PE_VALID_ERROR)
+        return PE_ERR_INVALID_CONFIG;
+
+    /* Nothing has been allocated at this point, and nothing will be if the
+       estimate does not fit: that is the whole point of asking first. */
+    if (pe_plan_estimate(&plan, &solver->config.problem,
+                         solver->config.execution.max_ram_bytes,
+                         &estimate, diag) == PE_VALID_ERROR)
+        return PE_ERR_BUDGET_EXCEEDED;
+
+    return PE_OK;
 }
 
 pe_status_t pe_solver_capabilities(const pe_solver_t *solver,
@@ -139,9 +170,29 @@ pe_status_t pe_solver_capabilities(const pe_solver_t *solver,
 pe_status_t pe_solver_estimate(const pe_solver_t *solver,
                                pe_estimate_t *out)
 {
+    pe_execution_plan_t plan;
+
     if (solver == NULL || out == NULL)
         return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+
+    if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
+                        &plan, NULL) == PE_VALID_ERROR)
+        return PE_ERR_INVALID_CONFIG;
+
+    switch (pe_plan_estimate(&plan, &solver->config.problem,
+                             solver->config.execution.max_ram_bytes, out, NULL))
+    {
+    case PE_VALID_ERROR:
+        /* An empty problem size and a busted budget are different failures,
+           and `out` distinguishes them: infosets is 0 for the first. */
+        return (out->infosets == 0) ? PE_ERR_INVALID_CONFIG
+                                    : PE_ERR_BUDGET_EXCEEDED;
+    case PE_VALID_OK:
+    case PE_VALID_WARNING:
+    case PE_VALID_FALLBACK:
+    default:
+        return PE_OK;
+    }
 }
 
 pe_status_t pe_solver_plan(const pe_solver_t *solver,
@@ -149,7 +200,11 @@ pe_status_t pe_solver_plan(const pe_solver_t *solver,
 {
     if (solver == NULL || out == NULL)
         return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+
+    if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
+                        out, NULL) == PE_VALID_ERROR)
+        return PE_ERR_INVALID_CONFIG;
+    return PE_OK;
 }
 
 /* ------------------------------------------------------------------ *

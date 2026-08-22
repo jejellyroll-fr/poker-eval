@@ -215,7 +215,33 @@ typedef struct {
     size_t sample_batch_size;
     size_t terminal_batch_size;
     size_t update_batch_size;
+
+    /*
+     * Host memory the solve may use, in bytes. 0 means no budget.
+     *
+     * Memory is an input here, not a consequence discovered when the machine
+     * starts swapping: pe_solver_validate() refuses a configuration whose
+     * estimate exceeds it, before anything is allocated.
+     */
+    uint64_t max_ram_bytes;
 } pe_execution_config_t;
+
+/*
+ * How big the problem is expected to be.
+ *
+ * Supplied by the caller for now. Once the game port exists the game will fill
+ * it — a game knows its own tree — but the estimate has to work before that,
+ * because deciding whether a solve fits is exactly the question one asks
+ * before committing to it.
+ *
+ * The counts are averages: an estimate is a budget check, not an inventory.
+ */
+typedef struct {
+    uint64_t expected_infosets;
+    uint16_t expected_actions;
+    /** 1 outside the vector lane. */
+    uint16_t expected_combos;
+} pe_problem_config_t;
 
 /* ------------------------------------------------------------------ *
  * Solver configuration
@@ -225,6 +251,7 @@ typedef struct {
 struct pe_solver_config_t {
     pe_algorithm_config_t algorithm;
     pe_execution_config_t execution;
+    pe_problem_config_t problem;
 
     /* Seed of the solver's root RNG stream. Every derived stream is a
        reproducible function of it, so the same seed replays the same run. */

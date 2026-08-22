@@ -757,6 +757,8 @@ add_poker_test(test_pe_registry)
 set_tests_properties(test_pe_registry PROPERTIES LABELS "solver;solver-v3;ctr06")
 add_poker_test(test_pe_storage_ids)
 add_poker_test(test_pe_storage_port)
+add_poker_test(test_pe_estimate)
+set_tests_properties(test_pe_estimate PROPERTIES LABELS "solver;solver-v3;sto05" TIMEOUT 120)
 set_tests_properties(test_pe_storage_port PROPERTIES LABELS "solver;solver-v3;sto03")
 set_tests_properties(test_pe_storage_ids PROPERTIES LABELS "solver;solver-v3;sto01" TIMEOUT 120)
 

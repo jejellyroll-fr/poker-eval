@@ -14,8 +14,7 @@
  *
  *   pe_compute_ops_t     GPU-01  (pe_compute.h)
  *   pe_evaluator_ops_t   GPU-02  (pe_evaluator.h)
- *   pe_storage_ops_t     STO-03  (pe_storage.h)
- *   pe_persist_ops_t     API-04  (pe_persist.h)
+ * *   pe_persist_ops_t     API-04  (pe_persist.h)
  *
  * A port left NULL means "use the default adapter", not "misconfigured". The
  * solver substitutes a default at creation, so nothing downstream tests for
@@ -26,16 +25,20 @@
 #define POKER_EVAL_PE_PORTS_H
 
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_telemetry.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Completed by the tickets listed above. */
+/* Completed by the tickets listed above. pe_storage_ops_t is no longer among
+   them: STO-03 defined it, and repeating the typedef here is a constraint
+   violation in C99 — the very trap the forward declarations in pe_solver.h are
+   arranged to avoid. The header that defines a port is the one that declares
+   it. */
 typedef struct pe_compute_ops_t   pe_compute_ops_t;
 typedef struct pe_evaluator_ops_t pe_evaluator_ops_t;
-typedef struct pe_storage_ops_t   pe_storage_ops_t;
 typedef struct pe_persist_ops_t   pe_persist_ops_t;
 
 /*

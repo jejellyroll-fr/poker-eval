@@ -370,6 +370,123 @@ pe_valid_severity_t pe_plan_resolve(const pe_solver_config_t *cfg,
 }
 
 /* ------------------------------------------------------------------ *
+ * Estimation (STO-05)
+ * ------------------------------------------------------------------ */
+
+uint32_t pe_precision_bytes(pe_precision_mode_t precision)
+{
+    switch (precision)
+    {
+    case PE_PREC_F32:
+        return 4u;
+    case PE_PREC_FIXED16:
+        return 2u;
+    case PE_PREC_MIXED:
+        /* Accumulates in F32 and reduces in F64. The reduction buffer is what
+           sizes the storage, so this is 8 rather than 4: an estimate that
+           under-reports is worse than one that over-reports, because the
+           caller only finds out by running out. */
+        return 8u;
+    case PE_PREC_F64:
+    case PE_PREC_COUNT:
+    default:
+        return 8u;
+    }
+}
+
+uint32_t pe_plan_value_arrays(const pe_execution_plan_t *plan)
+{
+    /* Regret and average are always kept. The current strategy is recomputed
+       per node by every traversal that exists today, and the locked array is
+       only allocated where something is locked — neither is counted until a
+       plan says it needs one. */
+    uint32_t n = 2u;
+
+    if (plan != NULL && plan->pruning == PE_PRUNE_RBP)
+        n += 1u;   /* RBP keeps the current strategy to decide what to skip */
+    return n;
+}
+
+pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
+                                     const pe_problem_config_t *problem,
+                                     uint64_t budget_bytes,
+                                     pe_estimate_t *out,
+                                     pe_diagnostics_t *out_diag)
+{
+    uint64_t slots;
+    uint64_t per_slot;
+    uint64_t arrays;
+
+    if (plan == NULL || problem == NULL || out == NULL)
+        return PE_VALID_ERROR;
+
+    memset(out, 0, sizeof(*out));
+
+    if (problem->expected_infosets == 0 || problem->expected_actions == 0 ||
+        problem->expected_combos == 0)
+    {
+        pe_diag_add(out_diag, PE_VALID_ERROR,
+                    "problem size is empty (%llu infosets, %u actions, %u combos): "
+                    "estimating nothing is not an estimate of zero",
+                    (unsigned long long)problem->expected_infosets,
+                    (unsigned)problem->expected_actions,
+                    (unsigned)problem->expected_combos);
+        return PE_VALID_ERROR;
+    }
+
+    slots = problem->expected_infosets * (uint64_t)problem->expected_actions
+            * (uint64_t)problem->expected_combos;
+    per_slot = pe_precision_bytes(plan->precision);
+    arrays = pe_plan_value_arrays(plan);
+
+    out->infosets = problem->expected_infosets;
+    out->slots = slots;
+    out->bytes_per_slot = (uint32_t)per_slot;
+    out->value_arrays = (uint32_t)arrays;
+
+    /* Value arrays, plus the metadata and the key map the dense-ID storage
+       keeps per infoset. The map is sized for a 70% load factor and rounded to
+       a power of two, so it holds between 1.43 and 2.86 slots per infoset; 2
+       is the midpoint and the error it carries is far below the slack a memory
+       budget is set with. */
+    out->storage_bytes = slots * per_slot * arrays
+                         + problem->expected_infosets * PE_STORAGE_META_BYTES
+                         + problem->expected_infosets * 2u * sizeof(uint32_t);
+
+    /* One scratch frame per recursion level, and one update batch. Small next
+       to the storage on any real solve, and the reason it is reported
+       separately is that it does not shrink with abstraction. */
+    out->scratch_bytes = (uint64_t)PE_ESTIMATE_SCRATCH_DEPTH
+                             * (uint64_t)problem->expected_actions * 3u * sizeof(double)
+                         + (uint64_t)problem->expected_actions
+                               * (uint64_t)problem->expected_combos * 2u * sizeof(double);
+
+    out->host_bytes = out->storage_bytes + out->scratch_bytes;
+
+    /* A device holds the value arrays and nothing else so far: the traversal
+       runs on the host until GPU-4. */
+    if (plan->stages.traversal == PE_COMPUTE_CUDA ||
+        plan->stages.traversal == PE_COMPUTE_OPENCL ||
+        plan->stages.update == PE_COMPUTE_CUDA ||
+        plan->stages.update == PE_COMPUTE_OPENCL)
+        out->device_bytes = slots * per_slot * arrays;
+
+    out->budget_bytes = budget_bytes;
+    out->within_budget = (budget_bytes == 0 || out->host_bytes <= budget_bytes);
+
+    if (!out->within_budget)
+    {
+        pe_diag_add(out_diag, PE_VALID_ERROR,
+                    "estimated %llu MiB of host memory exceeds the %llu MiB budget",
+                    (unsigned long long)(out->host_bytes >> 20),
+                    (unsigned long long)(budget_bytes >> 20));
+        return PE_VALID_ERROR;
+    }
+
+    return PE_VALID_OK;
+}
+
+/* ------------------------------------------------------------------ *
  * Text form
  * ------------------------------------------------------------------ */
 

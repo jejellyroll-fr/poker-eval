@@ -57,7 +57,9 @@ typedef enum {
     PE_ERR_NULL_ARGUMENT,   /* a required pointer argument was NULL */
     PE_ERR_INVALID_STATE,   /* the call is not legal in the solver's state */
     PE_ERR_OUT_OF_MEMORY,   /* allocation failed */
-    PE_ERR_NOT_IMPLEMENTED  /* the entry point exists but has no body yet */
+    PE_ERR_NOT_IMPLEMENTED, /* the entry point exists but has no body yet */
+    PE_ERR_INVALID_CONFIG,  /* the configuration cannot be honoured */
+    PE_ERR_BUDGET_EXCEEDED  /* the estimate does not fit max_ram_bytes */
 } pe_status_t;
 
 /* ------------------------------------------------------------------ *
@@ -136,10 +138,46 @@ pe_status_t pe_solver_validate(const pe_solver_t *solver,
 pe_status_t pe_solver_capabilities(const pe_solver_t *solver,
                                    uint64_t *out_caps);
 
+/*
+ * What a solve would cost, before committing to it.
+ *
+ * Every figure is derived from the resolved plan and the declared problem
+ * size; nothing here allocates or runs. The point of the structure is that
+ * the parts are visible: a caller who is 30% over budget wants to know
+ * whether it is the value arrays or the scratch, because only one of those
+ * responds to abstraction.
+ */
+struct pe_estimate_t {
+    /** Inputs echoed back, so a printed estimate stands on its own. */
+    uint64_t infosets;
+    uint64_t slots;              /**< infosets * actions * combos */
+    uint32_t bytes_per_slot;     /**< from the resolved precision */
+    uint32_t value_arrays;       /**< how many the plan will keep */
+
+    /** Value arrays, metadata and the key map. */
+    uint64_t storage_bytes;
+    /** Traversal scratch and the update batches. */
+    uint64_t scratch_bytes;
+    /** storage + scratch. What max_ram_bytes is compared against. */
+    uint64_t host_bytes;
+    /** 0 unless a stage was resolved onto a device. */
+    uint64_t device_bytes;
+
+    /** The budget in force, echoed; 0 when none was declared. */
+    uint64_t budget_bytes;
+    /** Nonzero when host_bytes fits the budget, or there is none. */
+    int within_budget;
+};
+
 /**
- * Estimate the resources a solve would consume (RAM, VRAM, wall time) before
- * committing to it. Memory is a first-class input of the configuration, not a
- * consequence discovered at run time.
+ * Estimate the resources a solve would consume before committing to it.
+ *
+ * Memory is a first-class input of the configuration, not a consequence
+ * discovered at run time: pe_solver_validate() refuses a plan whose estimate
+ * exceeds pe_execution_config_t::max_ram_bytes, before anything is allocated.
+ *
+ * Returns PE_ERR_INVALID_CONFIG when the declared problem size is empty —
+ * estimating nothing is not an estimate of zero.
  */
 pe_status_t pe_solver_estimate(const pe_solver_t *solver,
                                pe_estimate_t *out);

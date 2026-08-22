@@ -185,6 +185,43 @@ pe_valid_severity_t pe_plan_resolve(const pe_solver_config_t *cfg,
                                     pe_execution_plan_t *out_plan,
                                     pe_diagnostics_t *out_diag);
 
+/* ------------------------------------------------------------------ *
+ * Estimation (STO-05)
+ * ------------------------------------------------------------------ */
+
+/*
+ * Bytes the dense-ID storage keeps per infoset outside the value arrays.
+ * Mirrors sizeof(pe_infoset_meta_t); named here so the estimate does not have
+ * to include the concrete storage header to know it.
+ */
+#define PE_STORAGE_META_BYTES 24u
+
+/* Recursion depth the scratch estimate assumes. Generous: a poker tree is
+   nowhere near this deep, and over-reporting scratch is harmless next to
+   under-reporting storage. */
+#define PE_ESTIMATE_SCRATCH_DEPTH 256u
+
+/** Bytes one value slot occupies at a given precision. */
+uint32_t pe_precision_bytes(pe_precision_mode_t precision);
+
+/** How many value arrays a plan will keep populated. */
+uint32_t pe_plan_value_arrays(const pe_execution_plan_t *plan);
+
+/**
+ * What a solve of this size, under this plan, would cost.
+ *
+ * @param budget_bytes  Host budget; 0 means none.
+ * @param out_diag      May be NULL.
+ * @return PE_VALID_OK, or PE_VALID_ERROR when the problem size is empty or
+ *         the estimate does not fit the budget. `out` is filled either way
+ *         except on a NULL argument, so a caller can report what did not fit.
+ */
+pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
+                                     const pe_problem_config_t *problem,
+                                     uint64_t budget_bytes,
+                                     pe_estimate_t *out,
+                                     pe_diagnostics_t *out_diag);
+
 /**
  * Render a resolved plan as text, one field per line.
  *
