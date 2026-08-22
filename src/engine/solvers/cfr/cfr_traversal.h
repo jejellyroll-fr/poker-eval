@@ -23,6 +23,8 @@
 #ifndef POKER_EVAL_CFR_TRAVERSAL_H
 #define POKER_EVAL_CFR_TRAVERSAL_H
 
+#include "cfr_algo_ops.h"
+
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
 #include <poker_eval/solver/pe_telemetry.h>
 
@@ -60,36 +62,6 @@ typedef struct
 
 void cfr_walk_ctx_init(cfr_walk_ctx_t *walk);
 
-/*
- * How raw deltas turn into accumulated regret and into the average strategy.
- *
- * This is the seam that keeps algorithm selection out of the recursion. The
- * traversal asks for two numbers and applies them; which formula produced them
- * is none of its business, which is why cfr_traversal_full_scalar.c mentions
- * neither DCFR nor linear averaging.
- */
-typedef struct cfr_algo_ops_t
-{
-    /*
-     * Factor applied to the already-accumulated regret before this node's
-     * delta is added: regret = regret * discount + delta. 1.0 accumulates
-     * plainly.
-     */
-    double (*regret_discount)(const struct cfr_algo_ops_t *ops, int iter);
-
-    /*
-     * Weight of this node's contribution to the average strategy.
-     *
-     * `reach` is the acting player's reach probability, and `flow_weight` the
-     * flow-focusing factor already computed by the traversal — passed in
-     * rather than recomputed so the two cannot drift apart.
-     */
-    double (*average_weight)(const struct cfr_algo_ops_t *ops, int iter,
-                             double reach, double flow_weight, int use_flow_focus);
-
-    /* Read by the implementations, never by the traversal. */
-    const cfr_config_t *config;
-} cfr_algo_ops_t;
 
 /* Helpers shared with cfr_core.c. External linkage only so the traversal can
    reach them from its own translation unit; they are not public API. */

@@ -64,59 +64,6 @@ int pe_cfr_set_utility_function(cfr_game_t *game, pe_cfr_utility_config_t utilit
 }
 
 
-/* ------------------------------------------------------------------ *
- * Legacy algorithm selection (EXT-04)
- *
- * The formulas the traversal used to carry inline. They stay here, behind
- * cfr_algo_ops_t, so the recursion no longer branches on which algorithm is
- * running. EXT-05 and EXT-06 move them into modules of their own; the numbers
- * they produce must not change on the way.
- * ------------------------------------------------------------------ */
-
-static double cfr_legacy_regret_discount(const cfr_algo_ops_t *ops, int iter)
-{
-    const cfr_config_t *config = ops->config;
-    double t = (double)(iter + 1);
-
-    if (!config->enable_dcfr)
-        return 1.0;
-
-    return (t > 0.0)
-               ? (pow(t, config->dcfr_alpha) / (pow(t, config->dcfr_alpha) + 1.0))
-               : 1.0;
-}
-
-static double cfr_legacy_average_weight(const cfr_algo_ops_t *ops, int iter,
-                                        double reach, double flow_weight,
-                                        int use_flow_focus)
-{
-    const cfr_config_t *config = ops->config;
-    double t = (double)(iter + 1);
-    double w = reach;
-
-    if (use_flow_focus)
-        w *= flow_weight;
-    if (config->enable_linear_avg)
-        w *= t;
-    if (config->enable_dcfr)
-    {
-        if (fabs(config->dcfr_beta) > 1e-9)
-            w *= pow(t, config->dcfr_beta);
-        if (fabs(config->dcfr_gamma) > 1e-9)
-            w *= pow(t, config->dcfr_gamma);
-    }
-    return w;
-}
-
-static cfr_algo_ops_t cfr_legacy_algo_ops(const cfr_config_t *config)
-{
-    cfr_algo_ops_t ops;
-    ops.regret_discount = cfr_legacy_regret_discount;
-    ops.average_weight = cfr_legacy_average_weight;
-    ops.config = config;
-    return ops;
-}
-
 void cfr_walk_ctx_init(cfr_walk_ctx_t *walk)
 {
     walk->current_iter = 0;
@@ -335,7 +282,7 @@ double cfr_solve(
     }
 
     cfr_walk_ctx_init(&walk);
-    algo = cfr_legacy_algo_ops(config);
+    algo = cfr_algo_ops_from_config(config);
     /* Resolved once. NULL keeps the historical stderr behaviour, so an
        existing caller sees the same bytes it always did. */
     if (config->telemetry != NULL)

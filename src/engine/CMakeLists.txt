@@ -16,6 +16,8 @@ set(ENGINE_SOURCES
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_traversal_full_scalar.c
+    solvers/cfr/cfr_regret_ops.c
+    solvers/cfr/cfr_average_ops.c
     solvers/cfr/bet_sizing.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/hand_clustering.c
