@@ -724,6 +724,8 @@ set_tests_properties(test_cfr_opponent_model PROPERTIES LABELS "engine;cfr;lock;
 add_poker_test(test_cfr_periodic_relock)
 set_tests_properties(test_cfr_periodic_relock PROPERTIES LABELS "engine;cfr;lock;feat11")
 add_poker_test(test_cfr_periodic_relock_multiway)
+add_poker_test(test_cfr_relock_ev_loss)
+set_tests_properties(test_cfr_relock_ev_loss PROPERTIES LABELS "engine;cfr;lock;feat11;ext08")
 set_tests_properties(test_cfr_periodic_relock_multiway PROPERTIES LABELS "engine;cfr;lock;feat11;multiway")
 add_poker_test(test_cfr_subgame_resolve)
 set_tests_properties(test_cfr_subgame_resolve PROPERTIES LABELS "engine;cfr;resolve;feat05" TIMEOUT 180)
