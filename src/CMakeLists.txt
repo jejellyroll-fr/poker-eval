@@ -28,6 +28,7 @@ add_library(poker_solver
     solver/domain/plan.c
     solver/domain/storage_v2.c
     solver/domain/telemetry.c
+    solver/adapters/storage_ram.c
     solver/adapters/telemetry_null.c
     solver/adapters/telemetry_stream.c
     solver/adapters/telemetry_callback.c

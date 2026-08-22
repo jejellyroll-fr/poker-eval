@@ -232,7 +232,7 @@ static void fill_and_verify(const char *label, int n_infosets,
         if (!v) break;
         for (a = 0; a < na; ++a)
             for (c = 0; c < nc; ++c)
-                v[pe_storage_slot_index(meta, (uint16_t)a, (uint16_t)c)] = cell(i, a, c);
+                v[pe_storage_slot_at(meta->combo_count, (uint16_t)a, (uint16_t)c)] = cell(i, a, c);
     }
 
     CHECK(pe_storage_slot_count(s) == expected_slots,
@@ -252,7 +252,7 @@ static void fill_and_verify(const char *label, int n_infosets,
         for (a = 0; a < meta->action_count && !bad; ++a)
             for (c = 0; c < meta->combo_count; ++c)
             {
-                double got = v[pe_storage_slot_index(meta, (uint16_t)a, (uint16_t)c)];
+                double got = v[pe_storage_slot_at(meta->combo_count, (uint16_t)a, (uint16_t)c)];
                 if (got != cell(i, a, c))
                 {
                     CHECK(0, "%s: infoset %d slot (%d,%d) is %.17g, expected %.17g",
@@ -306,10 +306,10 @@ static void test_full_holdem_width(void)
 
     for (a = 0; a < 3; ++a)
         for (c = 0; c < 1326; ++c)
-            v[pe_storage_slot_index(meta, (uint16_t)a, (uint16_t)c)] = cell(0, a, c);
+            v[pe_storage_slot_at(meta->combo_count, (uint16_t)a, (uint16_t)c)] = cell(0, a, c);
     for (a = 0; a < 3 && !bad; ++a)
         for (c = 0; c < 1326; ++c)
-            if (v[pe_storage_slot_index(meta, (uint16_t)a, (uint16_t)c)] != cell(0, a, c))
+            if (v[pe_storage_slot_at(meta->combo_count, (uint16_t)a, (uint16_t)c)] != cell(0, a, c))
             {
                 CHECK(0, "1326-combo slot (%d,%d) reads back wrong", a, c);
                 bad = 1;

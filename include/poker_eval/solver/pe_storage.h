@@ -36,6 +36,8 @@
 #ifndef POKER_EVAL_PE_STORAGE_H
 #define POKER_EVAL_PE_STORAGE_H
 
+#include <poker_eval/solver/pe_storage_port.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -45,20 +47,11 @@ extern "C" {
 
 /* ------------------------------------------------------------------ *
  * Identity
+ *
+ * The id type, the flags and the value arrays live in pe_storage_port.h: code
+ * written against the port must not need this header, which is what makes it
+ * a port rather than a typedef over one implementation.
  * ------------------------------------------------------------------ */
-
-typedef uint32_t pe_infoset_id_t;
-
-/** Returned when an infoset is absent, or when resolving one fails. */
-#define PE_INFOSET_ID_INVALID ((pe_infoset_id_t)0xFFFFFFFFu)
-
-/** Street is optional; this says "not known", matching the v2 convention. */
-#define PE_STREET_UNKNOWN ((int8_t)-1)
-
-/* Per-infoset flags. */
-#define PE_INFOSET_LOCKED     ((uint8_t)(1u << 0))
-#define PE_INFOSET_ABSTRACTED ((uint8_t)(1u << 1))
-#define PE_INFOSET_PRUNED     ((uint8_t)(1u << 2))
 
 typedef struct
 {
@@ -84,17 +77,6 @@ typedef struct
  * ------------------------------------------------------------------ */
 
 typedef struct pe_storage_t pe_storage_t;
-
-/** Value arrays an infoset can carry. */
-typedef enum {
-    PE_VALUES_REGRET = 0,
-    PE_VALUES_AVERAGE,
-    /** Allocated on first use: the scalar lane recomputes it per node. */
-    PE_VALUES_CURRENT,
-    /** Allocated on first use, and only when something is locked. */
-    PE_VALUES_LOCKED,
-    PE_VALUES_COUNT
-} pe_value_array_t;
 
 /**
  * Create an empty storage.
@@ -166,8 +148,8 @@ size_t pe_storage_bytes(const pe_storage_t *storage);
  * The slab of an infoset in one value array.
  *
  * The span is action_count * combo_count long and laid out [action][combo], so
- * slot (a, c) is at index a * combo_count + c. Use pe_storage_slot_index() and
- * let it be the one place that knows.
+ * slot (a, c) is at index a * combo_count + c. Use pe_storage_slot_at() from
+ * the port header and let it be the one place that knows.
  *
  * PE_VALUES_CURRENT and PE_VALUES_LOCKED are allocated on first request, so
  * the arrays a solve never touches cost nothing.
@@ -186,20 +168,6 @@ double *pe_storage_values(pe_storage_t *storage,
 const double *pe_storage_values_const(const pe_storage_t *storage,
                                       pe_infoset_id_t id,
                                       pe_value_array_t which);
-
-/**
- * Index of slot (action, combo) inside a span.
- *
- * Deliberately not bounds-checked: it is called once per slot in the hot path.
- * pe_storage_values() already validated the infoset, and the counts come from
- * its metadata.
- */
-static inline size_t pe_storage_slot_index(const pe_infoset_meta_t *meta,
-                                           uint16_t action,
-                                           uint16_t combo)
-{
-    return (size_t)action * (size_t)meta->combo_count + (size_t)combo;
-}
 
 /** Slots one infoset occupies in each value array. */
 static inline size_t pe_storage_slab_size(const pe_infoset_meta_t *meta)
