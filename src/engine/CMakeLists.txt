@@ -49,7 +49,10 @@ target_include_directories(poker_engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics m)
+# EXT-03: the legacy solver now reports through the v3 telemetry port instead
+# of writing to stderr itself. The dependency runs engine -> solver, which is
+# the migration direction; poker_solver itself links only poker_core.
+target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics poker_solver m)
 
 install(TARGETS poker_engine
         EXPORT poker-eval-targets

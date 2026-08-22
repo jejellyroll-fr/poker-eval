@@ -8,10 +8,10 @@
  */
 
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/solver/pe_telemetry.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <stdio.h>
 #include <time.h>
 #include <stdint.h>
 #include <errno.h>
@@ -87,6 +87,9 @@ typedef struct
     long node_count;
     int use_flow_focus;
     double flow_pow;
+    /* Where this walk's messages go. Resolved once by cfr_solve so no call
+       site has to test for NULL. */
+    const pe_telemetry_ops_t *telemetry;
 } cfr_walk_ctx_t;
 
 static void cfr_walk_ctx_init(cfr_walk_ctx_t *walk)
@@ -98,6 +101,7 @@ static void cfr_walk_ctx_init(cfr_walk_ctx_t *walk)
     walk->node_count = 0;
     walk->use_flow_focus = 0;
     walk->flow_pow = 1.0;
+    walk->telemetry = pe_telemetry_stderr();
 }
 
 static void cfr_traverse_recursive(
@@ -124,7 +128,8 @@ static double best_response_recursive(
     uint64_t state_key,
     void *user_data,
     int depth,
-    int *depth_exceeded);
+    int *depth_exceeded,
+    const pe_telemetry_ops_t *telemetry);
 
 static double best_response_recursive_multiway(
     cfr_game_t *game,
@@ -133,7 +138,8 @@ static double best_response_recursive_multiway(
     uint64_t state_key,
     void *user_data,
     int depth,
-    int *depth_exceeded);
+    int *depth_exceeded,
+    const pe_telemetry_ops_t *telemetry);
 
 
 static uint64_t cfr_storage_key(cfr_game_t *game, uint64_t state_key)
@@ -316,6 +322,10 @@ double cfr_solve(
     }
 
     cfr_walk_ctx_init(&walk);
+    /* Resolved once. NULL keeps the historical stderr behaviour, so an
+       existing caller sees the same bytes it always did. */
+    if (config->telemetry != NULL)
+        walk.telemetry = config->telemetry;
 
     cfr_storage_set_strategy_mode_for(storage, config->enable_ecfr, config->ecfr_lambda);
     cfr_storage_set_memory_masks(storage, config->keep_avg_strategy_mask, config->keep_ev_mask);
@@ -338,12 +348,14 @@ double cfr_solve(
             start_iter = (int)saved_iter;
             if (start_iter > 0)
             {
-                fprintf(stderr, "[cfr] resumed from %s at iteration %d\n", config->resume_path, start_iter);
+                pe_telemetry_emitf(walk.telemetry, PE_LOG_INFO, "cfr", (uint64_t)start_iter,
+                               "[cfr] resumed from %s at iteration %d\n", config->resume_path, start_iter);
             }
         }
         else
         {
-            fprintf(stderr, "[cfr] warning: failed to resume from %s (%s)\n", config->resume_path, strerror(errno));
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_WARN, "cfr", 0,
+                               "[cfr] warning: failed to resume from %s (%s)\n", config->resume_path, strerror(errno));
         }
     }
 
@@ -367,7 +379,8 @@ double cfr_solve(
                                        sizeof(double));
     if (!scratch)
     {
-        fprintf(stderr, "[cfr] error: failed to allocate traversal scratch buffer\n");
+        pe_telemetry_emitf(walk.telemetry, PE_LOG_ERROR, "cfr", 0,
+                           "[cfr] error: failed to allocate traversal scratch buffer\n");
         return -1.0;
     }
 
@@ -381,8 +394,9 @@ double cfr_solve(
     int num_players = (game->num_players > 0) ? game->num_players : 2;
     if (num_players > CFR_MAX_PLAYERS)
     {
-        fprintf(stderr, "[cfr] error: num_players=%d exceeds max supported (%d)\n",
-                num_players, CFR_MAX_PLAYERS);
+        pe_telemetry_emitf(walk.telemetry, PE_LOG_ERROR, "cfr", 0,
+                           "[cfr] error: num_players=%d exceeds max supported (%d)\n",
+                           num_players, CFR_MAX_PLAYERS);
         free(scratch);
         return -1.0;
     }
@@ -406,8 +420,8 @@ double cfr_solve(
         clock_t iter_start_clock = clock();
         if (config->trace_iterations)
         {
-            fprintf(stderr, "[cfr] iter %d/%d started\n", it + 1, config->max_iterations);
-            fflush(stderr);
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_TRACE, "cfr", (uint64_t)(it + 1),
+                               "[cfr] iter %d/%d started\n", it + 1, config->max_iterations);
         }
         walk.current_iter = it + 1;
         walk.recursion_depth = 0;
@@ -441,8 +455,9 @@ double cfr_solve(
 
         if (walk.depth_exceeded)
         {
-            fprintf(stderr, "[cfr] error: aborting solve after recursion depth limit %d exceeded\n",
-                    depth_limit);
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_ERROR, "cfr", (uint64_t)(it + 1),
+                               "[cfr] error: aborting solve after recursion depth limit %d exceeded\n",
+                               depth_limit);
             free(scratch);
             return -1.0;
         }
@@ -459,9 +474,9 @@ double cfr_solve(
 
         if (config->trace_iterations)
         {
-            fprintf(stderr, "[cfr] iter %d/%d finished in %.3fs (nodes=%ld, max_depth=%d)\n",
-                    it + 1, config->max_iterations, iter_elapsed, walk.node_count, walk.max_depth);
-            fflush(stderr);
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_TRACE, "cfr", (uint64_t)(it + 1),
+                               "[cfr] iter %d/%d finished in %.3fs (nodes=%ld, max_depth=%d)\n",
+                               it + 1, config->max_iterations, iter_elapsed, walk.node_count, walk.max_depth);
         }
 
         if ((config->metrics_fn || config->metrics_buffer))
@@ -524,9 +539,9 @@ double cfr_solve(
             double eta = est_total - elapsed;
             if (eta < 0.0)
                 eta = 0.0;
-            fprintf(stderr, "[cfr] iter %d/%d  elapsed %.2fs  est %.2fs  eta %.2fs\n",
-                    it + 1, config->max_iterations, elapsed, est_total, eta);
-            fflush(stderr);
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_INFO, "cfr", (uint64_t)(it + 1),
+                               "[cfr] iter %d/%d  elapsed %.2fs  est %.2fs  eta %.2fs\n",
+                               it + 1, config->max_iterations, elapsed, est_total, eta);
             if (config->monitor_fn && config->monitor_period == 0)
                 config->monitor_fn(it + 1, game, storage, config->monitor_user);
         }
@@ -535,8 +550,9 @@ double cfr_solve(
         {
             if (cfr_storage_save_checkpoint(storage, config->checkpoint_path, (uint64_t)(it + 1)) != 0)
             {
-                fprintf(stderr, "[cfr] warning: failed to write checkpoint %s (%s)\n",
-                        config->checkpoint_path, strerror(errno));
+                pe_telemetry_emitf(walk.telemetry, PE_LOG_WARN, "cfr", (uint64_t)(it + 1),
+                                   "[cfr] warning: failed to write checkpoint %s (%s)\n",
+                                   config->checkpoint_path, strerror(errno));
             }
         }
 
@@ -569,9 +585,9 @@ double cfr_solve(
     if (progress_interval > 0 && config->max_iterations > 0)
     {
         double total_elapsed = (double)(clock() - start_clock) / CLOCKS_PER_SEC;
-        fprintf(stderr, "[cfr] iter %d/%d  elapsed %.2fs  est %.2fs  eta 0.00s\n",
-                config->max_iterations, config->max_iterations, total_elapsed, total_elapsed);
-        fflush(stderr);
+        pe_telemetry_emitf(walk.telemetry, PE_LOG_INFO, "cfr", (uint64_t)config->max_iterations,
+                           "[cfr] iter %d/%d  elapsed %.2fs  est %.2fs  eta 0.00s\n",
+                           config->max_iterations, config->max_iterations, total_elapsed, total_elapsed);
     }
 
     /* Restore the default so a storage reused for a second solve does not
@@ -584,16 +600,18 @@ double cfr_solve(
     {
         if (cfr_storage_save_checkpoint(storage, config->checkpoint_path, (uint64_t)config->max_iterations) != 0)
         {
-            fprintf(stderr, "[cfr] warning: failed to write final checkpoint %s (%s)\n",
-                    config->checkpoint_path, strerror(errno));
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_WARN, "cfr", 0,
+                               "[cfr] warning: failed to write final checkpoint %s (%s)\n",
+                               config->checkpoint_path, strerror(errno));
         }
     }
     else if (config->checkpoint_path && config->stop_flag && *config->stop_flag)
     {
         if (cfr_storage_save_checkpoint(storage, config->checkpoint_path, (uint64_t)last_iter) != 0)
         {
-            fprintf(stderr, "[cfr] warning: failed to write checkpoint %s (%s)\n",
-                    config->checkpoint_path, strerror(errno));
+            pe_telemetry_emitf(walk.telemetry, PE_LOG_WARN, "cfr", 0,
+                               "[cfr] warning: failed to write checkpoint %s (%s)\n",
+                               config->checkpoint_path, strerror(errno));
         }
     }
 
@@ -601,7 +619,8 @@ double cfr_solve(
         config->monitor_fn(last_iter, game, storage, config->monitor_user);
 
     if (aborted)
-        fprintf(stderr, "[cfr] stopped at iteration %d\n", last_iter);
+        pe_telemetry_emitf(walk.telemetry, PE_LOG_INFO, "cfr", (uint64_t)last_iter,
+                           "[cfr] stopped at iteration %d\n", last_iter);
 
     free(scratch);
     return final_exploitability;
@@ -652,9 +671,9 @@ static void cfr_traverse_recursive(
     {
         if (!walk->depth_exceeded)
         {
-            fprintf(stderr, "[cfr] error: max recursion depth %d exceeded at 0x%llx; a cycle or runaway tree is likely\n",
-                    depth_limit, (unsigned long long)state_key);
-            fflush(stderr);
+            pe_telemetry_emitf(walk->telemetry, PE_LOG_ERROR, "cfr", (uint64_t)walk->current_iter,
+                               "[cfr] error: max recursion depth %d exceeded at 0x%llx; a cycle or runaway tree is likely\n",
+                               depth_limit, (unsigned long long)state_key);
         }
         walk->depth_exceeded = 1;
         goto cfr_exit;
@@ -664,9 +683,9 @@ static void cfr_traverse_recursive(
         walk->max_depth = walk->recursion_depth;
         if (config->trace_iterations)
         {
-            fprintf(stderr, "[cfr] iter %d depth -> %d (state=0x%llx)\n",
-                    walk->current_iter, walk->max_depth, (unsigned long long)state_key);
-            fflush(stderr);
+            pe_telemetry_emitf(walk->telemetry, PE_LOG_TRACE, "cfr", (uint64_t)walk->current_iter,
+                               "[cfr] iter %d depth -> %d (state=0x%llx)\n",
+                               walk->current_iter, walk->max_depth, (unsigned long long)state_key);
         }
     }
     walk->node_count++;
@@ -736,9 +755,9 @@ static void cfr_traverse_recursive(
 
     if (config->trace_iterations)
     {
-        fprintf(stderr, "[cfr] iter %d depth %d state 0x%llx actions=%d player=%d\n",
-                walk->current_iter, walk->recursion_depth, (unsigned long long)state_key, num_actions, acting_player);
-        fflush(stderr);
+        pe_telemetry_emitf(walk->telemetry, PE_LOG_TRACE, "cfr", (uint64_t)walk->current_iter,
+                           "[cfr] iter %d depth %d state 0x%llx actions=%d player=%d\n",
+                           walk->current_iter, walk->recursion_depth, (unsigned long long)state_key, num_actions, acting_player);
     }
 
     /* Per-frame scratch, indexed by depth: each frame gets
@@ -784,9 +803,9 @@ static void cfr_traverse_recursive(
         uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
         if (config->trace_iterations)
         {
-            fprintf(stderr, "[cfr] iter %d depth %d action %d -> state 0x%llx\n",
-                    walk->current_iter, walk->recursion_depth, actions[i], (unsigned long long)next_state_key);
-            fflush(stderr);
+            pe_telemetry_emitf(walk->telemetry, PE_LOG_TRACE, "cfr", (uint64_t)walk->current_iter,
+                               "[cfr] iter %d depth %d action %d -> state 0x%llx\n",
+                               walk->current_iter, walk->recursion_depth, actions[i], (unsigned long long)next_state_key);
         }
 
         for (int p = 0; p < num_players; ++p)
@@ -895,14 +914,16 @@ static void cfr_traverse_recursive(
                     v = best_response_recursive_multiway(game, storage, acting_player,
                                                          br_child_key, user_data,
                                                          walk->recursion_depth + 1,
-                                                         &walk->depth_exceeded);
+                                                         &walk->depth_exceeded,
+                                                         walk->telemetry);
                 }
                 else
                 {
                     v = best_response_recursive(game, storage, acting_player,
                                                 1 - acting_player, br_child_key,
                                                 user_data, walk->recursion_depth + 1,
-                                                &walk->depth_exceeded);
+                                                &walk->depth_exceeded,
+                                                walk->telemetry);
                 }
                 if (v > br_value)
                     br_value = v;
@@ -937,15 +958,16 @@ static double best_response_recursive(
     uint64_t state_key,
     void *user_data,
     int depth,
-    int *depth_exceeded)
+    int *depth_exceeded,
+    const pe_telemetry_ops_t *telemetry)
 {
     if (depth > CFR_DEFAULT_MAX_DEPTH)
     {
         if (!*depth_exceeded)
         {
-            fprintf(stderr, "[cfr] error: best-response recursion depth exceeded %d at 0x%llx\n",
-                    CFR_DEFAULT_MAX_DEPTH, (unsigned long long)state_key);
-            fflush(stderr);
+            pe_telemetry_emitf(telemetry, PE_LOG_ERROR, "cfr", 0,
+                               "[cfr] error: best-response recursion depth exceeded %d at 0x%llx\n",
+                               CFR_DEFAULT_MAX_DEPTH, (unsigned long long)state_key);
         }
         *depth_exceeded = 1;
         return 0.0;
@@ -975,7 +997,7 @@ static double best_response_recursive(
                 : 1 - current_player;
             chance_value += w * best_response_recursive(
                 game, storage, br_player, child_player, child_key,
-                user_data, depth + 1, depth_exceeded);
+                user_data, depth + 1, depth_exceeded, telemetry);
             if (game->release_state)
                 game->release_state(game, child_key, user_data);
         }
@@ -999,7 +1021,7 @@ static double best_response_recursive(
         for (int i = 0; i < num_actions; ++i)
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
-            double value = best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data, depth + 1, depth_exceeded);
+            double value = best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data, depth + 1, depth_exceeded, telemetry);
             if (game->release_state)
                 game->release_state(game, next_state_key, user_data);
             if (value > best_value)
@@ -1015,7 +1037,7 @@ static double best_response_recursive(
         for (int i = 0; i < num_actions; ++i)
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
-            node_value += avg_strategy[i] * best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data, depth + 1, depth_exceeded);
+            node_value += avg_strategy[i] * best_response_recursive(game, storage, br_player, 1 - current_player, next_state_key, user_data, depth + 1, depth_exceeded, telemetry);
             if (game->release_state)
                 game->release_state(game, next_state_key, user_data);
         }
@@ -1042,7 +1064,8 @@ double cfr_best_response_value(
     {
         int depth_exceeded = 0;
         return best_response_recursive(game, storage, player, root_player,
-                                       root_key, user_data, 0, &depth_exceeded);
+                                       root_key, user_data, 0, &depth_exceeded,
+                                       pe_telemetry_stderr());
     }
 }
 
@@ -1188,7 +1211,8 @@ static double best_response_recursive_multiway(
     uint64_t state_key,
     void *user_data,
     int depth,
-    int *depth_exceeded)
+    int *depth_exceeded,
+    const pe_telemetry_ops_t *telemetry)
 {
     /* Terminal state - return utility for BR player */
     if (game->is_terminal(game, state_key, user_data))
@@ -1201,9 +1225,9 @@ static double best_response_recursive_multiway(
     {
         if (!*depth_exceeded)
         {
-            fprintf(stderr, "[cfr] error: best-response recursion depth exceeded %d at 0x%llx\n",
-                    CFR_DEFAULT_MAX_DEPTH, (unsigned long long)state_key);
-            fflush(stderr);
+            pe_telemetry_emitf(telemetry, PE_LOG_ERROR, "cfr", 0,
+                               "[cfr] error: best-response recursion depth exceeded %d at 0x%llx\n",
+                               CFR_DEFAULT_MAX_DEPTH, (unsigned long long)state_key);
         }
         *depth_exceeded = 1;
         return 0.0;
@@ -1224,7 +1248,7 @@ static double best_response_recursive_multiway(
             chance_weight_sum += w;
             uint64_t child_key = game->apply_chance(game, state_key, i, user_data);
             chance_value += w * best_response_recursive_multiway(
-                game, storage, br_player, child_key, user_data, depth + 1, depth_exceeded);
+                game, storage, br_player, child_key, user_data, depth + 1, depth_exceeded, telemetry);
             if (game->release_state)
                 game->release_state(game, child_key, user_data);
         }
@@ -1259,7 +1283,7 @@ static double best_response_recursive_multiway(
         for (int i = 0; i < num_actions; ++i)
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
-            double value = best_response_recursive_multiway(game, storage, br_player, next_state_key, user_data, depth + 1, depth_exceeded);
+            double value = best_response_recursive_multiway(game, storage, br_player, next_state_key, user_data, depth + 1, depth_exceeded, telemetry);
             if (game->release_state)
                 game->release_state(game, next_state_key, user_data);
             if (value > best_value)
@@ -1277,7 +1301,7 @@ static double best_response_recursive_multiway(
         for (int i = 0; i < num_actions; ++i)
         {
             uint64_t next_state_key = game->apply_action(game, state_key, actions[i], user_data);
-            node_value += avg_strategy[i] * best_response_recursive_multiway(game, storage, br_player, next_state_key, user_data, depth + 1, depth_exceeded);
+            node_value += avg_strategy[i] * best_response_recursive_multiway(game, storage, br_player, next_state_key, user_data, depth + 1, depth_exceeded, telemetry);
             if (game->release_state)
                 game->release_state(game, next_state_key, user_data);
         }
@@ -1316,7 +1340,8 @@ double cfr_best_response_value_multiway(
     {
         int depth_exceeded = 0;
         return best_response_recursive_multiway(game, storage, player, root_key,
-                                                user_data, 0, &depth_exceeded);
+                                                user_data, 0, &depth_exceeded,
+                                                pe_telemetry_stderr());
     }
 }
 
@@ -1688,18 +1713,23 @@ void cfr_exploitability_print(const cfr_exploitability_result_t *result)
 {
     if (!result)
     {
-        printf("Exploitability result: NULL\n");
+        pe_telemetry_emitf(pe_telemetry_stdout(), PE_LOG_INFO, "exploitability", 0,
+                           "Exploitability result: NULL\n");
         return;
     }
     
-    printf("=== Exploitability Analysis (%d players) ===\n", result->num_players);
+    pe_telemetry_emitf(pe_telemetry_stdout(), PE_LOG_INFO, "exploitability", 0,
+                       "=== Exploitability Analysis (%d players) ===\n", result->num_players);
     for (int p = 0; p < result->num_players; ++p)
     {
-        printf("Player %d: policy_EV=%.6f  BR_EV=%.6f  exploit=%.6f\n",
-               p, result->policy_value[p], result->br_value[p], result->exploitability[p]);
+        pe_telemetry_emitf(pe_telemetry_stdout(), PE_LOG_INFO, "exploitability", 0,
+                           "Player %d: policy_EV=%.6f  BR_EV=%.6f  exploit=%.6f\n",
+                           p, result->policy_value[p], result->br_value[p], result->exploitability[p]);
     }
-    printf("Total exploitability: %.6f\n", result->total_exploitability);
-    printf("Nash distance estimate: %.6f\n", result->nash_distance);
+    pe_telemetry_emitf(pe_telemetry_stdout(), PE_LOG_INFO, "exploitability", 0,
+                       "Total exploitability: %.6f\n", result->total_exploitability);
+    pe_telemetry_emitf(pe_telemetry_stdout(), PE_LOG_INFO, "exploitability", 0,
+                       "Nash distance estimate: %.6f\n", result->nash_distance);
 }
 
 /* ===== Policy Value Computation ===== */
@@ -1735,7 +1765,8 @@ static void policy_value_recursive(
     const double *reach,
     double *out_util,
     int depth,
-    int *depth_exceeded)
+    int *depth_exceeded,
+    const pe_telemetry_ops_t *telemetry)
 {
     ctx->nodes_visited++;
 
@@ -1747,9 +1778,9 @@ static void policy_value_recursive(
     {
         if (!*depth_exceeded)
         {
-            fprintf(stderr, "[cfr] error: policy-value recursion depth exceeded %d at 0x%llx\n",
-                    CFR_DEFAULT_MAX_DEPTH, (unsigned long long)state_key);
-            fflush(stderr);
+            pe_telemetry_emitf(telemetry, PE_LOG_ERROR, "cfr", 0,
+                               "[cfr] error: policy-value recursion depth exceeded %d at 0x%llx\n",
+                               CFR_DEFAULT_MAX_DEPTH, (unsigned long long)state_key);
         }
         *depth_exceeded = 1;
         return;
@@ -1798,7 +1829,7 @@ static void policy_value_recursive(
             chance_weight_sum += w;
             uint64_t child_key = ctx->game->apply_chance(
                 ctx->game, state_key, c, ctx->user_data);
-            policy_value_recursive(ctx, child_key, reach, child_util, depth + 1, depth_exceeded);
+            policy_value_recursive(ctx, child_key, reach, child_util, depth + 1, depth_exceeded, telemetry);
             for (int p = 0; p < ctx->num_players; ++p)
                 out_util[p] += w * child_util[p];
             if (ctx->game->release_state)
@@ -1850,7 +1881,7 @@ static void policy_value_recursive(
 
         /* Recurse */
         uint64_t next_state = ctx->game->apply_action(ctx->game, state_key, actions[a], ctx->user_data);
-        policy_value_recursive(ctx, next_state, next_reach, child_util, depth + 1, depth_exceeded);
+        policy_value_recursive(ctx, next_state, next_reach, child_util, depth + 1, depth_exceeded, telemetry);
         if (ctx->game->release_state)
             ctx->game->release_state(ctx->game, next_state, ctx->user_data);
 
@@ -1895,7 +1926,8 @@ double cfr_compute_policy_value(
     /* Traverse */
     {
         int depth_exceeded = 0;
-        policy_value_recursive(&ctx, root_key, reach, util, 0, &depth_exceeded);
+        policy_value_recursive(&ctx, root_key, reach, util, 0, &depth_exceeded,
+                               pe_telemetry_stderr());
     }
 
     /* Return EV for requested player */
@@ -1941,7 +1973,8 @@ int cfr_compute_policy_values_detailed(
     /* Traverse */
     {
         int depth_exceeded = 0;
-        policy_value_recursive(&ctx, root_key, reach, util, 0, &depth_exceeded);
+        policy_value_recursive(&ctx, root_key, reach, util, 0, &depth_exceeded,
+                               pe_telemetry_stderr());
     }
 
     /* Copy results */

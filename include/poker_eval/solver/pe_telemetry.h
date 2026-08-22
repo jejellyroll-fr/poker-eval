@@ -122,6 +122,26 @@ static inline void pe_telemetry_flush(const pe_telemetry_ops_t *ops)
     ops->flush(ops->self);
 }
 
+/**
+ * Format a message and emit it (EXT-03).
+ *
+ * The convenience the domain actually needs: every call site it replaces was
+ * an fprintf. Formatting happens here rather than in the header so callers
+ * pull in no <stdio.h>, and it is skipped entirely when the level is filtered
+ * out — which matters because the busiest call sites are inside the traversal.
+ *
+ * A message longer than the internal buffer is truncated rather than
+ * allocated for: telemetry must never be able to fail a solve.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 5, 6)))
+#endif
+void pe_telemetry_emitf(const pe_telemetry_ops_t *ops,
+                        pe_log_level_t level,
+                        const char *category,
+                        uint64_t iteration,
+                        const char *fmt, ...);
+
 /* ------------------------------------------------------------------ *
  * Adapter: null
  * ------------------------------------------------------------------ */
@@ -135,6 +155,25 @@ static inline void pe_telemetry_flush(const pe_telemetry_ops_t *ops)
  * no cleanup, and may be used by any number of solvers at once.
  */
 const pe_telemetry_ops_t *pe_telemetry_null(void);
+
+/* ------------------------------------------------------------------ *
+ * Adapters: standard streams
+ * ------------------------------------------------------------------ */
+
+/**
+ * Writes each message to stderr and flushes.
+ *
+ * This is what the legacy solver used directly, so it is what a caller who
+ * asks for no telemetry gets when the code being migrated used to print: the
+ * bytes on stderr stay exactly what they were. Messages carry their own
+ * newline; the adapter adds nothing.
+ *
+ * Shared, immutable, always valid, needs no cleanup.
+ */
+const pe_telemetry_ops_t *pe_telemetry_stderr(void);
+
+/** The same, on stdout, for output that is a result rather than a log. */
+const pe_telemetry_ops_t *pe_telemetry_stdout(void);
 
 /* ------------------------------------------------------------------ *
  * Adapter: callback

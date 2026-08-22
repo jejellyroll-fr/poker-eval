@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <signal.h>
 
+#include <poker_eval/solver/pe_telemetry.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -309,6 +311,12 @@ struct cfr_config_t {
     cfr_metrics_listener_fn metrics_fn;
     void *metrics_user;
     volatile sig_atomic_t *stop_flag;
+
+    /* Where the solver's messages go (EXT-03). NULL keeps the historical
+     * behaviour — every line on stderr, flushed — so an existing caller sees
+     * no change. A host that wants to capture progress, route it to a UI or
+     * silence it installs its own adapter instead of redirecting a stream. */
+    const pe_telemetry_ops_t *telemetry;
 };
 
 typedef struct cfr_metrics_snapshot_t {
