@@ -47,6 +47,21 @@ static EvalContext *g_ctx = NULL;
         }                                                      \
     } while (0)
 
+static size_t mask_to_array_count_test(mask_t m)
+{
+    size_t n = 0;
+    for (int c = 0; c < MODERN_DECK_SIZE; ++c)
+        if (mask_is_set(m, c))
+            n++;
+    return n;
+}
+
+static size_t g_count_rows;
+static void count_cb(uint64_t k, int n, const double *r, const double *a, void *u)
+{ (void)k; (void)n; (void)r; (void)a; (void)u; g_count_rows++; }
+static size_t cfr_storage_count_test(cfr_storage_t *s)
+{ g_count_rows = 0; cfr_storage_iterate(s, count_cb, NULL); return g_count_rows; }
+
 static StdDeck_CardMask no_dead(void)
 {
     StdDeck_CardMask m;
@@ -205,6 +220,159 @@ static void test_single_combo_range_equals_fixed_hand(void)
     pe_range_free(r1);
 }
 
+/* ------------------------------------------------------------------ *
+ * RNG-03: the root deals the private hands
+ * ------------------------------------------------------------------ */
+
+/*
+ * The count the ticket names, and the reason it is the interesting number.
+ *
+ * Two players both holding "AA" have 6 combos each, so 36 nominal pairs. Only
+ * 6 survive: whichever two aces the first player takes, the second can only
+ * have the other two. Card removal is not a correction applied afterwards, it
+ * is what makes a range solve differ from solving each hand on its own — and a
+ * root node that reported 36 would be assigning probability to deals that
+ * cannot happen.
+ */
+static void test_joint_deals_remove_shared_cards(void)
+{
+    const EvalContext *ctx = g_ctx;
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+    pe_range_t *aa0 = NULL;
+    pe_range_t *aa1 = NULL;
+    int outcomes;
+    double total = 0.0;
+    int i;
+
+    CHECK(pe_solver_range_parse(game_holdem, "AA", no_dead(), &aa0) == PE_SOLVER_OK,
+          "range 0 parse failed");
+    CHECK(pe_solver_range_parse(game_holdem, "AA", no_dead(), &aa1) == PE_SOLVER_OK,
+          "range 1 parse failed");
+    if (!aa0 || !aa1) { pe_range_free(aa0); pe_range_free(aa1); return; }
+    CHECK(aa0->count == 6 && aa1->count == 6, "each \"AA\" should hold 6 combos");
+
+    configure(&cfg, ctx);
+    /* A board with no ace, so the board removes nothing and the count isolates
+       the removal between the two hands. */
+    cfg.board_cards[0] = 20; cfg.board_cards[1] = 15; cfg.board_cards[2] = 10;
+    cfg.board_cards[3] = 5;  cfg.board_cards[4] = 1;
+    cfg.range[0] = aa0;
+    cfg.range[1] = aa1;
+
+    CHECK(mpf_build_game(&cfg, &game, &root) == 0, "build with two ranges failed");
+    CHECK(root.private_pending, "the root is not a private-deal chance node");
+    CHECK(game.is_chance(&game, (uint64_t)(uintptr_t)game.initial_state, NULL),
+          "the root does not report itself as chance");
+
+    outcomes = game.get_chance_outcomes(&game, (uint64_t)(uintptr_t)game.initial_state, NULL);
+    CHECK(outcomes == 6,
+          "the root offers %d deals, expected 6 (36 pairs minus the 30 that "
+          "would need the same ace twice)", outcomes);
+
+    /* The weights are a distribution, and here a uniform one. */
+    for (i = 0; i < outcomes; ++i)
+    {
+        double w = game.get_chance_weight(&game, (uint64_t)(uintptr_t)game.initial_state, i, NULL);
+        CHECK(w > 0.0, "deal %d has weight %.17g", i, w);
+        CHECK(fabs(w - 1.0 / 6.0) < 1e-12,
+              "deal %d weighs %.17g, expected 1/6", i, w);
+        total += w;
+    }
+    CHECK(fabs(total - 1.0) < 1e-12, "deal weights sum to %.17g", total);
+
+    /* Every deal gives the two players disjoint hands. */
+    for (i = 0; i < outcomes; ++i)
+    {
+        mask_t a = root.private_deals[i].hole[0];
+        mask_t b = root.private_deals[i].hole[1];
+        CHECK(mask_to_array_count_test(a) == 2 && mask_to_array_count_test(b) == 2,
+              "deal %d does not give two cards to each player", i);
+        CHECK((a & b) == 0, "deal %d gives both players the same card", i);
+    }
+
+    mpf_state_cleanup(&root);
+    pe_range_free(aa0);
+    pe_range_free(aa1);
+}
+
+/*
+ * A card on the board is gone from both ranges. With one ace showing, a player
+ * holding "AA" has only the three remaining aces to choose from — C(3,2) = 3
+ * pairs — and the two players still cannot share one.
+ */
+static void test_board_cards_are_removed_too(void)
+{
+    const EvalContext *ctx = g_ctx;
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+    pe_range_t *aa0 = NULL;
+    pe_range_t *aa1 = NULL;
+    int outcomes;
+
+    CHECK(pe_solver_range_parse(game_holdem, "AA", no_dead(), &aa0) == PE_SOLVER_OK,
+          "parse failed");
+    CHECK(pe_solver_range_parse(game_holdem, "AA", no_dead(), &aa1) == PE_SOLVER_OK,
+          "parse failed");
+    if (!aa0 || !aa1) { pe_range_free(aa0); pe_range_free(aa1); return; }
+
+    configure(&cfg, ctx);
+    /* Card 51 is an ace in this indexing; the other board cards are not. */
+    cfg.board_cards[0] = 51; cfg.board_cards[1] = 20; cfg.board_cards[2] = 15;
+    cfg.board_cards[3] = 10; cfg.board_cards[4] = 5;
+    cfg.range[0] = aa0;
+    cfg.range[1] = aa1;
+
+    /* Three aces left: player 0 takes two of them, and player 1 cannot find
+       two among the one that remains. Nothing survives, and a configuration
+       whose every deal is impossible is refused rather than solved over an
+       empty distribution. */
+    CHECK(mpf_build_game(&cfg, &game, &root) != 0,
+          "a configuration with no possible deal was accepted");
+    (void)outcomes;
+    pe_range_free(aa0);
+    pe_range_free(aa1);
+}
+
+static void test_wide_range_is_dealt_not_refused(void)
+{
+    const EvalContext *ctx = g_ctx;
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+    cfr_config_t solve_cfg;
+    cfr_storage_t *storage;
+    pe_range_t *wide = NULL;
+    double value;
+
+    CHECK(pe_solver_range_parse(game_holdem, "AA", no_dead(), &wide) == PE_SOLVER_OK,
+          "parse failed");
+    if (!wide) return;
+
+    configure(&cfg, ctx);
+    cfg.hole[1] = mask_of("QsJs");
+    cfg.hole_specified[1] = 1;
+    cfg.range[0] = wide;
+
+    /* RNG-02 refused this; RNG-03 deals it. */
+    CHECK(mpf_build_game(&cfg, &game, &root) == 0, "a wide range was still refused");
+    CHECK(root.private_pending, "a wide range did not create a deal node");
+
+    memset(&solve_cfg, 0, sizeof(solve_cfg));
+    solve_cfg.max_iterations = 20;
+    solve_cfg.max_depth = 64;
+    storage = cfr_storage_create();
+    value = cfr_solve(&game, storage, &solve_cfg, NULL);
+    CHECK(isfinite(value), "solving over a range produced %.17g", value);
+    CHECK(cfr_storage_count_test(storage) > 0, "the solve visited no infoset");
+
+    cfr_storage_destroy(storage);
+    mpf_state_cleanup(&root);
+    pe_range_free(wide);
+}
+
 static void test_wide_range_is_refused(void)
 {
     const EvalContext *ctx = g_ctx;
@@ -223,10 +391,19 @@ static void test_wide_range_is_refused(void)
     cfg.hole_specified[1] = 1;
     cfg.range[0] = wide;
 
-    /* Refused, not collapsed onto the first combo: solving one hand while the
-       caller asked for six would be a wrong answer that looks right. */
-    CHECK(mpf_build_game(&cfg, &game, &root) != 0,
-          "a six-combo range was accepted before RNG-03");
+    /* Kept as a guard on the shape rather than on the refusal: RNG-03 made
+       this configuration legal, and what must stay true is that the combos
+       become deals rather than one silently chosen hand.
+     *
+     * The default board here holds card 51, whose rank index is 12 — an ace.
+     * "AA" therefore has three combos left, not six, and asserting six would
+     * have been asserting that card removal does not happen. The board is
+     * left as it is precisely so this says so. */
+    CHECK(mpf_build_game(&cfg, &game, &root) == 0, "build failed");
+    CHECK(root.private_deal_count == 3,
+          "six combos minus the ace on the board should leave 3 deals, got %d",
+          root.private_deal_count);
+    mpf_state_cleanup(&root);
 
     pe_range_free(wide);
 }
@@ -268,6 +445,9 @@ int main(void)
     }
 
     test_single_combo_range_equals_fixed_hand();
+    test_joint_deals_remove_shared_cards();
+    test_board_cards_are_removed_too();
+    test_wide_range_is_dealt_not_refused();
     test_wide_range_is_refused();
     test_unprepared_range_is_refused();
 

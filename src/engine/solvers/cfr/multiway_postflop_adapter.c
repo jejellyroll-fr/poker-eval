@@ -624,6 +624,17 @@ static int mpf_bunching_enabled(const mpf_state_t *st)
  * or the outcome index is out of range. */
 static double mpf_get_chance_weight_wrapper(cfr_game_t *game, uint64_t key, int outcome, void *user)
 {
+    {
+        const mpf_state_t *root = mpf_wrapper_state(game, key);
+        if (root && root->private_pending)
+        {
+            (void)user;
+            if (outcome < 0 || outcome >= root->private_deal_count)
+                return 0.0;
+            return root->private_deals[outcome].weight;
+        }
+    }
+
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
     if (!mpf_bunching_enabled(st))
@@ -1287,14 +1298,19 @@ static int mpf_is_chance_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    return (st && st->chance_pending) ? 1 : 0;
+    /* The root deals the private hands (RNG-03); later nodes deal the board. */
+    return (st && (st->chance_pending || st->private_pending)) ? 1 : 0;
 }
 
 static int mpf_get_chance_outcomes_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    if (!st || !st->chance_pending)
+    if (!st)
+        return 0;
+    if (st->private_pending)
+        return st->private_deal_count;
+    if (!st->chance_pending)
         return 0;
     int cards[52];
     return mpf_unused_cards(st, cards, 52);
@@ -1304,7 +1320,49 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
 {
     mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    if (!st || !st->chance_pending)
+    if (!st)
+        return 0;
+
+    if (st->private_pending)
+    {
+        /* Deal the private hands. The child is cached and owned by the root,
+           exactly as a board-card child is, so the traversal's release_state
+           stays a no-op for chance children. */
+        mpf_state_t *dealt;
+        if (outcome < 0 || outcome >= st->private_deal_count)
+            return 0;
+        dealt = st->private_children[outcome];
+        if (!dealt)
+        {
+            dealt = (mpf_state_t *)malloc(sizeof(mpf_state_t));
+            if (!dealt)
+                return 0;
+            *dealt = *st;
+            dealt->heap_owned = 1;
+            dealt->owns_stack_index = 0;
+            dealt->private_deals = NULL;
+            dealt->private_children = NULL;
+            dealt->private_deal_count = 0;
+            dealt->private_pending = 0;
+            dealt->util_ready = 0;
+            for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
+                dealt->action_cache[i] = NULL;
+            for (int i = 0; i < 52; ++i)
+                dealt->chance_children[i] = NULL;
+            dealt->chance_children_count = 0;
+            for (int i = 0; i < st->num_players; ++i)
+                dealt->hole[i] = st->private_deals[outcome].hole[i];
+            st->private_children[outcome] = dealt;
+        }
+        /* The dealt state must be reachable by its infoset key, exactly like a
+           board-card child: keyed mode is what the storage indexes by, and an
+           unregistered state is one the traversal cannot look up again. */
+        if (st->keyed_mode)
+            mpf_key_map_register(mpf_infoset_key(dealt), dealt);
+        return mpf_state_key(dealt);
+    }
+
+    if (!st->chance_pending)
         return 0;
     int cards[52];
     int count = mpf_unused_cards(st, cards, 52);
@@ -2065,12 +2123,11 @@ int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
  * Card indices are the same 0..51 in both representations, so the conversion
  * is a bit-for-bit walk rather than a rank/suit round trip.
  *
- * Only a one-combo range is resolvable: it is a fixed hand written another
- * way. Anything wider is refused here, because the traversal has no root
- * private chance yet and would otherwise solve the first combo while the
- * caller believed it had asked for a range.
+ * A one-combo range is a fixed hand written another way and is materialised
+ * here. Anything wider is left alone: the root private chance node deals it
+ * (RNG-03), and writing a hole here would pin the player to one combo.
  *
- * Returns 0, or -1 on a range that is unprepared, empty or too wide.
+ * Returns 0, or -1 on a range that is unprepared or empty.
  */
 static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
                               int *out_specified)
@@ -2088,7 +2145,7 @@ static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
 
         view = pe_solver_range_view(cfg->range[p]);
         if (view.count != 1)
-            return -1;
+            continue;   /* wider ranges are dealt by the root chance node */
 
         for (int c = 0; c < MODERN_DECK_SIZE; ++c)
             if (StdDeck_CardMask_CARD_IS_SET(view.combos[0].hand, c))
@@ -2098,6 +2155,160 @@ static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
         out_specified[p] = 1;
     }
     return 0;
+}
+
+/*
+ * Build the joint private deals (RNG-03).
+ *
+ * The cartesian product of the players' ranges, minus every combination that
+ * is impossible because two players would hold the same card, or because a
+ * card is already on the board. That removal is not a detail: it is the whole
+ * reason a range solve differs from solving each hand independently. Two
+ * players both holding "AA" have 36 nominal pairs and 6 real ones.
+ *
+ * Weights multiply and are then renormalised over what survives, so the deals
+ * form a probability distribution — which is what the chance node needs and
+ * what makes the counterfactual reach probabilities mean anything.
+ *
+ * A player with no range contributes their fixed hole, as a single certain
+ * option. A player with neither contributes an empty hand, which is what the
+ * model already did.
+ *
+ * Returns 0 on success, -1 when the product is too large to enumerate or no
+ * combination survives.
+ */
+#define MPF_MAX_PRIVATE_DEALS (1u << 20)
+
+static int mpf_range_option_count(const mpf_config_t *cfg, int p)
+{
+    if (cfg->range[p] != NULL)
+        return (int)pe_solver_range_view(cfg->range[p]).count;
+    return 1;   /* the fixed hole, or an empty hand */
+}
+
+static void mpf_range_option(const mpf_config_t *cfg, int p, int idx,
+                             mask_t *out_hole, double *out_weight)
+{
+    if (cfg->range[p] != NULL)
+    {
+        pe_range_view_t view = pe_solver_range_view(cfg->range[p]);
+        mask_t m = MASK_EMPTY;
+        for (int c = 0; c < MODERN_DECK_SIZE; ++c)
+            if (StdDeck_CardMask_CARD_IS_SET(view.combos[idx].hand, c))
+                m = mask_set(m, c);
+        *out_hole = m;
+        *out_weight = view.combos[idx].weight;
+        return;
+    }
+    *out_hole = cfg->hole[p];
+    *out_weight = 1.0;
+}
+
+static int mpf_build_private_deals(const mpf_config_t *cfg, mask_t board,
+                                   mpf_private_deal_t **out_deals,
+                                   int *out_count)
+{
+    int counts[MPF_MAX_PLAYERS];
+    int idx[MPF_MAX_PLAYERS];
+    unsigned long long product = 1;
+    mpf_private_deal_t *deals;
+    int capacity;
+    int n = 0;
+    double total = 0.0;
+    int p;
+
+    for (p = 0; p < cfg->num_players; ++p)
+    {
+        counts[p] = mpf_range_option_count(cfg, p);
+        if (counts[p] <= 0)
+            return -1;
+        idx[p] = 0;
+        product *= (unsigned long long)counts[p];
+        if (product > MPF_MAX_PRIVATE_DEALS)
+            return -1;   /* refused rather than truncated */
+    }
+
+    capacity = (int)product;
+    deals = (mpf_private_deal_t *)calloc((size_t)capacity, sizeof(mpf_private_deal_t));
+    if (!deals)
+        return -1;
+
+    for (;;)
+    {
+        mask_t used = board;
+        double w = 1.0;
+        int ok = 1;
+
+        for (p = 0; p < cfg->num_players && ok; ++p)
+        {
+            mask_t h;
+            double pw;
+            mpf_range_option(cfg, p, idx[p], &h, &pw);
+            /* A card cannot be in two hands, nor in a hand and on the board. */
+            if ((h & used) != 0)
+                ok = 0;
+            else
+            {
+                used |= h;
+                w *= pw;
+                deals[n].hole[p] = h;
+            }
+        }
+
+        if (ok && w > 0.0)
+        {
+            deals[n].weight = w;
+            total += w;
+            n++;
+        }
+
+        /* Odometer over the players' option indices. */
+        for (p = cfg->num_players - 1; p >= 0; --p)
+        {
+            if (++idx[p] < counts[p])
+                break;
+            idx[p] = 0;
+        }
+        if (p < 0)
+            break;
+    }
+
+    if (n == 0 || !(total > 0.0))
+    {
+        free(deals);
+        return -1;
+    }
+
+    for (int i = 0; i < n; ++i)
+        deals[i].weight /= total;
+
+    *out_deals = deals;
+    *out_count = n;
+    return 0;
+}
+
+/*
+ * Release what mpf_build_game has allocated, on a path that then fails.
+ *
+ * The function has always allocated a stack index early and had no way to
+ * give it back; nothing noticed, because it had no failure path after that
+ * point. RNG-03 added two — an unprepared range and a configuration whose
+ * every deal is impossible — and leaks(1) noticed immediately.
+ */
+static int mpf_build_fail(mpf_state_t *st)
+{
+    if (st->owns_stack_index && st->stack_index)
+    {
+        mpf_stack_index_destroy(st->stack_index);
+        st->stack_index = NULL;
+        st->owns_stack_index = 0;
+    }
+    free(st->private_children);
+    free(st->private_deals);
+    st->private_children = NULL;
+    st->private_deals = NULL;
+    st->private_deal_count = 0;
+    return -1;
 }
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
@@ -2189,7 +2400,15 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         resolved_specified[i] = cfg->hole_specified[i];
     }
     if (mpf_resolve_ranges(cfg, resolved_hole, resolved_specified) != 0)
-        return -1;
+        return mpf_build_fail(out_state);
+
+    /* Any range wider than one combo turns the root into a private-deal chance
+       node. Below one, nothing changes and the model behaves as it always
+       has — which is what keeps every existing configuration bit-identical. */
+    int needs_private_deal = 0;
+    for (int i = 0; i < cfg->num_players; ++i)
+        if (cfg->range[i] != NULL && pe_solver_range_view(cfg->range[i]).count > 1)
+            needs_private_deal = 1;
 
     for (int i = 0; i < cfg->num_players; ++i)
     {
@@ -2346,6 +2565,35 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
         out_state->chance_children[i] = NULL;
+
+    out_state->private_deals = NULL;
+    out_state->private_children = NULL;
+    out_state->private_deal_count = 0;
+    out_state->private_pending = 0;
+    if (needs_private_deal)
+    {
+        /* Keyed mode is required: the dealt states are heap clones, and the
+           storage must index them by infoset key rather than by pointer. */
+        out_state->keyed_mode = 1;
+        if (mpf_build_private_deals(cfg, out_state->board_mask,
+                                    &out_state->private_deals,
+                                    &out_state->private_deal_count) != 0)
+            return mpf_build_fail(out_state);
+        out_state->private_children =
+            (mpf_state_t **)calloc((size_t)out_state->private_deal_count,
+                                   sizeof(mpf_state_t *));
+        if (!out_state->private_children)
+        {
+            return mpf_build_fail(out_state);
+        }
+        out_state->private_pending = 1;
+        /* Until the deal happens nobody holds anything: leaving the fixed
+           holes in place would let an infoset key see cards the player has
+           not been given. */
+        for (int i = 0; i < cfg->num_players; ++i)
+            if (cfg->range[i] != NULL && pe_solver_range_view(cfg->range[i]).count > 1)
+                out_state->hole[i] = MASK_EMPTY;
+    }
     /* FEAT-14 (#150): folded-range card bunching configuration. Copied into
        the state (and inherited by every derived child through the state
        clone in mpf_apply_action_internal / mpf_chance_deal_internal) so the
@@ -2431,6 +2679,23 @@ static void mpf_state_cleanup_internal(mpf_state_t *state)
         }
     }
     state->chance_children_count = 0;
+
+    for (int i = 0; i < state->private_deal_count; ++i)
+    {
+        mpf_state_t *child = state->private_children ? state->private_children[i] : NULL;
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            state->private_children[i] = NULL;
+        }
+    }
+    free(state->private_children);
+    free(state->private_deals);
+    state->private_children = NULL;
+    state->private_deals = NULL;
+    state->private_deal_count = 0;
 }
 
 static int mpf_state_ptr_seen(mpf_state_t **seen, int seen_count, const mpf_state_t *ptr)

@@ -24,6 +24,13 @@ extern "C" {
 
 struct mpf_tree_def_t;
 struct mpf_state_s;
+
+/* One possible joint deal of the private hands, with its probability. */
+typedef struct mpf_private_deal_t
+{
+    mask_t hole[MPF_MAX_PLAYERS];
+    double weight;
+} mpf_private_deal_t;
 struct mpf_perf_stats_pool_t;
 
 #if !defined(_WIN32)
@@ -232,6 +239,24 @@ typedef struct mpf_state_s
     uint32_t stack_cfg_id;
     /* Set only on the root state: it owns (and must free) stack_index. */
     int owns_stack_index;
+
+    /*
+     * Root private chance (RNG-03).
+     *
+     * One entry per joint deal that is actually possible: the cartesian
+     * product of the players' ranges, minus every combination where two
+     * players hold the same card or a card already on the board. Weights are
+     * the product of the per-player weights, renormalised over what survives.
+     *
+     * Owned by the root state. `private_children` caches the dealt states the
+     * same way chance_children does for board cards, but sized by the number
+     * of deals rather than by 52.
+     */
+    struct mpf_private_deal_t *private_deals;
+    struct mpf_state_s **private_children;
+    int private_deal_count;
+    /* Set on the root when there is a deal to make; cleared by apply_chance. */
+    int private_pending;
 
     /* FEAT-03: real chance nodes */
     int keyed_mode;            /* use infoset keys instead of raw state pointers */
