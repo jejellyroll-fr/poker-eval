@@ -5,6 +5,7 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/economics/rake.h>
+#include <poker_eval/solver/pe_chance.h>
 #include <poker_eval/solver/pe_range.h>
 
 #if !defined(_WIN32)
@@ -312,6 +313,17 @@ size_t mpf_state_stack_index_capacity(const mpf_state_t *state);
    tests/diagnostics can locate a state's storage entry without reaching into
    the adapter's static helpers. */
 uint64_t mpf_state_infoset_key(const mpf_state_t *state);
+
+/*
+ * What kind of chance node a state is, if any (CHN-01).
+ *
+ * The two booleans it replaces — chance_pending and private_pending — are kept
+ * as the storage, because every clone path in the adapter copies them; what
+ * changes is that nothing outside this function reads them to decide what a
+ * node *is*. The distinction matters most for chance_children[52], which is
+ * indexed by card and is therefore only meaningful for PE_CHANCE_BOARD_ONE.
+ */
+pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state);
 
 struct mpf_perf_stats_pool_t *mpf_perf_stats_pool_create(int max_threads_hint);
 void mpf_perf_stats_pool_destroy(struct mpf_perf_stats_pool_t *pool);

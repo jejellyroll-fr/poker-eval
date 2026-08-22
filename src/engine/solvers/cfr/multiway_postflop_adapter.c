@@ -626,7 +626,7 @@ static double mpf_get_chance_weight_wrapper(cfr_game_t *game, uint64_t key, int 
 {
     {
         const mpf_state_t *root = mpf_wrapper_state(game, key);
-        if (root && root->private_pending)
+        if (mpf_state_chance_kind(root) == PE_CHANCE_PRIVATE_HANDS)
         {
             (void)user;
             if (outcome < 0 || outcome >= root->private_deal_count)
@@ -1294,26 +1294,54 @@ static uint64_t mpf_apply_action_wrapper(cfr_game_t *game, uint64_t key, int act
 
 /* ===== FEAT-03: chance node wrappers ================================== */
 
+pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state)
+{
+    if (!state)
+        return PE_CHANCE_NONE;
+
+    /* The root deals first: a state cannot be waiting for a board card before
+       anyone has been given a hand. */
+    if (state->private_pending)
+        return PE_CHANCE_PRIVATE_HANDS;
+
+    if (!state->chance_pending)
+        return PE_CHANCE_NONE;
+
+    /* Board chance deals one card at a time. The preflop-to-flop transition
+       still reveals a fixed board rather than dealing a combination, so
+       PE_CHANCE_FLOP_THREE is declared and not yet produced; CHN-02 is what
+       makes it reachable, and returning it here before then would name a node
+       kind the traversal does not implement. */
+    return PE_CHANCE_BOARD_ONE;
+}
+
 static int mpf_is_chance_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    /* The root deals the private hands (RNG-03); later nodes deal the board. */
-    return (st && (st->chance_pending || st->private_pending)) ? 1 : 0;
+    return (mpf_state_chance_kind(st) != PE_CHANCE_NONE) ? 1 : 0;
 }
 
 static int mpf_get_chance_outcomes_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    if (!st)
-        return 0;
-    if (st->private_pending)
+    switch (mpf_state_chance_kind(st))
+    {
+    case PE_CHANCE_PRIVATE_HANDS:
         return st->private_deal_count;
-    if (!st->chance_pending)
+    case PE_CHANCE_BOARD_ONE:
+    {
+        int cards[52];
+        return mpf_unused_cards(st, cards, 52);
+    }
+    case PE_CHANCE_NONE:
+    case PE_CHANCE_FLOP_THREE:
+    case PE_CHANCE_DRAW_N:
+    case PE_CHANCE_KIND_COUNT:
+    default:
         return 0;
-    int cards[52];
-    return mpf_unused_cards(st, cards, 52);
+    }
 }
 
 static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int outcome, void *user)
@@ -1323,7 +1351,7 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
     if (!st)
         return 0;
 
-    if (st->private_pending)
+    if (mpf_state_chance_kind(st) == PE_CHANCE_PRIVATE_HANDS)
     {
         /* Deal the private hands. The child is cached and owned by the root,
            exactly as a board-card child is, so the traversal's release_state
@@ -1362,7 +1390,9 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
         return mpf_state_key(dealt);
     }
 
-    if (!st->chance_pending)
+    /* Past this point the node deals one board card, which is the only kind
+       chance_children[52] can index. */
+    if (mpf_state_chance_kind(st) != PE_CHANCE_BOARD_ONE)
         return 0;
     int cards[52];
     int count = mpf_unused_cards(st, cards, 52);
