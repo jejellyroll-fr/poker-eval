@@ -27,8 +27,10 @@ add_library(poker_solver
     solver/domain/rng.c
     solver/domain/plan.c
     solver/domain/storage_v2.c
+    solver/domain/range.c
     solver/domain/telemetry.c
     solver/adapters/storage_ram.c
+    solver/adapters/range_parser.c
     solver/adapters/telemetry_null.c
     solver/adapters/telemetry_stream.c
     solver/adapters/telemetry_callback.c
@@ -42,7 +44,10 @@ target_include_directories(poker_solver PRIVATE
 # The only link dependency of the domain, and it is a leaf: PCG32 lives in
 # poker_core, which itself links nothing but libm. No engine, no evaluator, no
 # GPU backend — those arrive through the driven ports.
-target_link_libraries(poker_solver PUBLIC poker_core)
+# The range parser adapter needs the range engine. The edge is acyclic:
+# poker-eval-range reaches poker_core, poker_equity and poker_distributions,
+# and none of those links poker_solver.
+target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range)
 
 install(TARGETS poker_solver
         EXPORT poker-eval-targets
