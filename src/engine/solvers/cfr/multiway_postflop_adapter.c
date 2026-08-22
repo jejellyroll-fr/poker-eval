@@ -2059,6 +2059,47 @@ int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
     return applied;
 }
 
+/*
+ * Resolve the private ranges into fixed holes (RNG-02).
+ *
+ * Card indices are the same 0..51 in both representations, so the conversion
+ * is a bit-for-bit walk rather than a rank/suit round trip.
+ *
+ * Only a one-combo range is resolvable: it is a fixed hand written another
+ * way. Anything wider is refused here, because the traversal has no root
+ * private chance yet and would otherwise solve the first combo while the
+ * caller believed it had asked for a range.
+ *
+ * Returns 0, or -1 on a range that is unprepared, empty or too wide.
+ */
+static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
+                              int *out_specified)
+{
+    for (int p = 0; p < cfg->num_players && p < MPF_MAX_PLAYERS; ++p)
+    {
+        pe_range_view_t view;
+        mask_t m = MASK_EMPTY;
+
+        if (cfg->range[p] == NULL)
+            continue;
+
+        if (!pe_solver_range_is_prepared(cfg->range[p], 1e-9))
+            return -1;
+
+        view = pe_solver_range_view(cfg->range[p]);
+        if (view.count != 1)
+            return -1;
+
+        for (int c = 0; c < MODERN_DECK_SIZE; ++c)
+            if (StdDeck_CardMask_CARD_IS_SET(view.combos[0].hand, c))
+                m = mask_set(m, c);
+
+        out_hole[p] = m;
+        out_specified[p] = 1;
+    }
+    return 0;
+}
+
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
 {
     if (!cfg || !cfg->ctx || !out_game || !out_state)
@@ -2138,11 +2179,23 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         out_state->base_bet_sizes[i] = out_state->bet_sizes[i];
     out_state->base_enable_pot_sizing = out_state->enable_pot_sizing;
 
+    /* A one-combo range is a fixed hand written another way; anything wider is
+       refused until RNG-03 provides the root private chance. */
+    mask_t resolved_hole[MPF_MAX_PLAYERS];
+    int resolved_specified[MPF_MAX_PLAYERS];
+    for (int i = 0; i < MPF_MAX_PLAYERS; ++i)
+    {
+        resolved_hole[i] = cfg->hole[i];
+        resolved_specified[i] = cfg->hole_specified[i];
+    }
+    if (mpf_resolve_ranges(cfg, resolved_hole, resolved_specified) != 0)
+        return -1;
+
     for (int i = 0; i < cfg->num_players; ++i)
     {
         out_state->stacks[i] = cfg->stacks[i];
         out_state->active[i] = 1;
-        out_state->hole[i] = cfg->hole[i];
+        out_state->hole[i] = resolved_hole[i];
         out_state->invested[i] = 0.0;
         out_state->round_contrib[i] = 0.0;
         out_state->acted_this_round[i] = 0;

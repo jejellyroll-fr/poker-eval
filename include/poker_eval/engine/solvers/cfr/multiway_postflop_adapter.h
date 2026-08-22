@@ -5,6 +5,7 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/economics/rake.h>
+#include <poker_eval/solver/pe_range.h>
 
 #if !defined(_WIN32)
 #include <poker_eval/core/pthread_compat.h>
@@ -104,6 +105,21 @@ typedef struct
 
     mask_t hole[MPF_MAX_PLAYERS];
     int hole_specified[MPF_MAX_PLAYERS];
+
+    /*
+     * Private range per player (RNG-02). Borrowed: the caller owns it and must
+     * keep it alive for the life of the game.
+     *
+     * A range and a fixed hole say the same thing when the range holds one
+     * combo, and that is the only case supported so far — mpf_build_game
+     * materialises it into hole[p]. A range with several combos is refused
+     * rather than collapsed onto its first entry: solving one hand while the
+     * caller asked for a range would produce numbers that look like a range
+     * solve. RNG-03 adds the root private chance that makes them meaningful.
+     *
+     * The range must have been through pe_solver_range_prepare().
+     */
+    const pe_range_t *range[MPF_MAX_PLAYERS];
     int board_cards[5];
     int board_card_count;
 
