@@ -71,7 +71,7 @@ static void compare_against_reality(const char *label, uint64_t infosets,
     CHECK(solver != NULL, "%s: creation failed", label);
     if (!solver) return;
 
-    CHECK(pe_solver_estimate(solver, &est) == PE_OK, "%s: estimate failed", label);
+    CHECK(pe_solver_estimate(solver, &est) == PE_SOLVER_OK, "%s: estimate failed", label);
     CHECK(est.slots == infosets * actions * combos,
           "%s: slot count is %llu, expected %llu", label,
           (unsigned long long)est.slots,
@@ -140,17 +140,17 @@ static void test_precision_scales_the_estimate(void)
     pe_estimate_t f64, f32, fixed16;
 
     s = pe_solver_create(&cfg, NULL);
-    CHECK(pe_solver_estimate(s, &f64) == PE_OK, "f64 estimate failed");
+    CHECK(pe_solver_estimate(s, &f64) == PE_SOLVER_OK, "f64 estimate failed");
     pe_solver_destroy(s);
 
     cfg.execution.precision = PE_PREC_F32;
     s = pe_solver_create(&cfg, NULL);
-    CHECK(pe_solver_estimate(s, &f32) == PE_OK, "f32 estimate failed");
+    CHECK(pe_solver_estimate(s, &f32) == PE_SOLVER_OK, "f32 estimate failed");
     pe_solver_destroy(s);
 
     cfg.execution.precision = PE_PREC_FIXED16;
     s = pe_solver_create(&cfg, NULL);
-    CHECK(pe_solver_estimate(s, &fixed16) == PE_OK, "fixed16 estimate failed");
+    CHECK(pe_solver_estimate(s, &fixed16) == PE_SOLVER_OK, "fixed16 estimate failed");
     pe_solver_destroy(s);
 
     CHECK(f64.bytes_per_slot == 8 && f32.bytes_per_slot == 4
@@ -168,7 +168,7 @@ static void test_precision_scales_the_estimate(void)
     s = pe_solver_create(&cfg, NULL);
     {
         pe_estimate_t mixed;
-        CHECK(pe_solver_estimate(s, &mixed) == PE_OK, "mixed estimate failed");
+        CHECK(pe_solver_estimate(s, &mixed) == PE_SOLVER_OK, "mixed estimate failed");
         CHECK(mixed.bytes_per_slot == 8,
               "mixed reports %u bytes per slot, expected 8", mixed.bytes_per_slot);
     }
@@ -196,7 +196,7 @@ static void test_budget_refusal(void)
 
     /* The refusal happens in validate(), which allocates nothing: the solver
        object exists, the solve's memory does not. */
-    CHECK(pe_solver_validate(solver, &diag) == PE_ERR_BUDGET_EXCEEDED,
+    CHECK(pe_solver_validate(solver, &diag) == PE_SOLVER_ERR_BUDGET_EXCEEDED,
           "an impossible budget was accepted");
     CHECK(diag.worst == PE_VALID_ERROR, "the diagnostics do not report an error");
     for (i = 0; i < diag.count; ++i)
@@ -205,7 +205,7 @@ static void test_budget_refusal(void)
     CHECK(named, "no diagnostic mentions the budget");
 
     /* And the estimate says by how much, rather than only that it failed. */
-    CHECK(pe_solver_estimate(solver, &est) == PE_ERR_BUDGET_EXCEEDED,
+    CHECK(pe_solver_estimate(solver, &est) == PE_SOLVER_ERR_BUDGET_EXCEEDED,
           "estimate did not report the overrun");
     CHECK(est.within_budget == 0, "the estimate claims it fits");
     CHECK(est.host_bytes > est.budget_bytes,
@@ -225,8 +225,8 @@ static void test_budget_accepted_when_it_fits(void)
     cfg.execution.max_ram_bytes = 64u * 1024u * 1024u;
     solver = pe_solver_create(&cfg, NULL);
 
-    CHECK(pe_solver_validate(solver, NULL) == PE_OK, "a fitting budget was refused");
-    CHECK(pe_solver_estimate(solver, &est) == PE_OK, "estimate failed");
+    CHECK(pe_solver_validate(solver, NULL) == PE_SOLVER_OK, "a fitting budget was refused");
+    CHECK(pe_solver_estimate(solver, &est) == PE_SOLVER_OK, "estimate failed");
     CHECK(est.within_budget, "a fitting estimate reports it does not fit");
     CHECK(est.budget_bytes == cfg.execution.max_ram_bytes, "budget not echoed");
 
@@ -241,9 +241,9 @@ static void test_no_budget_means_no_refusal(void)
 
     /* max_ram_bytes stays 0. A caller who declared no budget is not told what
        to do; the figure is still reported. */
-    CHECK(pe_solver_validate(solver, NULL) == PE_OK,
+    CHECK(pe_solver_validate(solver, NULL) == PE_SOLVER_OK,
           "a solve was refused with no budget declared");
-    CHECK(pe_solver_estimate(solver, &est) == PE_OK, "estimate failed");
+    CHECK(pe_solver_estimate(solver, &est) == PE_SOLVER_OK, "estimate failed");
     CHECK(est.within_budget, "no budget should mean within budget");
     CHECK(est.host_bytes > (1ull << 40), "an absurd problem estimated small");
 
@@ -259,15 +259,15 @@ static void test_empty_problem_is_refused(void)
 
     /* Estimating nothing is not an estimate of zero: a caller who forgot to
        declare a size must not be told the solve is free. */
-    CHECK(pe_solver_estimate(solver, &est) == PE_ERR_INVALID_CONFIG,
+    CHECK(pe_solver_estimate(solver, &est) == PE_SOLVER_ERR_INVALID_CONFIG,
           "an undeclared problem size produced an estimate");
-    CHECK(pe_solver_validate(solver, &diag) == PE_ERR_BUDGET_EXCEEDED
-              || pe_solver_validate(solver, &diag) == PE_ERR_INVALID_CONFIG,
+    CHECK(pe_solver_validate(solver, &diag) == PE_SOLVER_ERR_BUDGET_EXCEEDED
+              || pe_solver_validate(solver, &diag) == PE_SOLVER_ERR_INVALID_CONFIG,
           "an undeclared problem size validated");
 
-    CHECK(pe_solver_estimate(NULL, &est) == PE_ERR_NULL_ARGUMENT, "NULL solver");
-    CHECK(pe_solver_estimate(solver, NULL) == PE_ERR_NULL_ARGUMENT, "NULL out");
-    CHECK(pe_solver_validate(NULL, NULL) == PE_ERR_NULL_ARGUMENT, "NULL solver");
+    CHECK(pe_solver_estimate(NULL, &est) == PE_SOLVER_ERR_NULL_ARGUMENT, "NULL solver");
+    CHECK(pe_solver_estimate(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT, "NULL out");
+    CHECK(pe_solver_validate(NULL, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT, "NULL solver");
 
     pe_solver_destroy(solver);
 }
@@ -285,7 +285,7 @@ static void test_invalid_config_fails_before_the_budget(void)
     cfg.execution.max_ram_bytes = 1;   /* would also bust */
 
     solver = pe_solver_create(&cfg, NULL);
-    CHECK(pe_solver_validate(solver, NULL) == PE_ERR_INVALID_CONFIG,
+    CHECK(pe_solver_validate(solver, NULL) == PE_SOLVER_ERR_INVALID_CONFIG,
           "an invalid combination was reported as a budget overrun");
     pe_solver_destroy(solver);
 }

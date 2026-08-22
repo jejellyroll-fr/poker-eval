@@ -11,7 +11,7 @@
  *
  * This is the CTR-01 skeleton: the contract and its granularity are fixed here
  * and every entry point is present, but the implementations are stubs that
- * report PE_ERR_NOT_IMPLEMENTED. The types referenced by the prototypes are
+ * report PE_SOLVER_ERR_NOT_IMPLEMENTED. The types referenced by the prototypes are
  * forward-declared and completed by later tickets:
  *
  *   pe_solver_config_t     CTR-03  (pe_solver_config.h)
@@ -44,8 +44,15 @@ extern "C" {
  * ------------------------------------------------------------------ */
 
 /*
- * Every entry point that can fail reports a pe_status_t. PE_OK is zero so
- * `if (pe_solver_run(s) != PE_OK)` reads the way callers expect.
+ * Every entry point that can fail reports a pe_solver_status_t. PE_SOLVER_OK is
+ * zero so `if (pe_solver_run(s) != PE_SOLVER_OK)` reads the way callers expect.
+ *
+ * Named pe_solver_status_t rather than pe_status_t because that name is taken
+ * twice already: <poker_eval/core/status.h> and <poker_eval/range.h> each
+ * define a different enum under it, reconciled by a PE_STATUS_T_DEFINED guard
+ * where the first include wins. Adding a third would have made including this
+ * header alongside either of those a hard error — which is exactly what
+ * happened the moment the solver needed to parse a range.
  *
  * This set covers exactly what the CTR-01 skeleton can return. Later tickets
  * extend it (invalid configuration, budget overrun, I/O failure, ...) by
@@ -53,14 +60,14 @@ extern "C" {
  * ABI.
  */
 typedef enum {
-    PE_OK = 0,
-    PE_ERR_NULL_ARGUMENT,   /* a required pointer argument was NULL */
-    PE_ERR_INVALID_STATE,   /* the call is not legal in the solver's state */
-    PE_ERR_OUT_OF_MEMORY,   /* allocation failed */
-    PE_ERR_NOT_IMPLEMENTED, /* the entry point exists but has no body yet */
-    PE_ERR_INVALID_CONFIG,  /* the configuration cannot be honoured */
-    PE_ERR_BUDGET_EXCEEDED  /* the estimate does not fit max_ram_bytes */
-} pe_status_t;
+    PE_SOLVER_OK = 0,
+    PE_SOLVER_ERR_NULL_ARGUMENT,   /* a required pointer argument was NULL */
+    PE_SOLVER_ERR_INVALID_STATE,   /* the call is not legal in the solver's state */
+    PE_SOLVER_ERR_OUT_OF_MEMORY,   /* allocation failed */
+    PE_SOLVER_ERR_NOT_IMPLEMENTED, /* the entry point exists but has no body yet */
+    PE_SOLVER_ERR_INVALID_CONFIG,  /* the configuration cannot be honoured */
+    PE_SOLVER_ERR_BUDGET_EXCEEDED  /* the estimate does not fit max_ram_bytes */
+} pe_solver_status_t;
 
 /* ------------------------------------------------------------------ *
  * Forward declarations
@@ -131,11 +138,11 @@ const pe_solver_config_t *pe_solver_get_config(const pe_solver_t *solver);
  * @param out  Receives the diagnostics (errors, warnings, fallbacks). May be
  *             NULL when the caller only wants the status.
  */
-pe_status_t pe_solver_validate(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
                                pe_diagnostics_t *out);
 
 /** Capability bits the resolved plan actually provides. */
-pe_status_t pe_solver_capabilities(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_capabilities(const pe_solver_t *solver,
                                    uint64_t *out_caps);
 
 /*
@@ -176,10 +183,10 @@ struct pe_estimate_t {
  * discovered at run time: pe_solver_validate() refuses a plan whose estimate
  * exceeds pe_execution_config_t::max_ram_bytes, before anything is allocated.
  *
- * Returns PE_ERR_INVALID_CONFIG when the declared problem size is empty —
+ * Returns PE_SOLVER_ERR_INVALID_CONFIG when the declared problem size is empty —
  * estimating nothing is not an estimate of zero.
  */
-pe_status_t pe_solver_estimate(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_estimate(const pe_solver_t *solver,
                                pe_estimate_t *out);
 
 /**
@@ -187,7 +194,7 @@ pe_status_t pe_solver_estimate(const pe_solver_t *solver,
  * pruning ops, effective backend per stage, precision, capabilities. Exposed
  * so a caller can print what will actually run instead of what was asked for.
  */
-pe_status_t pe_solver_plan(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
                            pe_execution_plan_t *out);
 
 /* ------------------------------------------------------------------ *
@@ -195,22 +202,22 @@ pe_status_t pe_solver_plan(const pe_solver_t *solver,
  * ------------------------------------------------------------------ */
 
 /** Run until a stop condition is met. Blocking. */
-pe_status_t pe_solver_run(pe_solver_t *solver);
+pe_solver_status_t pe_solver_run(pe_solver_t *solver);
 
 /** Request a pause at the next safe point. Idempotent. */
-pe_status_t pe_solver_pause(pe_solver_t *solver);
+pe_solver_status_t pe_solver_pause(pe_solver_t *solver);
 
 /** Resume a paused solve. Idempotent. */
-pe_status_t pe_solver_resume(pe_solver_t *solver);
+pe_solver_status_t pe_solver_resume(pe_solver_t *solver);
 
 /** Request a graceful stop at the next safe point. Idempotent. */
-pe_status_t pe_solver_stop(pe_solver_t *solver);
+pe_solver_status_t pe_solver_stop(pe_solver_t *solver);
 
 /**
  * Current progress. Never blocks the solve loop, so it is safe to poll from
  * another thread while pe_solver_run is in flight.
  */
-pe_status_t pe_solver_progress(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
                                pe_progress_t *out);
 
 /* ------------------------------------------------------------------ *
@@ -224,7 +231,7 @@ pe_status_t pe_solver_progress(const pe_solver_t *solver,
  * @param out    Receives a view over the solver's storage. The view stays
  *               valid until the next mutating call on the solver.
  */
-pe_status_t pe_solver_strategy(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
                                const pe_strategy_query_t *query,
                                pe_strategy_view_t *out);
 
@@ -233,7 +240,7 @@ pe_status_t pe_solver_strategy(const pe_solver_t *solver,
  * backend per stage, resolved precision, and the exploitability guarantee that
  * applies (never "Nash" for a multiway or non-zero-sum game).
  */
-pe_status_t pe_solver_metrics(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
                               pe_metrics_t *out);
 
 /* ------------------------------------------------------------------ *
@@ -241,11 +248,11 @@ pe_status_t pe_solver_metrics(const pe_solver_t *solver,
  * ------------------------------------------------------------------ */
 
 /** Write a backend-independent checkpoint or a solved-strategy artefact. */
-pe_status_t pe_solver_save(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_save(const pe_solver_t *solver,
                            const pe_persist_target_t *target);
 
 /** Restore from a checkpoint written by any backend. */
-pe_status_t pe_solver_load(pe_solver_t *solver,
+pe_solver_status_t pe_solver_load(pe_solver_t *solver,
                            const pe_persist_source_t *source);
 
 #ifdef __cplusplus

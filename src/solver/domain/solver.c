@@ -12,7 +12,7 @@
  * Nothing in this file includes cfr_core, the GPU headers or <stdio.h>: the
  * domain reaches the outside world only through the ports.
  *
- * The remaining entry points are still stubs reporting PE_ERR_NOT_IMPLEMENTED;
+ * The remaining entry points are still stubs reporting PE_SOLVER_ERR_NOT_IMPLEMENTED;
  * their argument checks are already the final behaviour and do not change when
  * a body lands.
  */
@@ -134,7 +134,7 @@ static uint64_t pe_solver_available_caps(const pe_solver_t *solver)
     return (uint64_t)PE_CAP_ALL;
 }
 
-pe_status_t pe_solver_validate(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
                                pe_diagnostics_t *out)
 {
     pe_execution_plan_t plan;
@@ -143,41 +143,41 @@ pe_status_t pe_solver_validate(const pe_solver_t *solver,
     pe_diagnostics_t *diag = (out != NULL) ? out : &local;
 
     if (solver == NULL)
-        return PE_ERR_NULL_ARGUMENT;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
 
     if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
                         &plan, diag) == PE_VALID_ERROR)
-        return PE_ERR_INVALID_CONFIG;
+        return PE_SOLVER_ERR_INVALID_CONFIG;
 
     /* Nothing has been allocated at this point, and nothing will be if the
        estimate does not fit: that is the whole point of asking first. */
     if (pe_plan_estimate(&plan, &solver->config.problem,
                          solver->config.execution.max_ram_bytes,
                          &estimate, diag) == PE_VALID_ERROR)
-        return PE_ERR_BUDGET_EXCEEDED;
+        return PE_SOLVER_ERR_BUDGET_EXCEEDED;
 
-    return PE_OK;
+    return PE_SOLVER_OK;
 }
 
-pe_status_t pe_solver_capabilities(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_capabilities(const pe_solver_t *solver,
                                    uint64_t *out_caps)
 {
     if (solver == NULL || out_caps == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_estimate(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_estimate(const pe_solver_t *solver,
                                pe_estimate_t *out)
 {
     pe_execution_plan_t plan;
 
     if (solver == NULL || out == NULL)
-        return PE_ERR_NULL_ARGUMENT;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
 
     if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
                         &plan, NULL) == PE_VALID_ERROR)
-        return PE_ERR_INVALID_CONFIG;
+        return PE_SOLVER_ERR_INVALID_CONFIG;
 
     switch (pe_plan_estimate(&plan, &solver->config.problem,
                              solver->config.execution.max_ram_bytes, out, NULL))
@@ -185,105 +185,105 @@ pe_status_t pe_solver_estimate(const pe_solver_t *solver,
     case PE_VALID_ERROR:
         /* An empty problem size and a busted budget are different failures,
            and `out` distinguishes them: infosets is 0 for the first. */
-        return (out->infosets == 0) ? PE_ERR_INVALID_CONFIG
-                                    : PE_ERR_BUDGET_EXCEEDED;
+        return (out->infosets == 0) ? PE_SOLVER_ERR_INVALID_CONFIG
+                                    : PE_SOLVER_ERR_BUDGET_EXCEEDED;
     case PE_VALID_OK:
     case PE_VALID_WARNING:
     case PE_VALID_FALLBACK:
     default:
-        return PE_OK;
+        return PE_SOLVER_OK;
     }
 }
 
-pe_status_t pe_solver_plan(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
                            pe_execution_plan_t *out)
 {
     if (solver == NULL || out == NULL)
-        return PE_ERR_NULL_ARGUMENT;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
 
     if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
                         out, NULL) == PE_VALID_ERROR)
-        return PE_ERR_INVALID_CONFIG;
-    return PE_OK;
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    return PE_SOLVER_OK;
 }
 
 /* ------------------------------------------------------------------ *
  * Execution
  * ------------------------------------------------------------------ */
 
-pe_status_t pe_solver_run(pe_solver_t *solver)
+pe_solver_status_t pe_solver_run(pe_solver_t *solver)
 {
     if (solver == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_pause(pe_solver_t *solver)
+pe_solver_status_t pe_solver_pause(pe_solver_t *solver)
 {
     if (solver == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_resume(pe_solver_t *solver)
+pe_solver_status_t pe_solver_resume(pe_solver_t *solver)
 {
     if (solver == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_stop(pe_solver_t *solver)
+pe_solver_status_t pe_solver_stop(pe_solver_t *solver)
 {
     if (solver == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_progress(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
                                pe_progress_t *out)
 {
     if (solver == NULL || out == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
 /* ------------------------------------------------------------------ *
  * Results
  * ------------------------------------------------------------------ */
 
-pe_status_t pe_solver_strategy(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
                                const pe_strategy_query_t *query,
                                pe_strategy_view_t *out)
 {
     if (solver == NULL || query == NULL || out == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_metrics(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
                               pe_metrics_t *out)
 {
     if (solver == NULL || out == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
 /* ------------------------------------------------------------------ *
  * Persistence
  * ------------------------------------------------------------------ */
 
-pe_status_t pe_solver_save(const pe_solver_t *solver,
+pe_solver_status_t pe_solver_save(const pe_solver_t *solver,
                            const pe_persist_target_t *target)
 {
     if (solver == NULL || target == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
-pe_status_t pe_solver_load(pe_solver_t *solver,
+pe_solver_status_t pe_solver_load(pe_solver_t *solver,
                            const pe_persist_source_t *source)
 {
     if (solver == NULL || source == NULL)
-        return PE_ERR_NULL_ARGUMENT;
-    return PE_ERR_NOT_IMPLEMENTED;
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
