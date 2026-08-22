@@ -44,7 +44,8 @@ Chacun est vérifié dans le code et bloque un usage réel du solveur.
 | **Pas de ranges.** Le modèle porte une main fixe par joueur | `mask_t hole[MPF_MAX_PLAYERS]` + `hole_specified[]` dans `mpf_config_t` |
 | **Pas de forme vectorielle.** Une traversée = un matchup de mains connues | aucune structure de valeurs par combo dans le solveur |
 | **Pas de chance flop.** Préflop → flop révèle un board figé | `mpf_advance_street()` appelle `mpf_update_board(st, 3)` ; `mpf_enter_chance()` ne couvre que turn et river |
-| **Best-response à information parfaite.** L'exploitabilité n'est qu'une borne supérieure | `best_response_recursive()` maximise par *état*, pas par infoset ; documenté dans `tests/game_theory/README.md` |
+| **L'exploitabilité publique n'est qu'une borne supérieure.** `cfr_best_response_value()` / `cfr_exploitability()` maximisent par *état*, pas par infoset | `best_response_recursive()` ; documenté dans `tests/game_theory/README.md` |
+| **Le BR correct existe mais n'est ni public ni dimensionné.** `cfr_best_response_value_infoset()` est un BR par infoset itéré jusqu'au point fixe — mais il est `static`, et sa table d'infosets est balayée linéairement à chaque insertion | `cfr_core.c`, utilisé seulement par `cfr_audit_multiway()` ; O(n²) en infosets, l'arbre reparcouru à chaque tour |
 | **DCFR non canonique.** Le discount s'applique à chaque *visite* d'infoset, pas une fois par itération → le regret est multiplié par `d^N` | `cfr_traverse_recursive()` appelle `cfr_storage_update_regret_at_street(..., discount)` à chaque visite ; `dcfr_beta` sert d'exposant d'averaging au lieu de discounter les regrets négatifs |
 | **Traversée monolithique.** Chance, regret matching, DCFR, averaging, locks, relock, flow focus et EV dans une fonction de ~320 lignes | `cfr_traverse_recursive()` |
 | **Aucun parallélisme dans le solveur.** Zéro `#pragma omp` sous `src/engine/solvers/` | OpenMP n'apparaît que dans `src/ofc/`, `src/core/`, `src/utils/` |
@@ -93,13 +94,25 @@ Tant que le modèle porte `hole[p]` fixe, ni CFR+, ni DCFR, ni GPU ne produisent
 ce soit d'utile : on résout un matchup de mains connues, pas un jeu à information
 imparfaite. Les ranges viennent **avant** toute optimisation.
 
-### D3 — Le best-response doit devenir à information imparfaite
+### D3 — Le best-response à information imparfaite doit devenir public et passer à l'échelle
 
 Sans lui, il n'existe aucun critère d'arrêt fondé et aucune mesure de qualité. C'est le
 différenciant principal face à MonkerSolver, dont le pont MCP documente que
-`target_exploitability` reste non supporté faute de métrique identifiée. En forme
-vectorielle, le BR correct est une opération naturelle : maximiser par infoset sur la somme
-pondérée par les reach adverses.
+`target_exploitability` reste non supporté faute de métrique identifiée.
+
+**Le dépôt en possède déjà un.** `cfr_best_response_value_infoset()` sélectionne une action
+par infoset, pondère par les reach contrefactuels et itère jusqu'au point fixe ; il gère la
+chance et le multiway, et il est correct. Le travail n'est donc pas de l'écrire mais de
+lever ses trois limites :
+
+1. il est `static` — l'API publique expose encore le BR à information parfaite ;
+2. sa table d'infosets est balayée linéairement à chaque insertion, et l'arbre est
+   reparcouru à chaque tour du point fixe : c'est un outil d'audit dimensionné pour Kuhn et
+   Leduc, pas un moteur de production ;
+3. il rend une valeur brute, sans conversion en mbb/g ni critère d'arrêt.
+
+En forme vectorielle (lane A), la même sélection par infoset devient une opération sur les
+vecteurs de reach, ce qui règle le point 2 par construction.
 
 ### D4 — Les ports se franchissent par lots, jamais par nœud
 
@@ -476,12 +489,22 @@ sérialisation `.pe_sbk` et réutilisation entre solves.
 
 ### 8.1 Best-response à information imparfaite
 
-Remplace `best_response_recursive()`. En forme vectorielle : pour chaque infoset du joueur
-BR, la valeur de chaque action est la somme sur les combos, pondérée par le reach
-contrefactuel adverse ; le BR maximise **par infoset**, pas par état.
+L'algorithme existe : `cfr_best_response_value_infoset()` maximise **par infoset**, pas par
+état, pondère par les reach contrefactuels et itère jusqu'au point fixe. v3 le promeut au
+lieu de le réécrire.
 
-L'implémentation actuelle reste disponible sous le nom `cfr_best_response_perfect_info()`,
-avec sa sémantique documentée de borne supérieure.
+Trois changements. Il devient public. Il passe en forme vectorielle : pour chaque infoset
+du joueur BR, la valeur de chaque action est la somme sur les combos pondérée par le reach
+contrefactuel adverse — ce qui remplace du même coup son balayage linéaire de la table
+d'infosets et le reparcours complet de l'arbre à chaque tour. Et il devient la source de
+l'exploitabilité publique.
+
+`best_response_recursive()` reste disponible sous le nom
+`cfr_best_response_perfect_info()`, avec sa sémantique documentée de borne supérieure. Les
+deux ne sont pas interchangeables : le BR à information parfaite majore toujours celui par
+infoset, et une assertion d'égalité entre les deux ne tient que par coïncidence — c'est ce
+qui a fait échouer `test_best_response_exploitability` quand `EXT-07` a changé la stratégie
+produite.
 
 Sortie : exploitabilité en **mbb/g** (milli-big-blinds par main), l'unité que les
 utilisateurs attendent, et critère d'arrêt `target_exploitability` réellement supporté.
@@ -537,7 +560,8 @@ V0  jeux jouets analytiques        AKQ, jam-or-fold, matrices  — existant
 V1  Kuhn 2p / 3p / 4p              vs fixtures OpenSpiel        — existant
 V2  Leduc                          vs énumération complète      — existant
 V3  LP séquentiel exact            vs simplex interne           — existant
-V4  BR à information imparfaite    exploitabilité → 0 sur équilibre exact   — NOUVEAU
+V4  BR à information imparfaite    exploitabilité → 0 sur équilibre exact,
+                                   et parité avec le BR par infoset existant
 V5  lane A vs lane scalaire        même jeu, même valeur, tolérance serrée  — NOUVEAU
 V6  Hold'em river range vs range   vs énumération exhaustive
 V7  Hold'em turn, puis flop

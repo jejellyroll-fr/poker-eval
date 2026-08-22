@@ -1040,30 +1040,57 @@ ctest --test-dir build/debug -R test_pe_holdem_river_ranges --output-on-failure
 renommer `cfr_best_response_perfect_info()` / `cfr_exploitability_perfect_info()` et
 conserver les anciens noms comme alias dépréciés documentés.
 
-**DoD** — `test_best_response_exploitability` passe sans changement de valeur. La
-documentation du header dit explicitement « borne supérieure » et pourquoi.
+**Le BR correct existe déjà** — `cfr_best_response_value_infoset()`, `static` dans
+`cfr_core.c`, utilisé seulement par `cfr_audit_multiway()`. Ce ticket ne le touche pas ;
+`BR-02` s'en charge. Ce qu'il doit faire ici, c'est **dire lequel est lequel** dans le
+header et dans `tests/game_theory/README.md`, parce que la confusion entre les deux a déjà
+produit une assertion d'oracle fausse : `test_best_response_exploitability` affirmait leur
+égalité à `1e-12`, ce qui n'est vrai que par coïncidence (le BR à information parfaite
+majore toujours l'autre). `EXT-07` l'a corrigée.
+
+**DoD** — `test_best_response_exploitability` passe sans changement de valeur. Le header
+documente les deux fonctions, dit laquelle est une borne supérieure et pourquoi, et note
+qu'aucune assertion ne doit supposer leur égalité.
 
 **Vérification**
 ```bash
 ctest --test-dir build/debug -R test_best_response_exploitability --output-on-failure
 ```
 
-## BR-02 — Best-response vectoriel par infoset
+## BR-02 — Promouvoir et vectoriser le best-response par infoset
 
 **Priorité** `P0` · **Taille** `L` · **Dépendances** `BR-01`
 
 **Fichiers** `src/solver/domain/best_response_ii.c` (nouveau),
+`src/engine/solvers/cfr/cfr_core.c`,
 `include/poker_eval/solver/pe_solver.h`,
 `tests/game_theory/test_best_response_ii.c` (nouveau), `tests/CMakeLists.txt`
 
-Implémenter le best-response correct : pour chaque infoset du joueur BR, la valeur de
-chaque action est la somme sur les combos pondérée par le reach contrefactuel adverse, et
-le maximum est pris **par infoset**, une seule fois pour tous les états qui le composent.
+**Ne pas réécrire l'algorithme.** `cfr_best_response_value_infoset()` sélectionne déjà une
+action par infoset, pondère par les reach contrefactuels et itère jusqu'au point fixe ; il
+gère la chance et le multiway, et ses résultats sont vérifiés par
+`test_best_response_exploitability`. Le prendre comme référence, et le confronter à la
+version vectorielle plutôt qu'à un oracle réécrit pour l'occasion.
+
+Trois limites à lever, et ce sont elles la substance du ticket :
+
+1. il est `static` — le promouvoir dans l'API publique ;
+2. `cfr_audit_find_infoset()` balaye sa table linéairement à chaque insertion, et l'arbre
+   est reparcouru intégralement à chaque tour du point fixe : c'est du O(n²) en infosets,
+   dimensionné pour Kuhn et Leduc, pas pour un solve réel. La forme vectorielle règle les
+   deux : la valeur de chaque action devient une somme sur les combos pondérée par le reach
+   contrefactuel adverse, et le maximum est pris par infoset une seule fois ;
+3. la borne de 32 tours de point fixe n'est ni justifiée ni signalée quand elle est
+   atteinte — la nouvelle version doit rapporter la non-convergence au lieu de rendre
+   silencieusement une valeur partielle.
 
 **DoD** — Sur l'équilibre exact fourni par le LP séquentiel de
 `tests/game_theory/analytical_oracles.c`, l'exploitabilité rendue est inférieure à `1e-7`.
 Sur une politique délibérément exploitable (Always Fold en Kuhn), elle vaut la valeur
-analytique connue.
+analytique connue. Sur Kuhn 2p/3p et Leduc, la version vectorielle rend la **même valeur à
+`1e-9` près** que `cfr_best_response_value_infoset()` — c'est la vérification qui prouve
+qu'on a porté l'algorithme et non écrit un autre. Un dépassement de la borne de tours est
+rapporté, pas avalé.
 
 **Vérification**
 ```bash
