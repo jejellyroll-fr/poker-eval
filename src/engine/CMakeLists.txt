@@ -15,6 +15,7 @@ set(ENGINE_SOURCES
     solvers/cfr/draw_abstraction.c
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
+    solvers/cfr/cfr_traversal_full_scalar.c
     solvers/cfr/bet_sizing.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/hand_clustering.c
