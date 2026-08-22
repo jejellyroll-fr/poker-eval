@@ -266,6 +266,28 @@ typedef struct mpf_state_s
     int chance_pending;        /* next street transition deals a card (chance state) */
     int chance_children_count; /* number of dealt children so far */
     struct mpf_state_s *chance_children[52]; /* cached per-outcome children */
+
+    /*
+     * CHN-02: how many board cards the pending chance node deals at once.
+     * One for the turn and the river, three for the flop, zero when nothing
+     * is pending. The count is what separates the two node kinds; deriving it
+     * from the street instead would misread a solve that starts on the flop
+     * with a pinned board.
+     */
+    int chance_deal_cards;
+    /*
+     * Cached children of a flop chance node, sized by C(unused,3) rather than
+     * by 52 — which is why they cannot live in chance_children[]. Allocated on
+     * the first deal and owned by the node, like every other chance child.
+     */
+    struct mpf_state_s **flop_children;
+    int flop_child_count;
+    /*
+     * Board cards the configuration pinned. A preflop start with fewer than
+     * three of them is the only case where the flop is dealt by chance; with
+     * three or more the caller chose the board and it is not chance's to pick.
+     */
+    int known_board_cards;
     cfr_storage_t *lock_storage;
 
     /* FEAT-14 (#150): folded-range card bunching (copied from mpf_config_t).
@@ -324,6 +346,16 @@ uint64_t mpf_state_infoset_key(const mpf_state_t *state);
  * indexed by card and is therefore only meaningful for PE_CHANCE_BOARD_ONE.
  */
 pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state);
+
+/*
+ * CHN-02: resolve a state key back to the state it names.
+ *
+ * In keyed mode a key is an infoset key, not a pointer, so a caller holding
+ * the result of apply_action or apply_chance has no way to look at what it
+ * was given. The solver does not need this; anything checking what a chance
+ * node actually dealt does.
+ */
+const mpf_state_t *mpf_state_for_key(cfr_game_t *game, uint64_t key);
 
 struct mpf_perf_stats_pool_t *mpf_perf_stats_pool_create(int max_threads_hint);
 void mpf_perf_stats_pool_destroy(struct mpf_perf_stats_pool_t *pool);

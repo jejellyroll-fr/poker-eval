@@ -3,6 +3,7 @@
 #include <poker_eval/engine/solvers/cfr/mpf_stack_index.h>
 #include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/solver/pe_combinations.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -10,6 +11,17 @@
 #include <stdio.h>
 
 #define MPF_EPS 1e-9
+
+/*
+ * CHN-02: the widest flop node the adapter will build, C(52,3). Nothing can
+ * legitimately exceed it, so the guard never fires in play — it is there so
+ * that a wrong unused-card count is refused rather than turned into an
+ * allocation. The cost worth knowing is the other one: every outcome is a
+ * cached child state, and at 17296 flops from a full deck that is tens of
+ * megabytes for a single node. Lane A exists precisely so this is not how
+ * preflop gets solved at scale.
+ */
+#define MPF_MAX_FLOP_OUTCOMES 22100u
 
 static int mpf_adapter_debug_enabled(void)
 {
@@ -637,6 +649,12 @@ static double mpf_get_chance_weight_wrapper(cfr_game_t *game, uint64_t key, int 
 
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
+    /* Flop outcomes are combination indices, not card indices: the bunching
+       estimator below reads `outcome` as a position in the unused-card list
+       and would weight the wrong card. Every flop is equally likely until
+       CHN-04 teaches the estimator to speak in combinations. */
+    if (mpf_state_chance_kind(st) == PE_CHANCE_FLOP_THREE)
+        return 1.0;
     if (!mpf_bunching_enabled(st))
         return 1.0;
     int cards[52];
@@ -702,21 +720,41 @@ int mpf_bunching_compute_survival(const mpf_config_t *cfg, double out_survival[5
     return 0;
 }
 
+/* Does the preflop-to-flop transition belong to chance, or did the caller
+ * pin the board? Three configured board cards mean the flop is a given and
+ * dealing it again would both contradict the caller and put cards back in the
+ * deck that are already on the table. */
+static int mpf_flop_is_chance(const mpf_state_t *st)
+{
+    return (st && st->enable_chance_nodes && st->known_board_cards < 3) ? 1 : 0;
+}
+
 static void mpf_enter_chance(mpf_state_t *st)
 {
     mpf_street_t next_street = st->street;
-    if (st->street == MPF_STREET_FLOP)
+    int deal = 1;
+    if (st->street == MPF_STREET_PREFLOP)
+    {
+        next_street = MPF_STREET_FLOP;
+        deal = 3;
+    }
+    else if (st->street == MPF_STREET_FLOP)
         next_street = MPF_STREET_TURN;
     else if (st->street == MPF_STREET_TURN)
         next_street = MPF_STREET_RIVER;
     st->street = next_street;
+    st->chance_deal_cards = deal;
     st->chance_pending = 1;
     st->to_act = -1;
     st->util_ready = 0;
     MPF_PERF_INC_STATE(st, street_transitions);
 }
 
-static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_state_t *out)
+/* Deal `count` board cards into a child state. The flop deals three at once
+ * and the turn and river one; the arithmetic is the same either way, and
+ * sharing it is what keeps the one-card path bit-for-bit what it was. */
+static void mpf_chance_deal_cards_internal(const mpf_state_t *st, const int *cards,
+                                           int count, mpf_state_t *out)
 {
     /* out may be a cached child from a previous iteration holding the whole
      * betting/chance subtree dealt before. Release it so the re-deal never
@@ -733,15 +771,27 @@ static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_st
     for (int i = 0; i < 52; ++i)
         out->chance_children[i] = NULL;
     out->chance_children_count = 0;
-    out->board_cards[out->board_revealed] = card_idx;
-    out->board_revealed += 1;
+    out->flop_children = NULL;
+    out->flop_child_count = 0;
+    for (int i = 0; i < count && out->board_revealed < 5; ++i)
+    {
+        out->board_cards[out->board_revealed] = cards[i];
+        out->board_revealed += 1;
+    }
     mpf_update_board(out, out->board_revealed);
+    out->known_board_cards = out->board_revealed;
     out->chance_pending = 0;
+    out->chance_deal_cards = 0;
     mpf_reset_round(out, out->street);
     out->first_to_act = mpf_first_player_after(out, out->button_index + 1);
     out->to_act = out->first_to_act;
     if (out->tree_enabled && out->tree && out->tree_node_idx >= 0)
         mpf_apply_tree_node(out, out->tree_node_idx);
+}
+
+static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_state_t *out)
+{
+    mpf_chance_deal_cards_internal(st, &card_idx, 1, out);
 }
 
 /* ===== state wrapper helpers ========================================== */
@@ -1153,6 +1203,12 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
              * enumerates every unseen card instead of a fixed runout. */
             mpf_enter_chance(out);
         }
+        else if (out->keyed_mode && out->street == MPF_STREET_PREFLOP &&
+                 mpf_flop_is_chance(out))
+        {
+            /* CHN-02: the flop is dealt as one combination of three. */
+            mpf_enter_chance(out);
+        }
         else
         {
             mpf_advance_street(out);
@@ -1307,12 +1363,20 @@ pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state)
     if (!state->chance_pending)
         return PE_CHANCE_NONE;
 
-    /* Board chance deals one card at a time. The preflop-to-flop transition
-       still reveals a fixed board rather than dealing a combination, so
-       PE_CHANCE_FLOP_THREE is declared and not yet produced; CHN-02 is what
-       makes it reachable, and returning it here before then would name a node
-       kind the traversal does not implement. */
+    /* A flop is three cards dealt at once. Dealing them one at a time would
+       reach the same boards but weight each of them six times — once per
+       ordering — so the two kinds are genuinely different nodes and not a
+       convenience. chance_deal_cards is what the transition recorded. */
+    if (state->chance_deal_cards == 3)
+        return PE_CHANCE_FLOP_THREE;
     return PE_CHANCE_BOARD_ONE;
+}
+
+const mpf_state_t *mpf_state_for_key(cfr_game_t *game, uint64_t key)
+{
+    if (!game)
+        return NULL;
+    return mpf_wrapper_state(game, key);
 }
 
 static int mpf_is_chance_wrapper(cfr_game_t *game, uint64_t key, void *user)
@@ -1335,8 +1399,16 @@ static int mpf_get_chance_outcomes_wrapper(cfr_game_t *game, uint64_t key, void 
         int cards[52];
         return mpf_unused_cards(st, cards, 52);
     }
-    case PE_CHANCE_NONE:
     case PE_CHANCE_FLOP_THREE:
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        uint64_t combos = pe_comb_count((unsigned)count, 3);
+        if (combos == 0 || combos > MPF_MAX_FLOP_OUTCOMES)
+            return 0;
+        return (int)combos;
+    }
+    case PE_CHANCE_NONE:
     case PE_CHANCE_DRAW_N:
     case PE_CHANCE_KIND_COUNT:
     default:
@@ -1378,6 +1450,8 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
             for (int i = 0; i < 52; ++i)
                 dealt->chance_children[i] = NULL;
             dealt->chance_children_count = 0;
+            dealt->flop_children = NULL;
+            dealt->flop_child_count = 0;
             for (int i = 0; i < st->num_players; ++i)
                 dealt->hole[i] = st->private_deals[outcome].hole[i];
             st->private_children[outcome] = dealt;
@@ -1388,6 +1462,47 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
         if (st->keyed_mode)
             mpf_key_map_register(mpf_infoset_key(dealt), dealt);
         return mpf_state_key(dealt);
+    }
+
+    if (mpf_state_chance_kind(st) == PE_CHANCE_FLOP_THREE)
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        uint64_t combos = pe_comb_count((unsigned)count, 3);
+        unsigned flop[PE_COMB_MAX_K];
+        int dealt[3];
+        mpf_state_t *child;
+        if (combos == 0 || combos > MPF_MAX_FLOP_OUTCOMES)
+            return 0;
+        if (outcome < 0 || (uint64_t)outcome >= combos)
+            return 0;
+        if (pe_comb_unrank((unsigned)count, 3, (uint64_t)outcome, flop) != PE_SOLVER_OK)
+            return 0;
+        if (!st->flop_children)
+        {
+            st->flop_children =
+                (mpf_state_t **)calloc((size_t)combos, sizeof(mpf_state_t *));
+            if (!st->flop_children)
+                return 0;
+            st->flop_child_count = (int)combos;
+        }
+        if (outcome >= st->flop_child_count)
+            return 0;
+        for (int i = 0; i < 3; ++i)
+            dealt[i] = cards[flop[i]];
+        child = st->flop_children[outcome];
+        if (!child)
+        {
+            child = (mpf_state_t *)malloc(sizeof(mpf_state_t));
+            if (!child)
+                return 0;
+            memset(child, 0, sizeof(*child));
+            st->flop_children[outcome] = child;
+        }
+        mpf_chance_deal_cards_internal(st, dealt, 3, child);
+        if (st->keyed_mode)
+            mpf_key_map_register(mpf_infoset_key(child), child);
+        return mpf_state_key(child);
     }
 
     /* Past this point the node deals one board card, which is the only kind
@@ -2338,6 +2453,9 @@ static int mpf_build_fail(mpf_state_t *st)
     st->private_children = NULL;
     st->private_deals = NULL;
     st->private_deal_count = 0;
+    free(st->flop_children);
+    st->flop_children = NULL;
+    st->flop_child_count = 0;
     return -1;
 }
 
@@ -2465,6 +2583,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     int reveal_at_start = (cfg->start_street == MPF_STREET_FLOP) ? 3 :
                           (cfg->start_street == MPF_STREET_TURN) ? 4 :
                           (cfg->start_street == MPF_STREET_RIVER) ? 5 : 0;
+    out_state->known_board_cards = board_limit;
     int load_limit = board_limit;
     if (cfg->enable_chance_nodes && reveal_at_start > 0 && load_limit > reveal_at_start)
         load_limit = reveal_at_start; /* turn/river cards are dealt by chance */
@@ -2592,9 +2711,12 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->keyed_mode = cfg->enable_chance_nodes ? 1 : 0;
     out_state->key_map_owner = out_state;
     out_state->chance_pending = 0;
+    out_state->chance_deal_cards = 0;
     out_state->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
         out_state->chance_children[i] = NULL;
+    out_state->flop_children = NULL;
+    out_state->flop_child_count = 0;
 
     out_state->private_deals = NULL;
     out_state->private_children = NULL;
@@ -2726,6 +2848,21 @@ static void mpf_state_cleanup_internal(mpf_state_t *state)
     state->private_children = NULL;
     state->private_deals = NULL;
     state->private_deal_count = 0;
+
+    for (int i = 0; i < state->flop_child_count; ++i)
+    {
+        mpf_state_t *child = state->flop_children ? state->flop_children[i] : NULL;
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            state->flop_children[i] = NULL;
+        }
+    }
+    free(state->flop_children);
+    state->flop_children = NULL;
+    state->flop_child_count = 0;
 }
 
 static int mpf_state_ptr_seen(mpf_state_t **seen, int seen_count, const mpf_state_t *ptr)
