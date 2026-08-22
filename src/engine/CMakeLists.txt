@@ -17,6 +17,7 @@ set(ENGINE_SOURCES
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_traversal_full_scalar.c
     solvers/cfr/cfr_locks.c
+    solvers/cfr/cfr_storage_legacy_port.c
     solvers/cfr/cfr_regret_ops.c
     solvers/cfr/cfr_average_ops.c
     solvers/cfr/bet_sizing.c

@@ -16,6 +16,10 @@
  */
 
 #include <poker_eval/solver/pe_storage_port.h>
+/* Declares the legacy adapter only. Still no concrete storage type in sight:
+   the adapter that wraps the v2 storage is declared by the module that owns
+   it, not by the port. */
+#include <poker_eval/engine/solvers/cfr/cfr_storage_legacy_port.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -187,7 +191,10 @@ static int toy_get_flags(const void *self, pe_infoset_id_t id, uint8_t *out)
 }
 
 static const pe_storage_ops_t k_toy_ops = {
-    "toy", toy_create, toy_destroy, toy_resolve, toy_find, toy_shape,
+    "toy",
+    0,                  /* no width limit */
+    PE_VALUES_ALL,
+    toy_create, toy_destroy, toy_resolve, toy_find, toy_shape,
     toy_values, toy_values_const, toy_count, toy_slot_count, toy_bytes,
     toy_set_flags, toy_get_flags
 };
@@ -225,7 +232,13 @@ static void run_contract(const pe_storage_ops_t *ops)
     for (i = 0; i < 16; ++i)
     {
         uint16_t na = (uint16_t)(2 + (i % 3));
-        uint16_t nc = (uint16_t)(1 + (i % 4) * 7);
+        /* Widths the adapter declares it cannot hold are not asked of it. A
+           scalar backend refusing a vector shape is correct behaviour, not a
+           contract failure — what would be a failure is accepting it and
+           truncating. */
+        uint16_t nc = pe_storage_accepts_width(ops, 8)
+                          ? (uint16_t)(1 + (i % 4) * 7)
+                          : (uint16_t)1;
         pe_infoset_id_t id = ops->resolve(s, 0x5000ull + (uint64_t)i, na, nc,
                                           (int8_t)(i % 4));
         uint16_t got_a = 0, got_c = 0;
@@ -286,6 +299,17 @@ static void run_contract(const pe_storage_ops_t *ops)
        as the mandatory ones, and independent of them. Checking only that a
        fresh array reads zero at slot 0 would let a span offset by one slot
        pass, since the next slot is zero too. */
+    if (!pe_storage_serves(ops, PE_VALUES_LOCKED))
+    {
+        /* An array the adapter does not serve reads NULL through both paths,
+           always — never a span into something else. */
+        CHECK(ops->values(s, 0, PE_VALUES_LOCKED, &len) == NULL,
+              "an unserved array handed out a writable span");
+        CHECK(ops->values_const(s, 0, PE_VALUES_LOCKED, NULL) == NULL,
+              "an unserved array handed out a readable span");
+    }
+    else
+    {
     CHECK(ops->values_const(s, 0, PE_VALUES_LOCKED, NULL) == NULL,
           "an untouched array was readable");
     {
@@ -329,6 +353,12 @@ static void run_contract(const pe_storage_ops_t *ops)
             CHECK(regret[0] == cell(0, 0, 0),
                   "writing the locked array changed the regret array");
     }
+    }
+
+    /* A width the adapter refuses must be refused, not truncated. */
+    if (!pe_storage_accepts_width(ops, 2))
+        CHECK(ops->resolve(s, 0xDEAD, 2, 2, 0) == PE_INFOSET_ID_INVALID,
+              "a scalar-only adapter accepted a two-combo infoset");
 
     /* Re-resolving is idempotent. */
     CHECK(ops->resolve(s, 0x5000ull, 2, 1, 0) == 0, "re-resolving moved the id");
@@ -360,6 +390,8 @@ int main(void)
 {
     run_contract(pe_storage_ram_ops());
     run_contract(&k_toy_ops);
+    /* The one adapter that exists for a reason other than being tested. */
+    run_contract(pe_storage_legacy_ops());
 
     if (g_failures != 0)
     {
@@ -367,6 +399,6 @@ int main(void)
         return 1;
     }
 
-    printf("test_pe_storage_port: the contract holds for ram and toy\n");
+    printf("test_pe_storage_port: the contract holds for ram, toy and legacy\n");
     return 0;
 }

@@ -570,6 +570,16 @@ typedef void (*cfr_iterate_callback)(
  * are accumulated: R_t = R_(t-1) * d(t) + r_t. A factor of 1.0 returns
  * immediately.
  */
+/*
+ * Writable spans of an infoset's arrays (STO-04), creating the entry when
+ * absent. Returns NULL when the array does not exist — the average is dropped
+ * on streets excluded by the selective-memory masks.
+ *
+ * The pointer is invalidated by the next call that grows this storage.
+ */
+double *cfr_storage_regret_span(cfr_storage_t *storage, uint64_t key, int n_actions);
+double *cfr_storage_avg_span(cfr_storage_t *storage, uint64_t key, int n_actions);
+
 void cfr_storage_scale_regrets(cfr_storage_t *storage, double factor);
 
 void cfr_storage_iterate(

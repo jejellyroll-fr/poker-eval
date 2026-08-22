@@ -82,6 +82,26 @@ typedef struct pe_storage_ops_t
     /** Short name of the adapter, for the execution plan. Never NULL. */
     const char *name;
 
+    /*
+     * What this adapter can hold.
+     *
+     * Not every backend can serve every shape, and pretending otherwise is
+     * how a caller ends up writing into a slab that was silently truncated.
+     * The legacy hash storage, for one, holds a single value per action and
+     * has no place to put a writable locked strategy — its entries only grow a
+     * lock array when something is actually locked, so handing one out would
+     * change the entry's meaning.
+     *
+     * max_combo_count  Largest combo_count accepted. 1 means scalar only;
+     *                  0 means no limit. resolve() refuses anything wider.
+     * value_arrays     Bit set of the pe_value_array_t values served, as
+     *                  1u << PE_VALUES_x. An array outside it always reads
+     *                  NULL, which pe_storage_serves() is the readable way to
+     *                  ask about.
+     */
+    uint16_t max_combo_count;
+    uint8_t value_arrays;
+
     /**
      * Allocate an instance. `expected_infosets` is a sizing hint; 0 means
      * unknown and must remain valid.
@@ -143,6 +163,27 @@ typedef struct pe_storage_ops_t
     int (*get_flags)(const void *self, pe_infoset_id_t id, uint8_t *out);
 } pe_storage_ops_t;
 
+/** Whether an adapter serves a value array. */
+static inline int pe_storage_serves(const pe_storage_ops_t *ops, pe_value_array_t which)
+{
+    if (ops == NULL || (int)which < 0 || which >= PE_VALUES_COUNT)
+        return 0;
+    return (ops->value_arrays & (uint8_t)(1u << (unsigned)which)) != 0;
+}
+
+/** Whether an adapter accepts an infoset this wide. */
+static inline int pe_storage_accepts_width(const pe_storage_ops_t *ops,
+                                           uint16_t combo_count)
+{
+    if (ops == NULL || combo_count == 0)
+        return 0;
+    return ops->max_combo_count == 0 || combo_count <= ops->max_combo_count;
+}
+
+/** Every value array, for an adapter with no restriction. */
+#define PE_VALUES_ALL ((uint8_t)((1u << PE_VALUES_REGRET) | (1u << PE_VALUES_AVERAGE) \
+                                 | (1u << PE_VALUES_CURRENT) | (1u << PE_VALUES_LOCKED)))
+
 /* ------------------------------------------------------------------ *
  * Adapter: RAM
  * ------------------------------------------------------------------ */
@@ -154,6 +195,7 @@ typedef struct pe_storage_ops_t
  * Shared, immutable, always valid.
  */
 const pe_storage_ops_t *pe_storage_ram_ops(void);
+
 
 #ifdef __cplusplus
 }

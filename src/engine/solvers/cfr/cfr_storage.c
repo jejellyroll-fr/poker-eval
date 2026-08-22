@@ -748,6 +748,30 @@ size_t cfr_storage_count_infosets(cfr_storage_t *s)
  * poker infoset is reached many times in one iteration, so it accumulated
  * d^N. This is the operation that lets the discount happen exactly once.
  */
+/*
+ * Writable spans of an entry's arrays (STO-04).
+ *
+ * The storage port hands callers a span rather than a copy, and the v2 storage
+ * had no way to give one out. These create the entry if it is absent, exactly
+ * like the update functions do.
+ *
+ * The pointer is invalidated by anything that grows the table or the entry, so
+ * it is good until the next call that touches this storage — the same contract
+ * the port already states.
+ */
+double *cfr_storage_regret_span(cfr_storage_t *s, uint64_t key, int n_actions)
+{
+    entry_t *e = get_entry(s, key, n_actions);
+    return e ? e->regret : NULL;
+}
+
+double *cfr_storage_avg_span(cfr_storage_t *s, uint64_t key, int n_actions)
+{
+    entry_t *e = get_entry(s, key, n_actions);
+    /* avg is absent when selective memory dropped this street. */
+    return e ? e->avg : NULL;
+}
+
 void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
 {
     if (!s || !s->tab)

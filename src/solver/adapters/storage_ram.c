@@ -143,6 +143,8 @@ static int ram_get_flags(const void *self, pe_infoset_id_t id, uint8_t *out)
 
 static const pe_storage_ops_t k_ram_ops = {
     "ram",
+    0,                  /* no width limit: this is the vector lane's storage */
+    PE_VALUES_ALL,
     ram_create,
     ram_destroy,
     ram_resolve,
