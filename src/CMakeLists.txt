@@ -29,6 +29,7 @@ add_library(poker_solver
     solver/domain/storage_v2.c
     solver/domain/range.c
     solver/domain/reach.c
+    solver/domain/blockers.c
     solver/domain/telemetry.c
     solver/adapters/storage_ram.c
     solver/adapters/range_parser.c
