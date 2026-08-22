@@ -80,6 +80,40 @@ convention `tests/test_*.c` déjà en place.
 4. **L'ordre M3 → M4 → M5 est non négociable.** Ranges, puis vectoriel, puis mesure.
    Toute optimisation avant M5 est une optimisation à l'aveugle.
 
+## Où vit le code du solveur
+
+Les tickets nomment des chemins sous `src/solver/domain/`. C'est la destination, pas
+toujours l'étape suivante.
+
+Un module ne peut vivre dans le domaine que s'il n'appelle aucun symbole de
+`poker_engine` : depuis `EXT-03`, `poker_engine` linke `poker_solver`, donc la dépendance
+inverse fermerait un cycle. Tant que le storage et les règles de jeu ne sont pas derrière
+des ports, un module qui touche `cfr_storage_*`, `cfr_game_t` ou le best-response reste
+sous `src/engine/solvers/cfr/`.
+
+**La règle : extraire sur place d'abord, déplacer quand la frontière existe.** Extraire un
+module dans sa propre unité de traduction avec une interface propre est le travail utile ;
+le déplacer est un `git mv` une fois que `STO-03` a fourni le port de storage et que le
+port de règles de jeu existe. Inventer une interface de callbacks pour anticiper le
+déplacement produit une surface que ces ports réécriront.
+
+Ce que cela donne aujourd'hui, pour les modules déjà extraits :
+
+| ticket | chemin du backlog | chemin réel |
+|---|---|---|
+| `EXT-04` | `src/solver/domain/traversal_full_scalar.c` | `src/engine/solvers/cfr/cfr_traversal_full_scalar.c` |
+| `EXT-05` | `src/solver/domain/regret_vanilla.c` | `src/engine/solvers/cfr/cfr_regret_ops.c` |
+| `EXT-06` | `src/solver/domain/average.c` | `src/engine/solvers/cfr/cfr_average_ops.c` |
+| `EXT-07` | `src/solver/domain/regret_dcfr.c` | `src/engine/solvers/cfr/cfr_regret_ops.c` |
+| `EXT-08` | `src/solver/domain/locks.c` | `src/engine/solvers/cfr/cfr_locks.c` |
+
+Les tickets `VEC-*`, `ALG-*`, `LNB-*`, `RBP-*` et `OUT-*` héritent de la même règle :
+étendre le module engine correspondant tant que la frontière n'est pas là, et le déplacer
+en un geste séparé ensuite.
+
+Un module qui ne dépend de rien — `CTR-05` (RNG), `STO-01`/`STO-02` (storage), `CTR-06`
+(registry) — va directement dans le domaine, comme prévu.
+
 ## Gates
 
 | Gate | Jalons | Condition |
@@ -544,15 +578,28 @@ ctest --test-dir build/debug -R test_pe_storage_ids --output-on-failure
 `src/solver/adapters/storage_ram.c` (nouveau), `src/CMakeLists.txt`
 
 Extraire `pe_storage_ops_t` (allouer, résoudre une clé, lire/écrire un span, itérer,
-compter, mesurer l'occupation) et fournir l'implémentation RAM.
+compter, mesurer l'occupation) et fournir l'implémentation RAM au-dessus du storage
+dense-ID de `STO-01`/`STO-02`.
 
-**DoD** — Le domaine n'appelle plus aucune fonction `cfr_storage_*` directement : toutes
-les écritures et lectures passent par le port.
+Le DoD d'origine — « le domaine n'appelle plus aucune fonction `cfr_storage_*` » — était
+déjà satisfait à l'écriture du ticket : la traversée est restée sous `src/engine/` (voir
+« Où vit le code du solveur »), donc `src/solver/` n'a jamais appelé `cfr_storage_*`. Le
+`grep` mesurait zéro et continuerait de mesurer zéro si le port n'existait pas du tout.
+
+**DoD** — Un test pilote un cycle complet — créer, résoudre une clé, écrire un span, le
+relire, itérer sur les infosets, compter, mesurer l'occupation, détruire — **uniquement à
+travers `pe_storage_ops_t`**, sans inclure `pe_storage.h` ni nommer un seul type concret.
+S'il compile et passe, l'abstraction est assez complète pour qu'un backend s'y substitue ;
+s'il a besoin d'un `#include` de plus, c'est qu'une opération manque au port.
+
+Le même test, exécuté contre un second adaptateur trivial (un storage factice qui compte
+les appels), doit passer sans modification : c'est ce qui distingue un port d'un typedef
+posé sur une implémentation unique.
 
 **Vérification**
 ```bash
-grep -c 'cfr_storage_' src/solver/domain/*.c   # attendu : 0
-ctest --test-dir build/debug -L cfr --output-on-failure
+ctest --test-dir build/debug -R test_pe_storage_port --output-on-failure
+grep -c 'pe_storage\.h' tests/test_pe_storage_port.c   # attendu : 0
 ```
 
 ## STO-04 — Adaptateur de compatibilité sur `cfr_storage_t`
