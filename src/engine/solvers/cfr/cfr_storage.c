@@ -736,6 +736,37 @@ size_t cfr_storage_count_infosets(cfr_storage_t *s)
     return cnt;
 }
 
+/*
+ * Scale every accumulated regret by `factor` (EXT-07).
+ *
+ * Discounted CFR discounts the cumulative regret once per iteration, applied
+ * to what was there before this iteration's deltas land on it:
+ *
+ *     R_t = R_(t-1) * d(t) + r_t
+ *
+ * The v2 solver instead passed `d` to every per-node regret update, and a
+ * poker infoset is reached many times in one iteration, so it accumulated
+ * d^N. This is the operation that lets the discount happen exactly once.
+ */
+void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
+{
+    if (!s || !s->tab)
+        return;
+    /* Nothing to do, and worth skipping: a full sweep of the table costs the
+       same whether or not the factor is neutral. */
+    if (factor == 1.0)
+        return;
+
+    for (size_t i = 0; i < s->cap; i++)
+    {
+        entry_t *e = &s->tab[i];
+        if (!e->used || !e->regret)
+            continue;
+        for (int a = 0; a < e->n; ++a)
+            e->regret[a] *= factor;
+    }
+}
+
 void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
 {
     if (!s || !fn || !s->tab)

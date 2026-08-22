@@ -563,6 +563,15 @@ typedef void (*cfr_iterate_callback)(
     void* user_data
 );
 
+/*
+ * Scale every accumulated regret by `factor` (EXT-07).
+ *
+ * Used to apply a discount once per iteration, before that iteration's deltas
+ * are accumulated: R_t = R_(t-1) * d(t) + r_t. A factor of 1.0 returns
+ * immediately.
+ */
+void cfr_storage_scale_regrets(cfr_storage_t *storage, double factor);
+
 void cfr_storage_iterate(
     cfr_storage_t* storage,
     cfr_iterate_callback callback,

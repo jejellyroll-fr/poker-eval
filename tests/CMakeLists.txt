@@ -711,6 +711,8 @@ set_tests_properties(test_cfr_compact_storage PROPERTIES LABELS "engine;cfr;comp
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
 add_poker_test(test_cfr_strategy_mode)
 add_poker_test(test_cfr_telemetry)
+add_poker_test(test_cfr_dcfr_discount)
+set_tests_properties(test_cfr_dcfr_discount PROPERTIES LABELS "engine;cfr;dcfr;ext07")
 set_tests_properties(test_cfr_telemetry PROPERTIES LABELS "engine;cfr;telemetry;ext03")
 set_tests_properties(test_cfr_strategy_mode PROPERTIES LABELS "engine;cfr;strategy-mode;ext01")
 add_poker_test(test_cfr_get_actions_clamp)

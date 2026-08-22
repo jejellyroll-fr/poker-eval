@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Behaviour change.** Discounted CFR now discounts the cumulative regret
+  once per iteration instead of once per infoset visit (EXT-07). The rule is
+  `R_t = R_(t-1) * d(t) + r_t`, as in Brown & Sandholm; the previous code
+  passed `d` to every per-node regret update, and a poker infoset is reached
+  from many states in a single iteration, so it was scaled `d^N` — a discount
+  exponentially stronger than the algorithm calls for, and one that varied
+  with the shape of the tree rather than with the iteration.
+
+  Solves with `cfr_config_t::enable_dcfr` set produce different numbers from
+  this release on. Everything else is bit-identical: vanilla, linear
+  averaging, ECFR and node-locked runs are unaffected, since their discount
+  was already 1.0.
+
+  The corrected discount is gentler, so a run may need more iterations to
+  reach the same exploitability. `test_kuhn_multiway_openspiel` had its
+  budget raised from 250 to 2000 iterations for that reason; its assertion is
+  unchanged.
+
+  `cfr_storage_scale_regrets()` is the new primitive that applies it.
+
 ### Added
 - UniversalDeck delegation to the generalized deck layer (ISSUE-03 phase 2,
   #203): the internal implementation of `Universal_*` (mask ops, string

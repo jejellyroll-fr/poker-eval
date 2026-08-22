@@ -9,9 +9,11 @@
  * acquire branches for algorithms it does not implement.
  *
  * What this file does NOT contain is the point of the extraction. It never
- * mentions DCFR, linear averaging or ECFR; it asks cfr_algo_ops_t for a
- * discount and an averaging weight and applies them. Adding CFR+ later means
- * writing an ops implementation, not another `if` in the recursion.
+ * mentions DCFR, linear averaging or ECFR; it asks cfr_algo_ops_t for the
+ * averaging weight and applies it. Regret discounting is not per node at all
+ * (EXT-07): the solve loop scales the cumulative regret once per iteration.
+ * Adding CFR+ later means writing an ops implementation, not another `if` in
+ * the recursion.
  *
  * Locks and the periodic relock are still here. They belong to EXT-08, and
  * pulling them out in the same step as the move would have made a
@@ -51,8 +53,6 @@ void cfr_traverse_recursive(
     double next_reach[CFR_MAX_PLAYERS];
     double reach_others = 1.0;
     double flow_weight = 1.0;
-    double discount = 1.0;
-    double t;
     double avg_weight;
     const double *locked = NULL;
     int is_locked = 0;
@@ -253,12 +253,13 @@ void cfr_traverse_recursive(
     for (int i = 0; i < num_actions; ++i)
         regret_delta[i] = (action_util[i] - node_util_acting) * reach_others * flow_weight;
 
-    /* Which formula produced these two numbers is not the traversal's
-       business; that is the whole point of the seam. */
-    discount = algo->regret_discount(algo, iter);
+    /* No discount here (EXT-07). Discounted CFR scales the cumulative regret
+       once per iteration, and the solve loop does it before the traversal
+       runs; applying it per node meant a poker infoset reached N times in one
+       iteration accumulated d^N. What lands here is the raw delta. */
     if (!is_locked)
     {
-        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, discount);
+        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, 1.0);
 
         avg_weight = algo->average_weight(algo, iter, reach[acting_player],
                                           flow_weight, walk->use_flow_focus);
@@ -270,7 +271,7 @@ void cfr_traverse_recursive(
            un-locked actions retain true best-response EVs; on a relock iteration
            the average strategy is snapped back to the locked target and the
            exact EV loss of the forced mix is recorded. */
-        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, discount);
+        cfr_storage_update_regret_at_street(storage, infoset_key, num_actions, street, regret_delta, 1.0);
         if (relock_iter)
         {
             cfr_storage_overwrite_avg_at_street(storage, infoset_key, num_actions, street, locked);

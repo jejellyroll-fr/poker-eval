@@ -410,6 +410,10 @@ double cfr_solve(
                 (((it + 1) % config->lock_period) == 0))
                 cfr_storage_begin_lock_ev_pass(storage);
             walk.depth_exceeded = 0;
+            /* EXT-07: the discount applies to what was accumulated before this
+               iteration, exactly once — R_t = R_(t-1) * d(t) + r_t. Doing it
+               here rather than inside the recursion is the whole correction. */
+            cfr_storage_scale_regrets(storage, algo.regret_discount(&algo, it));
             cfr_traverse_recursive(game, storage, config, &algo, root_key, reach, num_players, it, util, NULL,
                                    scratch, depth_limit, &walk);
         }
