@@ -36,6 +36,7 @@ add_library(poker_solver
     solver/domain/traversal_full_vector.c
     solver/domain/regret_vanilla.c
     solver/domain/average.c
+    solver/domain/showdown_vector.c
     solver/adapters/storage_ram.c
     solver/adapters/range_parser.c
     solver/adapters/telemetry_null.c
