@@ -33,6 +33,7 @@ add_library(poker_solver
     solver/domain/chance.c
     solver/domain/combinations.c
     solver/domain/telemetry.c
+    solver/domain/traversal_full_vector.c
     solver/adapters/storage_ram.c
     solver/adapters/range_parser.c
     solver/adapters/telemetry_null.c
