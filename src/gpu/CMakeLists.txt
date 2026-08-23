@@ -61,6 +61,7 @@ here instead of silently skipping it.")
 
         cuda_add_library(poker_gpu_cfr_cuda STATIC
             kernels/gpu_cfr_kernels.cu
+            kernels_regret_cuda.cu
             gpu_cfr_cuda.cu
         )
 
@@ -162,6 +163,7 @@ here instead of silently skipping it.")
 
         # GPU-CFR OpenCL backend
         add_library(poker_gpu_cfr_opencl STATIC
+            kernels_regret_opencl.c
             gpu_cfr_opencl.c
         )
 

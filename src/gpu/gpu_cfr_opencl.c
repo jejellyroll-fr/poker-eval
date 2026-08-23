@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "kernels_regret_opencl.h"
 
 #ifdef __APPLE__
 /* <OpenCL/opencl.h> also pulls in cl_gl.h and, through it,
@@ -301,6 +302,14 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
     if (!config) return NULL;
 
     cl_int err;
+    const char *kernel_sources[GPU_CFR_KERNEL_SOURCE_PARTS + 1u];
+    size_t source_index;
+
+    for (source_index = 0u; source_index < GPU_CFR_KERNEL_SOURCE_PARTS;
+         ++source_index)
+        kernel_sources[source_index] = GPU_CFR_KERNEL_SOURCE[source_index];
+    kernel_sources[GPU_CFR_KERNEL_SOURCE_PARTS] =
+        pe_regret_opencl_kernel_source();
 
     /* Allocate context */
     gpu_cfr_opencl_context_t* ctx =
@@ -424,8 +433,8 @@ gpu_cfr_opencl_context_t* gpu_cfr_init_opencl(const gpu_cfr_config_t* config) {
     /* Load and compile kernels from embedded source. Passing NULL lengths tells
      * OpenCL each fragment is NUL-terminated; it concatenates them in order. */
     ctx->program = clCreateProgramWithSource(ctx->context,
-                                             (cl_uint)GPU_CFR_KERNEL_SOURCE_PARTS,
-                                             GPU_CFR_KERNEL_SOURCE, NULL, &err);
+                                             (cl_uint)(GPU_CFR_KERNEL_SOURCE_PARTS + 1u),
+                                             kernel_sources, NULL, &err);
 
     if (err != CL_SUCCESS) {
         fprintf(stderr, "Failed to create program (err=%d)\n", err);
