@@ -10,6 +10,7 @@
 #define POKER_EVAL_PE_TRAVERSAL_H
 
 #include <poker_eval/solver/pe_storage_port.h>
+#include <poker_eval/solver/pe_game_rules.h>
 #include <poker_eval/solver/pe_vector.h>
 
 #include <stddef.h>
@@ -91,11 +92,46 @@ typedef struct
     int (*end_iteration)(pe_traversal_ctx_t *ctx, uint64_t iteration);
 } pe_traversal_ops_t;
 
+typedef int (*pe_vector_chance_sample_fn)(const void *state,
+                                          pe_rng_t *rng,
+                                          pe_chance_sample_t *out,
+                                          void *user);
+typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
+                                                  int outcome,
+                                                  void *user);
+
+/** Context for one-vector-per-combo chance sampling (VEC-08). */
+typedef struct
+{
+    const pe_vector_game_t *game;
+    pe_vector_chance_sample_fn sample_chance;
+    pe_vector_apply_chance_fn apply_chance;
+    void *user;
+    pe_rng_t rng;
+    pe_reach_vec_t reach[PE_TRAVERSAL_MAX_PLAYERS];
+    pe_value_vec_t values[PE_TRAVERSAL_MAX_PLAYERS];
+    size_t visited_nodes;
+    size_t terminal_nodes;
+    size_t sampled_chance_nodes;
+    double importance_ratio;
+    int initialized;
+} pe_chance_vector_ctx_t;
+
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game);
 void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx);
 
 const pe_traversal_ops_t *pe_traversal_full_vector_ops(void);
+
+int pe_chance_vector_ctx_init(pe_chance_vector_ctx_t *ctx,
+                              const pe_vector_game_t *game,
+                              pe_vector_chance_sample_fn sample_chance,
+                              pe_vector_apply_chance_fn apply_chance,
+                              uint64_t seed);
+void pe_chance_vector_ctx_destroy(pe_chance_vector_ctx_t *ctx);
+int pe_chance_vector_run(pe_chance_vector_ctx_t *ctx);
+const pe_value_vec_t *pe_chance_vector_values(
+    const pe_chance_vector_ctx_t *ctx, uint8_t player);
 
 #ifdef __cplusplus
 }

@@ -782,7 +782,7 @@ set_tests_properties(test_pe_storage_port PROPERTIES LABELS "solver;solver-v3;st
 set_tests_properties(test_pe_storage_ids PROPERTIES LABELS "solver;solver-v3;sto01" TIMEOUT 120)
 set_tests_properties(test_pe_showdown PROPERTIES LABELS "solver;solver-v3;vec06")
 set_tests_properties(test_pe_traversal_vector PROPERTIES LABELS "solver;solver-v3;vec02")
-set_tests_properties(test_pe_vector_cfr PROPERTIES LABELS "solver;solver-v3;vec03")
+set_tests_properties(test_pe_vector_cfr PROPERTIES LABELS "solver;solver-v3;vec03;vec08")
 
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")

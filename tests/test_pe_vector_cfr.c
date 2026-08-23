@@ -4,6 +4,7 @@
 
 #include <poker_eval/solver/pe_regret.h>
 #include <poker_eval/solver/pe_average.h>
+#include <poker_eval/solver/pe_traversal.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -144,12 +145,136 @@ static void test_average_uniform_fallback(void)
         CHECK(!isnan(out[i]), "average produced NaN at %zu", i);
 }
 
+typedef struct
+{
+    int chance;
+    int outcome;
+} chance_state_t;
+
+static const chance_state_t chance_root = {1, -1};
+static chance_state_t chance_outcomes[44];
+
+static int chance_is_terminal(const void *state, void *user)
+{
+    (void)user;
+    return !((const chance_state_t *)state)->chance;
+}
+
+static int chance_sample(const void *state, pe_rng_t *rng,
+                         pe_chance_sample_t *out, void *user)
+{
+    uint32_t draw;
+    (void)user;
+    if (!((const chance_state_t *)state)->chance || !rng || !out)
+        return 1;
+    draw = pe_rng_below(rng, 88u);
+    if (draw < 22u)
+    {
+        out->outcome = (int)draw;
+        out->importance_ratio = 2.0;
+    }
+    else
+    {
+        out->outcome = 22 + (int)((draw - 22u) % 22u);
+        out->importance_ratio = 2.0 / 3.0;
+    }
+    return 0;
+}
+
+static const void *chance_apply(const void *state, int outcome, void *user)
+{
+    (void)state;
+    (void)user;
+    return outcome >= 0 && outcome < 44 ? &chance_outcomes[outcome] : NULL;
+}
+
+static int chance_terminal_values(const void *state,
+                                  const pe_reach_vec_t *reach,
+                                  pe_value_vec_t *out_values,
+                                  uint8_t player_count, void *user)
+{
+    const chance_state_t *terminal = (const chance_state_t *)state;
+    size_t combo;
+    (void)reach;
+    (void)user;
+    if (player_count != 2u)
+        return -1;
+    for (combo = 0; combo < out_values[0].n; ++combo)
+    {
+        out_values[0].v[combo] = (double)terminal->outcome / 43.0;
+        out_values[1].v[combo] = -out_values[0].v[combo];
+    }
+    return 0;
+}
+
+static void test_sampled_chance_is_unbiased(void)
+{
+    pe_vector_game_t game;
+    pe_chance_vector_ctx_t first;
+    pe_chance_vector_ctx_t second;
+    const pe_value_vec_t *values;
+    double total = 0.0;
+    size_t iteration;
+    size_t combo;
+
+    for (iteration = 0; iteration < 44u; ++iteration)
+        chance_outcomes[iteration] = (chance_state_t){0, (int)iteration};
+    memset(&game, 0, sizeof(game));
+    game.root = &chance_root;
+    game.player_count = 2u;
+    game.combo_count = 3u;
+    game.is_terminal = chance_is_terminal;
+    game.terminal_values = chance_terminal_values;
+
+    CHECK(pe_chance_vector_ctx_init(&first, &game, chance_sample,
+                                    chance_apply, 17u) == 0,
+          "chance context init failed");
+    CHECK(pe_chance_vector_ctx_init(&second, &game, chance_sample,
+                                    chance_apply, 17u) == 0,
+          "second chance context init failed");
+    if (!first.initialized || !second.initialized)
+        return;
+    CHECK(pe_chance_vector_run(&first) == 0, "first chance run failed");
+    CHECK(pe_chance_vector_run(&second) == 0, "second chance run failed");
+    CHECK(first.sampled_chance_nodes == 1u && first.terminal_nodes == 1u,
+          "chance traversal counters are %zu/%zu",
+          first.sampled_chance_nodes, first.terminal_nodes);
+    values = pe_chance_vector_values(&first, 0u);
+    CHECK(values != NULL, "chance values unavailable");
+    {
+        const pe_value_vec_t *same_values =
+            pe_chance_vector_values(&second, 0u);
+        CHECK(values != NULL && same_values != NULL &&
+                  fabs(values->v[0] - same_values->v[0]) <= 1e-15,
+              "same seed did not reproduce the sampled outcome");
+    }
+    if (values)
+    {
+        for (combo = 0; combo < values->n; ++combo)
+        {
+            total = 0.0;
+            for (iteration = 0; iteration < 10000u; ++iteration)
+            {
+                CHECK(pe_chance_vector_run(&first) == 0,
+                      "chance iteration %zu failed", iteration);
+                total += values->v[combo];
+            }
+            CHECK(fabs(total / 10000.0 - 0.5) < 0.02,
+                  "combo %zu estimate is %.17g, expected 0.5",
+                  combo, total / 10000.0);
+        }
+    }
+    pe_chance_vector_ctx_destroy(&first);
+    pe_chance_vector_ctx_destroy(&second);
+}
+
 int main(void)
 {
     test_per_combo_normalization();
     test_uniform_fallback_and_invalid_inputs();
     test_reach_weighted_average();
     test_average_uniform_fallback();
+    test_sampled_chance_is_unbiased();
     if (failures != 0)
     {
         fprintf(stderr, "test_pe_vector_cfr: %d failure(s)\n", failures);
