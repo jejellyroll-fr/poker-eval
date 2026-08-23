@@ -15,6 +15,7 @@
 #include <signal.h>
 
 #include <poker_eval/solver/pe_telemetry.h>
+#include <poker_eval/solver/pe_solver_config.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -318,6 +319,18 @@ struct cfr_config_t {
      * silence it installs its own adapter instead of redirecting a stream. */
     const pe_telemetry_ops_t *telemetry;
 };
+
+/**
+ * Translate the v2 boolean configuration into the v3 axis vocabulary.
+ *
+ * This is a pure compatibility conversion. It does not validate a game or
+ * allocate solver storage; cfr_solve() remains the owner of the legacy game
+ * and storage ports until the public solver has a game-rules port.
+ *
+ * @return 0 on success, -1 when either argument is NULL.
+ */
+int cfr_config_to_pe_solver_config(const cfr_config_t *legacy,
+                                   pe_solver_config_t *out);
 
 typedef struct cfr_metrics_snapshot_t {
     int iteration;

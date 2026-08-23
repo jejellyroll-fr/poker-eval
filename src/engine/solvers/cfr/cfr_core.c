@@ -39,6 +39,68 @@
 
 #define CFR_MAX_PLAYERS 8
 
+int cfr_config_to_pe_solver_config(const cfr_config_t *legacy,
+                                   pe_solver_config_t *out)
+{
+    if (legacy == NULL || out == NULL)
+        return -1;
+
+    memset(out, 0, sizeof(*out));
+
+    /* The legacy engine is the scalar lane. Its flow-focus switch is a
+       traversal weighting detail, not a separate v3 traversal mode. */
+    out->algorithm.preset = PE_PRESET_CUSTOM;
+    out->algorithm.traversal = PE_TRAVERSAL_FULL_SCALAR;
+    out->algorithm.pruning = PE_PRUNE_NONE;
+    out->algorithm.dcfr_alpha = legacy->dcfr_alpha;
+    out->algorithm.dcfr_beta = legacy->dcfr_beta;
+    out->algorithm.dcfr_gamma = legacy->dcfr_gamma;
+    out->algorithm.exponential_lambda = legacy->ecfr_lambda > 0.0
+                                             ? legacy->ecfr_lambda : 1.0;
+    out->algorithm.outcome_epsilon = 0.6;
+
+    if (legacy->enable_ecfr)
+    {
+        out->algorithm.regret = PE_REGRET_LEGACY_EXP;
+        out->algorithm.policy = PE_POLICY_EXPONENTIAL;
+    }
+    else if (legacy->enable_dcfr)
+    {
+        out->algorithm.regret = PE_REGRET_DCFR;
+        out->algorithm.policy = PE_POLICY_REGRET_MATCHING;
+    }
+    else
+    {
+        out->algorithm.regret = PE_REGRET_VANILLA;
+        out->algorithm.policy = PE_POLICY_REGRET_MATCHING;
+    }
+
+    if (legacy->enable_dcfr)
+        out->algorithm.averaging = PE_AVG_POWER;
+    else if (legacy->enable_linear_avg)
+        out->algorithm.averaging = PE_AVG_LINEAR;
+    else
+        out->algorithm.averaging = PE_AVG_UNIFORM;
+
+    out->execution.backend = PE_COMPUTE_CPU_REF;
+    out->execution.stages.traversal = PE_COMPUTE_CPU_REF;
+    out->execution.stages.update = PE_COMPUTE_CPU_REF;
+    out->execution.stages.terminal_eval = PE_COMPUTE_CPU_REF;
+    out->execution.precision = PE_PREC_F64;
+    out->execution.device_id = -1;
+    out->execution.cpu_threads = 1;
+    out->execution.deterministic = 1;
+
+    out->seed = (uint64_t)(uint32_t)legacy->seed;
+    out->max_iterations = legacy->max_iterations > 0
+                              ? (uint64_t)legacy->max_iterations : 0u;
+    out->target_exploitability_mbb = legacy->convergence_threshold > 0.0
+                                         ? legacy->convergence_threshold : 0.0;
+    out->exploitability_interval = legacy->exploitability_interval > 0
+                                       ? (uint64_t)legacy->exploitability_interval : 0u;
+    return 0;
+}
+
 /* FEAT-14 (#150): non-uniform chance deals. Returns the weight of chance
  * outcome index `outcome` at the given state, defaulting to 1.0 when the game
  * exposes no get_chance_weight callback (equally-likely outcomes). Negative
