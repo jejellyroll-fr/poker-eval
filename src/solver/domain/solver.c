@@ -46,6 +46,16 @@ struct pe_solver_t {
        ports whose absence is meaningful (persist, where NULL means "refuse to
        save" rather than "write somewhere"). */
     pe_solver_deps_t deps;
+    int state;
+};
+
+enum {
+    PE_SOLVER_STATE_CREATED = 0,
+    PE_SOLVER_STATE_VALIDATED,
+    PE_SOLVER_STATE_RUNNING,
+    PE_SOLVER_STATE_PAUSED,
+    PE_SOLVER_STATE_STOPPED,
+    PE_SOLVER_STATE_COMPLETED
 };
 
 /* ------------------------------------------------------------------ *
@@ -70,6 +80,7 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
        return. The dependencies are not: they are borrowed pointers whose
        adapters must outlive the solver. */
     solver->config = *cfg;
+    solver->state = PE_SOLVER_STATE_CREATED;
 
     if (deps != NULL)
         solver->deps = *deps;
@@ -245,6 +256,7 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
     validation = pe_solver_validate(solver, NULL);
     if (validation != PE_SOLVER_OK)
         return validation;
+    solver->state = PE_SOLVER_STATE_VALIDATED;
     return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 
@@ -252,21 +264,31 @@ pe_solver_status_t pe_solver_pause(pe_solver_t *solver)
 {
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->state != PE_SOLVER_STATE_RUNNING)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    solver->state = PE_SOLVER_STATE_PAUSED;
+    return PE_SOLVER_OK;
 }
 
 pe_solver_status_t pe_solver_resume(pe_solver_t *solver)
 {
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->state != PE_SOLVER_STATE_PAUSED)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    solver->state = PE_SOLVER_STATE_RUNNING;
+    return PE_SOLVER_OK;
 }
 
 pe_solver_status_t pe_solver_stop(pe_solver_t *solver)
 {
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->state != PE_SOLVER_STATE_RUNNING &&
+        solver->state != PE_SOLVER_STATE_PAUSED)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    solver->state = PE_SOLVER_STATE_STOPPED;
+    return PE_SOLVER_OK;
 }
 
 pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
@@ -274,7 +296,13 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
 {
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->state == PE_SOLVER_STATE_CREATED)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    memset(out, 0, sizeof(*out));
+    out->running = solver->state == PE_SOLVER_STATE_RUNNING;
+    out->paused = solver->state == PE_SOLVER_STATE_PAUSED;
+    out->complete = solver->state == PE_SOLVER_STATE_COMPLETED;
+    return PE_SOLVER_OK;
 }
 
 /* ------------------------------------------------------------------ *
@@ -287,6 +315,8 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
 {
     if (solver == NULL || query == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (solver->state != PE_SOLVER_STATE_COMPLETED)
+        return PE_SOLVER_ERR_INVALID_STATE;
     return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 

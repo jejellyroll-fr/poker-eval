@@ -1,0 +1,71 @@
+/* API-01: public lifecycle state and invalid-state contracts. */
+
+#include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_solver_config.h>
+
+#include <stdio.h>
+
+static int failures;
+
+#define CHECK(condition, ...)                                      \
+    do                                                             \
+    {                                                              \
+        if (!(condition))                                          \
+        {                                                          \
+            fprintf(stderr, "FAILED %s:%d: ", __FILE__, __LINE__); \
+            fprintf(stderr, __VA_ARGS__);                          \
+            fputc('\n', stderr);                                   \
+            failures++;                                             \
+        }                                                          \
+    } while (0)
+
+int main(void)
+{
+    pe_solver_config_t config = pe_solver_config_default();
+    pe_solver_t *solver;
+    pe_progress_t progress;
+    pe_metrics_t metrics;
+    pe_strategy_query_t query = {0u};
+    pe_strategy_view_t view;
+    uint64_t caps = 0u;
+
+    config.problem.expected_infosets = 100u;
+    config.problem.expected_actions = 2u;
+    config.problem.expected_combos = 1u;
+    solver = pe_solver_create(&config, NULL);
+    CHECK(solver != NULL, "solver creation failed");
+    if (solver == NULL)
+        return 1;
+
+    CHECK(pe_solver_progress(solver, &progress) == PE_SOLVER_ERR_INVALID_STATE,
+          "progress before validation should be an invalid state");
+    CHECK(pe_solver_pause(solver) == PE_SOLVER_ERR_INVALID_STATE,
+          "pause before run should be an invalid state");
+    CHECK(pe_solver_resume(solver) == PE_SOLVER_ERR_INVALID_STATE,
+          "resume before pause should be an invalid state");
+    CHECK(pe_solver_stop(solver) == PE_SOLVER_ERR_INVALID_STATE,
+          "stop before run should be an invalid state");
+    CHECK(pe_solver_strategy(solver, &query, &view) == PE_SOLVER_ERR_INVALID_STATE,
+          "strategy before run should be an invalid state");
+    CHECK(pe_solver_metrics(solver, &metrics) == PE_SOLVER_ERR_INVALID_STATE,
+          "metrics before run should be an invalid state");
+    CHECK(pe_solver_validate(solver, NULL) == PE_SOLVER_OK,
+          "validation failed");
+    CHECK(pe_solver_capabilities(solver, &caps) == PE_SOLVER_OK && caps != 0u,
+          "capability query failed after validation");
+    CHECK(pe_solver_plan(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
+          "plan must reject a NULL output");
+    CHECK(pe_solver_run(solver) == PE_SOLVER_ERR_NOT_IMPLEMENTED,
+          "valid run should remain explicit until the driver is wired");
+    CHECK(pe_solver_progress(solver, &progress) == PE_SOLVER_OK &&
+              !progress.running && !progress.complete,
+          "post-run progress snapshot is inconsistent");
+    CHECK(pe_solver_stop(solver) == PE_SOLVER_ERR_INVALID_STATE,
+          "stop after an unimplemented run should not claim a running solve");
+    CHECK(pe_solver_save(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
+          "save must reject a NULL target");
+    CHECK(pe_solver_load(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
+          "load must reject a NULL source");
+    pe_solver_destroy(solver);
+    return failures != 0;
+}

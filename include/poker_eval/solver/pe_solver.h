@@ -33,6 +33,7 @@
 #ifndef POKER_EVAL_PE_SOLVER_H
 #define POKER_EVAL_PE_SOLVER_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -114,6 +115,29 @@ struct pe_metrics_t {
     double br_gap[PE_SOLVER_MAX_PLAYERS];
     double cce_gap;
     double utility_imbalance;
+};
+
+/** Snapshot of lifecycle progress; values are stable for one call. */
+struct pe_progress_t {
+    uint64_t iteration;
+    uint64_t total_iterations;
+    double fraction;
+    int running;
+    int paused;
+    int complete;
+};
+
+/** Identifies one infoset strategy query. */
+struct pe_strategy_query_t {
+    uint32_t infoset;
+};
+
+/** Borrowed view returned by a strategy query. */
+struct pe_strategy_view_t {
+    const double *values;
+    size_t count;
+    uint16_t action_count;
+    uint16_t combo_count;
 };
 
 /* ------------------------------------------------------------------ *
