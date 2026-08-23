@@ -24,6 +24,23 @@ extern "C" {
 int pe_regret_match_vector(const double *regrets, double *strategy,
                            uint16_t action_count, uint16_t combo_count);
 
+/**
+ * Apply one regret-delta batch using CFR+ semantics.
+ *
+ * The delta is accumulated first and the complete span is clamped once at
+ * the end of the call. Callers invoke this once per iteration, never once per
+ * traversal visit, so negative cumulative regret cannot leak into the next
+ * iteration and the update remains order-independent within the batch.
+ *
+ * @return 0 on success, -1 for NULL arrays, a zero length, or non-finite data.
+ */
+int pe_regret_plus_apply_delta(double *regrets, const double *delta,
+                               size_t count);
+
+/** Compute regret-matching+ probabilities from a clamped regret span. */
+int pe_regret_match_plus_vector(const double *regrets, double *strategy,
+                               uint16_t action_count, uint16_t combo_count);
+
 #ifdef __cplusplus
 }
 #endif

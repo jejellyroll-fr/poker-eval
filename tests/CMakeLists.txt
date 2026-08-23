@@ -1449,6 +1449,12 @@ add_game_theory_test(test_best_response_ii_multiway
                      test_best_response_ii_multiway.c)
 add_game_theory_test(test_best_response_ii_leduc
                      test_best_response_ii_leduc.c)
+add_game_theory_test(test_cfr_plus test_cfr_plus.c)
+if(TEST test_cfr_plus)
+    set_tests_properties(test_cfr_plus PROPERTIES
+        LABELS "solver;solver-v3;game_theory;alg01"
+        TIMEOUT 180)
+endif()
 add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
 add_game_theory_test(test_extended_analytical_games
                      test_extended_analytical_games.c)
