@@ -37,6 +37,25 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
     return 0;
 }
 
+int pe_average_accumulate_delayed_linear_vector(
+    double *weighted, double *normalizer, const double *strategy,
+    const double *reach, uint16_t action_count, uint16_t combo_count,
+    uint64_t iteration, uint64_t averaging_delay)
+{
+    double weight;
+
+    if (iteration == 0u)
+        return -1;
+    if (iteration <= averaging_delay)
+        return 0;
+
+    weight = (double)(iteration - averaging_delay);
+    if (!isfinite(weight))
+        return -1;
+    return pe_average_accumulate_vector(weighted, normalizer, strategy, reach,
+                                        action_count, combo_count, weight);
+}
+
 int pe_average_finalize_vector(const double *weighted, const double *normalizer,
                                double *out_strategy,
                                uint16_t action_count,

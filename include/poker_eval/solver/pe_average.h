@@ -30,6 +30,18 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
                                  uint16_t combo_count, double weight);
 
 /**
+ * Add one observation using delayed linear CFR+ averaging.
+ *
+ * Iterations are one-based. Iterations <= `averaging_delay` are intentionally
+ * no-ops; iteration `averaging_delay + 1` contributes with weight 1, then the
+ * weight increases linearly.
+ */
+int pe_average_accumulate_delayed_linear_vector(
+    double *weighted, double *normalizer, const double *strategy,
+    const double *reach, uint16_t action_count, uint16_t combo_count,
+    uint64_t iteration, uint64_t averaging_delay);
+
+/**
  * Normalize a weighted average into another [action][combo] span.
  *
  * Combos with a zero denominator receive a uniform distribution rather than

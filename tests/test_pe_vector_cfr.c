@@ -145,6 +145,39 @@ static void test_average_uniform_fallback(void)
         CHECK(!isnan(out[i]), "average produced NaN at %zu", i);
 }
 
+static void test_delayed_linear_average(void)
+{
+    const double strategy[] = {0.25, 0.75};
+    const double reach[] = {1.0};
+    double weighted[] = {0.0, 0.0};
+    double normalizer[] = {0.0};
+
+    CHECK(pe_average_accumulate_delayed_linear_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 100u, 100u) == 0,
+          "delayed iteration should be accepted as a no-op");
+    CHECK(weighted[0] == 0.0 && weighted[1] == 0.0 && normalizer[0] == 0.0,
+          "averaging delay contributed too early");
+
+    CHECK(pe_average_accumulate_delayed_linear_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 101u, 100u) == 0,
+          "first post-delay iteration failed");
+    CHECK(fabs(weighted[0] - 0.25) <= 1e-12 &&
+              fabs(weighted[1] - 0.75) <= 1e-12 &&
+              fabs(normalizer[0] - 1.0) <= 1e-12,
+          "first post-delay contribution must have weight one");
+
+    CHECK(pe_average_accumulate_delayed_linear_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 102u, 100u) == 0,
+          "second post-delay iteration failed");
+    CHECK(fabs(weighted[0] - 0.75) <= 1e-12 &&
+              fabs(weighted[1] - 2.25) <= 1e-12 &&
+              fabs(normalizer[0] - 3.0) <= 1e-12,
+          "linear post-delay weight is incorrect");
+    CHECK(pe_average_accumulate_delayed_linear_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 0u, 100u) != 0,
+          "zero iteration must be rejected");
+}
+
 typedef struct
 {
     int chance;
@@ -274,6 +307,7 @@ int main(void)
     test_uniform_fallback_and_invalid_inputs();
     test_reach_weighted_average();
     test_average_uniform_fallback();
+    test_delayed_linear_average();
     test_sampled_chance_is_unbiased();
     if (failures != 0)
     {
