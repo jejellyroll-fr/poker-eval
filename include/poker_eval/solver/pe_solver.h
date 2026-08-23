@@ -67,7 +67,8 @@ typedef enum {
     PE_SOLVER_ERR_OUT_OF_MEMORY,   /* allocation failed */
     PE_SOLVER_ERR_NOT_IMPLEMENTED, /* the entry point exists but has no body yet */
     PE_SOLVER_ERR_INVALID_CONFIG,  /* the configuration cannot be honoured */
-    PE_SOLVER_ERR_BUDGET_EXCEEDED  /* the estimate does not fit max_ram_bytes */
+    PE_SOLVER_ERR_BUDGET_EXCEEDED, /* the estimate does not fit max_ram_bytes */
+    PE_SOLVER_ERR_EXECUTION        /* an injected execution port failed */
 } pe_solver_status_t;
 
 /* ------------------------------------------------------------------ *

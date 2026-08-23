@@ -40,6 +40,7 @@ extern "C" {
 typedef struct pe_compute_ops_t   pe_compute_ops_t;
 typedef struct pe_evaluator_ops_t pe_evaluator_ops_t;
 typedef struct pe_persist_ops_t   pe_persist_ops_t;
+struct pe_vector_game_t;
 
 /*
  * Completes the tag forward-declared in pe_solver.h.
@@ -71,6 +72,12 @@ struct pe_solver_deps_t {
     /* NULL selects pe_telemetry_null(), so the domain's emit path is the same
        whether or not anyone is listening. */
     const pe_telemetry_ops_t *telemetry;
+
+    /* Optional vector-lane game used by the first executable solver driver.
+       Appended to preserve the layout of legacy positional initializers. NULL
+       keeps plan-only and legacy callers on the existing path until the
+       complete game-rules port is available. */
+    const struct pe_vector_game_t *vector_game;
 };
 
 /**

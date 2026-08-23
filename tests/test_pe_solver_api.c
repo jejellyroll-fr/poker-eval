@@ -2,10 +2,40 @@
 
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_traversal.h>
 
 #include <stdio.h>
+#include <string.h>
 
 static int failures;
+
+static int terminal_root(const void *state, void *user)
+{
+    return state == user;
+}
+
+static int acting_root(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0;
+}
+
+static uint16_t actions_root(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0;
+}
+
+static const void *apply_root(const void *state, uint16_t action, void *user)
+{
+    (void)state;
+    (void)action;
+    (void)user;
+    return NULL;
+}
 
 #define CHECK(condition, ...)                                      \
     do                                                             \
@@ -71,5 +101,44 @@ int main(void)
     CHECK(pe_solver_load(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
           "load must reject a NULL source");
     pe_solver_destroy(solver);
+
+    {
+        static int root;
+        pe_solver_config_t vector_config = pe_solver_config_default();
+        pe_solver_deps_t deps = pe_solver_deps_default();
+        pe_vector_game_t game;
+        pe_progress_t vector_progress;
+
+        memset(&game, 0, sizeof(game));
+        game.root = &root;
+        game.user = &root;
+        game.player_count = 2u;
+        game.combo_count = 1u;
+        game.is_terminal = terminal_root;
+        game.acting_player = acting_root;
+        game.action_count = actions_root;
+        game.apply_action = apply_root;
+        vector_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        vector_config.max_iterations = 3u;
+        vector_config.problem.expected_infosets = 1u;
+        vector_config.problem.expected_actions = 1u;
+        vector_config.problem.expected_combos = 1u;
+        deps.vector_game = &game;
+
+        solver = pe_solver_create(&vector_config, &deps);
+        CHECK(solver != NULL, "vector solver creation failed");
+        if (solver != NULL)
+        {
+            CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
+                  "vector solver run failed");
+            CHECK(pe_solver_progress(solver, &vector_progress) == PE_SOLVER_OK &&
+                      vector_progress.iteration == 3u &&
+                      vector_progress.total_iterations == 3u &&
+                      vector_progress.fraction == 1.0 &&
+                      vector_progress.complete,
+                  "vector solver progress snapshot is inconsistent");
+            pe_solver_destroy(solver);
+        }
+    }
     return failures != 0;
 }

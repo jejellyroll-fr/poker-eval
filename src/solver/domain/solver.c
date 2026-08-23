@@ -22,6 +22,7 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_telemetry.h>
+#include <poker_eval/solver/pe_traversal.h>
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -47,6 +48,7 @@ struct pe_solver_t {
        save" rather than "write somewhere"). */
     pe_solver_deps_t deps;
     int state;
+    uint64_t iteration;
 };
 
 enum {
@@ -242,6 +244,50 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
     return PE_SOLVER_OK;
 }
 
+static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
+                                                const pe_execution_plan_t *plan)
+{
+    pe_traversal_ctx_t traversal;
+    pe_update_batch_t batch = {0};
+    const pe_traversal_ops_t *ops;
+    uint64_t iteration;
+    int rc;
+
+    if (solver->deps.vector_game == NULL ||
+        plan->traversal != PE_TRAVERSAL_FULL_VECTOR ||
+        solver->config.max_iterations == 0u ||
+        solver->config.target_exploitability_mbb > 0.0)
+        return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+
+    ops = pe_traversal_full_vector_ops();
+    if (ops == NULL || pe_traversal_ctx_init(&traversal,
+                                             solver->deps.vector_game) != 0)
+        return PE_SOLVER_ERR_EXECUTION;
+
+    solver->state = PE_SOLVER_STATE_RUNNING;
+    for (iteration = 1u; iteration <= solver->config.max_iterations; ++iteration)
+    {
+        rc = ops->begin_iteration(&traversal, iteration);
+        if (rc == 0)
+            rc = ops->run_iteration(&traversal, &batch);
+        if (rc == 0)
+            rc = ops->end_iteration(&traversal, iteration);
+        if (rc != 0)
+        {
+            pe_update_batch_destroy(&batch);
+            pe_traversal_ctx_destroy(&traversal);
+            solver->state = PE_SOLVER_STATE_STOPPED;
+            return PE_SOLVER_ERR_EXECUTION;
+        }
+        solver->iteration = iteration;
+    }
+
+    pe_update_batch_destroy(&batch);
+    pe_traversal_ctx_destroy(&traversal);
+    solver->state = PE_SOLVER_STATE_COMPLETED;
+    return PE_SOLVER_OK;
+}
+
 /* ------------------------------------------------------------------ *
  * Execution
  * ------------------------------------------------------------------ */
@@ -249,6 +295,7 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
 pe_solver_status_t pe_solver_run(pe_solver_t *solver)
 {
     pe_solver_status_t validation;
+    pe_execution_plan_t plan;
 
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
@@ -269,7 +316,11 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
     if (validation != PE_SOLVER_OK)
         return validation;
     solver->state = PE_SOLVER_STATE_VALIDATED;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    solver->iteration = 0u;
+
+    if (pe_solver_plan(solver, &plan) != PE_SOLVER_OK)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    return pe_solver_run_vector(solver, &plan);
 }
 
 pe_solver_status_t pe_solver_pause(pe_solver_t *solver)
@@ -317,6 +368,7 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
     if (solver->state == PE_SOLVER_STATE_CREATED)
         return PE_SOLVER_ERR_INVALID_STATE;
     memset(out, 0, sizeof(*out));
+    out->iteration = solver->iteration;
     out->total_iterations = solver->config.max_iterations;
     if (out->total_iterations > 0u)
         out->fraction = (double)out->iteration /
