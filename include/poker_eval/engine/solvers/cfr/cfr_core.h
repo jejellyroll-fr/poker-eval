@@ -621,8 +621,15 @@ double cfr_chance_weight(
     void* user_data
 );
 
-/* Best response value (for exploitability calculation) */
-double cfr_best_response_value(
+/**
+ * Compute a perfect-information best-response value.
+ *
+ * The maximizing player may choose a different action at every concrete
+ * state, including states that share an information set. In an imperfect-
+ * information game this is therefore an upper bound, not the legal
+ * information-set best response.
+ */
+double cfr_best_response_perfect_info(
     cfr_game_t* game,
     cfr_storage_t* storage,
     int player,
@@ -630,14 +637,32 @@ double cfr_best_response_value(
 );
 
 /*
- * Compute exact 2-player best-response exploitability.
+ * Compute exact 2-player perfect-information best-response exploitability.
  *
- * Despite its old name ("proxy") this is an exact computation: it walks the
- * game tree once per player and returns the sum of the best-response values,
- * so it is expensive and should be run on a configurable period (see
- * cfr_config_t::exploitability_interval) rather than on every iteration.
+ * This walks the game tree once per player and returns the sum of the
+ * perfect-information best-response values, so it is expensive and should be
+ * run on a configurable period (see cfr_config_t::exploitability_interval)
+ * rather than on every iteration. For imperfect-information games it remains
+ * an upper bound at equilibrium because the BR can observe hidden state.
  * For N-player games use cfr_exploitability_multiway instead.
  */
+double cfr_exploitability_perfect_info(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    void* user_data
+);
+
+/** Compatibility alias for cfr_best_response_perfect_info().
+ * Deprecated: new code should use the explicit perfect-information name. */
+double cfr_best_response_value(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    int player,
+    void* user_data
+);
+
+/** Compatibility alias for cfr_exploitability_perfect_info().
+ * Deprecated: new code should use the explicit perfect-information name. */
 double cfr_exploitability(
     cfr_game_t* game,
     cfr_storage_t* storage,
@@ -707,7 +732,8 @@ int cfr_compute_policy_values_detailed(
  *
  * Computes the expected value for a player when they play a best response
  * strategy while all other players follow their average strategies from storage.
- * This is an extension of cfr_best_response_value that supports N>2 players.
+ * This is the multiway extension of the perfect-information best response and
+ * supports N>2 players.
  *
  * @param game      Game interface with vtable (must have current_player callback)
  * @param storage   CFR storage containing average strategies

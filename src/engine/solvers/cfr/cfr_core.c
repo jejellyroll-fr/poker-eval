@@ -250,7 +250,7 @@ static double cfr_solve_exploitability(cfr_game_t *game, cfr_storage_t *storage)
             return 0.0;
         return result.total_exploitability;
     }
-    return cfr_exploitability(game, storage, user_data);
+    return cfr_exploitability_perfect_info(game, storage, user_data);
 }
 
 static double cfr_solve_exploitability_cached(cfr_game_t *game,
@@ -687,7 +687,7 @@ double cfr_best_response_recursive(
     }
 }
 
-double cfr_best_response_value(
+double cfr_best_response_perfect_info(
     cfr_game_t *game,
     cfr_storage_t *storage,
     int player,
@@ -709,6 +709,15 @@ double cfr_best_response_value(
                                        root_key, user_data, 0, &depth_exceeded,
                                        pe_telemetry_stderr());
     }
+}
+
+double cfr_best_response_value(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    int player,
+    void *user_data)
+{
+    return cfr_best_response_perfect_info(game, storage, player, user_data);
 }
 
 cfr_metrics_buffer_t *cfr_metrics_buffer_create(int capacity)
@@ -827,17 +836,25 @@ static void cfr_metrics_buffer_push_internal(cfr_metrics_buffer_t *buffer,
     cfr_metrics_buffer_unlock(buffer);
 }
 
-double cfr_exploitability(
+double cfr_exploitability_perfect_info(
     cfr_game_t *game,
     cfr_storage_t *storage,
     void *user_data)
 {
     if (game->num_players && game->num_players != 2)
         return 0.0;
-    double br_p0 = cfr_best_response_value(game, storage, 0, user_data);
-    double br_p1 = cfr_best_response_value(game, storage, 1, user_data);
+    double br_p0 = cfr_best_response_perfect_info(game, storage, 0, user_data);
+    double br_p1 = cfr_best_response_perfect_info(game, storage, 1, user_data);
     // Exploitability is the sum of best response values for a zero-sum game
     return br_p0 + br_p1;
+}
+
+double cfr_exploitability(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    void *user_data)
+{
+    return cfr_exploitability_perfect_info(game, storage, user_data);
 }
 
 /* ===== Multiway Best-Response and Exploitability ===== */
@@ -965,7 +982,7 @@ double cfr_best_response_value_multiway(
     {
         /* Fall back to 2-player version if available */
         if (game->num_players == 2)
-            return cfr_best_response_value(game, storage, player, user_data);
+            return cfr_best_response_perfect_info(game, storage, player, user_data);
         return 0.0;
     }
     
