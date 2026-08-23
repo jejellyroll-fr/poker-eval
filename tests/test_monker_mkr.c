@@ -3,6 +3,7 @@
  */
 
 #include <poker_eval/solver/pe_monker.h>
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -634,6 +635,190 @@ static void test_java_scalars_and_strategy(void)
 }
 
 /*
+ * Which node a slot belongs to.
+ *
+ * The order is preorder with children visited last to first, so this fixture
+ * is built to tell that apart from plain preorder rather than merely be
+ * consistent with it. The tree is
+ *
+ *      0 ---- call -----> 1 (leaf)
+ *        \-- 50% pot --> 2 ---- fold --> 3 (leaf)
+ *                          \-- call --> 4 (leaf)
+ *
+ * Plain preorder visits 0,1,2,3,4 and gives the presence pattern "A.A..".
+ * Last-to-first visits 0,2,4,3,1 and gives "AA...". The two disagree at every
+ * slot but the first, so a fixture matching one cannot match the other.
+ */
+static void tree_be16(unsigned char *buffer, size_t *at, unsigned value)
+{
+    buffer[(*at)++] = (unsigned char)(value >> 8u);
+    buffer[(*at)++] = (unsigned char)(value & 0xFFu);
+}
+
+static void tree_be32(unsigned char *buffer, size_t *at, uint32_t value)
+{
+    unsigned index;
+    for (index = 0u; index < 4u; ++index)
+        buffer[(*at)++] = (unsigned char)(value >> (8u * (3u - index)));
+}
+
+static size_t write_bind_tree(const char *path)
+{
+    unsigned char bytes[128];
+    size_t at = 0u;
+    FILE *file;
+    unsigned index;
+
+    for (index = 0u; index < 4u; ++index)
+        bytes[at++] = 0u;
+    tree_be32(bytes, &at, 33487u);       /* signature (low half of the i64) */
+    tree_be32(bytes, &at, 1u);           /* internal format */
+    tree_be32(bytes, &at, 2u);           /* players */
+    tree_be32(bytes, &at, 0u);           /* first to act */
+    tree_be32(bytes, &at, 1u);           /* street 1: no committed block */
+    tree_be32(bytes, &at, 0u);           /* dead money */
+    tree_be32(bytes, &at, 10000u);
+    tree_be32(bytes, &at, 10000u);
+    tree_be16(bytes, &at, 2u);           /* root: 2 children */
+    tree_be16(bytes, &at, 1u);           /*   call */
+    tree_be16(bytes, &at, 0u);           /*   leaf */
+    tree_be16(bytes, &at, 40050u);       /*   half pot */
+    tree_be16(bytes, &at, 2u);           /*   node with 2 children */
+    tree_be16(bytes, &at, 0u);           /*     fold */
+    tree_be16(bytes, &at, 0u);           /*     leaf */
+    tree_be16(bytes, &at, 1u);           /*     call */
+    tree_be16(bytes, &at, 0u);           /*     leaf */
+    bytes[at++] = 0u;                    /* no ranges */
+
+    file = fopen(path, "wb");
+    if (file == NULL)
+        return 0u;
+    if (fwrite(bytes, 1u, at, file) != at || fclose(file) != 0)
+        return 0u;
+    return at;
+}
+
+static void build_bind_strategy(java_fixture_t *fixture, const char *pattern)
+{
+    size_t index;
+    int first = 1;
+    java_stream_begin(fixture);
+    java_block_int(fixture, 30);
+    for (index = 0u; pattern[index] != '\0'; ++index) {
+        if (pattern[index] == '.') {
+            java_byte(fixture, 0x70u);
+            continue;
+        }
+        if (first) {
+            java_array_new(fixture, "[B");
+            first = 0;
+        } else {
+            java_array_ref(fixture, 0x7E0000u);
+        }
+        java_be32(fixture, 2u);
+        java_byte(fixture, 200u);
+        java_byte(fixture, 56u);
+    }
+}
+
+static void test_slot_to_node_binding(void)
+{
+    const char *tree_path = "/tmp/poker_eval_monker_bind.tree";
+    const char *archive_path = "/tmp/poker_eval_monker_bind.mkr";
+    static const char *const names[] = {
+        "storedstrategy0", "storedstrategy1", "storedstrategy2"
+    };
+    java_fixture_t good = {{0}, 0u};
+    java_fixture_t wrong = {{0}, 0u};
+    java_fixture_t short_run = {{0}, 0u};
+    unsigned char *good_z = NULL;
+    unsigned char *wrong_z = NULL;
+    unsigned char *short_z = NULL;
+    size_t good_size = 0u, wrong_size = 0u, short_size = 0u;
+    const unsigned char *payloads[3];
+    size_t payload_sizes[3];
+    mpf_tree_def_t *tree = NULL;
+    pe_monker_mkr_t archive;
+    pe_monker_mkr_strategy_t strategy;
+    int32_t map[8];
+
+    CHECK(write_bind_tree(tree_path) > 0u, "bind tree fixture write failed");
+    if (pe_monker_tree_load(tree_path, &tree) != PE_MONKER_OK || tree == NULL) {
+        CHECK(0, "bind tree fixture did not load");
+        return;
+    }
+    CHECK(tree->node_count == 5, "bind tree has %d nodes, expected 5",
+          tree->node_count);
+
+    build_bind_strategy(&good, "AA...");    /* children last to first */
+    build_bind_strategy(&wrong, "A.A..");   /* plain preorder */
+    /* Three slots for a five-node tree. Every slot on its own is consistent
+       with the walk — 0, 2, 4 — so only counting them catches this. */
+    build_bind_strategy(&short_run, "AA.");
+    CHECK(deflate_fixture(&good, &good_z, &good_size) == 0, "compress failed");
+    CHECK(deflate_fixture(&wrong, &wrong_z, &wrong_size) == 0, "compress failed");
+    CHECK(deflate_fixture(&short_run, &short_z, &short_size) == 0,
+          "compress failed");
+    payloads[0] = good_z;      payload_sizes[0] = good_size;
+    payloads[1] = wrong_z;     payload_sizes[1] = wrong_size;
+    payloads[2] = short_z;     payload_sizes[2] = short_size;
+    CHECK(write_archive_payloads(archive_path, names, payloads, payload_sizes,
+                                 3u) == 0, "bind archive write failed");
+    if (pe_monker_mkr_read(archive_path, &archive) != PE_MONKER_MKR_OK) {
+        CHECK(0, "bind archive was rejected");
+        mpf_tree_free(tree);
+        free(good_z);
+        free(wrong_z);
+        free(short_z);
+        return;
+    }
+
+    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy0",
+                                    &strategy) != PE_MONKER_MKR_OK) {
+        CHECK(0, "bind strategy was not decoded");
+    } else {
+        CHECK(pe_monker_mkr_bind_strategy(tree, &strategy, map,
+                                          sizeof(map) / sizeof(map[0])) ==
+                  PE_MONKER_MKR_OK,
+              "the last-to-first pattern was not bound");
+        CHECK(map[0] == 0 && map[1] == 2 && map[2] == 4 && map[3] == 3 &&
+                  map[4] == 1,
+              "slots bound to %d %d %d %d %d, expected 0 2 4 3 1",
+              map[0], map[1], map[2], map[3], map[4]);
+    }
+    pe_monker_mkr_strategy_free(&strategy);
+
+    /* The same tree, the same slot count, arrays one node off. Accepting this
+       is what a mapping that trusts instead of checking would do. */
+    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy1",
+                                    &strategy) != PE_MONKER_MKR_OK) {
+        CHECK(0, "second bind strategy was not decoded");
+    } else {
+        CHECK(pe_monker_mkr_bind_strategy(tree, &strategy, map,
+                                          sizeof(map) / sizeof(map[0])) ==
+                  PE_MONKER_MKR_ERR_BAD_ARCHIVE,
+              "a plain-preorder layout was bound anyway");
+    }
+    pe_monker_mkr_strategy_free(&strategy);
+
+    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy2",
+                                    &strategy) != PE_MONKER_MKR_OK) {
+        CHECK(0, "short bind strategy was not decoded");
+    } else {
+        CHECK(pe_monker_mkr_bind_strategy(tree, &strategy, map,
+                                          sizeof(map) / sizeof(map[0])) ==
+                  PE_MONKER_MKR_ERR_BAD_ARCHIVE,
+              "a strategy with fewer slots than the tree has nodes was bound");
+    }
+    pe_monker_mkr_strategy_free(&strategy);
+    pe_monker_mkr_free(&archive);
+    mpf_tree_free(tree);
+    free(good_z);
+    free(wrong_z);
+    free(short_z);
+}
+
+/*
  * A real saved run, when one is at hand.
  *
  * The archive is 800 KB, too big to embed the way the .tree fixture is, so
@@ -674,6 +859,28 @@ static void test_real_saved_run(void)
           "a real storedstrategy0 decoded to nothing");
     printf("  real run: %u slots, %u arrays, bucket count %d\n",
            strategy.slot_count, arrays, strategy.bucket_count);
+
+    /* And, when the matching tree is named too, that the slots land on it. */
+    {
+        const char *tree_path = getenv("POKER_MONKER_TREE");
+        mpf_tree_def_t *tree = NULL;
+        if (tree_path != NULL && tree_path[0] != '\0' &&
+            pe_monker_tree_load(tree_path, &tree) == PE_MONKER_OK &&
+            tree != NULL) {
+            int32_t *map = (int32_t *)malloc((size_t)strategy.slot_count *
+                                             sizeof(*map));
+            CHECK(map != NULL, "bind map allocation failed");
+            if (map != NULL) {
+                CHECK(pe_monker_mkr_bind_strategy(tree, &strategy, map,
+                                                  strategy.slot_count) ==
+                          PE_MONKER_MKR_OK,
+                      "a real strategy did not bind to its own tree");
+                printf("  bound to a %d-node tree\n", tree->node_count);
+                free(map);
+            }
+            mpf_tree_free(tree);
+        }
+    }
     pe_monker_mkr_strategy_free(&strategy);
     pe_monker_mkr_free(&archive);
 }
@@ -683,6 +890,7 @@ int main(void)
     test_entry_listing();
     test_encoding_and_corruption();
     test_java_scalars_and_strategy();
+    test_slot_to_node_binding();
     test_real_saved_run();
     if (failures != 0)
         return 1;

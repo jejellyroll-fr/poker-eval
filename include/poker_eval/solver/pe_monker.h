@@ -102,19 +102,18 @@ typedef struct
 /*
  * One slot of a stored strategy.
  *
- * A slot is either absent, or one array. What the array's numbers *mean* is
- * not established, so this reports what the file holds rather than an
- * interpretation: the element type and the element count, unscaled.
+ * A byte slot is a strategy: one byte per (hand class, action), and the bytes
+ * of one hand class sum to 256. Measured over the 230048 pairs of a
+ * four-handed all-in-or-fold PLO4 run: all but 161 sum to exactly 256, of
+ * which 87 are 0/0 — a class carrying no strategy — and 74 sum to 257, which
+ * is each action rounded to a byte on its own. So a frequency is the byte
+ * over 256, and the count is class_count * action_count, not a class count:
+ * slicing it needs the node's action count, which is why the raw array is
+ * what is handed over.
  *
- * What is known, on a four-handed all-in-or-fold PLO4 run: the entry holds
- * twice as many slots as the tree has nodes, the two halves have identical
- * presence patterns, and each half holds one array per decision node — 14 of
- * them for that tree's 14 decision nodes. The arrays are byte[32864] in one
- * half and int[32864] in the other, and 32864 is 2 * 16432, the PLO4 hand
- * class count. Whether that second factor of two is the two bytes of a
- * fixed-point frequency or the two actions of an all-in-or-fold node is
- * exactly the thing no evidence here settles — and the two readings disagree
- * about every number. Nothing is scaled or paired until it does.
+ * An int slot runs parallel to a byte slot, same length, and carries values
+ * that are largely non-positive with a zero against the current best action —
+ * the shape of accumulated regret. Nothing here depends on that reading.
  */
 typedef enum
 {
@@ -190,6 +189,31 @@ void pe_monker_mkr_metadata_free(pe_monker_mkr_metadata_t *metadata);
 pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
     const pe_monker_mkr_t *archive, const char *entry_name,
     pe_monker_mkr_strategy_t *out);
+
+/*
+ * Say which tree node each slot belongs to.
+ *
+ * An entry holds two slots per node: the strategy in the first half, the
+ * parallel int array in the second. Within a half, slot i is the i-th node of
+ * a preorder walk that visits children last to first.
+ *
+ * That order is read off a single archive — a 29-node tree reproducing the
+ * file's 29-slot presence pattern exactly, 14 arrays against 14 decision
+ * nodes. One exact match on a 29-position signature is strong, and it is
+ * still one file. So this verifies rather than trusts: every slot holding an
+ * array must land on a decision node and every absent slot on a terminal, and
+ * the binding is refused when it does not. A mapping that is wrong and silent
+ * hands every node some other node's strategy, and a solve built on it looks
+ * entirely healthy.
+ *
+ * out_node_of_slot receives one node index per slot. Returns
+ * PE_MONKER_MKR_ERR_BAD_ARCHIVE when the shape does not line up.
+ */
+pe_monker_mkr_status_t pe_monker_mkr_bind_strategy(
+    const struct mpf_tree_def_t *tree,
+    const pe_monker_mkr_strategy_t *strategy,
+    int32_t *out_node_of_slot,
+    size_t capacity);
 
 void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy);
 

@@ -11,6 +11,8 @@
 #include <string.h>
 #include <zlib.h>
 
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+
 #define PE_MONKER_MKR_EOCD_SIGNATURE 0x06054b50u
 #define PE_MONKER_MKR_CENTRAL_SIGNATURE 0x02014b50u
 #define PE_MONKER_MKR_LOCAL_SIGNATURE 0x04034b50u
@@ -1674,6 +1676,94 @@ pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
         }
     }
     java_values_free(items, count);
+    return PE_MONKER_MKR_OK;
+}
+
+/*
+ * Preorder, children last to first, written iteratively: pushing a node's
+ * children in forward order leaves the last one on top, so it pops first.
+ * A tree deep enough to matter would blow a recursive walk's stack long
+ * before it blew this one's heap.
+ */
+static pe_monker_mkr_status_t tree_storage_order(const mpf_tree_def_t *tree,
+                                                 int32_t *out_order)
+{
+    int32_t *stack;
+    int stack_size = 0;
+    int emitted = 0;
+    int seen_capacity = tree->node_count;
+
+    stack = (int32_t *)malloc((size_t)seen_capacity * sizeof(*stack));
+    if (stack == NULL)
+        return PE_MONKER_MKR_ERR_NO_MEMORY;
+    stack[stack_size++] = tree->root_index;
+    while (stack_size > 0) {
+        int32_t node = stack[--stack_size];
+        int action;
+        if (node < 0 || node >= tree->node_count || emitted >= seen_capacity) {
+            free(stack);
+            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+        }
+        out_order[emitted++] = node;
+        for (action = 0; action < tree->nodes[node].action_count; ++action) {
+            int32_t child = tree->nodes[node].actions[action].next_index;
+            if (child < 0 || child >= tree->node_count ||
+                stack_size >= seen_capacity) {
+                free(stack);
+                return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+            }
+            stack[stack_size++] = child;
+        }
+    }
+    free(stack);
+    /* Every node must be reached exactly once, or the walk is not a walk of
+       this tree and the slot numbering it produces means nothing. */
+    return emitted == tree->node_count ? PE_MONKER_MKR_OK
+                                       : PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+}
+
+pe_monker_mkr_status_t pe_monker_mkr_bind_strategy(
+    const mpf_tree_def_t *tree,
+    const pe_monker_mkr_strategy_t *strategy,
+    int32_t *out_node_of_slot,
+    size_t capacity)
+{
+    int32_t *order;
+    uint32_t slot;
+    pe_monker_mkr_status_t status;
+
+    if (tree == NULL || strategy == NULL || out_node_of_slot == NULL)
+        return PE_MONKER_MKR_ERR_NULL_ARGUMENT;
+    if (tree->node_count <= 0 || tree->nodes == NULL)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    if (capacity < (size_t)strategy->slot_count)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    /* One slot per node, or two: the strategy and its parallel int array. */
+    if (strategy->slot_count != (uint32_t)tree->node_count &&
+        strategy->slot_count != (uint32_t)tree->node_count * 2u)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+
+    order = (int32_t *)malloc((size_t)tree->node_count * sizeof(*order));
+    if (order == NULL)
+        return PE_MONKER_MKR_ERR_NO_MEMORY;
+    status = tree_storage_order(tree, order);
+    if (status != PE_MONKER_MKR_OK) {
+        free(order);
+        return status;
+    }
+
+    for (slot = 0u; slot < strategy->slot_count; ++slot) {
+        int32_t node = order[slot % (uint32_t)tree->node_count];
+        int decides = tree->nodes[node].action_count > 0;
+        int has_array = strategy->slots[slot].kind != PE_MONKER_SLOT_ABSENT;
+        /* The check that makes this a binding and not a guess. */
+        if (decides != has_array) {
+            free(order);
+            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+        }
+        out_node_of_slot[slot] = node;
+    }
+    free(order);
     return PE_MONKER_MKR_OK;
 }
 
