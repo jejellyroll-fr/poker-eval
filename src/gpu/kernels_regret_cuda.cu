@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include "kernels_regret_cuda.h"
 
 /* `offsets` has infoset_count + 1 entries. Each infoset owns the ragged span
  * [offsets[i], offsets[i + 1]) in the regret and strategy arrays. */
@@ -61,6 +62,8 @@ void pe_cuda_launch_strategy_batch(
     uint32_t infoset_count, cudaStream_t stream)
 {
     const int threads = 256;
+    if (infoset_count == 0u)
+        return;
     const int blocks = (int)((infoset_count + (uint32_t)threads - 1u) /
                              (uint32_t)threads);
     pe_strategy_batch_kernel<<<blocks, threads, 0, stream>>>(
@@ -73,6 +76,8 @@ void pe_cuda_launch_apply_update_batch(
     uint32_t update_count, cudaStream_t stream)
 {
     const int threads = 256;
+    if (update_count == 0u)
+        return;
     const int blocks = (int)((update_count + (uint32_t)threads - 1u) /
                              (uint32_t)threads);
     pe_apply_update_batch_kernel<<<blocks, threads, 0, stream>>>(
