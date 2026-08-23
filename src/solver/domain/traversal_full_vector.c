@@ -43,6 +43,18 @@ int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
     return 0;
 }
 
+int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,
+                                 const pe_storage_ops_t *storage,
+                                 void *storage_self)
+{
+    if (!ctx || !ctx->initialized || !storage || !storage_self ||
+        !storage->resolve || !storage->values)
+        return -1;
+    ctx->storage = storage;
+    ctx->storage_self = storage_self;
+    return 0;
+}
+
 void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx)
 {
     unsigned p;
@@ -61,6 +73,7 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
     uint16_t actions;
     int player;
     uint64_t key = 0;
+    pe_infoset_id_t infoset = PE_INFOSET_ID_INVALID;
 
     if (!state)
         return -1;
@@ -101,6 +114,18 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
         return -1;
     if (game->infoset_key)
         key = game->infoset_key(state, game->user);
+    if (ctx->storage != NULL)
+    {
+        infoset = ctx->storage->resolve(ctx->storage_self, key, actions,
+                                        game->combo_count, PE_STREET_UNKNOWN);
+        if (infoset == PE_INFOSET_ID_INVALID)
+            return -1;
+        /* Allocate the average slab on first sight. The update/averaging
+           tranche will fill it; until then, the zero slab means uniform. */
+        if (ctx->storage->values(ctx->storage_self, infoset,
+                                 PE_VALUES_AVERAGE, NULL) == NULL)
+            return -1;
+    }
 
     for (uint16_t action = 0; action < actions; ++action)
     {
@@ -116,7 +141,21 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
             rc = game->strategy(state, key, action, &strategy, game->user);
         else
         {
-            pe_vec_fill(&strategy, 1.0 / (double)actions);
+            const double *average = NULL;
+            size_t average_length = 0u;
+            if (ctx->storage != NULL)
+                average = ctx->storage->values_const(
+                    ctx->storage_self, infoset, PE_VALUES_AVERAGE,
+                    &average_length);
+            if (average != NULL && average_length >= game->combo_count &&
+                average[action * game->combo_count] > 0.0)
+            {
+                for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+                    strategy.v[combo] = average[
+                        pe_storage_slot_at(game->combo_count, action, combo)];
+            }
+            else
+                pe_vec_fill(&strategy, 1.0 / (double)actions);
             rc = 0;
         }
         if (rc != 0)

@@ -70,6 +70,8 @@ typedef struct pe_vector_game_t
 struct pe_traversal_ctx_t
 {
     const pe_vector_game_t *game;
+    const pe_storage_ops_t *storage;
+    void *storage_self;
     pe_reach_vec_t reach[PE_TRAVERSAL_MAX_PLAYERS];
     size_t visited_nodes;
     size_t terminal_nodes;
@@ -110,6 +112,9 @@ typedef struct
 
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game);
+int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,
+                                 const pe_storage_ops_t *storage,
+                                 void *storage_self);
 void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx);
 
 const pe_traversal_ops_t *pe_traversal_full_vector_ops(void);

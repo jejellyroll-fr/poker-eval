@@ -294,6 +294,12 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     if (ops == NULL || pe_traversal_ctx_init(&traversal,
                                              solver->deps.vector_game) != 0)
         return PE_SOLVER_ERR_EXECUTION;
+    if (pe_traversal_ctx_set_storage(&traversal, solver->storage,
+                                     solver->storage_self) != 0)
+    {
+        pe_traversal_ctx_destroy(&traversal);
+        return PE_SOLVER_ERR_EXECUTION;
+    }
 
     solver->state = PE_SOLVER_STATE_RUNNING;
     for (iteration = 1u; iteration <= solver->config.max_iterations; ++iteration)

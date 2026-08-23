@@ -37,6 +37,29 @@ static const void *apply_root(const void *state, uint16_t action, void *user)
     return NULL;
 }
 
+static int terminal_one_step(const void *state, void *user)
+{
+    return state != user;
+}
+
+static uint16_t actions_one_step(const void *state, void *user)
+{
+    return state == user ? 1u : 0u;
+}
+
+static uint64_t key_one_step(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0x1234u;
+}
+
+static const void *apply_one_step(const void *state, uint16_t action, void *user)
+{
+    (void)action;
+    return state == user ? (const void *)((const char *)user + 1) : NULL;
+}
+
 #define CHECK(condition, ...)                                      \
     do                                                             \
     {                                                              \
@@ -140,6 +163,47 @@ int main(void)
                       vector_progress.fraction == 1.0 &&
                       vector_progress.complete,
                   "vector solver progress snapshot is inconsistent");
+            pe_solver_destroy(solver);
+        }
+    }
+
+    {
+        static char one_step_root;
+        pe_solver_config_t vector_config = pe_solver_config_default();
+        pe_solver_deps_t deps = pe_solver_deps_default();
+        pe_vector_game_t game;
+        pe_strategy_query_t strategy_query = {0u};
+        pe_strategy_view_t strategy_view;
+
+        memset(&game, 0, sizeof(game));
+        game.root = &one_step_root;
+        game.user = &one_step_root;
+        game.player_count = 2u;
+        game.combo_count = 1u;
+        game.is_terminal = terminal_one_step;
+        game.acting_player = acting_root;
+        game.action_count = actions_one_step;
+        game.infoset_key = key_one_step;
+        game.apply_action = apply_one_step;
+        vector_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        vector_config.max_iterations = 1u;
+        vector_config.problem.expected_infosets = 1u;
+        vector_config.problem.expected_actions = 1u;
+        vector_config.problem.expected_combos = 1u;
+        deps.vector_game = &game;
+
+        solver = pe_solver_create(&vector_config, &deps);
+        CHECK(solver != NULL, "storage-backed vector solver creation failed");
+        if (solver != NULL)
+        {
+            CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
+                  "storage-backed vector solver run failed");
+            CHECK(pe_solver_strategy(solver, &strategy_query, &strategy_view) ==
+                      PE_SOLVER_OK && strategy_view.count == 1u &&
+                      strategy_view.action_count == 1u &&
+                      strategy_view.combo_count == 1u &&
+                      strategy_view.values[0] == 0.0,
+                  "vector traversal should expose its initialized average slab");
             pe_solver_destroy(solver);
         }
     }
