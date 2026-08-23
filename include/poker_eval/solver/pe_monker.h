@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+struct mpf_tree_def_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,7 +23,11 @@ typedef enum
     PE_MONKER_ERR_IO,
     PE_MONKER_ERR_TRUNCATED,
     PE_MONKER_ERR_BAD_SIGNATURE,
-    PE_MONKER_ERR_INVALID_HEADER
+    PE_MONKER_ERR_INVALID_HEADER,
+    PE_MONKER_ERR_INVALID_ACTION,
+    PE_MONKER_ERR_INVALID_TOPOLOGY,
+    PE_MONKER_ERR_DEPTH_LIMIT,
+    PE_MONKER_ERR_TOO_LARGE
 } pe_monker_status_t;
 
 typedef struct
@@ -44,6 +50,17 @@ pe_monker_status_t pe_monker_tree_read_header(
     const char *path, pe_monker_tree_header_t *out);
 
 const char *pe_monker_status_string(pe_monker_status_t status);
+
+/**
+ * Read the recursive node stream following the fixed header.
+ *
+ * The returned definition is owned by the caller and is released with
+ * mpf_tree_free(). The stream is deliberately limited to the compact node
+ * framing used by the reader: one action byte and one child-count byte per
+ * node, in preorder.
+ */
+pe_monker_status_t pe_monker_tree_load(const char *path,
+                                       struct mpf_tree_def_t **out_tree);
 
 #ifdef __cplusplus
 }

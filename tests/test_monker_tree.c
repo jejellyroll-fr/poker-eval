@@ -3,6 +3,7 @@
  */
 
 #include <poker_eval/solver/pe_monker.h>
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -128,10 +129,67 @@ static void test_rejections(void)
           "NULL output was not rejected");
 }
 
+static void test_node_topology(void)
+{
+    const char *path = "/tmp/poker_eval_monker_nodes.tree";
+    unsigned char bytes[256];
+    size_t at = 0u;
+    pe_monker_tree_header_t header;
+    mpf_tree_def_t *tree = NULL;
+    mpf_tree_error_t error;
+
+    put_i64(bytes, &at, 33487);
+    put_i32(bytes, &at, 12);
+    put_i32(bytes, &at, 2);
+    put_i32(bytes, &at, 0);
+    put_i32(bytes, &at, 0);
+    put_f64(bytes, &at, 1.0);
+    put_f64(bytes, &at, 1.0);
+    put_f64(bytes, &at, 0.0);
+    put_f64(bytes, &at, 100.0);
+    put_f64(bytes, &at, 100.0);
+
+    /* Preorder: root, CALL leaf, half-pot node, then FOLD/CALL leaves. */
+    bytes[at++] = 0u;
+    bytes[at++] = 2u;
+    bytes[at++] = 1u;
+    bytes[at++] = 0u;
+    bytes[at++] = 4u;
+    bytes[at++] = 2u;
+    bytes[at++] = 0u;
+    bytes[at++] = 0u;
+    bytes[at++] = 1u;
+    bytes[at++] = 0u;
+
+    CHECK(write_path_fixture(path, bytes, at) == 0, "node fixture write failed");
+    CHECK(pe_monker_tree_read_header(path, &header) == PE_MONKER_OK,
+          "node fixture header failed");
+    CHECK(pe_monker_tree_load(path, &tree) == PE_MONKER_OK && tree != NULL,
+          "node stream was not loaded");
+    if (!tree)
+        return;
+    CHECK(tree->node_count == 5 && tree->root_index == 0,
+          "unexpected node count or root");
+    CHECK(tree->nodes[0].action_count == 2 &&
+              tree->nodes[0].actions[0].type == MPF_TREE_ACTION_CALL &&
+              tree->nodes[0].actions[0].next_index == 1 &&
+              tree->nodes[0].actions[1].type == MPF_TREE_ACTION_RAISE &&
+              tree->nodes[0].actions[1].next_index == 2,
+          "root actions were not reconstructed");
+    CHECK(tree->nodes[2].action_count == 2 &&
+              tree->nodes[2].actions[0].type == MPF_TREE_ACTION_FOLD &&
+              tree->nodes[2].actions[1].type == MPF_TREE_ACTION_CALL,
+          "nested actions were not reconstructed");
+    CHECK(mpf_tree_validate(tree, &error) != 0,
+          "reconstructed topology does not validate");
+    mpf_tree_free(tree);
+}
+
 int main(void)
 {
     test_header_variants();
     test_rejections();
+    test_node_topology();
     if (failures != 0)
         return 1;
     puts("test_monker_tree: header decoding and rejection paths passed");
