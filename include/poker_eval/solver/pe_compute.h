@@ -57,6 +57,22 @@ typedef struct pe_strategy_batch_t
     const uint32_t *offsets;       /* same ragged layout as the input       */
     float *strategies;
 } pe_strategy_batch_t;
+
+/* Shape metadata used to flatten a storage update into a GPU slot. `infosets`
+ * need not be dense; the resolver performs a deterministic linear lookup. */
+typedef struct pe_infoset_layout_t
+{
+    size_t count;
+    const pe_infoset_id_t *infosets;
+    const uint32_t *offsets;       /* count + 1 entries                    */
+    const uint16_t *action_counts; /* count entries                        */
+    const uint16_t *combo_counts;  /* count entries                        */
+} pe_infoset_layout_t;
+
+/** Resolve one logical update to its flattened ragged slot. */
+int pe_infoset_layout_resolve_slot(const pe_infoset_layout_t *layout,
+                                   const pe_update_t *update,
+                                   uint32_t *out_slot);
 typedef struct pe_showdown_job_t pe_showdown_job_t;
 
 /*
