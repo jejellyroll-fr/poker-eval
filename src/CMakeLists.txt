@@ -45,6 +45,7 @@ add_library(poker_solver
     solver/domain/showdown_vector.c
     solver/domain/traversal_chance_vector.c
     solver/domain/traversal_external.c
+    solver/domain/traversal_outcome.c
     solver/domain/best_response_ii.c
     solver/adapters/storage_ram.c
     solver/adapters/compute_cpu_ref.c
