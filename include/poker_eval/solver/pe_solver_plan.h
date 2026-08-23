@@ -176,6 +176,12 @@ int pe_gpu_terminal_eval_gate_is_open(void);
 /** Open the GPU-1 gate after every available terminal backend passes parity. */
 void pe_gpu_terminal_eval_gate_open(void);
 
+/** Whether the GPU-3/4 strategy/update parity gate is open. */
+int pe_gpu_regret_update_gate_is_open(void);
+
+/** Open the GPU-3/4 gate after strategy and update parity passes. */
+void pe_gpu_regret_update_gate_open(void);
+
 /**
  * Expand, validate, and produce a plan.
  *

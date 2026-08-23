@@ -28,8 +28,15 @@ typedef struct
 
 static uint64_t compute_opencl_capabilities(void *self)
 {
+    uint64_t caps = 0u;
     (void)self;
-    return pe_gpu_terminal_eval_gate_is_open() ? PE_CAP_GPU_TERMINAL_EVAL : 0u;
+    if (pe_gpu_terminal_eval_gate_is_open())
+        caps |= PE_CAP_GPU_TERMINAL_EVAL;
+#if defined(PE_COMPUTE_OPENCL_AVAILABLE)
+    if (pe_gpu_regret_update_gate_is_open())
+        caps |= PE_CAP_GPU_REGRET_UPDATE;
+#endif
+    return caps;
 }
 
 static int compute_opencl_create(void **self, const pe_compute_config_t *cfg)

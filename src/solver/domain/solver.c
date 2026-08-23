@@ -147,6 +147,8 @@ static uint64_t pe_solver_validation_caps(const pe_solver_t *solver)
 
     if (!pe_gpu_terminal_eval_gate_is_open())
         caps &= ~((uint64_t)PE_CAP_GPU_TERMINAL_EVAL);
+    if (!pe_gpu_regret_update_gate_is_open())
+        caps &= ~((uint64_t)PE_CAP_GPU_REGRET_UPDATE);
     return caps;
 }
 

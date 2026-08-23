@@ -25,6 +25,7 @@
    This process-local latch prevents a backend from advertising itself merely
    because its library was linked successfully. */
 static int g_gpu_terminal_eval_gate_open;
+static int g_gpu_regret_update_gate_open;
 
 int pe_gpu_terminal_eval_gate_is_open(void)
 {
@@ -34,6 +35,16 @@ int pe_gpu_terminal_eval_gate_is_open(void)
 void pe_gpu_terminal_eval_gate_open(void)
 {
     g_gpu_terminal_eval_gate_open = 1;
+}
+
+int pe_gpu_regret_update_gate_is_open(void)
+{
+    return g_gpu_regret_update_gate_open;
+}
+
+void pe_gpu_regret_update_gate_open(void)
+{
+    g_gpu_regret_update_gate_open = 1;
 }
 
 /* ------------------------------------------------------------------ *
