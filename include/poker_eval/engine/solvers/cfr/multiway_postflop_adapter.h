@@ -6,6 +6,7 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/economics/rake.h>
 #include <poker_eval/solver/pe_chance.h>
+#include <poker_eval/solver/pe_abstraction.h>
 #include <poker_eval/solver/pe_game_rules.h>
 #include <poker_eval/solver/pe_range.h>
 
@@ -169,6 +170,14 @@ typedef struct
     int enable_card_bunching;
     int folded_range_provided[MPF_MAX_PLAYERS];
     double folded_range_prob[MPF_MAX_PLAYERS][52];
+
+    /* FEAT-13 / ABS-02: optional general postflop abstraction. A supplied
+       model is borrowed for the life of the game; when it is NULL and a
+       postflop board is already available, mpf_build_game trains a model for
+       the initial board and owns it from the root state. */
+    int strength_buckets_per_street; /* 0 = disabled */
+    int texture_filter_level;         /* pe_texture_filter_level_t */
+    const pe_abstraction_model_t *abstraction_model;
 } mpf_config_t;
 
 typedef struct mpf_state_s
@@ -298,6 +307,13 @@ typedef struct mpf_state_s
     int enable_card_bunching;
     int folded_range_provided[MPF_MAX_PLAYERS];
     double folded_range_prob[MPF_MAX_PLAYERS][52];
+
+    /* FEAT-13 / ABS-02: shared by cloned states; only the root owns an
+       automatically trained model. */
+    int strength_buckets_per_street;
+    int texture_filter_level;
+    const pe_abstraction_model_t *abstraction_model;
+    int owns_abstraction_model;
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);

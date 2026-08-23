@@ -451,6 +451,34 @@ static uint64_t mpf_pattern_hash(const mpf_state_t *st, int player)
     return mpf_fnv1a_hash(str, strlen(str));
 }
 
+/* ABS-02: replace the exact private-hand/board pattern with the trained
+ * abstraction pair only when the caller explicitly enabled strength
+ * bucketing and supplied (or successfully trained) a model. The caller's
+ * zero-value configuration therefore takes the exact historical path. */
+static int mpf_abstraction_key(const mpf_state_t *st, int player,
+                               uint64_t *out_key)
+{
+    if (!st || !out_key || st->strength_buckets_per_street <= 0 ||
+        !st->abstraction_model || player < 0 || player >= st->num_players)
+        return 0;
+    if (st->board_revealed < 3 || st->board_revealed > 5 ||
+        mask_popcount(st->hole[player]) != st->total_hole_cards)
+        return 0;
+
+    const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+    if (!ops || !ops->bucket_of || !ops->texture_of)
+        return 0;
+    int bucket = ops->bucket_of(st->abstraction_model, st->ctx,
+                                st->hole[player], st->board_mask,
+                                (int)st->street);
+    if (bucket < 0)
+        return 0;
+    uint64_t texture = ops->texture_of(st->abstraction_model,
+                                       st->board_mask, (int)st->street);
+    *out_key = (((uint64_t)(uint32_t)bucket) << 32) ^ texture;
+    return 1;
+}
+
 /* Content-derived infoset key for a decision state (keyed_mode only).
  * All bet/board fields are folded into a single running hash; each field
  * re-seeds from the previous field's digest so the key depends on every
@@ -482,7 +510,12 @@ static uint64_t mpf_infoset_key(const mpf_state_t *st)
     h = mpf_fnv1a_hash_seeded(h, &rc, sizeof(rc));
     h = mpf_fnv1a_hash_seeded(h, &acted_flags, sizeof(acted_flags));
     h = mpf_fnv1a_hash_seeded(h, &active_flags, sizeof(active_flags));
-    uint64_t bh = mpf_pattern_hash(st, p);
+    uint64_t bh;
+    uint64_t abstraction_key;
+    if (mpf_abstraction_key(st, p, &abstraction_key))
+        bh = abstraction_key;
+    else
+        bh = mpf_pattern_hash(st, p);
     h = mpf_fnv1a_hash_seeded(h, &bh, sizeof(bh));
     /* FEAT-10 (#146): fold the committed-stack configuration hash into the
        infoset key so asymmetrical (and equivalent-by-action-order) stack
@@ -766,6 +799,7 @@ static void mpf_chance_deal_cards_internal(const mpf_state_t *st, const int *car
     out->util_ready = 0;
     /* Cloned state borrows the shared sparse index but never owns it. */
     out->owns_stack_index = 0;
+    out->owns_abstraction_model = 0;
     for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
         out->action_cache[i] = NULL;
     for (int i = 0; i < 52; ++i)
@@ -2555,6 +2589,14 @@ static int mpf_build_private_deals(const mpf_config_t *cfg, mask_t board,
  */
 static int mpf_build_fail(mpf_state_t *st)
 {
+    if (st->owns_abstraction_model && st->abstraction_model)
+    {
+        const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+        if (ops && ops->destroy)
+            ops->destroy((pe_abstraction_model_t *)st->abstraction_model);
+        st->abstraction_model = NULL;
+        st->owns_abstraction_model = 0;
+    }
     if (st->owns_stack_index && st->stack_index)
     {
         mpf_stack_index_destroy(st->stack_index);
@@ -2570,6 +2612,75 @@ static int mpf_build_fail(mpf_state_t *st)
     st->flop_children = NULL;
     st->flop_child_count = 0;
     return -1;
+}
+
+static void mpf_collect_abstraction_hands(const int *cards, int card_count,
+                                          int need, int start, int depth,
+                                          mask_t current, mask_t *out,
+                                          size_t cap, size_t *count)
+{
+    if (*count >= cap)
+        return;
+    if (depth == need)
+    {
+        out[(*count)++] = current;
+        return;
+    }
+    int remaining = need - depth;
+    for (int i = start; i <= card_count - remaining && *count < cap; ++i)
+    {
+        mpf_collect_abstraction_hands(cards, card_count, need, i + 1,
+                                      depth + 1, mask_set(current, cards[i]),
+                                      out, cap, count);
+    }
+}
+
+/* Train the default MPF model only when a postflop board is already known.
+ * Chance-node games may provide a pre-trained model through the config; a
+ * future street can then use it without mutating the state during keying. */
+static int mpf_prepare_abstraction(const mpf_config_t *cfg, mpf_state_t *st)
+{
+    if (!cfg || !st || st->strength_buckets_per_street <= 0)
+        return 0;
+    if (cfg->abstraction_model)
+    {
+        st->abstraction_model = cfg->abstraction_model;
+        return 0;
+    }
+    if (st->board_revealed < 3 || st->board_revealed > 5 ||
+        (st->total_hole_cards != 2 && st->total_hole_cards != 4))
+        return 0;
+
+    int cards[MODERN_DECK_SIZE];
+    int card_count = 0;
+    for (int card = 0; card < MODERN_DECK_SIZE; ++card)
+        if (!mask_is_set(st->board_mask, card))
+            cards[card_count++] = card;
+
+    size_t cap = (st->total_hole_cards == 2) ? 1326u : 1024u;
+    mask_t *hands = (mask_t *)calloc(cap, sizeof(*hands));
+    if (!hands)
+        return -1;
+    size_t hand_count = 0;
+    mpf_collect_abstraction_hands(cards, card_count, st->total_hole_cards,
+                                  0, 0, MASK_EMPTY, hands, cap, &hand_count);
+
+    pe_abstraction_config_t acfg;
+    memset(&acfg, 0, sizeof(acfg));
+    acfg.strength.n_buckets = st->strength_buckets_per_street;
+    acfg.strength.hole_cards = st->total_hole_cards;
+    acfg.strength.max_samples = (uint32_t)cap;
+    acfg.texture_filter = (pe_texture_filter_level_t)st->texture_filter_level;
+    const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+    pe_abstraction_model_t *model = NULL;
+    int rc = (ops && ops->train && hand_count > 0) ?
+        ops->train(&model, st->ctx, st->board_mask, hands, hand_count, &acfg) : -1;
+    free(hands);
+    if (rc != 0 || !model)
+        return -1;
+    st->abstraction_model = model;
+    st->owns_abstraction_model = 1;
+    return 0;
 }
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
@@ -2597,6 +2708,10 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         mpf_perf_stats_reset(perf_stats);
 
     out_state->ctx = cfg->ctx;
+    out_state->strength_buckets_per_street = cfg->strength_buckets_per_street;
+    out_state->texture_filter_level = cfg->texture_filter_level;
+    out_state->abstraction_model = cfg->abstraction_model;
+    out_state->owns_abstraction_model = 0;
     out_state->rake = cfg->rake;
     out_state->rules = cfg->rules;
     out_state->lock_storage = NULL;
@@ -2880,6 +2995,9 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         mpf_restore_base_bets(out_state);
     }
 
+    if (mpf_prepare_abstraction(cfg, out_state) != 0)
+        return mpf_build_fail(out_state);
+
     /* FEAT-10 (#146): now that stacks/round_contrib/active are fully
        populated (including any tree-node or preconfig overrides), resolve
        the root's sparse stack-config id so the infoset key distinguishes
@@ -3074,6 +3192,14 @@ void mpf_state_cleanup(mpf_state_t *state)
         mpf_stack_index_destroy(state->stack_index);
         state->stack_index = NULL;
         state->owns_stack_index = 0;
+    }
+    if (state->owns_abstraction_model && state->abstraction_model)
+    {
+        const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+        if (ops && ops->destroy)
+            ops->destroy((pe_abstraction_model_t *)state->abstraction_model);
+        state->abstraction_model = NULL;
+        state->owns_abstraction_model = 0;
     }
     if (state->tree)
         mpf_tree_release_cache(state->tree, state);
