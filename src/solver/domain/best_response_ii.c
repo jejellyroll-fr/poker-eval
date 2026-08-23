@@ -323,7 +323,7 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
 }
 
 static int br_collect(pe_br_ctx_t *ctx, const void *state,
-                      const pe_reach_vec_t *reach)
+                      const pe_reach_vec_t *reach, double chance_reach)
 {
     const pe_vector_game_t *game = ctx->game;
     uint16_t action_count;
@@ -349,7 +349,10 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
             {
                 const void *child = game->apply_chance(
                     state, (int)outcome, game->user);
-                if (!child || br_collect(ctx, child, reach) != 0)
+                double weight = br_chance_weight(game, state, outcome) /
+                                total_weight;
+                if (!child || br_collect(ctx, child, reach,
+                                         chance_reach * weight) != 0)
                     return -1;
             }
             return 0;
@@ -389,7 +392,8 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
                 pe_vec_free(&action_value);
                 return -1;
             }
-            entry->action_values[action] += pe_vec_sum(&action_value);
+            entry->action_values[action] +=
+                chance_reach * pe_vec_sum(&action_value);
             pe_vec_free(&action_value);
         }
         if (player != (int)ctx->br_player)
@@ -405,7 +409,7 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
             pe_vec_mul(&child_reach[player], &strategy);
             pe_vec_free(&strategy);
         }
-        if (br_collect(ctx, child, child_reach) != 0)
+        if (br_collect(ctx, child, child_reach, chance_reach) != 0)
         {
             br_free_reach(child_reach, game->player_count);
             return -1;
@@ -463,7 +467,8 @@ pe_solver_status_t pe_best_response_vector(
             if (ctx.table[i].used)
                 memset(ctx.table[i].action_values, 0,
                        sizeof(ctx.table[i].action_values));
-        if (br_collect(&ctx, game->root, root_reach) != 0 || ctx.failed)
+        if (br_collect(&ctx, game->root, root_reach, 1.0) != 0 ||
+            ctx.failed)
         {
             br_free_reach(root_reach, game->player_count);
             free(ctx.table);

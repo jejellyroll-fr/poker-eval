@@ -4,6 +4,7 @@
 
 #include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/solver/pe_traversal.h>
+#include <poker_eval/engine/solvers/cfr/cfr_core.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -72,6 +73,118 @@ static const void *br_apply_chance(const void *state, int outcome, void *user)
     return state == &root && outcome == 0 ? &first
          : state == &root && outcome == 1 ? &second
          : NULL;
+}
+
+static int toy_cfr_current_player(cfr_game_t *game, uint64_t state,
+                                   void *user)
+{
+    const br_state_t *node = (const br_state_t *)(uintptr_t)state;
+    (void)game;
+    (void)user;
+    return node->terminal ? -1 : node->player;
+}
+
+static int toy_cfr_is_terminal(cfr_game_t *game, uint64_t state, void *user)
+{
+    (void)game;
+    (void)user;
+    return ((const br_state_t *)(uintptr_t)state)->terminal;
+}
+
+static int toy_cfr_get_actions(cfr_game_t *game, uint64_t state, int *out,
+                               int max_actions, void *user)
+{
+    const br_state_t *node = (const br_state_t *)(uintptr_t)state;
+    (void)game;
+    (void)user;
+    if (node->terminal || max_actions < 2)
+        return 0;
+    out[0] = 0;
+    out[1] = 1;
+    return 2;
+}
+
+static uint64_t toy_cfr_apply_action(cfr_game_t *game, uint64_t state,
+                                     int action, void *user)
+{
+    const br_state_t *node = (const br_state_t *)(uintptr_t)state;
+    (void)game;
+    (void)user;
+    return action < 2 && !node->terminal
+        ? (uint64_t)(uintptr_t)node->children[action]
+        : 0u;
+}
+
+static uint64_t toy_cfr_infoset_key(const void *state)
+{
+    const br_state_t *node = (const br_state_t *)state;
+    return node->terminal ? (uint64_t)(uintptr_t)node : node->infoset;
+}
+
+static double toy_cfr_get_utility(cfr_game_t *game, uint64_t state, int player,
+                                  void *user)
+{
+    const br_state_t *terminal = (const br_state_t *)(uintptr_t)state;
+    double value = (terminal->payoff[0] + terminal->payoff[1] +
+                    terminal->payoff[2]) / 3.0;
+    (void)game;
+    (void)user;
+    return player == 0 ? value : -value;
+}
+
+static int toy_cfr_is_chance(cfr_game_t *game, uint64_t state, void *user)
+{
+    (void)game;
+    return user && *(const int *)user &&
+           (const br_state_t *)(uintptr_t)state == &root;
+}
+
+static int toy_cfr_chance_outcomes(cfr_game_t *game, uint64_t state,
+                                   void *user)
+{
+    (void)game;
+    (void)state;
+    (void)user;
+    return 2;
+}
+
+static double toy_cfr_chance_weight(cfr_game_t *game, uint64_t state,
+                                    int outcome, void *user)
+{
+    (void)game;
+    (void)state;
+    (void)user;
+    return outcome == 0 ? 1.0 : 3.0;
+}
+
+static uint64_t toy_cfr_apply_chance(cfr_game_t *game, uint64_t state,
+                                      int outcome, void *user)
+{
+    (void)game;
+    (void)user;
+    return state == (uint64_t)(uintptr_t)&root && outcome == 0
+        ? (uint64_t)(uintptr_t)&first
+        : state == (uint64_t)(uintptr_t)&root && outcome == 1
+            ? (uint64_t)(uintptr_t)&second
+            : 0u;
+}
+
+static void init_toy_cfr_game(cfr_game_t *game)
+{
+    memset(game, 0, sizeof(*game));
+    game->current_player = toy_cfr_current_player;
+    game->is_terminal = toy_cfr_is_terminal;
+    game->get_actions = toy_cfr_get_actions;
+    game->apply_action = toy_cfr_apply_action;
+    game->get_infoset_key = toy_cfr_infoset_key;
+    game->get_utility = toy_cfr_get_utility;
+    game->is_chance = toy_cfr_is_chance;
+    game->get_chance_outcomes = toy_cfr_chance_outcomes;
+    game->get_chance_weight = toy_cfr_chance_weight;
+    game->apply_chance = toy_cfr_apply_chance;
+    game->initial_state = &root;
+    game->state_size = sizeof(uint64_t);
+    game->num_players = 2;
 }
 
 static int br_acting_player(const void *state, void *user)
@@ -182,6 +295,10 @@ static void test_shared_infoset_and_convergence(void)
     pe_vector_game_t game;
     pe_best_response_vector_config_t config;
     pe_best_response_vector_result_t result;
+    cfr_game_t cfr_game;
+    cfr_storage_t *cfr_storage;
+    int chance_enabled = 0;
+    double scalar_value;
 
     init_game(&game);
     config = pe_best_response_vector_config_default();
@@ -197,6 +314,15 @@ static void test_shared_infoset_and_convergence(void)
           5.0 / 3.0);
     CHECK(result.visited_nodes > 0u, "no nodes were visited");
 
+    init_toy_cfr_game(&cfr_game);
+    cfr_storage = cfr_storage_create();
+    CHECK(cfr_storage != NULL, "scalar reference storage allocation");
+    scalar_value = cfr_best_response_value_infoset(
+        &cfr_game, cfr_storage, 0, &chance_enabled);
+    CHECK(fabs(result.value - scalar_value) <= 1e-12,
+          "vector/scalar infoset value mismatch: %.17g vs %.17g",
+          result.value, scalar_value);
+
     game.is_chance = br_is_chance;
     game.chance_outcome_count = br_chance_outcome_count;
     game.chance_outcome_weight = br_chance_outcome_weight;
@@ -204,9 +330,17 @@ static void test_shared_infoset_and_convergence(void)
     CHECK(pe_best_response_vector(&game, 0u, &config, &result) ==
               PE_SOLVER_OK,
           "chance-aware vector best response failed");
-    CHECK(fabs(result.value - 4.0 / 3.0) <= 1e-12,
+    CHECK(fabs(result.value - 19.0 / 12.0) <= 1e-12,
           "chance-weighted value %.17g, expected %.17g", result.value,
-          4.0 / 3.0);
+          19.0 / 12.0);
+
+    chance_enabled = 1;
+    scalar_value = cfr_best_response_value_infoset(
+        &cfr_game, cfr_storage, 0, &chance_enabled);
+    CHECK(fabs(result.value - scalar_value) <= 1e-12,
+          "chance vector/scalar value mismatch: %.17g vs %.17g",
+          result.value, scalar_value);
+    cfr_storage_destroy(cfr_storage);
 
     game.is_chance = NULL;
     game.chance_outcome_count = NULL;
