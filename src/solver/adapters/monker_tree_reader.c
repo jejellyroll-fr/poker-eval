@@ -22,13 +22,19 @@ static int read_bytes(FILE *file, unsigned char *out, size_t count)
     return fread(out, 1u, count, file) == count ? 0 : -1;
 }
 
+/*
+ * MonkerSolver writes its .tree files with java.io.DataOutputStream, which is
+ * big-endian for every type it emits, on every platform. The byte order is a
+ * property of the format, not of the machine that wrote the file, so these
+ * decoders are fixed big-endian rather than host-order.
+ */
 static int64_t decode_i64(const unsigned char *bytes)
 {
     uint64_t value = 0u;
     unsigned i;
 
     for (i = 0u; i < 8u; ++i)
-        value |= (uint64_t)bytes[i] << (8u * i);
+        value = (value << 8u) | (uint64_t)bytes[i];
     return (int64_t)value;
 }
 
@@ -38,16 +44,16 @@ static int32_t decode_i32(const unsigned char *bytes)
     unsigned i;
 
     for (i = 0u; i < 4u; ++i)
-        value |= (uint32_t)bytes[i] << (8u * i);
+        value = (value << 8u) | (uint32_t)bytes[i];
     return (int32_t)value;
 }
 
-static double decode_f64(const unsigned char *bytes)
+/* Java `char` is a 16-bit UTF-16 code unit, and DataOutputStream.writeChar
+   emits it as two big-endian bytes. The node stream is written with writeChar,
+   which is why an action code such as 40100 fits in it at all. */
+static unsigned decode_u16(const unsigned char *bytes)
 {
-    uint64_t bits = (uint64_t)decode_i64(bytes);
-    double value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
+    return ((unsigned)bytes[0] << 8u) | (unsigned)bytes[1];
 }
 
 static int read_i64(FILE *file, int64_t *out)
@@ -68,18 +74,21 @@ static int read_i32(FILE *file, int32_t *out)
     return 0;
 }
 
-static int read_f64(FILE *file, double *out)
-{
-    unsigned char bytes[8];
-    if (read_bytes(file, bytes, sizeof(bytes)) != 0)
-        return -1;
-    *out = decode_f64(bytes);
-    return 0;
-}
 
-static int valid_f64(double value)
+/*
+ * Committed, dead money and stacks are int32 in the file. They are surfaced as
+ * double because they are money, but the value stored is the raw file integer:
+ * nothing in the format states its scale, and the observed magnitudes (a 4000
+ * dead pot against 200000 stacks) are consistent with both hundredths and raw
+ * chips. Guessing a divisor here would silently rescale every imported tree.
+ */
+static int read_money(FILE *file, double *out)
 {
-    return value == value && value > -1.0e300 && value < 1.0e300;
+    int32_t raw;
+    if (read_i32(file, &raw) != 0)
+        return -1;
+    *out = (double)raw;
+    return 0;
 }
 
 pe_monker_status_t pe_monker_tree_read_header(
@@ -133,20 +142,19 @@ pe_monker_status_t pe_monker_tree_read_header(
     if (street == 0)
     {
         for (i = 0; i < player_count; ++i)
-            if (read_f64(file, &out->committed[i]) != 0 ||
-                !valid_f64(out->committed[i]))
+            if (read_money(file, &out->committed[i]) != 0)
             {
                 fclose(file);
                 return PE_MONKER_ERR_TRUNCATED;
             }
     }
-    if (read_f64(file, &out->dead_money) != 0 || !valid_f64(out->dead_money))
+    if (read_money(file, &out->dead_money) != 0)
     {
         fclose(file);
         return PE_MONKER_ERR_TRUNCATED;
     }
     for (i = 0; i < player_count; ++i)
-        if (read_f64(file, &out->stacks[i]) != 0 || !valid_f64(out->stacks[i]))
+        if (read_money(file, &out->stacks[i]) != 0)
         {
             fclose(file);
             return PE_MONKER_ERR_TRUNCATED;
@@ -175,11 +183,15 @@ const char *pe_monker_status_string(pe_monker_status_t status)
     }
 }
 
+/* The root carries no incoming action; this marks the field as absent so a
+   sentinel can never be mistaken for a real code. */
+#define PE_MONKER_NO_ACTION 0xFFFFFFFFu
+
 typedef struct
 {
-    unsigned char incoming_action;
+    unsigned incoming_action;
+    unsigned child_count;
     unsigned char child_slot;
-    unsigned char child_count;
     int parent;
 } pe_monker_node_record_t;
 
@@ -216,9 +228,17 @@ static int append_record(pe_monker_node_records_t *records,
     return 0;
 }
 
+/*
+ * The node stream is preorder. Each node writes its child count as a Java
+ * `char` — two big-endian bytes — and each *edge* writes its action code the
+ * same way, immediately before the child it leads to. The root has no edge
+ * into it and therefore no action code: reading one for the root would shift
+ * the whole stream by two bytes and still parse, which is why the caller
+ * passes PE_MONKER_NO_ACTION rather than letting this function guess.
+ */
 static int parse_node_stream(const unsigned char *bytes, size_t length,
-                             size_t *offset, int parent, unsigned depth,
-                             unsigned child_slot,
+                             size_t *offset, unsigned incoming_action,
+                             int parent, unsigned depth, unsigned child_slot,
                              pe_monker_node_records_t *records)
 {
     pe_monker_node_record_t record;
@@ -231,8 +251,9 @@ static int parse_node_stream(const unsigned char *bytes, size_t length,
     if (length - *offset < 2u)
         return -4;
 
-    record.incoming_action = bytes[(*offset)++];
-    record.child_count = bytes[(*offset)++];
+    record.incoming_action = incoming_action;
+    record.child_count = decode_u16(bytes + *offset);
+    *offset += 2u;
     record.child_slot = (unsigned char)child_slot;
     record.parent = parent;
     if (record.child_count > MPF_TREE_ACTION_MAX)
@@ -243,7 +264,12 @@ static int parse_node_stream(const unsigned char *bytes, size_t length,
 
     for (child = 0u; child < record.child_count; ++child)
     {
-        rc = parse_node_stream(bytes, length, offset, (int)index,
+        unsigned action;
+        if (length - *offset < 2u)
+            return -4;
+        action = decode_u16(bytes + *offset);
+        *offset += 2u;
+        rc = parse_node_stream(bytes, length, offset, action, (int)index,
                                depth + 1u, child, records);
         if (rc != 0)
             return rc;
@@ -266,36 +292,59 @@ static char *copy_node_id(size_t index)
     return out;
 }
 
+static int action_size(unsigned code, double *out_size);
+
 static int decode_action_code(unsigned code, mpf_tree_action_type_t *out_type)
 {
+    double ignored;
     if (code == 0u)
         *out_type = MPF_TREE_ACTION_FOLD;
     else if (code == 1u)
         *out_type = MPF_TREE_ACTION_CALL;
-    else if ((code >= 2u && code <= 7u) || code == 9u || code == 10u ||
-             code >= 40000u)
+    else if (action_size(code, &ignored) == 0)
         *out_type = MPF_TREE_ACTION_RAISE;
     else
         return -1;
     return 0;
 }
 
-static double action_size(unsigned code)
+/*
+ * Bet sizes carried by an action code.
+ *
+ * Only three families are evidenced. Codes at or above 40000 encode a pot
+ * percentage, confirmed both by MonkerSolver's own CustomActions/example.txt
+ * (a "75%" sizing writes 40075) and by the codes present in the shipped trees
+ * (40050, 40075, 40100). Code 5 is the minimum raise, from the same file
+ * ("min" writes 5). Code 3 is all-in: the GG all-in-or-fold tree contains no
+ * action code other than 0, 1 and 3, and by construction offers nothing but
+ * folding and shoving.
+ *
+ * Every other small code is a guess, and a guess here does not fail — it
+ * produces a tree that solves a game nobody asked for. They are rejected
+ * instead, so a file that uses one is a named error rather than a wrong
+ * answer. None of the shipped trees reaches this path.
+ */
+#define PE_MONKER_SIZE_ALL_IN (-1.0)
+#define PE_MONKER_SIZE_MIN_RAISE (-2.0)
+
+static int action_size(unsigned code, double *out_size)
 {
     if (code >= 40000u)
-        return (double)(code - 40000u) / 100.0;
-    switch (code)
     {
-    case 2u: return 1.0;
-    case 3u: return 2.0;
-    case 4u: return 0.5;
-    case 5u: return -1.0;
-    case 6u: return 1.0;
-    case 7u: return 0.25;
-    case 9u: return 0.75;
-    case 10u: return 0.0;
-    default: return 0.0;
+        *out_size = (double)(code - 40000u) / 100.0;
+        return 0;
     }
+    if (code == 3u)
+    {
+        *out_size = PE_MONKER_SIZE_ALL_IN;
+        return 0;
+    }
+    if (code == 5u)
+    {
+        *out_size = PE_MONKER_SIZE_MIN_RAISE;
+        return 0;
+    }
+    return -1;
 }
 
 static void discard_tree(mpf_tree_def_t *tree, size_t initialized)
@@ -325,12 +374,22 @@ static void discard_tree(mpf_tree_def_t *tree, size_t initialized)
     free(tree);
 }
 
+/*
+ * int64 signature, four int32 (format, players, first to act, street), then
+ * int32 committed per player only at street 0, int32 dead money, and int32 per
+ * player of stacks. 36 bytes for a two-handed postflop tree.
+ */
+static pe_monker_status_t load_payload(const char *path,
+                                       const pe_monker_tree_header_t *header,
+                                       unsigned char **out_bytes,
+                                       size_t *out_length);
+
 static int skip_header(FILE *file, const pe_monker_tree_header_t *header)
 {
-    uint64_t bytes = 8u + 4u * 4u + 8u +
-                     8u * (uint64_t)header->player_count;
+    uint64_t bytes = 8u + 4u * 4u + 4u +
+                     4u * (uint64_t)header->player_count;
     if (header->street == 0)
-        bytes += 8u * (uint64_t)header->player_count;
+        bytes += 4u * (uint64_t)header->player_count;
     return fseek(file, (long)bytes, SEEK_SET) == 0 ? 0 : -1;
 }
 
@@ -340,9 +399,7 @@ pe_monker_status_t pe_monker_tree_load(const char *path,
     pe_monker_tree_header_t header;
     pe_monker_node_records_t records = {0};
     mpf_tree_def_t *tree = NULL;
-    FILE *file = NULL;
     unsigned char *bytes = NULL;
-    long file_size;
     size_t payload_length;
     size_t offset = 0u;
     size_t i;
@@ -356,50 +413,46 @@ pe_monker_status_t pe_monker_tree_load(const char *path,
     header_status = pe_monker_tree_read_header(path, &header);
     if (header_status != PE_MONKER_OK)
         return header_status;
-    file = fopen(path, "rb");
-    if (!file)
-        return PE_MONKER_ERR_OPEN;
-    if (skip_header(file, &header) != 0 || fseek(file, 0, SEEK_END) != 0)
-    {
-        fclose(file);
-        return PE_MONKER_ERR_IO;
-    }
-    file_size = ftell(file);
-    if (file_size < 0)
-    {
-        fclose(file);
-        return PE_MONKER_ERR_IO;
-    }
-    if ((uint64_t)file_size < 8u + 4u * 4u + 8u +
-                             8u * (uint64_t)header.player_count +
-                             (header.street == 0 ?
-                              8u * (uint64_t)header.player_count : 0u))
-    {
-        fclose(file);
-        return PE_MONKER_ERR_TRUNCATED;
-    }
-    if (skip_header(file, &header) != 0)
-    {
-        fclose(file);
-        return PE_MONKER_ERR_IO;
-    }
-    payload_length = (size_t)file_size - (size_t)ftell(file);
-    bytes = (unsigned char *)malloc(payload_length == 0u ? 1u : payload_length);
-    if (!bytes || fread(bytes, 1u, payload_length, file) != payload_length)
-    {
-        free(bytes);
-        fclose(file);
-        return PE_MONKER_ERR_TRUNCATED;
-    }
-    fclose(file);
+    /* The header arithmetic lives in exactly one place. It used to be written
+       out a second time here, which is how the two copies could disagree. */
+    header_status = load_payload(path, &header, &bytes, &payload_length);
+    if (header_status != PE_MONKER_OK)
+        return header_status;
 
     if (payload_length == 0u)
         parse_rc = -4;
     else
         parse_rc = parse_node_stream(bytes, payload_length, &offset,
-                                     -1, 0u, 0u, &records);
+                                     PE_MONKER_NO_ACTION, -1, 0u, 0u,
+                                     &records);
+    /*
+     * The node stream is followed by a one-byte "ranges present" flag, and by
+     * the range block itself when that flag is set. Requiring the nodes to
+     * consume the payload exactly rejected every real file; ignoring the tail
+     * entirely would accept a stream that stopped early. What is checked is
+     * that the tail is precisely the trailer the format defines.
+     */
+    if (parse_rc == 0)
+    {
+        size_t remaining = payload_length - offset;
+        unsigned flag;
+        if (remaining < 1u)
+            parse_rc = -4;
+        else
+        {
+            flag = bytes[offset];
+            if (flag > 1u)
+                parse_rc = -6;
+            else if (flag == 0u && remaining != 1u)
+                parse_rc = -6;
+            else if (flag == 1u &&
+                     ((remaining - 1u) == 0u ||
+                      (remaining - 1u) % ((size_t)header.player_count * 4u) != 0u))
+                parse_rc = -6;
+        }
+    }
     free(bytes);
-    if (parse_rc != 0 || offset != payload_length)
+    if (parse_rc != 0)
     {
         free(records.items);
         if (parse_rc == -2 || parse_rc == -1)
@@ -492,11 +545,14 @@ pe_monker_status_t pe_monker_tree_load(const char *path,
                     return PE_MONKER_ERR_IO;
                 }
                 node->bet_sizes = grown;
-                node->bet_sizes[size_index] = action_size(action);
+                if (action_size(action, &node->bet_sizes[size_index]) != 0)
+                {
+                    discard_tree(tree, i + 1u);
+                    free(records.items);
+                    return PE_MONKER_ERR_INVALID_ACTION;
+                }
                 node->bet_size_count++;
                 node->actions[records.items[child].child_slot].size_index = size_index;
-                if (action == 10u)
-                    node->use_pot_sizing = 1;
             }
         }
     }
@@ -616,8 +672,8 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
         free(bytes);
         return PE_MONKER_OK;
     }
-    parse_rc = parse_node_stream(bytes, length, &offset, -1, 0u, 0u,
-                                 &records);
+    parse_rc = parse_node_stream(bytes, length, &offset, PE_MONKER_NO_ACTION,
+                                 -1, 0u, 0u, &records);
     free(records.items);
     if (parse_rc != 0)
     {
@@ -628,13 +684,17 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
             return PE_MONKER_ERR_TRUNCATED;
         return PE_MONKER_ERR_INVALID_TOPOLOGY;
     }
-    if (length - offset < sizeof(int32_t))
+    /* DataOutputStream.writeBoolean emits a single byte. Reading four here
+       consumed the first int32 of the range block whenever ranges were
+       present, and rejected every rangeless tree — which is all of them, since
+       a rangeless tree ends on exactly this one byte. */
+    if (length - offset < 1u)
     {
         free(bytes);
         return PE_MONKER_OK;
     }
-    present = decode_i32(bytes + offset);
-    offset += sizeof(int32_t);
+    present = (int32_t)bytes[offset];
+    offset += 1u;
     if (present == 0)
     {
         status = offset == length ? PE_MONKER_OK : PE_MONKER_ERR_INVALID_HEADER;
