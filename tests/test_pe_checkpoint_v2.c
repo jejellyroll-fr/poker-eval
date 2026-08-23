@@ -58,8 +58,8 @@ int main(void)
     const pe_storage_ops_t *ops = pe_storage_ram_ops();
     const pe_persist_ops_t *persist = pe_persist_checkpoint_ops();
     pe_solver_config_t config = pe_solver_config_default();
-    pe_persist_target_t target = {path};
-    pe_persist_source_t source = {path};
+    pe_persist_target_t target = {path, 0x11112222u, 0x33334444u};
+    pe_persist_source_t source = {path, 0x11112222u, 0x33334444u};
     void *left = NULL;
     void *right = NULL;
     pe_infoset_id_t left_id;
@@ -135,6 +135,20 @@ int main(void)
         CHECK(fabs(restored_regret[2] - 3.5) < 1e-15 &&
                   fabs(restored_average[1] - 0.75) < 1e-15,
               "restored values changed during round-trip");
+    }
+    {
+        void *mismatch = NULL;
+        pe_persist_source_t wrong_tree = source;
+        wrong_tree.tree_hash ^= 1u;
+        CHECK(ops->create(&mismatch, 1u) == 0,
+              "mismatch destination creation failed");
+        if (mismatch)
+        {
+            CHECK(persist->load(NULL, &wrong_tree, &config, ops, mismatch,
+                                &iteration) != 0,
+                  "checkpoint with a different tree hash was accepted");
+            ops->destroy(mismatch);
+        }
     }
 
     /* API-04 keeps the legacy CFRCHKPT v1 stream readable. Its records are

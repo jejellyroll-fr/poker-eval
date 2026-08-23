@@ -18,11 +18,15 @@ extern "C" {
 /** File target for a checkpoint adapter. The path is borrowed. */
 struct pe_persist_target_t {
     const char *path;
+    uint64_t game_hash;
+    uint64_t tree_hash;
 };
 
 /** File source for a checkpoint adapter. The path is borrowed. */
 struct pe_persist_source_t {
     const char *path;
+    uint64_t game_hash;
+    uint64_t tree_hash;
 };
 
 #ifndef POKER_EVAL_PE_PERSIST_OPS_T_DEFINED

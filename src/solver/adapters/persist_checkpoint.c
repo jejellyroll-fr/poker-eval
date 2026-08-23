@@ -3,6 +3,7 @@
  */
 
 #include <poker_eval/solver/pe_persist.h>
+#include <poker_eval/solver/pe_rng.h>
 
 #include <stdio.h>
 #include <math.h>
@@ -318,6 +319,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
     size_t count;
     size_t id;
     uint64_t hash;
+    pe_rng_t rng;
     (void)self;
 
     if (!target || !target->path || !*target->path || !config ||
@@ -331,13 +333,16 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
     if (!file)
         return -1;
     hash = hash_config(config);
+    rng = pe_solver_rng_stream(config->seed, 0u, iteration, 0u, 0u);
     if (write_bytes(file, PE_CHECKPOINT_MAGIC, 8u) != 0 ||
         write_u32(file, PE_CHECKPOINT_VERSION) != 0 ||
         write_u32(file, PE_CHECKPOINT_ENDIAN) != 0 ||
         write_u64(file, iteration) != 0 ||
         write_u64(file, (uint64_t)count) != 0 ||
         write_u64(file, hash) != 0 ||
-        write_u64(file, 0u) != 0)
+        write_u64(file, target->game_hash) != 0 ||
+        write_u64(file, target->tree_hash) != 0 ||
+        write_u64(file, rng.state) != 0)
         goto fail;
 
     for (id = 0u; id < count; ++id)
@@ -406,7 +411,9 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
     uint64_t iteration;
     uint64_t count64;
     uint64_t stored_hash;
-    uint64_t reserved;
+    uint64_t stored_game_hash;
+    uint64_t stored_tree_hash;
+    uint64_t stored_rng_state;
     checkpoint_entry_t *entries = NULL;
     size_t count = 0u;
     size_t i;
@@ -426,12 +433,23 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
                                       out_iteration);
     if (read_u32(file, &version) != 0 || read_u32(file, &endian) != 0 ||
         read_u64(file, &iteration) != 0 || read_u64(file, &count64) != 0 ||
-        read_u64(file, &stored_hash) != 0 || read_u64(file, &reserved) != 0 ||
+        read_u64(file, &stored_hash) != 0 ||
+        read_u64(file, &stored_game_hash) != 0 ||
+        read_u64(file, &stored_tree_hash) != 0 ||
+        read_u64(file, &stored_rng_state) != 0 ||
         memcmp(magic, PE_CHECKPOINT_MAGIC, sizeof(magic)) != 0 ||
         version != PE_CHECKPOINT_VERSION || endian != PE_CHECKPOINT_ENDIAN ||
-        reserved != 0u || stored_hash != hash_config(config) ||
+        stored_hash != hash_config(config) ||
+        stored_game_hash != source->game_hash ||
+        stored_tree_hash != source->tree_hash ||
         count64 > PE_CHECKPOINT_MAX_ENTRIES || count64 > SIZE_MAX)
         goto fail;
+    {
+        pe_rng_t expected_rng = pe_solver_rng_stream(
+            config->seed, 0u, iteration, 0u, 0u);
+        if (stored_rng_state != expected_rng.state)
+            goto fail;
+    }
     count = (size_t)count64;
     entries = (checkpoint_entry_t *)calloc(count, sizeof(*entries));
     if (count != 0u && !entries)
