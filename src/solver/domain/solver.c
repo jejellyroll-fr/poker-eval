@@ -109,6 +109,10 @@ void pe_solver_destroy(pe_solver_t *solver)
     if (solver == NULL)
         return;
 
+    if (solver->state == PE_SOLVER_STATE_RUNNING ||
+        solver->state == PE_SOLVER_STATE_PAUSED)
+        solver->state = PE_SOLVER_STATE_STOPPED;
+
     /* Give a buffering adapter its chance before the pointer goes away. */
     pe_telemetry_flush(solver->deps.telemetry);
 
@@ -264,6 +268,8 @@ pe_solver_status_t pe_solver_pause(pe_solver_t *solver)
 {
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (solver->state == PE_SOLVER_STATE_PAUSED)
+        return PE_SOLVER_OK;
     if (solver->state != PE_SOLVER_STATE_RUNNING)
         return PE_SOLVER_ERR_INVALID_STATE;
     solver->state = PE_SOLVER_STATE_PAUSED;
@@ -274,6 +280,8 @@ pe_solver_status_t pe_solver_resume(pe_solver_t *solver)
 {
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (solver->state == PE_SOLVER_STATE_RUNNING)
+        return PE_SOLVER_OK;
     if (solver->state != PE_SOLVER_STATE_PAUSED)
         return PE_SOLVER_ERR_INVALID_STATE;
     solver->state = PE_SOLVER_STATE_RUNNING;
@@ -284,6 +292,8 @@ pe_solver_status_t pe_solver_stop(pe_solver_t *solver)
 {
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (solver->state == PE_SOLVER_STATE_STOPPED)
+        return PE_SOLVER_OK;
     if (solver->state != PE_SOLVER_STATE_RUNNING &&
         solver->state != PE_SOLVER_STATE_PAUSED)
         return PE_SOLVER_ERR_INVALID_STATE;
@@ -299,6 +309,7 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
     if (solver->state == PE_SOLVER_STATE_CREATED)
         return PE_SOLVER_ERR_INVALID_STATE;
     memset(out, 0, sizeof(*out));
+    out->total_iterations = solver->config.max_iterations;
     out->running = solver->state == PE_SOLVER_STATE_RUNNING;
     out->paused = solver->state == PE_SOLVER_STATE_PAUSED;
     out->complete = solver->state == PE_SOLVER_STATE_COMPLETED;
