@@ -161,6 +161,9 @@ typedef struct pe_storage_ops_t
 
     /** Read flags. @return 0, or -1 when the id is out of range. */
     int (*get_flags)(const void *self, pe_infoset_id_t id, uint8_t *out);
+
+    /** Read the stable game key of an infoset id without creating anything. */
+    int (*key_at)(const void *self, pe_infoset_id_t id, uint64_t *out_key);
 } pe_storage_ops_t;
 
 /** Whether an adapter serves a value array. */

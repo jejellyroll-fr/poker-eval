@@ -50,6 +50,7 @@ add_library(poker_solver
     solver/domain/compute_layout.c
     solver/domain/best_response_ii.c
     solver/adapters/storage_ram.c
+    solver/adapters/persist_checkpoint.c
     solver/adapters/compute_cpu_ref.c
     solver/adapters/compute_cpu_par.c
     solver/adapters/compute_gpu_updates.c

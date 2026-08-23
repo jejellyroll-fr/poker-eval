@@ -196,7 +196,7 @@ static const pe_storage_ops_t k_toy_ops = {
     PE_VALUES_ALL,
     toy_create, toy_destroy, toy_resolve, toy_find, toy_shape,
     toy_values, toy_values_const, toy_count, toy_slot_count, toy_bytes,
-    toy_set_flags, toy_get_flags
+    toy_set_flags, toy_get_flags, NULL
 };
 
 /* ------------------------------------------------------------------ *

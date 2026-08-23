@@ -114,6 +114,16 @@ static size_t ram_count(const void *self)
     return pe_storage_count((const pe_storage_t *)self);
 }
 
+static int ram_key_at(const void *self, pe_infoset_id_t id, uint64_t *out_key)
+{
+    const pe_infoset_meta_t *meta =
+        pe_storage_meta((const pe_storage_t *)self, id);
+    if (!meta || !out_key)
+        return -1;
+    *out_key = meta->key;
+    return 0;
+}
+
 static uint64_t ram_slot_count(const void *self)
 {
     return pe_storage_slot_count((const pe_storage_t *)self);
@@ -156,7 +166,8 @@ static const pe_storage_ops_t k_ram_ops = {
     ram_slot_count,
     ram_bytes,
     ram_set_flags,
-    ram_get_flags
+    ram_get_flags,
+    ram_key_at
 };
 
 const pe_storage_ops_t *pe_storage_ram_ops(void)

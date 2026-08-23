@@ -304,7 +304,8 @@ static const pe_storage_ops_t k_legacy_ops = {
     legacy_slot_count,
     legacy_bytes,
     legacy_set_flags,
-    legacy_get_flags
+    legacy_get_flags,
+    NULL
 };
 
 const pe_storage_ops_t *pe_storage_legacy_ops(void)

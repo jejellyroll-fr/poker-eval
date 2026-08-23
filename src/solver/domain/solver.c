@@ -22,6 +22,7 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/solver/pe_traversal.h>
 
@@ -63,6 +64,7 @@ struct pe_solver_t {
        save" rather than "write somewhere"). */
     pe_solver_deps_t deps;
     int state;
+    int checkpoint_loaded;
     uint64_t iteration;
 };
 
@@ -330,6 +332,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     pe_compute_config_t compute_config;
     void *compute_self = NULL;
     uint64_t iteration;
+    uint64_t completed_iterations;
     int rc;
 
     if (solver->deps.vector_game == NULL ||
@@ -384,8 +387,11 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     }
 
     solver->state = PE_SOLVER_STATE_RUNNING;
-    for (iteration = 1u; iteration <= solver->config.max_iterations; ++iteration)
+    completed_iterations = solver->iteration;
+    for (iteration = completed_iterations;
+         iteration < solver->config.max_iterations;)
     {
+        ++iteration;
         rc = ops->begin_iteration(&traversal, iteration);
         if (rc == 0)
             rc = ops->run_iteration(&traversal, &batch);
@@ -416,6 +422,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     pe_traversal_ctx_destroy(&traversal);
     compute_ops->destroy(compute_self);
     solver->state = PE_SOLVER_STATE_COMPLETED;
+    solver->checkpoint_loaded = 0;
     return PE_SOLVER_OK;
 }
 
@@ -447,7 +454,8 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
     if (validation != PE_SOLVER_OK)
         return validation;
     solver->state = PE_SOLVER_STATE_VALIDATED;
-    solver->iteration = 0u;
+    if (!solver->checkpoint_loaded)
+        solver->iteration = 0u;
 
     if (pe_solver_plan(solver, &plan) != PE_SOLVER_OK)
         return PE_SOLVER_ERR_INVALID_CONFIG;
@@ -579,7 +587,16 @@ pe_solver_status_t pe_solver_save(const pe_solver_t *solver,
 {
     if (solver == NULL || target == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->deps.persist == NULL || solver->deps.persist->save == NULL)
+        return PE_SOLVER_ERR_EXECUTION;
+    if (solver->state != PE_SOLVER_STATE_COMPLETED &&
+        solver->state != PE_SOLVER_STATE_PAUSED &&
+        solver->state != PE_SOLVER_STATE_STOPPED)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    return solver->deps.persist->save(NULL, target, &solver->config,
+                                      solver->storage, solver->storage_self,
+                                      solver->iteration) == 0
+        ? PE_SOLVER_OK : PE_SOLVER_ERR_EXECUTION;
 }
 
 pe_solver_status_t pe_solver_load(pe_solver_t *solver,
@@ -587,5 +604,16 @@ pe_solver_status_t pe_solver_load(pe_solver_t *solver,
 {
     if (solver == NULL || source == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->deps.persist == NULL || solver->deps.persist->load == NULL)
+        return PE_SOLVER_ERR_EXECUTION;
+    if (solver->state != PE_SOLVER_STATE_CREATED &&
+        solver->state != PE_SOLVER_STATE_VALIDATED)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    if (solver->deps.persist->load(NULL, source, &solver->config,
+                                   solver->storage, solver->storage_self,
+                                   &solver->iteration) != 0)
+        return PE_SOLVER_ERR_EXECUTION;
+    solver->state = PE_SOLVER_STATE_CREATED;
+    solver->checkpoint_loaded = 1;
+    return PE_SOLVER_OK;
 }

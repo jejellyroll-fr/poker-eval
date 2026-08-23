@@ -42,7 +42,10 @@ typedef struct pe_compute_ops_t   pe_compute_ops_t;
 #define POKER_EVAL_PE_COMPUTE_OPS_T_DEFINED
 #endif
 typedef struct pe_evaluator_ops_t pe_evaluator_ops_t;
+#ifndef POKER_EVAL_PE_PERSIST_OPS_T_DEFINED
 typedef struct pe_persist_ops_t   pe_persist_ops_t;
+#define POKER_EVAL_PE_PERSIST_OPS_T_DEFINED
+#endif
 struct pe_vector_game_t;
 
 /*
