@@ -6,6 +6,8 @@
 #define POKER_EVAL_PE_MONKER_H
 
 #include <stdint.h>
+#include <stddef.h>
+#include <poker_eval/range.h>
 
 struct mpf_tree_def_t;
 
@@ -45,6 +47,13 @@ typedef struct
     double stacks[PE_MONKER_MAX_PLAYERS];
 } pe_monker_tree_header_t;
 
+typedef struct
+{
+    uint32_t player_count;
+    uint32_t combo_count;
+    pe_range_t **players;
+} pe_monker_range_set_t;
+
 /** Read the fixed header at the beginning of a MonkerSolver .tree file. */
 pe_monker_status_t pe_monker_tree_read_header(
     const char *path, pe_monker_tree_header_t *out);
@@ -61,6 +70,12 @@ const char *pe_monker_status_string(pe_monker_status_t status);
  */
 pe_monker_status_t pe_monker_tree_load(const char *path,
                                        struct mpf_tree_def_t **out_tree);
+
+/** Read the optional fixed-point range block following a .tree node stream. */
+pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
+                                              pe_monker_range_set_t *out);
+
+void pe_monker_range_set_free(pe_monker_range_set_t *ranges);
 
 #ifdef __cplusplus
 }

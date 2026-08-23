@@ -5,11 +5,14 @@
 #include <poker_eval/solver/pe_monker.h>
 
 #include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/solver/pe_combinations.h>
 
 #define PE_MONKER_MAX_NODES 1000000u
 #define PE_MONKER_MAX_DEPTH 1024u
@@ -506,5 +509,205 @@ pe_monker_status_t pe_monker_tree_load(const char *path,
     }
     free(records.items);
     *out_tree = tree;
+    return PE_MONKER_OK;
+}
+
+static pe_monker_status_t load_payload(const char *path,
+                                       const pe_monker_tree_header_t *header,
+                                       unsigned char **out_bytes,
+                                       size_t *out_length)
+{
+    FILE *file;
+    long file_size;
+    long payload_start;
+    size_t payload_length;
+    unsigned char *bytes;
+
+    file = fopen(path, "rb");
+    if (!file)
+        return PE_MONKER_ERR_OPEN;
+    if (fseek(file, 0, SEEK_END) != 0)
+    {
+        fclose(file);
+        return PE_MONKER_ERR_IO;
+    }
+    file_size = ftell(file);
+    if (file_size < 0 || skip_header(file, header) != 0)
+    {
+        fclose(file);
+        return PE_MONKER_ERR_IO;
+    }
+    payload_start = ftell(file);
+    if (payload_start < 0 || file_size < payload_start)
+    {
+        fclose(file);
+        return PE_MONKER_ERR_TRUNCATED;
+    }
+    payload_length = (size_t)(file_size - payload_start);
+    bytes = (unsigned char *)malloc(payload_length == 0u ? 1u : payload_length);
+    if (!bytes || fread(bytes, 1u, payload_length, file) != payload_length)
+    {
+        free(bytes);
+        fclose(file);
+        return PE_MONKER_ERR_TRUNCATED;
+    }
+    fclose(file);
+    *out_bytes = bytes;
+    *out_length = payload_length;
+    return PE_MONKER_OK;
+}
+
+static pe_range_t *allocate_fixed_range(uint32_t combo_count,
+                                        unsigned combo_cards)
+{
+    pe_range_t *range = (pe_range_t *)calloc(1u, sizeof(*range));
+    if (!range)
+        return NULL;
+    range->game_type = combo_cards == 4u ? game_omaha : game_holdem;
+    range->capacity = combo_count;
+    range->count = combo_count;
+    range->combos = (pe_combo_t *)calloc(combo_count, sizeof(*range->combos));
+    if (!range->combos)
+    {
+        free(range);
+        return NULL;
+    }
+    return range;
+}
+
+void pe_monker_range_set_free(pe_monker_range_set_t *ranges)
+{
+    uint32_t player;
+
+    if (!ranges)
+        return;
+    for (player = 0u; player < ranges->player_count; ++player)
+        pe_range_free(ranges->players ? ranges->players[player] : NULL);
+    free(ranges->players);
+    memset(ranges, 0, sizeof(*ranges));
+}
+
+pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
+                                              pe_monker_range_set_t *out)
+{
+    pe_monker_tree_header_t header;
+    pe_monker_node_records_t records = {0};
+    unsigned char *bytes = NULL;
+    size_t length = 0u;
+    size_t offset = 0u;
+    uint32_t combo_count;
+    uint32_t player;
+    unsigned combo_cards;
+    int32_t present;
+    int parse_rc;
+    pe_monker_status_t status;
+
+    if (!path || !out)
+        return PE_MONKER_ERR_NULL_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    status = pe_monker_tree_read_header(path, &header);
+    if (status != PE_MONKER_OK)
+        return status;
+    status = load_payload(path, &header, &bytes, &length);
+    if (status != PE_MONKER_OK)
+        return status;
+    if (length == 0u)
+    {
+        free(bytes);
+        return PE_MONKER_OK;
+    }
+    parse_rc = parse_node_stream(bytes, length, &offset, -1, 0u, 0u,
+                                 &records);
+    free(records.items);
+    if (parse_rc != 0)
+    {
+        free(bytes);
+        if (parse_rc == -3)
+            return PE_MONKER_ERR_DEPTH_LIMIT;
+        if (parse_rc == -4)
+            return PE_MONKER_ERR_TRUNCATED;
+        return PE_MONKER_ERR_INVALID_TOPOLOGY;
+    }
+    if (length - offset < sizeof(int32_t))
+    {
+        free(bytes);
+        return PE_MONKER_OK;
+    }
+    present = decode_i32(bytes + offset);
+    offset += sizeof(int32_t);
+    if (present == 0)
+    {
+        status = offset == length ? PE_MONKER_OK : PE_MONKER_ERR_INVALID_HEADER;
+        free(bytes);
+        return status;
+    }
+    if (present != 1 || header.player_count == 0u ||
+        (length - offset) % ((size_t)header.player_count * sizeof(int32_t)) != 0u)
+    {
+        free(bytes);
+        return PE_MONKER_ERR_INVALID_HEADER;
+    }
+    combo_count = (uint32_t)((length - offset) /
+                             ((size_t)header.player_count * sizeof(int32_t)));
+    if (combo_count == 1326u)
+        combo_cards = 2u;
+    else if (combo_count == 270725u)
+        combo_cards = 4u;
+    else
+    {
+        free(bytes);
+        return PE_MONKER_ERR_INVALID_HEADER;
+    }
+
+    out->players = (pe_range_t **)calloc(header.player_count,
+                                         sizeof(*out->players));
+    if (!out->players)
+    {
+        free(bytes);
+        return PE_MONKER_ERR_IO;
+    }
+    out->player_count = header.player_count;
+    out->combo_count = combo_count;
+    for (player = 0u; player < out->player_count; ++player)
+    {
+        uint32_t combo;
+        double total = 0.0;
+        pe_range_t *range = allocate_fixed_range(combo_count, combo_cards);
+        if (!range)
+        {
+            free(bytes);
+            pe_monker_range_set_free(out);
+            return PE_MONKER_ERR_IO;
+        }
+        out->players[player] = range;
+        for (combo = 0u; combo < combo_count; ++combo)
+        {
+            int32_t fixed = decode_i32(bytes + offset);
+            unsigned cards[4];
+            size_t index = (size_t)combo;
+            offset += sizeof(int32_t);
+            if (fixed < 0 ||
+                pe_comb_unrank(52u, combo_cards, combo, cards) != PE_SOLVER_OK)
+            {
+                free(bytes);
+                pe_monker_range_set_free(out);
+                return PE_MONKER_ERR_INVALID_HEADER;
+            }
+            StdDeck_CardMask_RESET(range->combos[index].hand);
+            for (unsigned card = 0u; card < combo_cards; ++card)
+                StdDeck_CardMask_SET(range->combos[index].hand, cards[card]);
+            range->combos[index].weight =
+                (double)fixed / 2147483647.0;
+            total += range->combos[index].weight;
+        }
+        if (!(total > 0.0) || !isfinite(total))
+        {
+            free(bytes);
+            pe_monker_range_set_free(out);
+            return PE_MONKER_ERR_INVALID_HEADER;
+        }
+        range->total_weight = total;
+    }
+    free(bytes);
     return PE_MONKER_OK;
 }

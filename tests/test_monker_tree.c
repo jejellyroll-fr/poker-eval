@@ -6,7 +6,9 @@
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures;
@@ -185,11 +187,70 @@ static void test_node_topology(void)
     mpf_tree_free(tree);
 }
 
+static void test_fixed_ranges(void)
+{
+    const char *path = "/tmp/poker_eval_monker_ranges.tree";
+    unsigned char *bytes = (unsigned char *)calloc(12000u, 1u);
+    size_t at = 0u;
+    pe_monker_range_set_t ranges;
+    uint32_t player;
+    uint32_t combo;
+
+    CHECK(bytes != NULL, "range fixture allocation failed");
+    if (!bytes)
+        return;
+    put_i64(bytes, &at, 33487);
+    put_i32(bytes, &at, 12);
+    put_i32(bytes, &at, 2);
+    put_i32(bytes, &at, 0);
+    put_i32(bytes, &at, 0);
+    put_f64(bytes, &at, 1.0);
+    put_f64(bytes, &at, 1.0);
+    put_f64(bytes, &at, 0.0);
+    put_f64(bytes, &at, 100.0);
+    put_f64(bytes, &at, 100.0);
+    bytes[at++] = 0u;
+    bytes[at++] = 0u;
+    put_i32(bytes, &at, 1);
+    for (player = 0u; player < 2u; ++player)
+        for (combo = 0u; combo < 1326u; ++combo)
+            put_i32(bytes, &at, combo == player ? INT32_MAX : 0);
+
+    CHECK(write_path_fixture(path, bytes, at) == 0,
+          "range fixture write failed");
+    CHECK(pe_monker_tree_read_ranges(path, &ranges) == PE_MONKER_OK,
+          "fixed ranges were not decoded");
+    if (ranges.players)
+    {
+        CHECK(ranges.player_count == 2u && ranges.combo_count == 1326u,
+              "range dimensions are wrong");
+        CHECK(ranges.players[0]->count == 1326u &&
+                  ranges.players[0]->combos[0].weight == 1.0 &&
+                  ranges.players[0]->combos[1].weight == 0.0,
+              "player 0 fixed weights are wrong");
+        CHECK(ranges.players[1]->combos[1].weight == 1.0,
+              "player 1 fixed weight is wrong");
+        {
+            unsigned card_count = 0u;
+            unsigned card;
+            for (card = 0u; card < 52u; ++card)
+                if (StdDeck_CardMask_CARD_IS_SET(
+                        ranges.players[0]->combos[0].hand, card))
+                    ++card_count;
+            CHECK(card_count == 2u,
+                  "decoded Hold'em combo does not contain two cards");
+        }
+    }
+    pe_monker_range_set_free(&ranges);
+    free(bytes);
+}
+
 int main(void)
 {
     test_header_variants();
     test_rejections();
     test_node_topology();
+    test_fixed_ranges();
     if (failures != 0)
         return 1;
     puts("test_monker_tree: header decoding and rejection paths passed");
