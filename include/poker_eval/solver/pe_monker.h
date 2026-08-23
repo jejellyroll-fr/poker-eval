@@ -83,7 +83,25 @@ typedef struct
 {
     pe_monker_mkr_entry_t *entries;
     size_t count;
+    void *private_data;
 } pe_monker_mkr_t;
+
+typedef struct
+{
+    char *game;
+    int64_t iterations;
+    uint32_t flop_buckets;
+    double rakepercent;
+    double rakecap;
+    int32_t rakeflags;
+} pe_monker_mkr_metadata_t;
+
+typedef struct
+{
+    uint32_t bucket_count;
+    uint32_t class_count;
+    uint16_t *frequencies;
+} pe_monker_mkr_strategy_t;
 
 /** Read the fixed header at the beginning of a MonkerSolver .tree file. */
 pe_monker_status_t pe_monker_tree_read_header(
@@ -113,6 +131,24 @@ pe_monker_mkr_status_t pe_monker_mkr_read(const char *path,
                                           pe_monker_mkr_t *out);
 
 void pe_monker_mkr_free(pe_monker_mkr_t *archive);
+
+/** Extract one entry after validating and inflating its ZIP payload. */
+pe_monker_mkr_status_t pe_monker_mkr_entry_read(
+    const pe_monker_mkr_t *archive, size_t index,
+    unsigned char **out_data, size_t *out_size);
+
+/** Read the scalar Java-serialized entries in a saved run. */
+pe_monker_mkr_status_t pe_monker_mkr_read_metadata(
+    const pe_monker_mkr_t *archive, pe_monker_mkr_metadata_t *out);
+
+void pe_monker_mkr_metadata_free(pe_monker_mkr_metadata_t *metadata);
+
+/** Read a storedstrategyN entry; TC_NULL yields an empty strategy. */
+pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
+    const pe_monker_mkr_t *archive, const char *entry_name,
+    uint32_t bucket_count, pe_monker_mkr_strategy_t *out);
+
+void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy);
 
 const char *pe_monker_mkr_status_string(pe_monker_mkr_status_t status);
 

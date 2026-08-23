@@ -768,7 +768,7 @@ set_tests_properties(test_backend_parity PROPERTIES LABELS "solver;solver-v3;par
 add_poker_test(test_monker_tree)
 set_tests_properties(test_monker_tree PROPERTIES LABELS "solver;solver-v3;monker;mkr01")
 add_poker_test(test_monker_mkr)
-set_tests_properties(test_monker_mkr PROPERTIES LABELS "solver;solver-v3;monker;mkr04")
+set_tests_properties(test_monker_mkr PROPERTIES LABELS "solver;solver-v3;monker;mkr04;mkr05")
 add_poker_test(test_pe_storage_ids)
 add_poker_test(test_pe_traversal_vector)
 add_poker_test(test_pe_vector_cfr)
