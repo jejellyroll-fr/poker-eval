@@ -38,6 +38,7 @@ add_library(poker_solver
     solver/domain/average.c
     solver/domain/showdown_vector.c
     solver/domain/traversal_chance_vector.c
+    solver/domain/best_response_ii.c
     solver/adapters/storage_ram.c
     solver/adapters/range_parser.c
     solver/adapters/telemetry_null.c

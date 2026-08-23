@@ -259,4 +259,9 @@ pe_solver_status_t pe_solver_load(pe_solver_t *solver,
 }
 #endif
 
+/* BR-02 vector best response. The contract is included here so callers that
+ * use the public solver header see the measurement API; the concrete vector
+ * game definition remains in pe_traversal.h. */
+#include <poker_eval/solver/pe_best_response.h>
+
 #endif /* POKER_EVAL_PE_SOLVER_H */

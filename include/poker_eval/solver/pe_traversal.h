@@ -49,7 +49,7 @@ int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update);
  * replace this compact surface with pe_game_rules_t without changing the
  * traversal port.
  */
-typedef struct
+typedef struct pe_vector_game_t
 {
     const void *root;
     void *user;
