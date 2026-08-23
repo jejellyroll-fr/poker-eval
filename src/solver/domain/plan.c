@@ -21,6 +21,7 @@
 
 #include <stdarg.h>
 #include <stddef.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -268,6 +269,23 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     "backend %s is single-threaded; cpu_threads = %d has no effect",
                     pe_compute_kind_name(PE_COMPUTE_CPU_REF),
                     cfg->execution.cpu_threads);
+
+    if (!isfinite(cfg->target_exploitability_mbb) ||
+        cfg->target_exploitability_mbb < 0.0)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "target_exploitability_mbb must be finite and non-negative, got %f",
+                    cfg->target_exploitability_mbb);
+
+    if (cfg->target_exploitability_mbb > 0.0 &&
+        cfg->exploitability_interval == 0)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "exploitability_interval must be positive when an exploitability "
+                    "target is configured");
+
+    if (cfg->max_iterations == 0 && cfg->target_exploitability_mbb == 0.0)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "at least one stop condition is required: max_iterations or "
+                    "target_exploitability_mbb");
 }
 
 static void pe_report_missing_caps(uint64_t missing, pe_diagnostics_t *diag)

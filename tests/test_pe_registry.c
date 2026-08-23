@@ -317,6 +317,38 @@ static void test_out_of_range_parameters(void)
           "the exponential policy without legacy-exp regret should be refused");
 }
 
+static void test_exploitability_stop_configuration(void)
+{
+    pe_solver_config_t cfg = pe_solver_config_default();
+    pe_execution_plan_t plan;
+    pe_diagnostics_t diag;
+
+    cfg.target_exploitability_mbb = 5.0;
+    cfg.exploitability_interval = 10;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) != PE_VALID_ERROR,
+          "a target with a measurement interval should be valid");
+
+    cfg = pe_solver_config_default();
+    cfg.target_exploitability_mbb = 5.0;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
+          "a target without a measurement interval should be refused");
+    CHECK(diag_mentions(&diag, "exploitability_interval"),
+          "the missing interval should be diagnosed");
+
+    cfg = pe_solver_config_default();
+    cfg.target_exploitability_mbb = -1.0;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
+          "a negative target should be refused");
+    CHECK(diag_mentions(&diag, "target_exploitability_mbb"),
+          "the invalid target should be diagnosed");
+
+    cfg = pe_solver_config_default();
+    cfg.max_iterations = 0;
+    cfg.target_exploitability_mbb = 0.0;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
+          "a configuration without a stop condition should be refused");
+}
+
 static void test_null_arguments(void)
 {
     pe_solver_config_t cfg = pe_solver_config_default();
@@ -401,6 +433,7 @@ int main(void)
     test_sampling_presets_are_gated();
     test_auto_backend_reports_a_fallback();
     test_out_of_range_parameters();
+    test_exploitability_stop_configuration();
     test_null_arguments();
     test_plan_text();
     test_diagnostics_overflow_is_counted();
