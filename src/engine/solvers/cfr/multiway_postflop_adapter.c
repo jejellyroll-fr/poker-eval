@@ -1530,6 +1530,119 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
     return mpf_state_key(child);
 }
 
+/*
+ * CHN-03: draw one chance outcome by direct sampling.
+ *
+ * The deck deals uniformly; anything an estimator biases (a bunched board
+ * card, a weighted private deal) is sampled at its actual probability and the
+ * importance ratio carries the correction back to the uniform scale. A flop
+ * combination is drawn uniformly, so its ratio is exactly 1.0 and a sweep of
+ * the sampler reproduces the enumerated distribution one-for-one.
+ */
+int mpf_chance_sample(const mpf_state_t *st, pe_rng_t *rng,
+                      pe_chance_sample_t *out)
+{
+    if (!out)
+        return -1;
+    out->outcome = 0;
+    out->importance_ratio = 1.0;
+    if (!st || !rng)
+        return -1;
+
+    switch (mpf_state_chance_kind(st))
+    {
+    case PE_CHANCE_PRIVATE_HANDS:
+    {
+        int n = st->private_deal_count;
+        if (n <= 0)
+            return -1;
+        double total = 0.0;
+        for (int i = 0; i < n; ++i)
+            total += st->private_deals[i].weight;
+        if (!(total > 0.0))
+            return -1;
+        double u = pe_rng_uniform01(rng) * total;
+        double acc = 0.0;
+        int pick = n - 1;
+        for (int i = 0; i < n; ++i)
+        {
+            acc += st->private_deals[i].weight;
+            if (u < acc)
+            {
+                pick = i;
+                break;
+            }
+        }
+        out->outcome = pick;
+        out->importance_ratio =
+            (1.0 / (double)n) /
+            (st->private_deals[pick].weight / total);
+        return 0;
+    }
+
+    case PE_CHANCE_FLOP_THREE:
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        uint64_t combos = pe_comb_count((unsigned)count, 3);
+        if (combos == 0 || combos > MPF_MAX_FLOP_OUTCOMES)
+            return -1;
+        out->outcome = (int)pe_rng_below(rng, (uint32_t)combos);
+        out->importance_ratio = 1.0; /* uniform over combinations */
+        return 0;
+    }
+
+    case PE_CHANCE_BOARD_ONE:
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        if (count <= 0)
+            return -1;
+        if (!mpf_bunching_enabled(st))
+        {
+            out->outcome = (int)pe_rng_below(rng, (uint32_t)count);
+            out->importance_ratio = 1.0;
+            return 0;
+        }
+        double wsum = 0.0;
+        double weights[52];
+        for (int i = 0; i < count; ++i)
+        {
+            weights[i] = mpf_bunching_state_survival(st, cards[i]);
+            wsum += weights[i];
+        }
+        if (!(wsum > 0.0))
+        {
+            out->outcome = (int)pe_rng_below(rng, (uint32_t)count);
+            out->importance_ratio = 1.0;
+            return 0;
+        }
+        double u = pe_rng_uniform01(rng) * wsum;
+        double acc = 0.0;
+        int pick = count - 1;
+        for (int i = 0; i < count; ++i)
+        {
+            acc += weights[i];
+            if (u < acc)
+            {
+                pick = i;
+                break;
+            }
+        }
+        out->outcome = pick;
+        out->importance_ratio =
+            (1.0 / (double)count) / (weights[pick] / wsum);
+        return 0;
+    }
+
+    case PE_CHANCE_NONE:
+    case PE_CHANCE_DRAW_N:
+    case PE_CHANCE_KIND_COUNT:
+    default:
+        return -1;
+    }
+}
+
 static int mpf_is_terminal(const mpf_state_t *st)
 {
     if (!st)

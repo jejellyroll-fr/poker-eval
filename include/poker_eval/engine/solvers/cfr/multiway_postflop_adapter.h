@@ -6,6 +6,7 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/economics/rake.h>
 #include <poker_eval/solver/pe_chance.h>
+#include <poker_eval/solver/pe_game_rules.h>
 #include <poker_eval/solver/pe_range.h>
 
 #if !defined(_WIN32)
@@ -356,6 +357,22 @@ pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state);
  * node actually dealt does.
  */
 const mpf_state_t *mpf_state_for_key(cfr_game_t *game, uint64_t key);
+
+/* CHN-03: draw one chance outcome by direct sampling.
+ *
+ * Enumeration is a strategy, not an identity: a wide node (a full-deck flop,
+ * a multiway deal from ranges) costs as many children as outcomes, and a
+ * sampled traversal needs the same transitions without building them. This
+ * draws an outcome with the same numbering apply_chance would index, plus the
+ * importance ratio that corrects for any non-uniform deal — bunching weights
+ * on a board card, private-deal weights. Uniform deals (every flop combination)
+ * draw with ratio 1.0.
+ *
+ * Returns 0 on success, -1 when `state` or `rng` is NULL, or the state is not
+ * a chance node the sampler understands.
+ */
+int mpf_chance_sample(const mpf_state_t *state, pe_rng_t *rng,
+                      pe_chance_sample_t *out);
 
 struct mpf_perf_stats_pool_t *mpf_perf_stats_pool_create(int max_threads_hint);
 void mpf_perf_stats_pool_destroy(struct mpf_perf_stats_pool_t *pool);

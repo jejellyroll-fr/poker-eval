@@ -24,6 +24,7 @@
 
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
 #include <poker_eval/engine/solvers/cfr/multiway_postflop_adapter.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/solver/pe_chance.h>
 #include <poker_eval/solver/pe_combinations.h>
 #include <poker_eval/core/eval_context.h>
@@ -32,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static void base_config(mpf_config_t *cfg, const EvalContext *ctx)
 {
@@ -290,6 +292,227 @@ static int test_a_pinned_flop_is_not_dealt(const EvalContext *ctx)
     return failures;
 }
 
+/*
+ * CHN-03: the sampler must reproduce the enumerated distribution.
+ *
+ * The flop chance node enumerates C(48,3) = 17296 combinations over the 48
+ * cards still in the deck. Direct sampling draws one of those combinations
+ * uniformly, so over many draws the empirical frequency of every suit-
+ * isomorphism class (flops grouped by pe_board_canonical_key) must converge to
+ * the theoretical frequency — class cardinal / C(48,3) — that the enumeration
+ * table implies. The check uses both a per-class absolute bound and Pearson's
+ * chi-square statistic; an L1 histogram distance is not suitable here because
+ * summing the independent sampling noise over 1,755 classes naturally makes
+ * it several percent even when the sampler is correct.
+ *
+ * The theoretical distribution is not hard-coded: it is rebuilt by brute
+ * enumeration over the same 48-card deck, using the same canonical key. The
+ * sampler and the reference cannot agree by sharing a bug, because neither
+ * reads the other's numbers.
+ */
+
+/* Small open-addressed table from canonical key to class index. Even the full
+   52-card flop space has only 1755 classes, so 16384 slots keep the load low
+   and the probe bounded. */
+#define ISO_SLOTS 16384u
+#define ISO_KEY_MAX 24
+
+typedef struct
+{
+    char key[ISO_KEY_MAX];
+    int used;
+    long cardinal;  /* flops in the class, from the enumeration table */
+    long empirical; /* draws observed in the class, from the sampler */
+} iso_slot_t;
+
+static iso_slot_t g_iso[ISO_SLOTS];
+
+static uint32_t iso_hash(const char *key)
+{
+    uint32_t h = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)key; *p; ++p)
+        h = (uint32_t)((h ^ *p) * 16777619u);
+    return h & (ISO_SLOTS - 1u);
+}
+
+/* Find the slot for `key`, inserting it when `create` is nonzero. Returns -1
+   when the table is full (it will not be), or when `create` is 0 and the key
+   is absent. */
+static long iso_slot(const char *key, int create)
+{
+    uint32_t base = iso_hash(key);
+    for (uint32_t probe = 0; probe < ISO_SLOTS; ++probe)
+    {
+        uint32_t idx = (base + probe) & (ISO_SLOTS - 1u);
+        if (!g_iso[idx].used)
+        {
+            if (!create)
+                return -1;
+            g_iso[idx].used = 1;
+            strncpy(g_iso[idx].key, key, ISO_KEY_MAX - 1);
+            g_iso[idx].key[ISO_KEY_MAX - 1] = '\0';
+            g_iso[idx].cardinal = 0;
+            g_iso[idx].empirical = 0;
+            return (long)idx;
+        }
+        if (strcmp(g_iso[idx].key, key) == 0)
+            return (long)idx;
+    }
+    return -1;
+}
+
+/* The three cards of a flop, as a board mask. `pos` holds deck indices. */
+static mask_t flop_mask(const unsigned pos[3])
+{
+    return mask_set(mask_set(mask_set(MASK_EMPTY, pos[0]), pos[1]), pos[2]);
+}
+
+static int test_flop_sampling_tracks_the_distribution(const EvalContext *ctx)
+{
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+    uint64_t chance_key;
+    const mpf_state_t *node;
+    int failures = 0;
+    const int unused = 48;     /* the four Aces sit in the two hands */
+    const long draws = 1000000L;
+    unsigned pos[3];
+
+    base_config(&cfg, ctx);
+    if (mpf_build_game(&cfg, &game, &root) != 0)
+    {
+        fprintf(stderr, "FAILED: sampling build\n");
+        return 1;
+    }
+    chance_key = walk_to_chance(&game, (uint64_t)(uintptr_t)game.initial_state);
+    node = chance_key ? mpf_state_for_key(&game, chance_key) : NULL;
+    if (!node || mpf_state_chance_kind(node) != PE_CHANCE_FLOP_THREE)
+    {
+        fprintf(stderr, "FAILED: sampling reached no flop chance node\n");
+        mpf_state_cleanup(&root);
+        return 1;
+    }
+
+    /* Theoretical distribution: every 3-subset of the 48-card deck. */
+    memset(g_iso, 0, sizeof(g_iso));
+    long total = 0;
+    for (pos[0] = 0; pos[0] < (unsigned)unused; ++pos[0])
+        for (pos[1] = pos[0] + 1; pos[1] < (unsigned)unused; ++pos[1])
+            for (pos[2] = pos[1] + 1; pos[2] < (unsigned)unused; ++pos[2])
+            {
+                char key[ISO_KEY_MAX];
+                long slot;
+                if (pe_board_canonical_key(flop_mask(pos), 3, key, sizeof(key)) != 0)
+                    continue;
+                slot = iso_slot(key, 1);
+                if (slot < 0)
+                    continue;
+                g_iso[slot].cardinal++;
+                total++;
+            }
+    if (total != 17296)
+    {
+        fprintf(stderr, "FAILED: theoretical enumeration found %ld flops\n",
+                total);
+        mpf_state_cleanup(&root);
+        return 1;
+    }
+/* Sample one million flop draws and count how many land in each class. */
+    pe_rng_t rng;
+    pe_rng_seed(&rng, 0xC0FFEEu);
+    uint64_t ratio_violations = 0;
+    long sampled = 0;
+    for (long d = 0; d < draws; ++d)
+    {
+        pe_chance_sample_t sm;
+        unsigned p[3];
+        char key[ISO_KEY_MAX];
+        long slot;
+        if (mpf_chance_sample(node, &rng, &sm) != 0)
+            break;
+        if (sm.importance_ratio != 1.0)
+            ratio_violations++;
+        if (pe_comb_unrank((unsigned)unused, 3, (uint64_t)sm.outcome, p) != 0)
+            break;
+        if (pe_board_canonical_key(flop_mask(p), 3, key, sizeof(key)) != 0)
+            break;
+        slot = iso_slot(key, 0);
+        if (slot < 0)
+            break;
+        g_iso[slot].empirical++;
+        sampled++;
+    }
+    if (sampled != draws)
+    {
+        fprintf(stderr, "FAILED: only %ld of %ld draws produced a class\n",
+                sampled, draws);
+        mpf_state_cleanup(&root);
+        return 1;
+    }
+
+    /* Every class must sit within 1% of the theoretical table. Pearson's
+       statistic is a second aggregate check; the generous fixed threshold is
+       many standard deviations above its expected value (about 1,754). */
+    double max_abs = 0.0;
+    double max_rel_big = 0.0;
+    double chi2 = 0.0;
+    long sampled_classes = 0;
+    for (uint32_t i = 0; i < ISO_SLOTS; ++i)
+    {
+        double theo;
+        double emp;
+        double absdev;
+        double expected;
+        double diff;
+        if (!g_iso[i].used)
+            continue;
+        theo = (double)g_iso[i].cardinal / (double)total;
+        emp = (double)g_iso[i].empirical / (double)draws;
+        absdev = fabs(emp - theo);
+        expected = (double)draws * theo;
+        diff = (double)g_iso[i].empirical - expected;
+        if (expected > 0.0)
+            chi2 += (diff * diff) / expected;
+        if (absdev > max_abs)
+            max_abs = absdev;
+        /* Relative deviation is only meaningful where a class is big enough
+           for finite-draw noise to be small; reported, not asserted. */
+        if (g_iso[i].cardinal >= 500)
+        {
+            double rel = theo > 0.0 ? absdev / theo : 0.0;
+            if (rel > max_rel_big)
+                max_rel_big = rel;
+        }
+        if (g_iso[i].empirical > 0)
+            sampled_classes++;
+    }
+
+    printf("  sampled %ld flops over %ld classes: max|dev|=%.4g"
+           " chi2=%.4g maxrel(big)=%.4g\n",
+           sampled, sampled_classes, max_abs, chi2, max_rel_big);
+
+    if (max_abs > 0.01)
+    {
+        fprintf(stderr, "FAILED: a class deviates by %.4g (> 1%%)\n", max_abs);
+        failures++;
+    }
+    if (chi2 > 2400.0)
+    {
+        fprintf(stderr, "FAILED: chi-square %.4g is too large\n", chi2);
+        failures++;
+    }
+    if (ratio_violations)
+    {
+        fprintf(stderr, "FAILED: %llu draws carried an importance ratio != 1.0\n",
+                (unsigned long long)ratio_violations);
+        failures++;
+    }
+
+    mpf_state_cleanup(&root);
+    return failures;
+}
+
 int main(void)
 {
     EvalConfig eval_cfg = eval_config_holdem();
@@ -304,6 +527,7 @@ int main(void)
 
     failures += test_flop_is_a_combination(ctx);
     failures += test_a_pinned_flop_is_not_dealt(ctx);
+    failures += test_flop_sampling_tracks_the_distribution(ctx);
 
     eval_context_destroy(ctx);
     if (failures)
