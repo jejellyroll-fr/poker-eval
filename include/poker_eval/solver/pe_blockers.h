@@ -27,6 +27,7 @@
 
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_vector.h>
 
 #include <stddef.h>
 
@@ -85,6 +86,24 @@ pe_solver_status_t pe_blockers_compatible_sum_pairwise(const mask_t *hero_masks,
                                                        size_t opp_n,
                                                        mask_t dead,
                                                        double *out);
+
+/**
+ * Fold payoff for the remaining player, per hero combo.
+ *
+ * This is the compatible opponent reach multiplied by `pot`, using the same
+ * accumulated O(n + m) path for two-card hands and exact pairwise fallback for
+ * wider hands. `out_values->n` must equal hero_n and its storage must be
+ * writable.
+ */
+pe_solver_status_t pe_blockers_fold_vector(const mask_t *hero_masks,
+                                           size_t hero_n,
+                                           const mask_t *opp_masks,
+                                           const double *opp_reach,
+                                           size_t opp_n,
+                                           mask_t dead,
+                                           double pot,
+                                           pe_value_vec_t *out_values,
+                                           pe_blockers_path_t *out_path);
 
 #ifdef __cplusplus
 }

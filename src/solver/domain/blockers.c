@@ -191,3 +191,33 @@ pe_solver_status_t pe_blockers_compatible_sum(const mask_t *hero_masks,
         *out_path = PE_BLOCKERS_PATH_ACCUMULATED;
     return PE_SOLVER_OK;
 }
+
+pe_solver_status_t pe_blockers_fold_vector(const mask_t *hero_masks,
+                                           size_t hero_n,
+                                           const mask_t *opp_masks,
+                                           const double *opp_reach,
+                                           size_t opp_n,
+                                           mask_t dead,
+                                           double pot,
+                                           pe_value_vec_t *out_values,
+                                           pe_blockers_path_t *out_path)
+{
+    pe_solver_status_t status;
+    size_t i;
+
+    if (!out_values)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (hero_n == 0 || out_values->n != hero_n || !out_values->v ||
+        pot < 0.0 || isnan(pot))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+
+    status = pe_blockers_compatible_sum(hero_masks, hero_n, opp_masks,
+                                        opp_reach, opp_n, dead,
+                                        out_values->v, out_path);
+    if (status != PE_SOLVER_OK)
+        return status;
+
+    for (i = 0; i < hero_n; ++i)
+        out_values->v[i] *= pot;
+    return PE_SOLVER_OK;
+}

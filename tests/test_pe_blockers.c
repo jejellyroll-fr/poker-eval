@@ -111,6 +111,7 @@ static void compare_on(const char *label, const char *hero_str,
     unpacked_t hero, opp;
     double *fast = NULL;
     double *slow = NULL;
+    pe_value_vec_t fold = {0};
     pe_blockers_path_t path = PE_BLOCKERS_PATH_NONE;
     mask_t dead;
     size_t i;
@@ -122,6 +123,9 @@ static void compare_on(const char *label, const char *hero_str,
 
     fast = (double *)calloc(hero.n, sizeof(double));
     slow = (double *)calloc(hero.n, sizeof(double));
+    CHECK(pe_vec_alloc(&fold, hero.n) == PE_SOLVER_OK,
+          "%s: fold vector allocation failed", label);
+    if (!fold.v) { unpack_free(&hero); unpack_free(&opp); return; }
     dead = board_of(board, board_n);
 
     CHECK(pe_blockers_compatible_sum(hero.masks, hero.n, opp.masks, opp.reach,
@@ -132,6 +136,9 @@ static void compare_on(const char *label, const char *hero_str,
     CHECK(pe_blockers_compatible_sum_pairwise(hero.masks, hero.n, opp.masks,
                                               opp.reach, opp.n, dead, slow)
               == PE_SOLVER_OK, "%s: pairwise path failed", label);
+    CHECK(pe_blockers_fold_vector(hero.masks, hero.n, opp.masks, opp.reach,
+                                  opp.n, dead, 17.5, &fold, NULL)
+              == PE_SOLVER_OK, "%s: fold vector failed", label);
 
     for (i = 0; i < hero.n; ++i)
     {
@@ -144,6 +151,9 @@ static void compare_on(const char *label, const char *hero_str,
                   label, i, fast[i], slow[i]);
             break;
         }
+        CHECK(fabs(fold.v[i] - 17.5 * slow[i]) <= 1e-12,
+              "%s: fold combo %zu gives %.17g, expected %.17g",
+              label, i, fold.v[i], 17.5 * slow[i]);
     }
 
     printf("    %-26s hero %4zu x opp %4zu combos, worst gap %.3e\n",
@@ -151,6 +161,7 @@ static void compare_on(const char *label, const char *hero_str,
 
     free(fast);
     free(slow);
+    pe_vec_free(&fold);
     unpack_free(&hero);
     unpack_free(&opp);
 }
@@ -256,6 +267,14 @@ static void test_degenerate(void)
               == PE_SOLVER_ERR_INVALID_CONFIG, "empty hero");
     CHECK(pe_blockers_compatible_sum(m, 2, m, r, 0, 0, out, NULL)
               == PE_SOLVER_ERR_INVALID_CONFIG, "empty opponent");
+
+    {
+        pe_value_vec_t values = pe_vec_wrap(out, 2);
+        CHECK(pe_blockers_fold_vector(m, 2, m, r, 2, 0, -1.0, &values, NULL)
+                  == PE_SOLVER_ERR_INVALID_CONFIG, "negative pot");
+        CHECK(pe_blockers_fold_vector(m, 2, m, r, 2, 0, 1.0, &values, NULL)
+                  == PE_SOLVER_OK, "valid fold");
+    }
 }
 
 static void test_wide_hands_take_the_exact_fallback(void)
