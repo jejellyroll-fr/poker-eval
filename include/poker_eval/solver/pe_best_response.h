@@ -39,9 +39,9 @@ pe_best_response_vector_config_t pe_best_response_vector_config_default(void);
  *
  * The game adapter's terminal_values callback must return raw utility vectors;
  * this routine applies counterfactual reach for every player other than
- * `br_player`. Chance nodes are intentionally outside this first exact port;
- * callers should use the scalar infoset reference until a chance-aware vector
- * rules adapter is available.
+ * `br_player`. Exact chance enumeration is supported when the optional chance
+ * callbacks on pe_vector_game_t are populated; outcome weights are normalized
+ * per chance state and default to uniform.
  */
 pe_solver_status_t pe_best_response_vector(
     const struct pe_vector_game_t *game,

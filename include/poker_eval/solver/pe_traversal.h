@@ -24,6 +24,10 @@ extern "C" {
 
 typedef struct pe_traversal_ctx_t pe_traversal_ctx_t;
 
+typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
+                                                  int outcome,
+                                                  void *user);
+
 typedef struct
 {
     pe_infoset_id_t infoset;
@@ -55,6 +59,14 @@ typedef struct pe_vector_game_t
     void *user;
     uint8_t player_count;
     uint16_t combo_count;
+
+    /* Exact chance enumeration is optional. A game with these callbacks
+     * unset has no chance nodes; outcome weights are normalized per state. */
+    int (*is_chance)(const void *state, void *user);
+    uint16_t (*chance_outcome_count)(const void *state, void *user);
+    double (*chance_outcome_weight)(const void *state, uint16_t outcome,
+                                    void *user);
+    pe_vector_apply_chance_fn apply_chance;
 
     int (*is_terminal)(const void *state, void *user);
     int (*acting_player)(const void *state, void *user);
@@ -96,9 +108,6 @@ typedef int (*pe_vector_chance_sample_fn)(const void *state,
                                           pe_rng_t *rng,
                                           pe_chance_sample_t *out,
                                           void *user);
-typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
-                                                  int outcome,
-                                                  void *user);
 
 /** Context for one-vector-per-combo chance sampling (VEC-08). */
 typedef struct

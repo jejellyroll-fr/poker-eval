@@ -155,6 +155,33 @@ static int br_strategy(const pe_br_ctx_t *ctx, const void *state,
     return 0;
 }
 
+static double br_chance_weight(const pe_vector_game_t *game,
+                               const void *state, uint16_t outcome)
+{
+    double weight = game->chance_outcome_weight
+        ? game->chance_outcome_weight(state, outcome, game->user)
+        : 1.0;
+    return weight > 0.0 && !isnan(weight) ? weight : 0.0;
+}
+
+static int br_chance_node(const pe_vector_game_t *game, const void *state,
+                          uint16_t *outcomes, double *total_weight)
+{
+    uint16_t outcome;
+
+    if (!game->is_chance || !game->is_chance(state, game->user))
+        return 0;
+    if (!game->chance_outcome_count || !game->apply_chance)
+        return -1;
+    *outcomes = game->chance_outcome_count(state, game->user);
+    if (*outcomes == 0)
+        return -1;
+    *total_weight = 0.0;
+    for (outcome = 0; outcome < *outcomes; ++outcome)
+        *total_weight += br_chance_weight(game, state, outcome);
+    return *total_weight > 0.0 && !isnan(*total_weight) ? 1 : -1;
+}
+
 /* Return utility weighted by every non-BR player's reach. */
 static int br_value(pe_br_ctx_t *ctx, const void *state,
                     const pe_reach_vec_t *reach, pe_value_vec_t *out)
@@ -199,6 +226,36 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
         for (player = 0; player < game->player_count; ++player)
             pe_vec_free(&terminal[player]);
         return 0;
+    }
+
+    {
+        uint16_t outcomes;
+        double total_weight;
+        int chance = br_chance_node(game, state, &outcomes, &total_weight);
+        if (chance < 0)
+            return -1;
+        if (chance > 0)
+        {
+            if (pe_vec_alloc(out, ctx->combo_count) != PE_SOLVER_OK)
+                return -1;
+            pe_vec_fill(out, 0.0);
+            for (action_count = 0; action_count < outcomes; ++action_count)
+            {
+                const void *child = game->apply_chance(
+                    state, (int)action_count, game->user);
+                pe_value_vec_t child_value = {0};
+                if (!child || br_value(ctx, child, reach, &child_value) != 0)
+                {
+                    pe_vec_free(out);
+                    pe_vec_free(&child_value);
+                    return -1;
+                }
+                pe_vec_axpy(out, br_chance_weight(game, state, action_count) /
+                                  total_weight, &child_value);
+                pe_vec_free(&child_value);
+            }
+            return 0;
+        }
     }
 
     player = game->acting_player(state, game->user);
@@ -277,6 +334,28 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
     ctx->visited_nodes++;
     if (game->is_terminal(state, game->user))
         return 0;
+
+    {
+        uint16_t outcomes;
+        double total_weight;
+        int chance = br_chance_node(game, state, &outcomes, &total_weight);
+        uint16_t outcome;
+        (void)total_weight;
+        if (chance < 0)
+            return -1;
+        if (chance > 0)
+        {
+            for (outcome = 0; outcome < outcomes; ++outcome)
+            {
+                const void *child = game->apply_chance(
+                    state, (int)outcome, game->user);
+                if (!child || br_collect(ctx, child, reach) != 0)
+                    return -1;
+            }
+            return 0;
+        }
+    }
+
     player = game->acting_player(state, game->user);
     action_count = game->action_count(state, game->user);
     if (player < 0 || player >= (int)game->player_count ||

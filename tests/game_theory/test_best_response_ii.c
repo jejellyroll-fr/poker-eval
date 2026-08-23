@@ -45,6 +45,35 @@ static int br_is_terminal(const void *state, void *user)
     return ((const br_state_t *)state)->terminal;
 }
 
+static int br_is_chance(const void *state, void *user)
+{
+    (void)user;
+    return state == &root;
+}
+
+static uint16_t br_chance_outcome_count(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 2u;
+}
+
+static double br_chance_outcome_weight(const void *state, uint16_t outcome,
+                                       void *user)
+{
+    (void)state;
+    (void)user;
+    return outcome == 0u ? 1.0 : 3.0;
+}
+
+static const void *br_apply_chance(const void *state, int outcome, void *user)
+{
+    (void)user;
+    return state == &root && outcome == 0 ? &first
+         : state == &root && outcome == 1 ? &second
+         : NULL;
+}
+
 static int br_acting_player(const void *state, void *user)
 {
     (void)user;
@@ -167,6 +196,22 @@ static void test_shared_infoset_and_convergence(void)
           "shared-infoset value %.17g, expected %.17g", result.value,
           5.0 / 3.0);
     CHECK(result.visited_nodes > 0u, "no nodes were visited");
+
+    game.is_chance = br_is_chance;
+    game.chance_outcome_count = br_chance_outcome_count;
+    game.chance_outcome_weight = br_chance_outcome_weight;
+    game.apply_chance = br_apply_chance;
+    CHECK(pe_best_response_vector(&game, 0u, &config, &result) ==
+              PE_SOLVER_OK,
+          "chance-aware vector best response failed");
+    CHECK(fabs(result.value - 4.0 / 3.0) <= 1e-12,
+          "chance-weighted value %.17g, expected %.17g", result.value,
+          4.0 / 3.0);
+
+    game.is_chance = NULL;
+    game.chance_outcome_count = NULL;
+    game.chance_outcome_weight = NULL;
+    game.apply_chance = NULL;
 
     config.max_iterations = 1u;
     CHECK(pe_best_response_vector(&game, 0u, &config, &result) ==
