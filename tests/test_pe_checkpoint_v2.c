@@ -106,6 +106,54 @@ int main(void)
               "restored values changed during round-trip");
     }
 
+    /* API-04 keeps the legacy CFRCHKPT v1 stream readable. Its records are
+       scalar, so the compatibility path maps each one to combo_count == 1. */
+    ops->destroy(right);
+    right = NULL;
+    {
+        FILE *legacy = fopen(path, "wb");
+        const uint32_t version = 1u;
+        const uint32_t reserved = 0u;
+        const uint64_t capacity = 8u;
+        const uint64_t entries = 1u;
+        const uint64_t legacy_iteration = 12u;
+        const uint64_t legacy_key = 0xbeefu;
+        const uint32_t legacy_actions = 2u;
+        const double legacy_ev = 0.0;
+        const uint64_t legacy_samples = 0u;
+        const double legacy_regret[] = {2.0, -1.0};
+        const double legacy_average[] = {0.4, 0.6};
+        CHECK(legacy != NULL, "legacy checkpoint creation failed");
+        if (!legacy)
+            goto done;
+        fwrite("CFRCHKPT", 8u, 1u, legacy);
+        fwrite(&version, sizeof(version), 1u, legacy);
+        fwrite(&reserved, sizeof(reserved), 1u, legacy);
+        fwrite(&capacity, sizeof(capacity), 1u, legacy);
+        fwrite(&entries, sizeof(entries), 1u, legacy);
+        fwrite(&legacy_iteration, sizeof(legacy_iteration), 1u, legacy);
+        fwrite(&legacy_key, sizeof(legacy_key), 1u, legacy);
+        fwrite(&legacy_actions, sizeof(legacy_actions), 1u, legacy);
+        fwrite(&legacy_ev, sizeof(legacy_ev), 1u, legacy);
+        fwrite(&legacy_samples, sizeof(legacy_samples), 1u, legacy);
+        fwrite(legacy_regret, sizeof(legacy_regret), 1u, legacy);
+        fwrite(legacy_average, sizeof(legacy_average), 1u, legacy);
+        fclose(legacy);
+    }
+    CHECK(ops->create(&right, 1u) == 0, "legacy destination creation failed");
+    if (right)
+    {
+        right_id = PE_INFOSET_ID_INVALID;
+        CHECK(persist->load(NULL, &source, &config, ops, right, &iteration) == 0 &&
+                  iteration == 12u,
+              "legacy checkpoint load failed");
+        right_id = ops->find(right, 0xbeefu);
+        CHECK(right_id != PE_INFOSET_ID_INVALID &&
+                  ops->shape(right, right_id, &actions, &combos, NULL) == 0 &&
+                  actions == 2u && combos == 1u,
+              "legacy checkpoint shape was not adapted to scalar storage");
+    }
+
 done:
     if (left)
         ops->destroy(left);

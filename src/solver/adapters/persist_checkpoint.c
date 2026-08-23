@@ -171,6 +171,144 @@ static void free_entries(checkpoint_entry_t *entries, size_t count)
     free(entries);
 }
 
+static int apply_entries(const checkpoint_entry_t *entries, size_t count,
+                         const pe_storage_ops_t *storage, void *storage_self)
+{
+    size_t i;
+    for (i = 0u; i < count; ++i)
+    {
+        pe_infoset_id_t id = storage->resolve(
+            storage_self, entries[i].key, entries[i].actions,
+            entries[i].combos, entries[i].street);
+        uint16_t stored_actions;
+        uint16_t stored_combos;
+        uint8_t which;
+        if (id == PE_INFOSET_ID_INVALID ||
+            storage->shape(storage_self, id, &stored_actions,
+                           &stored_combos, NULL) != 0 ||
+            stored_actions != entries[i].actions ||
+            stored_combos != entries[i].combos ||
+            storage->set_flags(storage_self, id, entries[i].flags, 0u) != 0)
+            return -1;
+        for (which = 0u; which < PE_VALUES_COUNT; ++which)
+        {
+            double *values;
+            if ((entries[i].present & (uint8_t)(1u << which)) == 0u)
+                continue;
+            values = storage->values(storage_self, id,
+                                     (pe_value_array_t)which, NULL);
+            if (!values)
+                return -1;
+            memcpy(values, entries[i].values[which],
+                   entries[i].slots * sizeof(double));
+        }
+    }
+    return 0;
+}
+
+static int checkpoint_load_legacy(FILE *file,
+                                  const pe_solver_config_t *config,
+                                  const pe_storage_ops_t *storage,
+                                  void *storage_self,
+                                  uint64_t *out_iteration)
+{
+    uint32_t version;
+    uint32_t reserved;
+    uint64_t capacity;
+    uint64_t count64;
+    uint64_t iteration;
+    checkpoint_entry_t *entries = NULL;
+    size_t count = 0u;
+    size_t i;
+    (void)config;
+
+    if (read_bytes(file, &version, sizeof(version)) != 0 ||
+        read_bytes(file, &reserved, sizeof(reserved)) != 0 ||
+        read_bytes(file, &capacity, sizeof(capacity)) != 0 ||
+        read_bytes(file, &count64, sizeof(count64)) != 0 ||
+        read_bytes(file, &iteration, sizeof(iteration)) != 0 ||
+        (version != 1u && version != 2u && version != 3u) ||
+        capacity == 0u || (capacity & (capacity - 1u)) != 0u ||
+        capacity > ((uint64_t)1u << 26) || count64 > capacity ||
+        count64 > PE_CHECKPOINT_MAX_ENTRIES || count64 > SIZE_MAX)
+        goto fail;
+    (void)reserved;
+    count = (size_t)count64;
+    entries = (checkpoint_entry_t *)calloc(count, sizeof(*entries));
+    if (count != 0u && !entries)
+        goto fail;
+    for (i = 0u; i < count; ++i)
+    {
+        uint32_t slots32;
+        double ev_sum;
+        double ev_sq_sum;
+        uint64_t ev_count;
+        size_t slot;
+        if (read_bytes(file, &entries[i].key, sizeof(entries[i].key)) != 0 ||
+            read_bytes(file, &slots32, sizeof(slots32)) != 0 ||
+            read_bytes(file, &ev_sum, sizeof(ev_sum)) != 0 ||
+            (version >= 2u && read_bytes(file, &ev_sq_sum,
+                                         sizeof(ev_sq_sum)) != 0) ||
+            read_bytes(file, &ev_count, sizeof(ev_count)) != 0 ||
+            slots32 == 0u || slots32 > UINT16_MAX)
+            goto fail;
+        (void)ev_sum;
+        (void)ev_sq_sum;
+        (void)ev_count;
+        entries[i].actions = (uint16_t)slots32;
+        entries[i].combos = 1u;
+        entries[i].street = -1;
+        entries[i].present = (uint8_t)((1u << PE_VALUES_REGRET) |
+                                       (1u << PE_VALUES_AVERAGE));
+        if (version >= 3u)
+            entries[i].present |= (uint8_t)(1u << PE_VALUES_LOCKED);
+        entries[i].slots = slots32;
+        entries[i].values[PE_VALUES_REGRET] = (double *)malloc(
+            entries[i].slots * sizeof(double));
+        entries[i].values[PE_VALUES_AVERAGE] = (double *)malloc(
+            entries[i].slots * sizeof(double));
+        if (!entries[i].values[PE_VALUES_REGRET] ||
+            !entries[i].values[PE_VALUES_AVERAGE] ||
+            read_bytes(file, entries[i].values[PE_VALUES_REGRET],
+                       entries[i].slots * sizeof(double)) != 0 ||
+            read_bytes(file, entries[i].values[PE_VALUES_AVERAGE],
+                       entries[i].slots * sizeof(double)) != 0)
+            goto fail;
+        if (version >= 3u)
+        {
+            entries[i].values[PE_VALUES_LOCKED] = (double *)malloc(
+                entries[i].slots * sizeof(double));
+            if (!entries[i].values[PE_VALUES_LOCKED] ||
+                read_bytes(file, entries[i].values[PE_VALUES_LOCKED],
+                           entries[i].slots * sizeof(double)) != 0)
+                goto fail;
+        }
+        for (slot = 0u; slot < entries[i].slots; ++slot)
+        {
+            unsigned which;
+            for (which = PE_VALUES_REGRET; which <= PE_VALUES_LOCKED; ++which)
+                if ((entries[i].present & (uint8_t)(1u << which)) != 0u &&
+                    !isfinite(entries[i].values[which][slot]))
+                    goto fail;
+        }
+    }
+    if (apply_entries(entries, count, storage, storage_self) != 0)
+        goto fail;
+    if (fclose(file) != 0)
+    {
+        file = NULL;
+        goto fail;
+    }
+    free_entries(entries, count);
+    if (out_iteration)
+        *out_iteration = iteration;
+    return 0;
+fail:
+    fclose(file);
+    free_entries(entries, count);
+    return -1;
+}
+
 static int checkpoint_save(void *self, const pe_persist_target_t *target,
                            const pe_solver_config_t *config,
                            const pe_storage_ops_t *storage, void *storage_self,
@@ -281,8 +419,12 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
     file = fopen(source->path, "rb");
     if (!file)
         return -1;
-    if (read_bytes(file, magic, sizeof(magic)) != 0 ||
-        read_u32(file, &version) != 0 || read_u32(file, &endian) != 0 ||
+    if (read_bytes(file, magic, sizeof(magic)) != 0)
+        goto fail;
+    if (memcmp(magic, "CFRCHKPT", sizeof(magic)) == 0)
+        return checkpoint_load_legacy(file, config, storage, storage_self,
+                                      out_iteration);
+    if (read_u32(file, &version) != 0 || read_u32(file, &endian) != 0 ||
         read_u64(file, &iteration) != 0 || read_u64(file, &count64) != 0 ||
         read_u64(file, &stored_hash) != 0 || read_u64(file, &reserved) != 0 ||
         memcmp(magic, PE_CHECKPOINT_MAGIC, sizeof(magic)) != 0 ||
