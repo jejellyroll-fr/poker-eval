@@ -1441,6 +1441,7 @@ add_game_theory_test(test_kuhn_openspiel    test_kuhn_openspiel.c)
 add_game_theory_test(test_kuhn_multiway_openspiel
                      test_kuhn_multiway_openspiel.c)
 add_game_theory_test(test_leduc_openspiel   test_leduc_openspiel.c)
+add_game_theory_test(test_vector_vs_scalar  test_vector_vs_scalar.c)
 add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
 add_game_theory_test(test_extended_analytical_games
                      test_extended_analytical_games.c)
@@ -1455,4 +1456,10 @@ if(TEST test_best_response_exploitability)
     set_tests_properties(test_best_response_exploitability PROPERTIES
         LABELS "engine;cfr;game_theory;feat09;feat12"
         TIMEOUT 300)
+endif()
+
+if(TEST test_vector_vs_scalar)
+    set_tests_properties(test_vector_vs_scalar PROPERTIES
+        LABELS "solver;solver-v3;game_theory;vec09"
+        TIMEOUT 180)
 endif()
