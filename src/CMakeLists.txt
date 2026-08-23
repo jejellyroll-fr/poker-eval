@@ -46,6 +46,7 @@ add_library(poker_solver
     solver/domain/traversal_chance_vector.c
     solver/domain/best_response_ii.c
     solver/adapters/storage_ram.c
+    solver/adapters/compute_cpu_ref.c
     solver/adapters/compute_cpu_par.c
     solver/adapters/monker_tree_reader.c
     solver/adapters/monker_mkr_reader.c

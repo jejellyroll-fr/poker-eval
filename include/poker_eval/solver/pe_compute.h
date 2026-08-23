@@ -59,6 +59,9 @@ typedef struct pe_compute_ops_t
 /** The deterministic CPU-parallel adapter. */
 const pe_compute_ops_t *pe_compute_cpu_par_ops(void);
 
+/** The one-thread F64 reference adapter used as the backend parity oracle. */
+const pe_compute_ops_t *pe_compute_cpu_ref_ops(void);
+
 #ifdef __cplusplus
 }
 #endif
