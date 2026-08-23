@@ -335,6 +335,7 @@ typedef struct
     pe_regret_mode_t regret;
     pe_policy_mode_t policy;
     pe_averaging_mode_t averaging;
+    int experimental;
 } pe_algo_preset_entry_t;
 
 /* Architecture v3 §5, "Matrice d'algorithmes initiale", row for row.
@@ -347,43 +348,43 @@ typedef struct
 static const pe_algo_preset_entry_t k_preset_table[] = {
     { PE_PRESET_CUSTOM, "custom",
       PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
 
     { PE_PRESET_CFR, "cfr",
       PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
 
     { PE_PRESET_CFR_VECTOR, "cfr-vector",
       PE_TRAVERSAL_FULL_VECTOR, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
 
     { PE_PRESET_CFR_PLUS, "cfr+",
       PE_TRAVERSAL_FULL_VECTOR, PE_REGRET_PLUS,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_DELAYED_LINEAR },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_DELAYED_LINEAR, 0 },
 
     { PE_PRESET_DCFR, "dcfr",
       PE_TRAVERSAL_FULL_VECTOR, PE_REGRET_DCFR,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_POWER },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_POWER, 0 },
 
     { PE_PRESET_CFR_PLUS_CHANCE, "cfr+-chance",
       PE_TRAVERSAL_CHANCE_VECTOR, PE_REGRET_PLUS,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_DELAYED_LINEAR },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_DELAYED_LINEAR, 0 },
 
     { PE_PRESET_EXTERNAL_MCCFR, "external-mccfr",
       PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
 
     { PE_PRESET_EXTERNAL_DCFR, "external-dcfr",
       PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_DCFR,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_POWER },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_POWER, 0 },
 
     { PE_PRESET_OUTCOME_MCCFR, "outcome-mccfr",
       PE_TRAVERSAL_OUTCOME_SAMPLING, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
 
     { PE_PRESET_ECFR, "ecfr",
       PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_LEGACY_EXP,
-      PE_POLICY_EXPONENTIAL, PE_AVG_UNIFORM }
+      PE_POLICY_EXPONENTIAL, PE_AVG_UNIFORM, 1 }
 };
 
 typedef char pe_preset_table_size_check[
@@ -404,6 +405,12 @@ const char *pe_preset_name(pe_algorithm_preset_t preset)
 {
     const pe_algo_preset_entry_t *e = pe_preset_entry(preset);
     return (e != NULL) ? e->name : NULL;
+}
+
+int pe_preset_is_experimental(pe_algorithm_preset_t preset)
+{
+    const pe_algo_preset_entry_t *e = pe_preset_entry(preset);
+    return (e != NULL) ? e->experimental : 0;
 }
 
 pe_algorithm_preset_t pe_preset_from_name(const char *name)

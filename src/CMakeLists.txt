@@ -37,6 +37,7 @@ add_library(poker_solver
     solver/domain/regret_vanilla.c
     solver/domain/regret_plus.c
     solver/domain/regret_dcfr.c
+    solver/domain/regret_legacy_exp.c
     solver/domain/average.c
     solver/domain/showdown_vector.c
     solver/domain/traversal_chance_vector.c

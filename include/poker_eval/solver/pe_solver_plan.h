@@ -125,6 +125,9 @@ struct pe_execution_plan_t {
 /** CLI-facing name of a preset ("cfr", "cfr+", "external-mccfr"), or NULL. */
 const char *pe_preset_name(pe_algorithm_preset_t preset);
 
+/** Whether a preset preserves an experimental legacy behaviour. */
+int pe_preset_is_experimental(pe_algorithm_preset_t preset);
+
 /** Preset for a CLI name, case-insensitive. PE_PRESET_COUNT when unknown. */
 pe_algorithm_preset_t pe_preset_from_name(const char *name);
 

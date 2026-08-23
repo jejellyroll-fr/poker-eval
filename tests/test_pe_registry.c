@@ -74,6 +74,12 @@ static void test_every_preset_expands(void)
     CHECK(pe_preset_from_name(NULL) == PE_PRESET_COUNT, "NULL is not a preset name");
     CHECK(pe_preset_expand((pe_algorithm_preset_t)PE_PRESET_COUNT, NULL) == -1,
           "a NULL target should be rejected");
+    CHECK(pe_preset_is_experimental(PE_PRESET_ECFR),
+          "ECFR should be marked experimental");
+    CHECK(!pe_preset_is_experimental(PE_PRESET_CFR),
+          "CFR should not be marked experimental");
+    CHECK(!pe_preset_is_experimental(PE_PRESET_COUNT),
+          "an unknown preset must not be experimental");
 }
 
 static void test_preset_matches_the_matrix(void)
