@@ -48,6 +48,7 @@ add_library(poker_solver
     solver/adapters/storage_ram.c
     solver/adapters/compute_cpu_ref.c
     solver/adapters/compute_cpu_par.c
+    solver/adapters/compute_cuda.c
     solver/adapters/evaluator_equity.c
     solver/adapters/evaluator_gpu.c
     solver/adapters/monker_tree_reader.c
@@ -75,6 +76,13 @@ target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range poker_equi
 
 if(OpenMP_C_FOUND)
     target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)
+endif()
+
+# The adapter itself is always present, but only the CUDA build gets access to
+# the existing batched GPU library and its CUDA headers/runtime.
+if(TARGET poker_cuda_batch AND TARGET poker_gpu_unified)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_CUDA_AVAILABLE=1)
+    target_link_libraries(poker_solver PUBLIC poker_gpu_unified)
 endif()
 
 install(TARGETS poker_solver

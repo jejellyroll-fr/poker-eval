@@ -1,0 +1,176 @@
+/*
+ * compute_cuda.c - CUDA terminal-evaluation compute adapter (GPU-03)
+ *
+ * The public port is always compiled. The GPU implementation is compiled and
+ * linked only when the existing CUDA batched-evaluator target is present, so a
+ * normal CPU/OpenCL-only build remains independent of CUDA headers and libs.
+ */
+
+#include <poker_eval/solver/pe_compute.h>
+
+#include <stdlib.h>
+
+#if defined(PE_COMPUTE_CUDA_AVAILABLE)
+#include <poker_eval/gpu/eval_batched_gpu.h>
+#endif
+
+typedef struct
+{
+#if defined(PE_COMPUTE_CUDA_AVAILABLE)
+    gpu_eval_context_t *context;
+#endif
+    size_t max_batch_size;
+} pe_compute_cuda_t;
+
+static uint64_t compute_cuda_capabilities(void *self)
+{
+    (void)self;
+    /* GPU-05 owns the parity gate. Until it passes, AUTO must stay on CPU. */
+    return 0u;
+}
+
+static int compute_cuda_create(void **self, const pe_compute_config_t *cfg)
+{
+    if (self == NULL || cfg == NULL || cfg->terminal_batch_size == 0u)
+        return -1;
+
+#if !defined(PE_COMPUTE_CUDA_AVAILABLE)
+    *self = NULL;
+    return -1;
+#else
+    pe_compute_cuda_t *backend;
+
+    backend = (pe_compute_cuda_t *)calloc(1u, sizeof(*backend));
+    if (backend == NULL)
+        return -1;
+    {
+        gpu_eval_config_t gpu_cfg = gpu_eval_default_config();
+        gpu_cfg.preferred_backend = GPU_BACKEND_CUDA;
+        gpu_cfg.max_batch_size = cfg->terminal_batch_size;
+        backend->context = gpu_eval_init(&gpu_cfg);
+    }
+    if (backend->context == NULL) {
+        free(backend);
+        return -1;
+    }
+    backend->max_batch_size = cfg->terminal_batch_size;
+    *self = backend;
+    return 0;
+#endif
+}
+
+static void compute_cuda_destroy(void *self)
+{
+    pe_compute_cuda_t *backend = (pe_compute_cuda_t *)self;
+
+#if defined(PE_COMPUTE_CUDA_AVAILABLE)
+    if (backend != NULL)
+        gpu_eval_free(backend->context);
+#endif
+    free(backend);
+}
+
+static int compute_cuda_strategy_batch(void *self, const pe_infoset_batch_t *in,
+                                       pe_strategy_batch_t *out)
+{
+    (void)self;
+    (void)in;
+    (void)out;
+    return -1;
+}
+
+static int compute_cuda_apply_update_batch(void *self,
+                                           const pe_update_batch_t *batch)
+{
+    (void)self;
+    (void)batch;
+    return -1;
+}
+
+static int compute_cuda_terminal_eval_batch(void *self,
+                                            const pe_terminal_batch_t *in,
+                                            pe_value_batch_t *out)
+{
+    pe_compute_cuda_t *backend = (pe_compute_cuda_t *)self;
+
+    if (backend == NULL || in == NULL || out == NULL || in->count == 0u ||
+        in->count > backend->max_batch_size || out->values == NULL ||
+        out->capacity < in->count)
+        return -1;
+
+#if !defined(PE_COMPUTE_CUDA_AVAILABLE)
+    (void)in;
+    (void)out;
+    return -1;
+#else
+    if (in->game == game_holdem && in->cards != NULL &&
+        gpu_eval_holdem_batch(backend->context, in->cards, in->count,
+                              out->values) == 0) {
+        out->count = in->count;
+        return 0;
+    }
+    if ((in->game == game_omaha || in->game == game_omaha8) &&
+        in->hole != NULL && in->board != NULL &&
+        gpu_eval_omaha_batch(backend->context, in->hole, in->board, in->count,
+                             out->values) == 0) {
+        out->count = in->count;
+        return 0;
+    }
+    if (in->game == game_omaha5 && in->hole != NULL && in->board != NULL &&
+        gpu_eval_omaha5_batch(backend->context, in->hole, in->board, in->count,
+                              out->values) == 0) {
+        out->count = in->count;
+        return 0;
+    }
+    if (in->game == game_omaha6 && in->hole != NULL && in->board != NULL &&
+        gpu_eval_omaha6_batch(backend->context, in->hole, in->board, in->count,
+                              out->values) == 0) {
+        out->count = in->count;
+        return 0;
+    }
+    if (in->game == game_7stud && in->cards != NULL &&
+        gpu_eval_stud_batch(backend->context, in->cards, in->count,
+                            out->values) == 0) {
+        out->count = in->count;
+        return 0;
+    }
+    if (in->game == game_razz && in->cards != NULL &&
+        gpu_eval_razz_batch(backend->context, in->cards, in->count,
+                            out->values) == 0) {
+        out->count = in->count;
+        return 0;
+    }
+    return -1;
+#endif
+}
+
+static int compute_cuda_vector_showdown(void *self,
+                                        const pe_showdown_job_t *job,
+                                        pe_value_vec_t *out)
+{
+    (void)self;
+    (void)job;
+    (void)out;
+    return -1;
+}
+
+static int compute_cuda_sync(void *self)
+{
+    return self == NULL ? -1 : 0;
+}
+
+const pe_compute_ops_t *pe_compute_cuda_ops(void)
+{
+    static const pe_compute_ops_t ops = {
+        "cuda",
+        compute_cuda_capabilities,
+        compute_cuda_create,
+        compute_cuda_destroy,
+        compute_cuda_strategy_batch,
+        compute_cuda_apply_update_batch,
+        compute_cuda_terminal_eval_batch,
+        compute_cuda_vector_showdown,
+        compute_cuda_sync
+    };
+    return &ops;
+}

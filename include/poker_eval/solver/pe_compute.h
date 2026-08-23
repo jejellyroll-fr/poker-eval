@@ -8,6 +8,7 @@
 #include <poker_eval/solver/pe_batch.h>
 #include <poker_eval/solver/pe_capabilities.h>
 #include <poker_eval/solver/pe_vector.h>
+#include <poker_eval/core/enumdefs.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -31,13 +32,32 @@ typedef struct pe_compute_config_t
     void *storage_self;
 } pe_compute_config_t;
 
-/* Batch types that will be completed by the evaluator and traversal tickets.
-   Keeping them opaque lets cpu_par register now without inventing layouts. */
+/* Traversal batch types that will be completed by later tickets. */
 typedef struct pe_infoset_batch_t pe_infoset_batch_t;
 typedef struct pe_strategy_batch_t pe_strategy_batch_t;
-typedef struct pe_terminal_batch_t pe_terminal_batch_t;
-typedef struct pe_value_batch_t pe_value_batch_t;
 typedef struct pe_showdown_job_t pe_showdown_job_t;
+
+/*
+ * Terminal evaluation is the first compute operation with a stable public
+ * batch contract. Hold'em/stud/razz consume `cards`; Omaha consumes `hole` and
+ * `board`. Card values are the standard 0..51 deck indices used by the GPU
+ * batched evaluator. Unused pointers are ignored for the selected game.
+ */
+typedef struct pe_terminal_batch_t
+{
+    enum_game_t game;
+    const uint8_t *cards;
+    const uint8_t *hole;
+    const uint8_t *board;
+    size_t count;
+} pe_terminal_batch_t;
+
+typedef struct pe_value_batch_t
+{
+    uint32_t *values;
+    size_t capacity;
+    size_t count;
+} pe_value_batch_t;
 
 typedef struct pe_compute_ops_t
 {
@@ -61,6 +81,9 @@ const pe_compute_ops_t *pe_compute_cpu_par_ops(void);
 
 /** The one-thread F64 reference adapter used as the backend parity oracle. */
 const pe_compute_ops_t *pe_compute_cpu_ref_ops(void);
+
+/** CUDA terminal evaluator; capability is gated until GPU-05 parity passes. */
+const pe_compute_ops_t *pe_compute_cuda_ops(void);
 
 #ifdef __cplusplus
 }
