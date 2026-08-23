@@ -88,11 +88,32 @@ typedef struct pe_strategy_view_t   pe_strategy_view_t;
 typedef struct pe_persist_target_t  pe_persist_target_t;
 typedef struct pe_persist_source_t  pe_persist_source_t;
 
-/* BR-03 metrics are available before the full API-01 lifecycle is wired. */
+#define PE_SOLVER_MAX_PLAYERS 8u
+
+/**
+ * What a reported exploitability measurement actually guarantees.
+ *
+ * UNSPECIFIED is intentional: a raw BR conversion has no game topology from
+ * which to infer a guarantee and must not accidentally look like Nash.
+ */
+typedef enum {
+    PE_GUARANTEE_UNSPECIFIED = 0,
+    PE_GUARANTEE_NASH,
+    PE_GUARANTEE_NO_REGRET_ONLY,
+    PE_GUARANTEE_EMPIRICAL
+} pe_guarantee_t;
+
+/* BR-03/05 metrics are available before the full API-01 lifecycle is wired. */
 struct pe_metrics_t {
     double exploitability_raw;
     double exploitability_mbb_per_game;
     double big_blind;
+
+    pe_guarantee_t guarantee;
+    uint8_t num_players;
+    double br_gap[PE_SOLVER_MAX_PLAYERS];
+    double cce_gap;
+    double utility_imbalance;
 };
 
 /* ------------------------------------------------------------------ *

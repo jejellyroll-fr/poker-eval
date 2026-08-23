@@ -523,9 +523,28 @@ pe_solver_status_t pe_best_response_metrics_from_raw(
     if (!isfinite(raw_value) || raw_value < 0.0 ||
         !isfinite(big_blind) || big_blind <= 0.0)
         return PE_SOLVER_ERR_INVALID_CONFIG;
+    memset(out_metrics, 0, sizeof(*out_metrics));
     out_metrics->exploitability_raw = raw_value;
     out_metrics->big_blind = big_blind;
     out_metrics->exploitability_mbb_per_game = raw_value / big_blind * 1000.0;
+    return PE_SOLVER_OK;
+}
+
+pe_solver_status_t pe_best_response_guarantee_for_game(
+    uint8_t num_players, int is_zero_sum, pe_guarantee_t *out_guarantee)
+{
+    if (!out_guarantee)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (num_players == 0 || num_players > PE_SOLVER_MAX_PLAYERS ||
+        (is_zero_sum != 0 && is_zero_sum != 1))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+
+    if (!is_zero_sum)
+        *out_guarantee = PE_GUARANTEE_EMPIRICAL;
+    else if (num_players == 2)
+        *out_guarantee = PE_GUARANTEE_NASH;
+    else
+        *out_guarantee = PE_GUARANTEE_NO_REGRET_ONLY;
     return PE_SOLVER_OK;
 }
 

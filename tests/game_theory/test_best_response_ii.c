@@ -664,12 +664,35 @@ static void test_exploitability_metrics(void)
     CHECK(fabs(metrics.exploitability_mbb_per_game - 1.0) <= 1e-12,
           "0.001 BB should equal 1.0 mbb/g, got %.17g",
           metrics.exploitability_mbb_per_game);
+    CHECK(metrics.guarantee == PE_GUARANTEE_UNSPECIFIED,
+          "raw conversion must not infer a game guarantee");
     CHECK(pe_best_response_metrics_from_raw(-1.0, 1.0, &metrics) ==
               PE_SOLVER_ERR_INVALID_CONFIG,
           "negative exploitability must be rejected");
     CHECK(pe_best_response_metrics_from_raw(0.001, 0.0, &metrics) ==
               PE_SOLVER_ERR_INVALID_CONFIG,
           "zero big blind must be rejected");
+}
+
+static void test_multiway_guarantee_contract(void)
+{
+    pe_guarantee_t guarantee = PE_GUARANTEE_UNSPECIFIED;
+
+    CHECK(pe_best_response_guarantee_for_game(2u, 1, &guarantee) ==
+              PE_SOLVER_OK && guarantee == PE_GUARANTEE_NASH,
+          "two-player zero-sum games should report Nash");
+    CHECK(pe_best_response_guarantee_for_game(3u, 1, &guarantee) ==
+              PE_SOLVER_OK && guarantee == PE_GUARANTEE_NO_REGRET_ONLY,
+          "multiway zero-sum games should report no-regret only");
+    CHECK(pe_best_response_guarantee_for_game(2u, 0, &guarantee) ==
+              PE_SOLVER_OK && guarantee == PE_GUARANTEE_EMPIRICAL,
+          "non-zero-sum games should report an empirical guarantee");
+    CHECK(pe_best_response_guarantee_for_game(0u, 1, &guarantee) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "zero players must be rejected");
+    CHECK(pe_best_response_guarantee_for_game(3u, 2, &guarantee) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "non-boolean zero-sum flag must be rejected");
 }
 
 static void test_exploitability_target(void)
@@ -697,6 +720,7 @@ int main(void)
     test_shared_infoset_and_convergence();
     test_kuhn_two_player_parity();
     test_exploitability_metrics();
+    test_multiway_guarantee_contract();
     test_exploitability_target();
     if (failures != 0)
     {

@@ -57,6 +57,15 @@ pe_solver_status_t pe_best_response_vector(
 pe_solver_status_t pe_best_response_metrics_from_raw(
     double raw_value, double big_blind, pe_metrics_t *out_metrics);
 
+/**
+ * Classify the guarantee that applies to a game's exploitability metric.
+ *
+ * A two-player zero-sum game may report Nash. Multiway zero-sum games report
+ * no-regret only, while any non-zero-sum game reports an empirical measure.
+ */
+pe_solver_status_t pe_best_response_guarantee_for_game(
+    uint8_t num_players, int is_zero_sum, pe_guarantee_t *out_guarantee);
+
 /** Return whether a measured mbb/g value satisfies a configured target. */
 pe_solver_status_t pe_best_response_target_reached(
     double measured_mbb, double target_mbb, int *out_reached);
