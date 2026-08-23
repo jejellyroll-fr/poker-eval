@@ -82,6 +82,20 @@ make
 
 ## API Usage
 
+### CFR solver migration
+
+The legacy `gpu_cfr_solve()` and `gpu_cfr_adapter_*()` APIs remain available for
+compatibility but are deprecated. They use an autonomous matrix solver and a
+CPU traversal that treats state pointers as infoset keys; they are not the
+canonical GPU path.
+
+New integrations should construct a `pe_solver_config_t`, select the GPU update
+backend through its execution plan, and call `pe_solver_run()`. The v3 solver
+keeps traversal, storage, checkpointing and GPU compute behind explicit ports,
+so the same solve can use CPU reference, CPU parallel, OpenCL or CUDA update
+adapters without changing the game integration. The legacy GPU kernels remain
+available as reusable implementation components.
+
 ### Basic Setup
 ```c
 #include "eval_gpu.h"

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+- The autonomous `gpu_cfr_solve()` and `gpu_cfr_adapter_*()` APIs are deprecated.
+  New code should use `pe_solver_run()` with the v3 traversal, storage and GPU
+  compute ports. The legacy symbols and reusable GPU kernels remain available
+  for compatibility.
+
 ### Fixed
 - **Behaviour change.** Discounted CFR now discounts the cumulative regret
   once per iteration instead of once per infoset visit (EXT-07). The rule is

@@ -22,6 +22,13 @@
 extern "C" {
 #endif
 
+/* The autonomous matrix solver predates the v3 port-based solver API. */
+#if defined(__GNUC__) || defined(__clang__)
+#define PE_GPU_CFR_DEPRECATED(message) __attribute__((deprecated(message)))
+#else
+#define PE_GPU_CFR_DEPRECATED(message)
+#endif
+
 /**
  * GPU-CFR Matrix Representation
  *
@@ -176,7 +183,7 @@ int gpu_cfr_download_state(
 int gpu_cfr_solve(
     gpu_cfr_context_t* ctx,
     int iterations
-);
+) PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
 /**
  * Get GPU-CFR statistics
@@ -293,18 +300,25 @@ typedef struct gpu_cfr_adapter_t gpu_cfr_adapter_t;
 gpu_cfr_adapter_t *gpu_cfr_adapter_create(
     cfr_game_t *game,
     cfr_matrix_storage_t *matrix,
-    int mc_samples);
+    int mc_samples
+) PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-void gpu_cfr_adapter_free(gpu_cfr_adapter_t *adapter);
+void gpu_cfr_adapter_free(gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-int gpu_cfr_adapter_compute_deltas(gpu_cfr_adapter_t *adapter);
+int gpu_cfr_adapter_compute_deltas(gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-const float *gpu_cfr_adapter_get_deltas(const gpu_cfr_adapter_t *adapter);
+const float *gpu_cfr_adapter_get_deltas(const gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-int gpu_cfr_adapter_get_visited_infosets(const gpu_cfr_adapter_t *adapter);
+int gpu_cfr_adapter_get_visited_infosets(const gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
 #ifdef __cplusplus
 }
 #endif
+
+#undef PE_GPU_CFR_DEPRECATED
 
 #endif /* POKER_EVAL_GPU_CFR_H */
