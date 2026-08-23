@@ -251,6 +251,122 @@ fail:
     return -1;
 }
 
+int pe_regret_opencl_apply_update_slots(
+    pe_regret_opencl_context_t *ctx, float *regrets, float *averages,
+    size_t value_count, const pe_regret_opencl_update_batch_t *batch)
+{
+    cl_mem regret_buffer = NULL;
+    cl_mem average_buffer = NULL;
+    cl_mem slots = NULL;
+    cl_mem regret_deltas = NULL;
+    cl_mem average_deltas = NULL;
+    cl_int status;
+
+    if (!ctx || !regrets || !averages || !batch ||
+        (batch->count != 0u && (!batch->slots || !batch->regret_deltas ||
+                                !batch->average_deltas)))
+        return -1;
+    for (size_t i = 0u; i < batch->count; ++i)
+    {
+        if (batch->slots[i] >= value_count ||
+            !isfinite(batch->regret_deltas[i]) ||
+            !isfinite(batch->average_deltas[i]) ||
+            !isfinite(regrets[batch->slots[i]]) ||
+            !isfinite(averages[batch->slots[i]]))
+            return -1;
+    }
+    if (batch->count == 0u)
+        return 0;
+
+    regret_buffer = clCreateBuffer(ctx->context, CL_MEM_READ_WRITE,
+                                   value_count * sizeof(float), NULL, &status);
+    if (status != CL_SUCCESS)
+        goto fail;
+    average_buffer = clCreateBuffer(ctx->context, CL_MEM_READ_WRITE,
+                                    value_count * sizeof(float), NULL, &status);
+    if (status != CL_SUCCESS)
+        goto fail;
+    slots = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY,
+                           batch->count * sizeof(uint32_t), NULL, &status);
+    if (status != CL_SUCCESS)
+        goto fail;
+    regret_deltas = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY,
+                                   batch->count * sizeof(float), NULL, &status);
+    if (status != CL_SUCCESS)
+        goto fail;
+    average_deltas = clCreateBuffer(ctx->context, CL_MEM_READ_ONLY,
+                                    batch->count * sizeof(float), NULL, &status);
+    if (status != CL_SUCCESS)
+        goto fail;
+
+    status = clEnqueueWriteBuffer(ctx->queue, regret_buffer, CL_TRUE, 0u,
+                                  value_count * sizeof(float), regrets,
+                                  0u, NULL, NULL);
+    status |= clEnqueueWriteBuffer(ctx->queue, average_buffer, CL_TRUE, 0u,
+                                   value_count * sizeof(float), averages,
+                                   0u, NULL, NULL);
+    status |= clEnqueueWriteBuffer(ctx->queue, slots, CL_TRUE, 0u,
+                                   batch->count * sizeof(uint32_t), batch->slots,
+                                   0u, NULL, NULL);
+    status |= clEnqueueWriteBuffer(ctx->queue, regret_deltas, CL_TRUE, 0u,
+                                   batch->count * sizeof(float),
+                                   batch->regret_deltas, 0u, NULL, NULL);
+    status |= clEnqueueWriteBuffer(ctx->queue, average_deltas, CL_TRUE, 0u,
+                                   batch->count * sizeof(float),
+                                   batch->average_deltas, 0u, NULL, NULL);
+    if (status != CL_SUCCESS)
+        goto fail;
+
+    {
+        cl_kernel kernel = clCreateKernel(ctx->program,
+                                          "pe_apply_update_batch_kernel",
+                                          &status);
+        cl_uint count = (cl_uint)batch->count;
+        size_t global = batch->count;
+        if (status != CL_SUCCESS)
+            goto fail;
+        status = clSetKernelArg(kernel, 0u, sizeof(regret_buffer),
+                                &regret_buffer);
+        status |= clSetKernelArg(kernel, 1u, sizeof(average_buffer),
+                                 &average_buffer);
+        status |= clSetKernelArg(kernel, 2u, sizeof(slots), &slots);
+        status |= clSetKernelArg(kernel, 3u, sizeof(regret_deltas),
+                                 &regret_deltas);
+        status |= clSetKernelArg(kernel, 4u, sizeof(average_deltas),
+                                 &average_deltas);
+        status |= clSetKernelArg(kernel, 5u, sizeof(count), &count);
+        if (status == CL_SUCCESS)
+            status = clEnqueueNDRangeKernel(ctx->queue, kernel, 1u, NULL,
+                                            &global, NULL, 0u, NULL, NULL);
+        if (status == CL_SUCCESS)
+            status = clFinish(ctx->queue);
+        clReleaseKernel(kernel);
+    }
+    if (status != CL_SUCCESS)
+        goto fail;
+    status = clEnqueueReadBuffer(ctx->queue, regret_buffer, CL_TRUE, 0u,
+                                 value_count * sizeof(float), regrets,
+                                 0u, NULL, NULL);
+    status |= clEnqueueReadBuffer(ctx->queue, average_buffer, CL_TRUE, 0u,
+                                  value_count * sizeof(float), averages,
+                                  0u, NULL, NULL);
+    if (status != CL_SUCCESS)
+        goto fail;
+    clReleaseMemObject(average_deltas);
+    clReleaseMemObject(regret_deltas);
+    clReleaseMemObject(slots);
+    clReleaseMemObject(average_buffer);
+    clReleaseMemObject(regret_buffer);
+    return 0;
+fail:
+    if (average_deltas) clReleaseMemObject(average_deltas);
+    if (regret_deltas) clReleaseMemObject(regret_deltas);
+    if (slots) clReleaseMemObject(slots);
+    if (average_buffer) clReleaseMemObject(average_buffer);
+    if (regret_buffer) clReleaseMemObject(regret_buffer);
+    return -1;
+}
+
 int pe_regret_opencl_sync(pe_regret_opencl_context_t *ctx)
 {
     return ctx && clFinish(ctx->queue) == CL_SUCCESS ? 0 : -1;
