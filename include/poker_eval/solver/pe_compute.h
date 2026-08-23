@@ -85,6 +85,9 @@ const pe_compute_ops_t *pe_compute_cpu_ref_ops(void);
 /** CUDA terminal evaluator; capability is gated until GPU-05 parity passes. */
 const pe_compute_ops_t *pe_compute_cuda_ops(void);
 
+/** OpenCL terminal evaluator; capability is gated until GPU-05 parity passes. */
+const pe_compute_ops_t *pe_compute_opencl_ops(void);
+
 #ifdef __cplusplus
 }
 #endif

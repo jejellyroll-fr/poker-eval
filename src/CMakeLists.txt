@@ -49,6 +49,7 @@ add_library(poker_solver
     solver/adapters/compute_cpu_ref.c
     solver/adapters/compute_cpu_par.c
     solver/adapters/compute_cuda.c
+    solver/adapters/compute_opencl.c
     solver/adapters/evaluator_equity.c
     solver/adapters/evaluator_gpu.c
     solver/adapters/monker_tree_reader.c
@@ -82,7 +83,12 @@ endif()
 # the existing batched GPU library and its CUDA headers/runtime.
 if(TARGET poker_cuda_batch AND TARGET poker_gpu_unified)
     target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_CUDA_AVAILABLE=1)
-    target_link_libraries(poker_solver PUBLIC poker_gpu_unified)
+    target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
+endif()
+
+if(TARGET poker_opencl AND TARGET poker_gpu_unified)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_OPENCL_AVAILABLE=1)
+    target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
 endif()
 
 install(TARGETS poker_solver
