@@ -44,7 +44,7 @@ static int terminal_one_step(const void *state, void *user)
 
 static uint16_t actions_one_step(const void *state, void *user)
 {
-    return state == user ? 1u : 0u;
+    return state == user ? 2u : 0u;
 }
 
 static uint64_t key_one_step(const void *state, void *user)
@@ -188,7 +188,7 @@ int main(void)
         vector_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
         vector_config.max_iterations = 1u;
         vector_config.problem.expected_infosets = 1u;
-        vector_config.problem.expected_actions = 1u;
+        vector_config.problem.expected_actions = 2u;
         vector_config.problem.expected_combos = 1u;
         deps.vector_game = &game;
 
@@ -199,11 +199,12 @@ int main(void)
             CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
                   "storage-backed vector solver run failed");
             CHECK(pe_solver_strategy(solver, &strategy_query, &strategy_view) ==
-                      PE_SOLVER_OK && strategy_view.count == 1u &&
-                      strategy_view.action_count == 1u &&
+                      PE_SOLVER_OK && strategy_view.count == 2u &&
+                      strategy_view.action_count == 2u &&
                       strategy_view.combo_count == 1u &&
-                      strategy_view.values[0] == 1.0,
-                  "compute adapter should apply the vector average update");
+                      strategy_view.values[0] == 0.5 &&
+                      strategy_view.values[1] == 0.5,
+                  "strategy query should normalize the stored average per combo");
             pe_solver_destroy(solver);
         }
     }

@@ -26,8 +26,15 @@
 #include <poker_eval/solver/pe_traversal.h>
 
 #include <stddef.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+typedef struct
+{
+    double *values;
+    size_t capacity;
+} pe_strategy_cache_t;
 
 /*
  * The instance. Opaque to callers: everything reaches it through pe_solver.h,
@@ -42,6 +49,7 @@ struct pe_solver_t {
        promise in pe_ports.h, and gives result queries one stable store. */
     const pe_storage_ops_t *storage;
     void *storage_self;
+    pe_strategy_cache_t *strategy_cache;
 
     /* Filled by the execution backend once a solve has produced a result.
        Keeping availability separate from the zero-valued metrics prevents a
@@ -106,6 +114,37 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
         free(solver);
         return NULL;
     }
+    solver->strategy_cache = (pe_strategy_cache_t *)calloc(1u, sizeof(*solver->strategy_cache));
+    if (solver->strategy_cache == NULL)
+    {
+        solver->storage->destroy(solver->storage_self);
+        free(solver);
+        return NULL;
+    }
+    if (solver->config.problem.expected_actions != 0u &&
+        solver->config.problem.expected_combos != 0u &&
+        (size_t)solver->config.problem.expected_actions >
+            SIZE_MAX / (size_t)solver->config.problem.expected_combos)
+    {
+        free(solver->strategy_cache);
+        solver->storage->destroy(solver->storage_self);
+        free(solver);
+        return NULL;
+    }
+    solver->strategy_cache->capacity =
+        (size_t)solver->config.problem.expected_actions *
+        (size_t)solver->config.problem.expected_combos;
+    if (solver->strategy_cache->capacity == 0u)
+        solver->strategy_cache->capacity = 1u;
+    solver->strategy_cache->values = (double *)calloc(
+        solver->strategy_cache->capacity, sizeof(double));
+    if (solver->strategy_cache->values == NULL)
+    {
+        free(solver->strategy_cache);
+        solver->storage->destroy(solver->storage_self);
+        free(solver);
+        return NULL;
+    }
     /* The compute adapters consume the same resolved pair once the execution
        driver is installed. Keep the dependency view coherent for accessors
        and for that next tranche. */
@@ -142,6 +181,11 @@ void pe_solver_destroy(pe_solver_t *solver)
 
     if (solver->storage != NULL && solver->storage->destroy != NULL)
         solver->storage->destroy(solver->storage_self);
+    if (solver->strategy_cache != NULL)
+    {
+        free(solver->strategy_cache->values);
+        free(solver->strategy_cache);
+    }
 
     free(solver);
 }
@@ -480,7 +524,8 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         return PE_SOLVER_ERR_INVALID_STATE;
     if (solver->storage == NULL || solver->storage->shape == NULL ||
         solver->storage->values_const == NULL ||
-        !pe_storage_serves(solver->storage, PE_VALUES_AVERAGE))
+        !pe_storage_serves(solver->storage, PE_VALUES_AVERAGE) ||
+        solver->strategy_cache == NULL || solver->strategy_cache->values == NULL)
         return PE_SOLVER_ERR_EXECUTION;
 
     memset(out, 0, sizeof(*out));
@@ -488,10 +533,29 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
                                &out->action_count, &out->combo_count,
                                NULL) != 0)
         return PE_SOLVER_ERR_INVALID_CONFIG;
-    out->values = solver->storage->values_const(
+    const double *average = solver->storage->values_const(
         solver->storage_self, query->infoset, PE_VALUES_AVERAGE, &out->count);
-    if (out->values == NULL)
+    if (average == NULL || out->count > solver->strategy_cache->capacity)
         return PE_SOLVER_ERR_INVALID_STATE;
+    for (uint16_t combo = 0u; combo < out->combo_count; ++combo)
+    {
+        double total = 0.0;
+        for (uint16_t action = 0u; action < out->action_count; ++action)
+        {
+            size_t slot = pe_storage_slot_at(out->combo_count, action, combo);
+            if (!isfinite(average[slot]) || average[slot] < 0.0)
+                return PE_SOLVER_ERR_EXECUTION;
+            total += average[slot];
+        }
+        for (uint16_t action = 0u; action < out->action_count; ++action)
+        {
+            size_t slot = pe_storage_slot_at(out->combo_count, action, combo);
+            solver->strategy_cache->values[slot] = total > 0.0
+                ? average[slot] / total
+                : 1.0 / (double)out->action_count;
+        }
+    }
+    out->values = solver->strategy_cache->values;
     return PE_SOLVER_OK;
 }
 

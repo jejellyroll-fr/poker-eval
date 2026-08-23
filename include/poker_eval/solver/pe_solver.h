@@ -133,7 +133,7 @@ struct pe_strategy_query_t {
     uint32_t infoset;
 };
 
-/** Borrowed view returned by a strategy query. */
+/** Borrowed view returned by a strategy query; valid until the next query. */
 struct pe_strategy_view_t {
     const double *values;
     size_t count;
