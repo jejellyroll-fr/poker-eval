@@ -34,6 +34,7 @@ add_library(poker_solver
     solver/domain/combinations.c
     solver/domain/telemetry.c
     solver/domain/traversal_full_vector.c
+    solver/domain/batch.c
     solver/domain/regret_vanilla.c
     solver/domain/regret_plus.c
     solver/domain/regret_dcfr.c

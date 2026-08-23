@@ -10,6 +10,7 @@
 #define POKER_EVAL_PE_TRAVERSAL_H
 
 #include <poker_eval/solver/pe_storage_port.h>
+#include <poker_eval/solver/pe_batch.h>
 #include <poker_eval/solver/pe_game_rules.h>
 #include <poker_eval/solver/pe_vector.h>
 
@@ -27,25 +28,6 @@ typedef struct pe_traversal_ctx_t pe_traversal_ctx_t;
 typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
                                                   int outcome,
                                                   void *user);
-
-typedef struct
-{
-    pe_infoset_id_t infoset;
-    uint16_t action;
-    uint16_t combo;
-    double delta;
-} pe_update_t;
-
-typedef struct
-{
-    pe_update_t *items;
-    size_t count;
-    size_t capacity;
-} pe_update_batch_t;
-
-void pe_update_batch_clear(pe_update_batch_t *batch);
-void pe_update_batch_destroy(pe_update_batch_t *batch);
-int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update);
 
 /*
  * The rules adapter used by the VEC-02 skeleton. States are borrowed and may

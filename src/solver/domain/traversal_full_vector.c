@@ -11,43 +11,7 @@
 #include <poker_eval/solver/pe_capabilities.h>
 #include <poker_eval/solver/pe_traversal.h>
 
-#include <stdlib.h>
 #include <string.h>
-
-void pe_update_batch_clear(pe_update_batch_t *batch)
-{
-    if (batch)
-        batch->count = 0;
-}
-
-void pe_update_batch_destroy(pe_update_batch_t *batch)
-{
-    if (!batch)
-        return;
-    free(batch->items);
-    memset(batch, 0, sizeof(*batch));
-}
-
-int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update)
-{
-    pe_update_t *grown;
-    size_t capacity;
-
-    if (!batch)
-        return -1;
-    if (batch->count == batch->capacity)
-    {
-        capacity = batch->capacity ? batch->capacity * 2u : 64u;
-        grown = (pe_update_t *)realloc(batch->items,
-                                       capacity * sizeof(pe_update_t));
-        if (!grown)
-            return -1;
-        batch->items = grown;
-        batch->capacity = capacity;
-    }
-    batch->items[batch->count++] = update;
-    return 0;
-}
 
 static int vector_valid(const pe_vector_game_t *game)
 {

@@ -107,7 +107,7 @@ static int toy_terminal_values(const void *state, const pe_reach_vec_t *reach,
 static void test_batch_lifetime(void)
 {
     pe_update_batch_t batch = {0};
-    pe_update_t update = {UINT64_C(7), 2u, 3u, 1.25};
+    pe_update_t update = {UINT64_C(7), 2u, 3u, 1.25, 0.0};
 
     CHECK(pe_update_batch_push(&batch, update) == 0, "batch push failed");
     CHECK(batch.count == 1u && batch.items[0].delta == 1.25,
