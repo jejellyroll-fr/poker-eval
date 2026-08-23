@@ -161,7 +161,8 @@ pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
     if (pe_plan_estimate(&plan, &solver->config.problem,
                          solver->config.execution.max_ram_bytes,
                          &estimate, diag) == PE_VALID_ERROR)
-        return PE_SOLVER_ERR_BUDGET_EXCEEDED;
+        return (estimate.infosets == 0) ? PE_SOLVER_ERR_INVALID_CONFIG
+                                        : PE_SOLVER_ERR_BUDGET_EXCEEDED;
 
     return PE_SOLVER_OK;
 }
@@ -221,8 +222,18 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
 
 pe_solver_status_t pe_solver_run(pe_solver_t *solver)
 {
+    pe_solver_status_t validation;
+
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+
+    /* Do not dispatch an execution backend for a plan that cannot be
+       honoured. Once a real backend is installed, this preflight remains the
+       first gate and the NOT_IMPLEMENTED result below is replaced by the
+       iteration driver. */
+    validation = pe_solver_validate(solver, NULL);
+    if (validation != PE_SOLVER_OK)
+        return validation;
     return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 }
 

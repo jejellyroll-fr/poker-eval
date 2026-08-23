@@ -272,6 +272,33 @@ static void test_capabilities_are_introspectable(void)
           "NULL solver must be rejected by capability query");
 }
 
+static void test_run_validates_before_dispatch(void)
+{
+    pe_solver_config_t cfg = pe_solver_config_default();
+    pe_solver_t *solver;
+
+    solver = pe_solver_create(&cfg, NULL);
+    CHECK(solver != NULL, "solver creation failed for invalid run test");
+    if (solver != NULL)
+    {
+        CHECK(pe_solver_run(solver) == PE_SOLVER_ERR_INVALID_CONFIG,
+              "run should reject an empty problem before dispatch");
+        pe_solver_destroy(solver);
+    }
+
+    cfg = sized(1000, 3, 1);
+    solver = pe_solver_create(&cfg, NULL);
+    CHECK(solver != NULL, "solver creation failed for valid run test");
+    if (solver != NULL)
+    {
+        CHECK(pe_solver_run(solver) == PE_SOLVER_ERR_NOT_IMPLEMENTED,
+              "a valid plan without an execution backend should remain explicit");
+        pe_solver_destroy(solver);
+    }
+    CHECK(pe_solver_run(NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
+          "NULL solver must be rejected by run");
+}
+
 static void test_empty_problem_is_refused(void)
 {
     pe_solver_config_t cfg = pe_solver_config_default();   /* size left at 0 */
@@ -320,6 +347,7 @@ int main(void)
     test_budget_accepted_when_it_fits();
     test_no_budget_means_no_refusal();
     test_capabilities_are_introspectable();
+    test_run_validates_before_dispatch();
     test_empty_problem_is_refused();
     test_invalid_config_fails_before_the_budget();
 
