@@ -58,13 +58,75 @@ static void cpu_par_destroy(void *self)
     free(self);
 }
 
+static void cpu_par_strategy_one(const pe_infoset_batch_t *in,
+                                 pe_strategy_batch_t *out, size_t infoset)
+{
+    uint32_t begin = in->offsets[infoset];
+    uint16_t actions = in->action_counts[infoset];
+    float positive = 0.0f;
+    uint16_t action;
+
+    for (action = 0u; action < actions; ++action)
+    {
+        float regret = in->regrets[begin + action];
+        if (regret > 0.0f)
+            positive += regret;
+    }
+    for (action = 0u; action < actions; ++action)
+    {
+        float regret = in->regrets[begin + action];
+        out->strategies[begin + action] = positive > 0.0f
+            ? (regret > 0.0f ? regret / positive : 0.0f)
+            : 1.0f / (float)actions;
+    }
+    for (uint32_t slot = begin + actions;
+         slot < in->offsets[infoset + 1u]; ++slot)
+        out->strategies[slot] = 0.0f;
+}
+
 static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
                                   pe_strategy_batch_t *out)
 {
-    (void)self;
-    (void)in;
-    (void)out;
-    return -1;
+    const pe_cpu_par_t *backend = (const pe_cpu_par_t *)self;
+    size_t infoset;
+
+    if (!backend || !in || !out || (in->count != 0u &&
+        (!in->offsets || !in->action_counts || !in->regrets)) ||
+        (out->capacity != 0u && !out->strategies) ||
+        out->capacity < (in->count != 0u ? in->offsets[in->count] : 0u))
+        return -1;
+    if (in->count == 0u)
+    {
+        out->count = 0u;
+        out->offsets = in->offsets;
+        return 0;
+    }
+    if (!out->strategies)
+        return -1;
+    if (!out->offsets)
+        out->offsets = in->offsets;
+
+    /* Validate all metadata before entering the parallel region so an invalid
+       batch cannot leave a partially written output. */
+    for (infoset = 0u; infoset < in->count; ++infoset)
+    {
+        uint32_t begin = in->offsets[infoset];
+        uint32_t end = in->offsets[infoset + 1u];
+        uint16_t action;
+        if (end < begin || (uint32_t)in->action_counts[infoset] > end - begin)
+            return -1;
+        for (action = 0u; action < in->action_counts[infoset]; ++action)
+            if (!isfinite(in->regrets[begin + action]))
+                return -1;
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#endif
+    for (infoset = 0u; infoset < in->count; ++infoset)
+        cpu_par_strategy_one(in, out, infoset);
+    out->count = in->count;
+    return 0;
 }
 
 static int cpu_par_apply_update_batch(void *self,

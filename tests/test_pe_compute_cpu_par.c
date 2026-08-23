@@ -106,11 +106,39 @@ static void test_update_batch_reaches_storage(void)
     storage_ops->destroy(storage);
 }
 
+static void test_ragged_strategy_batch(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_par_ops();
+    pe_compute_config_t cfg = {2, 1, 0u, 0u, 0u, NULL, NULL};
+    const uint32_t offsets[] = {0u, 3u, 5u};
+    const uint16_t actions[] = {2u, 1u};
+    const float regrets[] = {2.0f, -1.0f, 9.0f, -4.0f, 8.0f};
+    float strategies[5] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
+    pe_infoset_batch_t input = {2u, offsets, actions, regrets};
+    pe_strategy_batch_t output = {0u, 5u, NULL, strategies};
+    void *backend = NULL;
+
+    CHECK(ops->create(&backend, &cfg) == 0 && backend != NULL,
+          "cpu_par strategy backend creation failed");
+    if (!backend)
+        return;
+    CHECK(ops->strategy_batch(backend, &input, &output) == 0,
+          "cpu_par ragged strategy batch failed");
+    CHECK(output.count == 2u && output.offsets == offsets,
+          "cpu_par strategy metadata was not returned");
+    CHECK(strategies[0] == 1.0f && strategies[1] == 0.0f &&
+              strategies[2] == 0.0f && strategies[3] == 1.0f &&
+              strategies[4] == 0.0f,
+          "cpu_par ragged regret matching produced an invalid strategy");
+    ops->destroy(backend);
+}
+
 int main(void)
 {
     test_registration_and_capabilities();
     test_invalid_config_is_refused();
     test_update_batch_reaches_storage();
+    test_ragged_strategy_batch();
     if (failures != 0)
         return 1;
     puts("test_pe_compute_cpu_par: all tests passed");
