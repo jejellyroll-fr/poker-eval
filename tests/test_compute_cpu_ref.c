@@ -109,11 +109,39 @@ static void test_terminal_batch(void)
     ops->destroy(backend);
 }
 
+static void test_ragged_strategy_batch(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
+    pe_compute_config_t cfg = {1, 1, 0u, 0u, 0u, NULL, NULL};
+    const uint32_t offsets[] = {0u, 3u, 5u};
+    const uint16_t actions[] = {2u, 1u};
+    const float regrets[] = {2.0f, -1.0f, 9.0f, -4.0f, 8.0f};
+    float strategies[5] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
+    pe_infoset_batch_t input = {2u, offsets, actions, regrets};
+    pe_strategy_batch_t output = {0u, 5u, NULL, strategies};
+    void *backend = NULL;
+
+    CHECK(ops->create(&backend, &cfg) == 0 && backend != NULL,
+          "cpu_ref strategy backend creation failed");
+    if (backend == NULL)
+        return;
+    CHECK(ops->strategy_batch(backend, &input, &output) == 0,
+          "cpu_ref ragged strategy batch failed");
+    CHECK(output.count == 2u && output.offsets == offsets,
+          "strategy batch metadata was not returned");
+    CHECK(strategies[0] == 1.0f && strategies[1] == 0.0f &&
+              strategies[2] == 0.0f && strategies[3] == 1.0f &&
+              strategies[4] == 0.0f,
+          "ragged regret matching produced an invalid strategy");
+    ops->destroy(backend);
+}
+
 int main(void)
 {
     test_reference_contract();
     test_invalid_parallel_config();
     test_terminal_batch();
+    test_ragged_strategy_batch();
     if (failures != 0)
         return 1;
     puts("test_compute_cpu_ref: deterministic reference contract passed");

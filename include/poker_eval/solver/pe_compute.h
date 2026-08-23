@@ -32,9 +32,31 @@ typedef struct pe_compute_config_t
     void *storage_self;
 } pe_compute_config_t;
 
-/* Traversal batch types that will be completed by later tickets. */
-typedef struct pe_infoset_batch_t pe_infoset_batch_t;
-typedef struct pe_strategy_batch_t pe_strategy_batch_t;
+/*
+ * Ragged strategy batches. For infoset i, the owned span is
+ * [offsets[i], offsets[i + 1]) in `regrets`/`strategies`; action_counts[i]
+ * says how many entries in that span are live actions. The remaining entries
+ * are padding owned by the caller and are cleared by strategy_batch().
+ *
+ * The layout is deliberately independent of storage IDs: a strategy kernel
+ * only needs contiguous values and shape metadata. Update batches retain
+ * infoset IDs because they are applied through the storage port.
+ */
+typedef struct pe_infoset_batch_t
+{
+    size_t count;
+    const uint32_t *offsets;       /* count + 1 entries                    */
+    const uint16_t *action_counts; /* count entries                        */
+    const float *regrets;          /* offsets[count] entries               */
+} pe_infoset_batch_t;
+
+typedef struct pe_strategy_batch_t
+{
+    size_t count;
+    size_t capacity;               /* number of float entries              */
+    const uint32_t *offsets;       /* same ragged layout as the input       */
+    float *strategies;
+} pe_strategy_batch_t;
 typedef struct pe_showdown_job_t pe_showdown_job_t;
 
 /*
