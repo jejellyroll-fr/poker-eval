@@ -33,6 +33,15 @@ typedef struct
     size_t capacity;
 } pe_update_batch_t;
 
+/* A batch together with the stable logical thread id that produced it. The
+   array passed to pe_update_batch_reduce may arrive in any order; the id is
+   what defines the reduction order. */
+typedef struct
+{
+    size_t thread_index;
+    const pe_update_batch_t *batch;
+} pe_update_batch_source_t;
+
 void pe_update_batch_clear(pe_update_batch_t *batch);
 void pe_update_batch_destroy(pe_update_batch_t *batch);
 
@@ -46,6 +55,17 @@ int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update);
  */
 int pe_update_batch_merge(pe_update_batch_t *destination,
                           const pe_update_batch_t *source);
+
+/**
+ * Reduce thread batches in deterministic order. Slots are ordered by
+ * infoset, action and combo; equal slots are summed by ascending
+ * source.thread_index, then by their original position within that batch.
+ * Source array order therefore represents arrival order only and has no
+ * effect on the result.
+ */
+int pe_update_batch_reduce(const pe_update_batch_source_t *sources,
+                           size_t source_count,
+                           pe_update_batch_t *out_reduced);
 
 #ifdef __cplusplus
 }

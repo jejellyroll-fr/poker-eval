@@ -70,10 +70,76 @@ static void test_merge_reduces_same_slot(void)
     pe_update_batch_destroy(&destination);
 }
 
+static int same_results(const pe_update_batch_t *left,
+                        const pe_update_batch_t *right)
+{
+    size_t i;
+
+    if (left->count != right->count)
+        return 0;
+    for (i = 0u; i < left->count; ++i)
+    {
+        const pe_update_t *a = &left->items[i];
+        const pe_update_t *b = &right->items[i];
+        if (a->infoset != b->infoset || a->action != b->action ||
+            a->combo != b->combo || fabs(a->delta - b->delta) > 1e-15 ||
+            fabs(a->average_delta - b->average_delta) > 1e-15)
+            return 0;
+    }
+    return 1;
+}
+
+static void test_reduction_ignores_arrival_order(void)
+{
+    pe_update_batch_t threads[4] = {{0}};
+    pe_update_batch_t forward = {0};
+    pe_update_batch_t shuffled = {0};
+    const pe_update_t updates[] = {
+        {7u, 0u, 0u, 0.1, 1.0},
+        {7u, 0u, 0u, 0.2, 2.0},
+        {7u, 0u, 0u, 0.4, 4.0},
+        {7u, 0u, 0u, 0.8, 8.0},
+        {3u, 1u, 0u, 2.0, -1.0},
+        {3u, 1u, 0u, 3.0, -2.0}
+    };
+    const pe_update_batch_source_t sources_forward[] = {
+        {0u, &threads[0]}, {1u, &threads[1]},
+        {2u, &threads[2]}, {3u, &threads[3]}
+    };
+    const pe_update_batch_source_t sources_shuffled[] = {
+        {3u, &threads[3]}, {1u, &threads[1]},
+        {0u, &threads[0]}, {2u, &threads[2]}
+    };
+    size_t i;
+
+    for (i = 0u; i < 6u; ++i)
+    {
+        CHECK(pe_update_batch_push(&threads[i % 4u], updates[i]) == 0,
+              "thread batch push %zu", i);
+    }
+    CHECK(pe_update_batch_reduce(sources_forward, 4u, &forward) == 0,
+          "forward deterministic reduction failed");
+    CHECK(pe_update_batch_reduce(sources_shuffled, 4u, &shuffled) == 0,
+          "shuffled deterministic reduction failed");
+    CHECK(same_results(&forward, &shuffled),
+          "arrival order changed deterministic reduction");
+    CHECK(forward.count == 2u && forward.items[0].infoset == 3u &&
+              forward.items[0].delta == 5.0 &&
+              forward.items[1].infoset == 7u &&
+              forward.items[1].delta == 1.5,
+          "reduction did not sort and sum slots as expected");
+
+    for (i = 0u; i < 4u; ++i)
+        pe_update_batch_destroy(&threads[i]);
+    pe_update_batch_destroy(&forward);
+    pe_update_batch_destroy(&shuffled);
+}
+
 int main(void)
 {
     test_large_batch_round_trip();
     test_merge_reduces_same_slot();
+    test_reduction_ignores_arrival_order();
     if (failures != 0)
         return 1;
     puts("test_pe_batch: all tests passed");
