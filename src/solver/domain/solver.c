@@ -21,6 +21,7 @@
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
+#include <poker_eval/solver/pe_compute.h>
 #include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/solver/pe_traversal.h>
 
@@ -281,6 +282,9 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     pe_traversal_ctx_t traversal;
     pe_update_batch_t batch = {0};
     const pe_traversal_ops_t *ops;
+    const pe_compute_ops_t *compute_ops;
+    pe_compute_config_t compute_config;
+    void *compute_self = NULL;
     uint64_t iteration;
     int rc;
 
@@ -301,6 +305,40 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         return PE_SOLVER_ERR_EXECUTION;
     }
 
+    compute_ops = solver->deps.compute;
+    if (compute_ops == NULL)
+    {
+        switch (plan->stages.update)
+        {
+        case PE_COMPUTE_CPU_PAR:
+            compute_ops = pe_compute_cpu_par_ops();
+            break;
+        case PE_COMPUTE_CPU_REF:
+        case PE_COMPUTE_AUTO:
+        case PE_COMPUTE_CUDA:
+        case PE_COMPUTE_OPENCL:
+        case PE_COMPUTE_COUNT:
+        default:
+            compute_ops = pe_compute_cpu_ref_ops();
+            break;
+        }
+    }
+    memset(&compute_config, 0, sizeof(compute_config));
+    compute_config.cpu_threads = solver->config.execution.cpu_threads;
+    compute_config.deterministic = solver->config.execution.deterministic;
+    compute_config.sample_batch_size = solver->config.execution.sample_batch_size;
+    compute_config.terminal_batch_size = solver->config.execution.terminal_batch_size;
+    compute_config.update_batch_size = solver->config.execution.update_batch_size;
+    compute_config.storage = solver->storage;
+    compute_config.storage_self = solver->storage_self;
+    if (compute_ops == NULL || compute_ops->create == NULL ||
+        compute_ops->destroy == NULL || compute_ops->apply_update_batch == NULL ||
+        compute_ops->create(&compute_self, &compute_config) != 0)
+    {
+        pe_traversal_ctx_destroy(&traversal);
+        return PE_SOLVER_ERR_EXECUTION;
+    }
+
     solver->state = PE_SOLVER_STATE_RUNNING;
     for (iteration = 1u; iteration <= solver->config.max_iterations; ++iteration)
     {
@@ -309,18 +347,30 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             rc = ops->run_iteration(&traversal, &batch);
         if (rc == 0)
             rc = ops->end_iteration(&traversal, iteration);
+        if (rc == 0 && compute_ops->apply_update_batch(compute_self, &batch) != 0)
+            rc = -1;
         if (rc != 0)
         {
             pe_update_batch_destroy(&batch);
             pe_traversal_ctx_destroy(&traversal);
+            compute_ops->destroy(compute_self);
             solver->state = PE_SOLVER_STATE_STOPPED;
             return PE_SOLVER_ERR_EXECUTION;
         }
         solver->iteration = iteration;
     }
 
+    if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)
+    {
+        pe_update_batch_destroy(&batch);
+        pe_traversal_ctx_destroy(&traversal);
+        compute_ops->destroy(compute_self);
+        solver->state = PE_SOLVER_STATE_STOPPED;
+        return PE_SOLVER_ERR_EXECUTION;
+    }
     pe_update_batch_destroy(&batch);
     pe_traversal_ctx_destroy(&traversal);
+    compute_ops->destroy(compute_self);
     solver->state = PE_SOLVER_STATE_COMPLETED;
     return PE_SOLVER_OK;
 }

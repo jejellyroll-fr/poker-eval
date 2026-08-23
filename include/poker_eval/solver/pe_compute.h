@@ -97,7 +97,14 @@ typedef struct pe_value_batch_t
     size_t count;
 } pe_value_batch_t;
 
-typedef struct pe_compute_ops_t
+/* pe_ports.h forward-declares this tag; keep the typedef guarded so either
+   header can be included first without a C99 typedef redefinition. */
+#ifndef POKER_EVAL_PE_COMPUTE_OPS_T_DEFINED
+typedef struct pe_compute_ops_t pe_compute_ops_t;
+#define POKER_EVAL_PE_COMPUTE_OPS_T_DEFINED
+#endif
+
+struct pe_compute_ops_t
 {
     const char *name;
     uint64_t (*capabilities)(void *self);
@@ -112,7 +119,7 @@ typedef struct pe_compute_ops_t
     int (*vector_showdown)(void *self, const pe_showdown_job_t *job,
                            pe_value_vec_t *out);
     int (*sync)(void *self);
-} pe_compute_ops_t;
+};
 
 /** The deterministic CPU-parallel adapter. */
 const pe_compute_ops_t *pe_compute_cpu_par_ops(void);

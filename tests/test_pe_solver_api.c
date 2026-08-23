@@ -202,8 +202,8 @@ int main(void)
                       PE_SOLVER_OK && strategy_view.count == 1u &&
                       strategy_view.action_count == 1u &&
                       strategy_view.combo_count == 1u &&
-                      strategy_view.values[0] == 0.0,
-                  "vector traversal should expose its initialized average slab");
+                      strategy_view.values[0] == 1.0,
+                  "compute adapter should apply the vector average update");
             pe_solver_destroy(solver);
         }
     }
