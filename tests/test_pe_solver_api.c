@@ -58,8 +58,12 @@ int main(void)
     CHECK(pe_solver_run(solver) == PE_SOLVER_ERR_NOT_IMPLEMENTED,
           "valid run should remain explicit until the driver is wired");
     CHECK(pe_solver_progress(solver, &progress) == PE_SOLVER_OK &&
-              !progress.running && !progress.complete,
+              !progress.running && !progress.complete &&
+              progress.iteration == 0u && progress.total_iterations == config.max_iterations &&
+              progress.fraction == 0.0,
           "post-run progress snapshot is inconsistent");
+    CHECK(pe_solver_run(solver) == PE_SOLVER_ERR_INVALID_STATE,
+          "a solver must reject a second run attempt");
     CHECK(pe_solver_stop(solver) == PE_SOLVER_ERR_INVALID_STATE,
           "stop after an unimplemented run should not claim a running solve");
     CHECK(pe_solver_save(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,

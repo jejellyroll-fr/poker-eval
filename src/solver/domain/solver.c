@@ -253,6 +253,14 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
+    /* Validation is deliberately pure, so CREATED is also the state after a
+       successful pe_solver_validate() call.  A run is nevertheless a
+       one-shot lifecycle transition: once dispatch was attempted, accepting
+       another call would make a future backend allocate or append a second
+       solve on the same instance without an explicit reset contract. */
+    if (solver->state != PE_SOLVER_STATE_CREATED)
+        return PE_SOLVER_ERR_INVALID_STATE;
+
     /* Do not dispatch an execution backend for a plan that cannot be
        honoured. Once a real backend is installed, this preflight remains the
        first gate and the NOT_IMPLEMENTED result below is replaced by the
@@ -310,6 +318,9 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
         return PE_SOLVER_ERR_INVALID_STATE;
     memset(out, 0, sizeof(*out));
     out->total_iterations = solver->config.max_iterations;
+    if (out->total_iterations > 0u)
+        out->fraction = (double)out->iteration /
+                        (double)out->total_iterations;
     out->running = solver->state == PE_SOLVER_STATE_RUNNING;
     out->paused = solver->state == PE_SOLVER_STATE_PAUSED;
     out->complete = solver->state == PE_SOLVER_STATE_COMPLETED;
