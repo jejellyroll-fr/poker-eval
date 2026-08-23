@@ -64,6 +64,10 @@ target_include_directories(poker_solver PRIVATE
 # and none of those links poker_solver.
 target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range)
 
+if(OpenMP_C_FOUND)
+    target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)
+endif()
+
 install(TARGETS poker_solver
         EXPORT poker-eval-targets
     ARCHIVE DESTINATION lib

@@ -23,6 +23,12 @@ typedef struct pe_compute_config_t
     size_t sample_batch_size;
     size_t terminal_batch_size;
     size_t update_batch_size;
+
+    /* Optional storage target for apply_update_batch. A NULL pair keeps the
+       adapter usable as a compute-only validator until the full solver loop
+       injects its storage port. */
+    const pe_storage_ops_t *storage;
+    void *storage_self;
 } pe_compute_config_t;
 
 /* Batch types that will be completed by the evaluator and traversal tickets.
