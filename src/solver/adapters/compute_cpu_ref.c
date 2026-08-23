@@ -3,6 +3,8 @@
  */
 
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/core/eval.h>
+#include <poker_eval/games/eval_omaha.h>
 
 #include <math.h>
 #include <stdlib.h>
@@ -102,10 +104,69 @@ static int cpu_ref_terminal_eval_batch(void *self,
                                        const pe_terminal_batch_t *in,
                                        pe_value_batch_t *out)
 {
+    size_t index;
+
     (void)self;
-    (void)in;
-    (void)out;
-    return -1;
+    if (in == NULL || out == NULL || in->count == 0u || out->values == NULL ||
+        out->capacity < in->count)
+        return -1;
+
+    for (index = 0u; index < in->count; ++index) {
+        StdDeck_CardMask cards;
+        size_t card_index;
+
+        StdDeck_CardMask_RESET(cards);
+        if (in->game == game_holdem || in->game == game_7stud) {
+            if (in->cards == NULL)
+                return -1;
+            for (card_index = 0u; card_index < 7u; ++card_index) {
+                const uint8_t card = in->cards[index * 7u + card_index];
+                if (card >= StdDeck_N_CARDS ||
+                    StdDeck_CardMask_CARD_IS_SET(cards, card))
+                    return -1;
+                StdDeck_CardMask_SET(cards, card);
+            }
+            out->values[index] = (uint32_t)StdDeck_StdRules_EVAL_N(cards, 7);
+        } else if (in->game == game_omaha || in->game == game_omaha8 ||
+                   in->game == game_omaha5 || in->game == game_omaha6) {
+            StdDeck_CardMask hole;
+            StdDeck_CardMask board;
+            HandVal value = HandVal_NOTHING;
+            size_t hole_cards = 4u;
+            size_t hole_index;
+
+            if (in->hole == NULL || in->board == NULL)
+                return -1;
+            if (in->game == game_omaha5)
+                hole_cards = 5u;
+            else if (in->game == game_omaha6)
+                hole_cards = 6u;
+            StdDeck_CardMask_RESET(hole);
+            StdDeck_CardMask_RESET(board);
+            for (hole_index = 0u; hole_index < hole_cards; ++hole_index) {
+                const uint8_t card = in->hole[index * hole_cards + hole_index];
+                if (card >= StdDeck_N_CARDS ||
+                    StdDeck_CardMask_CARD_IS_SET(hole, card))
+                    return -1;
+                StdDeck_CardMask_SET(hole, card);
+            }
+            for (card_index = 0u; card_index < 5u; ++card_index) {
+                const uint8_t card = in->board[index * 5u + card_index];
+                if (card >= StdDeck_N_CARDS ||
+                    StdDeck_CardMask_CARD_IS_SET(hole, card) ||
+                    StdDeck_CardMask_CARD_IS_SET(board, card))
+                    return -1;
+                StdDeck_CardMask_SET(board, card);
+            }
+            if (StdDeck_OmahaHi_EVAL(hole, board, &value) != 0)
+                return -1;
+            out->values[index] = (uint32_t)value;
+        } else {
+            return -1;
+        }
+    }
+    out->count = in->count;
+    return 0;
 }
 
 static int cpu_ref_vector_showdown(void *self, const pe_showdown_job_t *job,

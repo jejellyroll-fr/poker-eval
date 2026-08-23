@@ -85,10 +85,35 @@ static void test_invalid_parallel_config(void)
           "cpu_ref accepted more than one worker");
 }
 
+static void test_terminal_batch(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
+    pe_compute_config_t cfg = {1, 1, 0u, 2u, 0u, NULL, NULL};
+    const uint8_t cards[] = {
+        12u, 25u, 38u, 3u, 16u, 29u, 42u,
+        11u, 24u, 37u, 2u, 15u, 28u, 41u
+    };
+    uint32_t values[2] = {0u, 0u};
+    pe_terminal_batch_t input = {game_holdem, cards, NULL, NULL, 2u};
+    pe_value_batch_t output = {values, 2u, 0u};
+    void *backend = NULL;
+
+    CHECK(ops->create(&backend, &cfg) == 0 && backend != NULL,
+          "cpu_ref terminal backend creation failed");
+    if (backend == NULL)
+        return;
+    CHECK(ops->terminal_eval_batch(backend, &input, &output) == 0,
+          "cpu_ref terminal evaluation failed");
+    CHECK(output.count == 2u && values[0] != 0u && values[1] != 0u,
+          "cpu_ref terminal output is incomplete");
+    ops->destroy(backend);
+}
+
 int main(void)
 {
     test_reference_contract();
     test_invalid_parallel_config();
+    test_terminal_batch();
     if (failures != 0)
         return 1;
     puts("test_compute_cpu_ref: deterministic reference contract passed");
