@@ -187,6 +187,279 @@ static void init_toy_cfr_game(cfr_game_t *game)
     game->num_players = 2;
 }
 
+/* A compact real Kuhn adapter used to compare both BR implementations on the
+ * six ordered private-card deals, not only on the synthetic fixture above. */
+#define K2_PH_ROOT 0
+#define K2_PH_P2C 1
+#define K2_PH_P1RB 2
+#define K2_PH_P2B 3
+#define K2_TERMINAL 4
+
+typedef struct
+{
+    cfr_game_t cfr;
+    cfr_storage_t *storage;
+    pe_vector_game_t vector;
+} k2_adapter_t;
+
+static uint64_t k2_key(int p1, int p2, int phase, int last)
+{
+    return ((uint64_t)(p1 & 3)) | ((uint64_t)(p2 & 3) << 2) |
+           ((uint64_t)(phase & 7) << 4) | ((uint64_t)(last & 3) << 7);
+}
+
+static void k2_unpack(uint64_t key, int *p1, int *p2, int *phase, int *last)
+{
+    *p1 = (int)(key & 3);
+    *p2 = (int)((key >> 2) & 3);
+    *phase = (int)((key >> 4) & 7);
+    *last = (int)((key >> 7) & 3);
+}
+
+static int k2_current_player(cfr_game_t *game, uint64_t key, void *user)
+{
+    int phase = (int)(key >> 4) & 7;
+    (void)game;
+    (void)user;
+    return phase == K2_PH_ROOT || phase == K2_PH_P1RB ? 0
+         : phase == K2_PH_P2C || phase == K2_PH_P2B ? 1
+         : -1;
+}
+
+static int k2_is_terminal(cfr_game_t *game, uint64_t key, void *user)
+{
+    (void)game;
+    (void)user;
+    return ((int)(key >> 4) & 7) >= K2_TERMINAL;
+}
+
+static double k2_utility(int p1, int p2, int phase, int last)
+{
+    int p1wins = p1 > p2;
+    if (phase == K2_TERMINAL + K2_PH_P2C)
+        return p1wins ? 1.0 : -1.0;
+    if (phase == K2_TERMINAL + K2_PH_P1RB)
+        return last == 0 ? -1.0 : (p1wins ? 2.0 : -2.0);
+    if (phase == K2_TERMINAL + K2_PH_P2B)
+        return last == 0 ? 1.0 : (p1wins ? 2.0 : -2.0);
+    return 0.0;
+}
+
+static double k2_get_utility(cfr_game_t *game, uint64_t key, int player,
+                             void *user)
+{
+    int p1, p2, phase, last;
+    (void)game;
+    (void)user;
+    k2_unpack(key, &p1, &p2, &phase, &last);
+    return player == 0 ? k2_utility(p1, p2, phase, last)
+                       : -k2_utility(p1, p2, phase, last);
+}
+
+static int k2_get_actions(cfr_game_t *game, uint64_t key, int *out,
+                          int max_actions, void *user)
+{
+    (void)game;
+    (void)user;
+    if (((int)(key >> 4) & 7) >= K2_TERMINAL || max_actions < 2)
+        return 0;
+    out[0] = 0;
+    out[1] = 1;
+    return 2;
+}
+
+static uint64_t k2_apply_action(cfr_game_t *game, uint64_t key, int action,
+                                void *user)
+{
+    int p1, p2, phase, last;
+    (void)game;
+    (void)user;
+    k2_unpack(key, &p1, &p2, &phase, &last);
+    if (action < 0 || action > 1)
+        return 0;
+    if (phase == K2_PH_ROOT)
+        return k2_key(p1, p2, action == 0 ? K2_PH_P2C : K2_PH_P2B, action);
+    if (phase == K2_PH_P2C)
+        return action == 0
+            ? k2_key(p1, p2, K2_TERMINAL + K2_PH_P2C, action)
+            : k2_key(p1, p2, K2_PH_P1RB, action);
+    if (phase == K2_PH_P1RB)
+        return k2_key(p1, p2, K2_TERMINAL + K2_PH_P1RB, action);
+    if (phase == K2_PH_P2B)
+        return k2_key(p1, p2, K2_TERMINAL + K2_PH_P2B, action);
+    return 0;
+}
+
+static uint64_t k2_infoset_key(const void *state)
+{
+    uint64_t key = (uint64_t)(uintptr_t)state;
+    int p1, p2, phase, last, hand;
+    if (key == 0)
+        return 0;
+    k2_unpack(key, &p1, &p2, &phase, &last);
+    if (phase >= K2_TERMINAL)
+        return (1ULL << 60) | key;
+    hand = phase == K2_PH_ROOT || phase == K2_PH_P1RB ? p1 : p2;
+    return (1ULL << 60) | ((uint64_t)hand << 8) | (uint64_t)phase;
+}
+
+static int k2_is_chance(cfr_game_t *game, uint64_t key, void *user)
+{
+    (void)game;
+    (void)user;
+    return key == 0;
+}
+
+static int k2_chance_outcomes(cfr_game_t *game, uint64_t key, void *user)
+{
+    (void)game;
+    (void)key;
+    (void)user;
+    return 6;
+}
+
+static uint64_t k2_apply_chance(cfr_game_t *game, uint64_t key, int outcome,
+                                void *user)
+{
+    static const int pairs[6][2] = {{0, 1}, {0, 2}, {1, 0},
+                                    {1, 2}, {2, 0}, {2, 1}};
+    (void)game;
+    (void)user;
+    return key == 0 && outcome >= 0 && outcome < 6
+        ? k2_key(pairs[outcome][0], pairs[outcome][1], K2_PH_ROOT, 0)
+        : 0;
+}
+
+static uint64_t k2_state_key(const k2_adapter_t *adapter, const void *state)
+{
+    return state == adapter ? 0 : (uint64_t)(uintptr_t)state;
+}
+
+static int k2_vector_is_terminal(const void *state, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    return k2_is_terminal(&adapter->cfr, k2_state_key(adapter, state), user);
+}
+
+static int k2_vector_acting_player(const void *state, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    return k2_current_player(&adapter->cfr, k2_state_key(adapter, state), user);
+}
+
+static uint16_t k2_vector_action_count(const void *state, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    int actions[2];
+    return (uint16_t)k2_get_actions(&adapter->cfr,
+                                    k2_state_key(adapter, state), actions, 2,
+                                    user);
+}
+
+static uint64_t k2_vector_infoset_key(const void *state, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    uint64_t key = k2_state_key(adapter, state);
+    return k2_infoset_key((const void *)(uintptr_t)key);
+}
+
+static int k2_vector_strategy(const void *state, uint64_t infoset,
+                              uint16_t action, pe_value_vec_t *out,
+                              void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    double strategy[2];
+    (void)state;
+    if (!out || out->n != 1 || action > 1)
+        return -1;
+    cfr_storage_get_avg_strategy(adapter->storage, infoset, 2, strategy);
+    out->v[0] = strategy[action];
+    return 0;
+}
+
+static const void *k2_vector_apply_action(const void *state, uint16_t action,
+                                          void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    uint64_t key = k2_apply_action(&adapter->cfr,
+                                  k2_state_key(adapter, state), (int)action,
+                                  user);
+    return key ? (const void *)(uintptr_t)key : NULL;
+}
+
+static int k2_vector_terminal_values(const void *state,
+                                     const pe_reach_vec_t *reach,
+                                     pe_value_vec_t *out,
+                                     uint8_t player_count, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    uint64_t key = k2_state_key(adapter, state);
+    (void)reach;
+    if (player_count != 2 || !out)
+        return -1;
+    out[0].v[0] = k2_get_utility(&adapter->cfr, key, 0, user);
+    out[1].v[0] = k2_get_utility(&adapter->cfr, key, 1, user);
+    return 0;
+}
+
+static int k2_vector_is_chance(const void *state, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    return k2_is_chance(&adapter->cfr, k2_state_key(adapter, state), user);
+}
+
+static uint16_t k2_vector_chance_count(const void *state, void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    return (uint16_t)k2_chance_outcomes(&adapter->cfr,
+                                        k2_state_key(adapter, state), user);
+}
+
+static const void *k2_vector_apply_chance(const void *state, int outcome,
+                                          void *user)
+{
+    k2_adapter_t *adapter = (k2_adapter_t *)user;
+    uint64_t key = k2_apply_chance(&adapter->cfr,
+                                   k2_state_key(adapter, state), outcome,
+                                   user);
+    return key ? (const void *)(uintptr_t)key : NULL;
+}
+
+static void k2_init(k2_adapter_t *adapter)
+{
+    pe_vector_game_t *vector = &adapter->vector;
+    memset(adapter, 0, sizeof(*adapter));
+    adapter->cfr.current_player = k2_current_player;
+    adapter->cfr.is_terminal = k2_is_terminal;
+    adapter->cfr.get_utility = k2_get_utility;
+    adapter->cfr.get_actions = k2_get_actions;
+    adapter->cfr.apply_action = k2_apply_action;
+    adapter->cfr.get_infoset_key = k2_infoset_key;
+    adapter->cfr.is_chance = k2_is_chance;
+    adapter->cfr.get_chance_outcomes = k2_chance_outcomes;
+    adapter->cfr.apply_chance = k2_apply_chance;
+    adapter->cfr.initial_state = (void *)(uintptr_t)0;
+    adapter->cfr.state_size = sizeof(uint64_t);
+    adapter->cfr.num_players = 2;
+    adapter->storage = cfr_storage_create();
+
+    memset(vector, 0, sizeof(*vector));
+    vector->root = adapter;
+    vector->user = adapter;
+    vector->player_count = 2;
+    vector->combo_count = 1;
+    vector->is_chance = k2_vector_is_chance;
+    vector->chance_outcome_count = k2_vector_chance_count;
+    vector->apply_chance = k2_vector_apply_chance;
+    vector->is_terminal = k2_vector_is_terminal;
+    vector->acting_player = k2_vector_acting_player;
+    vector->action_count = k2_vector_action_count;
+    vector->infoset_key = k2_vector_infoset_key;
+    vector->strategy = k2_vector_strategy;
+    vector->apply_action = k2_vector_apply_action;
+    vector->terminal_values = k2_vector_terminal_values;
+}
+
 static int br_acting_player(const void *state, void *user)
 {
     (void)user;
@@ -355,9 +628,35 @@ static void test_shared_infoset_and_convergence(void)
           "one-pass bound did not report non-convergence");
 }
 
+static void test_kuhn_two_player_parity(void)
+{
+    k2_adapter_t adapter;
+    pe_best_response_vector_config_t config;
+    pe_best_response_vector_result_t result;
+    double scalar_value;
+
+    k2_init(&adapter);
+    CHECK(adapter.storage != NULL, "Kuhn scalar storage allocation");
+    if (!adapter.storage)
+        return;
+    config = pe_best_response_vector_config_default();
+    CHECK(pe_best_response_vector(&adapter.vector, 0u, &config, &result) ==
+              PE_SOLVER_OK,
+          "Kuhn vector best response failed");
+    scalar_value = cfr_best_response_value_infoset(
+        &adapter.cfr, adapter.storage, 0, NULL);
+    CHECK(result.converged, "Kuhn vector best response did not converge");
+    CHECK(fabs(result.value - scalar_value) <= 1e-9,
+          "Kuhn vector/scalar mismatch: %.17g vs %.17g", result.value,
+          scalar_value);
+    CHECK(result.infosets > 0u, "Kuhn vector BR found no infosets");
+    cfr_storage_destroy(adapter.storage);
+}
+
 int main(void)
 {
     test_shared_infoset_and_convergence();
+    test_kuhn_two_player_parity();
     if (failures != 0)
     {
         fprintf(stderr, "test_best_response_ii: %d failure(s)\n", failures);
