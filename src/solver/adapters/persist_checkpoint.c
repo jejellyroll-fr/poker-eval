@@ -14,6 +14,8 @@
 #define PE_CHECKPOINT_ENDIAN  0x01020304u
 #define PE_CHECKPOINT_MAX_ENTRIES 10000000u
 #define PE_CHECKPOINT_MAGIC "PECHKPT2"
+#define PE_CHECKPOINT_END "PEENDV2!"
+#define PE_CHECKPOINT_HEADER_BYTES 64L
 
 typedef struct
 {
@@ -120,6 +122,35 @@ static uint64_t hash_bytes(uint64_t hash, const void *data, size_t count)
         hash *= 1099511628211ull;
     }
     return hash;
+}
+
+static int checksum_payload(FILE *file, long start, long end, uint64_t *out)
+{
+    unsigned char buffer[4096];
+    uint64_t hash = 1469598103934665603ull;
+    size_t count;
+    long position;
+
+    if (!file || !out || fseek(file, start, SEEK_SET) != 0)
+        return -1;
+    position = start;
+    while (end < 0L || position < end)
+    {
+        size_t wanted = sizeof(buffer);
+        if (end >= 0L && end - position < (long)wanted)
+            wanted = (size_t)(end - position);
+        count = fread(buffer, 1u, wanted, file);
+        if (count == 0u)
+            break;
+        hash = hash_bytes(hash, buffer, count);
+        position += (long)count;
+    }
+    if (ferror(file))
+        return -1;
+    if (end >= 0L && position != end)
+        return -1;
+    *out = hash;
+    return 0;
 }
 
 static uint64_t hash_config(const pe_solver_config_t *config)
@@ -319,6 +350,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
     size_t count;
     size_t id;
     uint64_t hash;
+    uint64_t checksum;
     pe_rng_t rng;
     (void)self;
 
@@ -329,7 +361,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
     count = storage->count(storage_self);
     if (count > PE_CHECKPOINT_MAX_ENTRIES)
         return -1;
-    file = fopen(target->path, "wb");
+    file = fopen(target->path, "w+b");
     if (!file)
         return -1;
     hash = hash_config(config);
@@ -391,6 +423,12 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
                     goto fail;
         }
     }
+    if (fflush(file) != 0 || checksum_payload(file, PE_CHECKPOINT_HEADER_BYTES,
+                                               -1L, &checksum) != 0 ||
+        fseek(file, 0L, SEEK_END) != 0 ||
+        write_bytes(file, PE_CHECKPOINT_END, 8u) != 0 ||
+        write_u64(file, checksum) != 0 || fflush(file) != 0)
+        goto fail;
     if (fclose(file) != 0)
         return -1;
     return 0;
@@ -406,14 +444,15 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
 {
     FILE *file;
     char magic[8];
-    uint32_t version;
-    uint32_t endian;
-    uint64_t iteration;
-    uint64_t count64;
-    uint64_t stored_hash;
-    uint64_t stored_game_hash;
-    uint64_t stored_tree_hash;
-    uint64_t stored_rng_state;
+    uint32_t version = 0u;
+    uint32_t endian = 0u;
+    uint64_t iteration = 0u;
+    uint64_t count64 = 0u;
+    uint64_t stored_hash = 0u;
+    uint64_t stored_game_hash = 0u;
+    uint64_t stored_tree_hash = 0u;
+    uint64_t stored_rng_state = 0u;
+    uint64_t stored_checksum = 0u;
     checkpoint_entry_t *entries = NULL;
     size_t count = 0u;
     size_t i;
@@ -457,9 +496,9 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
 
     for (i = 0u; i < count; ++i)
     {
-        uint16_t reserved16;
-        uint8_t array_mask;
-        uint8_t metadata_flags;
+        uint16_t reserved16 = 0u;
+        uint8_t array_mask = 0u;
+        uint8_t metadata_flags = 0u;
         uint8_t which;
         size_t slot;
         if (read_u64(file, &entries[i].key) != 0 ||
@@ -490,6 +529,23 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
                     !isfinite(entries[i].values[which][slot]))
                     goto fail;
         }
+    }
+    {
+        long footer_position = ftell(file);
+        char footer[8];
+        uint64_t checksum = 0u;
+        int trailing;
+        if (footer_position < PE_CHECKPOINT_HEADER_BYTES ||
+            read_bytes(file, footer, sizeof(footer)) != 0 ||
+            read_u64(file, &stored_checksum) != 0 ||
+            memcmp(footer, PE_CHECKPOINT_END, sizeof(footer)) != 0 ||
+            checksum_payload(file, PE_CHECKPOINT_HEADER_BYTES, footer_position,
+                             &checksum) != 0 ||
+            checksum != stored_checksum || fseek(file, 0L, SEEK_END) != 0)
+            goto fail;
+        trailing = fgetc(file);
+        if (trailing != EOF || ferror(file))
+            goto fail;
     }
     if (fclose(file) != 0)
     {

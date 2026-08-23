@@ -150,6 +150,32 @@ int main(void)
             ops->destroy(mismatch);
         }
     }
+    {
+        FILE *corrupt = fopen(path, "r+b");
+        void *corrupt_storage = NULL;
+        int byte;
+        CHECK(corrupt != NULL, "corruption fixture could not be opened");
+        if (corrupt)
+        {
+            CHECK(fseek(corrupt, 64L, SEEK_SET) == 0,
+                  "corruption fixture seek failed");
+            byte = fgetc(corrupt);
+            CHECK(byte != EOF && fseek(corrupt, 64L, SEEK_SET) == 0,
+                  "corruption fixture read failed");
+            if (byte != EOF)
+                fputc(byte ^ 1, corrupt);
+            fclose(corrupt);
+        }
+        CHECK(ops->create(&corrupt_storage, 1u) == 0,
+              "corruption destination creation failed");
+        if (corrupt_storage)
+        {
+            CHECK(persist->load(NULL, &source, &config, ops, corrupt_storage,
+                                &iteration) != 0,
+                  "corrupted checkpoint was accepted");
+            ops->destroy(corrupt_storage);
+        }
+    }
 
     /* API-04 keeps the legacy CFRCHKPT v1 stream readable. Its records are
        scalar, so the compatibility path maps each one to combo_count == 1. */
