@@ -104,6 +104,15 @@ pe_solver_deps_t pe_solver_deps_default(void);
  */
 const pe_telemetry_ops_t *pe_solver_get_telemetry(const pe_solver_t *solver);
 
+/**
+ * The storage adapter resolved for a live solver.
+ *
+ * The adapter is borrowed from the solver and remains valid until destroy.
+ * This accessor is intentionally read-only: callers inspect capabilities and
+ * names here, while infoset reads go through pe_solver_strategy().
+ */
+const pe_storage_ops_t *pe_solver_get_storage(const pe_solver_t *solver);
+
 #ifdef __cplusplus
 }
 #endif

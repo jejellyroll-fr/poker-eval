@@ -36,6 +36,12 @@
 struct pe_solver_t {
     pe_solver_config_t config;
 
+    /* The port describes the adapter; the instance is owned by this solver.
+       Keeping the pair here makes the default RAM adapter real rather than a
+       promise in pe_ports.h, and gives result queries one stable store. */
+    const pe_storage_ops_t *storage;
+    void *storage_self;
+
     /* Filled by the execution backend once a solve has produced a result.
        Keeping availability separate from the zero-valued metrics prevents a
        caller from mistaking an unrun solver for a solved zero-exploitability
@@ -89,6 +95,21 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
     else
         memset(&solver->deps, 0, sizeof(solver->deps));
 
+    solver->storage = solver->deps.storage != NULL
+        ? solver->deps.storage : pe_storage_ram_ops();
+    if (solver->storage == NULL || solver->storage->create == NULL ||
+        solver->storage->destroy == NULL ||
+        solver->storage->create(&solver->storage_self,
+                                (size_t)solver->config.problem.expected_infosets) != 0)
+    {
+        free(solver);
+        return NULL;
+    }
+    /* The compute adapters consume the same resolved pair once the execution
+       driver is installed. Keep the dependency view coherent for accessors
+       and for that next tranche. */
+    solver->deps.storage = solver->storage;
+
     /* Resolve the ports exactly once. Substituting the sink here is what lets
        every later emit call be unconditional. */
     if (solver->deps.telemetry == NULL)
@@ -118,6 +139,9 @@ void pe_solver_destroy(pe_solver_t *solver)
     /* Give a buffering adapter its chance before the pointer goes away. */
     pe_telemetry_flush(solver->deps.telemetry);
 
+    if (solver->storage != NULL && solver->storage->destroy != NULL)
+        solver->storage->destroy(solver->storage_self);
+
     free(solver);
 }
 
@@ -137,6 +161,13 @@ const pe_telemetry_ops_t *pe_solver_get_telemetry(const pe_solver_t *solver)
     if (solver == NULL)
         return NULL;
     return solver->deps.telemetry;
+}
+
+const pe_storage_ops_t *pe_solver_get_storage(const pe_solver_t *solver)
+{
+    if (solver == NULL)
+        return NULL;
+    return solver->storage;
 }
 
 /* ------------------------------------------------------------------ *
@@ -391,7 +422,21 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         return PE_SOLVER_ERR_NULL_ARGUMENT;
     if (solver->state != PE_SOLVER_STATE_COMPLETED)
         return PE_SOLVER_ERR_INVALID_STATE;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->storage == NULL || solver->storage->shape == NULL ||
+        solver->storage->values_const == NULL ||
+        !pe_storage_serves(solver->storage, PE_VALUES_AVERAGE))
+        return PE_SOLVER_ERR_EXECUTION;
+
+    memset(out, 0, sizeof(*out));
+    if (solver->storage->shape(solver->storage_self, query->infoset,
+                               &out->action_count, &out->combo_count,
+                               NULL) != 0)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    out->values = solver->storage->values_const(
+        solver->storage_self, query->infoset, PE_VALUES_AVERAGE, &out->count);
+    if (out->values == NULL)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    return PE_SOLVER_OK;
 }
 
 pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,

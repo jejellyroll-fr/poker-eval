@@ -83,6 +83,9 @@ int main(void)
           "validation failed");
     CHECK(pe_solver_capabilities(solver, &caps) == PE_SOLVER_OK && caps != 0u,
           "capability query failed after validation");
+    CHECK(pe_solver_get_storage(solver) != NULL &&
+              strcmp(pe_solver_get_storage(solver)->name, "ram") == 0,
+          "solver should resolve the default RAM storage adapter");
     CHECK(pe_solver_plan(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
           "plan must reject a NULL output");
     CHECK(pe_solver_run(solver) == PE_SOLVER_ERR_NOT_IMPLEMENTED,
