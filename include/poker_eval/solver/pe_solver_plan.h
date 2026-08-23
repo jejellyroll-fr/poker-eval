@@ -156,6 +156,8 @@ const char *pe_averaging_name(pe_averaging_mode_t mode);
 const char *pe_pruning_name(pe_pruning_mode_t mode);
 const char *pe_precision_name(pe_precision_mode_t mode);
 const char *pe_compute_kind_name(pe_compute_kind_t kind);
+/** Parse a backend name case-insensitively; PE_COMPUTE_COUNT means unknown. */
+pe_compute_kind_t pe_compute_kind_from_name(const char *name);
 
 /* ------------------------------------------------------------------ *
  * Resolution

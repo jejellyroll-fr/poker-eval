@@ -541,6 +541,26 @@ const char *pe_compute_kind_name(pe_compute_kind_t kind)
     return PE_NAME_OF(kind, names);
 }
 
+pe_compute_kind_t pe_compute_kind_from_name(const char *name)
+{
+    static const char *const names[] = { "auto", "cpu_ref", "cpu_par", "cuda", "opencl" };
+    size_t length;
+    size_t i;
+
+    if (name == NULL || *name == '\0')
+        return PE_COMPUTE_COUNT;
+    length = strlen(name);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+    {
+        if (pe_name_equal_ci(names[i], name, length))
+            return (pe_compute_kind_t)i;
+    }
+    /* CLI shorthand retained for the documented --backend cpu spelling. */
+    if (pe_name_equal_ci("cpu", name, length))
+        return PE_COMPUTE_CPU_REF;
+    return PE_COMPUTE_COUNT;
+}
+
 const char *pe_valid_severity_name(pe_valid_severity_t severity)
 {
     static const char *const names[] = { "ok", "warning", "fallback", "error" };

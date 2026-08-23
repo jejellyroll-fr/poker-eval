@@ -80,6 +80,14 @@ static void test_every_preset_expands(void)
           "CFR should not be marked experimental");
     CHECK(!pe_preset_is_experimental(PE_PRESET_COUNT),
           "an unknown preset must not be experimental");
+    CHECK(pe_compute_kind_from_name("cpu") == PE_COMPUTE_CPU_REF,
+          "cpu CLI shorthand should resolve to cpu_ref");
+    CHECK(pe_compute_kind_from_name("OPENCL") == PE_COMPUTE_OPENCL,
+          "backend lookup should be case-insensitive");
+    CHECK(pe_compute_kind_from_name("unknown") == PE_COMPUTE_COUNT,
+          "unknown backend should not resolve");
+    CHECK(pe_compute_kind_from_name(NULL) == PE_COMPUTE_COUNT,
+          "NULL is not a backend name");
 }
 
 static void test_preset_matches_the_matrix(void)

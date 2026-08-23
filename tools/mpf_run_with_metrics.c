@@ -2,6 +2,10 @@
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
 #include <poker_eval/core/eval_context.h>
+#include <poker_eval/solver/pe_capabilities.h>
+#include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 
 #include <errno.h>
 #include <stdint.h>
@@ -32,8 +36,130 @@ static void usage(const char *prog)
             "  --stack <amount>         Initial stack for every player (default: 100)\n"
             "  --bb <amount>            Big blind value (default: 1.0)\n"
             "  --sb <amount>            Small blind value (default: 0.5)\n"
+            "  --algorithm <preset>    Select a v3 algorithm preset\n"
+            "  --backend <kind>        Select a v3 backend (cpu, cpu_par, cuda, opencl)\n"
+            "  --list-algorithms       List registered algorithm presets and exit\n"
+            "  --list-backends         List registered compute backends and exit\n"
+            "  --show-capabilities     Print the available capability bits and exit\n"
+            "  --validate-only         Validate the v3 configuration and exit\n"
+            "  --estimate-only         Print the v3 resource estimate and exit\n"
+            "  --print-execution-plan  Print the resolved v3 execution plan and exit\n"
             "  --help                   Show this message\n",
             prog);
+}
+
+static void print_algorithms(void)
+{
+    for (int i = 0; i < PE_PRESET_COUNT; ++i)
+    {
+        pe_algorithm_preset_t preset = (pe_algorithm_preset_t)i;
+        printf("%s%s\n", pe_preset_name(preset),
+               pe_preset_is_experimental(preset) ? " (experimental)" : "");
+    }
+}
+
+static void print_backends(void)
+{
+    for (int i = 0; i < PE_COMPUTE_COUNT; ++i)
+        printf("%s\n", pe_compute_kind_name((pe_compute_kind_t)i));
+}
+
+static int run_introspection(pe_algorithm_preset_t preset, int have_preset,
+                             pe_compute_kind_t backend, int have_backend,
+                             int show_capabilities, int validate_only,
+                             int estimate_only, int print_plan)
+{
+    pe_solver_config_t config = pe_solver_config_default();
+    pe_solver_t *solver;
+    int result = 0;
+
+    /* An introspection call is useful before a tree is loaded. The one-node
+       hint is enough for plan validation; callers with a real tree can use
+       --estimate-only to replace it in the next CLI tranche. */
+    config.problem.expected_infosets = 1u;
+    config.problem.expected_actions = 2u;
+    config.problem.expected_combos = 1u;
+    if (have_preset)
+        config.algorithm.preset = preset;
+    if (have_backend)
+    {
+        config.execution.backend = backend;
+        config.execution.stages.traversal = backend;
+        config.execution.stages.update = backend;
+        config.execution.stages.terminal_eval = backend;
+    }
+
+    solver = pe_solver_create(&config, NULL);
+    if (solver == NULL)
+    {
+        fprintf(stderr, "Failed to create v3 solver for introspection\n");
+        return 1;
+    }
+
+    if (show_capabilities)
+    {
+        uint64_t caps = 0u;
+        char text[PE_CAPS_STRING_MAX];
+        if (pe_solver_capabilities(solver, &caps) != PE_SOLVER_OK)
+            result = 2;
+        else
+        {
+            pe_caps_to_string(caps, text, sizeof(text));
+            printf("capabilities=%s\n", text);
+        }
+    }
+
+    if (validate_only)
+    {
+        pe_diagnostics_t diagnostics;
+        pe_solver_status_t status = pe_solver_validate(solver, &diagnostics);
+        printf("validation=%s\n", status == PE_SOLVER_OK ? "ok" : "error");
+        for (size_t i = 0; i < diagnostics.count; ++i)
+            printf("%s: %s\n",
+                   pe_valid_severity_name(diagnostics.items[i].severity),
+                   diagnostics.items[i].message);
+        if (status != PE_SOLVER_OK)
+            result = 2;
+    }
+
+    if (estimate_only)
+    {
+        pe_estimate_t estimate;
+        pe_solver_status_t status = pe_solver_estimate(solver, &estimate);
+        if (status != PE_SOLVER_OK)
+        {
+            fprintf(stderr, "estimate failed: status=%d\n", (int)status);
+            result = 2;
+        }
+        else
+        {
+            printf("infosets=%llu slots=%llu host_bytes=%llu within_budget=%d\n",
+                   (unsigned long long)estimate.infosets,
+                   (unsigned long long)estimate.slots,
+                   (unsigned long long)estimate.host_bytes,
+                   estimate.within_budget);
+        }
+    }
+
+    if (print_plan)
+    {
+        pe_execution_plan_t plan;
+        char text[1024];
+        pe_solver_status_t status = pe_solver_plan(solver, &plan);
+        if (status != PE_SOLVER_OK)
+        {
+            fprintf(stderr, "plan resolution failed: status=%d\n", (int)status);
+            result = 2;
+        }
+        else
+        {
+            pe_plan_to_string(&plan, text, sizeof(text));
+            printf("%s", text);
+        }
+    }
+
+    pe_solver_destroy(solver);
+    return result;
 }
 
 static int parse_int(const char *arg, int *out)
@@ -179,6 +305,14 @@ int main(int argc, char **argv)
     double stack_amount = 100.0;
     double sb_amount = 0.5;
     double bb_amount = 1.0;
+    const char *algorithm_name = NULL;
+    const char *backend_name = NULL;
+    int list_algorithms = 0;
+    int list_backends = 0;
+    int show_capabilities = 0;
+    int validate_only = 0;
+    int estimate_only = 0;
+    int print_plan = 0;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -254,6 +388,26 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
+        else if (strcmp(argv[i], "--algorithm") == 0 && i + 1 < argc)
+        {
+            algorithm_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
+        {
+            backend_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--list-algorithms") == 0)
+            list_algorithms = 1;
+        else if (strcmp(argv[i], "--list-backends") == 0)
+            list_backends = 1;
+        else if (strcmp(argv[i], "--show-capabilities") == 0)
+            show_capabilities = 1;
+        else if (strcmp(argv[i], "--validate-only") == 0)
+            validate_only = 1;
+        else if (strcmp(argv[i], "--estimate-only") == 0)
+            estimate_only = 1;
+        else if (strcmp(argv[i], "--print-execution-plan") == 0)
+            print_plan = 1;
         else if (strcmp(argv[i], "--help") == 0)
         {
             usage(argv[0]);
@@ -265,6 +419,47 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 1;
         }
+    }
+
+    if (list_algorithms)
+    {
+        print_algorithms();
+        return 0;
+    }
+    if (list_backends)
+    {
+        print_backends();
+        return 0;
+    }
+
+    {
+        int have_preset = algorithm_name != NULL;
+        int have_backend = backend_name != NULL;
+        pe_algorithm_preset_t preset = PE_PRESET_COUNT;
+        pe_compute_kind_t backend = PE_COMPUTE_COUNT;
+
+        if (have_preset)
+        {
+            preset = pe_preset_from_name(algorithm_name);
+            if (preset == PE_PRESET_COUNT)
+            {
+                fprintf(stderr, "Unknown algorithm preset: %s\n", algorithm_name);
+                return 1;
+            }
+        }
+        if (have_backend)
+        {
+            backend = pe_compute_kind_from_name(backend_name);
+            if (backend == PE_COMPUTE_COUNT)
+            {
+                fprintf(stderr, "Unknown backend: %s\n", backend_name);
+                return 1;
+            }
+        }
+        if (show_capabilities || validate_only || estimate_only || print_plan)
+            return run_introspection(preset, have_preset, backend, have_backend,
+                                     show_capabilities, validate_only,
+                                     estimate_only, print_plan);
     }
 
     if (!tree_path)
