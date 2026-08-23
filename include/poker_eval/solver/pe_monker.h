@@ -54,6 +54,37 @@ typedef struct
     pe_range_t **players;
 } pe_monker_range_set_t;
 
+typedef enum
+{
+    PE_MONKER_MKR_OK = 0,
+    PE_MONKER_MKR_ERR_NULL_ARGUMENT,
+    PE_MONKER_MKR_ERR_OPEN,
+    PE_MONKER_MKR_ERR_IO,
+    PE_MONKER_MKR_ERR_BAD_ARCHIVE,
+    PE_MONKER_MKR_ERR_TRUNCATED,
+    PE_MONKER_MKR_ERR_BAD_ENCODING,
+    PE_MONKER_MKR_ERR_UTF16LE_BOM,
+    PE_MONKER_MKR_ERR_UNSUPPORTED,
+    PE_MONKER_MKR_ERR_NO_MEMORY,
+    PE_MONKER_MKR_ERR_TOO_LARGE
+} pe_monker_mkr_status_t;
+
+typedef struct
+{
+    char *name;
+    uint16_t flags;
+    uint16_t method;
+    uint32_t compressed_size;
+    uint32_t uncompressed_size;
+    uint32_t local_header_offset;
+} pe_monker_mkr_entry_t;
+
+typedef struct
+{
+    pe_monker_mkr_entry_t *entries;
+    size_t count;
+} pe_monker_mkr_t;
+
 /** Read the fixed header at the beginning of a MonkerSolver .tree file. */
 pe_monker_status_t pe_monker_tree_read_header(
     const char *path, pe_monker_tree_header_t *out);
@@ -76,6 +107,14 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
                                               pe_monker_range_set_t *out);
 
 void pe_monker_range_set_free(pe_monker_range_set_t *ranges);
+
+/** Read the central directory of a MonkerSolver .mkr ZIP container. */
+pe_monker_mkr_status_t pe_monker_mkr_read(const char *path,
+                                          pe_monker_mkr_t *out);
+
+void pe_monker_mkr_free(pe_monker_mkr_t *archive);
+
+const char *pe_monker_mkr_status_string(pe_monker_mkr_status_t status);
 
 #ifdef __cplusplus
 }

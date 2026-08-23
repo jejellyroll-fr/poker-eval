@@ -46,6 +46,7 @@ add_library(poker_solver
     solver/adapters/storage_ram.c
     solver/adapters/compute_cpu_par.c
     solver/adapters/monker_tree_reader.c
+    solver/adapters/monker_mkr_reader.c
     solver/adapters/range_parser.c
     solver/adapters/telemetry_null.c
     solver/adapters/telemetry_stream.c
