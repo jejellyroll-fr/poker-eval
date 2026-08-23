@@ -1,6 +1,8 @@
 /* API-04: portable checkpoint round-trip over the storage port. */
 
 #include <poker_eval/solver/pe_persist.h>
+#include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_traversal.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -8,6 +10,35 @@
 #include <string.h>
 
 static int failures;
+
+static int terminal_game(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 1;
+}
+
+static int acting_game(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0;
+}
+
+static uint16_t actions_game(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0u;
+}
+
+static const void *apply_game(const void *state, uint16_t action, void *user)
+{
+    (void)state;
+    (void)action;
+    (void)user;
+    return NULL;
+}
 
 #define CHECK(condition, ...)                                      \
     do                                                             \
@@ -151,7 +182,53 @@ int main(void)
         CHECK(right_id != PE_INFOSET_ID_INVALID &&
                   ops->shape(right, right_id, &actions, &combos, NULL) == 0 &&
                   actions == 2u && combos == 1u,
-              "legacy checkpoint shape was not adapted to scalar storage");
+                  "legacy checkpoint shape was not adapted to scalar storage");
+    }
+
+    {
+        static char root;
+        pe_solver_config_t solver_config = pe_solver_config_default();
+        pe_solver_deps_t deps = pe_solver_deps_default();
+        pe_vector_game_t game;
+        pe_solver_t *first;
+        pe_solver_t *resumed;
+        pe_progress_t progress;
+        memset(&game, 0, sizeof(game));
+        game.root = &root;
+        game.user = &root;
+        game.player_count = 2u;
+        game.combo_count = 1u;
+        game.is_terminal = terminal_game;
+        game.acting_player = acting_game;
+        game.action_count = actions_game;
+        game.apply_action = apply_game;
+        solver_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        solver_config.max_iterations = 2u;
+        solver_config.problem.expected_infosets = 1u;
+        solver_config.problem.expected_actions = 1u;
+        solver_config.problem.expected_combos = 1u;
+        deps.vector_game = &game;
+        deps.persist = persist;
+        first = pe_solver_create(&solver_config, &deps);
+        CHECK(first != NULL && pe_solver_run(first) == PE_SOLVER_OK,
+              "solver checkpoint source did not complete");
+        if (first)
+        {
+            CHECK(pe_solver_save(first, &target) == PE_SOLVER_OK,
+                  "solver save API failed");
+            pe_solver_destroy(first);
+        }
+        resumed = pe_solver_create(&solver_config, &deps);
+        CHECK(resumed != NULL && pe_solver_load(resumed, &source) == PE_SOLVER_OK,
+              "solver load API failed");
+        if (resumed)
+        {
+            CHECK(pe_solver_run(resumed) == PE_SOLVER_OK &&
+                      pe_solver_progress(resumed, &progress) == PE_SOLVER_OK &&
+                      progress.complete && progress.iteration == 2u,
+                  "loaded solver did not resume to the configured iteration");
+            pe_solver_destroy(resumed);
+        }
     }
 
 done:
