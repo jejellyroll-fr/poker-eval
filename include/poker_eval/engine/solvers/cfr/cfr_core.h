@@ -685,6 +685,28 @@ double cfr_best_response_value_infoset(
     void* user_data
 );
 
+/** Result of the infoset best-response fixed-point iteration. */
+typedef struct cfr_best_response_infoset_result_t {
+    double value;
+    int iterations;
+    int converged;
+} cfr_best_response_infoset_result_t;
+
+/**
+ * Infoset best response with convergence diagnostics.
+ *
+ * `converged` is zero when the bounded fixed-point iteration reached its
+ * limit; callers must not treat the returned value as a converged result in
+ * that case. `iterations` is the number of passes actually performed.
+ */
+int cfr_best_response_value_infoset_ex(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    int player,
+    void* user_data,
+    cfr_best_response_infoset_result_t* out_result
+);
+
 /**
  * Compute the expected value (policy value) of the average strategy
  *

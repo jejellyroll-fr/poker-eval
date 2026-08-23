@@ -1272,10 +1272,13 @@ static double cfr_audit_br_value(cfr_audit_br_context_t *ctx,
     return value;
 }
 
-double cfr_best_response_value_infoset(cfr_game_t *game,
-                                       cfr_storage_t *storage,
-                                       int player,
-                                       void *user_data)
+static double cfr_best_response_value_infoset_run(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    int player,
+    void *user_data,
+    int *out_iterations,
+    int *out_converged)
 {
     cfr_audit_br_context_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -1288,8 +1291,11 @@ double cfr_best_response_value_infoset(cfr_game_t *game,
     if (!root_key && game->initial_state)
         root_key = (uint64_t)(uintptr_t)game->initial_state;
 
+    int iterations = 0;
+    int converged = 0;
     for (int iteration = 0; iteration < 32; ++iteration)
     {
+        iterations = iteration + 1;
         for (size_t i = 0; i < ctx.count; ++i)
             memset(ctx.infosets[i].action_values, 0,
                    sizeof(ctx.infosets[i].action_values));
@@ -1298,6 +1304,10 @@ double cfr_best_response_value_infoset(cfr_game_t *game,
         if (ctx.failed)
         {
             free(ctx.infosets);
+            if (out_iterations)
+                *out_iterations = iterations;
+            if (out_converged)
+                *out_converged = 0;
             return 0.0;
         }
 
@@ -1316,12 +1326,44 @@ double cfr_best_response_value_infoset(cfr_game_t *game,
             }
         }
         if (!changed && iteration > 0)
+        {
+            converged = 1;
             break;
+        }
     }
 
     double result = cfr_audit_br_value(&ctx, root_key, 0);
     free(ctx.infosets);
+    if (out_iterations)
+        *out_iterations = iterations;
+    if (out_converged)
+        *out_converged = converged;
     return result;
+}
+
+double cfr_best_response_value_infoset(cfr_game_t *game,
+                                       cfr_storage_t *storage,
+                                       int player,
+                                       void *user_data)
+{
+    return cfr_best_response_value_infoset_run(game, storage, player,
+                                               user_data, NULL, NULL);
+}
+
+int cfr_best_response_value_infoset_ex(
+    cfr_game_t *game,
+    cfr_storage_t *storage,
+    int player,
+    void *user_data,
+    cfr_best_response_infoset_result_t *out_result)
+{
+    if (!game || !storage || !out_result)
+        return -1;
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->value = cfr_best_response_value_infoset_run(
+        game, storage, player, user_data, &out_result->iterations,
+        &out_result->converged);
+    return 0;
 }
 
 int cfr_audit_multiway(cfr_game_t *game,
