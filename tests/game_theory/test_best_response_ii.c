@@ -653,10 +653,30 @@ static void test_kuhn_two_player_parity(void)
     cfr_storage_destroy(adapter.storage);
 }
 
+static void test_exploitability_metrics(void)
+{
+    pe_metrics_t metrics;
+    CHECK(pe_best_response_metrics_from_raw(0.001, 1.0, &metrics) ==
+              PE_SOLVER_OK,
+          "raw exploitability conversion failed");
+    CHECK(fabs(metrics.exploitability_raw - 0.001) <= 1e-15,
+          "raw exploitability was not preserved");
+    CHECK(fabs(metrics.exploitability_mbb_per_game - 1.0) <= 1e-12,
+          "0.001 BB should equal 1.0 mbb/g, got %.17g",
+          metrics.exploitability_mbb_per_game);
+    CHECK(pe_best_response_metrics_from_raw(-1.0, 1.0, &metrics) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "negative exploitability must be rejected");
+    CHECK(pe_best_response_metrics_from_raw(0.001, 0.0, &metrics) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "zero big blind must be rejected");
+}
+
 int main(void)
 {
     test_shared_infoset_and_convergence();
     test_kuhn_two_player_parity();
+    test_exploitability_metrics();
     if (failures != 0)
     {
         fprintf(stderr, "test_best_response_ii: %d failure(s)\n", failures);

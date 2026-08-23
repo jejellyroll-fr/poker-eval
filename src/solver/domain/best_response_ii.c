@@ -514,3 +514,17 @@ pe_solver_status_t pe_best_response_vector(
     free(ctx.table);
     return PE_SOLVER_OK;
 }
+
+pe_solver_status_t pe_best_response_metrics_from_raw(
+    double raw_value, double big_blind, pe_metrics_t *out_metrics)
+{
+    if (!out_metrics)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (!isfinite(raw_value) || raw_value < 0.0 ||
+        !isfinite(big_blind) || big_blind <= 0.0)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    out_metrics->exploitability_raw = raw_value;
+    out_metrics->big_blind = big_blind;
+    out_metrics->exploitability_mbb_per_game = raw_value / big_blind * 1000.0;
+    return PE_SOLVER_OK;
+}

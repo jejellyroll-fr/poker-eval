@@ -49,6 +49,14 @@ pe_solver_status_t pe_best_response_vector(
     const pe_best_response_vector_config_t *config,
     pe_best_response_vector_result_t *out_result);
 
+/**
+ * Convert a raw exploitability value expressed in the game's currency to
+ * milli-big-blinds per game. `big_blind` must use the same currency unit as
+ * `raw_value`; a raw value of 0.001 BB therefore becomes 1.0 mbb/g.
+ */
+pe_solver_status_t pe_best_response_metrics_from_raw(
+    double raw_value, double big_blind, pe_metrics_t *out_metrics);
+
 #ifdef __cplusplus
 }
 #endif

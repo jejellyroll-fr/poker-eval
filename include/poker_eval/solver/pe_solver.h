@@ -88,6 +88,13 @@ typedef struct pe_strategy_view_t   pe_strategy_view_t;
 typedef struct pe_persist_target_t  pe_persist_target_t;
 typedef struct pe_persist_source_t  pe_persist_source_t;
 
+/* BR-03 metrics are available before the full API-01 lifecycle is wired. */
+struct pe_metrics_t {
+    double exploitability_raw;
+    double exploitability_mbb_per_game;
+    double big_blind;
+};
+
 /* ------------------------------------------------------------------ *
  * Lifecycle
  * ------------------------------------------------------------------ */
