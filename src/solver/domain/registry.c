@@ -503,10 +503,43 @@ const char *pe_traversal_name(pe_traversal_mode_t mode)
     return PE_NAME_OF(mode, names);
 }
 
+pe_traversal_mode_t pe_traversal_from_name(const char *name)
+{
+    static const char *const names[] = {
+        "full-vector", "chance-vector", "full-scalar",
+        "external-sampling", "outcome-sampling"
+    };
+    size_t length;
+    size_t i;
+
+    if (name == NULL || *name == '\0')
+        return PE_TRAVERSAL_COUNT;
+    length = strlen(name);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (pe_name_equal_ci(names[i], name, length))
+            return (pe_traversal_mode_t)i;
+    return PE_TRAVERSAL_COUNT;
+}
+
 const char *pe_regret_name(pe_regret_mode_t mode)
 {
     static const char *const names[] = { "vanilla", "plus", "dcfr", "legacy-exp" };
     return PE_NAME_OF(mode, names);
+}
+
+pe_regret_mode_t pe_regret_from_name(const char *name)
+{
+    static const char *const names[] = { "vanilla", "plus", "dcfr", "legacy-exp" };
+    size_t length;
+    size_t i;
+
+    if (name == NULL || *name == '\0')
+        return PE_REGRET_COUNT;
+    length = strlen(name);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (pe_name_equal_ci(names[i], name, length))
+            return (pe_regret_mode_t)i;
+    return PE_REGRET_COUNT;
 }
 
 const char *pe_policy_name(pe_policy_mode_t mode)
@@ -523,6 +556,23 @@ const char *pe_averaging_name(pe_averaging_mode_t mode)
     return PE_NAME_OF(mode, names);
 }
 
+pe_averaging_mode_t pe_averaging_from_name(const char *name)
+{
+    static const char *const names[] = {
+        "uniform", "linear", "power", "delayed-linear", "importance"
+    };
+    size_t length;
+    size_t i;
+
+    if (name == NULL || *name == '\0')
+        return PE_AVG_COUNT;
+    length = strlen(name);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (pe_name_equal_ci(names[i], name, length))
+            return (pe_averaging_mode_t)i;
+    return PE_AVG_COUNT;
+}
+
 const char *pe_pruning_name(pe_pruning_mode_t mode)
 {
     static const char *const names[] = { "none", "rbp" };
@@ -533,6 +583,21 @@ const char *pe_precision_name(pe_precision_mode_t mode)
 {
     static const char *const names[] = { "f64", "f32", "mixed", "fixed16" };
     return PE_NAME_OF(mode, names);
+}
+
+pe_precision_mode_t pe_precision_from_name(const char *name)
+{
+    static const char *const names[] = { "f64", "f32", "mixed", "fixed16" };
+    size_t length;
+    size_t i;
+
+    if (name == NULL || *name == '\0')
+        return PE_PREC_COUNT;
+    length = strlen(name);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (pe_name_equal_ci(names[i], name, length))
+            return (pe_precision_mode_t)i;
+    return PE_PREC_COUNT;
 }
 
 const char *pe_compute_kind_name(pe_compute_kind_t kind)

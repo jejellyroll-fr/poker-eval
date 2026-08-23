@@ -150,11 +150,15 @@ int pe_preset_expand(pe_algorithm_preset_t preset, pe_algorithm_config_t *inout)
  * ------------------------------------------------------------------ */
 
 const char *pe_traversal_name(pe_traversal_mode_t mode);
+pe_traversal_mode_t pe_traversal_from_name(const char *name);
 const char *pe_regret_name(pe_regret_mode_t mode);
+pe_regret_mode_t pe_regret_from_name(const char *name);
 const char *pe_policy_name(pe_policy_mode_t mode);
 const char *pe_averaging_name(pe_averaging_mode_t mode);
+pe_averaging_mode_t pe_averaging_from_name(const char *name);
 const char *pe_pruning_name(pe_pruning_mode_t mode);
 const char *pe_precision_name(pe_precision_mode_t mode);
+pe_precision_mode_t pe_precision_from_name(const char *name);
 const char *pe_compute_kind_name(pe_compute_kind_t kind);
 /** Parse a backend name case-insensitively; PE_COMPUTE_COUNT means unknown. */
 pe_compute_kind_t pe_compute_kind_from_name(const char *name);

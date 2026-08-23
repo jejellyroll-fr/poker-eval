@@ -38,6 +38,13 @@ static void usage(const char *prog)
             "  --sb <amount>            Small blind value (default: 0.5)\n"
             "  --algorithm <preset>    Select a v3 algorithm preset\n"
             "  --backend <kind>        Select a v3 backend (cpu, cpu_par, cuda, opencl)\n"
+            "  --traversal <kind>      Override traversal (full-vector, full-scalar, ...)\n"
+            "  --regret <kind>         Override regret update (vanilla, plus, dcfr, ...)\n"
+            "  --averaging <kind>      Override averaging (uniform, linear, power, ...)\n"
+            "  --precision <kind>      Override value precision (f64, f32, mixed, fixed16)\n"
+            "  --alpha <x>             Override DCFR alpha\n"
+            "  --beta <x>              Override DCFR beta\n"
+            "  --gamma <x>             Override averaging/DCFR gamma\n"
             "  --list-algorithms       List registered algorithm presets and exit\n"
             "  --list-backends         List registered compute backends and exit\n"
             "  --show-capabilities     Print the available capability bits and exit\n"
@@ -64,10 +71,36 @@ static void print_backends(void)
         printf("%s\n", pe_compute_kind_name((pe_compute_kind_t)i));
 }
 
+typedef struct
+{
+    int have_traversal;
+    pe_traversal_mode_t traversal;
+    int have_regret;
+    pe_regret_mode_t regret;
+    int have_averaging;
+    pe_averaging_mode_t averaging;
+    int have_precision;
+    pe_precision_mode_t precision;
+    int have_alpha;
+    double alpha;
+    int have_beta;
+    double beta;
+    int have_gamma;
+    double gamma;
+} cli_solver_overrides_t;
+
+static int overrides_have_axis(const cli_solver_overrides_t *overrides)
+{
+    return overrides != NULL && (overrides->have_traversal ||
+                                 overrides->have_regret ||
+                                 overrides->have_averaging);
+}
+
 static int run_introspection(pe_algorithm_preset_t preset, int have_preset,
                              pe_compute_kind_t backend, int have_backend,
                              int show_capabilities, int validate_only,
-                             int estimate_only, int print_plan)
+                             int estimate_only, int print_plan,
+                             const cli_solver_overrides_t *overrides)
 {
     pe_solver_config_t config = pe_solver_config_default();
     pe_solver_t *solver;
@@ -81,6 +114,32 @@ static int run_introspection(pe_algorithm_preset_t preset, int have_preset,
     config.problem.expected_combos = 1u;
     if (have_preset)
         config.algorithm.preset = preset;
+    if (overrides_have_axis(overrides))
+    {
+        /* Expand the selected preset once, then make the explicit axis edits
+           authoritative. Leaving the preset in place would make the resolver
+           expand it again and erase those edits. */
+        if (have_preset)
+            pe_preset_expand(preset, &config.algorithm);
+        config.algorithm.preset = PE_PRESET_CUSTOM;
+        if (overrides->have_traversal)
+            config.algorithm.traversal = overrides->traversal;
+        if (overrides->have_regret)
+            config.algorithm.regret = overrides->regret;
+        if (overrides->have_averaging)
+            config.algorithm.averaging = overrides->averaging;
+    }
+    if (overrides != NULL)
+    {
+        if (overrides->have_precision)
+            config.execution.precision = overrides->precision;
+        if (overrides->have_alpha)
+            config.algorithm.dcfr_alpha = overrides->alpha;
+        if (overrides->have_beta)
+            config.algorithm.dcfr_beta = overrides->beta;
+        if (overrides->have_gamma)
+            config.algorithm.dcfr_gamma = overrides->gamma;
+    }
     if (have_backend)
     {
         config.execution.backend = backend;
@@ -313,6 +372,13 @@ int main(int argc, char **argv)
     int validate_only = 0;
     int estimate_only = 0;
     int print_plan = 0;
+    const char *traversal_name = NULL;
+    const char *regret_name = NULL;
+    const char *averaging_name = NULL;
+    const char *precision_name = NULL;
+    cli_solver_overrides_t overrides;
+
+    memset(&overrides, 0, sizeof(overrides));
 
     for (int i = 1; i < argc; ++i)
     {
@@ -396,6 +462,49 @@ int main(int argc, char **argv)
         {
             backend_name = argv[++i];
         }
+        else if (strcmp(argv[i], "--traversal") == 0 && i + 1 < argc)
+        {
+            traversal_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--regret") == 0 && i + 1 < argc)
+        {
+            regret_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--averaging") == 0 && i + 1 < argc)
+        {
+            averaging_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--precision") == 0 && i + 1 < argc)
+        {
+            precision_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--alpha") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &overrides.alpha))
+            {
+                fprintf(stderr, "Invalid alpha value\n");
+                return 1;
+            }
+            overrides.have_alpha = 1;
+        }
+        else if (strcmp(argv[i], "--beta") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &overrides.beta))
+            {
+                fprintf(stderr, "Invalid beta value\n");
+                return 1;
+            }
+            overrides.have_beta = 1;
+        }
+        else if (strcmp(argv[i], "--gamma") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &overrides.gamma))
+            {
+                fprintf(stderr, "Invalid gamma value\n");
+                return 1;
+            }
+            overrides.have_gamma = 1;
+        }
         else if (strcmp(argv[i], "--list-algorithms") == 0)
             list_algorithms = 1;
         else if (strcmp(argv[i], "--list-backends") == 0)
@@ -437,6 +546,10 @@ int main(int argc, char **argv)
         int have_backend = backend_name != NULL;
         pe_algorithm_preset_t preset = PE_PRESET_COUNT;
         pe_compute_kind_t backend = PE_COMPUTE_COUNT;
+        int have_expert_override = traversal_name != NULL || regret_name != NULL ||
+                                   averaging_name != NULL || precision_name != NULL ||
+                                   overrides.have_alpha || overrides.have_beta ||
+                                   overrides.have_gamma;
 
         if (have_preset)
         {
@@ -456,10 +569,56 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
-        if (show_capabilities || validate_only || estimate_only || print_plan)
+        if (traversal_name != NULL)
+        {
+            overrides.traversal = pe_traversal_from_name(traversal_name);
+            if (overrides.traversal == PE_TRAVERSAL_COUNT)
+            {
+                fprintf(stderr, "Unknown traversal: %s\n", traversal_name);
+                return 1;
+            }
+            overrides.have_traversal = 1;
+        }
+        if (regret_name != NULL)
+        {
+            overrides.regret = pe_regret_from_name(regret_name);
+            if (overrides.regret == PE_REGRET_COUNT)
+            {
+                fprintf(stderr, "Unknown regret mode: %s\n", regret_name);
+                return 1;
+            }
+            overrides.have_regret = 1;
+        }
+        if (averaging_name != NULL)
+        {
+            overrides.averaging = pe_averaging_from_name(averaging_name);
+            if (overrides.averaging == PE_AVG_COUNT)
+            {
+                fprintf(stderr, "Unknown averaging mode: %s\n", averaging_name);
+                return 1;
+            }
+            overrides.have_averaging = 1;
+        }
+        if (precision_name != NULL)
+        {
+            overrides.precision = pe_precision_from_name(precision_name);
+            if (overrides.precision == PE_PREC_COUNT)
+            {
+                fprintf(stderr, "Unknown precision mode: %s\n", precision_name);
+                return 1;
+            }
+            overrides.have_precision = 1;
+        }
+        if (show_capabilities || validate_only || estimate_only || print_plan ||
+            have_expert_override)
+        {
+            if (have_expert_override && !show_capabilities && !validate_only &&
+                !estimate_only && !print_plan)
+                print_plan = 1;
             return run_introspection(preset, have_preset, backend, have_backend,
                                      show_capabilities, validate_only,
-                                     estimate_only, print_plan);
+                                     estimate_only, print_plan, &overrides);
+        }
     }
 
     if (!tree_path)

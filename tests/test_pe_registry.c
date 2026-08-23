@@ -88,6 +88,22 @@ static void test_every_preset_expands(void)
           "unknown backend should not resolve");
     CHECK(pe_compute_kind_from_name(NULL) == PE_COMPUTE_COUNT,
           "NULL is not a backend name");
+    CHECK(pe_traversal_from_name("FULL-SCALAR") == PE_TRAVERSAL_FULL_SCALAR,
+          "traversal lookup should be case-insensitive");
+    CHECK(pe_traversal_from_name("nope") == PE_TRAVERSAL_COUNT,
+          "unknown traversal should not resolve");
+    CHECK(pe_regret_from_name("DCFR") == PE_REGRET_DCFR,
+          "regret lookup should be case-insensitive");
+    CHECK(pe_regret_from_name(NULL) == PE_REGRET_COUNT,
+          "NULL is not a regret mode");
+    CHECK(pe_averaging_from_name("delayed-linear") == PE_AVG_DELAYED_LINEAR,
+          "averaging lookup should resolve canonical names");
+    CHECK(pe_averaging_from_name("nope") == PE_AVG_COUNT,
+          "unknown averaging mode should not resolve");
+    CHECK(pe_precision_from_name("MIXED") == PE_PREC_MIXED,
+          "precision lookup should be case-insensitive");
+    CHECK(pe_precision_from_name(NULL) == PE_PREC_COUNT,
+          "NULL is not a precision mode");
 }
 
 static void test_preset_matches_the_matrix(void)
