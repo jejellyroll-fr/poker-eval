@@ -528,3 +528,15 @@ pe_solver_status_t pe_best_response_metrics_from_raw(
     out_metrics->exploitability_mbb_per_game = raw_value / big_blind * 1000.0;
     return PE_SOLVER_OK;
 }
+
+pe_solver_status_t pe_best_response_target_reached(
+    double measured_mbb, double target_mbb, int *out_reached)
+{
+    if (!out_reached)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (!isfinite(measured_mbb) || measured_mbb < 0.0 ||
+        !isfinite(target_mbb) || target_mbb < 0.0)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    *out_reached = target_mbb > 0.0 && measured_mbb <= target_mbb;
+    return PE_SOLVER_OK;
+}

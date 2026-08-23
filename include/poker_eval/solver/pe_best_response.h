@@ -57,6 +57,10 @@ pe_solver_status_t pe_best_response_vector(
 pe_solver_status_t pe_best_response_metrics_from_raw(
     double raw_value, double big_blind, pe_metrics_t *out_metrics);
 
+/** Return whether a measured mbb/g value satisfies a configured target. */
+pe_solver_status_t pe_best_response_target_reached(
+    double measured_mbb, double target_mbb, int *out_reached);
+
 #ifdef __cplusplus
 }
 #endif

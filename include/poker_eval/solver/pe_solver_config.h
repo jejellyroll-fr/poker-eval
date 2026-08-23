@@ -260,6 +260,10 @@ struct pe_solver_config_t {
     /* Stop after this many iterations. 0 means no iteration limit, in which
        case another stop condition must apply or the solve never ends. */
     uint64_t max_iterations;
+
+    /* BR-04: zero disables the exploitability stop condition. */
+    double target_exploitability_mbb;
+    uint64_t exploitability_interval;
 };
 
 /* ------------------------------------------------------------------ *

@@ -672,11 +672,32 @@ static void test_exploitability_metrics(void)
           "zero big blind must be rejected");
 }
 
+static void test_exploitability_target(void)
+{
+    int reached = -1;
+    CHECK(pe_best_response_target_reached(4.9, 5.0, &reached) ==
+              PE_SOLVER_OK && reached,
+          "target should stop below threshold");
+    CHECK(pe_best_response_target_reached(5.0, 5.0, &reached) ==
+              PE_SOLVER_OK && reached,
+          "target should stop at threshold");
+    CHECK(pe_best_response_target_reached(5.1, 5.0, &reached) ==
+              PE_SOLVER_OK && !reached,
+          "target should continue above threshold");
+    CHECK(pe_best_response_target_reached(1.0, 0.0, &reached) ==
+              PE_SOLVER_OK && !reached,
+          "zero target should disable the stop condition");
+    CHECK(pe_best_response_target_reached(-1.0, 5.0, &reached) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "negative measured exploitability must be rejected");
+}
+
 int main(void)
 {
     test_shared_infoset_and_convergence();
     test_kuhn_two_player_parity();
     test_exploitability_metrics();
+    test_exploitability_target();
     if (failures != 0)
     {
         fprintf(stderr, "test_best_response_ii: %d failure(s)\n", failures);
