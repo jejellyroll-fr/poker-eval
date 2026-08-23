@@ -112,12 +112,19 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
     {
         uint32_t begin = in->offsets[infoset];
         uint32_t end = in->offsets[infoset + 1u];
+        float positive = 0.0f;
         uint16_t action;
         if (end < begin || (uint32_t)in->action_counts[infoset] > end - begin)
             return -1;
         for (action = 0u; action < in->action_counts[infoset]; ++action)
+        {
             if (!isfinite(in->regrets[begin + action]))
                 return -1;
+            if (in->regrets[begin + action] > 0.0f)
+                positive += in->regrets[begin + action];
+        }
+        if (!isfinite(positive))
+            return -1;
     }
 
 #ifdef _OPENMP

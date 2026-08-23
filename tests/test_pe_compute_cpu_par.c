@@ -4,6 +4,7 @@
 
 #include <poker_eval/solver/pe_compute.h>
 
+#include <string.h>
 #include <stdio.h>
 
 static int failures;
@@ -133,12 +134,57 @@ static void test_ragged_strategy_batch(void)
     ops->destroy(backend);
 }
 
+static void test_ragged_strategy_matches_cpu_ref(void)
+{
+    const pe_compute_ops_t *parallel = pe_compute_cpu_par_ops();
+    const pe_compute_ops_t *reference = pe_compute_cpu_ref_ops();
+    pe_compute_config_t cfg = {2, 1, 0u, 0u, 0u, NULL, NULL};
+    pe_compute_config_t reference_cfg = {1, 1, 0u, 0u, 0u, NULL, NULL};
+    const uint32_t offsets[] = {0u, 4u, 7u, 10u};
+    const uint16_t actions[] = {3u, 2u, 1u};
+    const float regrets[] = {
+        4.0f, -2.0f, 1.0f, 99.0f,
+        -1.0f, -3.0f, 88.0f,
+        7.0f, 66.0f, 55.0f
+    };
+    float parallel_values[10] = {0};
+    float reference_values[10] = {0};
+    pe_infoset_batch_t input = {3u, offsets, actions, regrets};
+    pe_strategy_batch_t parallel_out = {0u, 10u, NULL, parallel_values};
+    pe_strategy_batch_t reference_out = {0u, 10u, NULL, reference_values};
+    void *parallel_backend = NULL;
+    void *reference_backend = NULL;
+
+    CHECK(parallel->create(&parallel_backend, &cfg) == 0 && parallel_backend,
+          "parallel parity backend creation failed");
+    CHECK(reference->create(&reference_backend, &reference_cfg) == 0 &&
+              reference_backend,
+          "reference parity backend creation failed");
+    if (!parallel_backend || !reference_backend)
+    {
+        parallel->destroy(parallel_backend);
+        reference->destroy(reference_backend);
+        return;
+    }
+    CHECK(parallel->strategy_batch(parallel_backend, &input, &parallel_out) == 0,
+          "parallel parity strategy failed");
+    CHECK(reference->strategy_batch(reference_backend, &input, &reference_out) == 0,
+          "reference parity strategy failed");
+    CHECK(parallel_out.count == reference_out.count &&
+              memcmp(parallel_values, reference_values,
+                     sizeof(parallel_values)) == 0,
+          "cpu_par and cpu_ref ragged strategies differ");
+    parallel->destroy(parallel_backend);
+    reference->destroy(reference_backend);
+}
+
 int main(void)
 {
     test_registration_and_capabilities();
     test_invalid_config_is_refused();
     test_update_batch_reaches_storage();
     test_ragged_strategy_batch();
+    test_ragged_strategy_matches_cpu_ref();
     if (failures != 0)
         return 1;
     puts("test_pe_compute_cpu_par: all tests passed");
