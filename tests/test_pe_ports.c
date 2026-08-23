@@ -323,6 +323,25 @@ static void test_config_is_copied_not_borrowed(void)
     CHECK(pe_solver_get_telemetry(NULL) == NULL, "a NULL solver has no telemetry");
 }
 
+static void test_metrics_require_completed_solve(void)
+{
+    pe_solver_config_t cfg = pe_solver_config_default();
+    pe_solver_t *solver = pe_solver_create(&cfg, NULL);
+    pe_metrics_t metrics;
+
+    CHECK(solver != NULL, "creation should succeed before metrics query");
+    if (solver != NULL)
+    {
+        CHECK(pe_solver_metrics(solver, &metrics) == PE_SOLVER_ERR_INVALID_STATE,
+              "metrics must not be reported before a solve completes");
+        CHECK(pe_solver_metrics(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
+              "NULL output must still be rejected");
+        pe_solver_destroy(solver);
+    }
+    CHECK(pe_solver_metrics(NULL, &metrics) == PE_SOLVER_ERR_NULL_ARGUMENT,
+          "NULL solver must still be rejected");
+}
+
 int main(void)
 {
     test_callback_counts_events();
@@ -333,6 +352,7 @@ int main(void)
     test_create_without_telemetry();
     test_create_uses_the_injected_adapter();
     test_config_is_copied_not_borrowed();
+    test_metrics_require_completed_solve();
 
     if (g_failures != 0)
     {

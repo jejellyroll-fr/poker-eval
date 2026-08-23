@@ -35,6 +35,13 @@
 struct pe_solver_t {
     pe_solver_config_t config;
 
+    /* Filled by the execution backend once a solve has produced a result.
+       Keeping availability separate from the zero-valued metrics prevents a
+       caller from mistaking an unrun solver for a solved zero-exploitability
+       game. */
+    pe_metrics_t metrics;
+    int metrics_available;
+
     /* Resolved dependencies: no member is NULL once creation succeeds, except
        ports whose absence is meaningful (persist, where NULL means "refuse to
        save" rather than "write somewhere"). */
@@ -265,7 +272,10 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
 {
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (!solver->metrics_available)
+        return PE_SOLVER_ERR_INVALID_STATE;
+    *out = solver->metrics;
+    return PE_SOLVER_OK;
 }
 
 /* ------------------------------------------------------------------ *
