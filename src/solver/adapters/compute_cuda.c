@@ -7,6 +7,7 @@
  */
 
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 
 #include <stdlib.h>
 
@@ -25,8 +26,7 @@ typedef struct
 static uint64_t compute_cuda_capabilities(void *self)
 {
     (void)self;
-    /* GPU-05 owns the parity gate. Until it passes, AUTO must stay on CPU. */
-    return 0u;
+    return pe_gpu_terminal_eval_gate_is_open() ? PE_CAP_GPU_TERMINAL_EVAL : 0u;
 }
 
 static int compute_cuda_create(void **self, const pe_compute_config_t *cfg)

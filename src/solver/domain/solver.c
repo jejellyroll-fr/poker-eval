@@ -141,6 +141,15 @@ static uint64_t pe_solver_available_caps(const pe_solver_t *solver)
     return (uint64_t)PE_CAP_ALL;
 }
 
+static uint64_t pe_solver_validation_caps(const pe_solver_t *solver)
+{
+    uint64_t caps = pe_solver_available_caps(solver);
+
+    if (!pe_gpu_terminal_eval_gate_is_open())
+        caps &= ~((uint64_t)PE_CAP_GPU_TERMINAL_EVAL);
+    return caps;
+}
+
 pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
                                pe_diagnostics_t *out)
 {
@@ -152,7 +161,7 @@ pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
-    if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
+    if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
                         &plan, diag) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
@@ -184,7 +193,7 @@ pe_solver_status_t pe_solver_estimate(const pe_solver_t *solver,
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
-    if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
+    if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
                         &plan, NULL) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
@@ -210,7 +219,7 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
-    if (pe_plan_resolve(&solver->config, pe_solver_available_caps(solver),
+    if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
                         out, NULL) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
     return PE_SOLVER_OK;

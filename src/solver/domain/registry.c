@@ -21,6 +21,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* GPU capabilities are opt-in only after the terminal parity test has passed.
+   This process-local latch prevents a backend from advertising itself merely
+   because its library was linked successfully. */
+static int g_gpu_terminal_eval_gate_open;
+
+int pe_gpu_terminal_eval_gate_is_open(void)
+{
+    return g_gpu_terminal_eval_gate_open;
+}
+
+void pe_gpu_terminal_eval_gate_open(void)
+{
+    g_gpu_terminal_eval_gate_open = 1;
+}
+
 /* ------------------------------------------------------------------ *
  * The table
  * ------------------------------------------------------------------ */

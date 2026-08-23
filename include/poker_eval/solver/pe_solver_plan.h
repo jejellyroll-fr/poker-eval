@@ -170,6 +170,12 @@ const char *pe_compute_kind_name(pe_compute_kind_t kind);
  */
 uint64_t pe_config_required_caps(const pe_solver_config_t *cfg);
 
+/** Whether the GPU-1 terminal parity gate has been opened in this process. */
+int pe_gpu_terminal_eval_gate_is_open(void);
+
+/** Open the GPU-1 gate after every available terminal backend passes parity. */
+void pe_gpu_terminal_eval_gate_open(void);
+
 /**
  * Expand, validate, and produce a plan.
  *

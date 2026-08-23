@@ -8,6 +8,7 @@
  */
 
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,6 +107,19 @@ int main(void)
         cpu_ops->destroy(cpu);
         if (cuda_ready) cuda_ops->destroy(cuda);
         opencl_ops->destroy(opencl);
+        free(cards);
+        free(reference);
+        free(candidate);
+        return 1;
+    }
+
+    pe_gpu_terminal_eval_gate_open();
+    if ((cuda_ready && (cuda_ops->capabilities(NULL) & PE_CAP_GPU_TERMINAL_EVAL) == 0u) ||
+        (opencl_ready && (opencl_ops->capabilities(NULL) & PE_CAP_GPU_TERMINAL_EVAL) == 0u)) {
+        fprintf(stderr, "GPU parity passed but the capability gate stayed closed\n");
+        cpu_ops->destroy(cpu);
+        if (cuda_ready) cuda_ops->destroy(cuda);
+        if (opencl_ready) opencl_ops->destroy(opencl);
         free(cards);
         free(reference);
         free(candidate);
