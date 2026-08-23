@@ -40,6 +40,7 @@ set(ENGINE_SOURCES
     solvers/cfr/stud8_river_adapter.c
     solvers/cfr/razz_river_adapter.c
     solvers/ismcts/ismcts_poker.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../solver/domain/abstraction.c
 )
 
 add_library(poker_engine ${ENGINE_SOURCES})

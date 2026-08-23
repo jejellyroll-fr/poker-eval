@@ -773,6 +773,8 @@ add_poker_test(test_solver_gpu_parity)
 set_tests_properties(test_solver_gpu_parity PROPERTIES
     LABELS "solver;solver-v3;gpu05"
     SKIP_RETURN_CODE 77)
+add_poker_test(test_abstraction_port)
+set_tests_properties(test_abstraction_port PROPERTIES LABELS "solver;solver-v3;abs01")
 add_poker_test(test_evaluator_port)
 set_tests_properties(test_evaluator_port PROPERTIES LABELS "solver;solver-v3;gpu02")
 add_poker_test(test_backend_parity)
