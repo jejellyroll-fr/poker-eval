@@ -95,6 +95,8 @@ int main(void)
     int hand_count;
     size_t exact_unique;
     size_t abstract_unique;
+    size_t texture_unique[PE_TEXTURE_FILTER_COUNT] = {0};
+    uint64_t texture_keys[20000];
     int failure = 0;
 
     memset(&exact_state, 0, sizeof(exact_state));
@@ -167,13 +169,69 @@ int main(void)
         failure = 1;
     }
 
+    /* ABS-03: texture-only mode uses the configured MPF filter, independently
+       of the strength model. The board id is exact for NONE/PERFECT and gets
+       progressively coarser for LARGE/MEDIUM/SMALL. */
+    for (int level = PE_TEXTURE_FILTER_NONE;
+         level < PE_TEXTURE_FILTER_COUNT; ++level)
+    {
+        mpf_config_t texture_cfg;
+        mpf_state_t texture_state;
+        cfr_game_t texture_game;
+        memset(&texture_state, 0, sizeof(texture_state));
+        base_config(&texture_cfg, ctx);
+        texture_cfg.texture_filter_level = level;
+        if (mpf_build_game(&texture_cfg, &texture_game, &texture_state) != 0)
+        {
+            fprintf(stderr, "ABS-03: build failed for texture level %d\n", level);
+            failure = 1;
+            continue;
+        }
+        size_t board_count = 0;
+        for (int a = 0; a < 52; ++a)
+            for (int b = a + 1; b < 52; ++b)
+                for (int c = b + 1; c < 52; ++c)
+                {
+                    mask_t candidate = MASK_EMPTY;
+                    candidate = mask_set(candidate, a);
+                    candidate = mask_set(candidate, b);
+                    candidate = mask_set(candidate, c);
+                    if ((candidate & texture_state.hole[0]) != MASK_EMPTY)
+                        continue;
+                    mpf_state_t probe = texture_state;
+                    probe.board_mask = candidate;
+                    probe.board_revealed = 3;
+                    probe.to_act = 0;
+                    texture_keys[board_count++] = mpf_state_infoset_key(&probe);
+                }
+        texture_unique[level] = unique_count(texture_keys, board_count);
+        mpf_state_cleanup(&texture_state);
+    }
+    if (texture_unique[PE_TEXTURE_FILTER_PERFECT] !=
+            texture_unique[PE_TEXTURE_FILTER_NONE] ||
+        texture_unique[PE_TEXTURE_FILTER_LARGE] >
+            texture_unique[PE_TEXTURE_FILTER_PERFECT] ||
+        texture_unique[PE_TEXTURE_FILTER_MEDIUM] >
+            texture_unique[PE_TEXTURE_FILTER_LARGE] ||
+        texture_unique[PE_TEXTURE_FILTER_SMALL] >
+            texture_unique[PE_TEXTURE_FILTER_MEDIUM])
+    {
+        fprintf(stderr, "ABS-03: texture cardinalities are not monotone\n");
+        failure = 1;
+    }
+
     mpf_state_cleanup(&abstract_state);
     mpf_state_cleanup(&exact_state);
     ops->destroy(model);
     eval_context_destroy(ctx);
     if (failure)
         return 1;
-    printf("test_mpf_abstraction: %zu -> %zu unique infoset keys\n",
-           exact_unique, abstract_unique);
+    printf("test_mpf_abstraction: %zu -> %zu strength keys; texture %zu/%zu/%zu/%zu/%zu\n",
+           exact_unique, abstract_unique,
+           texture_unique[PE_TEXTURE_FILTER_PERFECT],
+           texture_unique[PE_TEXTURE_FILTER_LARGE],
+           texture_unique[PE_TEXTURE_FILTER_MEDIUM],
+           texture_unique[PE_TEXTURE_FILTER_SMALL],
+           texture_unique[PE_TEXTURE_FILTER_NONE]);
     return 0;
 }

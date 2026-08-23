@@ -451,6 +451,35 @@ static uint64_t mpf_pattern_hash(const mpf_state_t *st, int player)
     return mpf_fnv1a_hash(str, strlen(str));
 }
 
+/* Texture-only abstraction still needs the acting player's exact private
+ * pattern, but must not retain the exact board in that component. */
+static uint64_t mpf_hole_pattern_hash(const mpf_state_t *st, int player)
+{
+    mask_t hole = st->hole[player];
+    char key[100];
+    char fallback[100];
+    const char *str = fallback;
+    if (pe_board_canonical_key(hole, st->total_hole_cards,
+                               key, sizeof(key)) == 0)
+    {
+        str = key;
+    }
+    else
+    {
+        int pos = 0;
+        for (int c = 0; c < MODERN_DECK_SIZE && pos < 98; ++c)
+        {
+            if (mask_is_set(hole, c))
+            {
+                fallback[pos++] = (char)('0' + (MODERN_GET_RANK(c) % 10));
+                fallback[pos++] = (char)('0' + MODERN_GET_SUIT(c));
+            }
+        }
+        fallback[pos] = '\0';
+    }
+    return mpf_fnv1a_hash(str, strlen(str));
+}
+
 /* ABS-02: replace the exact private-hand/board pattern with the trained
  * abstraction pair only when the caller explicitly enabled strength
  * bucketing and supplied (or successfully trained) a model. The caller's
@@ -458,24 +487,45 @@ static uint64_t mpf_pattern_hash(const mpf_state_t *st, int player)
 static int mpf_abstraction_key(const mpf_state_t *st, int player,
                                uint64_t *out_key)
 {
-    if (!st || !out_key || st->strength_buckets_per_street <= 0 ||
-        !st->abstraction_model || player < 0 || player >= st->num_players)
+    if (!st || !out_key || player < 0 || player >= st->num_players ||
+        (st->strength_buckets_per_street <= 0 &&
+         st->texture_filter_level <= PE_TEXTURE_FILTER_NONE))
         return 0;
-    if (st->board_revealed < 3 || st->board_revealed > 5 ||
-        mask_popcount(st->hole[player]) != st->total_hole_cards)
+    if (st->board_revealed < 3 || st->board_revealed > 5)
         return 0;
 
-    const pe_abstraction_ops_t *ops = pe_abstraction_ops();
-    if (!ops || !ops->bucket_of || !ops->texture_of)
+    uint64_t texture = pe_board_texture_id(
+        st->board_mask, (pe_texture_filter_level_t)st->texture_filter_level);
+    if (st->strength_buckets_per_street > 0 && st->abstraction_model &&
+        mask_popcount(st->hole[player]) == st->total_hole_cards)
+    {
+        const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+        if (ops && ops->bucket_of)
+        {
+            int bucket = ops->bucket_of(st->abstraction_model, st->ctx,
+                                        st->hole[player], st->board_mask,
+                                        (int)st->street);
+            if (bucket >= 0)
+            {
+                *out_key = (((uint64_t)(uint32_t)bucket) << 32) ^ texture;
+                return 1;
+            }
+        }
+    }
+
+    if (st->texture_filter_level <= PE_TEXTURE_FILTER_NONE)
         return 0;
-    int bucket = ops->bucket_of(st->abstraction_model, st->ctx,
-                                st->hole[player], st->board_mask,
-                                (int)st->street);
-    if (bucket < 0)
+
+    /* PERFECT has no merge and therefore preserves the historical canonical
+       board+hole hash when no strength abstraction is active. */
+    if (st->strength_buckets_per_street <= 0 &&
+        st->texture_filter_level == PE_TEXTURE_FILTER_PERFECT)
         return 0;
-    uint64_t texture = ops->texture_of(st->abstraction_model,
-                                       st->board_mask, (int)st->street);
-    *out_key = (((uint64_t)(uint32_t)bucket) << 32) ^ texture;
+
+    /* Texture-only mode keeps the private pattern exact and merges only the
+       board component. PERFECT naturally becomes the exact board id. */
+    uint64_t hole_hash = mpf_hole_pattern_hash(st, player);
+    *out_key = mpf_fnv1a_hash_seeded(hole_hash, &texture, sizeof(texture));
     return 1;
 }
 
@@ -512,7 +562,9 @@ static uint64_t mpf_infoset_key(const mpf_state_t *st)
     h = mpf_fnv1a_hash_seeded(h, &active_flags, sizeof(active_flags));
     uint64_t bh;
     uint64_t abstraction_key;
-    if (mpf_abstraction_key(st, p, &abstraction_key))
+    if ((st->strength_buckets_per_street > 0 ||
+         st->texture_filter_level > PE_TEXTURE_FILTER_NONE) &&
+        mpf_abstraction_key(st, p, &abstraction_key))
         bh = abstraction_key;
     else
         bh = mpf_pattern_hash(st, p);

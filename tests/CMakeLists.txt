@@ -776,7 +776,7 @@ set_tests_properties(test_solver_gpu_parity PROPERTIES
 add_poker_test(test_abstraction_port)
 set_tests_properties(test_abstraction_port PROPERTIES LABELS "solver;solver-v3;abs01")
 add_poker_test(test_mpf_abstraction)
-set_tests_properties(test_mpf_abstraction PROPERTIES LABELS "engine;cfr;multiway;solver-v3;abs02" TIMEOUT 180)
+set_tests_properties(test_mpf_abstraction PROPERTIES LABELS "engine;cfr;multiway;solver-v3;abs02;abs03" TIMEOUT 180)
 add_poker_test(test_evaluator_port)
 set_tests_properties(test_evaluator_port PROPERTIES LABELS "solver;solver-v3;gpu02")
 add_poker_test(test_backend_parity)
