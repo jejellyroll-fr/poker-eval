@@ -152,6 +152,51 @@ void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy);
 
 const char *pe_monker_mkr_status_string(pe_monker_mkr_status_t status);
 
+typedef enum
+{
+    PE_MONKER_FILTER_OP_NONE = 0,
+    PE_MONKER_FILTER_OP_GT,
+    PE_MONKER_FILTER_OP_LT,
+    PE_MONKER_FILTER_OP_EQ,
+    PE_MONKER_FILTER_OP_GE,
+    PE_MONKER_FILTER_OP_LE
+} pe_monker_filter_operator_t;
+
+typedef enum
+{
+    PE_MONKER_FILTER_OK = 0,
+    PE_MONKER_FILTER_ERR_NULL_ARGUMENT,
+    PE_MONKER_FILTER_ERR_EMPTY,
+    PE_MONKER_FILTER_ERR_SYNTAX,
+    PE_MONKER_FILTER_ERR_UNKNOWN_KEYWORD,
+    PE_MONKER_FILTER_ERR_BAD_VALUE,
+    PE_MONKER_FILTER_ERR_NO_MEMORY,
+    PE_MONKER_FILTER_ERR_TOO_DEEP
+} pe_monker_filter_status_t;
+
+typedef struct
+{
+    char *keyword;
+    char *value;
+    pe_monker_filter_operator_t operator;
+    unsigned negated;
+    unsigned previous;
+} pe_monker_filter_atom_t;
+
+typedef struct
+{
+    pe_monker_filter_atom_t *atoms;
+    size_t atom_count;
+    size_t max_depth;
+} pe_monker_filter_t;
+
+pe_monker_filter_status_t pe_monker_filter_parse(
+    const char *expression, pe_monker_filter_t *out);
+
+void pe_monker_filter_free(pe_monker_filter_t *filter);
+
+const char *pe_monker_filter_status_string(pe_monker_filter_status_t status);
+
 #ifdef __cplusplus
 }
 #endif
