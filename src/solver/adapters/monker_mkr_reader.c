@@ -569,6 +569,7 @@ typedef enum
     JAVA_VALUE_DOUBLE,
     JAVA_VALUE_BYTES,
     JAVA_VALUE_SHORTS,
+    JAVA_VALUE_INTS,
     JAVA_VALUE_OBJECTS
 } java_value_kind_t;
 
@@ -585,6 +586,7 @@ struct java_value_t
         double real;
         struct { unsigned char *data; uint32_t count; } bytes;
         struct { uint16_t *data; uint32_t count; } shorts;
+        struct { int32_t *data; uint32_t count; } ints;
         struct { java_value_t *items; uint32_t count; } objects;
     } value;
 };
@@ -605,12 +607,42 @@ struct java_classdesc_t
     java_classdesc_t *super_desc;
 };
 
+/*
+ * Java serialization assigns every class descriptor, string, object and array
+ * a handle, numbered from 0x7E0000 in the order they appear, and refers back
+ * to them with TC_REFERENCE instead of repeating them. A stream holding more
+ * than one array of the same type therefore *must* contain references — which
+ * is why refusing them meant refusing every real saved run.
+ *
+ * Only class descriptors are resolvable here; the other handles exist so the
+ * numbering stays aligned. Getting that numbering wrong does not fail loudly,
+ * it silently resolves to the wrong descriptor, so every producer of a handle
+ * registers one in the same order the specification lists them.
+ */
+typedef enum
+{
+    JAVA_HANDLE_CLASSDESC,
+    JAVA_HANDLE_OPAQUE
+} java_handle_kind_t;
+
+typedef struct
+{
+    java_handle_kind_t kind;
+    java_classdesc_t *desc;
+} java_handle_t;
+
 typedef struct
 {
     const unsigned char *data;
     size_t size;
     size_t position;
+    java_handle_t *handles;
+    size_t handle_count;
+    size_t handle_capacity;
 } java_reader_t;
+
+#define JAVA_HANDLE_BASE 0x7E0000u
+#define JAVA_MAX_HANDLES 1000000u
 
 #define JAVA_STREAM_MAGIC 0xacedu
 #define JAVA_STREAM_VERSION 0x0005u
@@ -710,6 +742,9 @@ static void java_value_free(java_value_t *value)
     case JAVA_VALUE_SHORTS:
         free(value->value.shorts.data);
         break;
+    case JAVA_VALUE_INTS:
+        free(value->value.ints.data);
+        break;
     case JAVA_VALUE_OBJECTS:
         for (index = 0u; index < value->value.objects.count; ++index)
             java_value_free(&value->value.objects.items[index]);
@@ -726,6 +761,12 @@ static void java_value_free(java_value_t *value)
     memset(value, 0, sizeof(*value));
 }
 
+/*
+ * Frees one descriptor and not its superclass: a superclass descriptor has a
+ * handle of its own and is owned by the reader's table, which frees every
+ * descriptor exactly once at the end of the stream. Recursing here would
+ * double-free any superclass a later TC_REFERENCE also points at.
+ */
 static void java_classdesc_free(java_classdesc_t *desc)
 {
     uint16_t index;
@@ -736,8 +777,72 @@ static void java_classdesc_free(java_classdesc_t *desc)
     for (index = 0u; index < desc->field_count; ++index)
         free(desc->fields[index].name);
     free(desc->fields);
-    java_classdesc_free(desc->super_desc);
     free(desc);
+}
+
+static void java_reader_init(java_reader_t *reader,
+                             const unsigned char *data, size_t size)
+{
+    reader->data = data;
+    reader->size = size;
+    reader->position = 0u;
+    reader->handles = NULL;
+    reader->handle_count = 0u;
+    reader->handle_capacity = 0u;
+}
+
+static void java_reader_free(java_reader_t *reader)
+{
+    size_t index;
+    for (index = 0u; index < reader->handle_count; ++index)
+        if (reader->handles[index].kind == JAVA_HANDLE_CLASSDESC)
+            java_classdesc_free(reader->handles[index].desc);
+    free(reader->handles);
+    reader->handles = NULL;
+    reader->handle_count = 0u;
+    reader->handle_capacity = 0u;
+}
+
+/*
+ * Registers the next handle. Every value the specification says takes a
+ * handle must call this, in stream order, whether or not this reader has any
+ * use for it — a skipped registration shifts every later reference by one.
+ */
+static pe_monker_mkr_status_t java_handle_add(java_reader_t *reader,
+                                              java_handle_kind_t kind,
+                                              java_classdesc_t *desc)
+{
+    if (reader->handle_count >= JAVA_MAX_HANDLES)
+        return PE_MONKER_MKR_ERR_TOO_LARGE;
+    if (reader->handle_count == reader->handle_capacity) {
+        size_t capacity = reader->handle_capacity == 0u
+                              ? 64u : reader->handle_capacity * 2u;
+        java_handle_t *grown = (java_handle_t *)realloc(
+            reader->handles, capacity * sizeof(*grown));
+        if (grown == NULL)
+            return PE_MONKER_MKR_ERR_NO_MEMORY;
+        reader->handles = grown;
+        reader->handle_capacity = capacity;
+    }
+    reader->handles[reader->handle_count].kind = kind;
+    reader->handles[reader->handle_count].desc = desc;
+    reader->handle_count++;
+    return PE_MONKER_MKR_OK;
+}
+
+static pe_monker_mkr_status_t java_handle_classdesc(const java_reader_t *reader,
+                                                    uint32_t handle,
+                                                    java_classdesc_t **out)
+{
+    size_t index;
+    if (handle < JAVA_HANDLE_BASE)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    index = (size_t)(handle - JAVA_HANDLE_BASE);
+    if (index >= reader->handle_count ||
+        reader->handles[index].kind != JAVA_HANDLE_CLASSDESC)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    *out = reader->handles[index].desc;
+    return PE_MONKER_MKR_OK;
 }
 
 static pe_monker_mkr_status_t java_read_value(java_reader_t *reader,
@@ -794,12 +899,24 @@ static pe_monker_mkr_status_t java_read_classdesc(java_reader_t *reader,
         *out = NULL;
         return PE_MONKER_MKR_OK;
     }
+    if (token == JAVA_TC_REFERENCE) {
+        status = java_take(reader, 4u, &data);
+        if (status != PE_MONKER_MKR_OK)
+            return status;
+        return java_handle_classdesc(reader, java_be32(data), out);
+    }
     if (token != JAVA_TC_CLASSDESC)
-        return token == JAVA_TC_REFERENCE ? PE_MONKER_MKR_ERR_UNSUPPORTED
-                                          : PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
     desc = (java_classdesc_t *)calloc(1u, sizeof(*desc));
     if (desc == NULL)
         return PE_MONKER_MKR_ERR_NO_MEMORY;
+    /* The handle is taken here, before any nested value can claim one.
+       From this point the table owns the descriptor. */
+    status = java_handle_add(reader, JAVA_HANDLE_CLASSDESC, desc);
+    if (status != PE_MONKER_MKR_OK) {
+        java_classdesc_free(desc);
+        return status;
+    }
     status = java_utf(reader, &desc->name);
     if (status != PE_MONKER_MKR_OK)
         goto fail;
@@ -841,6 +958,9 @@ static pe_monker_mkr_status_t java_read_classdesc(java_reader_t *reader,
                 free(signature);
                 if (status != PE_MONKER_MKR_OK)
                     goto fail;
+                status = java_handle_add(reader, JAVA_HANDLE_OPAQUE, NULL);
+                if (status != PE_MONKER_MKR_OK)
+                    goto fail;
             } else if (token != JAVA_TC_REFERENCE) {
                 status = PE_MONKER_MKR_ERR_BAD_ARCHIVE;
                 goto fail;
@@ -863,7 +983,7 @@ static pe_monker_mkr_status_t java_read_classdesc(java_reader_t *reader,
 unsupported:
     status = PE_MONKER_MKR_ERR_UNSUPPORTED;
 fail:
-    java_classdesc_free(desc);
+    /* No free: the descriptor is in the handle table, which owns it. */
     return status;
 }
 
@@ -977,30 +1097,27 @@ static pe_monker_mkr_status_t java_read_array(java_reader_t *reader,
     status = java_read_classdesc(reader, &desc);
     if (status != PE_MONKER_MKR_OK)
         return status;
-    if (desc == NULL || desc->name == NULL || desc->name[0] != '[') {
-        java_classdesc_free(desc);
+    if (desc == NULL || desc->name == NULL || desc->name[0] != '[')
         return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
-    }
-    status = java_take(reader, 4u, &data);
-    if (status != PE_MONKER_MKR_OK) {
-        java_classdesc_free(desc);
+    /* The array's own handle comes after its class descriptor and before its
+       length. Descriptors are owned by the handle table, never freed here. */
+    status = java_handle_add(reader, JAVA_HANDLE_OPAQUE, NULL);
+    if (status != PE_MONKER_MKR_OK)
         return status;
-    }
+    status = java_take(reader, 4u, &data);
+    if (status != PE_MONKER_MKR_OK)
+        return status;
     count = java_be32(data);
-    if (count > 100000000u) {
-        java_classdesc_free(desc);
+    if (count > 100000000u)
         return PE_MONKER_MKR_ERR_TOO_LARGE;
-    }
     if (strcmp(desc->name, "[B") == 0) {
         out->kind = JAVA_VALUE_BYTES;
         out->value.bytes.count = count;
         out->value.bytes.data = count == 0u
                                     ? NULL
                                     : (unsigned char *)malloc(count);
-        if (count != 0u && out->value.bytes.data == NULL) {
-            java_classdesc_free(desc);
+        if (count != 0u && out->value.bytes.data == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        }
         status = java_take(reader, count, &data);
         if (status == PE_MONKER_MKR_OK && count != 0u)
             memcpy(out->value.bytes.data, data, count);
@@ -1011,14 +1128,26 @@ static pe_monker_mkr_status_t java_read_array(java_reader_t *reader,
                                      ? NULL
                                      : (uint16_t *)malloc(
                                            (size_t)count * sizeof(uint16_t));
-        if (count != 0u && out->value.shorts.data == NULL) {
-            java_classdesc_free(desc);
+        if (count != 0u && out->value.shorts.data == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        }
         for (index = 0u; index < count && status == PE_MONKER_MKR_OK; ++index) {
             status = java_take(reader, 2u, &data);
             if (status == PE_MONKER_MKR_OK)
                 out->value.shorts.data[index] = java_be16(data);
+        }
+    } else if (strcmp(desc->name, "[I") == 0) {
+        out->kind = JAVA_VALUE_INTS;
+        out->value.ints.count = count;
+        out->value.ints.data = count == 0u
+                                   ? NULL
+                                   : (int32_t *)malloc((size_t)count *
+                                                       sizeof(int32_t));
+        if (count != 0u && out->value.ints.data == NULL)
+            return PE_MONKER_MKR_ERR_NO_MEMORY;
+        for (index = 0u; index < count && status == PE_MONKER_MKR_OK; ++index) {
+            status = java_take(reader, 4u, &data);
+            if (status == PE_MONKER_MKR_OK)
+                out->value.ints.data[index] = (int32_t)java_be32(data);
         }
     } else if (strlen(desc->name) >= 2u && desc->name[1] == '[') {
         out->kind = JAVA_VALUE_OBJECTS;
@@ -1027,16 +1156,13 @@ static pe_monker_mkr_status_t java_read_array(java_reader_t *reader,
                                        ? NULL
                                        : (java_value_t *)calloc(
                                              count, sizeof(java_value_t));
-        if (count != 0u && out->value.objects.items == NULL) {
-            java_classdesc_free(desc);
+        if (count != 0u && out->value.objects.items == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        }
         for (index = 0u; index < count && status == PE_MONKER_MKR_OK; ++index)
             status = java_read_value(reader, &out->value.objects.items[index]);
     } else {
         status = PE_MONKER_MKR_ERR_UNSUPPORTED;
     }
-    java_classdesc_free(desc);
     if (status != PE_MONKER_MKR_OK)
         java_value_free(out);
     return status;
@@ -1058,48 +1184,164 @@ static pe_monker_mkr_status_t java_read_value(java_reader_t *reader,
         return PE_MONKER_MKR_OK;
     case JAVA_TC_STRING:
         out->kind = JAVA_VALUE_STRING;
-        return java_utf(reader, &out->value.string);
+        status = java_utf(reader, &out->value.string);
+        if (status != PE_MONKER_MKR_OK)
+            return status;
+        return java_handle_add(reader, JAVA_HANDLE_OPAQUE, NULL);
     case JAVA_TC_ARRAY:
         return java_read_array(reader, out);
     case JAVA_TC_OBJECT: {
         java_classdesc_t *desc = NULL;
         status = java_read_classdesc(reader, &desc);
-        if (status == PE_MONKER_MKR_OK && desc != NULL)
-            status = java_read_class_data(reader, desc, out);
-        java_classdesc_free(desc);
-        return status;
+        if (status != PE_MONKER_MKR_OK)
+            return status;
+        if (desc == NULL)
+            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+        /* The object's handle follows its descriptor and precedes its data;
+           the descriptor itself belongs to the handle table. */
+        status = java_handle_add(reader, JAVA_HANDLE_OPAQUE, NULL);
+        if (status != PE_MONKER_MKR_OK)
+            return status;
+        return java_read_class_data(reader, desc, out);
     }
     case JAVA_TC_REFERENCE:
+        /* A back-reference to an earlier *value*. Class descriptors are
+           resolved (see java_read_classdesc); values are not retained, and no
+           MonkerSolver entry read here contains one. */
         return PE_MONKER_MKR_ERR_UNSUPPORTED;
     default:
         return PE_MONKER_MKR_ERR_UNSUPPORTED;
     }
 }
 
+static void java_values_free(java_value_t *items, size_t count)
+{
+    size_t index;
+    if (items == NULL)
+        return;
+    for (index = 0u; index < count; ++index)
+        java_value_free(&items[index]);
+    free(items);
+}
+
+static pe_monker_mkr_status_t java_values_push(java_value_t **items,
+                                               size_t *count,
+                                               size_t *capacity,
+                                               const java_value_t *value)
+{
+    if (*count == *capacity) {
+        size_t grown_capacity = *capacity == 0u ? 8u : *capacity * 2u;
+        java_value_t *grown = (java_value_t *)realloc(
+            *items, grown_capacity * sizeof(*grown));
+        if (grown == NULL)
+            return PE_MONKER_MKR_ERR_NO_MEMORY;
+        *items = grown;
+        *capacity = grown_capacity;
+    }
+    (*items)[(*count)++] = *value;
+    return PE_MONKER_MKR_OK;
+}
+
+/*
+ * A serialization stream is a *sequence* of values, not a single one, and
+ * anything written with writeInt rather than writeObject arrives as block
+ * data between them. MonkerSolver's stored strategies open with exactly that:
+ * a four-byte block holding the bucket count, then one value per slot. Reading
+ * only the first value rejected every one of them.
+ *
+ * A four-byte block is surfaced as an integer, which is the only shape any
+ * entry here uses; longer blocks are skipped rather than guessed at.
+ */
+static pe_monker_mkr_status_t parse_java_stream(const unsigned char *data,
+                                                size_t size,
+                                                java_value_t **out_items,
+                                                size_t *out_count)
+{
+    java_reader_t reader;
+    java_value_t *items = NULL;
+    size_t count = 0u;
+    size_t capacity = 0u;
+    pe_monker_mkr_status_t status = PE_MONKER_MKR_OK;
+
+    *out_items = NULL;
+    *out_count = 0u;
+    if (size < 4u)
+        return PE_MONKER_MKR_ERR_TRUNCATED;
+    if (java_be16(data) != JAVA_STREAM_MAGIC ||
+        java_be16(data + 2u) != JAVA_STREAM_VERSION)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    java_reader_init(&reader, data, size);
+    reader.position = 4u;
+
+    while (reader.position < reader.size) {
+        unsigned char token = reader.data[reader.position];
+        java_value_t value;
+        memset(&value, 0, sizeof(value));
+        if (token == JAVA_TC_BLOCKDATA || token == JAVA_TC_BLOCKDATALONG) {
+            const unsigned char *raw;
+            uint32_t length;
+            reader.position += 1u;
+            if (token == JAVA_TC_BLOCKDATA) {
+                unsigned char small;
+                status = java_u8(&reader, &small);
+                length = small;
+            } else {
+                status = java_take(&reader, 4u, &raw);
+                length = (status == PE_MONKER_MKR_OK) ? java_be32(raw) : 0u;
+            }
+            if (status != PE_MONKER_MKR_OK)
+                break;
+            status = java_take(&reader, length, &raw);
+            if (status != PE_MONKER_MKR_OK)
+                break;
+            if (length != 4u)
+                continue;
+            value.kind = JAVA_VALUE_INTEGER;
+            value.value.integer = (int32_t)java_be32(raw);
+        } else if (token == JAVA_TC_RESET) {
+            /* A reset clears the handle table; honouring it is what keeps
+               later references pointing where the writer meant. */
+            reader.position += 1u;
+            java_reader_free(&reader);
+            continue;
+        } else {
+            status = java_read_value(&reader, &value);
+            if (status != PE_MONKER_MKR_OK)
+                break;
+        }
+        status = java_values_push(&items, &count, &capacity, &value);
+        if (status != PE_MONKER_MKR_OK) {
+            java_value_free(&value);
+            break;
+        }
+    }
+    java_reader_free(&reader);
+    if (status != PE_MONKER_MKR_OK) {
+        java_values_free(items, count);
+        return status;
+    }
+    *out_items = items;
+    *out_count = count;
+    return PE_MONKER_MKR_OK;
+}
+
+/* The scalar entries hold exactly one object and nothing else. */
 static pe_monker_mkr_status_t parse_java_value(const unsigned char *data,
                                                size_t size,
                                                java_value_t *out)
 {
-    java_reader_t reader;
-    const unsigned char *header;
-    pe_monker_mkr_status_t status;
-
-    if (size < 4u)
-        return PE_MONKER_MKR_ERR_TRUNCATED;
-    header = data;
-    if (java_be16(header) != JAVA_STREAM_MAGIC ||
-        java_be16(header + 2u) != JAVA_STREAM_VERSION)
-        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
-    reader.data = data;
-    reader.size = size;
-    reader.position = 4u;
-    status = java_read_value(&reader, out);
+    java_value_t *items = NULL;
+    size_t count = 0u;
+    pe_monker_mkr_status_t status = parse_java_stream(data, size, &items,
+                                                      &count);
     if (status != PE_MONKER_MKR_OK)
         return status;
-    if (reader.position != reader.size) {
-        java_value_free(out);
+    if (count != 1u) {
+        java_values_free(items, count);
         return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
     }
+    *out = items[0];
+    free(items);
     return PE_MONKER_MKR_OK;
 }
 
@@ -1274,31 +1516,28 @@ void pe_monker_mkr_metadata_free(pe_monker_mkr_metadata_t *metadata)
 {
     if (metadata == NULL)
         return;
-    free(metadata->game);
     memset(metadata, 0, sizeof(*metadata));
 }
 
 pe_monker_mkr_status_t pe_monker_mkr_read_metadata(
     const pe_monker_mkr_t *archive, pe_monker_mkr_metadata_t *out)
 {
-    java_value_t game;
     int64_t integer;
     pe_monker_mkr_status_t status;
 
     if (archive == NULL || out == NULL)
         return PE_MONKER_MKR_ERR_NULL_ARGUMENT;
     memset(out, 0, sizeof(*out));
-    memset(&game, 0, sizeof(game));
-    status = read_java_entry(archive, "game", &game);
-    if (status != PE_MONKER_MKR_OK)
-        goto fail;
-    if (game.kind != JAVA_VALUE_STRING) {
-        status = PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    /* "game" is a java.lang.Integer. It was read as a String, which is why
+       every real saved run reported a corrupt archive here. */
+    status = read_scalar_integer(archive, "game", &integer);
+    if (status != PE_MONKER_MKR_OK || integer < INT32_MIN ||
+        integer > INT32_MAX) {
+        if (status == PE_MONKER_MKR_OK)
+            status = PE_MONKER_MKR_ERR_BAD_ARCHIVE;
         goto fail;
     }
-    out->game = game.value.string;
-    game.value.string = NULL;
-    java_value_free(&game);
+    out->game = (int32_t)integer;
 
     status = read_scalar_integer(archive, "iterations", &integer);
     if (status != PE_MONKER_MKR_OK || integer < 0)
@@ -1321,104 +1560,55 @@ pe_monker_mkr_status_t pe_monker_mkr_read_metadata(
     return PE_MONKER_MKR_OK;
 
 fail:
-    java_value_free(&game);
     pe_monker_mkr_metadata_free(out);
     return status;
 }
 
 void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy)
 {
+    uint32_t index;
+
     if (strategy == NULL)
         return;
-    free(strategy->frequencies);
+    for (index = 0u; index < strategy->slot_count; ++index) {
+        free(strategy->slots[index].bytes);
+        free(strategy->slots[index].ints);
+    }
+    free(strategy->slots);
     memset(strategy, 0, sizeof(*strategy));
 }
 
-static pe_monker_mkr_status_t strategy_from_value(
-    const java_value_t *value, uint32_t bucket_count,
-    pe_monker_mkr_strategy_t *out)
+/* Hand one slot over as it is on disk: element type, element count, values.
+   No pairing, no scaling — see the note on pe_monker_mkr_slot_t. */
+static pe_monker_mkr_status_t slot_from_value(const java_value_t *value,
+                                              pe_monker_mkr_slot_t *out)
 {
-    uint32_t class_count;
-    uint32_t index;
-
+    memset(out, 0, sizeof(*out));
     if (value->kind == JAVA_VALUE_NULL) {
-        out->bucket_count = bucket_count;
-        return PE_MONKER_MKR_OK;
-    }
-    if (bucket_count == 0u)
-        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
-    if (value->kind == JAVA_VALUE_SHORTS) {
-        if (value->value.shorts.count % bucket_count != 0u)
-            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
-        class_count = value->value.shorts.count / bucket_count;
-        out->frequencies = class_count == 0u
-                               ? NULL
-                               : (uint16_t *)malloc(
-                                     (size_t)class_count * bucket_count *
-                                     sizeof(*out->frequencies));
-        if (class_count != 0u && out->frequencies == NULL)
-            return PE_MONKER_MKR_ERR_NO_MEMORY;
-        if (class_count != 0u)
-            memcpy(out->frequencies, value->value.shorts.data,
-                   (size_t)class_count * bucket_count *
-                       sizeof(*out->frequencies));
-        out->bucket_count = bucket_count;
-        out->class_count = class_count;
+        out->kind = PE_MONKER_SLOT_ABSENT;
         return PE_MONKER_MKR_OK;
     }
     if (value->kind == JAVA_VALUE_BYTES) {
-        if (value->value.bytes.count % 2u != 0u ||
-            value->value.bytes.count / 2u % bucket_count != 0u)
-            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
-        class_count = (value->value.bytes.count / 2u) / bucket_count;
-        out->frequencies = class_count == 0u
-                               ? NULL
-                               : (uint16_t *)malloc(
-                                     (size_t)class_count * bucket_count *
-                                     sizeof(*out->frequencies));
-        if (class_count != 0u && out->frequencies == NULL)
+        out->kind = PE_MONKER_SLOT_BYTES;
+        out->count = value->value.bytes.count;
+        if (out->count == 0u)
+            return PE_MONKER_MKR_OK;
+        out->bytes = (unsigned char *)malloc(out->count);
+        if (out->bytes == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        for (index = 0u; index < class_count * bucket_count; ++index)
-            out->frequencies[index] = (uint16_t)(
-                ((uint16_t)value->value.bytes.data[index * 2u] << 8) |
-                (uint16_t)value->value.bytes.data[index * 2u + 1u]);
-        out->bucket_count = bucket_count;
-        out->class_count = class_count;
+        memcpy(out->bytes, value->value.bytes.data, out->count);
         return PE_MONKER_MKR_OK;
     }
-    if (value->kind == JAVA_VALUE_OBJECTS) {
-        class_count = value->value.objects.count;
-        out->frequencies = class_count == 0u
-                               ? NULL
-                               : (uint16_t *)calloc(
-                                     (size_t)class_count * bucket_count,
-                                     sizeof(*out->frequencies));
-        if (class_count != 0u && out->frequencies == NULL)
+    if (value->kind == JAVA_VALUE_INTS) {
+        out->kind = PE_MONKER_SLOT_INTS;
+        out->count = value->value.ints.count;
+        if (out->count == 0u)
+            return PE_MONKER_MKR_OK;
+        out->ints = (int32_t *)malloc((size_t)out->count * sizeof(int32_t));
+        if (out->ints == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        for (index = 0u; index < class_count; ++index) {
-            const java_value_t *row = &value->value.objects.items[index];
-            uint32_t bucket;
-            if (row->kind == JAVA_VALUE_NULL)
-                continue;
-            if (row->kind == JAVA_VALUE_SHORTS &&
-                row->value.shorts.count == bucket_count) {
-                for (bucket = 0u; bucket < bucket_count; ++bucket)
-                    out->frequencies[index * bucket_count + bucket] =
-                        row->value.shorts.data[bucket];
-            } else if (row->kind == JAVA_VALUE_BYTES &&
-                       row->value.bytes.count == bucket_count * 2u) {
-                for (bucket = 0u; bucket < bucket_count; ++bucket)
-                    out->frequencies[index * bucket_count + bucket] =
-                        (uint16_t)(((uint16_t)row->value.bytes.data[bucket * 2u]
-                                    << 8) |
-                                   (uint16_t)row->value.bytes.data[bucket * 2u +
-                                                                    1u]);
-            } else {
-                return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
-            }
-        }
-        out->bucket_count = bucket_count;
-        out->class_count = class_count;
+        memcpy(out->ints, value->value.ints.data,
+               (size_t)out->count * sizeof(int32_t));
         return PE_MONKER_MKR_OK;
     }
     return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
@@ -1426,20 +1616,21 @@ static pe_monker_mkr_status_t strategy_from_value(
 
 pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
     const pe_monker_mkr_t *archive, const char *entry_name,
-    uint32_t bucket_count, pe_monker_mkr_strategy_t *out)
+    pe_monker_mkr_strategy_t *out)
 {
     unsigned char *compressed = NULL;
     unsigned char *java_data = NULL;
     size_t compressed_size = 0u;
     size_t java_size = 0u;
-    java_value_t value;
+    java_value_t *items = NULL;
+    size_t count = 0u;
+    size_t first_slot = 0u;
     size_t index;
     pe_monker_mkr_status_t status;
 
     if (archive == NULL || entry_name == NULL || out == NULL)
         return PE_MONKER_MKR_ERR_NULL_ARGUMENT;
     memset(out, 0, sizeof(*out));
-    memset(&value, 0, sizeof(value));
     status = find_entry(archive, entry_name, &index);
     if (status != PE_MONKER_MKR_OK)
         return status;
@@ -1447,17 +1638,42 @@ pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
                                       &compressed_size);
     if (status != PE_MONKER_MKR_OK)
         return status;
+    /* Twice compressed: deflated into the ZIP, and a zlib stream inside. */
     status = inflate_nested(compressed, compressed_size, &java_data,
                             &java_size);
     free(compressed);
     if (status != PE_MONKER_MKR_OK)
         return status;
-    status = parse_java_value(java_data, java_size, &value);
+    status = parse_java_stream(java_data, java_size, &items, &count);
     free(java_data);
-    if (status == PE_MONKER_MKR_OK)
-        status = strategy_from_value(&value, bucket_count, out);
-    java_value_free(&value);
     if (status != PE_MONKER_MKR_OK)
-        pe_monker_mkr_strategy_free(out);
-    return status;
+        return status;
+
+    /* The leading block-data integer is the bucket count the run used. */
+    if (count > 0u && items[0].kind == JAVA_VALUE_INTEGER) {
+        out->bucket_count = items[0].value.integer;
+        first_slot = 1u;
+    }
+    out->slot_count = (uint32_t)(count - first_slot);
+    if (out->slot_count != 0u) {
+        out->slots = (pe_monker_mkr_slot_t *)calloc(out->slot_count,
+                                                    sizeof(*out->slots));
+        if (out->slots == NULL) {
+            java_values_free(items, count);
+            memset(out, 0, sizeof(*out));
+            return PE_MONKER_MKR_ERR_NO_MEMORY;
+        }
+    }
+    for (index = 0u; index < out->slot_count; ++index) {
+        status = slot_from_value(&items[first_slot + index],
+                                 &out->slots[index]);
+        if (status != PE_MONKER_MKR_OK) {
+            java_values_free(items, count);
+            pe_monker_mkr_strategy_free(out);
+            return status;
+        }
+    }
+    java_values_free(items, count);
+    return PE_MONKER_MKR_OK;
 }
+

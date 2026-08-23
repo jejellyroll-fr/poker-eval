@@ -88,7 +88,10 @@ typedef struct
 
 typedef struct
 {
-    char *game;
+    /* Written as a java.lang.Integer, not a name. Observed value 1 on a PLO4
+       run; what the numbering means is not established, so it is carried
+       through rather than interpreted. */
+    int32_t game;
     int64_t iterations;
     uint32_t flop_buckets;
     double rakepercent;
@@ -96,11 +99,51 @@ typedef struct
     int32_t rakeflags;
 } pe_monker_mkr_metadata_t;
 
+/*
+ * One slot of a stored strategy.
+ *
+ * A slot is either absent, or one array. What the array's numbers *mean* is
+ * not established, so this reports what the file holds rather than an
+ * interpretation: the element type and the element count, unscaled.
+ *
+ * What is known, on a four-handed all-in-or-fold PLO4 run: the entry holds
+ * twice as many slots as the tree has nodes, the two halves have identical
+ * presence patterns, and each half holds one array per decision node — 14 of
+ * them for that tree's 14 decision nodes. The arrays are byte[32864] in one
+ * half and int[32864] in the other, and 32864 is 2 * 16432, the PLO4 hand
+ * class count. Whether that second factor of two is the two bytes of a
+ * fixed-point frequency or the two actions of an all-in-or-fold node is
+ * exactly the thing no evidence here settles — and the two readings disagree
+ * about every number. Nothing is scaled or paired until it does.
+ */
+typedef enum
+{
+    PE_MONKER_SLOT_ABSENT = 0,
+    PE_MONKER_SLOT_BYTES,
+    PE_MONKER_SLOT_INTS
+} pe_monker_mkr_slot_kind_t;
+
 typedef struct
 {
-    uint32_t bucket_count;
-    uint32_t class_count;
-    uint16_t *frequencies;
+    pe_monker_mkr_slot_kind_t kind;
+    uint32_t count;         /* elements, not bytes */
+    unsigned char *bytes;   /* PE_MONKER_SLOT_BYTES */
+    int32_t *ints;          /* PE_MONKER_SLOT_INTS  */
+} pe_monker_mkr_slot_t;
+
+/*
+ * A storedstrategyN entry: the bucket count the run was configured with,
+ * followed by its slots in stream order.
+ *
+ * bucket_count used to be an argument to the reader, which meant the caller
+ * had to know MonkerSolver's abstraction before it could read anything. It is
+ * in the file; it is read from there.
+ */
+typedef struct
+{
+    int32_t bucket_count;
+    pe_monker_mkr_slot_t *slots;
+    uint32_t slot_count;
 } pe_monker_mkr_strategy_t;
 
 /** Read the fixed header at the beginning of a MonkerSolver .tree file. */
@@ -143,10 +186,10 @@ pe_monker_mkr_status_t pe_monker_mkr_read_metadata(
 
 void pe_monker_mkr_metadata_free(pe_monker_mkr_metadata_t *metadata);
 
-/** Read a storedstrategyN entry; TC_NULL yields an empty strategy. */
+/** Read a storedstrategyN entry. Absent slots come back with no array. */
 pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
     const pe_monker_mkr_t *archive, const char *entry_name,
-    uint32_t bucket_count, pe_monker_mkr_strategy_t *out);
+    pe_monker_mkr_strategy_t *out);
 
 void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy);
 

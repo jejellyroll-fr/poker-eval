@@ -422,11 +422,58 @@ static void test_encoding_and_corruption(void)
           "NULL path was not rejected");
 }
 
+/*
+ * Handle numbering.
+ *
+ * Java writes a class descriptor once and refers back to it; the reference is
+ * a number, and the numbering counts *every* class descriptor, string, object
+ * and array in stream order. A reader that forgets to count one does not fail
+ * — it resolves the reference to a neighbouring entry and decodes an array as
+ * the wrong type. So this fixture puts an array between a descriptor and the
+ * reference to it, which is only decodable if the array was counted.
+ */
+static void java_stream_begin(java_fixture_t *fixture)
+{
+    java_byte(fixture, 0xacu);
+    java_byte(fixture, 0xedu);
+    java_be16(fixture, 5u);
+}
+
+static void java_block_int(java_fixture_t *fixture, int32_t value)
+{
+    java_byte(fixture, 0x77u);
+    java_byte(fixture, 4u);
+    java_be32(fixture, (uint32_t)value);
+}
+
+/* TC_ARRAY + a fresh TC_CLASSDESC. Consumes two handles: descriptor, array. */
+static void java_array_new(java_fixture_t *fixture, const char *type)
+{
+    unsigned index;
+    java_byte(fixture, 0x75u);
+    java_byte(fixture, 0x72u);
+    java_utf(fixture, type);
+    for (index = 0u; index < 8u; ++index)
+        java_byte(fixture, 0u);
+    java_byte(fixture, 0x02u);
+    java_be16(fixture, 0u);
+    java_byte(fixture, 0x78u);
+    java_byte(fixture, 0x70u);
+}
+
+/* TC_ARRAY + TC_REFERENCE to a descriptor already in the stream. */
+static void java_array_ref(java_fixture_t *fixture, uint32_t handle)
+{
+    java_byte(fixture, 0x75u);
+    java_byte(fixture, 0x71u);
+    java_be32(fixture, handle);
+}
+
 static void test_java_scalars_and_strategy(void)
 {
-    static const char *names[] = {
-        "game", "iterations", "flopBuckets", "rakepercent",
-        "rakecap", "rakeflags", "storedstrategy0", "storedstrategy1"
+    static const char *const names[] = {
+        "game", "iterations", "flopBuckets", "rakepercent", "rakecap",
+        "rakeflags", "storedstrategy0", "storedstrategy1"
     };
     const char *path = "/tmp/poker_eval_monker_scalars.mkr";
     java_fixture_t game = {{0}, 0u};
@@ -437,7 +484,6 @@ static void test_java_scalars_and_strategy(void)
     java_fixture_t rakeflags = {{0}, 0u};
     java_fixture_t strategy = {{0}, 0u};
     java_fixture_t no_strategy = {{0}, 0u};
-    const uint16_t frequencies[] = {100u, 200u, 300u, 400u, 500u, 600u};
     unsigned char *compressed_strategy = NULL;
     unsigned char *compressed_null = NULL;
     size_t compressed_strategy_size = 0u;
@@ -447,25 +493,63 @@ static void test_java_scalars_and_strategy(void)
     pe_monker_mkr_t archive;
     pe_monker_mkr_metadata_t metadata;
     pe_monker_mkr_strategy_t decoded;
+    unsigned index;
 
-    java_string(&game, "holdem");
+    /* "game" is an Integer in every real saved run, not a name. */
+    java_integer(&game, 1);
     java_long(&iterations, 1234567890123LL);
     java_integer(&buckets, 3);
     java_double(&rakepercent, 0.05);
     java_double(&rakecap, 1500.0);
     java_integer(&rakeflags, 7);
-    java_short_array(&strategy, frequencies,
-                     sizeof(frequencies) / sizeof(frequencies[0]));
-    java_byte(&no_strategy, 0xacu);
-    java_byte(&no_strategy, 0xedu);
-    java_be16(&no_strategy, 5u);
+
+    /*
+     * The shape a real storedstrategy0 has: a leading block-data integer, then
+     * one slot per node — an array where the node decides, nothing where it
+     * does not — with byte arrays and int arrays both present.
+     *
+     *   handle 0x7E0000  descriptor "[B"
+     *   handle 0x7E0001  first byte array
+     *   handle 0x7E0002  second byte array   (descriptor by reference)
+     *   handle 0x7E0003  descriptor "[I"
+     *   handle 0x7E0004  int array
+     *   handle 0x7E0005  int array, descriptor by reference to 0x7E0003
+     *
+     * The last slot is the one that pins the numbering. Reaching 0x7E0003 for
+     * the "[I" descriptor is only correct if the three arrays before it each
+     * took a handle of their own; a reader that counts descriptors alone puts
+     * "[I" at 0x7E0001 and resolves this reference to the byte array's.
+     */
+    java_stream_begin(&strategy);
+    java_block_int(&strategy, 30);
+    java_array_new(&strategy, "[B");
+    java_be32(&strategy, 4u);
+    for (index = 0u; index < 4u; ++index)
+        java_byte(&strategy, (unsigned char)(0x10u + index));
+    java_byte(&strategy, 0x70u);                 /* absent slot */
+    java_array_ref(&strategy, 0x7E0000u);        /* "[B" again */
+    java_be32(&strategy, 4u);
+    for (index = 0u; index < 4u; ++index)
+        java_byte(&strategy, (unsigned char)(0x20u + index));
+    java_array_new(&strategy, "[I");
+    java_be32(&strategy, 2u);
+    java_be32(&strategy, 0xFFFFFFFFu);           /* -1 */
+    java_be32(&strategy, 7u);
+    java_array_ref(&strategy, 0x7E0003u);        /* "[I" again */
+    java_be32(&strategy, 1u);
+    java_be32(&strategy, 99u);
+
+    java_stream_begin(&no_strategy);
+    java_block_int(&no_strategy, 30);
     java_byte(&no_strategy, 0x70u);
+    java_byte(&no_strategy, 0x70u);
+
     CHECK(deflate_fixture(&strategy, &compressed_strategy,
                           &compressed_strategy_size) == 0,
           "strategy compression failed");
     CHECK(deflate_fixture(&no_strategy, &compressed_null,
                           &compressed_null_size) == 0,
-          "TC_NULL compression failed");
+          "empty-strategy compression failed");
     payloads[0] = game.data;
     payloads[1] = iterations.data;
     payloads[2] = buckets.data;
@@ -493,7 +577,7 @@ static void test_java_scalars_and_strategy(void)
     if (pe_monker_mkr_read_metadata(&archive, &metadata) != PE_MONKER_MKR_OK) {
         CHECK(0, "Java scalar entries were not decoded");
     } else {
-        CHECK(metadata.game != NULL && strcmp(metadata.game, "holdem") == 0 &&
+        CHECK(metadata.game == 1 &&
                   metadata.iterations == 1234567890123LL &&
                   metadata.flop_buckets == 3u && metadata.rakepercent > 0.0499 &&
                   metadata.rakepercent < 0.0501 &&
@@ -501,24 +585,97 @@ static void test_java_scalars_and_strategy(void)
               "decoded scalar values are wrong");
     }
     pe_monker_mkr_metadata_free(&metadata);
-    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy0", 3u,
+
+    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy0",
                                     &decoded) != PE_MONKER_MKR_OK) {
         CHECK(0, "storedstrategy0 was not decoded");
     } else {
-        CHECK(decoded.bucket_count == 3u && decoded.class_count == 2u &&
-                  decoded.frequencies != NULL && decoded.frequencies[0] == 100u &&
-                  decoded.frequencies[5] == 600u,
-              "storedstrategy0 dimensions or frequencies are wrong");
+        CHECK(decoded.bucket_count == 30,
+              "the leading block-data integer was not read as the bucket count");
+        CHECK(decoded.slot_count == 5u, "expected 5 slots, got %u",
+              decoded.slot_count);
+        if (decoded.slot_count == 5u) {
+            CHECK(decoded.slots[0].kind == PE_MONKER_SLOT_BYTES &&
+                      decoded.slots[0].count == 4u &&
+                      decoded.slots[0].bytes[0] == 0x10u,
+                  "the first byte slot is wrong");
+            CHECK(decoded.slots[1].kind == PE_MONKER_SLOT_ABSENT,
+                  "an absent slot did not come back absent");
+            /* This is the one that needs the handle table: its descriptor is a
+               reference across an array that also took a handle. */
+            CHECK(decoded.slots[2].kind == PE_MONKER_SLOT_BYTES &&
+                      decoded.slots[2].count == 4u &&
+                      decoded.slots[2].bytes[3] == 0x23u,
+                  "a referenced class descriptor did not resolve to [B");
+            CHECK(decoded.slots[3].kind == PE_MONKER_SLOT_INTS &&
+                      decoded.slots[3].count == 2u &&
+                      decoded.slots[3].ints[0] == -1 &&
+                      decoded.slots[3].ints[1] == 7,
+                  "the int slot is wrong");
+            /* Only decodable if arrays are counted as handles too. */
+            CHECK(decoded.slots[4].kind == PE_MONKER_SLOT_INTS &&
+                      decoded.slots[4].count == 1u &&
+                      decoded.slots[4].ints[0] == 99,
+                  "handles were numbered without counting the arrays");
+        }
     }
     pe_monker_mkr_strategy_free(&decoded);
-    CHECK(pe_monker_mkr_read_strategy(&archive, "storedstrategy1", 3u,
+
+    CHECK(pe_monker_mkr_read_strategy(&archive, "storedstrategy1",
                                       &decoded) == PE_MONKER_MKR_OK &&
-              decoded.bucket_count == 3u && decoded.class_count == 0u,
-          "TC_NULL did not produce an empty strategy");
+              decoded.bucket_count == 30 && decoded.slot_count == 2u &&
+              decoded.slots[0].kind == PE_MONKER_SLOT_ABSENT &&
+              decoded.slots[1].kind == PE_MONKER_SLOT_ABSENT,
+          "an unsolved street did not come back as absent slots");
     pe_monker_mkr_strategy_free(&decoded);
     pe_monker_mkr_free(&archive);
     free(compressed_strategy);
     free(compressed_null);
+}
+
+/*
+ * A real saved run, when one is at hand.
+ *
+ * The archive is 800 KB, too big to embed the way the .tree fixture is, so
+ * this reads from POKER_MONKER_MKR and does nothing when that is unset. It is
+ * therefore not CI coverage — the fixtures above are — but it is the only
+ * check that confronts bytes nobody here wrote, and the reader it exercises
+ * spent its whole life passing tests while unable to open a single one.
+ */
+static void test_real_saved_run(void)
+{
+    const char *path = getenv("POKER_MONKER_MKR");
+    pe_monker_mkr_t archive;
+    pe_monker_mkr_metadata_t metadata;
+    pe_monker_mkr_strategy_t strategy;
+    uint32_t index;
+    uint32_t arrays = 0u;
+
+    if (path == NULL || path[0] == '\0') {
+        printf("  (POKER_MONKER_MKR unset: real saved run not checked)\n");
+        return;
+    }
+    if (pe_monker_mkr_read(path, &archive) != PE_MONKER_MKR_OK) {
+        CHECK(0, "a real .mkr was rejected");
+        return;
+    }
+    CHECK(pe_monker_mkr_read_metadata(&archive, &metadata) == PE_MONKER_MKR_OK,
+          "a real .mkr's metadata was not decoded");
+    CHECK(metadata.flop_buckets > 0u, "flopBuckets came back as zero");
+    pe_monker_mkr_metadata_free(&metadata);
+
+    CHECK(pe_monker_mkr_read_strategy(&archive, "storedstrategy0",
+                                      &strategy) == PE_MONKER_MKR_OK,
+          "a real storedstrategy0 was not decoded");
+    for (index = 0u; index < strategy.slot_count; ++index)
+        if (strategy.slots[index].kind != PE_MONKER_SLOT_ABSENT)
+            arrays++;
+    CHECK(strategy.slot_count > 0u && arrays > 0u,
+          "a real storedstrategy0 decoded to nothing");
+    printf("  real run: %u slots, %u arrays, bucket count %d\n",
+           strategy.slot_count, arrays, strategy.bucket_count);
+    pe_monker_mkr_strategy_free(&strategy);
+    pe_monker_mkr_free(&archive);
 }
 
 int main(void)
@@ -526,6 +683,7 @@ int main(void)
     test_entry_listing();
     test_encoding_and_corruption();
     test_java_scalars_and_strategy();
+    test_real_saved_run();
     if (failures != 0)
         return 1;
     puts("test_monker_mkr: UTF-16BE ZIP entry listing passed");
