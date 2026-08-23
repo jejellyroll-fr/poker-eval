@@ -250,6 +250,28 @@ static void test_no_budget_means_no_refusal(void)
     pe_solver_destroy(solver);
 }
 
+static void test_capabilities_are_introspectable(void)
+{
+    pe_solver_config_t cfg = sized(1000, 3, 1);
+    pe_solver_t *solver = pe_solver_create(&cfg, NULL);
+    uint64_t caps = 0;
+
+    CHECK(solver != NULL, "solver creation failed");
+    if (solver != NULL)
+    {
+        CHECK(pe_solver_capabilities(solver, &caps) == PE_SOLVER_OK,
+              "capability query failed");
+        CHECK(caps == PE_CAP_ALL,
+              "capability query returned 0x%llx, expected PE_CAP_ALL",
+              (unsigned long long)caps);
+        CHECK(pe_solver_capabilities(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
+              "NULL output must be rejected by capability query");
+        pe_solver_destroy(solver);
+    }
+    CHECK(pe_solver_capabilities(NULL, &caps) == PE_SOLVER_ERR_NULL_ARGUMENT,
+          "NULL solver must be rejected by capability query");
+}
+
 static void test_empty_problem_is_refused(void)
 {
     pe_solver_config_t cfg = pe_solver_config_default();   /* size left at 0 */
@@ -297,6 +319,7 @@ int main(void)
     test_budget_refusal();
     test_budget_accepted_when_it_fits();
     test_no_budget_means_no_refusal();
+    test_capabilities_are_introspectable();
     test_empty_problem_is_refused();
     test_invalid_config_fails_before_the_budget();
 

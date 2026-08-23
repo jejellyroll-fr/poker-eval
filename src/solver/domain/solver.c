@@ -171,7 +171,8 @@ pe_solver_status_t pe_solver_capabilities(const pe_solver_t *solver,
 {
     if (solver == NULL || out_caps == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    *out_caps = pe_solver_available_caps(solver);
+    return PE_SOLVER_OK;
 }
 
 pe_solver_status_t pe_solver_estimate(const pe_solver_t *solver,
