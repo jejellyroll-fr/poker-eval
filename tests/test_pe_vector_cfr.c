@@ -3,6 +3,7 @@
  */
 
 #include <poker_eval/solver/pe_regret.h>
+#include <poker_eval/solver/pe_average.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -78,10 +79,77 @@ static void test_uniform_fallback_and_invalid_inputs(void)
           "zero combos accepted");
 }
 
+static void test_reach_weighted_average(void)
+{
+    const double reach[] = {1.0, 0.5, 2.0};
+    const double strategy_a[] = {
+        0.25, 0.75, 0.40,
+        0.75, 0.25, 0.60
+    };
+    const double strategy_b[] = {
+        0.75, 0.25, 0.80,
+        0.25, 0.75, 0.20
+    };
+    double weighted[6] = {0};
+    double normalizer[3] = {0};
+    double average[6] = {0};
+    uint16_t action;
+    uint16_t combo;
+
+    /* Three observations of A and one observation of B, with reach differing
+       per combo. The reach must affect numerator and denominator equally, so
+       the resulting strategy remains the weighted temporal average per combo. */
+    CHECK(pe_average_accumulate_vector(weighted, normalizer, strategy_a,
+                                       reach, 2u, 3u, 3.0) == 0,
+          "first average update failed");
+    CHECK(pe_average_accumulate_vector(weighted, normalizer, strategy_b,
+                                       reach, 2u, 3u, 1.0) == 0,
+          "second average update failed");
+    CHECK(pe_average_finalize_vector(weighted, normalizer, average, 2u, 3u) == 0,
+          "average finalization failed");
+
+    for (combo = 0; combo < 3u; ++combo)
+    {
+        double expected = (3.0 * strategy_a[combo] + strategy_b[combo]) / 4.0;
+        double sum = 0.0;
+        for (action = 0; action < 2u; ++action)
+            sum += average[(size_t)action * 3u + combo];
+        CHECK(fabs(average[combo] - expected) <= 1e-12,
+              "combo %u average is %.17g, expected %.17g",
+              combo, average[combo], expected);
+        CHECK(fabs(sum - 1.0) <= 1e-12,
+              "combo %u average sums to %.17g", combo, sum);
+        CHECK(fabs(normalizer[combo] - 4.0 * reach[combo]) <= 1e-12,
+              "combo %u normalizer is %.17g, expected %.17g",
+              combo, normalizer[combo], 4.0 * reach[combo]);
+    }
+}
+
+static void test_average_uniform_fallback(void)
+{
+    const double weighted[] = {1.0, 2.0, 3.0, 4.0};
+    const double normalizer[] = {0.0, 2.0};
+    double out[4] = {0};
+    size_t i;
+
+    CHECK(pe_average_finalize_vector(weighted, normalizer, out, 2u, 2u) == 0,
+          "zero-reach average finalization failed");
+    CHECK(out[0] == 0.5 && out[2] == 0.5,
+          "zero-reach combo did not fall back to uniform");
+    CHECK(out[1] == 1.0 && out[3] == 2.0,
+          "non-zero combo was normalized incorrectly");
+    CHECK(pe_average_accumulate_vector(out, out, out, out, 0u, 2u, 1.0) != 0,
+          "zero actions accepted by average update");
+    for (i = 0; i < 4u; ++i)
+        CHECK(!isnan(out[i]), "average produced NaN at %zu", i);
+}
+
 int main(void)
 {
     test_per_combo_normalization();
     test_uniform_fallback_and_invalid_inputs();
+    test_reach_weighted_average();
+    test_average_uniform_fallback();
     if (failures != 0)
     {
         fprintf(stderr, "test_pe_vector_cfr: %d failure(s)\n", failures);
