@@ -3,6 +3,8 @@
 #ifndef POKER_EVAL_KERNELS_REGRET_OPENCL_H
 #define POKER_EVAL_KERNELS_REGRET_OPENCL_H
 
+#include <poker_eval/gpu/pe_regret_opencl.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

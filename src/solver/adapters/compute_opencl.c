@@ -7,6 +7,7 @@
 
 #include <poker_eval/solver/pe_compute.h>
 #include <poker_eval/solver/pe_solver_plan.h>
+#include <poker_eval/gpu/pe_regret_opencl.h>
 
 #include <stdlib.h>
 
@@ -20,6 +21,7 @@ typedef struct
     gpu_eval_context_t *context;
 #endif
     size_t max_batch_size;
+    pe_regret_opencl_context_t *regret_context;
 } pe_compute_opencl_t;
 
 static uint64_t compute_opencl_capabilities(void *self)
@@ -52,6 +54,9 @@ static int compute_opencl_create(void **self, const pe_compute_config_t *cfg)
         return -1;
     }
     backend->max_batch_size = cfg->terminal_batch_size;
+#if defined(PE_COMPUTE_OPENCL_AVAILABLE)
+    backend->regret_context = pe_regret_opencl_create();
+#endif
     *self = backend;
     return 0;
 #endif
@@ -63,6 +68,8 @@ static void compute_opencl_destroy(void *self)
 
 #if defined(PE_COMPUTE_OPENCL_AVAILABLE)
     if (backend != NULL)
+        pe_regret_opencl_destroy(backend->regret_context);
+    if (backend != NULL)
         gpu_eval_free(backend->context);
 #endif
     free(backend);
@@ -72,10 +79,16 @@ static int compute_opencl_strategy_batch(void *self,
                                          const pe_infoset_batch_t *in,
                                          pe_strategy_batch_t *out)
 {
-    (void)self;
+    pe_compute_opencl_t *backend = (pe_compute_opencl_t *)self;
+#if defined(PE_COMPUTE_OPENCL_AVAILABLE)
+    return backend ? pe_regret_opencl_strategy_batch(backend->regret_context,
+                                                     in, out) : -1;
+#else
+    (void)backend;
     (void)in;
     (void)out;
     return -1;
+#endif
 }
 
 static int compute_opencl_apply_update_batch(void *self,
@@ -155,7 +168,15 @@ static int compute_opencl_vector_showdown(void *self,
 
 static int compute_opencl_sync(void *self)
 {
-    return self == NULL ? -1 : 0;
+    pe_compute_opencl_t *backend = (pe_compute_opencl_t *)self;
+#if defined(PE_COMPUTE_OPENCL_AVAILABLE)
+    if (!backend)
+        return -1;
+    return !backend->regret_context ||
+                   pe_regret_opencl_sync(backend->regret_context) == 0 ? 0 : -1;
+#else
+    return backend == NULL ? -1 : 0;
+#endif
 }
 
 const pe_compute_ops_t *pe_compute_opencl_ops(void)
