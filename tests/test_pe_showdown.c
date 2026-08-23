@@ -141,10 +141,160 @@ static void test_wide_hand_fallback_and_invalid_inputs(void)
     pe_vec_free(&values);
 }
 
+static void test_three_player_showdown_and_fold(void)
+{
+    const mask_t masks0[] = {hand(0, 1), hand(2, 3), hand(3, 4)};
+    const mask_t masks1[] = {hand(5, 6), hand(0, 7), hand(8, 9)};
+    const mask_t masks2[] = {hand(10, 11), hand(1, 12), hand(13, 14)};
+    const int64_t strength0[] = {30, 20, 40};
+    const int64_t strength1[] = {25, 35, 15};
+    const int64_t strength2[] = {30, 10, 45};
+    const double reach0[] = {0.40, 0.35, 0.25};
+    const double reach1[] = {0.30, 0.45, 0.25};
+    const double reach2[] = {0.50, 0.20, 0.30};
+    const pe_showdown_player_t players[] = {
+        {masks0, strength0, reach0, 3},
+        {masks1, strength1, reach1, 3},
+        {masks2, strength2, reach2, 3}
+    };
+    const mask_t dead = mask_set(MASK_EMPTY, 4);
+    pe_value_vec_t values[3] = {{0}};
+    pe_value_vec_t fold_values[3] = {{0}};
+    double expected[3][3] = {{0}};
+    double expected_fold[3] = {0};
+    double joint_mass = 0.0;
+    pe_showdown_path_t path = PE_SHOWDOWN_PATH_NONE;
+    const pe_showdown_sidepot_t sidepots[] = {
+        {2.0, 0x07u},
+        {1.0, 0x03u}
+    };
+    size_t c0;
+    size_t c1;
+    size_t c2;
+    unsigned winners;
+    int64_t best;
+    double weighted_total = 0.0;
+
+    for (c0 = 0; c0 < 3u; ++c0)
+    {
+        for (c1 = 0; c1 < 3u; ++c1)
+        {
+            for (c2 = 0; c2 < 3u; ++c2)
+            {
+                mask_t used = dead;
+                double mass;
+
+                if ((masks0[c0] & used) != 0)
+                    continue;
+                used |= masks0[c0];
+                if ((masks1[c1] & used) != 0)
+                    continue;
+                used |= masks1[c1];
+                if ((masks2[c2] & used) != 0)
+                    continue;
+                mass = reach0[c0] * reach1[c1] * reach2[c2];
+                joint_mass += mass;
+                best = strength0[c0];
+                if (strength1[c1] > best) best = strength1[c1];
+                if (strength2[c2] > best) best = strength2[c2];
+                winners = (strength0[c0] == best) +
+                          (strength1[c1] == best) +
+                          (strength2[c2] == best);
+                if (strength0[c0] == best)
+                    expected[0][c0] += 3.0 * mass / (winners * reach0[c0]);
+                if (strength1[c1] == best)
+                    expected[1][c1] += 3.0 * mass / (winners * reach1[c1]);
+                if (strength2[c2] == best)
+                    expected[2][c2] += 3.0 * mass / (winners * reach2[c2]);
+            }
+        }
+    }
+
+    for (c0 = 0; c0 < 3u; ++c0)
+        for (c1 = 0; c1 < 3u; ++c1)
+            for (c2 = 0; c2 < 3u; ++c2)
+            {
+                mask_t used = dead;
+                if ((masks0[c0] & used) != 0) continue;
+                used |= masks0[c0];
+                if ((masks1[c1] & used) != 0) continue;
+                used |= masks1[c1];
+                if ((masks2[c2] & used) != 0) continue;
+                expected_fold[c0] += 3.0 * reach1[c1] * reach2[c2];
+            }
+
+    CHECK(pe_vec_alloc(&values[0], 3) == PE_SOLVER_OK, "multiway out 0 alloc");
+    CHECK(pe_vec_alloc(&values[1], 3) == PE_SOLVER_OK, "multiway out 1 alloc");
+    CHECK(pe_vec_alloc(&values[2], 3) == PE_SOLVER_OK, "multiway out 2 alloc");
+    CHECK(pe_vec_alloc(&fold_values[0], 3) == PE_SOLVER_OK, "fold out 0 alloc");
+    CHECK(pe_vec_alloc(&fold_values[1], 3) == PE_SOLVER_OK, "fold out 1 alloc");
+    CHECK(pe_vec_alloc(&fold_values[2], 3) == PE_SOLVER_OK, "fold out 2 alloc");
+    if (!values[0].v || !values[1].v || !values[2].v || !fold_values[0].v ||
+        !fold_values[1].v || !fold_values[2].v)
+        goto cleanup;
+
+    CHECK(pe_showdown_multiway_vector(players, 3, dead, 3.0, values, &path)
+              == PE_SOLVER_OK, "multiway showdown failed");
+    CHECK(path == PE_SHOWDOWN_PATH_MULTIWAY, "multiway path not reported");
+    for (c0 = 0; c0 < 3u; ++c0)
+    {
+        CHECK(fabs(values[0].v[c0] - expected[0][c0]) <= 1e-10,
+              "player 0 combo %zu is %.17g, expected %.17g",
+              c0, values[0].v[c0], expected[0][c0]);
+        CHECK(fabs(values[1].v[c0] - expected[1][c0]) <= 1e-10,
+              "player 1 combo %zu is %.17g, expected %.17g",
+              c0, values[1].v[c0], expected[1][c0]);
+        CHECK(fabs(values[2].v[c0] - expected[2][c0]) <= 1e-10,
+              "player 2 combo %zu is %.17g, expected %.17g",
+              c0, values[2].v[c0], expected[2][c0]);
+        weighted_total += reach0[c0] * values[0].v[c0];
+        weighted_total += reach1[c0] * values[1].v[c0];
+        weighted_total += reach2[c0] * values[2].v[c0];
+    }
+    CHECK(fabs(weighted_total - 3.0 * joint_mass) <= 1e-10,
+          "conservation is %.17g, expected %.17g",
+          weighted_total, 3.0 * joint_mass);
+
+    CHECK(pe_showdown_multiway_sidepots(players, 3, dead, sidepots, 2,
+                                        values, &path) == PE_SOLVER_OK,
+          "side-pot showdown failed");
+    weighted_total = 0.0;
+    for (c0 = 0; c0 < 3u; ++c0)
+    {
+        weighted_total += reach0[c0] * values[0].v[c0];
+        weighted_total += reach1[c0] * values[1].v[c0];
+        weighted_total += reach2[c0] * values[2].v[c0];
+    }
+    CHECK(fabs(weighted_total - 3.0 * joint_mass) <= 1e-10,
+          "side-pot conservation is %.17g, expected %.17g",
+          weighted_total, 3.0 * joint_mass);
+
+    CHECK(pe_fold_multiway_vector(players, 3, 0, dead, 3.0, fold_values, &path)
+              == PE_SOLVER_OK, "multiway fold failed");
+    CHECK(path == PE_SHOWDOWN_PATH_MULTIWAY, "multiway fold path not reported");
+    for (c0 = 0; c0 < 3u; ++c0)
+    {
+        CHECK(fabs(fold_values[0].v[c0] - expected_fold[c0]) <= 1e-10,
+              "fold combo %zu is %.17g, expected %.17g",
+              c0, fold_values[0].v[c0], expected_fold[c0]);
+        CHECK(fold_values[1].v[c0] == 0.0 && fold_values[2].v[c0] == 0.0,
+              "fold wrote values for a non-selected player");
+    }
+
+cleanup:
+    pe_vec_free(&values[0]);
+    pe_vec_free(&values[1]);
+    pe_vec_free(&values[2]);
+    pe_vec_free(&fold_values[0]);
+    pe_vec_free(&fold_values[1]);
+    pe_vec_free(&fold_values[2]);
+}
+
 int main(void)
 {
     test_multiple_ranges_and_boards();
     test_wide_hand_fallback_and_invalid_inputs();
+    test_three_player_showdown_and_fold();
     if (failures != 0)
     {
         fprintf(stderr, "test_pe_showdown: %d failure(s)\n", failures);

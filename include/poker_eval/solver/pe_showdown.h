@@ -19,8 +19,23 @@ extern "C" {
 typedef enum {
     PE_SHOWDOWN_PATH_NONE = 0,
     PE_SHOWDOWN_PATH_SORTED,
-    PE_SHOWDOWN_PATH_PAIRWISE
+    PE_SHOWDOWN_PATH_PAIRWISE,
+    PE_SHOWDOWN_PATH_MULTIWAY
 } pe_showdown_path_t;
+
+typedef struct
+{
+    const mask_t *masks;
+    const int64_t *strength;
+    const double *reach;
+    size_t combo_count;
+} pe_showdown_player_t;
+
+typedef struct
+{
+    double amount;
+    uint8_t eligible_players;
+} pe_showdown_sidepot_t;
 
 /**
  * Compute the per-hero-combo showdown value.
@@ -53,6 +68,42 @@ pe_solver_status_t pe_showdown_vector_pairwise(const mask_t *hero_masks,
                                                mask_t dead,
                                                double pot,
                                                pe_value_vec_t *out_values);
+
+/**
+ * Exact multiway showdown for two to eight players.
+ *
+ * The returned value for one combo excludes that player's own reach. The
+ * conservation identity is therefore reach-weighted: summing
+ * `reach[p][combo] * value[p][combo]` over all players gives the pot times the
+ * compatible joint reach mass. Equal best hands split the pot equally.
+ */
+pe_solver_status_t pe_showdown_multiway_vector(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path);
+
+/** Multiway showdown with explicit pot amounts and eligible-player masks. */
+pe_solver_status_t pe_showdown_multiway_sidepots(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    mask_t dead,
+    const pe_showdown_sidepot_t *sidepots,
+    size_t sidepot_count,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path);
+
+/** Multiway fold value: all other players fold and the selected player wins. */
+pe_solver_status_t pe_fold_multiway_vector(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    uint8_t hero_player,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path);
 
 #ifdef __cplusplus
 }

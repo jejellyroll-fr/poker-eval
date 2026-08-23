@@ -9,6 +9,7 @@
 #include <string.h>
 
 #define PE_SHOWDOWN_DECK 52u
+#define PE_SHOWDOWN_MAX_PLAYERS 8u
 
 typedef struct
 {
@@ -321,4 +322,234 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
     if (out_path)
         *out_path = PE_SHOWDOWN_PATH_SORTED;
     return PE_SOLVER_OK;
+}
+
+typedef struct
+{
+    const pe_showdown_player_t *players;
+    uint8_t player_count;
+    uint8_t hero_player;
+    mask_t dead;
+    mask_t used;
+    const pe_showdown_sidepot_t *sidepots;
+    size_t sidepot_count;
+    double weight;
+    double result;
+    int fold_only;
+    int64_t strength[PE_SHOWDOWN_MAX_PLAYERS];
+} multiway_context_t;
+
+static void multiway_visit(multiway_context_t *context, uint8_t player)
+{
+    const pe_showdown_player_t *current;
+    size_t combo;
+
+    if (player == context->player_count)
+    {
+        if (context->fold_only)
+        {
+            context->result += context->weight;
+            return;
+        }
+        else
+        {
+            size_t pot_index;
+            for (pot_index = 0; pot_index < context->sidepot_count; ++pot_index)
+            {
+                const pe_showdown_sidepot_t *pot = &context->sidepots[pot_index];
+                uint8_t eligible = (uint8_t)(pot->eligible_players &
+                                             ((1u << context->player_count) - 1u));
+                int64_t best = 0;
+                unsigned winners = 0u;
+                uint8_t p;
+
+                for (p = 0u; p < context->player_count; ++p)
+                {
+                    if ((eligible & (uint8_t)(1u << p)) == 0)
+                        continue;
+                    if (winners == 0u || context->strength[p] > best)
+                    {
+                        best = context->strength[p];
+                        winners = 1u;
+                    }
+                    else if (context->strength[p] == best)
+                        ++winners;
+                }
+                if ((eligible & (uint8_t)(1u << context->hero_player)) != 0 &&
+                    context->strength[context->hero_player] == best &&
+                    winners > 0u)
+                    context->result += context->weight * pot->amount /
+                                       (double)winners;
+            }
+            return;
+        }
+    }
+    if (player == context->hero_player)
+    {
+        multiway_visit(context, (uint8_t)(player + 1u));
+        return;
+    }
+
+    current = &context->players[player];
+    for (combo = 0; combo < current->combo_count; ++combo)
+    {
+        mask_t mask = current->masks[combo];
+        double reach = current->reach[combo];
+        mask_t previous_used;
+        double previous_weight;
+
+        if ((mask & context->used) != 0 || reach == 0.0)
+            continue;
+        previous_used = context->used;
+        previous_weight = context->weight;
+        context->used |= mask;
+        context->weight *= reach;
+        context->strength[player] = current->strength[combo];
+        multiway_visit(context, (uint8_t)(player + 1u));
+        context->weight = previous_weight;
+        context->used = previous_used;
+    }
+}
+
+static pe_solver_status_t validate_multiway(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    const pe_value_vec_t *out_values)
+{
+    uint8_t player;
+
+    if (!players || !out_values)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (player_count < 2u || player_count > PE_SHOWDOWN_MAX_PLAYERS)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    for (player = 0u; player < player_count; ++player)
+    {
+        size_t combo;
+        if (!players[player].masks || !players[player].strength ||
+            !players[player].reach || players[player].combo_count == 0 ||
+            !valid_values(&out_values[player], players[player].combo_count))
+            return PE_SOLVER_ERR_NULL_ARGUMENT;
+        for (combo = 0; combo < players[player].combo_count; ++combo)
+            if (players[player].reach[combo] < 0.0 ||
+                isnan(players[player].reach[combo]))
+                return PE_SOLVER_ERR_INVALID_CONFIG;
+    }
+    return PE_SOLVER_OK;
+}
+
+static pe_solver_status_t multiway_values(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path,
+    int fold_only,
+    uint8_t selected_player,
+    double fold_pot,
+    const pe_showdown_sidepot_t *sidepots,
+    size_t sidepot_count)
+{
+    pe_solver_status_t status;
+    uint8_t hero_player;
+
+    status = validate_multiway(players, player_count, out_values);
+    if (status != PE_SOLVER_OK)
+        return status;
+    if (fold_only && (fold_pot < 0.0 || isnan(fold_pot)))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    if (!fold_only && (!sidepots || sidepot_count == 0))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    if (!fold_only)
+    {
+        size_t pot_index;
+        for (pot_index = 0; pot_index < sidepot_count; ++pot_index)
+            if (sidepots[pot_index].amount < 0.0 ||
+                isnan(sidepots[pot_index].amount) ||
+                (sidepots[pot_index].eligible_players &
+                 (uint8_t)((1u << player_count) - 1u)) == 0)
+                return PE_SOLVER_ERR_INVALID_CONFIG;
+    }
+    if (fold_only && selected_player >= player_count)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+
+    for (hero_player = 0u; hero_player < player_count; ++hero_player)
+        for (size_t combo = 0; combo < players[hero_player].combo_count; ++combo)
+            out_values[hero_player].v[combo] = 0.0;
+
+    for (hero_player = 0u; hero_player < player_count; ++hero_player)
+    {
+        multiway_context_t context;
+        size_t combo;
+
+        if (fold_only && hero_player != selected_player)
+            continue;
+        for (combo = 0; combo < players[hero_player].combo_count; ++combo)
+        {
+            memset(&context, 0, sizeof(context));
+            context.players = players;
+            context.player_count = player_count;
+            context.hero_player = hero_player;
+            context.dead = dead;
+            context.used = dead | players[hero_player].masks[combo];
+            context.sidepots = sidepots;
+            context.sidepot_count = sidepot_count;
+            context.weight = 1.0;
+            context.fold_only = fold_only;
+            context.strength[hero_player] =
+                players[hero_player].strength[combo];
+            if ((players[hero_player].masks[combo] & dead) != 0)
+                out_values[hero_player].v[combo] = 0.0;
+            else
+            {
+                multiway_visit(&context, 0u);
+                out_values[hero_player].v[combo] = fold_only
+                    ? fold_pot * context.result : context.result;
+            }
+        }
+    }
+    if (out_path)
+        *out_path = PE_SHOWDOWN_PATH_MULTIWAY;
+    return PE_SOLVER_OK;
+}
+
+pe_solver_status_t pe_showdown_multiway_vector(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path)
+{
+    pe_showdown_sidepot_t sidepot;
+    sidepot.amount = pot;
+    sidepot.eligible_players = UINT8_MAX;
+    return multiway_values(players, player_count, dead, pot, out_values,
+                            out_path, 0, 0u, pot, &sidepot, 1u);
+}
+
+pe_solver_status_t pe_showdown_multiway_sidepots(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    mask_t dead,
+    const pe_showdown_sidepot_t *sidepots,
+    size_t sidepot_count,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path)
+{
+    return multiway_values(players, player_count, dead, 0.0, out_values,
+                           out_path, 0, 0u, 0.0, sidepots, sidepot_count);
+}
+
+pe_solver_status_t pe_fold_multiway_vector(
+    const pe_showdown_player_t *players,
+    uint8_t player_count,
+    uint8_t hero_player,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    pe_showdown_path_t *out_path)
+{
+    return multiway_values(players, player_count, dead, pot, out_values,
+                            out_path, 1, hero_player, pot, NULL, 0u);
 }
