@@ -80,13 +80,13 @@ static int write_archive(const char *path,
                          int utf16le)
 {
     FILE *file = fopen(path, "wb");
-    uint32_t offsets[8];
+    uint32_t offsets[16];
     uint32_t central_offset;
     uint32_t central_size;
     size_t index;
     int ok = 0;
 
-    if (file == NULL || count > 8u)
+    if (file == NULL || count > 16u)
         goto done;
     for (index = 0u; index < count; ++index) {
         long offset = ftell(file);
@@ -164,13 +164,13 @@ static int write_archive_payloads(const char *path,
                                   size_t count)
 {
     FILE *file = fopen(path, "wb");
-    uint32_t offsets[8];
+    uint32_t offsets[16];
     uint32_t central_offset;
     uint32_t central_size;
     size_t index;
     int ok = 0;
 
-    if (file == NULL || count > 8u)
+    if (file == NULL || count > 16u)
         goto done;
     for (index = 0u; index < count; ++index) {
         long offset = ftell(file);
@@ -474,7 +474,8 @@ static void test_java_scalars_and_strategy(void)
 {
     static const char *const names[] = {
         "game", "iterations", "flopBuckets", "rakepercent", "rakecap",
-        "rakeflags", "storedstrategy0", "storedstrategy1"
+        "rakeflags", "version", "iscount", "isoLevel",
+        "storedstrategy0", "storedstrategy1"
     };
     const char *path = "/tmp/poker_eval_monker_scalars.mkr";
     java_fixture_t game = {{0}, 0u};
@@ -485,12 +486,15 @@ static void test_java_scalars_and_strategy(void)
     java_fixture_t rakeflags = {{0}, 0u};
     java_fixture_t strategy = {{0}, 0u};
     java_fixture_t no_strategy = {{0}, 0u};
+    java_fixture_t version = {{0}, 0u};
+    java_fixture_t iscount = {{0}, 0u};
+    java_fixture_t iso_level = {{0}, 0u};
     unsigned char *compressed_strategy = NULL;
     unsigned char *compressed_null = NULL;
     size_t compressed_strategy_size = 0u;
     size_t compressed_null_size = 0u;
-    const unsigned char *payloads[8];
-    size_t payload_sizes[8];
+    const unsigned char *payloads[11];
+    size_t payload_sizes[11];
     pe_monker_mkr_t archive;
     pe_monker_mkr_metadata_t metadata;
     pe_monker_mkr_strategy_t decoded;
@@ -503,6 +507,9 @@ static void test_java_scalars_and_strategy(void)
     java_double(&rakepercent, 0.05);
     java_double(&rakecap, 1500.0);
     java_integer(&rakeflags, 7);
+    java_long(&version, 20109);
+    java_long(&iscount, 230048);
+    java_integer(&iso_level, 0);
 
     /*
      * The shape a real storedstrategy0 has: a leading block-data integer, then
@@ -557,17 +564,23 @@ static void test_java_scalars_and_strategy(void)
     payloads[3] = rakepercent.data;
     payloads[4] = rakecap.data;
     payloads[5] = rakeflags.data;
-    payloads[6] = compressed_strategy;
-    payloads[7] = compressed_null;
+    payloads[6] = version.data;
+    payloads[7] = iscount.data;
+    payloads[8] = iso_level.data;
+    payloads[9] = compressed_strategy;
+    payloads[10] = compressed_null;
     payload_sizes[0] = game.size;
     payload_sizes[1] = iterations.size;
     payload_sizes[2] = buckets.size;
     payload_sizes[3] = rakepercent.size;
     payload_sizes[4] = rakecap.size;
     payload_sizes[5] = rakeflags.size;
-    payload_sizes[6] = compressed_strategy_size;
-    payload_sizes[7] = compressed_null_size;
-    CHECK(write_archive_payloads(path, names, payloads, payload_sizes, 8u) == 0,
+    payload_sizes[6] = version.size;
+    payload_sizes[7] = iscount.size;
+    payload_sizes[8] = iso_level.size;
+    payload_sizes[9] = compressed_strategy_size;
+    payload_sizes[10] = compressed_null_size;
+    CHECK(write_archive_payloads(path, names, payloads, payload_sizes, 11u) == 0,
           "could not write Java .mkr fixture");
     if (pe_monker_mkr_read(path, &archive) != PE_MONKER_MKR_OK) {
         CHECK(0, "Java .mkr fixture was rejected");
@@ -582,7 +595,9 @@ static void test_java_scalars_and_strategy(void)
                   metadata.iterations == 1234567890123LL &&
                   metadata.flop_buckets == 3u && metadata.rakepercent > 0.0499 &&
                   metadata.rakepercent < 0.0501 &&
-                  metadata.rakecap == 1500.0 && metadata.rakeflags == 7,
+                  metadata.rakecap == 1500.0 && metadata.rakeflags == 7 &&
+                  metadata.version == 20109 && metadata.iscount == 230048 &&
+                  metadata.iso_level == 0,
               "decoded scalar values are wrong");
     }
     pe_monker_mkr_metadata_free(&metadata);
@@ -698,13 +713,21 @@ static size_t write_bind_tree(const char *path)
     return at;
 }
 
-static void build_bind_strategy(java_fixture_t *fixture, const char *pattern)
+/*
+ * `pattern` is one character per slot: 'A' an array, '.' an absent slot. Each
+ * array holds two values, except that the array at `odd_slot` holds four —
+ * which is how a strategy whose slots disagree about the class count is made.
+ */
+static void build_bind_strategy_sized(java_fixture_t *fixture,
+                                      const char *pattern, int odd_slot)
 {
     size_t index;
     int first = 1;
     java_stream_begin(fixture);
     java_block_int(fixture, 30);
     for (index = 0u; pattern[index] != '\0'; ++index) {
+        uint32_t count = ((int)index == odd_slot) ? 4u : 2u;
+        uint32_t value;
         if (pattern[index] == '.') {
             java_byte(fixture, 0x70u);
             continue;
@@ -715,10 +738,17 @@ static void build_bind_strategy(java_fixture_t *fixture, const char *pattern)
         } else {
             java_array_ref(fixture, 0x7E0000u);
         }
-        java_be32(fixture, 2u);
-        java_byte(fixture, 200u);
-        java_byte(fixture, 56u);
+        java_be32(fixture, count);
+        for (value = 0u; value < count; value += 2u) {
+            java_byte(fixture, 200u);
+            java_byte(fixture, 56u);
+        }
     }
+}
+
+static void build_bind_strategy(java_fixture_t *fixture, const char *pattern)
+{
+    build_bind_strategy_sized(fixture, pattern, -1);
 }
 
 static void test_slot_to_node_binding(void)
@@ -726,17 +756,20 @@ static void test_slot_to_node_binding(void)
     const char *tree_path = "/tmp/poker_eval_monker_bind.tree";
     const char *archive_path = "/tmp/poker_eval_monker_bind.mkr";
     static const char *const names[] = {
-        "storedstrategy0", "storedstrategy1", "storedstrategy2"
+        "storedstrategy0", "storedstrategy1", "storedstrategy2",
+        "storedstrategy3"
     };
     java_fixture_t good = {{0}, 0u};
     java_fixture_t wrong = {{0}, 0u};
     java_fixture_t short_run = {{0}, 0u};
+    java_fixture_t ragged = {{0}, 0u};
     unsigned char *good_z = NULL;
     unsigned char *wrong_z = NULL;
     unsigned char *short_z = NULL;
-    size_t good_size = 0u, wrong_size = 0u, short_size = 0u;
-    const unsigned char *payloads[3];
-    size_t payload_sizes[3];
+    unsigned char *ragged_z = NULL;
+    size_t good_size = 0u, wrong_size = 0u, short_size = 0u, ragged_size = 0u;
+    const unsigned char *payloads[4];
+    size_t payload_sizes[4];
     mpf_tree_def_t *tree = NULL;
     pe_monker_mkr_t archive;
     pe_monker_mkr_strategy_t strategy;
@@ -755,21 +788,28 @@ static void test_slot_to_node_binding(void)
     /* Three slots for a five-node tree. Every slot on its own is consistent
        with the walk — 0, 2, 4 — so only counting them catches this. */
     build_bind_strategy(&short_run, "AA.");
+    /* Same shape as the good one, but the second array is twice as long. Both
+       slots bind; only comparing their lengths catches it. */
+    build_bind_strategy_sized(&ragged, "AA...", 1);
     CHECK(deflate_fixture(&good, &good_z, &good_size) == 0, "compress failed");
     CHECK(deflate_fixture(&wrong, &wrong_z, &wrong_size) == 0, "compress failed");
     CHECK(deflate_fixture(&short_run, &short_z, &short_size) == 0,
           "compress failed");
+    CHECK(deflate_fixture(&ragged, &ragged_z, &ragged_size) == 0,
+          "compress failed");
     payloads[0] = good_z;      payload_sizes[0] = good_size;
     payloads[1] = wrong_z;     payload_sizes[1] = wrong_size;
     payloads[2] = short_z;     payload_sizes[2] = short_size;
+    payloads[3] = ragged_z;    payload_sizes[3] = ragged_size;
     CHECK(write_archive_payloads(archive_path, names, payloads, payload_sizes,
-                                 3u) == 0, "bind archive write failed");
+                                 4u) == 0, "bind archive write failed");
     if (pe_monker_mkr_read(archive_path, &archive) != PE_MONKER_MKR_OK) {
         CHECK(0, "bind archive was rejected");
         mpf_tree_free(tree);
         free(good_z);
         free(wrong_z);
         free(short_z);
+        free(ragged_z);
         return;
     }
 
@@ -785,6 +825,14 @@ static void test_slot_to_node_binding(void)
                   map[4] == 1,
               "slots bound to %d %d %d %d %d, expected 0 2 4 3 1",
               map[0], map[1], map[2], map[3], map[4]);
+        {
+            /* Two values per slot over two-action nodes: one class. */
+            uint32_t classes = 0u;
+            CHECK(pe_monker_mkr_strategy_class_count(tree, &strategy,
+                                                     &classes) ==
+                      PE_MONKER_MKR_OK && classes == 1u,
+                  "class count came out %u, expected 1", classes);
+        }
     }
     pe_monker_mkr_strategy_free(&strategy);
 
@@ -811,11 +859,28 @@ static void test_slot_to_node_binding(void)
               "a strategy with fewer slots than the tree has nodes was bound");
     }
     pe_monker_mkr_strategy_free(&strategy);
+
+    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy3",
+                                    &strategy) != PE_MONKER_MKR_OK) {
+        CHECK(0, "ragged bind strategy was not decoded");
+    } else {
+        uint32_t classes = 0u;
+        CHECK(pe_monker_mkr_bind_strategy(tree, &strategy, map,
+                                          sizeof(map) / sizeof(map[0])) ==
+                  PE_MONKER_MKR_OK,
+              "the ragged strategy should still bind: its shape is right");
+        CHECK(pe_monker_mkr_strategy_class_count(tree, &strategy, &classes) ==
+                  PE_MONKER_MKR_ERR_BAD_ARCHIVE,
+              "slots disagreeing on the class count were accepted (%u)",
+              classes);
+    }
+    pe_monker_mkr_strategy_free(&strategy);
     pe_monker_mkr_free(&archive);
     mpf_tree_free(tree);
     free(good_z);
     free(wrong_z);
     free(short_z);
+    free(ragged_z);
 }
 
 /*
@@ -835,6 +900,7 @@ static void test_real_saved_run(void)
     pe_monker_mkr_strategy_t strategy;
     uint32_t index;
     uint32_t arrays = 0u;
+    int64_t iscount = 0;
 
     if (path == NULL || path[0] == '\0') {
         printf("  (POKER_MONKER_MKR unset: real saved run not checked)\n");
@@ -847,6 +913,7 @@ static void test_real_saved_run(void)
     CHECK(pe_monker_mkr_read_metadata(&archive, &metadata) == PE_MONKER_MKR_OK,
           "a real .mkr's metadata was not decoded");
     CHECK(metadata.flop_buckets > 0u, "flopBuckets came back as zero");
+    iscount = metadata.iscount;
     pe_monker_mkr_metadata_free(&metadata);
 
     CHECK(pe_monker_mkr_read_strategy(&archive, "storedstrategy0",
@@ -871,11 +938,33 @@ static void test_real_saved_run(void)
                                              sizeof(*map));
             CHECK(map != NULL, "bind map allocation failed");
             if (map != NULL) {
+                uint32_t classes = 0u;
+                int decisions = 0;
+                int node;
                 CHECK(pe_monker_mkr_bind_strategy(tree, &strategy, map,
                                                   strategy.slot_count) ==
                           PE_MONKER_MKR_OK,
                       "a real strategy did not bind to its own tree");
-                printf("  bound to a %d-node tree\n", tree->node_count);
+                CHECK(pe_monker_mkr_strategy_class_count(tree, &strategy,
+                                                         &classes) ==
+                          PE_MONKER_MKR_OK,
+                      "a real strategy's slots disagree on the class count");
+                for (node = 0; node < tree->node_count; ++node)
+                    if (tree->nodes[node].action_count > 0)
+                        decisions++;
+                /* The archive states its own infoset count. It must be the
+                   decision nodes times the classes a slot is indexed by —
+                   two numbers this reader derives from entirely different
+                   parts of the file. */
+                CHECK((int64_t)classes * decisions == iscount,
+                      "%u classes over %d decision nodes is %lld, but the "
+                      "archive says %lld infosets",
+                      classes, decisions,
+                      (long long)((int64_t)classes * decisions),
+                      (long long)iscount);
+                printf("  bound to a %d-node tree: %u classes x %d decisions "
+                       "= %lld infosets\n", tree->node_count, classes,
+                       decisions, (long long)((int64_t)classes * decisions));
                 free(map);
             }
             mpf_tree_free(tree);

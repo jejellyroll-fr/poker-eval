@@ -1559,6 +1559,16 @@ pe_monker_mkr_status_t pe_monker_mkr_read_metadata(
     if (status != PE_MONKER_MKR_OK || integer < INT32_MIN || integer > INT32_MAX)
         goto fail;
     out->rakeflags = (int32_t)integer;
+    status = read_scalar_integer(archive, "version", &out->version);
+    if (status != PE_MONKER_MKR_OK)
+        goto fail;
+    status = read_scalar_integer(archive, "iscount", &out->iscount);
+    if (status != PE_MONKER_MKR_OK || out->iscount < 0)
+        goto fail;
+    status = read_scalar_integer(archive, "isoLevel", &integer);
+    if (status != PE_MONKER_MKR_OK || integer < INT32_MIN || integer > INT32_MAX)
+        goto fail;
+    out->iso_level = (int32_t)integer;
     return PE_MONKER_MKR_OK;
 
 fail:
@@ -1764,6 +1774,59 @@ pe_monker_mkr_status_t pe_monker_mkr_bind_strategy(
         out_node_of_slot[slot] = node;
     }
     free(order);
+    return PE_MONKER_MKR_OK;
+}
+
+pe_monker_mkr_status_t pe_monker_mkr_strategy_class_count(
+    const mpf_tree_def_t *tree,
+    const pe_monker_mkr_strategy_t *strategy,
+    uint32_t *out_class_count)
+{
+    int32_t *map;
+    uint32_t slot;
+    uint32_t classes = 0u;
+    pe_monker_mkr_status_t status;
+
+    if (tree == NULL || strategy == NULL || out_class_count == NULL)
+        return PE_MONKER_MKR_ERR_NULL_ARGUMENT;
+    *out_class_count = 0u;
+    if (strategy->slot_count == 0u)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    map = (int32_t *)malloc((size_t)strategy->slot_count * sizeof(*map));
+    if (map == NULL)
+        return PE_MONKER_MKR_ERR_NO_MEMORY;
+    status = pe_monker_mkr_bind_strategy(tree, strategy, map,
+                                         strategy->slot_count);
+    if (status != PE_MONKER_MKR_OK) {
+        free(map);
+        return status;
+    }
+    for (slot = 0u; slot < strategy->slot_count; ++slot) {
+        int actions;
+        uint32_t here;
+        if (strategy->slots[slot].kind == PE_MONKER_SLOT_ABSENT)
+            continue;
+        actions = tree->nodes[map[slot]].action_count;
+        if (actions <= 0 ||
+            (strategy->slots[slot].count % (uint32_t)actions) != 0u) {
+            free(map);
+            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+        }
+        here = strategy->slots[slot].count / (uint32_t)actions;
+        /* Every slot must agree. One that does not is a slot bound to a node
+           it does not belong to, which no length check on a single slot would
+           have shown. */
+        if (classes == 0u)
+            classes = here;
+        else if (here != classes) {
+            free(map);
+            return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+        }
+    }
+    free(map);
+    if (classes == 0u)
+        return PE_MONKER_MKR_ERR_BAD_ARCHIVE;
+    *out_class_count = classes;
     return PE_MONKER_MKR_OK;
 }
 

@@ -97,6 +97,14 @@ typedef struct
     double rakepercent;
     double rakecap;
     int32_t rakeflags;
+    /* MonkerSolver's build, as a packed integer: 20109 is 2.1.9. */
+    int64_t version;
+    /* Infosets the run covered. It is the product of the tree's decision
+       nodes and the hand classes a strategy is indexed by, which makes it an
+       independent check on the strategy layout — see
+       pe_monker_mkr_strategy_class_count(). */
+    int64_t iscount;
+    int32_t iso_level;
 } pe_monker_mkr_metadata_t;
 
 /*
@@ -214,6 +222,24 @@ pe_monker_mkr_status_t pe_monker_mkr_bind_strategy(
     const pe_monker_mkr_strategy_t *strategy,
     int32_t *out_node_of_slot,
     size_t capacity);
+
+/*
+ * How many hand classes a strategy is indexed by.
+ *
+ * A slot's length is class_count * action_count, so the class count is
+ * recoverable from any one slot once its node is known — and every other slot
+ * must agree, which is what this checks. Disagreement means the slots are not
+ * bound to the nodes they are being read against, and it is refused.
+ *
+ * The value can be checked once more from outside: multiplied by the tree's
+ * decision-node count it must equal the archive's own iscount. On the run at
+ * hand that is 16432 * 14 = 230048, and 16432 is exactly the number of
+ * four-card hands up to suit isomorphism.
+ */
+pe_monker_mkr_status_t pe_monker_mkr_strategy_class_count(
+    const struct mpf_tree_def_t *tree,
+    const pe_monker_mkr_strategy_t *strategy,
+    uint32_t *out_class_count);
 
 void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy);
 
