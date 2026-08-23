@@ -163,6 +163,30 @@ static void test_reference_preset_resolves(void)
           "a valid plan requires something it was not provided");
 }
 
+static void test_canonical_presets_resolve(void)
+{
+    pe_solver_config_t cfg = pe_solver_config_default();
+    pe_execution_plan_t plan;
+    pe_diagnostics_t diag;
+
+    cfg.algorithm.preset = PE_PRESET_CFR_PLUS;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) != PE_VALID_ERROR,
+          "cfr+ preset was refused");
+    CHECK(plan.traversal == PE_TRAVERSAL_FULL_VECTOR &&
+              plan.regret == PE_REGRET_PLUS &&
+              plan.averaging == PE_AVG_DELAYED_LINEAR,
+          "cfr+ preset did not resolve to its canonical axes");
+
+    cfg = pe_solver_config_default();
+    cfg.algorithm.preset = PE_PRESET_DCFR;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) != PE_VALID_ERROR,
+          "dcfr preset was refused");
+    CHECK(plan.traversal == PE_TRAVERSAL_FULL_VECTOR &&
+              plan.regret == PE_REGRET_DCFR &&
+              plan.averaging == PE_AVG_POWER,
+          "dcfr preset did not resolve to its canonical axes");
+}
+
 /* ------------------------------------------------------------------ *
  * A refused configuration produces no plan
  * ------------------------------------------------------------------ */
@@ -265,6 +289,13 @@ static void test_sampling_presets_are_gated(void)
           "external-mccfr should not resolve before LNB-02");
     CHECK(diag_mentions(&diag, "LNB-02"),
           "the refusal should name the ticket that unblocks it");
+
+    cfg = pe_solver_config_default();
+    cfg.algorithm.preset = PE_PRESET_EXTERNAL_DCFR;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
+          "external-dcfr should not resolve before LNB-02");
+    CHECK(diag_mentions(&diag, "LNB-02"),
+          "external-dcfr refusal should name LNB-02");
 }
 
 /* ------------------------------------------------------------------ *
@@ -426,6 +457,7 @@ int main(void)
     test_preset_leaves_tuning_alone();
     test_custom_expands_to_nothing();
     test_reference_preset_resolves();
+    test_canonical_presets_resolve();
     test_undeclared_combination_is_refused();
     test_refused_plan_is_zeroed();
     test_missing_capability_is_an_error_not_a_fallback();
