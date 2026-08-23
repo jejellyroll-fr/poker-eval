@@ -9,8 +9,10 @@
  */
 
 #include <poker_eval/solver/pe_capabilities.h>
+#include <poker_eval/solver/pe_regret.h>
 #include <poker_eval/solver/pe_traversal.h>
 
+#include <stdlib.h>
 #include <string.h>
 
 static int vector_valid(const pe_vector_game_t *game)
@@ -67,43 +69,25 @@ void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx)
 }
 
 static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
-                        const pe_reach_vec_t *reach)
+                        const pe_reach_vec_t *reach,
+                        pe_value_vec_t *out_values,
+                        pe_update_batch_t *out_batch)
 {
     const pe_vector_game_t *game = ctx->game;
     uint16_t actions;
     int player;
     uint64_t key = 0;
     pe_infoset_id_t infoset = PE_INFOSET_ID_INVALID;
+    uint8_t p;
 
-    if (!state)
+    if (!state || !out_values)
         return -1;
     ctx->visited_nodes++;
     if (game->is_terminal(state, game->user))
     {
-        if (game->terminal_values)
-        {
-            pe_value_vec_t values[PE_TRAVERSAL_MAX_PLAYERS];
-            unsigned p;
-            memset(values, 0, sizeof(values));
-            for (p = 0; p < game->player_count; ++p)
-            {
-                if (pe_vec_alloc(&values[p], game->combo_count) != PE_SOLVER_OK)
-                {
-                    while (p > 0)
-                        pe_vec_free(&values[--p]);
-                    return -1;
-                }
-            }
-            if (game->terminal_values(state, reach, values,
-                                      game->player_count, game->user) != 0)
-            {
-                for (p = 0; p < game->player_count; ++p)
-                    pe_vec_free(&values[p]);
-                return -1;
-            }
-            for (p = 0; p < game->player_count; ++p)
-                pe_vec_free(&values[p]);
-        }
+        if (game->terminal_values && game->terminal_values(
+                state, reach, out_values, game->player_count, game->user) != 0)
+            return -1;
         ctx->terminal_nodes++;
         return 0;
     }
@@ -127,64 +111,156 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
             return -1;
     }
 
-    for (uint16_t action = 0; action < actions; ++action)
+    if (actions > SIZE_MAX / (size_t)game->combo_count ||
+        actions * (size_t)game->combo_count > SIZE_MAX / sizeof(double))
+        return -1;
+    double *strategies = (double *)calloc(
+        (size_t)actions * game->combo_count, sizeof(*strategies));
+    pe_value_vec_t *child_values = (pe_value_vec_t *)calloc(
+        (size_t)actions * game->player_count, sizeof(*child_values));
+    if (!strategies || !child_values)
     {
-        pe_value_vec_t strategy = {0};
-        pe_reach_vec_t child_reach[PE_TRAVERSAL_MAX_PLAYERS];
+        free(strategies);
+        free(child_values);
+        return -1;
+    }
+
+    if (game->strategy == NULL && ctx->storage != NULL)
+    {
+        double *regrets = ctx->storage->values(
+            ctx->storage_self, infoset, PE_VALUES_REGRET, NULL);
+        if (regrets == NULL || pe_regret_match_vector(
+                regrets, strategies, actions, game->combo_count) != 0)
+        {
+            free(strategies);
+            free(child_values);
+            return -1;
+        }
+    }
+
+    for (uint16_t action = 0u; action < actions; ++action)
+    {
+        pe_value_vec_t strategy = pe_vec_wrap(
+            strategies + (size_t)action * game->combo_count,
+            game->combo_count);
+        pe_reach_vec_t child_reach[PE_TRAVERSAL_MAX_PLAYERS] = {{0}};
         const void *child;
-        unsigned p;
         int rc;
 
-        if (pe_vec_alloc(&strategy, game->combo_count) != PE_SOLVER_OK)
-            return -1;
-        if (game->strategy)
+        if (game->strategy != NULL)
             rc = game->strategy(state, key, action, &strategy, game->user);
-        else
+        else if (ctx->storage == NULL)
         {
-            const double *average = NULL;
-            size_t average_length = 0u;
-            if (ctx->storage != NULL)
-                average = ctx->storage->values_const(
-                    ctx->storage_self, infoset, PE_VALUES_AVERAGE,
-                    &average_length);
-            if (average != NULL && average_length >= game->combo_count &&
-                average[action * game->combo_count] > 0.0)
-            {
-                for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
-                    strategy.v[combo] = average[
-                        pe_storage_slot_at(game->combo_count, action, combo)];
-            }
-            else
-                pe_vec_fill(&strategy, 1.0 / (double)actions);
+            pe_vec_fill(&strategy, 1.0 / (double)actions);
             rc = 0;
         }
+        else
+            rc = 0;
         if (rc != 0)
         {
-            pe_vec_free(&strategy);
+            free(strategies);
+            free(child_values);
             return -1;
         }
 
-        memset(child_reach, 0, sizeof(child_reach));
-        for (p = 0; p < game->player_count; ++p)
+        for (p = 0u; p < game->player_count; ++p)
         {
             if (pe_vec_alloc(&child_reach[p], game->combo_count) != PE_SOLVER_OK)
             {
-                while (p > 0)
+                while (p > 0u)
                     pe_vec_free(&child_reach[--p]);
-                pe_vec_free(&strategy);
+                free(strategies);
+                free(child_values);
                 return -1;
             }
             pe_vec_copy(&child_reach[p], &reach[p]);
         }
         pe_vec_mul(&child_reach[player], &strategy);
         child = game->apply_action(state, action, game->user);
-        rc = child ? vector_visit(ctx, child, child_reach) : -1;
-        for (p = 0; p < game->player_count; ++p)
+        for (p = 0u; p < game->player_count; ++p)
+        {
+            if (pe_vec_alloc(&child_values[(size_t)action * game->player_count + p],
+                             game->combo_count) != PE_SOLVER_OK)
+            {
+                for (uint8_t q = 0u; q < game->player_count; ++q)
+                    pe_vec_free(&child_reach[q]);
+                for (uint16_t a = 0u; a < action; ++a)
+                    for (uint8_t q = 0u; q < game->player_count; ++q)
+                        pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
+                free(strategies);
+                free(child_values);
+                return -1;
+            }
+        }
+        rc = child ? vector_visit(ctx, child, child_reach,
+                                  &child_values[(size_t)action * game->player_count],
+                                  out_batch) : -1;
+        for (p = 0u; p < game->player_count; ++p)
             pe_vec_free(&child_reach[p]);
-        pe_vec_free(&strategy);
         if (rc != 0)
-            return rc;
+        {
+            for (uint16_t a = 0u; a <= action; ++a)
+                for (uint8_t q = 0u; q < game->player_count; ++q)
+                    pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
+            free(strategies);
+            free(child_values);
+            return -1;
+        }
     }
+
+    for (p = 0u; p < game->player_count; ++p)
+        pe_vec_fill(&out_values[p], 0.0);
+    for (uint16_t action = 0u; action < actions; ++action)
+    {
+        for (p = 0u; p < game->player_count; ++p)
+        {
+            pe_value_vec_t *child = &child_values[
+                (size_t)action * game->player_count + p];
+            for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+                out_values[p].v[combo] += strategies[
+                    (size_t)action * game->combo_count + combo] * child->v[combo];
+        }
+    }
+
+    if (out_batch != NULL && ctx->storage != NULL)
+    {
+        for (uint16_t action = 0u; action < actions; ++action)
+        {
+            pe_value_vec_t *action_values = &child_values[
+                (size_t)action * game->player_count + player];
+            for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+            {
+                double opponent_reach = 1.0;
+                for (p = 0u; p < game->player_count; ++p)
+                    if (p != (uint8_t)player)
+                        opponent_reach *= reach[p].v[combo];
+                pe_update_t update = {
+                    infoset,
+                    action,
+                    combo,
+                    opponent_reach * (action_values->v[combo] -
+                                      out_values[player].v[combo]),
+                    reach[player].v[combo] * strategies[
+                        (size_t)action * game->combo_count + combo]
+                };
+                if (pe_update_batch_push(out_batch, update) != 0)
+                {
+                    for (uint16_t a = 0u; a < actions; ++a)
+                        for (uint8_t q = 0u; q < game->player_count; ++q)
+                            pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
+                    free(strategies);
+                    free(child_values);
+                    return -1;
+                }
+            }
+        }
+    }
+
+    for (uint16_t action = 0u; action < actions; ++action)
+        for (uint8_t q = 0u; q < game->player_count; ++q)
+            pe_vec_free(&child_values[(size_t)action * game->player_count + q]);
+    free(strategies);
+    free(child_values);
     return 0;
 }
 
@@ -203,11 +279,24 @@ static int vector_begin(pe_traversal_ctx_t *ctx, uint64_t iteration)
 
 static int vector_run(pe_traversal_ctx_t *ctx, pe_update_batch_t *out_batch)
 {
+    pe_value_vec_t values[PE_TRAVERSAL_MAX_PLAYERS] = {{0}};
+    uint8_t p;
+
     if (!ctx || !ctx->initialized)
         return -1;
     if (out_batch)
         pe_update_batch_clear(out_batch);
-    return vector_visit(ctx, ctx->game->root, ctx->reach);
+    for (p = 0u; p < ctx->game->player_count; ++p)
+        if (pe_vec_alloc(&values[p], ctx->game->combo_count) != PE_SOLVER_OK)
+        {
+            while (p > 0u)
+                pe_vec_free(&values[--p]);
+            return -1;
+        }
+    int rc = vector_visit(ctx, ctx->game->root, ctx->reach, values, out_batch);
+    for (p = 0u; p < ctx->game->player_count; ++p)
+        pe_vec_free(&values[p]);
+    return rc;
 }
 
 static int vector_end(pe_traversal_ctx_t *ctx, uint64_t iteration)
