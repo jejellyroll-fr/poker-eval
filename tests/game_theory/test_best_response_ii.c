@@ -676,6 +676,8 @@ static void test_exploitability_metrics(void)
 
 static void test_multiway_guarantee_contract(void)
 {
+    const double gaps[3] = {1.0, 2.0, 3.0};
+    pe_metrics_t metrics;
     pe_guarantee_t guarantee = PE_GUARANTEE_UNSPECIFIED;
 
     CHECK(pe_best_response_guarantee_for_game(2u, 1, &guarantee) ==
@@ -693,6 +695,25 @@ static void test_multiway_guarantee_contract(void)
     CHECK(pe_best_response_guarantee_for_game(3u, 2, &guarantee) ==
               PE_SOLVER_ERR_INVALID_CONFIG,
           "non-boolean zero-sum flag must be rejected");
+
+    CHECK(pe_best_response_metrics_from_multiway(
+              3u, 1, gaps, 3.0, 0.25, 2.0, &metrics) == PE_SOLVER_OK,
+          "multiway metrics aggregation failed");
+    CHECK(metrics.num_players == 3u &&
+              metrics.guarantee == PE_GUARANTEE_NO_REGRET_ONLY,
+          "multiway metrics lost player count or guarantee");
+    CHECK(fabs(metrics.exploitability_raw - 6.0) <= 1e-12 &&
+              fabs(metrics.exploitability_mbb_per_game - 3000.0) <= 1e-9,
+          "multiway NashConv conversion is incorrect");
+    CHECK(fabs(metrics.br_gap[0] - 1.0) <= 1e-12 &&
+              fabs(metrics.br_gap[2] - 3.0) <= 1e-12 &&
+              fabs(metrics.cce_gap - 3.0) <= 1e-12 &&
+              fabs(metrics.utility_imbalance - 0.25) <= 1e-12,
+          "multiway diagnostics were not preserved");
+    CHECK(pe_best_response_metrics_from_multiway(
+              3u, 1, gaps, -1.0, 0.25, 2.0, &metrics) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "negative CCE gap must be rejected");
 }
 
 static void test_exploitability_target(void)

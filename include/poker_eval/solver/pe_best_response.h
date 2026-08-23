@@ -66,6 +66,18 @@ pe_solver_status_t pe_best_response_metrics_from_raw(
 pe_solver_status_t pe_best_response_guarantee_for_game(
     uint8_t num_players, int is_zero_sum, pe_guarantee_t *out_guarantee);
 
+/**
+ * Build a multiway metrics snapshot from per-player unilateral gains.
+ *
+ * `br_gaps` contains one non-negative raw-currency gain per player. The raw
+ * exploitability is their sum (the multiway NashConv); CCE and utility
+ * imbalance are reported alongside it in the same raw currency.
+ */
+pe_solver_status_t pe_best_response_metrics_from_multiway(
+    uint8_t num_players, int is_zero_sum, const double *br_gaps,
+    double cce_gap, double utility_imbalance, double big_blind,
+    pe_metrics_t *out_metrics);
+
 /** Return whether a measured mbb/g value satisfies a configured target. */
 pe_solver_status_t pe_best_response_target_reached(
     double measured_mbb, double target_mbb, int *out_reached);

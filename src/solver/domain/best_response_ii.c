@@ -548,6 +548,46 @@ pe_solver_status_t pe_best_response_guarantee_for_game(
     return PE_SOLVER_OK;
 }
 
+pe_solver_status_t pe_best_response_metrics_from_multiway(
+    uint8_t num_players, int is_zero_sum, const double *br_gaps,
+    double cce_gap, double utility_imbalance, double big_blind,
+    pe_metrics_t *out_metrics)
+{
+    pe_guarantee_t guarantee;
+    double total = 0.0;
+    uint8_t player;
+
+    if (!out_metrics || !br_gaps)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (pe_best_response_guarantee_for_game(num_players, is_zero_sum,
+                                            &guarantee) != PE_SOLVER_OK ||
+        !isfinite(cce_gap) || cce_gap < 0.0 ||
+        !isfinite(utility_imbalance) || utility_imbalance < 0.0 ||
+        !isfinite(big_blind) || big_blind <= 0.0)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+
+    for (player = 0; player < num_players; ++player)
+    {
+        if (!isfinite(br_gaps[player]) || br_gaps[player] < 0.0)
+            return PE_SOLVER_ERR_INVALID_CONFIG;
+        total += br_gaps[player];
+        if (!isfinite(total))
+            return PE_SOLVER_ERR_INVALID_CONFIG;
+    }
+
+    memset(out_metrics, 0, sizeof(*out_metrics));
+    out_metrics->exploitability_raw = total;
+    out_metrics->exploitability_mbb_per_game = total / big_blind * 1000.0;
+    out_metrics->big_blind = big_blind;
+    out_metrics->guarantee = guarantee;
+    out_metrics->num_players = num_players;
+    for (player = 0; player < num_players; ++player)
+        out_metrics->br_gap[player] = br_gaps[player];
+    out_metrics->cce_gap = cce_gap;
+    out_metrics->utility_imbalance = utility_imbalance;
+    return PE_SOLVER_OK;
+}
+
 pe_solver_status_t pe_best_response_target_reached(
     double measured_mbb, double target_mbb, int *out_reached)
 {
