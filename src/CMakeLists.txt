@@ -48,6 +48,8 @@ add_library(poker_solver
     solver/adapters/storage_ram.c
     solver/adapters/compute_cpu_ref.c
     solver/adapters/compute_cpu_par.c
+    solver/adapters/evaluator_equity.c
+    solver/adapters/evaluator_gpu.c
     solver/adapters/monker_tree_reader.c
     solver/adapters/monker_mkr_reader.c
     solver/adapters/monker_filters.c
@@ -69,7 +71,7 @@ target_include_directories(poker_solver PRIVATE
 # The range parser adapter needs the range engine. The edge is acyclic:
 # poker-eval-range reaches poker_core, poker_equity and poker_distributions,
 # and none of those links poker_solver.
-target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range ZLIB::ZLIB)
+target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range poker_equity ZLIB::ZLIB)
 
 if(OpenMP_C_FOUND)
     target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)
