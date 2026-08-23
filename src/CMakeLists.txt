@@ -50,6 +50,7 @@ add_library(poker_solver
     solver/adapters/monker_tree_reader.c
     solver/adapters/monker_mkr_reader.c
     solver/adapters/monker_filters.c
+    solver/adapters/range_ppt.c
     solver/adapters/range_parser.c
     solver/adapters/telemetry_null.c
     solver/adapters/telemetry_stream.c

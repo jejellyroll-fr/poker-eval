@@ -197,6 +197,22 @@ void pe_monker_filter_free(pe_monker_filter_t *filter);
 
 const char *pe_monker_filter_status_string(pe_monker_filter_status_t status);
 
+typedef enum
+{
+    PE_MONKER_PPT_OK = 0,
+    PE_MONKER_PPT_ERR_NULL_ARGUMENT,
+    PE_MONKER_PPT_ERR_EMPTY,
+    PE_MONKER_PPT_ERR_SYNTAX,
+    PE_MONKER_PPT_ERR_TOO_MANY_CARDS,
+    PE_MONKER_PPT_ERR_NO_MEMORY
+} pe_monker_ppt_status_t;
+
+/** Count the four-card Omaha combinations matching a PPT expression. */
+pe_monker_ppt_status_t pe_monker_ppt_count(const char *expression,
+                                           uint64_t *out_count);
+
+const char *pe_monker_ppt_status_string(pe_monker_ppt_status_t status);
+
 #ifdef __cplusplus
 }
 #endif
