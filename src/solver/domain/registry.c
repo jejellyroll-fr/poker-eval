@@ -355,11 +355,10 @@ typedef struct
 
 /* Architecture v3 §5, "Matrice d'algorithmes initiale", row for row.
  *
- * The two sampling presets take PE_AVG_UNIFORM here. The matrix calls for a
- * sampling-aware averaging that does not exist until LNB-02; rather than
- * inventing a placeholder mode, they carry uniform and the resolver refuses
- * the plan on a missing capability. That keeps the refusal visible instead of
- * hiding it behind an averaging mode nobody implemented. */
+ * Sampling presets use the explicit importance-corrected averaging mode.
+ * External DCFR retains POWER because its temporal discount is part of the
+ * preset contract; the traversal applies the sampling correction separately.
+ */
 static const pe_algo_preset_entry_t k_preset_table[] = {
     { PE_PRESET_CUSTOM, "custom",
       PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_VANILLA,
@@ -387,7 +386,7 @@ static const pe_algo_preset_entry_t k_preset_table[] = {
 
     { PE_PRESET_EXTERNAL_MCCFR, "external-mccfr",
       PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_IMPORTANCE, 0 },
 
     { PE_PRESET_EXTERNAL_DCFR, "external-dcfr",
       PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_DCFR,
@@ -395,7 +394,7 @@ static const pe_algo_preset_entry_t k_preset_table[] = {
 
     { PE_PRESET_OUTCOME_MCCFR, "outcome-mccfr",
       PE_TRAVERSAL_OUTCOME_SAMPLING, PE_REGRET_VANILLA,
-      PE_POLICY_REGRET_MATCHING, PE_AVG_UNIFORM, 0 },
+      PE_POLICY_REGRET_MATCHING, PE_AVG_IMPORTANCE, 0 },
 
     { PE_PRESET_ECFR, "ecfr",
       PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_LEGACY_EXP,
@@ -507,7 +506,9 @@ const char *pe_policy_name(pe_policy_mode_t mode)
 
 const char *pe_averaging_name(pe_averaging_mode_t mode)
 {
-    static const char *const names[] = { "uniform", "linear", "power", "delayed-linear" };
+    static const char *const names[] = {
+        "uniform", "linear", "power", "delayed-linear", "importance"
+    };
     return PE_NAME_OF(mode, names);
 }
 

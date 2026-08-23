@@ -178,6 +178,34 @@ static void test_delayed_linear_average(void)
           "zero iteration must be rejected");
 }
 
+static void test_importance_weighted_average(void)
+{
+    const double strategy[] = {0.25, 0.75};
+    const double reach[] = {2.0};
+    double weighted[] = {0.0, 0.0};
+    double normalizer[] = {0.0};
+    double average[] = {0.0, 0.0};
+
+    CHECK(pe_average_accumulate_importance_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 0.25, 1.0) == 0,
+          "importance average update failed");
+    CHECK(fabs(weighted[0] - 2.0) <= 1e-12 &&
+              fabs(weighted[1] - 6.0) <= 1e-12 &&
+              fabs(normalizer[0] - 8.0) <= 1e-12,
+          "inverse sampling probability was not applied");
+    CHECK(pe_average_finalize_vector(weighted, normalizer, average, 2u, 1u) == 0,
+          "importance average finalization failed");
+    CHECK(fabs(average[0] - 0.25) <= 1e-12 &&
+              fabs(average[1] - 0.75) <= 1e-12,
+          "importance correction changed the observed strategy");
+    CHECK(pe_average_accumulate_importance_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 0.0, 1.0) != 0,
+          "zero sampling probability must be rejected");
+    CHECK(pe_average_accumulate_importance_vector(
+              weighted, normalizer, strategy, reach, 2u, 1u, 1.1, 1.0) != 0,
+          "sampling probability above one must be rejected");
+}
+
 typedef struct
 {
     int chance;
@@ -308,6 +336,7 @@ int main(void)
     test_reach_weighted_average();
     test_average_uniform_fallback();
     test_delayed_linear_average();
+    test_importance_weighted_average();
     test_sampled_chance_is_unbiased();
     if (failures != 0)
     {

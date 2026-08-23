@@ -107,6 +107,23 @@ static void test_preset_matches_the_matrix(void)
     CHECK(algo.averaging == PE_AVG_POWER, "dcfr averaging");
 
     memset(&algo, 0, sizeof(algo));
+    pe_preset_expand(PE_PRESET_EXTERNAL_MCCFR, &algo);
+    CHECK(algo.traversal == PE_TRAVERSAL_EXTERNAL_SAMPLING,
+          "external-mccfr traversal");
+    CHECK(algo.averaging == PE_AVG_IMPORTANCE,
+          "external-mccfr averaging");
+
+    memset(&algo, 0, sizeof(algo));
+    pe_preset_expand(PE_PRESET_EXTERNAL_DCFR, &algo);
+    CHECK(algo.regret == PE_REGRET_DCFR, "external-dcfr regret");
+    CHECK(algo.averaging == PE_AVG_POWER, "external-dcfr averaging");
+
+    memset(&algo, 0, sizeof(algo));
+    pe_preset_expand(PE_PRESET_OUTCOME_MCCFR, &algo);
+    CHECK(algo.averaging == PE_AVG_IMPORTANCE,
+          "outcome-mccfr averaging");
+
+    memset(&algo, 0, sizeof(algo));
     pe_preset_expand(PE_PRESET_ECFR, &algo);
     CHECK(algo.policy == PE_POLICY_EXPONENTIAL, "ecfr policy");
     CHECK(algo.regret == PE_REGRET_LEGACY_EXP, "ecfr regret");
@@ -281,27 +298,39 @@ static void test_gpu_stage_without_the_capability_is_refused(void)
           "the resolved terminal stage is not the one requested");
 }
 
-static void test_sampling_presets_are_gated(void)
+static void test_sampling_presets_require_compatible_averaging(void)
 {
     pe_solver_config_t cfg = pe_solver_config_default();
     pe_execution_plan_t plan;
     pe_diagnostics_t diag;
 
-    /* external-mccfr expands, but its plan is refused until LNB-02 provides
-       importance-weighted averaging. Expansion and validation are separate
-       questions, and the ticket's "every preset expands" is the first one. */
+    /* The sampling presets now resolve with the dedicated unbiased averaging. */
     cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
-    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
-          "external-mccfr should not resolve before LNB-02");
-    CHECK(diag_mentions(&diag, "LNB-02"),
-          "the refusal should name the ticket that unblocks it");
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) != PE_VALID_ERROR,
+          "external-mccfr should resolve with importance averaging");
+    CHECK(plan.averaging == PE_AVG_IMPORTANCE,
+          "external-mccfr plan lost importance averaging");
 
     cfg = pe_solver_config_default();
     cfg.algorithm.preset = PE_PRESET_EXTERNAL_DCFR;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) != PE_VALID_ERROR,
+          "external-dcfr should resolve with sampling correction");
+    CHECK(plan.averaging == PE_AVG_POWER,
+          "external-dcfr must retain power averaging");
+
+    cfg = pe_solver_config_default();
+    cfg.algorithm.traversal = PE_TRAVERSAL_EXTERNAL_SAMPLING;
+    cfg.algorithm.averaging = PE_AVG_UNIFORM;
     CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
-          "external-dcfr should not resolve before LNB-02");
+          "external sampling with uniform averaging must be rejected");
     CHECK(diag_mentions(&diag, "LNB-02"),
-          "external-dcfr refusal should name LNB-02");
+          "the incompatible sampling diagnostic should name LNB-02");
+
+    cfg = pe_solver_config_default();
+    cfg.algorithm.traversal = PE_TRAVERSAL_OUTCOME_SAMPLING;
+    cfg.algorithm.averaging = PE_AVG_LINEAR;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR,
+          "outcome sampling with linear averaging must be rejected");
 }
 
 /* ------------------------------------------------------------------ *
@@ -468,7 +497,7 @@ int main(void)
     test_refused_plan_is_zeroed();
     test_missing_capability_is_an_error_not_a_fallback();
     test_gpu_stage_without_the_capability_is_refused();
-    test_sampling_presets_are_gated();
+    test_sampling_presets_require_compatible_averaging();
     test_auto_backend_reports_a_fallback();
     test_out_of_range_parameters();
     test_exploitability_stop_configuration();

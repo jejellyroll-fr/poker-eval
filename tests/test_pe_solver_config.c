@@ -177,7 +177,8 @@ static void test_enum_values(void)
     CHECK_EQ_INT(PE_AVG_LINEAR,         1);
     CHECK_EQ_INT(PE_AVG_POWER,          2);
     CHECK_EQ_INT(PE_AVG_DELAYED_LINEAR, 3);
-    CHECK_EQ_INT(PE_AVG_COUNT,          4);
+    CHECK_EQ_INT(PE_AVG_IMPORTANCE,     4);
+    CHECK_EQ_INT(PE_AVG_COUNT,          5);
 
     CHECK_EQ_INT(PE_PRUNE_NONE,  0);
     CHECK_EQ_INT(PE_PRUNE_RBP,   1);

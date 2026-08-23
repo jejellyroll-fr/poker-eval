@@ -37,6 +37,24 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
     return 0;
 }
 
+int pe_average_accumulate_importance_vector(
+    double *weighted, double *normalizer, const double *strategy,
+    const double *reach, uint16_t action_count, uint16_t combo_count,
+    double sampling_probability, double weight)
+{
+    double corrected_weight;
+
+    if (!isfinite(sampling_probability) || sampling_probability <= 0.0 ||
+        sampling_probability > 1.0 || !isfinite(weight) || weight < 0.0)
+        return -1;
+    corrected_weight = weight / sampling_probability;
+    if (!isfinite(corrected_weight))
+        return -1;
+    return pe_average_accumulate_vector(weighted, normalizer, strategy, reach,
+                                        action_count, combo_count,
+                                        corrected_weight);
+}
+
 int pe_average_accumulate_delayed_linear_vector(
     double *weighted, double *normalizer, const double *strategy,
     const double *reach, uint16_t action_count, uint16_t combo_count,

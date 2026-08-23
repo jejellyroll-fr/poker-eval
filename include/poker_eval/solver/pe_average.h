@@ -29,6 +29,12 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
                                  uint16_t action_count,
                                  uint16_t combo_count, double weight);
 
+/** Add one sampled observation with an inverse sampling-probability weight. */
+int pe_average_accumulate_importance_vector(
+    double *weighted, double *normalizer, const double *strategy,
+    const double *reach, uint16_t action_count, uint16_t combo_count,
+    double sampling_probability, double weight);
+
 /**
  * Add one observation using delayed linear CFR+ averaging.
  *

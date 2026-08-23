@@ -107,6 +107,7 @@ typedef enum {
     PE_AVG_LINEAR,           /* weight t                                      */
     PE_AVG_POWER,            /* weight (t/(t+1))^gamma, DCFR's companion      */
     PE_AVG_DELAYED_LINEAR,   /* skip the first averaging_delay iterations     */
+    PE_AVG_IMPORTANCE,       /* inverse sampling-probability correction       */
     PE_AVG_COUNT
 } pe_averaging_mode_t;
 

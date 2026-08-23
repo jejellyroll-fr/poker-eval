@@ -203,14 +203,12 @@ static void pe_check_combination(const pe_algorithm_config_t *algo,
     }
 
     /* Sampling needs averaging weighted by the inverse sampling probability.
-       LNB-02 introduces it; until then every averaging mode currently exposed
-       is refused rather than run with a policy that silently biases the
-       result. This also keeps external-dcfr gated: PE_AVG_POWER is not an
-       importance-weighted averaging mode merely because it is non-uniform. */
-    if (sampled && (algo->averaging == PE_AVG_UNIFORM ||
-                    algo->averaging == PE_AVG_LINEAR ||
-                    algo->averaging == PE_AVG_POWER ||
-                    algo->averaging == PE_AVG_DELAYED_LINEAR))
+       DCFR keeps POWER as its temporal weighting; its traversal is responsible
+       for applying the sampling correction in addition to that weight. */
+    if (sampled && algo->averaging != PE_AVG_IMPORTANCE &&
+        !(algo->traversal == PE_TRAVERSAL_EXTERNAL_SAMPLING &&
+          algo->regret == PE_REGRET_DCFR &&
+          algo->averaging == PE_AVG_POWER))
     {
         pe_diag_add(diag, PE_VALID_ERROR,
                     "averaging %s is not valid with traversal %s: "
