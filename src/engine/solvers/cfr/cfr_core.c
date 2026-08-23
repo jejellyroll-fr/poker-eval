@@ -1272,10 +1272,10 @@ static double cfr_audit_br_value(cfr_audit_br_context_t *ctx,
     return value;
 }
 
-static double cfr_best_response_value_infoset(cfr_game_t *game,
-                                              cfr_storage_t *storage,
-                                              int player,
-                                              void *user_data)
+double cfr_best_response_value_infoset(cfr_game_t *game,
+                                       cfr_storage_t *storage,
+                                       int player,
+                                       void *user_data)
 {
     cfr_audit_br_context_t ctx;
     memset(&ctx, 0, sizeof(ctx));

@@ -670,6 +670,22 @@ double cfr_exploitability(
 );
 
 /**
+ * Compute an information-set-consistent best response.
+ *
+ * Unlike cfr_best_response_perfect_info(), the selected action is shared by
+ * all concrete states in the same information set. The implementation uses
+ * counterfactual reach and iterates the infoset action choices to a fixed
+ * point. This is the legal exploitability measure for imperfect-information
+ * games.
+ */
+double cfr_best_response_value_infoset(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    int player,
+    void* user_data
+);
+
+/**
  * Compute the expected value (policy value) of the average strategy
  *
  * This function computes the expected value for a given player when both
