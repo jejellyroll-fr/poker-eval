@@ -161,7 +161,7 @@ static double br_chance_weight(const pe_vector_game_t *game,
     double weight = game->chance_outcome_weight
         ? game->chance_outcome_weight(state, outcome, game->user)
         : 1.0;
-    return weight > 0.0 && !isnan(weight) ? weight : 0.0;
+    return weight > 0.0 && isfinite(weight) ? weight : 0.0;
 }
 
 static int br_chance_node(const pe_vector_game_t *game, const void *state,
@@ -179,7 +179,7 @@ static int br_chance_node(const pe_vector_game_t *game, const void *state,
     *total_weight = 0.0;
     for (outcome = 0; outcome < *outcomes; ++outcome)
         *total_weight += br_chance_weight(game, state, outcome);
-    return *total_weight > 0.0 && !isnan(*total_weight) ? 1 : -1;
+    return *total_weight > 0.0 && isfinite(*total_weight) ? 1 : -1;
 }
 
 /* Return utility weighted by every non-BR player's reach. */
