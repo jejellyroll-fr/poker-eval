@@ -37,6 +37,7 @@
 #define POKER_EVAL_PE_STORAGE_H
 
 #include <poker_eval/solver/pe_storage_port.h>
+#include <poker_eval/solver/pe_solver_config.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -87,6 +88,23 @@ typedef struct pe_storage_t pe_storage_t;
  * @return The storage, or NULL on allocation failure.
  */
 pe_storage_t *pe_storage_create(size_t expected_infosets);
+
+/** Create storage with an explicit numeric representation. F64 preserves the
+ * historical implementation; FIXED16 stores value arrays as int16_t with a
+ * separately tracked scale for every infoset and value array. */
+pe_storage_t *pe_storage_create_with_precision(size_t expected_infosets,
+                                               pe_precision_mode_t precision);
+
+/** Short alias for pe_storage_create_with_precision(). */
+pe_storage_t *pe_storage_create_precision(size_t expected_infosets,
+                                          pe_precision_mode_t precision);
+
+/** Numeric representation selected at creation time. */
+pe_precision_mode_t pe_storage_precision(const pe_storage_t *storage);
+
+/** Number of fixed16 rescalings performed after a value exceeded its prior
+ * representable range. A non-zero count is diagnostic, not silent truncation. */
+size_t pe_storage_fixed16_rescales(const pe_storage_t *storage);
 
 void pe_storage_destroy(pe_storage_t *storage);
 

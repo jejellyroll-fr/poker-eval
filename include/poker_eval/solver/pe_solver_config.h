@@ -128,7 +128,7 @@ typedef enum {
     PE_PREC_F64 = 0,         /* reference precision                           */
     PE_PREC_F32,
     PE_PREC_MIXED,           /* F32 accumulation, F64 reduction               */
-    PE_PREC_FIXED16,         /* 16-bit fixed point, lane B at scale           */
+    PE_PREC_FIXED16,         /* 16-bit fixed point, per-infoset scale         */
     PE_PREC_COUNT
 } pe_precision_mode_t;
 
