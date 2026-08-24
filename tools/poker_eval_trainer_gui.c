@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "pe_sol_format.h"
+#include "pe_tree_json.h"
 
 #ifdef _WIN32
 #define PE_GUI_PATH_SEPARATOR '\\'
@@ -101,6 +102,10 @@ typedef struct {
     char solve_staging[1024];
     char solve_success[64];
     char solve_failure[64];
+    /* Loaded tree topology rendered by draw_tree. */
+    pe_tree_json_t tree_view;
+    int tree_json_pending;
+    char tree_json_path[1024];
 } app_t;
 
 typedef struct { int x; int y; int w; int h; } rect_t;
@@ -517,6 +522,8 @@ static int launch_solver(app_t *app, const char *command, const char *success,
 
 /* Main-loop side of the handoff: reclaim the finished worker and publish its
  * output. Safe to call every frame; does nothing while a solve is in flight. */
+static int load_tree_json_file(app_t *app, const char *path);
+
 static void finish_pending_solve(app_t *app)
 {
     if (SDL_AtomicGet(&app->solve_state) != SOLVE_DONE)
@@ -532,6 +539,61 @@ static void finish_pending_solve(app_t *app)
     copy_field(app->solver_status, sizeof(app->solver_status),
                app->solve_exit_status == 0 ? app->solve_success
                                            : app->solve_failure);
+    if (app->tree_json_pending)
+    {
+        app->tree_json_pending = 0;
+        if (app->solve_exit_status == 0)
+            load_tree_json_file(app, app->tree_json_path);
+    }
+}
+
+/* Load an mpf-format tree JSON file into the tree view. */
+static int load_tree_json_file(app_t *app, const char *path)
+{
+    FILE *file = fopen(path, "rb"); long size; char *data;
+    pe_tree_json_t parsed;
+    char message[96];
+    if (!file || fseek(file, 0, SEEK_END) != 0) { if (file) fclose(file); copy_field(app->solver_status, sizeof(app->solver_status), "Could not open tree JSON"); return -1; }
+    size = ftell(file); rewind(file);
+    if (size <= 0 || size > 64 * 1024 * 1024) { fclose(file); copy_field(app->solver_status, sizeof(app->solver_status), "Tree JSON too large"); return -1; }
+    data = (char *)malloc((size_t)size + 1u);
+    if (!data || fread(data, 1u, (size_t)size, file) != (size_t)size) { free(data); fclose(file); copy_field(app->solver_status, sizeof(app->solver_status), "Could not read tree JSON"); return -1; }
+    fclose(file);
+    data[size] = '\0';
+    if (pe_tree_json_parse(data, (size_t)size, &parsed, 4096u) != 0 || parsed.count == 0u) {
+        free(data); pe_tree_json_free(&parsed);
+        copy_field(app->solver_status, sizeof(app->solver_status), "No readable nodes in tree JSON");
+        return -1;
+    }
+    free(data);
+    pe_tree_json_free(&app->tree_view);
+    app->tree_view = parsed;
+    snprintf(message, sizeof(message), "Tree topology loaded (%zu nodes)", parsed.count);
+    copy_field(app->solver_status, sizeof(app->solver_status), message);
+    return 0;
+}
+
+/* Ask pe-monker-validate to convert a Monker .tree into mpf JSON so the GUI
+ * can render the topology without linking the solver library. */
+static void start_tree_conversion(app_t *app)
+{
+    char executable[1200], quoted_executable[1400], tree[1200], output[1200];
+    char command[8192];
+    if (SDL_AtomicGet(&app->solve_state) == SOLVE_RUNNING)
+        return; /* busy with another job; the next drop retries */
+    if (app->executable_dir[0])
+        snprintf(executable, sizeof(executable), "%s%cpe-monker-validate%s",
+                 app->executable_dir, PE_GUI_PATH_SEPARATOR, PE_GUI_EXE_SUFFIX);
+    else
+        copy_field(executable, sizeof(executable), "pe-monker-validate");
+    shell_quote(executable, quoted_executable, sizeof(quoted_executable));
+    shell_quote(app->tree_path, tree, sizeof(tree));
+    copy_field(app->tree_json_path, sizeof(app->tree_json_path), "pe_gui_tree.json");
+    shell_quote(app->tree_json_path, output, sizeof(output));
+    snprintf(command, sizeof(command), "%s --tree %s --tree-json %s 2>&1",
+             quoted_executable, tree, output);
+    app->tree_json_pending = 1;
+    launch_solver(app, command, "Tree converted", "Tree conversion failed");
 }
 
 static int run_vector_sim(app_t *app)
@@ -670,7 +732,12 @@ static void set_dropped_file(app_t *app, const char *path)
     else if (has_suffix(path, ".tree"))
     {
         copy_field(app->tree_path, sizeof(app->tree_path), path);
-        copy_field(app->solver_status, sizeof(app->solver_status), "Tree loaded - choose Solve");
+        copy_field(app->solver_status, sizeof(app->solver_status), "Tree loaded - converting topology");
+        start_tree_conversion(app);
+    }
+    else if (has_suffix(path, ".json"))
+    {
+        load_tree_json_file(app, path);
     }
     else if (has_suffix(path, ".mkr"))
     {
@@ -788,23 +855,79 @@ static void stat_value(SDL_Renderer *renderer, int x, int y, const char *name,
     text(renderer, x, y + 25, value, 3, value_color);
 }
 
-static void draw_tree(SDL_Renderer *renderer, int x, int y, int width,
-                      int height, SDL_Color white, SDL_Color muted,
+static const pe_tree_json_node_t *find_tree_node(const pe_tree_json_t *tree,
+                                                 const char *id)
+{
+    size_t i;
+    if (!tree || !id || !id[0])
+        return NULL;
+    for (i = 0u; i < tree->count; ++i)
+        if (strcmp(tree->nodes[i].id, id) == 0)
+            return &tree->nodes[i];
+    return NULL;
+}
+
+/* Render the loaded tree topology (root + its action children). When no tree
+ * is loaded, say so instead of drawing placeholder nodes. */
+static void draw_tree(const app_t *app, SDL_Renderer *renderer, int x, int y,
+                      int width, int height, SDL_Color white, SDL_Color muted,
                       SDL_Color blue, SDL_Color green)
 {
-    int root_x = x + width / 2;
-    int child_y = y + 76;
-    int child_left = x + width / 4;
-    int child_right = x + 3 * width / 4;
-    line(renderer, root_x, y + 30, child_left, child_y, muted);
-    line(renderer, root_x, y + 30, child_right, child_y, muted);
-    panel(renderer, (rect_t){root_x - 66, y, 132, 42}, (SDL_Color){39, 65, 91, 255}, blue);
-    panel(renderer, (rect_t){child_left - 66, child_y, 132, 42}, (SDL_Color){34, 57, 55, 255}, green);
-    panel(renderer, (rect_t){child_right - 66, child_y, 132, 42}, (SDL_Color){47, 51, 67, 255}, blue);
-    text(renderer, root_x - 49, y + 14, "ACTING", 2, white);
-    text(renderer, child_left - 49, child_y + 14, "CHECK", 2, white);
-    text(renderer, child_right - 49, child_y + 14, "BET 33", 2, white);
-    text(renderer, x + 18, y + height - 30, "TREE PATH  /  ROOT > FLOP > DECISION", 2, muted);
+    const pe_tree_json_node_t *root = NULL;
+    char label[32];
+    char caption[192];
+    if (app->tree_view.count > 0u)
+    {
+        root = find_tree_node(&app->tree_view, app->tree_view.root_id);
+        if (!root)
+            root = &app->tree_view.nodes[0];
+    }
+    if (!root)
+    {
+        panel(renderer, (rect_t){x + width / 2 - 160, y + 20, 320, 42},
+              (SDL_Color){39, 65, 91, 255}, blue);
+        text(renderer, x + width / 2 - 100, y + 34, "NO TREE LOADED", 2, white);
+        text(renderer, x + 18, y + height - 30,
+             "DROP A .tree OR TREE .json TO SHOW ITS TOPOLOGY", 2, muted);
+        return;
+    }
+    {
+        int root_x = x + width / 2;
+        int child_y = y + 86;
+        int children = root->action_count < 4 ? root->action_count : 4;
+        int i;
+        panel(renderer, (rect_t){root_x - 66, y, 132, 42},
+              (SDL_Color){39, 65, 91, 255}, blue);
+        if (root->player >= 0)
+            snprintf(label, sizeof(label), "%s P%d",
+                     root->type[0] ? root->type : "node", root->player);
+        else
+            snprintf(label, sizeof(label), "%s",
+                     root->type[0] ? root->type : "node");
+        text(renderer, root_x - 58, y + 6, label, 1, muted);
+        snprintf(label, sizeof(label), "%.10s", root->id);
+        text(renderer, root_x - 58, y + 20, label, 2, white);
+        for (i = 0; i < children; ++i)
+        {
+            int child_x = x + (width * (i + 1)) / (children + 1);
+            const pe_tree_json_node_t *child =
+                find_tree_node(&app->tree_view, root->action_next[i]);
+            line(renderer, root_x, y + 42, child_x, child_y, muted);
+            panel(renderer, (rect_t){child_x - 66, child_y, 132, 42},
+                  (SDL_Color){34, 57, 55, 255}, green);
+            text(renderer, child_x - 58, child_y + 6,
+                 root->action_type[i][0] ? root->action_type[i] : "action",
+                 1, white);
+            snprintf(label, sizeof(label), "%.10s",
+                     child ? child->id : root->action_next[i]);
+            text(renderer, child_x - 58, child_y + 20, label, 2, white);
+        }
+        snprintf(caption, sizeof(caption), "TREE  /  ROOT %.24s  /  %zu NODES",
+                 app->tree_view.root_id[0] ? app->tree_view.root_id
+                                           : root->id,
+                 app->tree_view.count);
+        text(renderer, x + 18, y + height - 30, caption, 2, muted);
+    }
 }
 
 static int rank_index(char rank)
@@ -1177,7 +1300,7 @@ static void render_solver_legacy(SDL_Renderer *renderer, const app_t *app)
         for (int c = 0; c < 5; ++c)
             card(renderer, right + 24 + c * 86, 238, c < 3 ? "--" : "", c < 3);
         text(renderer, right + 24, 366, "ACTION TREE", 2, muted);
-        draw_tree(renderer, right + 24, 398, width - right - 76, 180, white, muted, blue, green);
+        draw_tree(app, renderer, right + 24, 398, width - right - 76, 180, white, muted, blue, green);
         panel(renderer, (rect_t){right + 24, height - 154, width - right - 76, 54}, (SDL_Color){35, 77, 73, 255}, green);
         text(renderer, right + 42, height - 137, "SOLVE THIS SPOT  >", 2, white);
     }
@@ -1190,7 +1313,7 @@ static void render_solver_legacy(SDL_Renderer *renderer, const app_t *app)
         text(renderer, left + 24, 166, "TREE MONITOR", 2, blue);
         snprintf(buffer, sizeof(buffer), "%s  /  %d PLAYERS  /  %s", game_label_for(app->game_index), app->player_count, engine_label_for(app->engine_index));
         text(renderer, left + 24, 208, buffer, 2, muted);
-        draw_tree(renderer, left + 28, 260, 680, 220, white, muted, blue, green);
+        draw_tree(app, renderer, left + 28, 260, 680, 220, white, muted, blue, green);
         text(renderer, left + 24, 536, "ITERATION", 2, muted);
         text(renderer, left + 24, 562, app->solution_path[0] ? "SNAPSHOT LOADED" : "WAITING FOR INPUT", 3, app->solution_path[0] ? green : orange);
         line(renderer, left + 24, 618, left + 704, 618, outline);
@@ -1366,7 +1489,7 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
 
         text(renderer, right + 24, 116, "TREE PREVIEW", 2, blue);
         text(renderer, right + 24, 151, "ROOT / PREFLOP", 1, muted);
-        draw_tree(renderer, right + 24, 180, width - right - 76, 196, white, muted, blue, green);
+        draw_tree(app, renderer, right + 24, 180, width - right - 76, 196, white, muted, blue, green);
         text(renderer, right + 24, 410, "ACTIVE BOARD", 1, muted);
         for (int c = 0; c < 5; ++c) card(renderer, right + 24 + c * 70, 430, c < 5 ? "--" : "", c < 5);
         panel(renderer, (rect_t){right + 24, height - 110, width - right - 76, 52}, (SDL_Color){31, 102, 80, 255}, green);
@@ -1772,5 +1895,6 @@ int main(int argc, char **argv)
     /* Do not leak the worker: wait out any solve still in flight. */
     while (SDL_AtomicGet(&app.solve_state) == SOLVE_RUNNING) SDL_Delay(16);
     finish_pending_solve(&app);
+    pe_tree_json_free(&app.tree_view);
     save_session(&app); SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit(); free(app.spots); free(app.labels); free(app.events); return 0;
 }

@@ -8,8 +8,11 @@
 
 static void usage(const char *program)
 {
-    fprintf(stderr, "usage: %s --tree FILE --mkr FILE [--strategy NAME] "
-                    "[--expected-classes N] [--json FILE]\n", program);
+    fprintf(stderr, "usage: %s --tree FILE [--mkr FILE] [--strategy NAME] "
+                    "[--expected-classes N] [--json FILE] [--tree-json FILE|-]\n"
+                    "       --tree-json exports the tree topology as mpf JSON "
+                    "and skips the strategy audit when --mkr is absent\n",
+            program);
 }
 
 static const char *game_name(enum_game_t game)
@@ -45,6 +48,7 @@ int main(int argc, char **argv)
     const char *mkr_path = NULL;
     const char *strategy_name = NULL;
     const char *json_path = NULL;
+    const char *tree_json_path = NULL;
     uint32_t expected_classes = 0u;
     int have_expected = 0;
     mpf_tree_def_t *tree = NULL;
@@ -78,13 +82,33 @@ int main(int argc, char **argv)
             have_expected = 1;
         }
         else if (strcmp(argv[i], "--json") == 0 && i + 1 < argc) json_path = argv[++i];
+        else if (strcmp(argv[i], "--tree-json") == 0 && i + 1 < argc) tree_json_path = argv[++i];
         else { usage(argv[0]); return 2; }
     }
-    if (!tree_path || !mkr_path) { usage(argv[0]); return 2; }
+    if (!tree_path || (!mkr_path && !tree_json_path)) { usage(argv[0]); return 2; }
 
     if (pe_monker_tree_read_header(tree_path, &header) != PE_MONKER_OK ||
         pe_monker_tree_load(tree_path, &tree) != PE_MONKER_OK || !tree) {
         fprintf(stderr, "cannot load Monker tree %s\n", tree_path);
+        goto done;
+    }
+    if (tree_json_path && !mkr_path) {
+        /* Topology-only export: no strategy audit without an archive. */
+        size_t json_length = 0u;
+        char *json_text = mpf_tree_serialize_json(tree, &json_length);
+        FILE *tree_out = strcmp(tree_json_path, "-") == 0
+                             ? stdout
+                             : fopen(tree_json_path, "w");
+        if (!json_text || !tree_out ||
+            fwrite(json_text, 1u, json_length, tree_out) != json_length) {
+            fprintf(stderr, "cannot export tree JSON\n");
+            free(json_text);
+            if (tree_out && tree_out != stdout) fclose(tree_out);
+            goto done;
+        }
+        free(json_text);
+        if (tree_out != stdout) fclose(tree_out);
+        result = 0;
         goto done;
     }
     if (pe_monker_tree_read_ranges(tree_path, &ranges) != PE_MONKER_OK ||

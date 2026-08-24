@@ -1648,6 +1648,13 @@ if(TARGET test_pe_sol_format)
     set_tests_properties(test_pe_sol_format PROPERTIES LABELS "product;import")
 endif()
 
+add_poker_test(test_pe_tree_json)
+if(TARGET test_pe_tree_json)
+    target_compile_definitions(test_pe_tree_json PRIVATE
+        PE_TREE_JSON_SAMPLE="${CMAKE_SOURCE_DIR}/examples/heads_up_river/tree.json")
+    set_tests_properties(test_pe_tree_json PROPERTIES LABELS "product;import")
+endif()
+
 if(TARGET pe-hand-history-import)
     add_test(NAME pe_hand_history_import_smoke
         COMMAND pe-hand-history-import
