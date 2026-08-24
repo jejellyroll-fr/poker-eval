@@ -32,3 +32,11 @@ target_link_libraries(pe-runout-report PRIVATE poker_eval_modular m)
 add_executable(pe-vector-sim pe_vector_sim.c)
 target_include_directories(pe-vector-sim PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-vector-sim PRIVATE poker_eval_modular m)
+
+add_executable(pe-hand-history-import pe_hand_history_import.c)
+target_include_directories(pe-hand-history-import PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-hand-history-import PRIVATE poker_eval_modular m)
+
+add_executable(pe-preflop-tree pe_preflop_tree.c)
+target_include_directories(pe-preflop-tree PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-preflop-tree PRIVATE poker_eval_modular m)

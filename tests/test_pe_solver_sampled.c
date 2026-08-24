@@ -1,6 +1,7 @@
 /* Lane B integration: the public solver lifecycle drives external sampling. */
 
 #include <poker_eval/solver/pe_external_traversal.h>
+#include <poker_eval/solver/pe_external_best_response.h>
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
@@ -85,6 +86,9 @@ int main(void)
     pe_solver_deps_t deps = pe_solver_deps_default();
     pe_solver_t *solver;
     pe_progress_t progress;
+    pe_metrics_t metrics;
+    pe_external_br_config_t br_config = pe_external_br_config_default();
+    pe_external_br_result_t br_result;
 
     game.root = (const void *)(uintptr_t)50u;
     game.player_count = 2u;
@@ -98,12 +102,25 @@ int main(void)
     game.sample_chance_with_user = sample_chance_with_user;
     game.apply_chance = apply_chance;
 
+    br_config.samples = 64u;
+    br_config.max_depth = 16u;
+    br_config.seed = 0x55u;
+    if (pe_external_best_response_sampled(&game, 0u, &br_config, &br_result) != 0 ||
+        !br_result.empirical || br_result.policy_samples == 0u ||
+        br_result.br_samples == 0u || br_result.br_gap < 0.0)
+    {
+        fprintf(stderr, "test_pe_solver_sampled: empirical BR failed\n");
+        return 1;
+    }
+
     cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
     cfg.max_iterations = 64u;
     cfg.problem.expected_infosets = 4u;
     cfg.problem.expected_actions = 2u;
     cfg.problem.expected_combos = 1u;
     cfg.seed = 0x1234u;
+    cfg.target_exploitability_mbb = 1.0;
+    cfg.exploitability_interval = 16u;
     deps.external_game = &game;
     solver = pe_solver_create(&cfg, &deps);
     if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
@@ -111,6 +128,14 @@ int main(void)
         !progress.complete || progress.iteration != cfg.max_iterations)
     {
         fprintf(stderr, "test_pe_solver_sampled: Lane B lifecycle failed\n");
+        pe_solver_destroy(solver);
+        return 1;
+    }
+    if (pe_solver_metrics(solver, &metrics) != PE_SOLVER_OK ||
+        metrics.guarantee != PE_GUARANTEE_EMPIRICAL ||
+        metrics.exploitability_mbb_per_game < 0.0)
+    {
+        fprintf(stderr, "test_pe_solver_sampled: Lane B metrics failed\n");
         pe_solver_destroy(solver);
         return 1;
     }

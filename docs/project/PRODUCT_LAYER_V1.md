@@ -71,6 +71,14 @@ poker-eval-trainer --solution solve.pe_sol --labels labels.csv --rounds 20 \
   --session-json session.json
 ```
 
+Pour une interface locale sans installation, `--export-html` génère une application
+HTML autonome avec boutons d'actions, feedback, score et difficulté adaptative :
+
+```sh
+poker-eval-trainer --solution solve.pe_sol --labels labels.csv \
+  --export-html trainer.html
+```
+
 Les libellés sont une vue produit ; la stratégie quantifiée reste la source de vérité.
 Quand `next_key` est présent, le trainer suit la transition choisie vers le prochain
 infoset au lieu de tirer un spot indépendant. Le trainer exporte une session JSON
@@ -92,6 +100,30 @@ parcours préflop complet au sampler Lane B : chaque itération tire un deal pri
 corrélé, applique les actions sémantiques de l'arbre et atteint un terminal de mise.
 Les reports de runout exacts sont disponibles via `pe-runout-report`, qui énumère
 les boards turn/river conditionnels et vérifie que leur masse vaut 1.
+
+`pe_external_best_response_sampled` mesure la valeur de la stratégie et une déviation
+unilatérale par échantillonnage. Le résultat est marqué `empirical` : il sert au suivi
+Lane B, mais ne se présente pas comme une BR exacte.
+
+Un arbre de mise préflop déclaratif peut être produit avec les ranges et les tailles
+d'actions du spot :
+
+```sh
+pe-preflop-tree --players 2 --stack 100 --stack 100 --raises 2,4,8 \
+  --range 0 '22+,AKs' --range 1 'random' --output tree.json
+```
+
+Le document `pe-preflop-tree/v1` contient les nœuds, les transitions légales, le pot,
+le montant à payer et les ranges d'entrée.
+
+Les hand histories courantes de type PokerStars peuvent être normalisées :
+
+```sh
+pe-hand-history-import --input hand.txt --format json --output hand.json
+```
+
+Le format `pe-hand-history/v1` conserve hand id, street, board, joueur, action et
+montant pour les futurs adaptateurs de room.
 
 Pour une clé brute, `pe-solution-report --decode-key 0x...` indique explicitement
 si elle est décodable. Les clés d'infoset Monker/FNV sont des hash et ne peuvent pas

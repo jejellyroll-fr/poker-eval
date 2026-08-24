@@ -27,6 +27,7 @@
 #include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/solver/pe_traversal.h>
 #include <poker_eval/solver/pe_external_traversal.h>
+#include <poker_eval/solver/pe_external_best_response.h>
 #include <poker_eval/solver/pe_outcome_traversal.h>
 
 #include <stddef.h>
@@ -600,11 +601,6 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         ((game->sample_chance || game->sample_chance_with_user) &&
          !game->apply_chance && !game->sample_chance_child))
         return PE_SOLVER_ERR_NOT_IMPLEMENTED;
-    if (solver->config.target_exploitability_mbb > 0.0)
-        /* Lane B has no exact BR measurement yet; accepting the target would
-           turn an iteration budget into an unbounded run. */
-        return PE_SOLVER_ERR_INVALID_CONFIG;
-
     compute_ops = solver->deps.compute;
     if (compute_ops == NULL)
         compute_ops = plan->stages.update == PE_COMPUTE_CPU_PAR
@@ -694,6 +690,51 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         compute_ops->destroy(compute_self);
         solver->state = PE_SOLVER_STATE_STOPPED;
         return PE_SOLVER_ERR_EXECUTION;
+    }
+
+    /* Lane B cannot enumerate every private deal, so its BR is explicitly an
+       empirical measurement. It is still useful for a configured target and
+       for reporting: the caller receives a sampled empirical gap rather
+       than a false exact/Nash claim. */
+    if (solver->config.target_exploitability_mbb > 0.0)
+    {
+        pe_external_br_config_t br_config = pe_external_br_config_default();
+        double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
+        uint8_t player;
+        br_config.samples = solver->config.exploitability_interval == 0u
+            ? 256u
+            : solver->config.exploitability_interval > UINT32_MAX
+                ? UINT32_MAX
+                : (uint32_t)solver->config.exploitability_interval;
+        br_config.seed = solver->config.seed ^ solver->iteration;
+        for (player = 0u; player < sampled_game.player_count; ++player)
+        {
+            pe_external_br_result_t br_result;
+            if (pe_external_best_response_sampled(&sampled_game, player,
+                                                  &br_config, &br_result) != 0)
+            {
+                pe_update_batch_destroy(&batch);
+                if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+                else pe_external_sampling_ctx_destroy(&external);
+                compute_ops->destroy(compute_self);
+                solver->state = PE_SOLVER_STATE_STOPPED;
+                return PE_SOLVER_ERR_EXECUTION;
+            }
+            gaps[player] = br_result.br_gap;
+        }
+        if (pe_best_response_metrics_from_multiway(
+                sampled_game.player_count, 1, gaps, 0.0, 0.0,
+                solver->config.execution.big_blind, &solver->metrics) != PE_SOLVER_OK)
+        {
+            pe_update_batch_destroy(&batch);
+            if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+            else pe_external_sampling_ctx_destroy(&external);
+            compute_ops->destroy(compute_self);
+            solver->state = PE_SOLVER_STATE_STOPPED;
+            return PE_SOLVER_ERR_EXECUTION;
+        }
+        solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
+        solver->metrics_available = 1;
     }
     pe_update_batch_destroy(&batch);
     if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);

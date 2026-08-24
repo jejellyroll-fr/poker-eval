@@ -1612,3 +1612,21 @@ if(TEST test_best_response_ii_leduc)
         LABELS "solver;solver-v3;game_theory;br02"
         TIMEOUT 180)
 endif()
+
+if(TARGET pe-hand-history-import)
+    add_test(NAME pe_hand_history_import_smoke
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json
+            --output ${CMAKE_BINARY_DIR}/pe-hand-history-smoke.json)
+    set_tests_properties(pe_hand_history_import_smoke PROPERTIES LABELS "product;import")
+endif()
+
+if(TARGET pe-preflop-tree)
+    add_test(NAME pe_preflop_tree_smoke
+        COMMAND pe-preflop-tree
+            --players 2 --stack 100 --stack 100 --raises 2,4,8
+            --range 0 "22+,AKs" --range 1 "random"
+            --output ${CMAKE_BINARY_DIR}/pe-preflop-tree-smoke.json)
+    set_tests_properties(pe_preflop_tree_smoke PROPERTIES LABELS "product;solver")
+endif()

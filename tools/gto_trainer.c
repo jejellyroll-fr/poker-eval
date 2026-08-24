@@ -34,10 +34,27 @@ typedef struct
 static void usage(const char *program)
 {
     fprintf(stderr, "Usage: %s --solution FILE [--labels CSV] [--rounds N] [--seed N]"
-                    " [--session-json FILE]\n"
+                    " [--session-json FILE] [--export-html FILE]\n"
                     "       labels CSV: key,action,label or key,street,board,action,label,next_key\n"
                     "       rich labels: key,street,board,runout,position,pot,action,label,next_key\n",
             program);
+}
+
+static void json_string(FILE *file, const char *value)
+{
+    const unsigned char *p = (const unsigned char *)value;
+    fputc('"', file);
+    while (*p != 0u)
+    {
+        if (*p == '"' || *p == '\\') { fputc('\\', file); fputc((int)*p, file); }
+        else if (*p == '\n') fputs("\\n", file);
+        else if (*p == '\r') fputs("\\r", file);
+        else if (*p == '\t') fputs("\\t", file);
+        else if (*p < 32u) fputc(' ', file);
+        else fputc((int)*p, file);
+        ++p;
+    }
+    fputc('"', file);
 }
 
 static int load_labels(const char *path, trainer_label_t **out, size_t *count)
@@ -175,6 +192,73 @@ static int write_session(const char *path, const char *solution,
     return fclose(file) == 0 ? 0 : -1;
 }
 
+/* Generates a self-contained local browser trainer.  It is intentionally
+ * static: opening the file never uploads solution data or needs a server. */
+static int write_html_app(const char *path, pe_sol_mmap_t *view,
+                          const trainer_label_t *labels, size_t label_count)
+{
+    FILE *file = fopen(path, "w");
+    const size_t count = pe_sol_mmap_infoset_count(view);
+    if (!file) return -1;
+    fputs("<!doctype html><html><head><meta charset='utf-8'><title>poker-eval trainer</title>"
+          "<style>body{font:16px system-ui;max-width:900px;margin:2rem auto;padding:0 1rem;"
+          "background:#10131a;color:#eef}button{margin:.35rem;padding:.7rem 1rem;border:0;"
+          "border-radius:.4rem;background:#385b9b;color:white;cursor:pointer}.card{background:#191e29;"
+          "padding:1rem;border-radius:.6rem;margin:1rem 0}.muted{color:#9aa}</style></head><body>"
+          "<h1>poker-eval trainer</h1><p class='muted'>Local adaptive play-vs-solution session</p>"
+          "<div class='card'><div id='spot'></div><div id='actions'></div><div id='feedback'></div></div>"
+          "<p>Score: <span id='score'>0</span> / <span id='seen'>0</span> · Difficulty: "
+          "<span id='difficulty'>1</span></p><button onclick='nextSpot()'>Next spot</button>"
+          "<script>const spots=[", file);
+    for (size_t i = 0u; i < count; ++i)
+    {
+        uint64_t key = 0u;
+        double probabilities[256];
+        int actions = 0;
+        if (pe_sol_mmap_get_strategy(view, i, &key, 256, probabilities, &actions) != 0) continue;
+        if (i != 0u) fputc(',', file);
+        fprintf(file, "{key:\"0x%016llx\",actions:[", (unsigned long long)key);
+        for (int action = 0; action < actions; ++action)
+        {
+            const trainer_label_t *label = NULL;
+            for (size_t j = 0u; j < label_count; ++j)
+                if (labels[j].key == key && labels[j].action == action) { label = &labels[j]; break; }
+            if (action != 0) fputc(',', file);
+            fprintf(file, "{n:%d,p:%g,label:", action, probabilities[action]);
+            json_string(file, label && label->label[0] ? label->label : "action");
+            fputs(",next:", file);
+            if (label && label->has_next) fprintf(file, "\"0x%016llx\"", (unsigned long long)label->next_key);
+            else fputs("null", file);
+            fputc('}', file);
+        }
+        fputs("]", file);
+        const trainer_label_t *spot = spot_for(labels, label_count, key);
+        if (spot)
+        {
+            fputs(",street:", file); json_string(file, spot->street);
+            fputs(",board:", file); json_string(file, spot->board);
+            fputs(",runout:", file); json_string(file, spot->runout);
+            fputs(",position:", file); json_string(file, spot->position);
+        }
+        fputc('}', file);
+    }
+    fputs("];let current=null,score=0,seen=0,streak=0,difficulty=1;"
+          "function choose(){let pool=spots;if(difficulty>1){let h=spots.filter(s=>s.actions.some(a=>a.p<.5));"
+          "if(h.length)pool=h;}return pool[Math.floor(Math.random()*pool.length)];}"
+          "function nextSpot(){current=choose();render();}function render(){if(!current)return;"
+          "let m=[current.street,current.board,current.runout,current.position].filter(Boolean).join(' · ');"
+          "document.getElementById('spot').innerHTML='<b>'+current.key+'</b> '+m;let box=document.getElementById('actions');"
+          "box.innerHTML='';current.actions.forEach(a=>{let b=document.createElement('button');b.textContent=a.label+' ('+(100*a.p).toFixed(1)+'%)';"
+          "b.onclick=()=>answer(a);box.appendChild(b);});document.getElementById('feedback').textContent='Choose your action.';}"
+          "function answer(a){let best=current.actions.reduce((x,y)=>y.p>x.p?y:x);seen++;if(a.p>=best.p){score++;streak++;"
+          "document.getElementById('feedback').textContent='Correct — highest-frequency action.';}else{streak=0;"
+          "document.getElementById('feedback').textContent='Review: '+best.label+' is '+(100*best.p).toFixed(1)+'%.';}"
+          "if(streak>=3)difficulty=Math.min(5,difficulty+1);if(!streak)difficulty=Math.max(1,difficulty-1);"
+          "document.getElementById('score').textContent=score;document.getElementById('seen').textContent=seen;"
+          "document.getElementById('difficulty').textContent=difficulty;setTimeout(nextSpot,700);}nextSpot();</script></body></html>\n", file);
+    return fclose(file) == 0 ? 0 : -1;
+}
+
 int main(int argc, char **argv)
 {
     const char *solution = NULL;
@@ -184,6 +268,7 @@ int main(int argc, char **argv)
     int rounds = 10;
     unsigned seed = 1u;
     const char *session_path = NULL;
+    const char *export_html = NULL;
     for (int i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--solution") == 0 && i + 1 < argc)
@@ -196,6 +281,8 @@ int main(int argc, char **argv)
             seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (strcmp(argv[i], "--session-json") == 0 && i + 1 < argc)
             session_path = argv[++i];
+        else if (strcmp(argv[i], "--export-html") == 0 && i + 1 < argc)
+            export_html = argv[++i];
         else
         {
             usage(argv[0]);
@@ -226,6 +313,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "Solution contains no infosets\n");
         pe_sol_close_mmap(view);
         return 1;
+    }
+
+    if (export_html)
+    {
+        const int result = write_html_app(export_html, view, labels, label_count);
+        pe_sol_close_mmap(view);
+        free(labels);
+        if (result != 0) fprintf(stderr, "Unable to write trainer GUI %s\n", export_html);
+        else printf("Wrote local trainer GUI: %s\n", export_html);
+        return result == 0 ? 0 : 1;
     }
 
     printf("GTO trainer: %zu infosets, %d rounds\n", count, rounds);
