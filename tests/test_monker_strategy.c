@@ -587,6 +587,13 @@ int main(void)
         state.pot = 2.0;
         state.invested[0] = 1.0;
         state.invested[1] = 1.0;
+        state.stack[0] = 9999.0;
+        state.stack[1] = 9999.0;
+        state.round_contrib[0] = 1.0;
+        state.round_contrib[1] = 1.0;
+        state.to_call = 1.0;
+        state.current_bet = 1.0;
+        state.min_raise = 1.0;
         state.active[0] = 1;
         state.active[1] = 1;
         state.winner = -1;

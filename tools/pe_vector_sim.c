@@ -808,7 +808,16 @@ static int run_omaha_tree(const EvalContext *context, mask_t board,
     {
         state.active[player] = 1;
         state.invested[player] = options->invested;
+        state.round_contrib[player] = options->invested;
+        state.stack[player] = monker->header.stacks[player] >
+                                      options->invested
+                                  ? monker->header.stacks[player] -
+                                        options->invested
+                                  : 0.0;
     }
+    state.to_call = options->invested;
+    state.current_bet = options->invested;
+    state.min_raise = options->invested > 0.0 ? options->invested : 1.0;
     {
         pe_monker_omaha_tree_spec_t spec;
         memset(&spec, 0, sizeof(spec));
@@ -935,7 +944,7 @@ int main(int argc, char **argv)
                    monker.walk_stats.reach_mass);
         if (monker.tree_ev_loaded)
             printf(" ev_weighting=tree_path terminal_mass=%.17g "
-                   "bet_amounts=not_applied",
+                   "bet_amounts=tree_applied",
                    monker.tree_path_weight);
         else if (monker.tree_walk_loaded)
             printf(" ev_weighting=not_applied");

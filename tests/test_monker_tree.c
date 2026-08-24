@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -431,6 +432,17 @@ static void test_real_monker_file(void)
     }
     CHECK(pot_bets > 0, "no pot-sized bet survived the decode");
     CHECK(all_ins > 0, "no all-in survived the decode");
+    for (i = 0; i < tree->node_count; ++i)
+    {
+        int has_pot_size = 0;
+        int a;
+        for (a = 0; a < tree->nodes[i].bet_size_count; ++a)
+            if (fabs(tree->nodes[i].bet_sizes[a] - 1.0) < 1e-12)
+                has_pot_size = 1;
+        if (has_pot_size)
+            CHECK(tree->nodes[i].use_pot_sizing,
+                  "node %d lost the pot-sizing marker", i);
+    }
     mpf_tree_free(tree);
 }
 

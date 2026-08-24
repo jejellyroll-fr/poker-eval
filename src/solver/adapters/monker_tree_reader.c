@@ -583,6 +583,8 @@ pe_monker_status_t pe_monker_tree_load(const char *path,
             if (node->actions[records.items[child].child_slot].type ==
                 MPF_TREE_ACTION_RAISE)
             {
+                if (action >= 40000u)
+                    node->use_pot_sizing = 1;
                 int size_index = node->bet_size_count;
                 double *grown = (double *)realloc(
                     node->bet_sizes, (size_t)(size_index + 1) * sizeof(*grown));
