@@ -12,8 +12,10 @@
 #include <poker_eval/solver/pe_betting_state.h>
 #include <poker_eval/solver/pe_holdem_deals.h>
 #include <poker_eval/solver/pe_holdem_river.h>
+#include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
 #include <errno.h>
 #include <math.h>
@@ -34,11 +36,30 @@ typedef struct
 {
     const char *board_text;
     const char *ranges[PE_VECTOR_SIM_MAX_PLAYERS];
+    const char *tree_path;
+    const char *mkr_path;
+    const char *strategy_name;
+    const pe_range_t *source_ranges[PE_VECTOR_SIM_MAX_PLAYERS];
     uint8_t player_count;
     double invested;
     double pot;
     int pot_explicit;
 } cli_options_t;
+
+typedef struct
+{
+    mpf_tree_def_t *tree;
+    pe_monker_tree_header_t header;
+    pe_monker_range_set_t ranges;
+    pe_monker_mkr_t archive;
+    pe_monker_mkr_metadata_t metadata;
+    pe_monker_mkr_strategy_t strategy;
+    int tree_loaded;
+    int ranges_loaded;
+    int archive_loaded;
+    int metadata_loaded;
+    int strategy_loaded;
+} monker_cli_t;
 
 static const game_spec_t GAME_SPECS[] = {
     {"holdem", game_holdem, 2u},
@@ -57,7 +78,10 @@ static void usage(const char *program)
             "  --invested <x>      Contribution per player (default 1)\n"
             "  --pot <x>           Total pot (default players*invested)\n"
             "  --range<N> <expr>   Range for player N, N=0..7\n"
-            "                      PLO5/PLO6 currently require an exact hand\n"
+            "                      Omit all ranges to use ranges in --tree\n"
+            "  --tree <path>       Monker .tree (loads topology and embedded ranges)\n"
+            "  --mkr <path>        Monker .mkr (loads stored strategy metadata)\n"
+            "  --strategy <name>   Strategy entry in .mkr (default storedstrategy0)\n"
             "  --help              Show this message\n",
             program);
 }
@@ -127,7 +151,9 @@ static int parse_args(int argc, char **argv, cli_options_t *out,
         }
         if (strcmp(arg, "--game") == 0 || strcmp(arg, "--board") == 0 ||
             strcmp(arg, "--players") == 0 ||
-            strcmp(arg, "--invested") == 0 || strcmp(arg, "--pot") == 0)
+            strcmp(arg, "--invested") == 0 || strcmp(arg, "--pot") == 0 ||
+            strcmp(arg, "--tree") == 0 || strcmp(arg, "--mkr") == 0 ||
+            strcmp(arg, "--strategy") == 0)
         {
             if (++index >= argc)
                 return -1;
@@ -148,6 +174,12 @@ static int parse_args(int argc, char **argv, cli_options_t *out,
                     return -1;
                 out->pot_explicit = 1;
             }
+            else if (strcmp(arg, "--tree") == 0)
+                out->tree_path = value;
+            else if (strcmp(arg, "--mkr") == 0)
+                out->mkr_path = value;
+            else if (strcmp(arg, "--strategy") == 0)
+                out->strategy_name = value;
             continue;
         }
         if (strncmp(arg, "--range", 7u) == 0 && arg[7] >= '0' &&
@@ -165,9 +197,16 @@ static int parse_args(int argc, char **argv, cli_options_t *out,
         return -1;
     if (!out->pot_explicit)
         out->pot = out->invested * (double)out->player_count;
-    for (index = 0; index < (int)out->player_count; ++index)
-        if (!out->ranges[index])
+    {
+        int range_count = 0;
+        for (index = 0; index < (int)out->player_count; ++index)
+            if (out->ranges[index])
+                ++range_count;
+        if (range_count != 0 && range_count != (int)out->player_count)
             return -1;
+        if (range_count == 0 && !out->tree_path)
+            return -1;
+    }
     return 0;
 }
 
@@ -244,6 +283,160 @@ static int parse_exact_omaha_combo(const char *text, uint8_t hole_cards,
     return 0;
 }
 
+static void monker_range_to_internal(pe_range_t *range)
+{
+    static const int suit_map[4] = {
+        MODERN_SUIT_SPADES, MODERN_SUIT_HEARTS, MODERN_SUIT_CLUBS,
+        MODERN_SUIT_DIAMONDS};
+    size_t combo;
+
+    if (!range)
+        return;
+    for (combo = 0u; combo < range->count; ++combo)
+    {
+        StdDeck_CardMask source = range->combos[combo].hand;
+        StdDeck_CardMask converted;
+        int card;
+        StdDeck_CardMask_RESET(converted);
+        for (card = 0; card < MODERN_DECK_SIZE; ++card)
+        {
+            if (StdDeck_CardMask_CARD_IS_SET(source, card))
+            {
+                int wire_suit = card / 13;
+                int rank = card % 13;
+                StdDeck_CardMask_SET(
+                    converted, MODERN_MAKE_CARD(rank, suit_map[wire_suit]));
+            }
+        }
+        range->combos[combo].hand = converted;
+    }
+}
+
+static void monker_cli_free(monker_cli_t *state)
+{
+    if (!state)
+        return;
+    if (state->strategy_loaded)
+        pe_monker_mkr_strategy_free(&state->strategy);
+    if (state->metadata_loaded)
+        pe_monker_mkr_metadata_free(&state->metadata);
+    if (state->archive_loaded)
+        pe_monker_mkr_free(&state->archive);
+    if (state->ranges_loaded)
+        pe_monker_range_set_free(&state->ranges);
+    if (state->tree_loaded)
+        mpf_tree_free(state->tree);
+    memset(state, 0, sizeof(*state));
+}
+
+static int monker_cli_load(const cli_options_t *options,
+                           const game_spec_t *game, monker_cli_t *out)
+{
+    pe_monker_status_t tree_status;
+    pe_monker_mkr_status_t mkr_status;
+    pe_monker_combo_layout_t layout;
+    int use_tree_ranges;
+    uint8_t player;
+
+    if (!options || !game || !out)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    use_tree_ranges = options->ranges[0] == NULL;
+    if (!options->tree_path && !options->mkr_path)
+        return 0;
+
+    if (options->tree_path)
+    {
+        tree_status = pe_monker_tree_read_header(options->tree_path,
+                                                 &out->header);
+        if (tree_status != PE_MONKER_OK)
+        {
+            fprintf(stderr, "Monker .tree header error: %s\n",
+                    pe_monker_status_string(tree_status));
+            goto fail;
+        }
+        if (out->header.player_count != options->player_count)
+        {
+            fprintf(stderr,
+                    "Monker .tree has %u players, CLI requested %u\n",
+                    out->header.player_count, options->player_count);
+            goto fail;
+        }
+        tree_status = pe_monker_tree_load(options->tree_path, &out->tree);
+        if (tree_status != PE_MONKER_OK || !out->tree)
+        {
+            fprintf(stderr, "Monker .tree load error: %s\n",
+                    pe_monker_status_string(tree_status));
+            goto fail;
+        }
+        out->tree_loaded = 1;
+
+        if (use_tree_ranges)
+        {
+            tree_status = pe_monker_tree_read_ranges(options->tree_path,
+                                                      &out->ranges);
+            if (tree_status != PE_MONKER_OK)
+            {
+                fprintf(stderr, "Monker .tree ranges error: %s\n",
+                        pe_monker_status_string(tree_status));
+                goto fail;
+            }
+            out->ranges_loaded = 1;
+            if (out->ranges.player_count != options->player_count)
+            {
+                fprintf(stderr,
+                        "Monker .tree ranges have %u players, expected %u\n",
+                        out->ranges.player_count, options->player_count);
+                goto fail;
+            }
+            if (pe_monker_combo_layout_from_count(out->ranges.combo_count,
+                                                  &layout) != PE_MONKER_OK ||
+                layout.game != game->game)
+            {
+                fprintf(stderr,
+                        "Monker .tree range layout (%u combos) does not "
+                        "match --game %s\n",
+                        out->ranges.combo_count, game->game_name);
+                goto fail;
+            }
+            for (player = 0u; player < out->ranges.player_count; ++player)
+                monker_range_to_internal(out->ranges.players[player]);
+        }
+    }
+
+    if (options->mkr_path)
+    {
+        const char *strategy_name = options->strategy_name
+                                        ? options->strategy_name
+                                        : "storedstrategy0";
+        mkr_status = pe_monker_mkr_read(options->mkr_path, &out->archive);
+        if (mkr_status != PE_MONKER_MKR_OK)
+        {
+            fprintf(stderr, "Monker .mkr load error: %s\n",
+                    pe_monker_mkr_status_string(mkr_status));
+            goto fail;
+        }
+        out->archive_loaded = 1;
+        if (pe_monker_mkr_read_metadata(&out->archive, &out->metadata) ==
+            PE_MONKER_MKR_OK)
+            out->metadata_loaded = 1;
+        mkr_status = pe_monker_mkr_read_strategy(
+            &out->archive, strategy_name, &out->strategy);
+        if (mkr_status != PE_MONKER_MKR_OK)
+        {
+            fprintf(stderr, "Monker strategy '%s' error: %s\n", strategy_name,
+                    pe_monker_mkr_status_string(mkr_status));
+            goto fail;
+        }
+        out->strategy_loaded = 1;
+    }
+    return 0;
+
+fail:
+    monker_cli_free(out);
+    return -1;
+}
+
 static void destroy_state(pe_betting_state_t *state)
 {
     (void)state;
@@ -262,27 +455,39 @@ static int run_holdem(const EvalContext *context, mask_t board,
     for (player = 0u; player < options->player_count; ++player)
     {
         pe_range_t *parsed = NULL;
+        const pe_range_t *input;
         size_t combo;
+        size_t kept = 0u;
         StdDeck_CardMask dead = modern_to_std(board);
-        if (pe_range_parse(game_holdem, options->ranges[player], dead, NULL,
-                           &parsed) != PE_STATUS_OK || !parsed)
-            goto cleanup;
+        input = options->source_ranges[player];
+        if (!input)
+        {
+            if (pe_range_parse(game_holdem, options->ranges[player], dead,
+                               NULL, &parsed) != PE_STATUS_OK || !parsed)
+                goto cleanup;
+            input = parsed;
+        }
         owned[player] = (pe_holdem_combo_t *)calloc(
-            parsed->count, sizeof(*owned[player]));
+            input->count, sizeof(*owned[player]));
         if (!owned[player])
         {
             pe_range_free(parsed);
             goto cleanup;
         }
         ranges[player].combos = owned[player];
-        ranges[player].count = parsed->count;
-        for (combo = 0u; combo < parsed->count; ++combo)
+        for (combo = 0u; combo < input->count; ++combo)
         {
-            owned[player][combo].cards =
-                std_to_modern(parsed->combos[combo].hand);
-            owned[player][combo].weight = parsed->combos[combo].weight;
+            mask_t cards = std_to_modern(input->combos[combo].hand);
+            if ((cards & board) != MASK_EMPTY || mask_popcount(cards) != 2)
+                continue;
+            owned[player][kept].cards = cards;
+            owned[player][kept].weight = input->combos[combo].weight;
+            ++kept;
         }
+        ranges[player].count = kept;
         pe_range_free(parsed);
+        if (kept == 0u)
+            goto cleanup;
     }
     memset(&state, 0, sizeof(state));
     state.player_count = options->player_count;
@@ -316,9 +521,12 @@ static int run_omaha(const EvalContext *context, mask_t board,
     for (player = 0u; player < options->player_count; ++player)
     {
         pe_range_t *parsed = NULL;
+        const pe_range_t *input;
         size_t combo;
+        size_t kept = 0u;
         StdDeck_CardMask dead = modern_to_std(board);
-        if (game->hole_cards > 4u)
+        input = options->source_ranges[player];
+        if (!input && game->hole_cards > 4u)
         {
             if (parse_exact_omaha_combo(options->ranges[player],
                                         game->hole_cards, &owned[player]) != 0)
@@ -327,25 +535,35 @@ static int run_omaha(const EvalContext *context, mask_t board,
             ranges[player].count = 1u;
             continue;
         }
-        if (pe_range_parse(game->game, options->ranges[player], dead, NULL,
-                           &parsed) != PE_STATUS_OK || !parsed)
-            goto cleanup;
+        if (!input)
+        {
+            if (pe_range_parse(game->game, options->ranges[player], dead, NULL,
+                               &parsed) != PE_STATUS_OK || !parsed)
+                goto cleanup;
+            input = parsed;
+        }
         owned[player] = (pe_omaha_combo_t *)calloc(
-            parsed->count, sizeof(*owned[player]));
+            input->count, sizeof(*owned[player]));
         if (!owned[player])
         {
             pe_range_free(parsed);
             goto cleanup;
         }
         ranges[player].combos = owned[player];
-        ranges[player].count = parsed->count;
-        for (combo = 0u; combo < parsed->count; ++combo)
+        for (combo = 0u; combo < input->count; ++combo)
         {
-            owned[player][combo].cards =
-                std_to_modern(parsed->combos[combo].hand);
-            owned[player][combo].weight = parsed->combos[combo].weight;
+            mask_t cards = std_to_modern(input->combos[combo].hand);
+            if ((cards & board) != MASK_EMPTY ||
+                mask_popcount(cards) != game->hole_cards)
+                continue;
+            owned[player][kept].cards = cards;
+            owned[player][kept].weight = input->combos[combo].weight;
+            ++kept;
         }
+        ranges[player].count = kept;
         pe_range_free(parsed);
+        if (kept == 0u)
+            goto cleanup;
     }
     memset(&state, 0, sizeof(state));
     state.player_count = options->player_count;
@@ -370,6 +588,7 @@ int main(int argc, char **argv)
 {
     cli_options_t options;
     game_spec_t game;
+    monker_cli_t monker;
     EvalConfig config;
     EvalContext *context;
     mask_t board;
@@ -392,11 +611,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "--board must contain exactly five valid cards\n");
         return 2;
     }
+    if (monker_cli_load(&options, &game, &monker) != 0)
+        return 2;
+    if (monker.ranges_loaded)
+    {
+        for (player = 0u; player < options.player_count; ++player)
+            options.source_ranges[player] = monker.ranges.players[player];
+    }
     config = eval_config_holdem();
     context = eval_context_create(&config);
     if (!context)
     {
         fprintf(stderr, "could not create evaluation context\n");
+        monker_cli_free(&monker);
         return 1;
     }
     if (game.game == game_holdem)
@@ -410,6 +637,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "vector terminal evaluation failed (status=%d)\n",
                 status);
         eval_context_destroy(context);
+        monker_cli_free(&monker);
         return 1;
     }
     printf("game=%s players=%u board=", game.game_name, options.player_count);
@@ -418,9 +646,20 @@ int main(int argc, char **argv)
         printf("%s", mask_to_string(board, board_text, sizeof(board_text)));
     }
     printf(" deals=%zu weight=%.17g", deal_count, weight_sum);
+    if (monker.tree_loaded)
+        printf(" tree_nodes=%d tree_players=%u", monker.tree->node_count,
+               monker.header.player_count);
+    if (monker.archive_loaded)
+    {
+        printf(" mkr_entries=%zu strategy_slots=%u", monker.archive.count,
+               monker.strategy_loaded ? monker.strategy.slot_count : 0u);
+        if (monker.metadata_loaded)
+            printf(" iterations=%lld", (long long)monker.metadata.iterations);
+    }
     for (player = 0u; player < options.player_count; ++player)
         printf(" ev%u=%.17g", player, values[player]);
     putchar('\n');
     eval_context_destroy(context);
+    monker_cli_free(&monker);
     return 0;
 }
