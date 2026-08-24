@@ -56,8 +56,28 @@ static uint64_t key_one_step(const void *state, void *user)
 
 static const void *apply_one_step(const void *state, uint16_t action, void *user)
 {
-    (void)action;
-    return state == user ? (const void *)((const char *)user + 1) : NULL;
+    return state == user
+        ? (const void *)((const char *)user + 1 + action)
+        : NULL;
+}
+
+static int values_one_step(const void *state, const pe_reach_vec_t *reach,
+                           pe_value_vec_t *out_values, uint8_t players,
+                           void *user)
+{
+    size_t combo;
+    double value;
+    (void)reach;
+    (void)user;
+    if (!state || !out_values || players != 2u)
+        return -1;
+    value = state == (const void *)((const char *)user + 1) ? 0.0 : 1.0;
+    for (combo = 0u; combo < out_values[0].n; ++combo)
+    {
+        out_values[0].v[combo] = value;
+        out_values[1].v[combo] = -value;
+    }
+    return 0;
 }
 
 #define CHECK(condition, ...)                                      \
@@ -205,6 +225,59 @@ int main(void)
                       strategy_view.values[0] == 0.5 &&
                       strategy_view.values[1] == 0.5,
                   "strategy query should normalize the stored average per combo");
+            pe_solver_destroy(solver);
+        }
+    }
+
+    {
+        static char target_root;
+        pe_solver_config_t target_config = pe_solver_config_default();
+        pe_solver_deps_t deps = pe_solver_deps_default();
+        pe_vector_game_t game;
+        pe_progress_t target_progress;
+        pe_metrics_t target_metrics;
+        pe_best_response_vector_config_t br_config =
+            pe_best_response_vector_config_default();
+        pe_exploitability_vector_result_t direct = {0};
+
+        memset(&game, 0, sizeof(game));
+        game.root = &target_root;
+        game.user = &target_root;
+        game.player_count = 2u;
+        game.combo_count = 1u;
+        game.is_terminal = terminal_one_step;
+        game.acting_player = acting_root;
+        game.action_count = actions_one_step;
+        game.infoset_key = key_one_step;
+        game.apply_action = apply_one_step;
+        game.terminal_values = values_one_step;
+        target_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        target_config.max_iterations = 0u;
+        target_config.target_exploitability_mbb = 600.0;
+        target_config.exploitability_interval = 1u;
+        target_config.problem.expected_infosets = 1u;
+        target_config.problem.expected_actions = 2u;
+        target_config.problem.expected_combos = 1u;
+        deps.vector_game = &game;
+        CHECK(pe_exploitability_vector(&game, &br_config, &direct) ==
+                  PE_SOLVER_OK && direct.exploitability_raw > 0.0,
+              "direct exploitability was %g (gaps %g/%g)",
+              direct.exploitability_raw, direct.br_gap[0], direct.br_gap[1]);
+        solver = pe_solver_create(&target_config, &deps);
+        CHECK(solver != NULL, "target solver creation failed");
+        if (solver != NULL)
+        {
+            CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
+                  "exploitability-target run failed");
+            CHECK(pe_solver_progress(solver, &target_progress) == PE_SOLVER_OK &&
+                      target_progress.complete && target_progress.iteration == 1u,
+                  "target stop did not complete at iteration one");
+            CHECK(pe_solver_metrics(solver, &target_metrics) == PE_SOLVER_OK &&
+                      target_metrics.exploitability_raw > 0.0 &&
+                      target_metrics.exploitability_mbb_per_game <= 600.0,
+                  "target metrics were not recorded (raw=%g mbb=%g)",
+                  target_metrics.exploitability_raw,
+                  target_metrics.exploitability_mbb_per_game);
             pe_solver_destroy(solver);
         }
     }

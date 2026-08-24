@@ -76,6 +76,7 @@ pe_solver_config_t pe_solver_config_default(void)
     /* No budget and no declared size: a caller who has not said how big the
        problem is gets an estimate that refuses rather than a confident zero. */
     cfg.execution.max_ram_bytes = 0;
+    cfg.execution.big_blind = 1.0;
     cfg.problem.expected_infosets = 0;
     cfg.problem.expected_actions = 0;
     cfg.problem.expected_combos = 0;

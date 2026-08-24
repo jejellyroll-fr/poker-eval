@@ -12,9 +12,9 @@
  * Nothing in this file includes cfr_core, the GPU headers or <stdio.h>: the
  * domain reaches the outside world only through the ports.
  *
- * The remaining entry points are still stubs reporting PE_SOLVER_ERR_NOT_IMPLEMENTED;
- * their argument checks are already the final behaviour and do not change when
- * a body lands.
+ * The vector lifecycle is executable here, including exploitability-target
+ * stopping. The scalar, sampled and tree-port entry points still return
+ * PE_SOLVER_ERR_NOT_IMPLEMENTED until their traversal adapters are wired.
  */
 
 #include <poker_eval/solver/pe_solver.h>
@@ -22,6 +22,7 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/solver/pe_traversal.h>
@@ -258,6 +259,11 @@ pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
+    if (solver->config.target_exploitability_mbb > 0.0 &&
+        (!isfinite(solver->config.execution.big_blind) ||
+         solver->config.execution.big_blind <= 0.0))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+
     if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
                         &plan, diag) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
@@ -333,12 +339,14 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     void *compute_self = NULL;
     uint64_t iteration;
     uint64_t completed_iterations;
+    int target_reached = 0;
+    const int target_enabled =
+        solver->config.target_exploitability_mbb > 0.0;
     int rc;
 
     if (solver->deps.vector_game == NULL ||
         plan->traversal != PE_TRAVERSAL_FULL_VECTOR ||
-        solver->config.max_iterations == 0u ||
-        solver->config.target_exploitability_mbb > 0.0)
+        (solver->config.max_iterations == 0u && !target_enabled))
         return PE_SOLVER_ERR_NOT_IMPLEMENTED;
 
     ops = pe_traversal_full_vector_ops();
@@ -389,7 +397,8 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     solver->state = PE_SOLVER_STATE_RUNNING;
     completed_iterations = solver->iteration;
     for (iteration = completed_iterations;
-         iteration < solver->config.max_iterations;)
+         (solver->config.max_iterations == 0u ||
+          iteration < solver->config.max_iterations) && !target_reached;)
     {
         ++iteration;
         rc = ops->begin_iteration(&traversal, iteration);
@@ -408,6 +417,49 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             return PE_SOLVER_ERR_EXECUTION;
         }
         solver->iteration = iteration;
+
+        if (target_enabled &&
+            (iteration % solver->config.exploitability_interval == 0u ||
+             (solver->config.max_iterations > 0u &&
+              iteration == solver->config.max_iterations)))
+        {
+            pe_best_response_vector_config_t br_config =
+                pe_best_response_vector_config_default();
+            pe_exploitability_vector_result_t result = {0};
+            double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
+            uint8_t player;
+            int reached = 0;
+
+            if (pe_exploitability_vector(solver->deps.vector_game,
+                                          &br_config, &result) != PE_SOLVER_OK)
+            {
+                pe_update_batch_destroy(&batch);
+                pe_traversal_ctx_destroy(&traversal);
+                compute_ops->destroy(compute_self);
+                solver->state = PE_SOLVER_STATE_STOPPED;
+                return PE_SOLVER_ERR_EXECUTION;
+            }
+            for (player = 0u;
+                 player < solver->deps.vector_game->player_count; ++player)
+                gaps[player] = result.br_gap[player];
+            if (pe_best_response_metrics_from_multiway(
+                    solver->deps.vector_game->player_count, 1, gaps, 0.0,
+                    0.0, solver->config.execution.big_blind,
+                    &solver->metrics) != PE_SOLVER_OK ||
+                pe_best_response_target_reached(
+                    solver->metrics.exploitability_mbb_per_game,
+                    solver->config.target_exploitability_mbb,
+                    &reached) != PE_SOLVER_OK)
+            {
+                pe_update_batch_destroy(&batch);
+                pe_traversal_ctx_destroy(&traversal);
+                compute_ops->destroy(compute_self);
+                solver->state = PE_SOLVER_STATE_STOPPED;
+                return PE_SOLVER_ERR_EXECUTION;
+            }
+            solver->metrics_available = 1;
+            target_reached = reached;
+        }
     }
 
     if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)

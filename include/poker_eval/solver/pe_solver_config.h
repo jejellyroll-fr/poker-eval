@@ -225,6 +225,9 @@ typedef struct {
      * estimate exceeds it, before anything is allocated.
      */
     uint64_t max_ram_bytes;
+
+    /* Currency conversion used by exploitability stopping. */
+    double big_blind;
 } pe_execution_config_t;
 
 /*
