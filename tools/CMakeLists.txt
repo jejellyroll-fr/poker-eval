@@ -21,6 +21,10 @@ add_executable(poker-eval-trainer gto_trainer.c)
 target_include_directories(poker-eval-trainer PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(poker-eval-trainer PRIVATE poker_eval_modular m)
 
+add_executable(pe-solution-report pe_solution_report.c)
+target_include_directories(pe-solution-report PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-solution-report PRIVATE poker_eval_modular m)
+
 add_executable(pe-vector-sim pe_vector_sim.c)
 target_include_directories(pe-vector-sim PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-vector-sim PRIVATE poker_eval_modular m)

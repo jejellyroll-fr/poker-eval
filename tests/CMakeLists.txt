@@ -813,6 +813,8 @@ add_poker_test(test_pe_storage_precision)
 set_tests_properties(test_pe_storage_precision PROPERTIES LABELS "solver;solver-v3;abs04;storage" TIMEOUT 120)
 add_poker_test(test_external_mccfr)
 set_tests_properties(test_external_mccfr PROPERTIES LABELS "solver;solver-v3;lnb01;mccfr" TIMEOUT 120)
+add_poker_test(test_pe_solver_sampled)
+set_tests_properties(test_pe_solver_sampled PROPERTIES LABELS "solver;solver-v3;lane-b;preflop" TIMEOUT 30)
 
 add_poker_test(test_outcome_mccfr)
 set_tests_properties(test_outcome_mccfr PROPERTIES LABELS "solver;solver-v3;out01;mccfr" TIMEOUT 120)

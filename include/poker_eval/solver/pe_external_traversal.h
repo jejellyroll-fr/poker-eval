@@ -18,7 +18,7 @@ extern "C" {
 
 #define PE_EXTERNAL_MAX_ACTIONS 64u
 
-typedef struct
+typedef struct pe_external_game_t
 {
     const void *root;
     void *user;

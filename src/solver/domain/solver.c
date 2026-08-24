@@ -26,6 +26,8 @@
 #include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/solver/pe_traversal.h>
+#include <poker_eval/solver/pe_external_traversal.h>
+#include <poker_eval/solver/pe_outcome_traversal.h>
 
 #include <stddef.h>
 #include <math.h>
@@ -478,6 +480,208 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     return PE_SOLVER_OK;
 }
 
+typedef struct
+{
+    const pe_external_game_t *base;
+    const pe_storage_ops_t *storage;
+    void *storage_self;
+} pe_sampled_adapter_t;
+
+static int sampled_is_terminal(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->is_terminal(state, adapter->base->user);
+}
+
+static int sampled_acting_player(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->acting_player(state, adapter->base->user);
+}
+
+static uint16_t sampled_action_count(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->action_count(state, adapter->base->user);
+}
+
+static uint64_t sampled_infoset_key(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->infoset_key
+        ? adapter->base->infoset_key(state, adapter->base->user) : 0u;
+}
+
+static const void *sampled_apply_action(const void *state, uint16_t action,
+                                        void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->apply_action(state, action, adapter->base->user);
+}
+
+static const void *sampled_apply_chance(const void *state, int outcome,
+                                        void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->apply_chance(state, outcome, adapter->base->user);
+}
+
+static double sampled_action_probability(const void *state, uint64_t key,
+                                         uint16_t action, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    uint16_t actions = adapter->base->action_count(state, adapter->base->user);
+    pe_infoset_id_t id;
+    const double *regrets;
+    size_t length = 0u;
+    double positive = 0.0;
+    if (actions == 0u || action >= actions || !adapter->storage->resolve ||
+        !adapter->storage->values_const)
+        return 0.0;
+    id = adapter->storage->resolve(adapter->storage_self, key, actions, 1u,
+                                   PE_STREET_UNKNOWN);
+    if (id == PE_INFOSET_ID_INVALID)
+        return 0.0;
+    regrets = adapter->storage->values_const(adapter->storage_self, id,
+                                             PE_VALUES_REGRET, &length);
+    if (!regrets || length < actions)
+        return 1.0 / (double)actions;
+    for (uint16_t a = 0u; a < actions; ++a)
+        if (isfinite(regrets[a]) && regrets[a] > 0.0) positive += regrets[a];
+    if (positive <= 0.0) return 1.0 / (double)actions;
+    return regrets[action] > 0.0 ? regrets[action] / positive : 0.0;
+}
+
+static double sampled_terminal_value(const void *state, int player, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->terminal_value(state, player, adapter->base->user);
+}
+
+/* Lane B keeps the state space sampled instead of expanding every private
+ * deal and every future board.  This is the execution path intended for wide
+ * preflop ranges: the external game owns the deal/range sampler, while the
+ * solver still owns iteration, storage and compute/update dispatch. */
+static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
+                                                 const pe_execution_plan_t *plan)
+{
+    const pe_external_game_t *game = solver->deps.external_game;
+    const pe_compute_ops_t *compute_ops;
+    pe_compute_config_t compute_config;
+    void *compute_self = NULL;
+    pe_update_batch_t batch = {0};
+    pe_external_sampling_ctx_t external = {0};
+    pe_outcome_sampling_ctx_t outcome = {0};
+    pe_sampled_adapter_t adapter;
+    pe_external_game_t sampled_game;
+    uint64_t iteration;
+    int use_outcome = plan->traversal == PE_TRAVERSAL_OUTCOME_SAMPLING;
+    int rc;
+
+    if (!game || !game->root || solver->config.max_iterations == 0u ||
+        !game->is_terminal || !game->acting_player || !game->action_count ||
+        !game->apply_action || !game->terminal_value ||
+        (game->sample_chance && !game->apply_chance))
+        return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    if (solver->config.target_exploitability_mbb > 0.0)
+        /* Lane B has no exact BR measurement yet; accepting the target would
+           turn an iteration budget into an unbounded run. */
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+
+    compute_ops = solver->deps.compute;
+    if (compute_ops == NULL)
+        compute_ops = plan->stages.update == PE_COMPUTE_CPU_PAR
+            ? pe_compute_cpu_par_ops() : pe_compute_cpu_ref_ops();
+    memset(&compute_config, 0, sizeof(compute_config));
+    compute_config.cpu_threads = solver->config.execution.cpu_threads;
+    compute_config.deterministic = solver->config.execution.deterministic;
+    compute_config.sample_batch_size = solver->config.execution.sample_batch_size;
+    compute_config.terminal_batch_size = solver->config.execution.terminal_batch_size;
+    compute_config.update_batch_size = solver->config.execution.update_batch_size;
+    compute_config.storage = solver->storage;
+    compute_config.storage_self = solver->storage_self;
+    if (!compute_ops || !compute_ops->create || !compute_ops->destroy ||
+        !compute_ops->apply_update_batch ||
+        compute_ops->create(&compute_self, &compute_config) != 0)
+        return PE_SOLVER_ERR_EXECUTION;
+
+    adapter.base = game;
+    adapter.storage = solver->storage;
+    adapter.storage_self = solver->storage_self;
+    memset(&sampled_game, 0, sizeof(sampled_game));
+    sampled_game.root = game->root;
+    sampled_game.user = &adapter;
+    sampled_game.player_count = game->player_count;
+    sampled_game.is_terminal = sampled_is_terminal;
+    sampled_game.acting_player = sampled_acting_player;
+    sampled_game.action_count = sampled_action_count;
+    sampled_game.infoset_key = sampled_infoset_key;
+    sampled_game.apply_action = sampled_apply_action;
+    sampled_game.action_probability = sampled_action_probability;
+    sampled_game.terminal_value = sampled_terminal_value;
+    sampled_game.sample_chance = game->sample_chance;
+    sampled_game.apply_chance = game->apply_chance ? sampled_apply_chance : NULL;
+
+    if (use_outcome)
+        rc = pe_outcome_sampling_ctx_init(
+            &outcome, &sampled_game, solver->storage, solver->storage_self, 0,
+            solver->config.algorithm.outcome_epsilon,
+            solver->config.seed);
+    else
+        rc = pe_external_sampling_ctx_init(
+            &external, &sampled_game, solver->storage, solver->storage_self, 0,
+            solver->config.seed);
+    if (rc != 0)
+    {
+        compute_ops->destroy(compute_self);
+        return PE_SOLVER_ERR_EXECUTION;
+    }
+
+    solver->state = PE_SOLVER_STATE_RUNNING;
+    for (iteration = solver->iteration + 1u;
+         iteration <= solver->config.max_iterations; ++iteration)
+    {
+        int updating_player = (int)((iteration - 1u) % game->player_count);
+        if (use_outcome)
+        {
+            outcome.updating_player = updating_player;
+            rc = pe_outcome_sampling_run(&outcome, &batch);
+        }
+        else
+        {
+            external.updating_player = updating_player;
+            rc = pe_external_sampling_run(&external, &batch);
+        }
+        if (rc == 0 && compute_ops->apply_update_batch(compute_self, &batch) != 0)
+            rc = -1;
+        if (rc != 0)
+        {
+            pe_update_batch_destroy(&batch);
+            if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+            else pe_external_sampling_ctx_destroy(&external);
+            compute_ops->destroy(compute_self);
+            solver->state = PE_SOLVER_STATE_STOPPED;
+            return PE_SOLVER_ERR_EXECUTION;
+        }
+        solver->iteration = iteration;
+    }
+    if (compute_ops->sync && compute_ops->sync(compute_self) != 0)
+    {
+        pe_update_batch_destroy(&batch);
+        if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+        else pe_external_sampling_ctx_destroy(&external);
+        compute_ops->destroy(compute_self);
+        solver->state = PE_SOLVER_STATE_STOPPED;
+        return PE_SOLVER_ERR_EXECUTION;
+    }
+    pe_update_batch_destroy(&batch);
+    if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+    else pe_external_sampling_ctx_destroy(&external);
+    compute_ops->destroy(compute_self);
+    solver->state = PE_SOLVER_STATE_COMPLETED;
+    return PE_SOLVER_OK;
+}
+
 /* ------------------------------------------------------------------ *
  * Execution
  * ------------------------------------------------------------------ */
@@ -511,6 +715,9 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
 
     if (pe_solver_plan(solver, &plan) != PE_SOLVER_OK)
         return PE_SOLVER_ERR_INVALID_CONFIG;
+    if (plan.traversal == PE_TRAVERSAL_EXTERNAL_SAMPLING ||
+        plan.traversal == PE_TRAVERSAL_OUTCOME_SAMPLING)
+        return pe_solver_run_sampled(solver, &plan);
     return pe_solver_run_vector(solver, &plan);
 }
 

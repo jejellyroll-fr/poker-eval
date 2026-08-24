@@ -47,6 +47,7 @@ typedef struct pe_persist_ops_t   pe_persist_ops_t;
 #define POKER_EVAL_PE_PERSIST_OPS_T_DEFINED
 #endif
 struct pe_vector_game_t;
+struct pe_external_game_t;
 
 /*
  * Completes the tag forward-declared in pe_solver.h.
@@ -84,6 +85,13 @@ struct pe_solver_deps_t {
        keeps plan-only and legacy callers on the existing path until the
        complete game-rules port is available. */
     const struct pe_vector_game_t *vector_game;
+
+    /* Optional Lane-B game used by external/outcome sampling.  The game is
+       borrowed exactly like vector_game and is selected by the traversal
+       axis in the resolved plan.  Keeping this port separate prevents a
+       sampled preflop solve from being forced through the exhaustive vector
+       surface. */
+    const struct pe_external_game_t *external_game;
 };
 
 /**

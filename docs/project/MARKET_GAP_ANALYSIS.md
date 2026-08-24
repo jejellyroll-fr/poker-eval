@@ -1,7 +1,7 @@
 # Analyse de marché — poker-eval face aux solvers 2026
 
 **Date :** 24 août 2026
-**Branche analysée :** `feat/pr-01-solver-contracts` (HEAD `98ebc9fc`)
+**Branche analysée :** `feat/pr-01-solver-contracts` (HEAD à mettre à jour après le commit de cette tranche)
 **Référence :** panorama analytique des solvers de poker 2026 (29 produits/projets : PioSOLVER, GTO+, Simple Poker, MonkerSolver, GTO Wizard, Deepsolver, HRC, ICMIZER/Postflopizer, TexasSolver, postflop-solver, Shark, OpenSpiel, PokerRL, RLCard, noambrown/poker_solver, Oleg Solvers, etc.)
 
 ---
@@ -45,20 +45,28 @@ famille AGPL du solving OSS.
 
 ### Priorité 1 — bloquants pour exister face aux produits installés
 
-1. **Solver préflop scalable.** Support structurel présent (`start_street = preflop`,
-   snapshot préflop, chance flop C(n,3)) mais le code lui-même indique que ce n'est pas
-   l'approche à l'échelle. Marché : Pio Edge, Simple Preflop Holdem (2–10 joueurs),
-   GTO Wizard (9 joueurs). Correspond à la **Lane B (M10+)** du backlog v3 — non construite.
-2. **Pas de GUI ni de couche produit joueur.** Pio, GTO+, TexasSolver, Shark, GTO Nexus
-   (gratuit) ont tous une interface. `tools/gto_trainer.c` fait 126 lignes et affiche des
-   actions génériques (`.pe_sol` ne stocke pas les libellés). Sans GUI/viewer, le projet
-   reste invisible du segment qui achète.
-3. **Play-vs-solution / trainer riche.** Pio Trainer, GTO+ play-vs-solution,
-   Deepsolver Trainer 360°, Lucid drills : le marché 2026 monétise l'entraînement plus que
-   le solving. Le trainer actuel est une ébauche (issue #154).
-4. **Agrégation et reporting.** Deepsolver/GTO+ vendent les *aggregated flop reports* et
-   *runout reports* ; poker-eval a de l'export JSON/CSV par street mais pas d'agrégation
-   de type « rapport de flop sur tout le range ».
+1. **Solver préflop scalable.** La **Lane B est maintenant branchée dans le cycle public
+   `pe_solver`** : les presets `external-mccfr` et `outcome-mccfr` exécutent des parcours
+   échantillonnés, relisent les regrets du storage et appliquent les mises à jour par
+   batch. Cela supprime l'expansion obligatoire de tous les deals privés et boards. Le
+   bloqueur restant est l'adapter Hold'em/PLO préflop qui doit fournir les ranges
+   corrélées, card removal et sampler de deals à grande échelle (la preuve actuelle est
+   un jeu externe générique, pas encore le produit Pio Edge complet).
+2. **GUI / couche produit joueur.** Un viewer HTML statique est maintenant produit par
+   `pe-solution-report` avec un JSON versionné (`pe-solution-report/v1`) et des rapports
+   groupés par street/board via metadata CSV. `poker-eval-trainer` accepte en plus un
+   fichier de libellés `key,action,label`, ce qui remplace l'affichage purement numérique.
+   Ce n'est pas encore une application interactive multi-rues : c'est la première couche
+   inspectable et partageable au-dessus de `.pe_sol`.
+3. **Play-vs-solution / trainer riche.** Le trainer reste volontairement léger : il
+   mesure la meilleure action et la perte de probabilité, avec libellés optionnels. Il
+   manque encore le parcours de décisions, l'état de table, les cartes/runouts et la
+   notation d'une session ; ce point n'est donc pas considéré comme fermé.
+4. **Agrégation et reporting.** `pe-solution-report` agrège maintenant les fréquences,
+   poids, entropie et nombre d'infosets par groupe, en JSON ou HTML. La couverture est
+   déterministe quand le caller fournit le sidecar CSV `key,street,board,weight` ; le
+   décodage automatique d'un key Monker en board/range et les runout reports complets
+   restent à construire.
 
 ### Priorité 2 — segments de marché entiers non couverts
 
@@ -100,7 +108,8 @@ famille AGPL du solving OSS.
 6. **Cycle de vie v3 partiellement incomplet** : la cible
    `target_exploitability_mbb` est désormais exécutée par le parcours
    `PE_TRAVERSAL_FULL_VECTOR` (mesure BR périodique, métriques mBB et arrêt anticipé).
-   Restent `pe_tree_port` et les parcours scalar/samplés ; Lane B partielle.
+   Restent `pe_tree_port`, la mesure BR sur Lane B et les adapters de jeux préflop
+   concrets ; Lane B est exécutable mais pas encore un solveur préflop produit complet.
 7. **GPU-CFR** : déprécié/à l'état de stubs (`gpu_cfr_solve()` = boucle vide avec TODO)
    alors que `bench_gpu_cfr.c` promet « ×200–×400 speedup ». À nettoyer : c'est
    exactement le genre de claim reproché aux boîtes noires dans le panorama marché.
@@ -131,19 +140,20 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
 
 ## 6. Recommandations priorisées
 
-1. **Finir le cycle de vie v3** (stopping vectoriel par cible d'exploitabilité ✅,
-   parallélisation OpenMP complète et ports scalar/samplés restants) — chemin critique
-   du backlog v3, ferme l'écart de performance n°1.
+1. **Compléter Lane B côté jeu** (adapters Hold'em/PLO, ranges corrélées, card removal,
+   chance privée et mesure BR échantillonnée) — le cycle solver et le storage sont
+   désormais en place.
 2. **Purger les claims faux** (Metal, bench GPU-CFR, guides manquants, stubs `pe_cfr_*`
    ou leur documentation honnête) — coût faible, crédibilité forte.
-3. **Un viewer/GUI léger** (même web/WASM sur `.pe_sol`/`.pe_tree`) — fait passer de
-   « bibliothèque pour chercheurs » à « alternative Shark/TexasSolver » visible.
+3. **Étendre le viewer/trainer léger** vers un parcours interactif multi-rues ; la
+   première sortie HTML et les libellés de trainer sont désormais disponibles.
 4. **Draw-game adapters** — différenciateur absolu, prochaine étape après le pont
    Stud/Short Deck livré (abstraction + évaluateurs déjà présents).
 5. **Exposer le solver dans Python** (le wheel existe déjà) + import de hand histories —
    les deux portes d'entrée du plus large public. La façade C v3 est maintenant la
    base native de cette étape.
-6. **Lane B préflop et ICM/PKO** ensuite, selon la roadmap existante (#153, M10–M11).
+6. **Finaliser le solveur préflop produit et ICM/PKO** ensuite, selon la roadmap
+   existante (#153, M10–M11).
 
 ---
 

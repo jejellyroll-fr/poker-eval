@@ -6,9 +6,59 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct trainer_label_t
+{
+    uint64_t key;
+    int action;
+    char label[96];
+} trainer_label_t;
+
 static void usage(const char *program)
 {
-    fprintf(stderr, "Usage: %s --solution FILE [--rounds N] [--seed N]\n", program);
+    fprintf(stderr, "Usage: %s --solution FILE [--labels CSV] [--rounds N] [--seed N]\n",
+            program);
+}
+
+static int load_labels(const char *path, trainer_label_t **out, size_t *count)
+{
+    FILE *file;
+    trainer_label_t *labels = NULL;
+    size_t used = 0u, capacity = 0u;
+    char line[256];
+    *out = NULL; *count = 0u;
+    if (!path) return 0;
+    file = fopen(path, "r");
+    if (!file) return -1;
+    while (fgets(line, sizeof(line), file))
+    {
+        char *key = strtok(line, ",");
+        char *action = strtok(NULL, ",");
+        char *label = strtok(NULL, "\r\n");
+        if (!key || !action || !label || strcmp(key, "key") == 0) continue;
+        if (used == capacity)
+        {
+            size_t next = capacity ? capacity * 2u : 32u;
+            trainer_label_t *grown = (trainer_label_t *)realloc(labels, next * sizeof(*labels));
+            if (!grown) { free(labels); fclose(file); return -1; }
+            labels = grown; capacity = next;
+        }
+        labels[used].key = strtoull(key, NULL, 0);
+        labels[used].action = atoi(action);
+        snprintf(labels[used].label, sizeof(labels[used].label), "%s", label);
+        ++used;
+    }
+    fclose(file);
+    *out = labels; *count = used;
+    return 0;
+}
+
+static const char *label_for(const trainer_label_t *labels, size_t count,
+                             uint64_t key, int action)
+{
+    for (size_t i = 0u; i < count; ++i)
+        if (labels[i].key == key && labels[i].action == action)
+            return labels[i].label;
+    return NULL;
 }
 
 static unsigned next_random(unsigned *state)
@@ -20,12 +70,17 @@ static unsigned next_random(unsigned *state)
 int main(int argc, char **argv)
 {
     const char *solution = NULL;
+    const char *labels_path = NULL;
+    trainer_label_t *labels = NULL;
+    size_t label_count = 0u;
     int rounds = 10;
     unsigned seed = 1u;
     for (int i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--solution") == 0 && i + 1 < argc)
             solution = argv[++i];
+        else if (strcmp(argv[i], "--labels") == 0 && i + 1 < argc)
+            labels_path = argv[++i];
         else if (strcmp(argv[i], "--rounds") == 0 && i + 1 < argc)
             rounds = atoi(argv[++i]);
         else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
@@ -40,6 +95,11 @@ int main(int argc, char **argv)
     {
         usage(argv[0]);
         return 2;
+    }
+    if (load_labels(labels_path, &labels, &label_count) != 0)
+    {
+        fprintf(stderr, "Unable to open labels file\n");
+        return 1;
     }
 
     pe_sol_mmap_t *view = NULL;
@@ -57,7 +117,7 @@ int main(int argc, char **argv)
     }
 
     printf("GTO trainer: %zu infosets, %d rounds\n", count, rounds);
-    printf("Actions are shown generically because .pe_sol stores strategy, not tree labels.\n");
+    printf("Action labels: %s\n", label_count ? "loaded from metadata" : "numeric fallback");
     printf("Enter an action number, or q to stop.\n\n");
 
     int answered = 0;
@@ -87,7 +147,11 @@ int main(int argc, char **argv)
                (unsigned long long)key);
         printf("Available actions:");
         for (int action = 0; action < actions; ++action)
-            printf(" %d", action);
+        {
+            const char *label = label_for(labels, label_count, key, action);
+            if (label) printf(" %d=%s", action, label);
+            else printf(" %d", action);
+        }
         printf("\nYour action: ");
         fflush(stdout);
         char answer[32];
@@ -104,7 +168,11 @@ int main(int argc, char **argv)
         ++answered;
         printf("Solved strategy:\n");
         for (int action = 0; action < actions; ++action)
-            printf("  action %d: %.1f%%\n", action, probabilities[action] * 100.0);
+        {
+            const char *label = label_for(labels, label_count, key, action);
+            printf("  action %d%s%s%s: %.1f%%\n", action, label ? " (" : "",
+                   label ? label : "", label ? ")" : "", probabilities[action] * 100.0);
+        }
         if (probabilities[selected] >= probabilities[best])
         {
             ++correct;
@@ -121,5 +189,6 @@ int main(int argc, char **argv)
            answered, correct, answered ? 100.0 * (double)correct / answered : 0.0);
     printf("Cumulative strategy-probability loss: %.4f\n", probability_loss);
     pe_sol_close_mmap(view);
+    free(labels);
     return 0;
 }
