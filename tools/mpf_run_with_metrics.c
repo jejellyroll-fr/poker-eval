@@ -8,6 +8,8 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_cfr_external_adapter.h>
+#include <poker_eval/engine/solvers/cfr/legacy_vector_adapter.h>
+#include <poker_eval/solver/pe_compute.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_monker_strategy.h>
@@ -26,6 +28,68 @@ typedef struct
 {
     FILE *stream;
 } metrics_writer_t;
+
+static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
+                                  const char *backend_name)
+{
+    pe_legacy_vector_adapter_t adapter;
+    pe_solver_config_t config = pe_solver_config_default();
+    pe_solver_deps_t deps = pe_solver_deps_default();
+    const pe_compute_ops_t *compute = NULL;
+    pe_compute_kind_t kind;
+    pe_solver_t *solver = NULL;
+    pe_solver_status_t status;
+    pe_progress_t progress;
+    pe_metrics_t metrics;
+    int adapter_ready = 0;
+
+    if (!legacy || !backend_name || iterations <= 0)
+        return -1;
+    kind = pe_compute_kind_from_name(backend_name);
+    if (kind == PE_COMPUTE_OPENCL)
+        compute = pe_compute_opencl_ops();
+    else if (kind == PE_COMPUTE_CUDA)
+        compute = pe_compute_cuda_ops();
+    else
+        return -1;
+    if (!compute || pe_legacy_vector_adapter_init(&adapter, legacy, 1u) != 0)
+        return -1;
+    adapter_ready = 1;
+
+    config.algorithm.preset = PE_PRESET_CFR_VECTOR;
+    config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+    config.execution.backend = kind;
+    /* OpenCL/CUDA update ports do not own the game-tree walk yet. Keep the
+       traversal on the proven CPU adapter and offload regret/terminal batches
+       to the selected device; this is a real hybrid GPU-CFR path, not a
+       claim that the device traverses a betting tree by itself. */
+    config.execution.stages.traversal = PE_COMPUTE_CPU_REF;
+    config.execution.stages.update = kind;
+    config.execution.stages.terminal_eval = kind;
+    config.execution.deterministic = 0;
+    config.execution.terminal_batch_size = 256u;
+    config.execution.update_batch_size = 256u;
+    config.execution.max_ram_bytes = 512u * 1024u * 1024u;
+    config.problem.expected_infosets = 4096u;
+    config.problem.expected_actions = 8u;
+    config.problem.expected_combos = 1u;
+    config.max_iterations = (uint64_t)iterations;
+    deps.compute = compute;
+    deps.vector_game = pe_legacy_vector_adapter_game(&adapter);
+    solver = pe_solver_create(&config, &deps);
+    status = solver ? pe_solver_run(solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
+    printf("gpu_backend=%s status=%d\n", backend_name, (int)status);
+    if (solver && pe_solver_progress(solver, &progress) == PE_SOLVER_OK)
+        printf("gpu_progress=%.6f complete=%d iteration=%llu\n",
+               progress.fraction, progress.complete,
+               (unsigned long long)progress.iteration);
+    if (solver && pe_solver_metrics(solver, &metrics) == PE_SOLVER_OK)
+        printf("gpu_exploitability=%.6f guarantee=%d\n",
+               metrics.exploitability_mbb_per_game, (int)metrics.guarantee);
+    if (solver) pe_solver_destroy(solver);
+    if (adapter_ready) pe_legacy_vector_adapter_destroy(&adapter);
+    return status == PE_SOLVER_OK ? 0 : -1;
+}
 
 static void usage(const char *prog)
 {
@@ -1323,6 +1387,21 @@ int main(int argc, char **argv)
         eval_context_destroy(ctx);
         mpf_tree_free(tree);
         return 1;
+    }
+
+    if (backend_name && (strcmp(backend_name, "opencl") == 0 ||
+                         strcmp(backend_name, "cuda") == 0))
+    {
+        int gpu_status = run_gpu_vector_backend(&game, iterations, backend_name);
+        mpf_state_cleanup(&root_state);
+        mpf_perf_stats_pool_destroy(perf_pool);
+        eval_context_destroy(ctx);
+        for (int p = 0; p < num_players; ++p)
+            if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                pe_range_free(ranges[p]);
+        pe_monker_range_set_free(&tree_ranges);
+        mpf_tree_free(tree);
+        return gpu_status == 0 ? 0 : 1;
     }
 
     /* The same fully configured legacy tree can now be driven by Lane B.  This

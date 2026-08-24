@@ -72,12 +72,14 @@ typedef struct {
     char feedback[256];
     int running;
     int page;
+    int range_editor_player;
+    uint8_t range_matrix[2][13][13];
     uint64_t selected_key;
     size_t selected_spot;
     char game_name[24];
     char board_text[48];
-    char range_oop[48];
-    char range_ip[48];
+    char range_oop[4096];
+    char range_ip[4096];
     int iterations;
     int game_index;
     int player_count;
@@ -319,6 +321,7 @@ static const char *engine_label_for(int index)
 }
 
 static void copy_field(char *destination, size_t capacity, const char *source);
+static void range_matrix_sync_from_fields(app_t *app);
 
 static void set_default_ranges_for_game(app_t *app)
 {
@@ -328,6 +331,7 @@ static void set_default_ranges_for_game(app_t *app)
         return;
     copy_field(app->range_oop, sizeof(app->range_oop), oop[app->game_index]);
     copy_field(app->range_ip, sizeof(app->range_ip), ip[app->game_index]);
+    range_matrix_sync_from_fields(app);
 }
 
 static void copy_field(char *destination, size_t capacity, const char *source)
@@ -413,7 +417,7 @@ static int run_vector_sim(app_t *app)
 {
     char executable[1200], quoted_executable[1400];
     char board[160], tree[1200], mkr[1200];
-    char command[8192];
+    char command[32768];
     char output[4096];
     FILE *pipe;
     size_t used = 0u;
@@ -452,7 +456,7 @@ static int run_vector_sim(app_t *app)
     for (int player = 0; player < app->player_count && player < 8; ++player)
     {
         const char *player_range = starter_range_for_player(app, player);
-        char quoted_range[160];
+        char quoted_range[4200];
         shell_quote(player_range, quoted_range, sizeof(quoted_range));
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
                  " --range%d %s", player, quoted_range);
@@ -501,6 +505,96 @@ static int run_vector_sim(app_t *app)
     }
     copy_field(app->solver_status, sizeof(app->solver_status), "Solve complete");
     return 0;
+}
+
+static int run_legacy_cfr(app_t *app, const char *backend_name)
+{
+    char executable[1200], quoted_executable[1400];
+    char board[160], tree[1200], mkr[1200];
+    char ranges[8][4200];
+    char command[32768];
+    char output[4096];
+    FILE *pipe;
+    size_t used = 0u;
+    int exit_status;
+    if (!app) return -1;
+    if (!app->tree_path[0]) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Legacy CFR requires a .tree file");
+        return -1;
+    }
+    if (app->game_index > 3) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Legacy CFR variant is not configured");
+        return -1;
+    }
+    if (app->executable_dir[0])
+        snprintf(executable, sizeof(executable), "%s%c%s%s",
+                 app->executable_dir, PE_GUI_PATH_SEPARATOR,
+                 "mpf_run_with_metrics", PE_GUI_EXE_SUFFIX);
+    else copy_field(executable, sizeof(executable), "mpf_run_with_metrics");
+    shell_quote(executable, quoted_executable, sizeof(quoted_executable));
+    shell_quote(app->tree_path, tree, sizeof(tree));
+    shell_quote(app->board_text, board, sizeof(board));
+    snprintf(command, sizeof(command),
+             "%s --tree %s --rules %s --street river --board %s --players %d --iterations %d",
+             quoted_executable, tree, game_name_for(app->game_index), board,
+             app->player_count, app->iterations > 0 ? app->iterations : 1000);
+    if (backend_name)
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --backend %s", backend_name);
+    for (int player = 0; player < app->player_count && player < 8; ++player) {
+        shell_quote(starter_range_for_player(app, player), ranges[player], sizeof(ranges[player]));
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --range%d %s", player, ranges[player]);
+    }
+    if (app->mkr_path[0]) {
+        shell_quote(app->mkr_path, mkr, sizeof(mkr));
+        snprintf(command + strlen(command), sizeof(command) - strlen(command), " --mkr %s", mkr);
+    }
+    snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
+#ifdef _WIN32
+    pipe = _popen(command, "r");
+#else
+    pipe = popen(command, "r");
+#endif
+    if (!pipe) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   backend_name ? "Could not start GPU CFR runner" : "Could not start Legacy CFR runner");
+        return -1;
+    }
+    while (fgets(output, sizeof(output), pipe)) {
+        size_t length = strlen(output);
+        if (length >= sizeof(app->solver_result) - used)
+            length = sizeof(app->solver_result) - used - 1u;
+        if (length > 0u) {
+            memcpy(app->solver_result + used, output, length);
+            used += length;
+            app->solver_result[used] = '\0';
+        }
+        if (used + 1u >= sizeof(app->solver_result)) break;
+    }
+#ifdef _WIN32
+    exit_status = _pclose(pipe);
+#else
+    exit_status = pclose(pipe);
+#endif
+    if (exit_status != 0) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   backend_name ? "GPU CFR unavailable or failed" : "Legacy CFR failed");
+        return -1;
+    }
+    copy_field(app->solver_status, sizeof(app->solver_status),
+               backend_name ? "Hybrid GPU CFR complete" : "Legacy CFR complete");
+    return 0;
+}
+
+static int run_selected_solver(app_t *app)
+{
+    if (!app) return -1;
+    if (app->engine_index == 0) return run_vector_sim(app);
+    if (app->engine_index == 1) return run_legacy_cfr(app, NULL);
+    return run_legacy_cfr(app, "opencl");
 }
 
 static int has_suffix(const char *path, const char *suffix)
@@ -588,6 +682,7 @@ typedef struct {
     rect_t setup_tab;
     rect_t solve_tab;
     rect_t explore_tab;
+    rect_t range_tab;
     rect_t next_button;
     rect_t action_buttons[8];
 } gui_layout_t;
@@ -605,6 +700,7 @@ static gui_layout_t layout_for(int width, int height)
     layout.setup_tab = (rect_t){24, 150, 184, 48};
     layout.solve_tab = (rect_t){24, 210, 184, 48};
     layout.explore_tab = (rect_t){24, 270, 184, 48};
+    layout.range_tab = (rect_t){24, 330, 184, 48};
     layout.next_button = (rect_t){content_x, height - 78, 200, 48};
     for (int action = 0; action < 8; ++action)
         layout.action_buttons[action] = (rect_t){content_x + (action % 4) * (action_width + 12),
@@ -675,34 +771,125 @@ static int rank_index(char rank)
 static int range_contains_combo(const char *range, int row, int column,
                                 int *suited, int *pair)
 {
-    char token[32];
-    const char *at;
+    char copy[4096];
+    char *token;
     if (suited) *suited = 0;
     if (pair) *pair = 0;
     if (!range || !*range || row < 0 || column < 0)
         return 0;
-    at = range;
-    while (*at && isspace((unsigned char)*at)) ++at;
-    if (strlen(at) < 4u)
-        return 0;
-    snprintf(token, sizeof(token), "%.4s", at);
-    if (rank_index(token[0]) < 0 || rank_index(token[2]) < 0)
-        return 0;
-    {
+    snprintf(copy, sizeof(copy), "%s", range);
+    token = strtok(copy, ",; 	\r\n");
+    while (token) {
+        size_t length = strlen(token);
         int first = rank_index(token[0]);
-        int second = rank_index(token[2]);
-        int want_row = first < second ? first : second;
-        int want_column = first < second ? second : first;
-        if (first == second) {
-            want_row = first;
-            want_column = first;
-            if (pair) *pair = 1;
+        int second = length >= 2u ? rank_index(token[1]) : -1;
+        int is_suited = 0;
+        int want_row, want_column;
+        while (length > 0u && (token[length - 1u] == '+' || token[length - 1u] == 'x'))
+            token[--length] = '\0';
+        if (length >= 4u) {
+            first = rank_index(token[0]);
+            second = rank_index(token[2]);
+            is_suited = token[1] == token[3];
+        } else if (length >= 3u) {
+            is_suited = token[2] == 's';
         }
-        if (want_row != row || want_column != column)
-            return 0;
+        if (first >= 0 && second >= 0) {
+            if (first == second) {
+                want_row = want_column = first;
+                if (pair) *pair = 1;
+            } else if (is_suited) {
+                want_row = first < second ? first : second;
+                want_column = first < second ? second : first;
+            } else {
+                want_row = first < second ? second : first;
+                want_column = first < second ? first : second;
+            }
+            if (want_row == row && want_column == column) {
+                if (suited) *suited = is_suited;
+                return 1;
+            }
+        }
+        token = strtok(NULL, ",; 	\r\n");
     }
-    if (suited) *suited = token[1] == token[3];
-    return 1;
+    return 0;
+}
+
+static void range_matrix_clear(app_t *app)
+{
+    if (!app) return;
+    memset(app->range_matrix, 0, sizeof(app->range_matrix));
+}
+
+static void range_matrix_from_text(app_t *app, int player, const char *range)
+{
+    char copy[4096];
+    char *token;
+    if (!app || player < 0 || player > 1) return;
+    memset(app->range_matrix[player], 0, sizeof(app->range_matrix[player]));
+    if (!range) return;
+    snprintf(copy, sizeof(copy), "%s", range);
+    token = strtok(copy, ",; 	\r\n");
+    while (token) {
+        int first = rank_index(token[0]);
+        int second = rank_index(token[1]);
+        if (first >= 0 && second >= 0) {
+            int row;
+            int column;
+            int suited = strlen(token) >= 3u && token[2] == 's';
+            if (strlen(token) >= 4u) {
+                first = rank_index(token[0]);
+                second = rank_index(token[2]);
+                suited = token[1] == token[3];
+            }
+            if (first == second) {
+                row = column = first;
+            } else if (suited) {
+                row = first < second ? first : second;
+                column = first < second ? second : first;
+            } else {
+                row = first < second ? second : first;
+                column = first < second ? first : second;
+            }
+            if (row >= 0 && column >= 0 && row < 13 && column < 13)
+                app->range_matrix[player][row][column] = 1;
+        }
+        token = strtok(NULL, ",; 	\r\n");
+    }
+}
+
+static void range_matrix_to_text(app_t *app, int player)
+{
+    const char *ranks = "AKQJT98765432";
+    char *out;
+    size_t capacity;
+    size_t used = 0u;
+    if (!app || player < 0 || player > 1) return;
+    out = player == 0 ? app->range_oop : app->range_ip;
+    capacity = player == 0 ? sizeof(app->range_oop) : sizeof(app->range_ip);
+    out[0] = '\0';
+    for (int row = 0; row < 13; ++row) {
+        for (int column = 0; column < 13; ++column) {
+            if (!app->range_matrix[player][row][column]) continue;
+            char token[8];
+            int length = row == column
+                ? snprintf(token, sizeof(token), "%c%c", ranks[row], ranks[column])
+                : snprintf(token, sizeof(token), "%c%c%c", ranks[row], ranks[column],
+                           row < column ? 's' : 'o');
+            if (length <= 0 || used + (size_t)length + 2u >= capacity) continue;
+            if (used) out[used++] = ',';
+            memcpy(out + used, token, (size_t)length);
+            used += (size_t)length;
+            out[used] = '\0';
+        }
+    }
+}
+
+static void range_matrix_sync_from_fields(app_t *app)
+{
+    if (!app) return;
+    range_matrix_from_text(app, 0, app->range_oop);
+    range_matrix_from_text(app, 1, app->range_ip);
 }
 
 static void draw_hand_matrix(SDL_Renderer *renderer, int x, int y, int width,
@@ -1072,9 +1259,12 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
           app->page == 1 ? green : outline);
     panel(renderer, (rect_t){16, 254, 156, 54}, app->page == 2 ? surface2 : sidebar,
           app->page == 2 ? orange : outline);
+    panel(renderer, (rect_t){16, 318, 156, 54}, app->page == 3 ? surface2 : sidebar,
+          app->page == 3 ? blue : outline);
     text(renderer, 34, 147, "TREE / SETUP", 1, white);
     text(renderer, 34, 211, "SOLVE / STRATEGY", 1, white);
     text(renderer, 34, 275, "EXPLORE / TRAIN", 1, white);
+    text(renderer, 34, 339, "EDIT RANGES", 1, white);
     text(renderer, 24, height - 52, "NATIVE C + SDL2", 1, muted);
     text(renderer, 24, height - 30, "MAC / LINUX / WIN", 1, muted);
 
@@ -1164,7 +1354,7 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         draw_strategy_table(renderer, matrix_x + 14, bottom_y + 36, width - matrix_x - 48, height - bottom_y - 178,
                             app, white, muted, blue, green, outline);
         if (app->solver_status[0]) text(renderer, matrix_x + 14, height - 42, app->solver_status, 1, green);
-    } else {
+    } else if (app->page == 2) {
         int left = 212;
         int right = 860;
         panel(renderer, (rect_t){left, 94, 624, height - 116}, surface, outline);
@@ -1201,6 +1391,57 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         text(renderer, right + 42, 530, "RUN OUTPUT", 1, muted);
         if (app->solver_result[0]) text(renderer, right + 42, 560, app->solver_result, 1, white);
         else text(renderer, right + 42, 560, "No run yet", 1, muted);
+    } else {
+        int left = 212;
+        int matrix_x = 246;
+        int matrix_y = 170;
+        int cell = 38;
+        const char *player_label = app->range_editor_player == 0 ? "OOP RANGE" : "IP RANGE";
+        panel(renderer, (rect_t){left, 94, 680, height - 116}, surface, outline);
+        panel(renderer, (rect_t){916, 94, width - 944, height - 116}, surface, outline);
+        text(renderer, left + 24, 116, "RANGE EDITOR", 2, blue);
+        text(renderer, left + 24, 142, "CLICK HAND CLASSES TO TOGGLE THEM", 1, muted);
+        text(renderer, matrix_x, matrix_y - 20, player_label, 2, green);
+        text(renderer, matrix_x + 180, matrix_y - 20, "HOLD'EM CLASS RANGE", 1, muted);
+        {
+            const char *ranks = "AKQJT98765432";
+            for (int row = 0; row < 13; ++row) {
+                text(renderer, matrix_x - 22, matrix_y + row * cell + 10,
+                     (char[]){ranks[row], '\0'}, 1, muted);
+                for (int column = 0; column < 13; ++column) {
+                    int selected = app->range_matrix[app->range_editor_player][row][column] != 0;
+                    SDL_Color color = selected ? (app->range_editor_player == 0 ? blue : orange) : surface2;
+                    fill(renderer, (rect_t){matrix_x + column * cell, matrix_y + row * cell, cell - 2, cell - 2}, color);
+                    border(renderer, (rect_t){matrix_x + column * cell, matrix_y + row * cell, cell - 2, cell - 2}, outline);
+                    {
+                        char hand[4];
+                        hand[0] = ranks[row]; hand[1] = ranks[column];
+                        hand[2] = row == column ? 'p' : row < column ? 's' : 'o';
+                        hand[3] = '\0';
+                        text(renderer, matrix_x + column * cell + 7,
+                             matrix_y + row * cell + 12, hand, 1, white);
+                    }
+                }
+            }
+        }
+        panel(renderer, (rect_t){246, 680, 160, 42}, app->range_editor_player == 0 ? (SDL_Color){39, 103, 166, 255} : surface2, blue);
+        panel(renderer, (rect_t){418, 680, 160, 42}, app->range_editor_player == 1 ? (SDL_Color){169, 101, 57, 255} : surface2, orange);
+        panel(renderer, (rect_t){590, 680, 160, 42}, (SDL_Color){31, 102, 80, 255}, green);
+        text(renderer, 270, 695, "EDIT OOP", 1, white);
+        text(renderer, 442, 695, "EDIT IP", 1, white);
+        text(renderer, 610, 695, "APPLY RANGE", 1, white);
+        text(renderer, 940, 116, "RANGE PREVIEW", 2, blue);
+        text(renderer, 940, 150, "OOP", 1, muted);
+        text(renderer, 940, 172, app->range_oop, 1, white);
+        text(renderer, 940, 220, "IP", 1, muted);
+        text(renderer, 940, 242, app->range_ip, 1, white);
+        text(renderer, 940, 300, "EDITOR NOTES", 1, muted);
+        text(renderer, 940, 326, "BLUE = OOP", 1, blue);
+        text(renderer, 940, 350, "ORANGE = IP", 1, orange);
+        text(renderer, 940, 382, "PLO USES EXACT COMBOS", 1, white);
+        text(renderer, 940, 406, "IN THE SETUP FIELDS", 1, white);
+        panel(renderer, (rect_t){940, 470, width - 984, 64}, (SDL_Color){31, 102, 80, 255}, green);
+        text(renderer, 964, 495, "RETURN TO SETUP  >", 1, white);
     }
     SDL_RenderPresent(renderer);
 }
@@ -1355,7 +1596,8 @@ int main(int argc, char **argv)
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_1) app.page = 0;
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_2) app.page = 1;
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_3) app.page = 2;
-            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_TAB) app.page = (app.page + 1) % 3;
+            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_4) app.page = 3;
+            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_TAB) app.page = (app.page + 1) % 4;
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 mouse_x = event.button.x; mouse_y = event.button.y;
                 int output_width = 0, output_height = 0;
@@ -1364,14 +1606,15 @@ int main(int argc, char **argv)
                 if (inside(layout.setup_tab, mouse_x, mouse_y)) app.page = 0;
                 else if (inside(layout.solve_tab, mouse_x, mouse_y)) app.page = 1;
                 else if (inside(layout.explore_tab, mouse_x, mouse_y)) app.page = 2;
+                else if (inside(layout.range_tab, mouse_x, mouse_y)) app.page = 3;
                 else if (mouse_x >= output_width - 222 && mouse_x < output_width - 130 &&
                          mouse_y >= 0 && mouse_y < 70) {
-                    run_vector_sim(&app);
+                    run_selected_solver(&app);
                     app.page = 1;
                 }
                 else if (app.page == 0 && mouse_x >= 804 && mouse_x < output_width - 28 &&
                          mouse_y >= output_height - 110 && mouse_y < output_height - 58) {
-                    run_vector_sim(&app);
+                    run_selected_solver(&app);
                     app.page = 1;
                 }
                 else if (app.page == 0 && mouse_x >= 240 && mouse_x < 452 &&
@@ -1409,7 +1652,7 @@ int main(int argc, char **argv)
                 }
                 else if (app.page == 1 && mouse_x >= output_width - 154 && mouse_x < output_width - 50 &&
                          mouse_y >= 105 && mouse_y < 135)
-                    run_vector_sim(&app);
+                    run_selected_solver(&app);
                 else if (app.page == 1 && mouse_x >= 1050 && mouse_x < output_width - 52 &&
                          mouse_y >= 586 && mouse_y < 650)
                     app.page = 2;
@@ -1443,6 +1686,36 @@ int main(int argc, char **argv)
                         app.has_current = 1;
                         app.answered_current = 0;
                         answer(&app, action);
+                    }
+                }
+                else if (app.page == 3 && mouse_x >= 246 && mouse_x < 246 + 13 * 38 &&
+                         mouse_y >= 170 && mouse_y < 170 + 13 * 38) {
+                    if (app.game_index != 0) {
+                        copy_field(app.solver_status, sizeof(app.solver_status),
+                                   "PLO needs exact multi-card ranges in Setup");
+                    } else {
+                        int column = (mouse_x - 246) / 38;
+                        int row = (mouse_y - 170) / 38;
+                        app.range_matrix[app.range_editor_player][row][column] =
+                            (uint8_t)!app.range_matrix[app.range_editor_player][row][column];
+                        range_matrix_to_text(&app, app.range_editor_player);
+                        copy_field(app.solver_status, sizeof(app.solver_status), "Range matrix edited");
+                    }
+                }
+                else if (app.page == 3 && mouse_x >= 246 && mouse_x < 406 &&
+                         mouse_y >= 680 && mouse_y < 722)
+                    app.range_editor_player = 0;
+                else if (app.page == 3 && mouse_x >= 418 && mouse_x < 578 &&
+                         mouse_y >= 680 && mouse_y < 722)
+                    app.range_editor_player = 1;
+                else if (app.page == 3 && mouse_x >= 590 && mouse_x < 750 &&
+                         mouse_y >= 680 && mouse_y < 722) {
+                    if (app.game_index == 0) {
+                        copy_field(app.solver_status, sizeof(app.solver_status), "Range applied to current spot");
+                        app.page = 0;
+                    } else {
+                        copy_field(app.solver_status, sizeof(app.solver_status),
+                                   "PLO keeps exact ranges entered in Setup");
                     }
                 }
             }

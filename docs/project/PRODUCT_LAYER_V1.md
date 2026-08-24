@@ -81,11 +81,16 @@ outil de solving : `Setup` pour le spot, `Solve` pour le suivi de l'arbre et du 
 `Explore` pour l'index des infosets, les fréquences et le contexte street/board/position.
 Les sélecteurs de variante (Hold'em/PLO4/PLO5/PLO6), de joueurs (2–8) et de moteur
 sont actifs. Le moteur `Vector CPU` est branché : le bouton `Solve this spot` appelle
-le binaire `pe-vector-sim` à côté de la GUI et affiche sa sortie EV/deals/tree. Les
-entrées Legacy CFR et GPU signalent explicitement qu'elles restent à brancher. Les chemins `.tree` et `.mkr` peuvent
+le binaire `pe-vector-sim` à côté de la GUI et affiche sa sortie EV/deals/tree. Le
+choix Legacy CFR appelle maintenant `mpf_run_with_metrics` avec le `.tree` et
+remonte les métriques CFR réelles. Le choix GPU appelle le même parcours avec
+un backend OpenCL/CUDA hybride : l'arbre reste parcouru côté CPU et les mises à
+jour de regret sont déléguées au device ; si aucun device n'est disponible, le
+GUI affiche l'échec au lieu d'afficher une EV. Le parcours d'arbre entièrement
+GPU reste hors de cette tranche. Les chemins `.tree` et `.mkr` peuvent
 être déposés ou saisis dans les champs de configuration. Elle accepte aussi les
 fichiers `.pe_sol`/CSV, les boutons d'actions,
-le feedback, le score et l'export de session JSON :
+le feedback, le score, l'éditeur de ranges Hold'em 13×13 et l'export de session JSON :
 
 ```sh
 cmake --build build --target poker-eval-trainer-gui
