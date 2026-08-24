@@ -64,6 +64,26 @@ typedef struct {
 int pe_pko_calculate_from_ranges(const pe_pko_range_input_t *input,
                                  pe_pko_range_result_t *result);
 
+/* Configuration for pe_pko_outcome_showdown(). */
+typedef struct {
+    uint64_t seed;       /* RNG seed; identical seeds reproduce the matrix */
+    int board_samples;   /* Monte Carlo boards per profile; <=0 uses 512 */
+    /* Optional EvalContext* (see core/eval_context.h) reused across calls.
+     * NULL creates and destroys a Hold'em context on every call. */
+    void *context;
+} pe_pko_showdown_config_t;
+
+/* All-in Hold'em showdown outcome model for pe_pko_calculate_from_ranges().
+ * Every sampled board is dealt from the remaining deck, each player's
+ * 7-card hand is evaluated, and the unique pot winner is credited with
+ * eliminating every opponent; exact ties credit nobody. Deterministic for a
+ * fixed seed. Pass as `outcome` with a pe_pko_showdown_config_t* user_data
+ * (NULL selects the defaults). */
+int pe_pko_outcome_showdown(const pe_pko_range_profile_t *profile,
+                            int num_players,
+                            double out_probability[ICM_MAX_PLAYERS][ICM_MAX_PLAYERS],
+                            void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

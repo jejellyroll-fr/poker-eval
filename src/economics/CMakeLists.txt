@@ -5,6 +5,7 @@ set(ECONOMICS_SOURCES
     icm.c
     pko.c
     pko_ranges.c
+    pko_showdown.c
     hrc.c
     hrc_import.c
     fgs.c
