@@ -92,6 +92,15 @@ typedef struct {
     char executable_dir[1024];
     char solver_status[256];
     char solver_result[1024];
+    /* Background solve: the worker thread owns solve_staging and flips
+     * solve_state to SOLVE_DONE; the main loop drains the handoff. */
+    SDL_Thread *solve_thread;
+    SDL_atomic_t solve_state;
+    int solve_exit_status;
+    char solve_command[32768];
+    char solve_staging[1024];
+    char solve_success[64];
+    char solve_failure[64];
 } app_t;
 
 typedef struct { int x; int y; int w; int h; } rect_t;
@@ -421,15 +430,115 @@ static const char *starter_range_for_player(const app_t *app, int player)
     return ranges[player];
 }
 
+enum { SOLVE_IDLE = 0, SOLVE_RUNNING = 1, SOLVE_DONE = 2 };
+
+/* Run a shell command and capture its output into destination. Returns the
+ * process exit status, or -1 when the pipe cannot be opened. */
+static int run_command_capture(const char *command, char *destination,
+                               size_t capacity)
+{
+    char output[4096];
+    FILE *pipe;
+    size_t used = 0u;
+    int exit_status;
+#ifdef _WIN32
+    pipe = _popen(command, "r");
+#else
+    pipe = popen(command, "r");
+#endif
+    if (!pipe)
+        return -1;
+    if (capacity > 0u)
+        destination[0] = '\0';
+    while (fgets(output, sizeof(output), pipe))
+    {
+        size_t length = strlen(output);
+        if (capacity == 0u || used + 1u >= capacity)
+            continue; /* keep draining so the child does not block */
+        if (length >= capacity - used)
+            length = capacity - used - 1u;
+        if (length > 0u)
+        {
+            memcpy(destination + used, output, length);
+            used += length;
+            destination[used] = '\0';
+        }
+    }
+#ifdef _WIN32
+    exit_status = _pclose(pipe);
+#else
+    exit_status = pclose(pipe);
+#endif
+    return exit_status;
+}
+
+static int solve_worker(void *userdata)
+{
+    app_t *app = (app_t *)userdata;
+    app->solve_exit_status =
+        run_command_capture(app->solve_command, app->solve_staging,
+                            sizeof(app->solve_staging));
+    SDL_AtomicSet(&app->solve_state, SOLVE_DONE);
+    return 0;
+}
+
+/* Start the solver subprocess on a worker thread so the event loop keeps
+ * rendering. Falls back to a blocking run when the thread cannot start. */
+static int launch_solver(app_t *app, const char *command, const char *success,
+                         const char *failure)
+{
+    if (SDL_AtomicGet(&app->solve_state) == SOLVE_RUNNING)
+    {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Solve already running");
+        return -1;
+    }
+    copy_field(app->solve_command, sizeof(app->solve_command), command);
+    copy_field(app->solve_success, sizeof(app->solve_success), success);
+    copy_field(app->solve_failure, sizeof(app->solve_failure), failure);
+    app->solve_staging[0] = '\0';
+    app->solver_result[0] = '\0';
+    app->solve_exit_status = -1;
+    SDL_AtomicSet(&app->solve_state, SOLVE_RUNNING);
+    app->solve_thread = SDL_CreateThread(solve_worker, "pe-solve", app);
+    if (!app->solve_thread)
+    {
+        int exit_status = run_command_capture(command, app->solver_result,
+                                              sizeof(app->solver_result));
+        SDL_AtomicSet(&app->solve_state, SOLVE_IDLE);
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   exit_status == 0 ? success : failure);
+        return exit_status == 0 ? 0 : -1;
+    }
+    copy_field(app->solver_status, sizeof(app->solver_status),
+               "Solving in background...");
+    return 0;
+}
+
+/* Main-loop side of the handoff: reclaim the finished worker and publish its
+ * output. Safe to call every frame; does nothing while a solve is in flight. */
+static void finish_pending_solve(app_t *app)
+{
+    if (SDL_AtomicGet(&app->solve_state) != SOLVE_DONE)
+        return;
+    if (app->solve_thread)
+    {
+        SDL_WaitThread(app->solve_thread, NULL);
+        app->solve_thread = NULL;
+    }
+    SDL_AtomicSet(&app->solve_state, SOLVE_IDLE);
+    copy_field(app->solver_result, sizeof(app->solver_result),
+               app->solve_staging);
+    copy_field(app->solver_status, sizeof(app->solver_status),
+               app->solve_exit_status == 0 ? app->solve_success
+                                           : app->solve_failure);
+}
+
 static int run_vector_sim(app_t *app)
 {
     char executable[1200], quoted_executable[1400];
     char board[160], tree[1200], mkr[1200];
     char command[32768];
-    char output[4096];
-    FILE *pipe;
-    size_t used = 0u;
-    int exit_status;
     if (!app)
         return -1;
     if (app->engine_index != 0)
@@ -476,43 +585,7 @@ static int run_vector_sim(app_t *app)
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
                  " --mkr %s", mkr);
     snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
-#ifdef _WIN32
-    pipe = _popen(command, "r");
-#else
-    pipe = popen(command, "r");
-#endif
-    if (!pipe)
-    {
-        copy_field(app->solver_status, sizeof(app->solver_status),
-                   "Could not start pe-vector-sim");
-        return -1;
-    }
-    while (fgets(output, sizeof(output), pipe))
-    {
-        size_t length = strlen(output);
-        if (length >= sizeof(app->solver_result) - used)
-            length = sizeof(app->solver_result) - used - 1u;
-        if (length > 0u)
-        {
-            memcpy(app->solver_result + used, output, length);
-            used += length;
-            app->solver_result[used] = '\0';
-        }
-        if (used + 1u >= sizeof(app->solver_result))
-            break;
-    }
-#ifdef _WIN32
-    exit_status = _pclose(pipe);
-#else
-    exit_status = pclose(pipe);
-#endif
-    if (exit_status != 0)
-    {
-        copy_field(app->solver_status, sizeof(app->solver_status), "Solver failed");
-        return -1;
-    }
-    copy_field(app->solver_status, sizeof(app->solver_status), "Solve complete");
-    return 0;
+    return launch_solver(app, command, "Solve complete", "Solver failed");
 }
 
 static int run_legacy_cfr(app_t *app, const char *backend_name)
@@ -521,10 +594,6 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
     char board[160], tree[1200], mkr[1200];
     char ranges[8][4200];
     char command[32768];
-    char output[4096];
-    FILE *pipe;
-    size_t used = 0u;
-    int exit_status;
     if (!app) return -1;
     if (!app->tree_path[0]) {
         copy_field(app->solver_status, sizeof(app->solver_status),
@@ -561,40 +630,9 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
         snprintf(command + strlen(command), sizeof(command) - strlen(command), " --mkr %s", mkr);
     }
     snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
-#ifdef _WIN32
-    pipe = _popen(command, "r");
-#else
-    pipe = popen(command, "r");
-#endif
-    if (!pipe) {
-        copy_field(app->solver_status, sizeof(app->solver_status),
-                   backend_name ? "Could not start GPU CFR runner" : "Could not start Legacy CFR runner");
-        return -1;
-    }
-    while (fgets(output, sizeof(output), pipe)) {
-        size_t length = strlen(output);
-        if (length >= sizeof(app->solver_result) - used)
-            length = sizeof(app->solver_result) - used - 1u;
-        if (length > 0u) {
-            memcpy(app->solver_result + used, output, length);
-            used += length;
-            app->solver_result[used] = '\0';
-        }
-        if (used + 1u >= sizeof(app->solver_result)) break;
-    }
-#ifdef _WIN32
-    exit_status = _pclose(pipe);
-#else
-    exit_status = pclose(pipe);
-#endif
-    if (exit_status != 0) {
-        copy_field(app->solver_status, sizeof(app->solver_status),
-                   backend_name ? "GPU CFR unavailable or failed" : "Legacy CFR failed");
-        return -1;
-    }
-    copy_field(app->solver_status, sizeof(app->solver_status),
-               backend_name ? "Hybrid GPU CFR complete" : "Legacy CFR complete");
-    return 0;
+    return launch_solver(app, command,
+                         backend_name ? "Hybrid GPU CFR complete" : "Legacy CFR complete",
+                         backend_name ? "GPU CFR unavailable or failed" : "Legacy CFR failed");
 }
 
 static int run_selected_solver(app_t *app)
@@ -1589,6 +1627,7 @@ int main(int argc, char **argv)
     SDL_StartTextInput();
     if (app.spot_count) next_spot(&app);
     while (app.running) {
+        finish_pending_solve(&app);
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) app.running = 0;
             else if (event.type == SDL_DROPFILE) {
@@ -1730,5 +1769,8 @@ int main(int argc, char **argv)
         }
         render_solver(renderer, &app); SDL_Delay(16);
     }
+    /* Do not leak the worker: wait out any solve still in flight. */
+    while (SDL_AtomicGet(&app.solve_state) == SOLVE_RUNNING) SDL_Delay(16);
+    finish_pending_solve(&app);
     save_session(&app); SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit(); free(app.spots); free(app.labels); free(app.events); return 0;
 }
