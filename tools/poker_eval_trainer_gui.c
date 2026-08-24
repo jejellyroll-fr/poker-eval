@@ -48,6 +48,8 @@ typedef struct {
     size_t current;
     int has_current;
     int answered_current;
+    int selected_action;
+    int best_action;
     unsigned random_state;
     int score;
     int answered;
@@ -204,6 +206,37 @@ static void load_action_names(app_t *app, const char *text)
     }
 }
 
+static int load_session_summary(const char *path, int *answered,
+                                int *best_answers, double *probability_loss)
+{
+    FILE *file;
+    long size;
+    char *data;
+    const char *fields[] = {"\"answered\":", "\"best_answers\":",
+                            "\"probability_loss\":"};
+    double parsed[3];
+    if (!path || !answered || !best_answers || !probability_loss) return -1;
+    file = fopen(path, "rb");
+    if (!file || fseek(file, 0, SEEK_END) != 0) { if (file) fclose(file); return -1; }
+    size = ftell(file);
+    if (size < 0 || size > 16 * 1024 * 1024) { fclose(file); return -1; }
+    rewind(file);
+    data = (char *)malloc((size_t)size + 1u);
+    if (!data || fread(data, 1u, (size_t)size, file) != (size_t)size) { free(data); fclose(file); return -1; }
+    fclose(file); data[size] = '\0';
+    for (size_t i = 0u; i < 3u; ++i) {
+        const char *at = strstr(data, fields[i]); char *end = NULL;
+        if (!at) { free(data); return -1; }
+        parsed[i] = strtod(at + strlen(fields[i]), &end);
+        if (end == at + strlen(fields[i])) { free(data); return -1; }
+    }
+    *answered = parsed[0] < 0.0 ? 0 : (int)parsed[0];
+    *best_answers = parsed[1] < 0.0 ? 0 : (int)parsed[1];
+    *probability_loss = parsed[2] >= 0.0 ? parsed[2] : 0.0;
+    free(data);
+    return 0;
+}
+
 static const label_t *label_for(const app_t *app, uint64_t key, int action)
 { for (size_t i = 0; i < app->label_count; ++i) if (app->labels[i].key == key && app->labels[i].action == action) return &app->labels[i]; return NULL; }
 
@@ -218,7 +251,7 @@ static void next_spot(app_t *app)
         double best = 0.0; for (int action = 0; action < app->spots[i].actions; ++action) if (app->spots[i].probability[action] > best) best = app->spots[i].probability[action];
         if (app->difficulty == 1 || best < 0.8) candidates[count++] = i;
     }
-    if (!count) return; app->random_state = app->random_state * 1664525u + 1013904223u; app->current = candidates[app->random_state % count]; app->has_current = 1; app->answered_current = 0;
+    if (!count) return; app->random_state = app->random_state * 1664525u + 1013904223u; app->current = candidates[app->random_state % count]; app->has_current = 1; app->answered_current = 0; app->selected_action = -1; app->best_action = -1;
 }
 
 static void answer(app_t *app, int selected)
@@ -226,6 +259,7 @@ static void answer(app_t *app, int selected)
     spot_t *spot; int best = 0;
     if (!app->has_current || app->answered_current) return; spot = &app->spots[app->current];
     for (int action = 1; action < spot->actions; ++action) if (spot->probability[action] > spot->probability[best]) best = action;
+    app->selected_action = selected; app->best_action = best;
     app->answered_current = 1; app->answered++;
     if (app->event_count == app->event_capacity) { size_t next = app->event_capacity ? app->event_capacity * 2u : 32u; event_t *grown = (event_t *)realloc(app->events, next * sizeof(*grown)); if (grown) { app->events = grown; app->event_capacity = next; } }
     if (app->event_count < app->event_capacity) app->events[app->event_count++] = (event_t){spot->key, selected, best, spot->probability[selected], spot->probability[best]};
@@ -248,8 +282,8 @@ static void render(SDL_Renderer *renderer, const app_t *app)
     fill(renderer, (rect_t){28,124,1124,64}, (SDL_Color){27,34,43,255});
     text(renderer, 52, 140, app->solution_path[0] ? "SOLUTION CHARGEE" : "DEPOSE UN FICHIER .PE_SOL", 2, app->solution_path[0] ? green : orange);
     text(renderer, 300, 140, app->solution_path[0] ? basename_of(app->solution_path) : "puis un CSV de labels ou --actions", 2, white);
-    text(renderer, 52, 164, app->labels_path[0] ? "LABELS CHARGES" : "LABELS MANQUANTS", 2, app->labels_path[0] ? green : orange);
-    text(renderer, 300, 164, app->labels_path[0] ? basename_of(app->labels_path) : "glisse-depose un fichier CSV", 2, muted);
+    text(renderer, 52, 164, app->labels_path[0] ? "CONTEXTE CHARGE" : "CONTEXTE OPTIONNEL", 2, app->labels_path[0] ? green : orange);
+    text(renderer, 300, 164, app->labels_path[0] ? basename_of(app->labels_path) : "--actions fold,check,call,raise", 2, muted);
     fill(renderer, (rect_t){28,212,1124,280}, (SDL_Color){29,38,49,255}); border(renderer, (rect_t){28,212,1124,280}, (SDL_Color){57,73,91,255});
     if (app->has_current && app->current < app->spot_count) {
         const spot_t *spot = &app->spots[app->current]; const label_t *meta = metadata_for(app, spot->key); char line[512];
@@ -259,21 +293,33 @@ static void render(SDL_Renderer *renderer, const app_t *app)
         if (meta && meta->has_pot) { snprintf(line, sizeof(line), "POT : %.2f", meta->pot); text(renderer, 900, 238, line, 2, muted); }
         snprintf(line, sizeof(line), "SPOT %zu / %zu", app->current + 1u, app->spot_count); text(renderer, 54, 276, line, 3, blue);
         snprintf(line, sizeof(line), "Question : quelle action joues-tu ici ?"); text(renderer, 54, 318, line, 3, white);
-        if (app->labels_path[0] == '\0') text(renderer, 54, 354, "Utilise --actions fold,call,raise ou depose un CSV labels.", 2, orange);
+        if (!app->answered_current && app->labels_path[0] == '\0') text(renderer, 54, 354, "1 lis le contexte   2 choisis une action   3 appuie sur N", 2, orange);
+        if (app->answered_current) {
+            const label_t *selected = label_for(app, spot->key, app->selected_action);
+            const label_t *best = label_for(app, spot->key, app->best_action);
+            snprintf(line, sizeof(line), "TA REPONSE : %s   /   SOLUTION : %s",
+                     selected ? selected->label : "action choisie",
+                     best ? best->label : "meilleure frequence");
+            text(renderer, 54, 354, line, 2, app->streak ? green : orange);
+        }
         for (int action = 0; action < spot->actions && action < 8; ++action) {
             int column = action % 4, row = action / 4; rect_t button = {54 + column * 245, 382 + row * 48, 225, 38};
             const label_t *label = label_for(app, spot->key, action); char button_text[128];
             const char *name = label ? label->label :
                 (app->action_names[action][0] ? app->action_names[action] : "OPTION");
             snprintf(button_text, sizeof(button_text), "%s  %.1f%%", name, spot->probability[action] * 100.0);
-            fill(renderer, button, app->answered_current ? (SDL_Color){49,60,72,255} : (SDL_Color){53,80,112,255}); text(renderer, button.x + 14, button.y + 12, button_text, 2, white);
+            SDL_Color button_color = (SDL_Color){53,80,112,255};
+            if (app->answered_current && action == app->selected_action) button_color = app->selected_action == app->best_action ? green : orange;
+            else if (app->answered_current && action == app->best_action) button_color = blue;
+            fill(renderer, button, button_color); text(renderer, button.x + 14, button.y + 12, button_text, 2, white);
         }
     } else text(renderer, 54, 270, "DEPOSE TON .PE_SOL ICI POUR COMMENCER", 3, white);
     fill(renderer, (rect_t){28,516,1124,112}, (SDL_Color){27,34,43,255});
     text(renderer, 54, 540, app->answered_current ? app->feedback : "ETAPE 1 : CHOISIS UNE ACTION CI-DESSUS", 3, app->answered_current ? (app->streak ? green : orange) : white);
     { char score[128]; snprintf(score, sizeof(score), "SCORE : %d / %d     DIFFICULTE : %d / 5     SERIE : %d", app->score, app->answered, app->difficulty, app->streak); text(renderer, 54, 585, score, 2, muted); }
     fill(renderer, (rect_t){28,654,230,54}, (SDL_Color){53,80,112,255}); text(renderer, 57, 672, "SPOT SUIVANT (N)", 2, white);
-    fill(renderer, (rect_t){278,654,440,54}, (SDL_Color){31,42,53,255}); text(renderer, 300, 672, "GLISSE .PE_SOL OU .CSV SUR LA FENETRE", 2, muted);
+    fill(renderer, (rect_t){278,654,440,54}, (SDL_Color){31,42,53,255}); text(renderer, 300, 672, "N : SUIVANT   S : SAUVEGARDER", 2, muted);
+    { char session[160]; snprintf(session, sizeof(session), "SESSION : %s", app->session_path[0] ? basename_of(app->session_path) : "trainer-session.json"); text(renderer, 744, 672, session, 2, muted); }
     SDL_RenderPresent(renderer);
 }
 
@@ -281,7 +327,7 @@ static void save_session(const app_t *app)
 {
     const char *path = app->session_path[0] ? app->session_path : "trainer-session.json";
     FILE *file = fopen(path, "w"); if (!file) return;
-    fprintf(file, "{\"schema\":\"pe-trainer-session/v1\",\"solution\":\"%s\",\"answered\":%d,\"best_answers\":%d,\"probability_loss\":%.17g,\"events\":[", app->solution_path, app->answered, app->score, app->probability_loss);
+    fprintf(file, "{\"schema\":\"pe-trainer-session/v1\",\"solution\":\"%s\",\"answered\":%d,\"best_answers\":%d,\"probability_loss\":%.17g,\"difficulty\":%d,\"events\":[", app->solution_path, app->answered, app->score, app->probability_loss, app->difficulty);
     for (size_t i = 0; i < app->event_count; ++i) { if (i) fputc(',', file); fprintf(file, "{\"key\":\"0x%016llx\",\"selected\":%d,\"best\":%d}", (unsigned long long)app->events[i].key, app->events[i].selected, app->events[i].best); }
     fputs("]}\n", file); fclose(file);
 }
@@ -289,10 +335,11 @@ static void save_session(const app_t *app)
 int main(int argc, char **argv)
 {
     SDL_Window *window; SDL_Renderer *renderer; SDL_Event event; app_t app; int mouse_x, mouse_y;
+    const char *resume_path = NULL;
     memset(&app, 0, sizeof(app)); app.random_state = 1u; app.difficulty = 1; app.running = 1; font_init();
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--help") == 0) {
-            puts("usage: poker-eval-trainer-gui [--solution FILE] [--labels CSV] [--actions a,b,c] [--session-json FILE]");
+            puts("usage: poker-eval-trainer-gui [--solution FILE] [--labels CSV] [--actions a,b,c] [--session-json FILE] [--resume-session FILE]");
             return 0;
         }
         if (i + 1 >= argc) {
@@ -304,9 +351,26 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--actions") == 0) load_action_names(&app, argv[++i]);
         else if (strcmp(argv[i], "--session-json") == 0)
             snprintf(app.session_path, sizeof(app.session_path), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--resume-session") == 0)
+            resume_path = argv[++i];
         else {
             fprintf(stderr, "unknown option: %s\n", argv[i]);
             return 2;
+        }
+    }
+    if (resume_path) {
+        int answered = 0, best_answers = 0;
+        double probability_loss = 0.0;
+        if (load_session_summary(resume_path, &answered, &best_answers,
+                                 &probability_loss) != 0) {
+            fprintf(stderr, "cannot read session %s\n", resume_path);
+            free(app.spots); free(app.labels); return 1;
+        }
+        app.answered = answered; app.score = best_answers;
+        app.probability_loss = probability_loss;
+        if (answered > 0) {
+            double accuracy = (double)best_answers / (double)answered;
+            app.difficulty = accuracy >= 0.80 ? 3 : accuracy >= 0.60 ? 2 : 1;
         }
     }
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }

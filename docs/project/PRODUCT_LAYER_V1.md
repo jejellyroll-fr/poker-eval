@@ -96,6 +96,8 @@ build/tools/poker-eval-trainer-gui --solution solve.pe_sol \
 Les labels CSV restent prioritaires lorsqu’ils existent pour un infoset donné.
 Le chemin de session peut être choisi explicitement avec `--session-json`; sinon
 le GUI écrit `trainer-session.json` dans le répertoire courant.
+Une session existante peut être reprise avec `--resume-session FILE` ; le score,
+la perte de stratégie et la difficulté sont restaurés au démarrage.
 
 Sans arguments, il suffit de déposer le `.pe_sol` puis le CSV de labels dans la fenêtre.
 Le CSV est important : il transforme les indices techniques en `fold`, `call`, `bet`,
@@ -150,8 +152,32 @@ pe-preflop-tree --players 2 --stack 100 --stack 100 --raises 2,4,8 \
   --range 0 '22+,AKs' --range 1 'random' --output tree.json
 ```
 
-Le document `pe-preflop-tree/v1` contient les nœuds, les transitions légales, le pot,
+Le document `pe-preflop-tree/v2` contient les nœuds, les transitions légales, le pot,
 le montant à payer et les ranges d'entrée.
+
+Le générateur compile désormais les ranges au lieu de seulement les recopier. La
+sortie `pe-preflop-tree/v2` contient `rangeProfiles` au format MPF, avec chaque combo
+card-removalée et son poids normalisé :
+
+```sh
+pe-preflop-tree --game holdem --players 2 --stack 100 --stack 100 \
+  --raises 2,4,8 --range 0 '22+,AKs' --range 1 'JJ+,AQs+' \
+  --output tree.json
+```
+
+`--max-combos` protège les exports PLO très larges contre un fichier généré
+accidentellement gigantesque.
+
+Le trainer CLI propose trois politiques de drill :
+
+```sh
+poker-eval-trainer --solution solve.pe_sol --labels spots.csv \
+  --drill-mode progressive --rounds 50 --session-json session.json
+```
+
+`progressive` sélectionne les spots dont la difficulté entropique est accessible,
+`balanced` échantillonne tout le portefeuille et `review` rejoue le dernier spot
+raté. Le mode utilisé est conservé dans `pe-trainer-session/v1`.
 
 Les hand histories courantes de type PokerStars peuvent être normalisées :
 
@@ -166,3 +192,14 @@ Pour une clé brute, `pe-solution-report --decode-key 0x...` indique expliciteme
 si elle est décodable. Les clés d'infoset Monker/FNV sont des hash et ne peuvent pas
 être inversées en board sans métadonnée ; un champ packé n'est décodé que si son
 shift et son nombre de cartes sont fournis avec le format documenté.
+
+Les dumps Monker peuvent être audités sans les importer dans le solveur :
+
+```sh
+pe-monker-validate --tree spot.tree --mkr run.mkr --json validation.json
+```
+
+Le validateur contrôle la topologie, le binding des slots, les ranges, le nombre de
+classes et `iscount`. Le codec PLO4 est marqué `exact-plo4`; Hold'em, PLO5 et PLO6
+sont marqués `structural-only-reference-required` tant qu'un dump de référence
+indépendant n'a pas fourni leur table de classes Monker.

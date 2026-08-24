@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 typedef struct trainer_label_t
 {
@@ -31,10 +32,18 @@ typedef struct
     double best_probability;
 } trainer_event_t;
 
+typedef enum
+{
+    DRILL_PROGRESSIVE = 0,
+    DRILL_BALANCED,
+    DRILL_REVIEW
+} drill_mode_t;
+
 static void usage(const char *program)
 {
     fprintf(stderr, "Usage: %s --solution FILE [--labels CSV] [--rounds N] [--seed N]"
-                    " [--session-json FILE] [--resume-session FILE] [--export-html FILE]\n"
+                    " [--drill-mode progressive|balanced|review] [--session-json FILE]"
+                    " [--resume-session FILE] [--export-html FILE]\n"
                     "       labels CSV: key,action,label or key,street,board,action,label,next_key\n"
                     "       rich labels: key,street,board,runout,position,pot,action,label,next_key\n",
             program);
@@ -212,9 +221,71 @@ static unsigned next_random(unsigned *state)
     return *state;
 }
 
+static const char *drill_mode_name(drill_mode_t mode)
+{
+    switch (mode) {
+    case DRILL_BALANCED: return "balanced";
+    case DRILL_REVIEW: return "review";
+    case DRILL_PROGRESSIVE:
+    default: return "progressive";
+    }
+}
+
+static int parse_drill_mode(const char *text, drill_mode_t *out)
+{
+    if (!text || !out) return 0;
+    if (strcmp(text, "progressive") == 0) *out = DRILL_PROGRESSIVE;
+    else if (strcmp(text, "balanced") == 0) *out = DRILL_BALANCED;
+    else if (strcmp(text, "review") == 0) *out = DRILL_REVIEW;
+    else return 0;
+    return 1;
+}
+
+static int spot_difficulty(const double *probabilities, int actions)
+{
+    double entropy = 0.0;
+    if (!probabilities || actions <= 0) return 1;
+    for (int i = 0; i < actions; ++i)
+        if (probabilities[i] > 1e-12)
+            entropy -= probabilities[i] * (log(probabilities[i]) / log(2.0));
+    if (entropy < 0.5) return 1;
+    if (entropy < 1.0) return 2;
+    if (entropy < 1.5) return 3;
+    if (entropy < 2.0) return 4;
+    return 5;
+}
+
+static size_t choose_spot(pe_sol_mmap_t *view, size_t count,
+                          drill_mode_t mode, int difficulty,
+                          size_t review_index, unsigned *random_state)
+{
+    size_t selected = SIZE_MAX;
+    size_t seen = 0u;
+    if (mode == DRILL_REVIEW && review_index != SIZE_MAX && review_index < count)
+        return review_index;
+    for (size_t index = 0u; index < count; ++index) {
+        uint64_t key = 0u;
+        double probabilities[256];
+        int actions = 0;
+        int level;
+        if (pe_sol_mmap_get_strategy(view, index, &key, 256,
+                                     probabilities, &actions) != 0)
+            continue;
+        level = spot_difficulty(probabilities, actions);
+        if (mode == DRILL_PROGRESSIVE && level > difficulty) continue;
+        if (mode == DRILL_REVIEW && level > difficulty + 1) continue;
+        ++seen;
+        if ((next_random(random_state) % (unsigned)seen) == 0u)
+            selected = index;
+    }
+    if (selected != SIZE_MAX) return selected;
+    return count ? (size_t)(next_random(random_state) % (unsigned)count) : SIZE_MAX;
+}
+
 static int write_session(const char *path, const char *solution,
                          unsigned seed, int rounds, int answered, int correct,
                          double probability_loss, int difficulty,
+                         drill_mode_t drill_mode,
                          const char *resumed_from,
                          const trainer_event_t *events, size_t event_count)
 {
@@ -228,8 +299,10 @@ static int write_session(const char *path, const char *solution,
     }
     fprintf(file, "\",\"seed\":%u,\"rounds\":%d,\"answered\":%d,"
                   "\"best_answers\":%d,\"probability_loss\":%.17g,"
-                  "\"difficulty\":%d,\"resumed_from\":",
+                  "\"difficulty\":%d,\"drill_mode\":",
             seed, rounds, answered, correct, probability_loss, difficulty);
+    json_string(file, drill_mode_name(drill_mode));
+    fputs(",\"resumed_from\":", file);
     json_string(file, resumed_from ? resumed_from : "");
     fputs(",\"events\":[", file);
     for (size_t i = 0u; i < event_count; ++i)
@@ -323,6 +396,7 @@ int main(int argc, char **argv)
     const char *session_path = NULL;
     const char *resume_path = NULL;
     const char *export_html = NULL;
+    drill_mode_t drill_mode = DRILL_PROGRESSIVE;
     for (int i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--solution") == 0 && i + 1 < argc)
@@ -333,6 +407,13 @@ int main(int argc, char **argv)
             rounds = atoi(argv[++i]);
         else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
             seed = (unsigned)strtoul(argv[++i], NULL, 10);
+        else if (strcmp(argv[i], "--drill-mode") == 0 && i + 1 < argc)
+        {
+            if (!parse_drill_mode(argv[++i], &drill_mode)) {
+                usage(argv[0]);
+                return 2;
+            }
+        }
         else if (strcmp(argv[i], "--session-json") == 0 && i + 1 < argc)
             session_path = argv[++i];
         else if (strcmp(argv[i], "--resume-session") == 0 && i + 1 < argc)
@@ -399,7 +480,8 @@ int main(int argc, char **argv)
         return result == 0 ? 0 : 1;
     }
 
-    printf("GTO trainer: %zu infosets, %d rounds\n", count, rounds);
+    printf("GTO trainer: %zu infosets, %d rounds (mode: %s)\n", count, rounds,
+           drill_mode_name(drill_mode));
     printf("Action labels: %s\n", label_count ? "loaded from metadata" : "numeric fallback");
     printf("Enter an action number, or q to stop.\n\n");
 
@@ -408,10 +490,12 @@ int main(int argc, char **argv)
     size_t event_capacity = 0u;
     unsigned random_state = seed;
     uint64_t path_key = 0u;
+    size_t review_index = SIZE_MAX;
     for (int round = 0; round < rounds; ++round)
     {
         size_t index = SIZE_MAX;
-        if (path_key != 0u)
+        if (path_key != 0u &&
+            !(drill_mode == DRILL_REVIEW && review_index != SIZE_MAX))
             for (size_t candidate = 0u; candidate < count; ++candidate)
             {
                 uint64_t candidate_key = 0u;
@@ -423,7 +507,9 @@ int main(int argc, char **argv)
                 if (candidate_key == path_key) { index = candidate; break; }
             }
         if (index == SIZE_MAX)
-            index = (size_t)(next_random(&random_state) % (unsigned)count);
+            index = choose_spot(view, count, drill_mode, difficulty,
+                                review_index, &random_state);
+        if (index == SIZE_MAX) break;
         double probabilities[256];
         uint64_t key = 0;
         int actions = 0;
@@ -441,6 +527,7 @@ int main(int argc, char **argv)
                 best = action;
 
         const trainer_label_t *spot = spot_for(labels, label_count, key);
+        const int level = spot_difficulty(probabilities, actions);
         printf("Spot %d/%d  infoset=0x%016llx", round + 1, rounds,
                (unsigned long long)key);
         if (spot && (spot->street[0] || spot->board[0]))
@@ -449,6 +536,7 @@ int main(int argc, char **argv)
         if (spot && spot->runout[0]) printf(" runout=%s", spot->runout);
         if (spot && spot->position[0]) printf(" position=%s", spot->position);
         if (spot && spot->has_pot) printf(" pot=%.2f", spot->pot);
+        printf(" difficulty=%d/5", level);
         putchar('\n');
         printf("Available actions:");
         for (int action = 0; action < actions; ++action)
@@ -510,6 +598,7 @@ int main(int argc, char **argv)
         else
         {
             streak = 0;
+            review_index = index;
             if (difficulty > 1) --difficulty;
             probability_loss += probabilities[best] - probabilities[selected];
             printf("Best action: %d (%.1f%%).\n\n", best, probabilities[best] * 100.0);
@@ -519,13 +608,16 @@ int main(int argc, char **argv)
                 labels, label_count, key, (int)selected);
             path_key = transition ? transition->next_key : 0u;
         }
+        if (probabilities[selected] >= probabilities[best] &&
+            drill_mode == DRILL_REVIEW)
+            review_index = SIZE_MAX;
     }
     printf("Session: %d answered, %d best-action answers (%.1f%%)\n",
            answered, correct, answered ? 100.0 * (double)correct / answered : 0.0);
     printf("Cumulative strategy-probability loss: %.4f\n", probability_loss);
     if (session_path && write_session(session_path, solution, seed, rounds,
                                       answered, correct, probability_loss,
-                                      difficulty, resume_path,
+                                      difficulty, drill_mode, resume_path,
                                       events, event_count) != 0)
         fprintf(stderr, "Unable to write trainer session %s\n", session_path);
     pe_sol_close_mmap(view);
