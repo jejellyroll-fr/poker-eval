@@ -29,6 +29,16 @@ typedef struct
     int converged;
 } pe_best_response_vector_result_t;
 
+typedef struct
+{
+    double policy_value[PE_SOLVER_MAX_PLAYERS];
+    double br_value[PE_SOLVER_MAX_PLAYERS];
+    double br_gap[PE_SOLVER_MAX_PLAYERS];
+    double exploitability_raw;
+    uint32_t br_iterations[PE_SOLVER_MAX_PLAYERS];
+    int converged;
+} pe_exploitability_vector_result_t;
+
 struct pe_vector_game_t;
 
 /** Defaults: 32 fixed-point passes and exact action comparisons. */
@@ -48,6 +58,19 @@ pe_solver_status_t pe_best_response_vector(
     uint8_t br_player,
     const pe_best_response_vector_config_t *config,
     pe_best_response_vector_result_t *out_result);
+
+/**
+ * Measure a strategy's vector exploitability.
+ *
+ * The policy value is evaluated with all players following `game->strategy`.
+ * Each best-response value then replaces one player's policy, consistently at
+ * information sets. `br_gap` is the unilateral gain and
+ * `exploitability_raw` is their sum (NashConv for multiway games).
+ */
+pe_solver_status_t pe_exploitability_vector(
+    const struct pe_vector_game_t *game,
+    const pe_best_response_vector_config_t *config,
+    pe_exploitability_vector_result_t *out_result);
 
 /**
  * Convert a raw exploitability value expressed in the game's currency to

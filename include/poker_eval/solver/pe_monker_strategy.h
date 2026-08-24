@@ -24,6 +24,7 @@
 
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
+#include <poker_eval/solver/pe_traversal.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,6 +34,23 @@ extern "C" {
 #endif
 
 typedef struct pe_monker_strategy_t pe_monker_strategy_t;
+
+/** Map one vector-lane combo in a game state to a tree node and four cards. */
+typedef int (*pe_monker_combo_decoder_fn)(const void *state,
+                                          uint16_t combo,
+                                          int *out_node,
+                                          int out_cards[4],
+                                          void *user);
+
+/** A borrowed vector-game view whose strategy callback reads Monker bytes. */
+typedef struct
+{
+    pe_vector_game_t game;
+    const pe_vector_game_t *base;
+    const pe_monker_strategy_t *strategy;
+    pe_monker_combo_decoder_fn decode_combo;
+    void *decode_user;
+} pe_monker_strategy_game_t;
 
 /**
  * Join a stored strategy to its tree and to the hand-class numbering.
@@ -71,6 +89,21 @@ pe_monker_status_t pe_monker_strategy_probs(
     size_t capacity,
     uint16_t *out_action_count,
     int *out_specified);
+
+/**
+ * Wrap a vector game with the imported Monker strategy.
+ *
+ * The base game supplies topology, chance and terminal values. The decoder
+ * supplies the corresponding Monker tree node and canonical four-card hand
+ * for each combo in a state. The returned game borrows every input and is
+ * valid while `adapter` and those inputs remain alive.
+ */
+pe_monker_status_t pe_monker_strategy_vector_game_init(
+    pe_monker_strategy_game_t *adapter,
+    const pe_vector_game_t *base,
+    const pe_monker_strategy_t *strategy,
+    pe_monker_combo_decoder_fn decode_combo,
+    void *decode_user);
 
 #ifdef __cplusplus
 }

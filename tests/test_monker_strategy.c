@@ -8,6 +8,7 @@
  */
 
 #include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
 #include <math.h>
@@ -17,6 +18,84 @@
 #include <zlib.h>
 
 static int failures;
+
+typedef struct
+{
+    int terminal;
+    int winning_action;
+} strategy_state_t;
+
+static strategy_state_t strategy_root = {0, -1};
+static strategy_state_t strategy_win = {1, 0};
+static strategy_state_t strategy_lose = {1, 1};
+
+static int strategy_game_terminal(const void *state, void *user)
+{
+    (void)user;
+    return ((const strategy_state_t *)state)->terminal;
+}
+
+static int strategy_game_player(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0;
+}
+
+static uint16_t strategy_game_actions(const void *state, void *user)
+{
+    (void)user;
+    return ((const strategy_state_t *)state)->terminal ? 0u : 2u;
+}
+
+static uint64_t strategy_game_infoset(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 1u;
+}
+
+static const void *strategy_game_apply(const void *state, uint16_t action,
+                                       void *user)
+{
+    (void)user;
+    if (state != &strategy_root || action > 1u)
+        return NULL;
+    return action == 0u ? &strategy_win : &strategy_lose;
+}
+
+static int strategy_game_values(const void *state,
+                                const pe_reach_vec_t *reach,
+                                pe_value_vec_t *out_values,
+                                uint8_t player_count, void *user)
+{
+    size_t combo;
+    double value = state == &strategy_win ? 1.0 : 0.0;
+    (void)reach;
+    (void)user;
+    if (!out_values || player_count != 2u)
+        return -1;
+    for (combo = 0u; combo < out_values[0].n; ++combo)
+    {
+        out_values[0].v[combo] = value;
+        out_values[1].v[combo] = -value;
+    }
+    return 0;
+}
+
+static int strategy_decode_combo(const void *state, uint16_t combo,
+                                 int *out_node, int out_cards[4], void *user)
+{
+    (void)state;
+    (void)combo;
+    (void)user;
+    *out_node = 0;
+    out_cards[0] = 0;
+    out_cards[1] = 1;
+    out_cards[2] = 2;
+    out_cards[3] = 3;
+    return 0;
+}
 
 #define CHECK(condition, ...)                                      \
     do                                                             \
@@ -361,6 +440,41 @@ int main(void)
         CHECK(pe_monker_strategy_probs(view, tree->root_index, cards, p,
                                        1u, &n, NULL) != PE_MONKER_OK,
               "a one-slot buffer was accepted for a two-action node");
+    }
+
+    /* The imported policy is evaluated through the vector best-response
+       engine, not by comparing its action frequencies. Every combo is class
+       0 (the fixture's unstored/uniform class), so action 0 wins half the
+       time against an always-action-0 opponent. */
+    {
+        pe_vector_game_t base = {0};
+        pe_monker_strategy_game_t adapted = {0};
+        pe_best_response_vector_config_t br_config =
+            pe_best_response_vector_config_default();
+        pe_exploitability_vector_result_t result = {0};
+        base.root = &strategy_root;
+        base.player_count = 2u;
+        base.combo_count = 16432u;
+        base.is_terminal = strategy_game_terminal;
+        base.acting_player = strategy_game_player;
+        base.action_count = strategy_game_actions;
+        base.infoset_key = strategy_game_infoset;
+        base.apply_action = strategy_game_apply;
+        base.terminal_values = strategy_game_values;
+        CHECK(pe_monker_strategy_vector_game_init(
+                  &adapted, &base, view, strategy_decode_combo, NULL) ==
+              PE_MONKER_OK, "vector game adapter did not initialise");
+        CHECK(pe_exploitability_vector(&adapted.game, &br_config, &result) ==
+                  PE_SOLVER_OK, "vector exploitability did not run");
+        CHECK(fabs(result.policy_value[0] - 0.5) < 1e-12 &&
+                  fabs(result.policy_value[1] + 0.5) < 1e-12,
+              "policy values were %.12f/%.12f, expected 0.5/-0.5",
+              result.policy_value[0], result.policy_value[1]);
+        CHECK(fabs(result.br_gap[0] - 0.5) < 1e-12 &&
+                  fabs(result.br_gap[1]) < 1e-12 &&
+                  fabs(result.exploitability_raw - 0.5) < 1e-12,
+              "exploitability was %.12f with gaps %.12f/%.12f",
+              result.exploitability_raw, result.br_gap[0], result.br_gap[1]);
     }
 
     pe_monker_strategy_close(view);

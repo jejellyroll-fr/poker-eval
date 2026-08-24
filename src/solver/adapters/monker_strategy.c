@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PE_MONKER_VECTOR_MAX_ACTIONS 32u
+
 struct pe_monker_strategy_t
 {
     const mpf_tree_def_t *tree;
@@ -174,5 +176,152 @@ pe_monker_status_t pe_monker_strategy_probs(
         out_probs[a] = 1.0 / (double)actions;
     if (out_specified != NULL)
         *out_specified = 0;
+    return PE_MONKER_OK;
+}
+
+static pe_monker_strategy_game_t *strategy_game(void *user)
+{
+    return (pe_monker_strategy_game_t *)user;
+}
+
+static int game_is_chance(const void *state, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->is_chance(state, adapter->base->user);
+}
+
+static uint16_t game_chance_count(const void *state, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->chance_outcome_count(state, adapter->base->user);
+}
+
+static double game_chance_weight(const void *state, uint16_t outcome,
+                                 void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->chance_outcome_weight(
+        state, outcome, adapter->base->user);
+}
+
+static const void *game_apply_chance(const void *state, int outcome, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->apply_chance(state, outcome, adapter->base->user);
+}
+
+static int game_is_terminal(const void *state, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->is_terminal(state, adapter->base->user);
+}
+
+static int game_acting_player(const void *state, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->acting_player(state, adapter->base->user);
+}
+
+static uint16_t game_action_count(const void *state, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->action_count(state, adapter->base->user);
+}
+
+static uint64_t game_infoset_key(const void *state, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->infoset_key(state, adapter->base->user);
+}
+
+static const void *game_apply_action(const void *state, uint16_t action,
+                                     void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->apply_action(state, action, adapter->base->user);
+}
+
+static int game_terminal_values(const void *state,
+                                const pe_reach_vec_t *reach,
+                                pe_value_vec_t *out_values,
+                                uint8_t player_count, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->terminal_values(
+        state, reach, out_values, player_count, adapter->base->user);
+}
+
+static int game_strategy(const void *state, uint64_t infoset_key,
+                         uint16_t action, pe_value_vec_t *out, void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    uint16_t combo;
+    (void)infoset_key;
+
+    if (!out || out->n != adapter->game.combo_count ||
+        action >= PE_MONKER_VECTOR_MAX_ACTIONS)
+        return -1;
+    for (combo = 0u; combo < adapter->game.combo_count; ++combo)
+    {
+        int node;
+        int cards[4];
+        double probs[PE_MONKER_VECTOR_MAX_ACTIONS];
+        uint16_t action_count = 0u;
+        if (adapter->decode_combo(state, combo, &node, cards,
+                                  adapter->decode_user) != 0 ||
+            pe_monker_strategy_probs(adapter->strategy, node, cards, probs,
+                                     PE_MONKER_VECTOR_MAX_ACTIONS,
+                                     &action_count, NULL) != PE_MONKER_OK ||
+            action >= action_count)
+            return -1;
+        out->v[combo] = probs[action];
+    }
+    return 0;
+}
+
+pe_monker_status_t pe_monker_strategy_vector_game_init(
+    pe_monker_strategy_game_t *adapter,
+    const pe_vector_game_t *base,
+    const pe_monker_strategy_t *strategy,
+    pe_monker_combo_decoder_fn decode_combo,
+    void *decode_user)
+{
+    uint32_t class_count;
+
+    if (!adapter || !base || !strategy || !decode_combo)
+        return PE_MONKER_ERR_NULL_ARGUMENT;
+    class_count = pe_monker_strategy_class_count(strategy);
+    if (class_count == 0u || class_count != base->combo_count)
+        return PE_MONKER_ERR_INVALID_HEADER;
+    if (!base->root || !base->is_terminal || !base->acting_player ||
+        !base->action_count || !base->infoset_key || !base->apply_action ||
+        !base->terminal_values)
+        return PE_MONKER_ERR_INVALID_TOPOLOGY;
+    if (base->is_chance && (!base->chance_outcome_count ||
+                            !base->apply_chance))
+        return PE_MONKER_ERR_INVALID_TOPOLOGY;
+
+    memset(adapter, 0, sizeof(*adapter));
+    adapter->base = base;
+    adapter->strategy = strategy;
+    adapter->decode_combo = decode_combo;
+    adapter->decode_user = decode_user;
+    adapter->game = *base;
+    adapter->game.user = adapter;
+    adapter->game.strategy = game_strategy;
+    adapter->game.is_terminal = game_is_terminal;
+    adapter->game.acting_player = game_acting_player;
+    adapter->game.action_count = game_action_count;
+    adapter->game.infoset_key = game_infoset_key;
+    adapter->game.apply_action = game_apply_action;
+    adapter->game.terminal_values = game_terminal_values;
+    if (base->is_chance)
+    {
+        adapter->game.is_chance = game_is_chance;
+        adapter->game.chance_outcome_count = game_chance_count;
+        adapter->game.chance_outcome_weight = base->chance_outcome_weight
+            ? game_chance_weight : NULL;
+        adapter->game.apply_chance = game_apply_chance;
+    }
     return PE_MONKER_OK;
 }
