@@ -57,10 +57,11 @@ famille AGPL du solving OSS.
    partir des stacks, tailles et ranges déclarées ; les transitions de street et un
    solveur produit multi-rues restent distincts.
 2. **GUI / couche produit joueur.** `pe-solution-report` produit désormais un JSON v2
-   et un viewer HTML autonome avec filtre interactif par street/flop/board/nœud. Le
-   viewer reste une application statique partageable, mais le trainer exporte aussi
-   une GUI HTML locale interactive avec score et difficulté adaptative. Il n'y a pas
-   encore d'application desktop native ni d'éditeur de ranges intégré.
+   et un viewer HTML autonome avec filtre interactif par street/flop/board/nœud. La
+   cible `poker-eval-trainer-desktop` produit maintenant un bundle macOS natif avec
+   fenêtre, chargement `.pe_sol`/CSV, boutons d'actions, feedback, score, difficulté
+   adaptative et export de session JSON. Il manque encore l'éditeur de ranges intégré
+   et les ports Windows/Linux.
 3. **Play-vs-solution / trainer riche.** `poker-eval-trainer` suit les transitions
    `next_key`, affiche street/board/runout/position/pot lorsqu'ils sont fournis, et
    exporte une session JSON avec les réponses, meilleurs choix, pertes de stratégie et
@@ -153,7 +154,7 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
 2. **Purger les claims faux** (Metal, bench GPU-CFR, guides manquants, stubs `pe_cfr_*`
    ou leur documentation honnête) — coût faible, crédibilité forte.
 3. **Étendre le viewer/trainer** vers les formats de rooms, les drills adaptatifs
-   calibrés et une application desktop native ; le parcours interactif, les sessions,
+   calibrés et l'éditeur de ranges ; le parcours interactif, l'application macOS,
    l'import PokerStars et les rapports de flop/runout sont disponibles.
 4. **Draw-game adapters** — différenciateur absolu, prochaine étape après le pont
    Stud/Short Deck livré (abstraction + évaluateurs déjà présents).

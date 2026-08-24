@@ -1,4 +1,4 @@
-# Couche produit v1 : viewer, trainer et rapports
+# Couche produit v1 : viewer, trainer desktop et rapports
 
 Cette tranche fournit une sortie exploitable sans modifier le format binaire `.pe_sol`.
 Les métadonnées de spot restent séparées afin de préserver la compatibilité avec les
@@ -71,13 +71,19 @@ poker-eval-trainer --solution solve.pe_sol --labels labels.csv --rounds 20 \
   --session-json session.json
 ```
 
-Pour une interface locale sans installation, `--export-html` génère une application
-HTML autonome avec boutons d'actions, feedback, score et difficulté adaptative :
+Le trainer joueur est maintenant une application macOS native. La cible CMake produit
+un bundle `.app` avec fenêtre, panneaux Open/Save, boutons d'actions, feedback, score,
+difficulté adaptative et export de session JSON :
 
 ```sh
-poker-eval-trainer --solution solve.pe_sol --labels labels.csv \
-  --export-html trainer.html
+cmake --build build --target poker-eval-trainer-desktop
+open "build/tools/PokerEval Trainer.app" --args \
+  --solution solve.pe_sol --labels labels.csv
 ```
+
+Le mode `--export-html` de `poker-eval-trainer` reste disponible pour partager une
+session sans installer l'application, mais il n'est plus la surface principale du
+produit.
 
 Les libellés sont une vue produit ; la stratégie quantifiée reste la source de vérité.
 Quand `next_key` est présent, le trainer suit la transition choisie vers le prochain
