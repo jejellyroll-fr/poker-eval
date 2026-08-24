@@ -14,14 +14,29 @@ typedef struct trainer_label_t
     char label[96];
     char street[24];
     char board[64];
+    char runout[64];
+    char position[32];
+    double pot;
+    int has_pot;
     uint64_t next_key;
     int has_next;
 } trainer_label_t;
 
+typedef struct
+{
+    uint64_t key;
+    int selected;
+    int best;
+    double selected_probability;
+    double best_probability;
+} trainer_event_t;
+
 static void usage(const char *program)
 {
-    fprintf(stderr, "Usage: %s --solution FILE [--labels CSV] [--rounds N] [--seed N]\n"
-                    "       labels CSV: key,action,label or key,street,board,action,label,next_key\n",
+    fprintf(stderr, "Usage: %s --solution FILE [--labels CSV] [--rounds N] [--seed N]"
+                    " [--session-json FILE]\n"
+                    "       labels CSV: key,action,label or key,street,board,action,label,next_key\n"
+                    "       rich labels: key,street,board,runout,position,pot,action,label,next_key\n",
             program);
 }
 
@@ -37,10 +52,10 @@ static int load_labels(const char *path, trainer_label_t **out, size_t *count)
     if (!file) return -1;
     while (fgets(line, sizeof(line), file))
     {
-        char *fields[6] = {0};
+        char *fields[10] = {0};
         char *field = strtok(line, ",\r\n");
         int field_count = 0;
-        while (field && field_count < 6)
+        while (field && field_count < 10)
         {
             fields[field_count++] = field;
             field = strtok(NULL, ",\r\n");
@@ -53,17 +68,37 @@ static int load_labels(const char *path, trainer_label_t **out, size_t *count)
             if (!grown) { free(labels); fclose(file); return -1; }
             labels = grown; capacity = next;
         }
+        memset(&labels[used], 0, sizeof(labels[used]));
         labels[used].key = strtoull(fields[0], NULL, 0);
         if (field_count >= 5)
         {
-            snprintf(labels[used].street, sizeof(labels[used].street), "%s", fields[1]);
-            snprintf(labels[used].board, sizeof(labels[used].board), "%s", fields[2]);
-            labels[used].action = atoi(fields[3]);
-            snprintf(labels[used].label, sizeof(labels[used].label), "%s", fields[4]);
-            if (field_count >= 6 && fields[5][0])
+            if (field_count >= 9)
             {
-                labels[used].next_key = strtoull(fields[5], NULL, 0);
-                labels[used].has_next = 1;
+                snprintf(labels[used].street, sizeof(labels[used].street), "%s", fields[1]);
+                snprintf(labels[used].board, sizeof(labels[used].board), "%s", fields[2]);
+                snprintf(labels[used].runout, sizeof(labels[used].runout), "%s", fields[3]);
+                snprintf(labels[used].position, sizeof(labels[used].position), "%s", fields[4]);
+                labels[used].pot = strtod(fields[5], NULL);
+                labels[used].has_pot = 1;
+                labels[used].action = atoi(fields[6]);
+                snprintf(labels[used].label, sizeof(labels[used].label), "%s", fields[7]);
+                if (fields[8][0])
+                {
+                    labels[used].next_key = strtoull(fields[8], NULL, 0);
+                    labels[used].has_next = 1;
+                }
+            }
+            else
+            {
+                snprintf(labels[used].street, sizeof(labels[used].street), "%s", fields[1]);
+                snprintf(labels[used].board, sizeof(labels[used].board), "%s", fields[2]);
+                labels[used].action = atoi(fields[3]);
+                snprintf(labels[used].label, sizeof(labels[used].label), "%s", fields[4]);
+                if (field_count >= 6 && fields[5][0])
+                {
+                    labels[used].next_key = strtoull(fields[5], NULL, 0);
+                    labels[used].has_next = 1;
+                }
             }
         }
         else
@@ -111,6 +146,35 @@ static unsigned next_random(unsigned *state)
     return *state;
 }
 
+static int write_session(const char *path, const char *solution,
+                         unsigned seed, int rounds, int answered, int correct,
+                         double probability_loss,
+                         const trainer_event_t *events, size_t event_count)
+{
+    FILE *file = fopen(path, "w");
+    if (!file) return -1;
+    fprintf(file, "{\"schema\":\"pe-trainer-session/v1\",\"solution\":\"");
+    for (const char *p = solution; *p; ++p)
+    {
+        if (*p == '"' || *p == '\\') fputc('\\', file);
+        fputc(*p, file);
+    }
+    fprintf(file, "\",\"seed\":%u,\"rounds\":%d,\"answered\":%d,"
+                  "\"best_answers\":%d,\"probability_loss\":%.17g,\"events\":[",
+            seed, rounds, answered, correct, probability_loss);
+    for (size_t i = 0u; i < event_count; ++i)
+    {
+        if (i) fputc(',', file);
+        fprintf(file, "{\"key\":\"0x%016llx\",\"selected\":%d,\"best\":%d,"
+                      "\"selected_probability\":%.17g,\"best_probability\":%.17g}",
+                (unsigned long long)events[i].key, events[i].selected,
+                events[i].best, events[i].selected_probability,
+                events[i].best_probability);
+    }
+    fputs("]}\n", file);
+    return fclose(file) == 0 ? 0 : -1;
+}
+
 int main(int argc, char **argv)
 {
     const char *solution = NULL;
@@ -119,6 +183,7 @@ int main(int argc, char **argv)
     size_t label_count = 0u;
     int rounds = 10;
     unsigned seed = 1u;
+    const char *session_path = NULL;
     for (int i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--solution") == 0 && i + 1 < argc)
@@ -129,6 +194,8 @@ int main(int argc, char **argv)
             rounds = atoi(argv[++i]);
         else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
             seed = (unsigned)strtoul(argv[++i], NULL, 10);
+        else if (strcmp(argv[i], "--session-json") == 0 && i + 1 < argc)
+            session_path = argv[++i];
         else
         {
             usage(argv[0]);
@@ -150,6 +217,7 @@ int main(int argc, char **argv)
     if (pe_sol_open_mmap(solution, &view) != 0)
     {
         fprintf(stderr, "Unable to open %s: %s\n", solution, strerror(errno));
+        free(labels);
         return 1;
     }
     size_t count = pe_sol_mmap_infoset_count(view);
@@ -167,6 +235,9 @@ int main(int argc, char **argv)
     int answered = 0;
     int correct = 0;
     double probability_loss = 0.0;
+    trainer_event_t *events = NULL;
+    size_t event_count = 0u;
+    size_t event_capacity = 0u;
     unsigned random_state = seed;
     uint64_t path_key = 0u;
     for (int round = 0; round < rounds; ++round)
@@ -207,6 +278,9 @@ int main(int argc, char **argv)
         if (spot && (spot->street[0] || spot->board[0]))
             printf("  street=%s board=%s", spot->street[0] ? spot->street : "?",
                    spot->board[0] ? spot->board : "?");
+        if (spot && spot->runout[0]) printf(" runout=%s", spot->runout);
+        if (spot && spot->position[0]) printf(" position=%s", spot->position);
+        if (spot && spot->has_pot) printf(" pot=%.2f", spot->pot);
         putchar('\n');
         printf("Available actions:");
         for (int action = 0; action < actions; ++action)
@@ -229,6 +303,27 @@ int main(int argc, char **argv)
             continue;
         }
         ++answered;
+        if (event_count == event_capacity)
+        {
+            size_t next = event_capacity ? event_capacity * 2u : 16u;
+            trainer_event_t *grown = realloc(events, next * sizeof(*events));
+            if (!grown)
+            {
+                fprintf(stderr, "Unable to record trainer session\n");
+                free(events);
+                pe_sol_close_mmap(view);
+                free(labels);
+                return 1;
+            }
+            events = grown;
+            event_capacity = next;
+        }
+        events[event_count].key = key;
+        events[event_count].selected = (int)selected;
+        events[event_count].best = best;
+        events[event_count].selected_probability = probabilities[selected];
+        events[event_count].best_probability = probabilities[best];
+        ++event_count;
         printf("Solved strategy:\n");
         for (int action = 0; action < actions; ++action)
         {
@@ -256,7 +351,12 @@ int main(int argc, char **argv)
     printf("Session: %d answered, %d best-action answers (%.1f%%)\n",
            answered, correct, answered ? 100.0 * (double)correct / answered : 0.0);
     printf("Cumulative strategy-probability loss: %.4f\n", probability_loss);
+    if (session_path && write_session(session_path, solution, seed, rounds,
+                                      answered, correct, probability_loss,
+                                      events, event_count) != 0)
+        fprintf(stderr, "Unable to write trainer session %s\n", session_path);
     pe_sol_close_mmap(view);
     free(labels);
+    free(events);
     return 0;
 }

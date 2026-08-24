@@ -50,6 +50,18 @@ static int own_state(pe_preflop_betting_game_t *game,
     return 0;
 }
 
+/* The preflop adapter has one private-deal chance node. All states created
+ * below it die when that traversal returns, so reclaim them before the next
+ * sampled deal instead of accumulating one allocation per iteration. */
+static void reset_owned_states(pe_preflop_betting_game_t *game)
+{
+    if (!game)
+        return;
+    for (size_t i = 0u; i < game->owned_count; ++i)
+        free(game->owned_states[i]);
+    game->owned_count = 0u;
+}
+
 static const void *apply_action(const void *state, uint16_t action, void *user)
 {
     pe_preflop_betting_game_t *game = user;
@@ -87,6 +99,7 @@ static const void *sample_chance_child(const void *state, pe_rng_t *rng,
     if (!source->is_chance || pe_preflop_deal_sampler_sample(
             &game->sampler, rng, &sample) != 0)
         return NULL;
+    reset_owned_states(game);
     child = calloc(1u, sizeof(*child));
     if (!child || own_state(game, child) != 0)
     {

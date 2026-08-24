@@ -6,12 +6,19 @@ solutions déjà produites.
 
 ## Rapport agrégé
 
-Le sidecar CSV utilise quatre colonnes :
+Le sidecar CSV utilise quatre colonnes de base et accepte `flop`/`runout` pour les
+rapports de gamme :
 
 ```csv
 key,street,board,weight
 0x1234,flop,AsKd7c,1.0
 0x4567,flop,AsKd7c,0.75
+```
+
+```csv
+key,street,board,weight,flop,runout
+0x1234,turn,AsKd7cQs,1.0,AsKd7c,AsKd7cQs
+0x4567,river,AsKd7cQs2h,0.75,AsKd7c,AsKd7cQs2h
 ```
 
 La commande suivante produit un JSON versionné et une page HTML autonome :
@@ -20,14 +27,19 @@ La commande suivante produit un JSON versionné et une page HTML autonome :
 pe-solution-report \
   --solution solve.pe_sol \
   --metadata spots.csv \
+  --aggregate flop \
   --json report.json \
   --html report.html
 ```
 
-Le JSON contient, pour chaque groupe `street/board`, le nombre d'infosets, le poids,
+Le JSON v2 contient, pour chaque groupe `street/board`, `street/flop` ou
+`street/runout`, le nombre d'infosets, le poids,
 l'entropie en bits et la fréquence agrégée de chaque action. Sans sidecar, les lignes
 sont regroupées sous `unknown/unknown` : le programme ne prétend pas décoder un key
 Monker dont le codec n'est pas fourni.
+
+Le HTML est un viewer autonome filtrable par street, flop, board ou nœud ; il ne
+nécessite ni serveur ni dépendance JavaScript externe.
 
 Pour une archive Monker, le rapport peut maintenant décoder directement les artefacts
 natifs :
@@ -55,14 +67,15 @@ key,street,board,action,label,next_key
 ```
 
 ```sh
-poker-eval-trainer --solution solve.pe_sol --labels labels.csv --rounds 20
+poker-eval-trainer --solution solve.pe_sol --labels labels.csv --rounds 20 \
+  --session-json session.json
 ```
 
 Les libellés sont une vue produit ; la stratégie quantifiée reste la source de vérité.
 Quand `next_key` est présent, le trainer suit la transition choisie vers le prochain
-infoset au lieu de tirer un spot indépendant. Le manifeste porte donc la street, le
-board et le chemin de décision ; les transitions automatiques depuis un arbre Monker
-restent à relier au trainer.
+infoset au lieu de tirer un spot indépendant. Le trainer exporte une session JSON
+avec les spots, les réponses, la perte de probabilité et les transitions suivies ;
+les labels riches peuvent porter runout, position et pot.
 
 ## Lane B préflop
 

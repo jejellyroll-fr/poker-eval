@@ -13,12 +13,14 @@
 #include <string.h>
 
 #define PE_REPORT_MAX_ACTIONS 256
-#define PE_REPORT_MAX_GROUPS 4096
+#define PE_REPORT_MAX_GROUPS 16384
 
 typedef struct {
     uint64_t key;
     char street[32];
     char board[64];
+    char flop[64];
+    char runout[64];
     double weight;
 } metadata_row_t;
 
@@ -36,7 +38,8 @@ static void usage(const char *program)
             "Usage: %s --solution FILE [--metadata CSV] [--json FILE] [--html FILE]\n"
             "       %s --monker-tree TREE --monker-mkr MKR [--entry NAME]\n"
             "       %s --decode-key HEX [--packed-board-shift N --packed-board-cards N]\n"
-            "Metadata CSV columns: key,street,board,weight\n",
+            "Metadata CSV columns: key,street,board,weight[,flop,runout]\n"
+            "Aggregation: --aggregate board|flop|runout (default board)\n",
             program, program, program);
 }
 
@@ -62,14 +65,14 @@ static int load_metadata(const char *path, metadata_row_t **out, size_t *count)
     if (!file) return -1;
     while (fgets(line, sizeof(line), file))
     {
-        char *fields[4];
+        char *fields[6] = {0};
         char *field;
         char *save = NULL;
         int n = 0;
         trim(line);
         if (!line[0] || line[0] == '#') continue;
         field = strtok_r(line, ",", &save);
-        while (field && n < 4) { fields[n++] = field; field = strtok_r(NULL, ",", &save); }
+        while (field && n < 6) { fields[n++] = field; field = strtok_r(NULL, ",", &save); }
         if (n < 4 || strcmp(fields[0], "key") == 0) continue;
         if (used == capacity)
         {
@@ -78,9 +81,12 @@ static int load_metadata(const char *path, metadata_row_t **out, size_t *count)
             if (!grown) { free(rows); fclose(file); return -1; }
             rows = grown; capacity = next;
         }
+        memset(&rows[used], 0, sizeof(rows[used]));
         rows[used].key = strtoull(fields[0], NULL, 0);
         snprintf(rows[used].street, sizeof(rows[used].street), "%s", fields[1]);
         snprintf(rows[used].board, sizeof(rows[used].board), "%s", fields[2]);
+        if (n >= 5) snprintf(rows[used].flop, sizeof(rows[used].flop), "%s", fields[4]);
+        if (n >= 6) snprintf(rows[used].runout, sizeof(rows[used].runout), "%s", fields[5]);
         rows[used].weight = strtod(fields[3], NULL);
         if (!isfinite(rows[used].weight) || rows[used].weight < 0.0)
             rows[used].weight = 1.0;
@@ -121,9 +127,12 @@ static void json_string(FILE *out, const char *text)
     fputc('"', out);
 }
 
-static void write_json(FILE *out, const report_group_t *groups, size_t count)
+static void write_json(FILE *out, const report_group_t *groups, size_t count,
+                       const char *aggregation)
 {
-    fprintf(out, "{\"schema\":\"pe-solution-report/v1\",\"groups\":[");
+    fputs("{\"schema\":\"pe-solution-report/v2\",\"aggregation\":", out);
+    json_string(out, aggregation);
+    fputs(",\"groups\":[", out);
     for (size_t i = 0u; i < count; ++i)
     {
         const report_group_t *g = &groups[i];
@@ -148,13 +157,17 @@ static void write_json(FILE *out, const report_group_t *groups, size_t count)
     fputs("]}\n", out);
 }
 
-static void write_html(FILE *out, const report_group_t *groups, size_t count)
+static void write_html(FILE *out, const report_group_t *groups, size_t count,
+                       const char *aggregation)
 {
     fputs("<!doctype html><meta charset=\"utf-8\"><title>poker-eval solution report</title>"
           "<style>body{font:15px system-ui;margin:2rem}table{border-collapse:collapse}"
           "td,th{border:1px solid #ccc;padding:.45rem}.bar{display:inline-block;"
           "height:1rem;background:#3b82f6;margin-right:2px;vertical-align:middle}</style>"
-          "<h1>Solution report</h1><table><thead><tr><th>Group</th><th>Infosets</th>"
+          "<h1>Solution report</h1><p>Aggregation: <code>", out);
+    fputs(aggregation, out);
+    fputs("</code></p><label>Filter <input id=\"filter\" placeholder=\"flop, street, node...\"></label>"
+          "<table id=\"report\"><thead><tr><th>Group</th><th>Infosets</th>"
           "<th>Entropy</th><th>Action frequencies</th></tr></thead><tbody>", out);
     for (size_t i = 0u; i < count; ++i)
     {
@@ -179,7 +192,10 @@ static void write_html(FILE *out, const report_group_t *groups, size_t count)
         }
         fputs("</td></tr>", out);
     }
-    fputs("</tbody></table>", out);
+    fputs("</tbody></table><script>const q=document.getElementById('filter');"
+          "q.addEventListener('input',()=>{const s=q.value.toLowerCase();"
+          "document.querySelectorAll('#report tbody tr').forEach(r=>r.hidden="
+          "!r.textContent.toLowerCase().includes(s));});</script>", out);
 }
 
 static const char *street_name(mpf_street_t street)
@@ -278,6 +294,7 @@ int main(int argc, char **argv)
     const char *solution = NULL, *metadata_path = NULL, *json_path = NULL, *html_path = NULL;
     const char *monker_tree = NULL, *monker_mkr = NULL, *monker_entry = NULL;
     const char *decode_key_text = NULL;
+    const char *aggregation = "board";
     unsigned packed_shift = 0u, packed_cards = 0u;
     int packed_layout = 0;
     metadata_row_t *metadata = NULL;
@@ -294,6 +311,8 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--monker-tree") == 0 && i + 1 < argc) monker_tree = argv[++i];
         else if (strcmp(argv[i], "--monker-mkr") == 0 && i + 1 < argc) monker_mkr = argv[++i];
         else if (strcmp(argv[i], "--entry") == 0 && i + 1 < argc) monker_entry = argv[++i];
+        else if (strcmp(argv[i], "--aggregate") == 0 && i + 1 < argc)
+            aggregation = argv[++i];
         else if (strcmp(argv[i], "--decode-key") == 0 && i + 1 < argc) decode_key_text = argv[++i];
         else if (strcmp(argv[i], "--packed-board-shift") == 0 && i + 1 < argc)
         {
@@ -306,6 +325,12 @@ int main(int argc, char **argv)
             packed_layout = 1;
         }
         else { usage(argv[0]); return 2; }
+    }
+    if (strcmp(aggregation, "board") != 0 && strcmp(aggregation, "flop") != 0 &&
+        strcmp(aggregation, "runout") != 0)
+    {
+        usage(argv[0]);
+        return 2;
     }
     if (decode_key_text)
     {
@@ -359,7 +384,15 @@ int main(int argc, char **argv)
         if (pe_sol_mmap_get_strategy(view, i, &key, PE_REPORT_MAX_ACTIONS,
                                      probs, &actions) != 0) continue;
         meta = find_metadata(metadata, metadata_count, key);
-        if (meta) snprintf(name, sizeof(name), "%s/%s", meta->street, meta->board);
+        if (meta)
+        {
+            const char *dimension = meta->board;
+            if (strcmp(aggregation, "flop") == 0 && meta->flop[0])
+                dimension = meta->flop;
+            else if (strcmp(aggregation, "runout") == 0 && meta->runout[0])
+                dimension = meta->runout;
+            snprintf(name, sizeof(name), "%s/%s", meta->street, dimension);
+        }
         else snprintf(name, sizeof(name), "unknown/unknown");
         group = find_group(groups, &group_count, name);
         if (!group) continue;
@@ -374,14 +407,14 @@ int main(int argc, char **argv)
     {
         out = fopen(json_path, "w");
         if (!out) { free(groups); return 1; }
-        write_json(out, groups, group_count); fclose(out);
+        write_json(out, groups, group_count, aggregation); fclose(out);
     }
-    else write_json(stdout, groups, group_count);
+    else write_json(stdout, groups, group_count, aggregation);
     if (html_path)
     {
         out = fopen(html_path, "w");
         if (!out) { free(groups); return 1; }
-        write_html(out, groups, group_count); fputc('\n', out); fclose(out);
+        write_html(out, groups, group_count, aggregation); fputc('\n', out); fclose(out);
     }
     free(groups);
     return 0;

@@ -109,6 +109,52 @@ int main(void)
     }
     pe_solver_destroy(solver);
     pe_preflop_betting_game_destroy(&game);
+
+    /* The same bounded adapter must also carry a three-way PLO5 deal. */
+    {
+        pe_omaha_combo_t plo_combos[3];
+        pe_omaha_range_t plo_ranges[3];
+        pe_preflop_deal_sampler_t plo_sampler;
+        pe_betting_rules_t plo_rules;
+        pe_preflop_betting_state_t plo_root;
+        pe_preflop_betting_game_t plo_game;
+        double plo_stacks[] = {10.0, 10.0, 10.0};
+        for (int player = 0; player < 3; ++player)
+        {
+            mask_t hand = MASK_EMPTY;
+            for (int card = 0; card < 5; ++card)
+                hand = mask_set(hand, player * 6 + card);
+            plo_combos[player] = (pe_omaha_combo_t){hand, 1.0};
+            plo_ranges[player] = (pe_omaha_range_t){&plo_combos[player], 1u};
+        }
+        if (pe_preflop_deal_sampler_init_omaha(
+                &plo_sampler, MASK_EMPTY, plo_ranges, 3u, 5u) != 0)
+            return 1;
+        pe_betting_rules_default(&plo_rules, 3u);
+        if (pe_betting_state_init(&plo_root.betting, &plo_rules, plo_stacks,
+                                  3u, 0, 0.0, 0.0) != PE_BETTING_OK)
+            return 1;
+        plo_root.is_chance = 0;
+        plo_root.holes[0] = plo_root.holes[1] = plo_root.holes[2] = MASK_EMPTY;
+        if (pe_preflop_betting_game_init(&plo_game, &plo_sampler, &plo_rules,
+                                         &plo_root, &ops, NULL) != 0)
+            return 1;
+        cfg.max_iterations = 16u;
+        cfg.problem.expected_infosets = 16u;
+        deps.external_game = pe_preflop_betting_external(&plo_game);
+        solver = pe_solver_create(&cfg, &deps);
+        status = solver ? pe_solver_run(solver) : PE_SOLVER_ERR_NULL_ARGUMENT;
+        if (!solver || status != PE_SOLVER_OK)
+        {
+            fprintf(stderr, "test_pe_preflop_betting: PLO5 multiway failed (%d)\n",
+                    (int)status);
+            pe_solver_destroy(solver);
+            pe_preflop_betting_game_destroy(&plo_game);
+            return 1;
+        }
+        pe_solver_destroy(solver);
+        pe_preflop_betting_game_destroy(&plo_game);
+    }
     puts("test_pe_preflop_betting: private deals enter betting tree");
     return 0;
 }

@@ -46,33 +46,28 @@ famille AGPL du solving OSS.
 ### Priorité 1 — bloquants pour exister face aux produits installés
 
 1. **Solver préflop scalable.** La **Lane B est maintenant branchée dans le cycle public
-   `pe_solver`** : les presets `external-mccfr` et `outcome-mccfr` exécutent des parcours
-   échantillonnés, relisent les regrets du storage et appliquent les mises à jour par
-   batch. Cela supprime l'expansion obligatoire de tous les deals privés et boards. Le
-   Le module `pe_preflop_deal_sampler` fournit maintenant les deals corrélés
-   Hold'em/PLO4/PLO5/PLO6, le card removal et le ratio d'importance optionnel contre la
-   normalisation exacte. Le bloqueur restant est l'adapter de betting/ranges qui branche
-   ces deals sur un arbre préflop complet, pas la primitive de chance privée.
-2. **GUI / couche produit joueur.** Un viewer HTML statique est maintenant produit par
-   `pe-solution-report` avec un JSON versionné (`pe-solution-report/v1`) et des rapports
-   groupés par street/board via metadata CSV. `poker-eval-trainer` accepte en plus un
-   fichier de libellés multi-rues avec `street,board,next_key`, ce qui remplace
-   l'affichage purement numérique et permet de suivre une transition choisie.
-   Ce n'est pas encore une application graphique interactive complète : c'est la première
-   couche inspectable et partageable au-dessus de `.pe_sol`.
-3. **Play-vs-solution / trainer riche.** Le trainer reste volontairement léger : il
-   mesure la meilleure action et la perte de probabilité, avec libellés, street, board et
-   transitions optionnelles. Il manque encore l'état de table, les cartes/runouts et la
-   notation persistante d'une session ; ce point n'est donc pas considéré comme fermé.
-4. **Agrégation et reporting.** `pe-solution-report` agrège maintenant les fréquences,
-   poids, entropie et nombre d'infosets par groupe, en JSON ou HTML. La couverture est
-   déterministe quand le caller fournit le sidecar CSV `key,street,board,weight` ; le
-   mode `.tree` + `.mkr` lie maintenant automatiquement les slots aux nœuds et agrège
-   par street/nœud. `pe-runout-report` produit maintenant les runouts exacts
-   conditionnels avec leur masse de probabilité. `pe-solution-report --decode-key`
-   sonde aussi les clés brutes : il décode les layouts packés documentés et refuse
-   explicitement les clés hashées, qui ne peuvent pas restituer un board sans
-   métadonnée ou nœud associé.
+   `pe_solver`** : `external-mccfr` et `outcome-mccfr` échantillonnent les deals privés,
+   relisent les regrets du storage et appliquent les mises à jour par batch. Le sampler
+   corrélé couvre Hold'em/PLO4/PLO5/PLO6, jusqu'à huit joueurs, avec card removal et
+   ratio d'importance. `pe_preflop_betting_game` relie ce flux à l'état de mise et
+   libère les états enfants à chaque deal : la mémoire ne croît plus avec le nombre
+   d'itérations. La preuve d'intégration couvre un arbre Hold'em et un PLO5 trois-way.
+   La mesure BR de Lane B et la construction automatique d'une stratégie d'actions
+   depuis un fichier de ranges restent des travaux de produit distincts.
+2. **GUI / couche produit joueur.** `pe-solution-report` produit désormais un JSON v2
+   et un viewer HTML autonome avec filtre interactif par street/flop/board/nœud. Le
+   viewer reste une application statique partageable, pas encore une application
+   desktop complète avec édition de ranges.
+3. **Play-vs-solution / trainer riche.** `poker-eval-trainer` suit les transitions
+   `next_key`, affiche street/board/runout/position/pot lorsqu'ils sont fournis, et
+   exporte une session JSON avec les réponses, meilleurs choix, pertes de stratégie et
+   chemin d'entraînement. Il manque encore l'import de hand histories et le moteur de
+   drills adaptatifs ; le contrat play-vs-solution de base est fermé.
+4. **Agrégation et reporting.** `pe-solution-report --aggregate board|flop|runout` produit
+   des rapports déterministes sur un sidecar `key,street,board,weight[,flop,runout]`.
+   `pe-runout-report` énumère les boards conditionnels exacts avec masse de probabilité
+   contrôlée. Le mode `.tree` + `.mkr` lie les slots aux nœuds ; les clés hashées brutes
+   sont refusées comme non inversibles lorsqu'aucune métadonnée n'est fournie.
 
 ### Priorité 2 — segments de marché entiers non couverts
 
@@ -146,13 +141,13 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
 
 ## 6. Recommandations priorisées
 
-1. **Compléter Lane B côté jeu** (adapters Hold'em/PLO de betting, ranges corrélées,
-   transitions de street et mesure BR échantillonnée) — la chance privée et le storage
-   sont désormais en place.
+1. **Compléter Lane B côté produit** (construction automatique d'arbres d'actions,
+   transitions de street et mesure BR échantillonnée) — le chemin de deals/betting
+   préflop borné est désormais en place.
 2. **Purger les claims faux** (Metal, bench GPU-CFR, guides manquants, stubs `pe_cfr_*`
    ou leur documentation honnête) — coût faible, crédibilité forte.
-3. **Étendre le viewer/trainer léger** vers un parcours interactif multi-rues ; la
-   première sortie HTML et les libellés de trainer sont désormais disponibles.
+3. **Étendre le viewer/trainer** vers l'import de hand histories et les drills adaptatifs ;
+   le parcours interactif, les sessions et les rapports de flop/runout sont disponibles.
 4. **Draw-game adapters** — différenciateur absolu, prochaine étape après le pont
    Stud/Short Deck livré (abstraction + évaluateurs déjà présents).
 5. **Exposer le solver dans Python** (le wheel existe déjà) + import de hand histories —
