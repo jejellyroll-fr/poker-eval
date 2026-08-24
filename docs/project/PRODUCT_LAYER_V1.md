@@ -79,7 +79,12 @@ Le trainer joueur est maintenant une application desktop portable en C + SDL2. L
 cible fonctionne sur macOS, Linux et Windows. L'interface est organisée comme un vrai
 outil de solving : `Setup` pour le spot, `Solve` pour le suivi de l'arbre et du budget,
 `Explore` pour l'index des infosets, les fréquences et le contexte street/board/position.
-Elle accepte le glisser-déposer des fichiers `.pe_sol`/CSV, les boutons d'actions,
+Les sélecteurs de variante (Hold'em/PLO4/PLO5/PLO6), de joueurs (2–8) et de moteur
+sont actifs. Le moteur `Vector CPU` est branché : le bouton `Solve this spot` appelle
+le binaire `pe-vector-sim` à côté de la GUI et affiche sa sortie EV/deals/tree. Les
+entrées Legacy CFR et GPU signalent explicitement qu'elles restent à brancher. Les chemins `.tree` et `.mkr` peuvent
+être déposés ou saisis dans les champs de configuration. Elle accepte aussi les
+fichiers `.pe_sol`/CSV, les boutons d'actions,
 le feedback, le score et l'export de session JSON :
 
 ```sh

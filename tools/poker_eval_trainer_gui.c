@@ -7,6 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define PE_GUI_PATH_SEPARATOR '\\'
+#define PE_GUI_EXE_SUFFIX ".exe"
+#else
+#define PE_GUI_PATH_SEPARATOR '/'
+#define PE_GUI_EXE_SUFFIX ""
+#endif
+
 #define WINDOW_WIDTH 1440
 #define WINDOW_HEIGHT 900
 #define MAX_ACTIONS 256
@@ -70,6 +78,15 @@ typedef struct {
     char range_oop[48];
     char range_ip[48];
     int iterations;
+    int game_index;
+    int player_count;
+    int engine_index;
+    int focus_field;
+    char tree_path[1024];
+    char mkr_path[1024];
+    char executable_dir[1024];
+    char solver_status[256];
+    char solver_result[1024];
 } app_t;
 
 typedef struct { int x; int y; int w; int h; } rect_t;
@@ -282,6 +299,231 @@ static int inside(rect_t rect, int x, int y)
 static const char *basename_of(const char *path)
 { const char *slash = strrchr(path, '/'); const char *backslash = strrchr(path, '\\'); if (backslash && (!slash || backslash > slash)) slash = backslash; return slash ? slash + 1 : path; }
 
+static const char *game_name_for(int index)
+{
+    static const char *names[] = {"holdem", "plo4", "plo5", "plo6"};
+    return index >= 0 && index < 4 ? names[index] : names[0];
+}
+
+static const char *game_label_for(int index)
+{
+    static const char *labels[] = {"HOLDEM", "PLO4", "PLO5", "PLO6"};
+    return index >= 0 && index < 4 ? labels[index] : labels[0];
+}
+
+static const char *engine_label_for(int index)
+{
+    static const char *labels[] = {"VECTOR CPU", "LEGACY CFR", "GPU VECTOR"};
+    return index >= 0 && index < 3 ? labels[index] : labels[0];
+}
+
+static void copy_field(char *destination, size_t capacity, const char *source);
+
+static void set_default_ranges_for_game(app_t *app)
+{
+    static const char *oop[] = {"AsKs", "AsKsQd3c", "AsKsQd3c9h", "AsKsQd3c9h5h"};
+    static const char *ip[] = {"AhKh", "AhKhJdTc", "AhKhJdTc8s", "AhKhJdTc8s4s"};
+    if (!app || app->game_index < 0 || app->game_index > 3)
+        return;
+    copy_field(app->range_oop, sizeof(app->range_oop), oop[app->game_index]);
+    copy_field(app->range_ip, sizeof(app->range_ip), ip[app->game_index]);
+}
+
+static void copy_field(char *destination, size_t capacity, const char *source)
+{
+    if (!destination || capacity == 0u)
+        return;
+    snprintf(destination, capacity, "%s", source ? source : "");
+}
+
+static void shell_quote(const char *source, char *destination, size_t capacity)
+{
+    size_t used = 0u;
+    if (!destination || capacity == 0u)
+        return;
+    destination[0] = '\0';
+#ifdef _WIN32
+    if (used + 1u < capacity) destination[used++] = '"';
+    for (const char *at = source ? source : ""; *at && used + 2u < capacity; ++at)
+    {
+        if (*at == '"' && used + 2u < capacity) destination[used++] = '\\';
+        destination[used++] = *at;
+    }
+    if (used + 1u < capacity) destination[used++] = '"';
+#else
+    if (used + 1u < capacity) destination[used++] = '\'';
+    for (const char *at = source ? source : ""; *at && used + 5u < capacity; ++at)
+    {
+        if (*at == '\'')
+        {
+            destination[used++] = '\''; destination[used++] = '\\';
+            destination[used++] = '\''; destination[used++] = '\'';
+        }
+        else destination[used++] = *at;
+    }
+    if (used + 1u < capacity) destination[used++] = '\'';
+#endif
+    destination[used] = '\0';
+}
+
+static int run_vector_sim(app_t *app)
+{
+    char executable[1200], quoted_executable[1400];
+    char board[160], range[160], tree[1200], mkr[1200];
+    char command[8192];
+    char output[4096];
+    FILE *pipe;
+    size_t used = 0u;
+    int exit_status;
+    if (!app)
+        return -1;
+    if (app->engine_index != 0)
+    {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Selected engine is not wired to this spot runner yet");
+        return -1;
+    }
+    if (app->executable_dir[0])
+        snprintf(executable, sizeof(executable), "%s%cpe-vector-sim%s",
+                 app->executable_dir, PE_GUI_PATH_SEPARATOR,
+                 PE_GUI_EXE_SUFFIX);
+    else
+        copy_field(executable, sizeof(executable), "pe-vector-sim");
+    shell_quote(executable, quoted_executable, sizeof(quoted_executable));
+    shell_quote(app->board_text, board, sizeof(board));
+    shell_quote(app->range_oop, range, sizeof(range));
+    shell_quote(app->tree_path, tree, sizeof(tree));
+    shell_quote(app->mkr_path, mkr, sizeof(mkr));
+    snprintf(command, sizeof(command), "%s --game %s --board %s --players %d",
+             quoted_executable, game_name_for(app->game_index), board,
+             app->player_count > 1 ? app->player_count : 2);
+    for (int player = 0; player < app->player_count && player < 8; ++player)
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --range%d %s", player, range);
+    if (app->tree_path[0])
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --tree %s", tree);
+    if (app->mkr_path[0])
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --mkr %s", mkr);
+    snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
+#ifdef _WIN32
+    pipe = _popen(command, "r");
+#else
+    pipe = popen(command, "r");
+#endif
+    if (!pipe)
+    {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Could not start pe-vector-sim");
+        return -1;
+    }
+    while (fgets(output, sizeof(output), pipe))
+    {
+        size_t length = strlen(output);
+        if (length >= sizeof(app->solver_result) - used)
+            length = sizeof(app->solver_result) - used - 1u;
+        if (length > 0u)
+        {
+            memcpy(app->solver_result + used, output, length);
+            used += length;
+            app->solver_result[used] = '\0';
+        }
+        if (used + 1u >= sizeof(app->solver_result))
+            break;
+    }
+#ifdef _WIN32
+    exit_status = _pclose(pipe);
+#else
+    exit_status = pclose(pipe);
+#endif
+    if (exit_status != 0)
+    {
+        copy_field(app->solver_status, sizeof(app->solver_status), "Solver failed");
+        return -1;
+    }
+    copy_field(app->solver_status, sizeof(app->solver_status), "Solve complete");
+    return 0;
+}
+
+static int has_suffix(const char *path, const char *suffix)
+{
+    size_t path_length = path ? strlen(path) : 0u;
+    size_t suffix_length = suffix ? strlen(suffix) : 0u;
+    if (suffix_length > path_length)
+        return 0;
+    path += path_length - suffix_length;
+    for (size_t i = 0u; i < suffix_length; ++i)
+        if (tolower((unsigned char)path[i]) != tolower((unsigned char)suffix[i]))
+            return 0;
+    return 1;
+}
+
+static void set_dropped_file(app_t *app, const char *path)
+{
+    if (!app || !path)
+        return;
+    if (has_suffix(path, ".pe_sol"))
+    {
+        if (load_solution(app, path) == 0)
+            copy_field(app->solver_status, sizeof(app->solver_status), "Strategy snapshot loaded");
+        else
+            copy_field(app->solver_status, sizeof(app->solver_status), "Could not read .pe_sol");
+    }
+    else if (has_suffix(path, ".tree"))
+    {
+        copy_field(app->tree_path, sizeof(app->tree_path), path);
+        copy_field(app->solver_status, sizeof(app->solver_status), "Tree loaded - choose Solve");
+    }
+    else if (has_suffix(path, ".mkr"))
+    {
+        copy_field(app->mkr_path, sizeof(app->mkr_path), path);
+        copy_field(app->solver_status, sizeof(app->solver_status), "Strategy archive loaded");
+    }
+    else if (has_suffix(path, ".csv"))
+    {
+        if (load_labels(app, path) == 0)
+            copy_field(app->solver_status, sizeof(app->solver_status), "Labels loaded");
+        else
+            copy_field(app->solver_status, sizeof(app->solver_status), "Could not read labels CSV");
+    }
+    else
+        copy_field(app->solver_status, sizeof(app->solver_status), "Drop .tree, .mkr, .pe_sol or .csv");
+}
+
+static char *focused_text(app_t *app, size_t *capacity)
+{
+    if (!app || !capacity)
+        return NULL;
+    if (app->focus_field == 1) { *capacity = sizeof(app->board_text); return app->board_text; }
+    if (app->focus_field == 2) { *capacity = sizeof(app->range_oop); return app->range_oop; }
+    if (app->focus_field == 3) { *capacity = sizeof(app->range_ip); return app->range_ip; }
+    if (app->focus_field == 4) { *capacity = sizeof(app->tree_path); return app->tree_path; }
+    if (app->focus_field == 5) { *capacity = sizeof(app->mkr_path); return app->mkr_path; }
+    return NULL;
+}
+
+static void append_text_input(app_t *app, const char *input)
+{
+    size_t capacity;
+    char *destination = focused_text(app, &capacity);
+    if (!destination || !input)
+        return;
+    size_t length = strlen(destination);
+    size_t available = capacity > length + 1u ? capacity - length - 1u : 0u;
+    if (available > 0u)
+        strncat(destination, input, available);
+}
+
+static void remove_text_input(app_t *app)
+{
+    size_t capacity;
+    char *destination = focused_text(app, &capacity);
+    (void)capacity;
+    if (destination && *destination)
+        destination[strlen(destination) - 1u] = '\0';
+}
+
 typedef struct {
     int width;
     int height;
@@ -425,23 +667,44 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         text(renderer, left + 24, 166, "GAME CONFIGURATION", 2, blue);
         text(renderer, left + 24, 212, "VARIANT", 2, muted);
         panel(renderer, (rect_t){left + 24, 236, 210, 46}, surface2, outline);
-        text(renderer, left + 40, 251, app->game_name[0] ? app->game_name : "HOLDEM", 2, white);
+        text(renderer, left + 40, 251, game_label_for(app->game_index), 2, white);
         text(renderer, left + 260, 212, "PLAYERS", 2, muted);
         panel(renderer, (rect_t){left + 260, 236, 184, 46}, surface2, outline);
-        text(renderer, left + 276, 251, "2  /  HEADS-UP", 2, white);
+        snprintf(buffer, sizeof(buffer), "%d  /  %s", app->player_count, app->player_count == 2 ? "HEADS-UP" : "MULTIWAY");
+        text(renderer, left + 276, 251, buffer, 2, white);
         text(renderer, left + 24, 314, "BOARD", 2, muted);
-        panel(renderer, (rect_t){left + 24, 338, 420, 46}, surface2, outline);
+        panel(renderer, (rect_t){left + 24, 338, 420, 46}, surface2,
+              app->focus_field == 1 ? blue : outline);
         text(renderer, left + 40, 353, app->board_text[0] ? app->board_text : "--  --  --  --  --", 2, white);
         text(renderer, left + 24, 416, "RANGES", 2, muted);
-        panel(renderer, (rect_t){left + 24, 440, 204, 46}, surface2, outline);
-        panel(renderer, (rect_t){left + 240, 440, 204, 46}, surface2, outline);
-        text(renderer, left + 40, 455, app->range_oop[0] ? app->range_oop : "OOP  100%", 2, white);
-        text(renderer, left + 256, 455, app->range_ip[0] ? app->range_ip : "IP   100%", 2, white);
+        panel(renderer, (rect_t){left + 24, 440, 204, 46}, surface2,
+              app->focus_field == 2 ? blue : outline);
+        panel(renderer, (rect_t){left + 240, 440, 204, 46}, surface2,
+              app->focus_field == 3 ? blue : outline);
+        snprintf(buffer, sizeof(buffer), "OOP  %s", app->range_oop[0] ? app->range_oop : "100%");
+        text(renderer, left + 40, 455, buffer, 2, white);
+        snprintf(buffer, sizeof(buffer), "IP   %s", app->range_ip[0] ? app->range_ip : "100%");
+        text(renderer, left + 256, 455, buffer, 2, white);
         text(renderer, left + 24, 518, "ITERATIONS", 2, muted);
         snprintf(buffer, sizeof(buffer), "%d", app->iterations > 0 ? app->iterations : 100000);
         panel(renderer, (rect_t){left + 24, 542, 204, 46}, surface2, outline);
         text(renderer, left + 40, 557, buffer, 2, white);
-        text(renderer, left + 24, 632, "DROP .PE_SOL OR LABEL CSV TO LOAD A PROJECT", 2, orange);
+        text(renderer, left + 24, 518, "ENGINE", 2, muted);
+        panel(renderer, (rect_t){left + 260, 542, 184, 46}, surface2, outline);
+        text(renderer, left + 276, 557, engine_label_for(app->engine_index), 2, white);
+        snprintf(buffer, sizeof(buffer), "ITERATIONS  %d", app->iterations);
+        text(renderer, left + 24, 604, buffer, 2, muted);
+        if (app->tree_path[0])
+            snprintf(buffer, sizeof(buffer), "TREE  %s", basename_of(app->tree_path));
+        else
+            snprintf(buffer, sizeof(buffer), "TREE  DROP .TREE / .MKR / .PE_SOL / CSV");
+        text(renderer, left + 24, 632, buffer, 2, orange);
+        if (app->mkr_path[0]) {
+            snprintf(buffer, sizeof(buffer), "MKR   %s", basename_of(app->mkr_path));
+            text(renderer, left + 24, 664, buffer, 2, orange);
+        }
+        text(renderer, left + 24, app->mkr_path[0] ? 696 : 664, app->solver_status, 2, app->solver_status[0] ? green : muted);
+        text(renderer, left + 24, 730, "CLICK A FIELD TO TYPE  /  DROP FILES  /  SOLVE THIS SPOT", 2, muted);
 
         text(renderer, right + 24, 166, "SPOT PREVIEW", 2, blue);
         text(renderer, right + 24, 208, "BOARD", 2, muted);
@@ -450,7 +713,7 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         text(renderer, right + 24, 366, "ACTION TREE", 2, muted);
         draw_tree(renderer, right + 24, 398, width - right - 76, 180, white, muted, blue, green);
         panel(renderer, (rect_t){right + 24, height - 154, width - right - 76, 54}, (SDL_Color){35, 77, 73, 255}, green);
-        text(renderer, right + 42, height - 137, "READY TO SOLVE  >", 2, white);
+        text(renderer, right + 42, height - 137, "SOLVE THIS SPOT  >", 2, white);
     }
     else if (app->page == 1)
     {
@@ -459,7 +722,8 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         panel(renderer, (rect_t){left, 140, 760, height - 244}, surface, outline);
         panel(renderer, (rect_t){right, 140, width - right - 28, height - 244}, surface, outline);
         text(renderer, left + 24, 166, "TREE MONITOR", 2, blue);
-        text(renderer, left + 24, 208, "ROOT  /  PREFLOP  /  BTN VS BB", 2, muted);
+        snprintf(buffer, sizeof(buffer), "%s  /  %d PLAYERS  /  %s", game_label_for(app->game_index), app->player_count, engine_label_for(app->engine_index));
+        text(renderer, left + 24, 208, buffer, 2, muted);
         draw_tree(renderer, left + 28, 260, 680, 220, white, muted, blue, green);
         text(renderer, left + 24, 536, "ITERATION", 2, muted);
         text(renderer, left + 24, 562, app->solution_path[0] ? "SNAPSHOT LOADED" : "WAITING FOR INPUT", 3, app->solution_path[0] ? green : orange);
@@ -468,13 +732,20 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         stat_value(renderer, left + 178, 646, "EXPLOITABILITY", app->spot_count ? "READY" : "--", green);
         stat_value(renderer, left + 400, 646, "STATUS", "CPU / EXACT", blue);
         text(renderer, right + 24, 166, "RUN SUMMARY", 2, blue);
+        text(renderer, right + 24, 194, app->solver_status, 2, app->solver_status[0] ? green : muted);
         stat_value(renderer, right + 24, 216, "SOLUTION", app->solution_path[0] ? "OPEN" : "NONE", app->solution_path[0] ? green : orange);
         snprintf(buffer, sizeof(buffer), "%zu", app->spot_count);
         stat_value(renderer, right + 24, 302, "INFOSets", buffer, white);
         snprintf(buffer, sizeof(buffer), "%d", app->iterations > 0 ? app->iterations : 100000);
         stat_value(renderer, right + 24, 388, "BUDGET", buffer, white);
-        panel(renderer, (rect_t){right + 24, 500, width - right - 76, 64}, (SDL_Color){27, 49, 70, 255}, outline);
-        text(renderer, right + 42, 523, "OPEN A SNAPSHOT OR DROP A FILE", 2, orange);
+        panel(renderer, (rect_t){right + 24, 500, width - right - 76, 120}, (SDL_Color){27, 49, 70, 255}, outline);
+        text(renderer, right + 42, 518, "RESULT", 2, muted);
+        if (app->solver_result[0]) {
+            snprintf(buffer, sizeof(buffer), "%.170s", app->solver_result);
+            text(renderer, right + 42, 548, buffer, 2, white);
+        } else {
+            text(renderer, right + 42, 548, "No run yet", 2, white);
+        }
         panel(renderer, (rect_t){right + 24, 586, width - right - 76, 64}, (SDL_Color){35, 77, 73, 255}, green);
         text(renderer, right + 42, 609, "INSPECT STRATEGY  >", 2, white);
     }
@@ -605,22 +876,40 @@ int main(int argc, char **argv)
     app.page = 0;
     app.selected_action = -1;
     app.iterations = 100000;
+    app.game_index = 0;
+    app.player_count = 2;
+    app.engine_index = 0;
+    app.focus_field = 0;
     snprintf(app.game_name, sizeof(app.game_name), "HOLDEM");
     snprintf(app.board_text, sizeof(app.board_text), "2c 7d Th Js Qc");
-    snprintf(app.range_oop, sizeof(app.range_oop), "OOP  100%%");
-    snprintf(app.range_ip, sizeof(app.range_ip), "IP   100%%");
+    set_default_ranges_for_game(&app);
+    copy_field(app.solver_status, sizeof(app.solver_status), "Drop a tree or solution to begin");
+    {
+        const char *slash = strrchr(argv[0], '/');
+        const char *backslash = strrchr(argv[0], '\\');
+        if (backslash && (!slash || backslash > slash)) slash = backslash;
+        if (slash)
+        {
+            size_t length = (size_t)(slash - argv[0]);
+            if (length >= sizeof(app.executable_dir)) length = sizeof(app.executable_dir) - 1u;
+            memcpy(app.executable_dir, argv[0], length);
+            app.executable_dir[length] = '\0';
+        }
+    }
     font_init();
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--help") == 0) {
-            puts("usage: poker-eval-trainer-gui [--solution FILE] [--labels CSV] [--actions a,b,c] [--session-json FILE] [--resume-session FILE]");
+            puts("usage: poker-eval-trainer-gui [--tree FILE] [--mkr FILE] [--solution FILE] [--labels CSV] [--actions a,b,c] [--session-json FILE] [--resume-session FILE]");
             return 0;
         }
         if (i + 1 >= argc) {
             fprintf(stderr, "missing value for %s\n", argv[i]);
             return 2;
         }
-        if (strcmp(argv[i], "--solution") == 0) load_solution(&app, argv[++i]);
-        else if (strcmp(argv[i], "--labels") == 0) load_labels(&app, argv[++i]);
+        if (strcmp(argv[i], "--solution") == 0) set_dropped_file(&app, argv[++i]);
+        else if (strcmp(argv[i], "--labels") == 0) set_dropped_file(&app, argv[++i]);
+        else if (strcmp(argv[i], "--tree") == 0) set_dropped_file(&app, argv[++i]);
+        else if (strcmp(argv[i], "--mkr") == 0) set_dropped_file(&app, argv[++i]);
         else if (strcmp(argv[i], "--actions") == 0) load_action_names(&app, argv[++i]);
         else if (strcmp(argv[i], "--session-json") == 0)
             snprintf(app.session_path, sizeof(app.session_path), "%s", argv[++i]);
@@ -650,13 +939,21 @@ int main(int argc, char **argv)
     window = SDL_CreateWindow("poker-eval Trainer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_RESIZABLE);
     renderer = window ? SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
     if (!window || !renderer) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); if (renderer) SDL_DestroyRenderer(renderer); if (window) SDL_DestroyWindow(window); SDL_Quit(); return 1; }
+    SDL_StartTextInput();
     if (app.spot_count) next_spot(&app);
     while (app.running) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) app.running = 0;
-            else if (event.type == SDL_DROPFILE) { const char *path = event.drop.file; size_t length = strlen(path); if (length > 7u && strcmp(path + length - 7u, ".pe_sol") == 0) load_solution(&app, path); else load_labels(&app, path); if (app.spot_count) next_spot(&app); SDL_free(event.drop.file); }
+            else if (event.type == SDL_DROPFILE) {
+                set_dropped_file(&app, event.drop.file);
+                if (app.spot_count) next_spot(&app);
+                SDL_free(event.drop.file);
+            }
+            else if (event.type == SDL_TEXTINPUT) append_text_input(&app, event.text.text);
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_n) next_spot(&app);
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_s) save_session(&app);
+            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_BACKSPACE) remove_text_input(&app);
+            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) app.focus_field = 0;
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_1) app.page = 0;
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_2) app.page = 1;
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_3) app.page = 2;
@@ -670,8 +967,43 @@ int main(int argc, char **argv)
                 else if (inside(layout.solve_tab, mouse_x, mouse_y)) app.page = 1;
                 else if (inside(layout.explore_tab, mouse_x, mouse_y)) app.page = 2;
                 else if (app.page == 0 && mouse_x >= 786 && mouse_x < output_width - 28 &&
-                         mouse_y >= output_height - 154 && mouse_y < output_height - 100)
+                         mouse_y >= output_height - 154 && mouse_y < output_height - 100) {
+                    run_vector_sim(&app);
                     app.page = 1;
+                }
+                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 498 &&
+                         mouse_y >= 236 && mouse_y < 282) {
+                    app.game_index = (app.game_index + 1) % 4;
+                    set_default_ranges_for_game(&app);
+                }
+                else if (app.page == 0 && mouse_x >= 524 && mouse_x < 708 &&
+                         mouse_y >= 236 && mouse_y < 282) {
+                    app.player_count = app.player_count >= 8 ? 2 : app.player_count + 1;
+                }
+                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 708 &&
+                         mouse_y >= 338 && mouse_y < 384) {
+                    app.focus_field = 1;
+                }
+                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 492 &&
+                         mouse_y >= 440 && mouse_y < 486) {
+                    app.focus_field = 2;
+                }
+                else if (app.page == 0 && mouse_x >= 504 && mouse_x < 708 &&
+                         mouse_y >= 440 && mouse_y < 486) {
+                    app.focus_field = 3;
+                }
+                else if (app.page == 0 && mouse_x >= 524 && mouse_x < 708 &&
+                         mouse_y >= 542 && mouse_y < 588) {
+                    app.engine_index = (app.engine_index + 1) % 3;
+                }
+                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 708 &&
+                         mouse_y >= 620 && mouse_y < 652) {
+                    app.focus_field = 4;
+                }
+                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 708 &&
+                         mouse_y >= 652 && mouse_y < 684) {
+                    app.focus_field = 5;
+                }
                 else if (app.page == 1 && mouse_x >= 1050 && mouse_x < output_width - 52 &&
                          mouse_y >= 586 && mouse_y < 650)
                     app.page = 2;

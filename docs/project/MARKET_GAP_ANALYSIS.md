@@ -66,8 +66,11 @@ famille AGPL du solving OSS.
    cible `poker-eval-trainer-gui` produit maintenant une application C + SDL2
    redimensionnable sur macOS, Linux et Windows, structurée en `Setup`, `Solve` et
    `Explore` : glisser-déposer `.pe_sol`/CSV, arbre visuel, contexte du spot, index
-   d'infosets, fréquences d'actions, trainer et export de session JSON. Il manque
-   encore l'éditeur de ranges intégré et le sélecteur de fichiers natif.
+   d'infosets, fréquences d'actions, trainer et export de session JSON. Les choix
+   Hold'em/PLO4/PLO5/PLO6 et 2–8 joueurs alimentent désormais le solveur
+   `pe-vector-sim`; le moteur Vector CPU est branché et les autres choix signalent
+   leur indisponibilité ; `.tree/.mkr` peuvent être déposés ou saisis. Il manque encore
+   l'éditeur de ranges intégré et le sélecteur de fichiers natif.
 3. **Play-vs-solution / trainer riche.** `poker-eval-trainer` suit les transitions
    `next_key`, affiche street/board/runout/position/pot lorsqu'ils sont fournis, et
    exporte une session JSON avec les réponses, meilleurs choix, pertes de stratégie et
