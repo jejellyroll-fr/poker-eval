@@ -14,6 +14,7 @@
 #include <poker_eval/solver/pe_holdem_river.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/solver/pe_monker_omaha_tree.h>
 #include <poker_eval/solver/pe_monker_tree_vector.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
@@ -80,6 +81,11 @@ typedef struct
     int tree_vector_loaded;
     int strategy_vector_loaded;
     int tree_walk_loaded;
+    int tree_ev_loaded;
+    double tree_ev[PE_VECTOR_SIM_MAX_PLAYERS];
+    double tree_path_weight;
+    size_t tree_deal_count;
+    double tree_weight_sum;
 } monker_cli_t;
 
 static const game_spec_t GAME_SPECS[] = {
@@ -735,6 +741,95 @@ cleanup:
     return status;
 }
 
+static int run_omaha_tree(const EvalContext *context, mask_t board,
+                          const cli_options_t *options, const game_spec_t *game,
+                          const monker_cli_t *monker, double *values,
+                          size_t *deal_count, double *weight_sum,
+                          double *path_weight)
+{
+    pe_omaha_range_t ranges[PE_VECTOR_SIM_MAX_PLAYERS];
+    pe_omaha_combo_t *owned[PE_VECTOR_SIM_MAX_PLAYERS] = {0};
+    pe_betting_state_t state;
+    uint8_t player;
+    int status = -1;
+
+    memset(ranges, 0, sizeof(ranges));
+    for (player = 0u; player < options->player_count; ++player)
+    {
+        pe_range_t *parsed = NULL;
+        const pe_range_t *input = options->source_ranges[player];
+        size_t combo;
+        size_t kept = 0u;
+        StdDeck_CardMask dead = modern_to_std(board);
+        if (!input && game->hole_cards > 4u)
+        {
+            if (parse_exact_omaha_combo(options->ranges[player],
+                                        game->hole_cards, &owned[player]) != 0)
+                goto cleanup;
+            ranges[player].combos = owned[player];
+            ranges[player].count = 1u;
+            continue;
+        }
+        if (!input)
+        {
+            if (pe_range_parse(game->game, options->ranges[player], dead, NULL,
+                               &parsed) != PE_STATUS_OK || !parsed)
+                goto cleanup;
+            input = parsed;
+        }
+        owned[player] = (pe_omaha_combo_t *)calloc(
+            input->count, sizeof(*owned[player]));
+        if (!owned[player])
+        {
+            pe_range_free(parsed);
+            goto cleanup;
+        }
+        ranges[player].combos = owned[player];
+        for (combo = 0u; combo < input->count; ++combo)
+        {
+            mask_t cards = std_to_modern(input->combos[combo].hand);
+            if ((cards & board) != MASK_EMPTY ||
+                mask_popcount(cards) != game->hole_cards)
+                continue;
+            owned[player][kept].cards = cards;
+            owned[player][kept].weight = input->combos[combo].weight;
+            ++kept;
+        }
+        ranges[player].count = kept;
+        pe_range_free(parsed);
+        if (kept == 0u)
+            goto cleanup;
+    }
+    memset(&state, 0, sizeof(state));
+    state.player_count = options->player_count;
+    state.pot = options->pot;
+    state.winner = -1;
+    for (player = 0u; player < options->player_count; ++player)
+    {
+        state.active[player] = 1;
+        state.invested[player] = options->invested;
+    }
+    {
+        pe_monker_omaha_tree_spec_t spec;
+        memset(&spec, 0, sizeof(spec));
+        spec.context = context;
+        spec.board = board;
+        spec.ranges = ranges;
+        spec.state = &state;
+        spec.player_count = options->player_count;
+        spec.hole_cards = game->hole_cards;
+        spec.tree = monker->tree;
+        spec.strategy = monker->strategy_view;
+        spec.classes = monker->classes;
+        status = pe_monker_omaha_tree_values(&spec, values, deal_count,
+                                             weight_sum, path_weight);
+    }
+cleanup:
+    for (player = 0u; player < options->player_count; ++player)
+        free(owned[player]);
+    return status;
+}
+
 int main(int argc, char **argv)
 {
     cli_options_t options;
@@ -791,6 +886,29 @@ int main(int argc, char **argv)
         monker_cli_free(&monker);
         return 1;
     }
+    if (monker.strategy_view_loaded && game.game == game_omaha)
+    {
+        status = run_omaha_tree(context, board, &options, &game, &monker,
+                                monker.tree_ev, &monker.tree_deal_count,
+                                &monker.tree_weight_sum,
+                                &monker.tree_path_weight);
+        if (status != 0 ||
+            fabs(monker.tree_path_weight - 1.0) > 1e-9)
+        {
+            fprintf(stderr,
+                    "Monker tree did not produce a complete weighted "
+                    "terminal distribution (mass=%.17g)\n",
+                    monker.tree_path_weight);
+            eval_context_destroy(context);
+            monker_cli_free(&monker);
+            return 1;
+        }
+        for (player = 0u; player < options.player_count; ++player)
+            values[player] = monker.tree_ev[player];
+        deal_count = monker.tree_deal_count;
+        weight_sum = monker.tree_weight_sum;
+        monker.tree_ev_loaded = 1;
+    }
     printf("game=%s players=%u board=", game.game_name, options.player_count);
     {
         char board_text[128];
@@ -811,10 +929,16 @@ int main(int argc, char **argv)
                    pe_monker_strategy_class_count(monker.strategy_view));
         if (monker.tree_walk_loaded)
             printf(" strategy_tree_traversal=vector visited=%zu terminals=%zu "
-                   "reach_mass=%.17g ev_weighting=not_applied",
+                   "reach_mass=%.17g",
                    monker.walk_stats.visited_nodes,
                    monker.walk_stats.terminal_nodes,
                    monker.walk_stats.reach_mass);
+        if (monker.tree_ev_loaded)
+            printf(" ev_weighting=tree_path terminal_mass=%.17g "
+                   "bet_amounts=not_applied",
+                   monker.tree_path_weight);
+        else if (monker.tree_walk_loaded)
+            printf(" ev_weighting=not_applied");
     }
     for (player = 0u; player < options.player_count; ++player)
         printf(" ev%u=%.17g", player, values[player]);

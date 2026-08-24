@@ -74,6 +74,7 @@ add_library(poker_solver
     solver/adapters/monker_classes.c
     solver/adapters/monker_strategy.c
     solver/adapters/monker_tree_vector.c
+    solver/adapters/monker_omaha_tree.c
     solver/adapters/monker_tree_reader.c
     solver/adapters/monker_mkr_reader.c
     solver/adapters/monker_filters.c

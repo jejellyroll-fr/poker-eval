@@ -8,9 +8,11 @@
  */
 
 #include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/solver/pe_monker_omaha_tree.h>
 #include <poker_eval/solver/pe_monker_tree_vector.h>
 #include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+#include <poker_eval/core/modern_cardmask.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -554,6 +556,62 @@ int main(void)
         pe_update_batch_destroy(&batch);
         pe_traversal_ctx_destroy(&traversal);
         pe_monker_tree_vector_destroy(&tree_game);
+    }
+
+    /* A concrete PLO4 deal is now valued after the imported policy is
+     * applied. The fixture folds 200/256 and reaches showdown 56/256; the
+     * selected hand wins at showdown, so net EV is -200/256 + 56/256. */
+    {
+        EvalConfig config = eval_config_holdem();
+        EvalContext *context = eval_context_create(&config);
+        pe_omaha_combo_t combos[2];
+        pe_omaha_range_t ranges[2];
+        pe_betting_state_t state;
+        pe_monker_omaha_tree_spec_t spec;
+        mask_t board = string_to_mask("2c 7d Th Js Qc");
+        double values[2] = {0.0, 0.0};
+        double path_weight = 0.0;
+        size_t deals = 0u;
+        double weight = 0.0;
+        memset(&state, 0, sizeof(state));
+        memset(&spec, 0, sizeof(spec));
+        combos[0].cards = string_to_mask("As Ks Qd 3c");
+        combos[0].weight = 1.0;
+        combos[1].cards = string_to_mask("9c 8d 5c 6c");
+        combos[1].weight = 1.0;
+        ranges[0].combos = &combos[0];
+        ranges[0].count = 1u;
+        ranges[1].combos = &combos[1];
+        ranges[1].count = 1u;
+        state.player_count = 2u;
+        state.pot = 2.0;
+        state.invested[0] = 1.0;
+        state.invested[1] = 1.0;
+        state.active[0] = 1;
+        state.active[1] = 1;
+        state.winner = -1;
+        spec.context = context;
+        spec.board = board;
+        spec.ranges = ranges;
+        spec.state = &state;
+        spec.player_count = 2u;
+        spec.hole_cards = 4u;
+        spec.tree = tree;
+        spec.strategy = view;
+        spec.classes = classes;
+        CHECK(context != NULL &&
+                  pe_monker_omaha_tree_values(&spec, values, &deals, &weight,
+                                              &path_weight) == 0,
+              "weighted Omaha tree evaluation failed");
+        CHECK(deals == 1u && fabs(weight - 1.0) < 1e-12 &&
+                  fabs(path_weight - 1.0) < 1e-12,
+              "weighted deal accounting was %zu/%.12f/%.12f", deals, weight,
+              path_weight);
+        CHECK(fabs(values[0] + 0.5625) < 1e-12 &&
+                  fabs(values[1] - 0.5625) < 1e-12,
+              "weighted EV was %.12f/%.12f, expected -0.5625/0.5625",
+              values[0], values[1]);
+        eval_context_destroy(context);
     }
 
     pe_monker_strategy_close(view);
