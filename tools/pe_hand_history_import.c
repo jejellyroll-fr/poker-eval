@@ -89,6 +89,36 @@ static int split_csv(char *line, char **fields, int max_fields)
     return count;
 }
 
+static void unquote(char *field)
+{
+    size_t length = strlen(field);
+    if (length >= 2u && field[0] == '"' && field[length - 1u] == '"') {
+        memmove(field, field + 1, length - 2u);
+        field[length - 2u] = '\0';
+    }
+}
+
+static int parse_normalized_row(char *line, action_row_t *row)
+{
+    char *fields[8];
+    int count = split_csv(line, fields, 8);
+    if (count < 7 || strcmp(fields[0], "pe-hand-history/v1") != 0) return 0;
+    for (int i = 1; i < count; ++i) unquote(fields[i]);
+    memset(row, 0, sizeof(*row));
+    snprintf(row->hand_id, sizeof(row->hand_id), "%s", fields[1]);
+    snprintf(row->street, sizeof(row->street), "%s", fields[2]);
+    snprintf(row->board, sizeof(row->board), "%s", fields[3]);
+    snprintf(row->player, sizeof(row->player), "%s", fields[4]);
+    snprintf(row->action, sizeof(row->action), "%s", fields[5]);
+    trim(row->hand_id); trim(row->street); trim(row->board); trim(row->player); trim(row->action);
+    if (fields[6][0] != '\0') {
+        char *end = NULL;
+        row->amount = strtod(fields[6], &end);
+        row->has_amount = end != fields[6];
+    }
+    return row->action[0] != '\0';
+}
+
 static int load_mapping(const char *path, mapping_label_t **out, size_t *count)
 {
     FILE *file;
@@ -293,7 +323,7 @@ static int parse_action(const char *line, action_row_t *row)
 static void usage(const char *program)
 {
     fprintf(stderr, "usage: %s --input FILE [--output FILE] [--format json|csv] "
-                    "[--mapping LABELS.csv]\n", program);
+                    "[--mapping LABELS.csv] [--input-format pokerstars|normalized]\n", program);
 }
 
 int main(int argc, char **argv)
@@ -301,6 +331,7 @@ int main(int argc, char **argv)
     const char *input_path = NULL;
     const char *output_path = NULL;
     const char *mapping_path = NULL;
+    const char *input_format = "pokerstars";
     const char *format = "json";
     action_row_t *rows;
     mapping_label_t *mapping = NULL;
@@ -323,6 +354,8 @@ int main(int argc, char **argv)
             format = argv[++i];
         } else if (strcmp(argv[i], "--mapping") == 0 && i + 1 < argc) {
             mapping_path = argv[++i];
+        } else if (strcmp(argv[i], "--input-format") == 0 && i + 1 < argc) {
+            input_format = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
@@ -331,7 +364,8 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    if (input_path == NULL || (strcmp(format, "json") != 0 && strcmp(format, "csv") != 0)) {
+    if (input_path == NULL || (strcmp(format, "json") != 0 && strcmp(format, "csv") != 0) ||
+        (strcmp(input_format, "pokerstars") != 0 && strcmp(input_format, "normalized") != 0)) {
         usage(argv[0]);
         return 2;
     }
@@ -352,6 +386,14 @@ int main(int argc, char **argv)
     while (fgets(line, sizeof(line), input) != NULL) {
         action_row_t row;
         trim(line);
+        if (strcmp(input_format, "normalized") == 0) {
+            if (strncmp(line, "schema,", 7) == 0 || line[0] == '\0') continue;
+            if (row_count < MAX_ROWS && parse_normalized_row(line, &row)) {
+                if (mapping_path != NULL) map_row(&row, mapping, mapping_count);
+                rows[row_count++] = row;
+            }
+            continue;
+        }
         if (strstr(line, "Hand #") != NULL) {
             extract_hand_id(line, hand_id, sizeof(hand_id));
             strcpy(street, "preflop");

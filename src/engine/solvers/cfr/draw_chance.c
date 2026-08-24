@@ -53,6 +53,7 @@ int pe_draw_chance_outcome(const pe_draw_chance_t *chance,
     *replacement = MASK_EMPTY;
     total = pe_draw_chance_outcome_count(chance);
     if (outcome >= total) return -1;
+    if (chance->draw_count == 0u) return 0;
     for (int card = 0; card < MODERN_DECK_SIZE; ++card)
         if (!mask_is_set(chance->hand & ~chance->discard, card))
             available[count++] = card;

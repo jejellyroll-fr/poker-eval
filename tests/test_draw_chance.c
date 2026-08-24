@@ -31,6 +31,13 @@ int main(void)
         assert(pe_draw_chance_apply(&chance, i, &new_hand) == 0);
         assert(mask_popcount(new_hand) == 4);
     }
+    assert(pe_draw_chance_init(&chance, PE_DRAW_BADUGI, cards(values, 4), MASK_EMPTY) == 0);
+    assert(pe_draw_chance_outcome_count(&chance) == 1u);
+    {
+        mask_t new_hand = MASK_EMPTY;
+        assert(pe_draw_chance_apply(&chance, 0u, &new_hand) == 0);
+        assert(new_hand == chance.hand);
+    }
     puts("Draw chance tests passed");
     return 0;
 }

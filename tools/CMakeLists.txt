@@ -45,9 +45,17 @@ add_executable(pe-push-fold pe_push_fold.c)
 target_include_directories(pe-push-fold PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-push-fold PRIVATE poker_eval_modular m)
 
+add_executable(pe-push-fold-multiway pe_push_fold_multiway.c)
+target_include_directories(pe-push-fold-multiway PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-push-fold-multiway PRIVATE poker_eval_modular m)
+
 add_executable(pe-icm pe_icm.c)
 target_include_directories(pe-icm PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-icm PRIVATE poker_eval_modular m)
+
+add_executable(pe-fgs pe_fgs.c)
+target_include_directories(pe-fgs PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-fgs PRIVATE poker_eval_modular m)
 
 add_executable(pe-preflop-tree pe_preflop_tree.c)
 target_include_directories(pe-preflop-tree PRIVATE ${TOOLS_COMMON_INCLUDES})

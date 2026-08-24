@@ -14,6 +14,7 @@ set(ENGINE_SOURCES
     solvers/cfr/strength_bucketing.c
     solvers/cfr/draw_abstraction.c
     solvers/cfr/draw_chance.c
+    solvers/cfr/draw_game_adapter.c
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
     solvers/cfr/legacy_vector_adapter.c

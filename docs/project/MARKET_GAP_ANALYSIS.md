@@ -107,23 +107,32 @@ Les briques suivantes sont maintenant livrées et testées, avec leurs limites e
    Malmuth-Harville à une matrice de gains joueur/position. `pe-icm` expose l'ICM standard
    en JSON (`pe-icm/v1`) et accepte `--asym-payouts MATRIX.csv` pour cette variante. La
    matrice permet de représenter une utilité bounty/PKO déjà calculée par l'appelant ; la
-   conversion automatique des bounties, le FGS et le modèle complet de tournoi restent à
-   construire.
+   conversion automatique des bounties, le FGS dynamique et le modèle complet de tournoi
+   restent à construire.
 6. **Push/fold Nash** : `pe-push-fold` résout l'abstraction zéro-somme explicite
    fold/push contre fold/call par regret matching et retourne fréquences, EV et
-   exploitabilité. Ce n'est pas encore un solveur HRC range-aware multiway.
+   exploitabilité. `pe-push-fold-multiway` accepte une équité conditionnelle par sous-ensemble
+   de callers et résout une abstraction de coalition jusqu'à quatre adversaires ; ce n'est
+   pas encore un solveur HRC range-aware avec arbre d'actions complet.
 7. **Mapping hand history** : `pe-hand-history-import --mapping LABELS.csv` enrichit les
    lignes PokerStars normalisées avec `infoset_key`, `mapped`/`unmapped` et les compteurs
    de couverture. Le sidecar accepte les formats compact et riche du trainer ; les
-   parsers spécifiques aux rooms réseau et l'inférence de position à partir d'une main
-   sans métadonnées restent à ajouter.
+   `--input-format normalized` permet désormais à n'importe quel parser de room externe de
+   fournir le même contrat CSV ; les parsers spécifiques réseau et l'inférence de position
+   à partir d'une main sans métadonnées restent à ajouter.
 8. **Draw chance** : `pe_draw_chance_*()` consomme réellement `PE_CHANCE_DRAW_N` pour
    Badugi et Triple Draw 2-7, énumère les combinaisons de remplacement et reconstruit la
-   main privée. L'adaptation complète au parcours CFR générique (états, actions de draw,
-   showdown et paytables) reste une étape séparée.
+   main privée. `pe_draw_cfr_build_game()` fournit maintenant un round CFR à deux joueurs
+   avec menus de discard bornés, transitions chance et terminal callback ; les arbres
+   multi-rues, betting, showdown spécialisé et paytables restent à compléter.
 9. **Depth-limited / modèle externe** : `cfr_config_t.depth_value_fn` permet de remplacer
    proprement l'erreur de profondeur par une valeur vectorielle fournie par un modèle
    externe ou neuronal. Le dépôt ne fournit volontairement pas de réseau pré-entraîné.
+
+Les outils `pe-fgs` et la couche `pe_pko_calculate()` complètent cette tranche : FGS agrège
+des scénarios futurs pondérés via l'ICM existant, tandis que PKO ajoute les bounties à partir
+d'une matrice explicite de probabilités d'élimination. Ils ne déduisent pas encore les
+scénarios depuis un arbre de tournoi ni les éliminations depuis des ranges.
 
 Cette tranche ferme donc les contrats d'intégration et les CLI vérifiables ; elle ne doit
 pas être présentée comme un clone complet de HRC/ICMIZER/GTO Wizard ou comme un solver

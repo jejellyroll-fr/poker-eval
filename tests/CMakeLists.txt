@@ -356,8 +356,11 @@ set(TEST_SOURCES
     test_rake.c
     test_icm.c
     test_icm_asymmetric.c
+    test_pko.c
     test_push_fold.c
+    test_push_fold_multiway.c
     test_draw_chance.c
+    test_draw_game_adapter.c
     test_a5_triple_draw.c
     test_paytable_ev.c
 )
@@ -600,8 +603,11 @@ endif()
 set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
 set_tests_properties(test_icm_asymmetric PROPERTIES LABELS "economics;tournament")
+set_tests_properties(test_pko PROPERTIES LABELS "economics;tournament;pko")
 set_tests_properties(test_push_fold PROPERTIES LABELS "economics;tournament")
+set_tests_properties(test_push_fold_multiway PROPERTIES LABELS "economics;tournament;multiway")
 set_tests_properties(test_draw_chance PROPERTIES LABELS "games;draw;engine")
+set_tests_properties(test_draw_game_adapter PROPERTIES LABELS "games;draw;engine;cfr")
 set_tests_properties(test_paytable_ev PROPERTIES LABELS "economics;paytable")
 set_tests_properties(test_draw_optimizer_fn PROPERTIES LABELS "economics;paytable")
 set_tests_properties(test_video_poker_strategy PROPERTIES LABELS "economics;paytable;fast")

@@ -1,0 +1,3 @@
+schema,hand_id,street,board,player,action,amount
+pe-hand-history/v1,"42","preflop","","Alice","raise",2.00
+pe-hand-history/v1,"42","flop","Ah 7c 2d","Bob","check",
