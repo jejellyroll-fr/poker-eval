@@ -14,8 +14,10 @@
 #include <poker_eval/solver/pe_holdem_river.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/solver/pe_monker_tree_vector.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
+#include <poker_eval/solver/pe_traversal.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
 #include <errno.h>
@@ -25,6 +27,14 @@
 #include <string.h>
 
 #define PE_VECTOR_SIM_MAX_PLAYERS 8u
+
+typedef struct
+{
+    size_t terminal_calls;
+    double reach_mass;
+    size_t visited_nodes;
+    size_t terminal_nodes;
+} monker_walk_stats_t;
 
 typedef struct
 {
@@ -57,6 +67,9 @@ typedef struct
     pe_monker_mkr_strategy_t strategy;
     pe_monker_classes_t *classes;
     pe_monker_strategy_t *strategy_view;
+    pe_monker_tree_vector_t tree_vector;
+    pe_monker_strategy_game_t strategy_vector;
+    monker_walk_stats_t walk_stats;
     int tree_loaded;
     int ranges_loaded;
     int archive_loaded;
@@ -64,6 +77,9 @@ typedef struct
     int strategy_loaded;
     int classes_loaded;
     int strategy_view_loaded;
+    int tree_vector_loaded;
+    int strategy_vector_loaded;
+    int tree_walk_loaded;
 } monker_cli_t;
 
 static const game_spec_t GAME_SPECS[] = {
@@ -321,6 +337,10 @@ static void monker_cli_free(monker_cli_t *state)
 {
     if (!state)
         return;
+    if (state->strategy_vector_loaded)
+        memset(&state->strategy_vector, 0, sizeof(state->strategy_vector));
+    if (state->tree_vector_loaded)
+        pe_monker_tree_vector_destroy(&state->tree_vector);
     if (state->strategy_view_loaded)
         pe_monker_strategy_close(state->strategy_view);
     if (state->classes_loaded)
@@ -336,6 +356,70 @@ static void monker_cli_free(monker_cli_t *state)
     if (state->tree_loaded)
         mpf_tree_free(state->tree);
     memset(state, 0, sizeof(*state));
+}
+
+static int monker_cli_decode_combo(const void *state, uint16_t combo,
+                                   int *out_node, int out_cards[4],
+                                   void *user)
+{
+    const pe_monker_tree_state_t *tree_state =
+        (const pe_monker_tree_state_t *)state;
+    const pe_monker_classes_t *classes =
+        (const pe_monker_classes_t *)user;
+    if (!tree_state || !out_node || !out_cards ||
+        pe_monker_class_representative(classes, combo, out_cards) !=
+            PE_MONKER_OK)
+        return -1;
+    *out_node = tree_state->node_index;
+    return 0;
+}
+
+static int monker_cli_terminal_values(
+    int node_index, const pe_reach_vec_t *reach, pe_value_vec_t *out_values,
+    uint8_t player_count, void *user)
+{
+    monker_walk_stats_t *stats = (monker_walk_stats_t *)user;
+    size_t combo;
+    uint8_t player;
+    (void)node_index;
+    if (!stats || !reach || !out_values || player_count == 0u)
+        return -1;
+    stats->terminal_calls++;
+    for (combo = 0u; combo < out_values[0].n; ++combo)
+    {
+        stats->reach_mass += reach[0].v[combo] /
+                             (double)out_values[0].n;
+        for (player = 0u; player < player_count; ++player)
+        {
+            out_values[player].v[combo] = 0.0;
+        }
+    }
+    return 0;
+}
+
+static int monker_cli_walk(monker_cli_t *state, uint8_t player_count)
+{
+    pe_traversal_ctx_t traversal = {0};
+    pe_update_batch_t batch = {0};
+    const pe_traversal_ops_t *ops = pe_traversal_full_vector_ops();
+    int status = -1;
+
+    if (!state || !state->strategy_vector_loaded || !ops)
+        return -1;
+    if (pe_traversal_ctx_init(&traversal, &state->strategy_vector.game) != 0)
+        goto done;
+    if (ops->begin_iteration(&traversal, 0u) != 0 ||
+        ops->run_iteration(&traversal, &batch) != 0 ||
+        ops->end_iteration(&traversal, 0u) != 0)
+        goto done;
+    state->walk_stats.visited_nodes = traversal.visited_nodes;
+    state->walk_stats.terminal_nodes = traversal.terminal_nodes;
+    state->tree_walk_loaded = 1;
+    status = 0;
+done:
+    pe_update_batch_destroy(&batch);
+    pe_traversal_ctx_destroy(&traversal);
+    return status;
 }
 
 static int monker_cli_load(const cli_options_t *options,
@@ -466,6 +550,35 @@ static int monker_cli_load(const cli_options_t *options,
                 goto fail;
             }
             out->strategy_view_loaded = 1;
+            if (pe_monker_tree_vector_init(
+                    &out->tree_vector, out->tree, options->player_count,
+                    (uint16_t)pe_monker_strategy_class_count(
+                        out->strategy_view),
+                    monker_cli_terminal_values, &out->walk_stats) != 0)
+            {
+                fprintf(stderr,
+                        "Monker tree cannot be represented by the vector "
+                        "topology adapter (chance nodes are not yet wired)\n");
+                goto fail;
+            }
+            out->tree_vector_loaded = 1;
+            if (pe_monker_strategy_vector_game_init(
+                    &out->strategy_vector, &out->tree_vector.game,
+                    out->strategy_view, monker_cli_decode_combo,
+                    out->classes) != PE_MONKER_OK)
+            {
+                fprintf(stderr,
+                        "Monker strategy could not be attached to vector "
+                        "tree topology\n");
+                goto fail;
+            }
+            out->strategy_vector_loaded = 1;
+            if (monker_cli_walk(out, options->player_count) != 0)
+            {
+                fprintf(stderr,
+                        "Monker strategy/tree vector traversal failed\n");
+                goto fail;
+            }
         }
     }
     return 0;
@@ -696,6 +809,12 @@ int main(int argc, char **argv)
         if (monker.strategy_view_loaded)
             printf(" strategy_binding=vector classes=%u",
                    pe_monker_strategy_class_count(monker.strategy_view));
+        if (monker.tree_walk_loaded)
+            printf(" strategy_tree_traversal=vector visited=%zu terminals=%zu "
+                   "reach_mass=%.17g ev_weighting=not_applied",
+                   monker.walk_stats.visited_nodes,
+                   monker.walk_stats.terminal_nodes,
+                   monker.walk_stats.reach_mass);
     }
     for (player = 0u; player < options.player_count; ++player)
         printf(" ev%u=%.17g", player, values[player]);

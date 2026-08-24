@@ -8,6 +8,7 @@
  */
 
 #include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/solver/pe_monker_tree_vector.h>
 #include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
@@ -94,6 +95,46 @@ static int strategy_decode_combo(const void *state, uint16_t combo,
     out_cards[1] = 1;
     out_cards[2] = 2;
     out_cards[3] = 3;
+    return 0;
+}
+
+static int tree_decode_combo(const void *state, uint16_t combo,
+                             int *out_node, int out_cards[4], void *user)
+{
+    const pe_monker_tree_state_t *tree_state =
+        (const pe_monker_tree_state_t *)state;
+    const pe_monker_classes_t *classes =
+        (const pe_monker_classes_t *)user;
+    (void)combo;
+    if (!tree_state || !out_node || !out_cards ||
+        pe_monker_class_representative(classes, combo, out_cards) !=
+            PE_MONKER_OK)
+        return -1;
+    *out_node = tree_state->node_index;
+    return 0;
+}
+
+typedef struct
+{
+    int calls;
+} tree_terminal_probe_t;
+
+static int tree_terminal_values(int node_index, const pe_reach_vec_t *reach,
+                                pe_value_vec_t *out_values,
+                                uint8_t player_count, void *user)
+{
+    tree_terminal_probe_t *probe = (tree_terminal_probe_t *)user;
+    size_t combo;
+    double value = node_index == 1 ? 1.0 : -1.0;
+    (void)reach;
+    if (!probe || !out_values || player_count != 2u)
+        return -1;
+    probe->calls++;
+    for (combo = 0u; combo < out_values[0].n; ++combo)
+    {
+        out_values[0].v[combo] = value;
+        out_values[1].v[combo] = -value;
+    }
     return 0;
 }
 
@@ -475,6 +516,44 @@ int main(void)
                   fabs(result.exploitability_raw - 0.5) < 1e-12,
               "exploitability was %.12f with gaps %.12f/%.12f",
               result.exploitability_raw, result.br_gap[0], result.br_gap[1]);
+    }
+
+    /* The actual loaded tree can now be used as the vector game's topology.
+     * The Monker wrapper supplies one policy vector per node/action and the
+     * full traversal reaches both leaves before the terminal callback. */
+    {
+        pe_monker_tree_vector_t tree_game = {0};
+        pe_monker_strategy_game_t adapted = {0};
+        pe_traversal_ctx_t traversal = {0};
+        pe_update_batch_t batch = {0};
+        tree_terminal_probe_t probe = {0};
+        const pe_traversal_ops_t *ops = pe_traversal_full_vector_ops();
+        CHECK(pe_monker_tree_vector_init(&tree_game, tree, 2u, 16432u,
+                                         tree_terminal_values, &probe) == 0,
+              "tree vector adapter did not initialise");
+        CHECK(pe_monker_strategy_vector_game_init(
+                  &adapted, &tree_game.game, view, tree_decode_combo, classes) ==
+                  PE_MONKER_OK,
+              "loaded tree could not be wrapped with its strategy");
+        CHECK(pe_traversal_ctx_init(&traversal, &adapted.game) == 0,
+              "tree traversal context did not initialise");
+        if (traversal.initialized)
+        {
+            CHECK(ops->begin_iteration(&traversal, 1u) == 0,
+                  "tree traversal begin failed");
+            CHECK(ops->run_iteration(&traversal, &batch) == 0,
+                  "tree traversal failed");
+            CHECK(traversal.visited_nodes == 3u &&
+                      traversal.terminal_nodes == 2u,
+                  "tree traversal visited %zu/%zu nodes, expected 3/2",
+                  traversal.visited_nodes, traversal.terminal_nodes);
+            CHECK(probe.calls == 2,
+                  "terminal callback called %d times, expected 2",
+                  probe.calls);
+        }
+        pe_update_batch_destroy(&batch);
+        pe_traversal_ctx_destroy(&traversal);
+        pe_monker_tree_vector_destroy(&tree_game);
     }
 
     pe_monker_strategy_close(view);

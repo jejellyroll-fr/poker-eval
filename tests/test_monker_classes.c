@@ -101,6 +101,23 @@ int main(void)
               a, b);
     }
 
+    /* Every class has a reversible representative for vector-lane decoding. */
+    {
+        uint32_t class_index;
+        for (class_index = 0u; class_index < PE_MONKER_CLASS_COUNT;
+             ++class_index)
+        {
+            int cards[4] = {0, 0, 0, 0};
+            uint32_t round_trip = UINT32_MAX;
+            CHECK(pe_monker_class_representative(classes, class_index, cards) ==
+                      PE_MONKER_OK &&
+                      pe_monker_class_of(classes, cards, &round_trip) ==
+                      PE_MONKER_OK && round_trip == class_index,
+                  "class %u representative round-tripped as %u",
+                  class_index, round_trip);
+        }
+    }
+
     /* Suit relabelling must not matter either — that is what a class is. */
     {
         int spades_hearts[4] = {0, 1, 13, 14};   /* 2s3s 2h3h */

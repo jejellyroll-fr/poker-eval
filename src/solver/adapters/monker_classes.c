@@ -18,6 +18,7 @@
 struct pe_monker_classes_t
 {
     uint16_t *class_of_combo;
+    uint8_t *representatives;
 };
 
 /*
@@ -91,8 +92,12 @@ pe_monker_status_t pe_monker_classes_create(pe_monker_classes_t **out)
         return PE_MONKER_ERR_IO;
     classes->class_of_combo = (uint16_t *)malloc(
         (size_t)PE_MONKER_COMBO_COUNT * sizeof(*classes->class_of_combo));
+    classes->representatives = (uint8_t *)calloc(
+        (size_t)PE_MONKER_CLASS_COUNT * 4u,
+        sizeof(*classes->representatives));
     map = (class_entry_t *)calloc(PE_MONKER_MAP_SIZE, sizeof(*map));
-    if (classes->class_of_combo == NULL || map == NULL)
+    if (classes->class_of_combo == NULL || classes->representatives == NULL ||
+        map == NULL)
     {
         free(map);
         pe_monker_classes_destroy(classes);
@@ -144,6 +149,14 @@ pe_monker_status_t pe_monker_classes_create(pe_monker_classes_t **out)
                         }
                         map[slot].key = key;
                         map[slot].value = next_class++;
+                        classes->representatives[map[slot].value * 4u] =
+                            (uint8_t)c0;
+                        classes->representatives[map[slot].value * 4u + 1u] =
+                            (uint8_t)c1;
+                        classes->representatives[map[slot].value * 4u + 2u] =
+                            (uint8_t)c2;
+                        classes->representatives[map[slot].value * 4u + 3u] =
+                            (uint8_t)c3;
                     }
                     values[0] = c0;
                     values[1] = c1;
@@ -176,6 +189,7 @@ void pe_monker_classes_destroy(pe_monker_classes_t *classes)
     if (classes == NULL)
         return;
     free(classes->class_of_combo);
+    free(classes->representatives);
     free(classes);
 }
 
@@ -210,5 +224,21 @@ pe_monker_status_t pe_monker_class_of(const pe_monker_classes_t *classes,
         rank >= PE_MONKER_COMBO_COUNT)
         return PE_MONKER_ERR_INVALID_HEADER;
     *out_class = classes->class_of_combo[rank];
+    return PE_MONKER_OK;
+}
+
+pe_monker_status_t pe_monker_class_representative(
+    const pe_monker_classes_t *classes,
+    uint32_t class_index,
+    int out_cards[4])
+{
+    unsigned card;
+
+    if (classes == NULL || out_cards == NULL)
+        return PE_MONKER_ERR_NULL_ARGUMENT;
+    if (class_index >= PE_MONKER_CLASS_COUNT)
+        return PE_MONKER_ERR_INVALID_HEADER;
+    for (card = 0u; card < 4u; ++card)
+        out_cards[card] = classes->representatives[class_index * 4u + card];
     return PE_MONKER_OK;
 }

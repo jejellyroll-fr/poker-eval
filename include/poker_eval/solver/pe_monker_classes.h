@@ -57,6 +57,18 @@ pe_monker_status_t pe_monker_class_of(const pe_monker_classes_t *classes,
                                       const int *cards,
                                       uint32_t *out_class);
 
+/**
+ * Return a stable representative four-card hand for a class.
+ *
+ * The representative is only a decoding aid: every hand in the same class
+ * has the same Monker strategy entry. `out_cards` receives four distinct
+ * suit-major card indices in [0,52).
+ */
+pe_monker_status_t pe_monker_class_representative(
+    const pe_monker_classes_t *classes,
+    uint32_t class_index,
+    int out_cards[4]);
+
 #ifdef __cplusplus
 }
 #endif
