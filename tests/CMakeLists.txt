@@ -824,6 +824,30 @@ add_poker_test(test_monker_tree)
 set_tests_properties(test_monker_tree PROPERTIES LABELS "solver;solver-v3;monker;mkr01")
 add_poker_test(test_monker_layout)
 set_tests_properties(test_monker_layout PROPERTIES LABELS "solver;solver-v3;monker;holdem;plo5;plo6;mkr02")
+
+if(TARGET pe-vector-sim)
+    add_test(NAME pe_vector_sim_holdem
+        COMMAND $<TARGET_FILE:pe-vector-sim>
+            --game holdem
+            --board "2c 7d Th Js Qc"
+            --range0 AsKs
+            --range1 9c8c)
+    set_tests_properties(pe_vector_sim_holdem PROPERTIES LABELS "solver;cli;vector;holdem")
+    add_test(NAME pe_vector_sim_plo5
+        COMMAND $<TARGET_FILE:pe-vector-sim>
+            --game plo5
+            --board "2c 7d Th Js Qc"
+            --range0 AsKsQd3c3d
+            --range1 9c8d5c6c7c)
+    set_tests_properties(pe_vector_sim_plo5 PROPERTIES LABELS "solver;cli;vector;plo5")
+    add_test(NAME pe_vector_sim_plo6
+        COMMAND $<TARGET_FILE:pe-vector-sim>
+            --game plo6
+            --board "2c 7d Th Js Qc"
+            --range0 AsKsQd3c3d2d
+            --range1 9c8d5c6c7c8c)
+    set_tests_properties(pe_vector_sim_plo6 PROPERTIES LABELS "solver;cli;vector;plo6")
+endif()
 add_poker_test(test_monker_mkr)
 set_tests_properties(test_monker_mkr PROPERTIES LABELS "solver;solver-v3;monker;mkr04;mkr05")
 add_poker_test(test_monker_filters)
