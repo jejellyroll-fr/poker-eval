@@ -358,6 +358,7 @@ set(TEST_SOURCES
     test_icm_asymmetric.c
     test_pko.c
     test_pko_ranges.c
+    test_hrc_import.c
     test_hrc.c
     test_fgs_tree.c
     test_nn_depth_value.c
@@ -609,6 +610,7 @@ set_tests_properties(test_icm PROPERTIES LABELS "economics")
 set_tests_properties(test_icm_asymmetric PROPERTIES LABELS "economics;tournament")
 set_tests_properties(test_pko PROPERTIES LABELS "economics;tournament;pko")
 set_tests_properties(test_pko_ranges PROPERTIES LABELS "economics;tournament;pko;range")
+set_tests_properties(test_hrc_import PROPERTIES LABELS "economics;tournament;hrc;pko;range;betting")
 set_tests_properties(test_hrc PROPERTIES LABELS "economics;tournament;hrc;range")
 set_tests_properties(test_fgs_tree PROPERTIES LABELS "economics;tournament;fgs")
 set_tests_properties(test_nn_depth_value PROPERTIES LABELS "engine;cfr;neural")

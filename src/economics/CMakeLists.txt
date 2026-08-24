@@ -6,6 +6,7 @@ set(ECONOMICS_SOURCES
     pko.c
     pko_ranges.c
     hrc.c
+    hrc_import.c
     fgs.c
     push_fold.c
     push_fold_multiway.c
@@ -23,7 +24,7 @@ target_include_directories(poker_economics PRIVATE
 )
 
 # Link with core for basic definitions if needed
-target_link_libraries(poker_economics PUBLIC poker_core m)
+target_link_libraries(poker_economics PUBLIC poker_core poker-eval-range m)
 
 # The video poker strategy derivation uses the generalized draw optimizer
 # (poker_games) and groups deals by suit isomorphism (local canonical key).

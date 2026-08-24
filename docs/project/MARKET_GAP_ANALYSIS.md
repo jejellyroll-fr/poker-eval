@@ -163,12 +163,20 @@ testée :
 13. **MLP embarqué** : `pe_nn_depth_value_callback()` adapte le MLP CPU déjà présent au
     callback depth-limited de CFR. L'inférence est locale, sans runtime externe ni réseau
     pré-entraîné fourni ; le modèle et l'extracteur de features sont injectés par l'appelant.
+14. **Import HRC/PKO et pots** : `pe_hrc_import_json_file()` accepte le contrat portable
+    `pe-hrc/v1`/`pe-pko/v1`, construit les ranges réelles via `pe_range_parse()`, restaure
+    les nœuds/actions et conserve stacks, antes, bounties et payouts. `pe_hrc_trace_pot()`
+    rejoue un chemin d'actions incrémentales et produit les slices main/side pots avec
+    éligibilité après fold/all-in ; `pe_hrc_import_make_pko_input()` relie ensuite ces
+    ranges aux calculs PKO existants. `pe-hrc-import` permet de valider un fichier depuis
+    la ligne de commande.
 
-Les tests `test_hrc`, `test_fgs_tree`, `test_pko_ranges` et `test_nn_depth_value` couvrent
-respectivement le parcours multiway avec card removal, l'agrégation dynamique, la dérivation
-PKO depuis ranges et le branchement du MLP. Cette livraison ferme les contrats noyau, pas
-les quatre produits finis : il reste l'éditeur/import d'arbres HRC, le modèle de tournoi
-FGS/PKO room-aware, des poids entraînés et une stratégie privée par combo.
+Les tests `test_hrc`, `test_fgs_tree`, `test_pko_ranges`, `test_hrc_import` et
+`test_nn_depth_value` couvrent respectivement le parcours multiway avec card removal,
+l'agrégation dynamique, la dérivation PKO depuis ranges, l'import JSON avec pot accounting
+et le branchement du MLP. Cette livraison ferme les contrats noyau, pas les quatre produits
+finis : il reste l'éditeur visuel d'arbres, les adapters room-specific FGS/PKO, des poids
+entraînés et la modélisation des ranges qui évoluent après chaque action.
 
 ---
 

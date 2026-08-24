@@ -1,0 +1,22 @@
+{
+  "schema": "pe-pko/v1",
+  "variant": "holdem",
+  "root": 0,
+  "initial_pot": 2,
+  "iterations": 8,
+  "max_profiles": 8,
+  "payouts": [70, 30],
+  "bounty_multiplier": 1,
+  "players": [
+    {"stack": 100, "ante": 1, "range": "AhKh", "bounty": 0},
+    {"stack": 50, "ante": 1, "range": "QsQc", "bounty": 25}
+  ],
+  "nodes": [
+    {"player": 0, "actions": [
+      {"label": "fold", "amount": 0, "child": 1},
+      {"label": "allin", "amount": 99, "child": 2}
+    ]},
+    {"terminal": true},
+    {"terminal": true}
+  ]
+}

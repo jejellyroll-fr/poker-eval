@@ -50,6 +50,11 @@ typedef struct {
     double weight;
 } pe_hrc_profile_t;
 
+typedef struct {
+    double amount;
+    uint8_t eligible_mask;
+} pe_hrc_pot_slice_t;
+
 /* The callback is called at every terminal for one collision-free private
  * hand profile. It may use the action path to calculate pot/stack payoffs. */
 typedef int (*pe_hrc_terminal_fn)(const pe_hrc_tree_t *tree,
