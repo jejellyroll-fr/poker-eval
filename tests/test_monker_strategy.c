@@ -1,0 +1,421 @@
+/*
+ * test_monker_strategy.c - a saved MonkerSolver strategy, indexed by hand
+ *
+ * The import joins four things that were each tested on their own: the tree,
+ * the stored slots, the slot-to-node binding, and the hand-class numbering.
+ * What is tested here is the join — that a question about a hand reaches the
+ * right bytes, and that the answer is a distribution.
+ */
+
+#include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <zlib.h>
+
+static int failures;
+
+#define CHECK(condition, ...)                                      \
+    do                                                             \
+    {                                                              \
+        if (!(condition))                                          \
+        {                                                          \
+            fprintf(stderr, "FAILED %s:%d: ", __FILE__, __LINE__); \
+            fprintf(stderr, __VA_ARGS__);                          \
+            fputc('\n', stderr);                                   \
+            failures++;                                            \
+        }                                                          \
+    } while (0)
+
+/* ---- fixtures: a two-node tree and a strategy for it ------------------ */
+
+static void be16(unsigned char *b, size_t *at, unsigned v)
+{
+    b[(*at)++] = (unsigned char)(v >> 8);
+    b[(*at)++] = (unsigned char)(v & 0xFFu);
+}
+
+static void be32(unsigned char *b, size_t *at, uint32_t v)
+{
+    unsigned i;
+    for (i = 0u; i < 4u; ++i)
+        b[(*at)++] = (unsigned char)(v >> (8u * (3u - i)));
+}
+
+/*
+ * root with two actions, both leading to leaves. Three nodes; the storage
+ * order (children last to first) is 0, 2, 1, so the strategy has an array in
+ * slot 0 and absent slots after it.
+ */
+static int write_tree(const char *path)
+{
+    unsigned char b[128];
+    size_t at = 0u;
+    FILE *f;
+    unsigned i;
+    for (i = 0u; i < 4u; ++i) b[at++] = 0u;
+    be32(b, &at, 33487u);
+    be32(b, &at, 1u);          /* internal format */
+    be32(b, &at, 2u);          /* players */
+    be32(b, &at, 0u);          /* first to act */
+    be32(b, &at, 1u);          /* street 1 */
+    be32(b, &at, 0u);          /* dead money */
+    be32(b, &at, 10000u);
+    be32(b, &at, 10000u);
+    be16(b, &at, 2u);          /* root: two children */
+    be16(b, &at, 0u);          /*   fold  */
+    be16(b, &at, 0u);          /*     leaf */
+    be16(b, &at, 3u);          /*   all in */
+    be16(b, &at, 0u);          /*     leaf */
+    b[at++] = 0u;              /* no ranges */
+    f = fopen(path, "wb");
+    if (f == NULL) return -1;
+    if (fwrite(b, 1u, at, f) != at || fclose(f) != 0) return -1;
+    return 0;
+}
+
+/*
+ * A strategy entry: block-data bucket count, then one array of
+ * 16432 * 2 bytes for the root, then two absent slots.
+ *
+ * Every class gets 200/56 except class 0, which gets 0/0 so the
+ * "no strategy stored" path is exercised, and class 1, which gets 129/128 —
+ * summing to 257, the independent-rounding case MonkerSolver produces.
+ */
+static unsigned char *build_strategy(size_t *out_size)
+{
+    size_t classes = 16432u;
+    size_t bytes = classes * 2u;
+    size_t cap = bytes + 256u;
+    unsigned char *s = (unsigned char *)malloc(cap);
+    size_t at = 0u;
+    size_t i;
+    unsigned j;
+    if (s == NULL) return NULL;
+    s[at++] = 0xacu; s[at++] = 0xedu; be16(s, &at, 5u);
+    s[at++] = 0x77u; s[at++] = 4u; be32(s, &at, 30u);
+    s[at++] = 0x75u; s[at++] = 0x72u;
+    be16(s, &at, 2u); s[at++] = '['; s[at++] = 'B';
+    for (j = 0u; j < 8u; ++j) s[at++] = 0u;
+    s[at++] = 0x02u; be16(s, &at, 0u); s[at++] = 0x78u; s[at++] = 0x70u;
+    be32(s, &at, (uint32_t)bytes);
+    for (i = 0u; i < classes; ++i)
+    {
+        if (i == 0u)       { s[at++] = 0u;   s[at++] = 0u;   }
+        else if (i == 1u)  { s[at++] = 129u; s[at++] = 128u; }
+        else               { s[at++] = 200u; s[at++] = 56u;  }
+    }
+    s[at++] = 0x70u;   /* slot for node 2 */
+    s[at++] = 0x70u;   /* slot for node 1 */
+    *out_size = at;
+    return s;
+}
+
+static int put_u16(FILE *f, uint16_t v)
+{
+    unsigned char b[2];
+    b[0] = (unsigned char)v; b[1] = (unsigned char)(v >> 8);
+    return fwrite(b, 1u, 2u, f) == 2u ? 0 : -1;
+}
+
+static int put_u32(FILE *f, uint32_t v)
+{
+    unsigned char b[4];
+    b[0] = (unsigned char)v;       b[1] = (unsigned char)(v >> 8);
+    b[2] = (unsigned char)(v >> 16); b[3] = (unsigned char)(v >> 24);
+    return fwrite(b, 1u, 4u, f) == 4u ? 0 : -1;
+}
+
+/* UTF-16BE with a BOM, which is how MonkerSolver names its entries. */
+static int put_name(FILE *f, const char *name)
+{
+    unsigned char bom[2] = {0xFEu, 0xFFu};
+    size_t i;
+    if (fwrite(bom, 1u, 2u, f) != 2u)
+        return -1;
+    for (i = 0u; name[i] != '\0'; ++i)
+    {
+        unsigned char pair[2];
+        pair[0] = 0u;
+        pair[1] = (unsigned char)name[i];
+        if (fwrite(pair, 1u, 2u, f) != 2u)
+            return -1;
+    }
+    return 0;
+}
+
+/*
+ * One stored (undeflated) ZIP entry whose payload is a zlib stream: the
+ * double compression a real .mkr uses for its strategies.
+ */
+/*
+ * The same shape, but the root's array is int[] rather than byte[]. A real
+ * entry puts the strategies first and the parallel int arrays second; nothing
+ * in the file says it must, so a view that assumed it would read regrets as
+ * frequencies. This binds — the presence pattern is right — and must still be
+ * refused.
+ */
+static unsigned char *build_strategy_ints(size_t *out_size)
+{
+    size_t classes = 16432u;
+    size_t values = classes * 2u;
+    unsigned char *s = (unsigned char *)malloc(values * 4u + 256u);
+    size_t at = 0u;
+    size_t i;
+    unsigned j;
+    if (s == NULL) return NULL;
+    s[at++] = 0xacu; s[at++] = 0xedu; be16(s, &at, 5u);
+    s[at++] = 0x77u; s[at++] = 4u; be32(s, &at, 30u);
+    s[at++] = 0x75u; s[at++] = 0x72u;
+    be16(s, &at, 2u); s[at++] = '['; s[at++] = 'I';
+    for (j = 0u; j < 8u; ++j) s[at++] = 0u;
+    s[at++] = 0x02u; be16(s, &at, 0u); s[at++] = 0x78u; s[at++] = 0x70u;
+    be32(s, &at, (uint32_t)values);
+    for (i = 0u; i < values; ++i)
+        be32(s, &at, 7u);
+    s[at++] = 0x70u;
+    s[at++] = 0x70u;
+    *out_size = at;
+    return s;
+}
+
+static int write_archive(const char *path, const unsigned char *java,
+                         size_t java_size)
+{
+    static const char name[] = "storedstrategy0";
+    const uint16_t namelen = (uint16_t)(2u + 2u * (sizeof(name) - 1u));
+    uLongf zlen = compressBound((uLong)java_size);
+    unsigned char *z = (unsigned char *)malloc((size_t)zlen);
+    FILE *f = NULL;
+    uint32_t central;
+    uint32_t csize;
+    int ok = 0;
+
+    if (z == NULL)
+        goto done;
+    if (compress2(z, &zlen, java, (uLong)java_size, 6) != Z_OK)
+        goto done;
+    f = fopen(path, "wb");
+    if (f == NULL)
+        goto done;
+    if (put_u32(f, 0x04034b50u) || put_u16(f, 20u) || put_u16(f, 0x0008u) ||
+        put_u16(f, 0u) || put_u16(f, 0u) || put_u16(f, 0u) ||
+        put_u32(f, 0u) || put_u32(f, 0u) || put_u32(f, 0u) ||
+        put_u16(f, namelen) || put_u16(f, 0u) || put_name(f, name) ||
+        fwrite(z, 1u, (size_t)zlen, f) != (size_t)zlen ||
+        put_u32(f, 0x08074b50u) || put_u32(f, 0u) ||
+        put_u32(f, (uint32_t)zlen) || put_u32(f, (uint32_t)zlen))
+        goto done;
+    central = (uint32_t)ftell(f);
+    if (put_u32(f, 0x02014b50u) || put_u16(f, 20u) || put_u16(f, 20u) ||
+        put_u16(f, 0x0008u) || put_u16(f, 0u) || put_u16(f, 0u) ||
+        put_u16(f, 0u) || put_u32(f, 0u) ||
+        put_u32(f, (uint32_t)zlen) || put_u32(f, (uint32_t)zlen) ||
+        put_u16(f, namelen) || put_u16(f, 0u) || put_u16(f, 0u) ||
+        put_u16(f, 0u) || put_u16(f, 0u) || put_u32(f, 0u) ||
+        put_u32(f, 0u) || put_name(f, name))
+        goto done;
+    csize = (uint32_t)ftell(f) - central;
+    if (put_u32(f, 0x06054b50u) || put_u16(f, 0u) || put_u16(f, 0u) ||
+        put_u16(f, 1u) || put_u16(f, 1u) || put_u32(f, csize) ||
+        put_u32(f, central) || put_u16(f, 0u))
+        goto done;
+    ok = 1;
+done:
+    if (f != NULL && fclose(f) != 0)
+        ok = 0;
+    free(z);
+    return ok ? 0 : -1;
+}
+
+int main(void)
+{
+    const char *tree_path = "/tmp/poker_eval_monker_view.tree";
+    const char *mkr_path = "/tmp/poker_eval_monker_view.mkr";
+    mpf_tree_def_t *tree = NULL;
+    pe_monker_mkr_t archive;
+    pe_monker_mkr_strategy_t stored;
+    pe_monker_classes_t *classes = NULL;
+    pe_monker_strategy_t *view = NULL;
+    unsigned char *payload;
+    size_t payload_size = 0u;
+
+    CHECK(write_tree(tree_path) == 0, "tree fixture write failed");
+    payload = build_strategy(&payload_size);
+    CHECK(payload != NULL, "strategy fixture build failed");
+    if (payload == NULL) return 1;
+    CHECK(write_archive(mkr_path, payload, payload_size) == 0,
+          "archive fixture write failed");
+    free(payload);
+
+    if (pe_monker_tree_load(tree_path, &tree) != PE_MONKER_OK || tree == NULL)
+    {
+        fprintf(stderr, "FAILED: fixture tree did not load\n");
+        return 1;
+    }
+    CHECK(tree->node_count == 3, "fixture tree has %d nodes, expected 3",
+          tree->node_count);
+    if (pe_monker_mkr_read(mkr_path, &archive) != PE_MONKER_MKR_OK)
+    {
+        fprintf(stderr, "FAILED: fixture archive was rejected\n");
+        mpf_tree_free(tree);
+        return 1;
+    }
+    if (pe_monker_mkr_read_strategy(&archive, "storedstrategy0", &stored) !=
+        PE_MONKER_MKR_OK)
+    {
+        fprintf(stderr, "FAILED: fixture strategy was not decoded\n");
+        pe_monker_mkr_free(&archive);
+        mpf_tree_free(tree);
+        return 1;
+    }
+    if (pe_monker_classes_create(&classes) != PE_MONKER_OK)
+    {
+        fprintf(stderr, "FAILED: class table was not built\n");
+        return 1;
+    }
+    CHECK(pe_monker_strategy_open(tree, &stored, classes, &view) ==
+              PE_MONKER_OK && view != NULL,
+          "the view did not open");
+    if (view == NULL) return 1;
+    CHECK(pe_monker_strategy_class_count(view) == 16432u,
+          "view reports %u classes", pe_monker_strategy_class_count(view));
+
+    /* 2s3s4s5s is class 0, which the fixture stores as all zero. */
+    {
+        int cards[4] = {0, 1, 2, 3};
+        double p[4] = {0.0, 0.0, 0.0, 0.0};
+        uint16_t n = 0u;
+        int specified = 1;
+        CHECK(pe_monker_strategy_probs(view, tree->root_index, cards, p,
+                                       4u, &n, &specified) == PE_MONKER_OK,
+              "class 0 could not be read");
+        CHECK(n == 2u, "root has %u actions, expected 2", n);
+        CHECK(specified == 0, "an all-zero class was reported as specified");
+        CHECK(fabs(p[0] - 0.5) < 1e-12 && fabs(p[1] - 0.5) < 1e-12,
+              "an unstored class gave %.6f/%.6f, expected uniform", p[0], p[1]);
+    }
+
+    /* 2s3s4s6s is class 1: 129/128, which sums to 257 and must still
+       normalise to one. */
+    {
+        int cards[4] = {0, 1, 2, 4};
+        double p[4] = {0.0, 0.0, 0.0, 0.0};
+        uint16_t n = 0u;
+        int specified = 0;
+        uint32_t k = 99u;
+        CHECK(pe_monker_class_of(classes, cards, &k) == PE_MONKER_OK && k == 1u,
+              "2s3s4s6s is class %u, expected 1", k);
+        CHECK(pe_monker_strategy_probs(view, tree->root_index, cards, p,
+                                       4u, &n, &specified) == PE_MONKER_OK,
+              "class 1 could not be read");
+        CHECK(specified == 1, "a stored class was reported as unstored");
+        CHECK(fabs(p[0] + p[1] - 1.0) < 1e-12,
+              "129/128 normalised to %.12f, not 1", p[0] + p[1]);
+        CHECK(fabs(p[0] - 129.0 / 257.0) < 1e-12,
+              "129 of 257 became %.12f", p[0]);
+    }
+
+    /* Any other class is 200/56, and suit relabelling must not change it. */
+    {
+        int a[4] = {0, 1, 2, 5};
+        int b[4] = {13, 14, 15, 18};
+        double pa[4] = {0}, pb[4] = {0};
+        uint16_t na = 0u, nb = 0u;
+        pe_monker_strategy_probs(view, tree->root_index, a, pa, 4u, &na, NULL);
+        pe_monker_strategy_probs(view, tree->root_index, b, pb, 4u, &nb, NULL);
+        CHECK(fabs(pa[0] - 200.0 / 256.0) < 1e-12,
+              "200 of 256 became %.12f", pa[0]);
+        CHECK(fabs(pa[0] - pb[0]) < 1e-15 && fabs(pa[1] - pb[1]) < 1e-15,
+              "the same hand in other suits gave %.12f and %.12f", pa[0], pb[0]);
+    }
+
+    /* Terminals have no strategy, and asking for one is an error rather than
+       a zero-length answer. */
+    {
+        double p[4] = {0};
+        uint16_t n = 0u;
+        int leaf = -1;
+        int i;
+        for (i = 0; i < tree->node_count; ++i)
+            if (tree->nodes[i].action_count == 0)
+            {
+                leaf = i;
+                break;
+            }
+        CHECK(leaf >= 0, "the fixture tree has no terminal");
+        if (leaf >= 0)
+            CHECK(pe_monker_strategy_probs(view, leaf, (int[]){0,1,2,3}, p,
+                                           4u, &n, NULL) != PE_MONKER_OK,
+                  "a terminal node answered with a strategy");
+    }
+
+    /* A buffer too small for the node's actions is refused, not overrun. */
+    {
+        int cards[4] = {0, 1, 2, 5};
+        double p[1] = {0.0};
+        uint16_t n = 0u;
+        CHECK(pe_monker_strategy_probs(view, tree->root_index, cards, p,
+                                       1u, &n, NULL) != PE_MONKER_OK,
+              "a one-slot buffer was accepted for a two-action node");
+    }
+
+    pe_monker_strategy_close(view);
+    pe_monker_mkr_strategy_free(&stored);
+    pe_monker_mkr_free(&archive);
+
+    /* An entry whose decision node carries an int array instead of a byte
+       array binds, and must not open as a strategy. */
+    {
+        const char *ints_path = "/tmp/poker_eval_monker_view_ints.mkr";
+        unsigned char *ints;
+        size_t ints_size = 0u;
+        pe_monker_mkr_t ints_archive;
+        pe_monker_mkr_strategy_t ints_stored;
+        pe_monker_strategy_t *ints_view = NULL;
+        int32_t map[8];
+
+        ints = build_strategy_ints(&ints_size);
+        CHECK(ints != NULL, "int-array fixture build failed");
+        if (ints != NULL)
+        {
+            CHECK(write_archive(ints_path, ints, ints_size) == 0,
+                  "int-array archive write failed");
+            free(ints);
+            if (pe_monker_mkr_read(ints_path, &ints_archive) ==
+                    PE_MONKER_MKR_OK &&
+                pe_monker_mkr_read_strategy(&ints_archive, "storedstrategy0",
+                                            &ints_stored) == PE_MONKER_MKR_OK)
+            {
+                CHECK(pe_monker_mkr_bind_strategy(tree, &ints_stored, map,
+                                                  sizeof(map) / sizeof(map[0]))
+                          == PE_MONKER_MKR_OK,
+                      "the int-array entry should bind: its shape is right");
+                CHECK(pe_monker_strategy_open(tree, &ints_stored, classes,
+                                              &ints_view) != PE_MONKER_OK,
+                      "an int array was opened as a strategy");
+                pe_monker_strategy_close(ints_view);
+                pe_monker_mkr_strategy_free(&ints_stored);
+                pe_monker_mkr_free(&ints_archive);
+            }
+            else
+            {
+                CHECK(0, "int-array archive was not readable");
+            }
+        }
+    }
+
+    pe_monker_classes_destroy(classes);
+    mpf_tree_free(tree);
+
+    if (failures)
+    {
+        fprintf(stderr, "test_monker_strategy: %d failure(s)\n", failures);
+        return 1;
+    }
+    printf("test_monker_strategy: a saved strategy answers by hand\n");
+    return 0;
+}
