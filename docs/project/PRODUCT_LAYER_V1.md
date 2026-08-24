@@ -71,15 +71,19 @@ poker-eval-trainer --solution solve.pe_sol --labels labels.csv --rounds 20 \
   --session-json session.json
 ```
 
-Le trainer joueur est maintenant une application macOS native. La cible CMake produit
-un bundle `.app` avec fenêtre, panneaux Open/Save, boutons d'actions, feedback, score,
-difficulté adaptative et export de session JSON :
+Le trainer joueur est maintenant une application desktop portable en C + SDL2. La même
+cible fonctionne sur macOS, Linux et Windows, avec une fenêtre claire, glisser-déposer
+des fichiers `.pe_sol`/CSV, boutons d'actions, feedback, score, difficulté adaptative
+et export de session JSON :
 
 ```sh
-cmake --build build --target poker-eval-trainer-desktop
-open "build/tools/PokerEval Trainer.app" --args \
-  --solution solve.pe_sol --labels labels.csv
+cmake --build build --target poker-eval-trainer-gui
+build/tools/poker-eval-trainer-gui --solution solve.pe_sol --labels labels.csv
 ```
+
+Sans arguments, il suffit de déposer le `.pe_sol` puis le CSV de labels dans la fenêtre.
+Le CSV est important : il transforme les indices techniques en `fold`, `call`, `bet`,
+etc. et fournit street, board, position et pot.
 
 Le mode `--export-html` de `poker-eval-trainer` reste disponible pour partager une
 session sans installer l'application, mais il n'est plus la surface principale du
