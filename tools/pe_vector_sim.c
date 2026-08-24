@@ -563,8 +563,8 @@ static int monker_cli_load(const cli_options_t *options,
                     monker_cli_terminal_values, &out->walk_stats) != 0)
             {
                 fprintf(stderr,
-                        "Monker tree cannot be represented by the vector "
-                        "topology adapter (chance nodes are not yet wired)\n");
+                    "Monker tree cannot be represented by the vector "
+                    "topology adapter\n");
                 goto fail;
             }
             out->tree_vector_loaded = 1;
