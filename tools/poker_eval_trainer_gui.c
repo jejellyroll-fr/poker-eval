@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 
 #include <ctype.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -366,10 +367,52 @@ static void shell_quote(const char *source, char *destination, size_t capacity)
     destination[used] = '\0';
 }
 
+static int card_token_count(const char *text)
+{
+    char copy[256];
+    char *token;
+    int count = 0;
+    if (!text || !*text)
+        return 0;
+    snprintf(copy, sizeof(copy), "%s", text);
+    token = strtok(copy, " ,;\t\r\n");
+    while (token) {
+        if (strlen(token) < 2u || strlen(token) > 3u)
+            return -1;
+        ++count;
+        token = strtok(NULL, " ,;\t\r\n");
+    }
+    return count;
+}
+
+static const char *starter_range_for_player(const app_t *app, int player)
+{
+    static const char *holdem[] = {
+        "AsKs", "AhKh", "AdKd", "AcKc", "QsQh", "QdQc", "JsJh", "JdJc"};
+    static const char *plo4[] = {
+        "AsKsQd3c", "AhKhJdTc", "AdKdQh2s", "AcKcQs2d",
+        "9s9h8d6c", "8c8h7s6d", "5s5h4d4c", "6h6s5d5c"};
+    static const char *plo5[] = {
+        "AsKsQd3c9h", "AhKhJdTc8s", "AdKdQh2s3h", "AcKcQs2d3s",
+        "9s9h8d6c5c", "8c8h7s6d4d", "5s5h4c4h7h", "6h6s5d5c4s"};
+    static const char *plo6[] = {
+        "AsKsQd3c9h5h", "AhKhJdTc8s4s", "AdKdQh2s3h6h", "AcKcQs2d7s6d",
+        "9s9h8d6c5c4c", "8c8h7s6d4d3d", "5s5h4c4h7h6c", "6h6s5d5c4s3s"};
+    const char *const *ranges = holdem;
+    if (!app || player < 0 || player > 7)
+        return "";
+    if (player == 0) return app->range_oop;
+    if (player == 1) return app->range_ip;
+    if (app->game_index == 1) ranges = plo4;
+    else if (app->game_index == 2) ranges = plo5;
+    else if (app->game_index == 3) ranges = plo6;
+    return ranges[player];
+}
+
 static int run_vector_sim(app_t *app)
 {
     char executable[1200], quoted_executable[1400];
-    char board[160], range[160], tree[1200], mkr[1200];
+    char board[160], tree[1200], mkr[1200];
     char command[8192];
     char output[4096];
     FILE *pipe;
@@ -383,6 +426,16 @@ static int run_vector_sim(app_t *app)
                    "Selected engine is not wired to this spot runner yet");
         return -1;
     }
+    if (card_token_count(app->board_text) != 5) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Board must contain exactly five cards");
+        return -1;
+    }
+    if (!app->range_oop[0] || !app->range_ip[0]) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Enter an OOP and IP range before solving");
+        return -1;
+    }
     if (app->executable_dir[0])
         snprintf(executable, sizeof(executable), "%s%cpe-vector-sim%s",
                  app->executable_dir, PE_GUI_PATH_SEPARATOR,
@@ -391,15 +444,19 @@ static int run_vector_sim(app_t *app)
         copy_field(executable, sizeof(executable), "pe-vector-sim");
     shell_quote(executable, quoted_executable, sizeof(quoted_executable));
     shell_quote(app->board_text, board, sizeof(board));
-    shell_quote(app->range_oop, range, sizeof(range));
     shell_quote(app->tree_path, tree, sizeof(tree));
     shell_quote(app->mkr_path, mkr, sizeof(mkr));
     snprintf(command, sizeof(command), "%s --game %s --board %s --players %d",
              quoted_executable, game_name_for(app->game_index), board,
              app->player_count > 1 ? app->player_count : 2);
     for (int player = 0; player < app->player_count && player < 8; ++player)
+    {
+        const char *player_range = starter_range_for_player(app, player);
+        char quoted_range[160];
+        shell_quote(player_range, quoted_range, sizeof(quoted_range));
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
-                 " --range%d %s", player, range);
+                 " --range%d %s", player, quoted_range);
+    }
     if (app->tree_path[0])
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
                  " --tree %s", tree);
@@ -608,7 +665,183 @@ static void draw_tree(SDL_Renderer *renderer, int x, int y, int width,
     text(renderer, x + 18, y + height - 30, "TREE PATH  /  ROOT > FLOP > DECISION", 2, muted);
 }
 
-static void render_solver(SDL_Renderer *renderer, const app_t *app)
+static int rank_index(char rank)
+{
+    const char *ranks = "AKQJT98765432";
+    const char *found = strchr(ranks, (int)toupper((unsigned char)rank));
+    return found ? (int)(found - ranks) : -1;
+}
+
+static int range_contains_combo(const char *range, int row, int column,
+                                int *suited, int *pair)
+{
+    char token[32];
+    const char *at;
+    if (suited) *suited = 0;
+    if (pair) *pair = 0;
+    if (!range || !*range || row < 0 || column < 0)
+        return 0;
+    at = range;
+    while (*at && isspace((unsigned char)*at)) ++at;
+    if (strlen(at) < 4u)
+        return 0;
+    snprintf(token, sizeof(token), "%.4s", at);
+    if (rank_index(token[0]) < 0 || rank_index(token[2]) < 0)
+        return 0;
+    {
+        int first = rank_index(token[0]);
+        int second = rank_index(token[2]);
+        int want_row = first < second ? first : second;
+        int want_column = first < second ? second : first;
+        if (first == second) {
+            want_row = first;
+            want_column = first;
+            if (pair) *pair = 1;
+        }
+        if (want_row != row || want_column != column)
+            return 0;
+    }
+    if (suited) *suited = token[1] == token[3];
+    return 1;
+}
+
+static void draw_hand_matrix(SDL_Renderer *renderer, int x, int y, int width,
+                             int height, const char *oop, const char *ip,
+                             SDL_Color white, SDL_Color muted,
+                             SDL_Color blue, SDL_Color orange,
+                             SDL_Color outline)
+{
+    const char *ranks = "AKQJT98765432";
+    int label = 20;
+    int cell = (width - label - 8) / 13;
+    if (cell < 24) cell = 24;
+    if (cell * 13 + label + 8 > width) cell = (width - label - 8) / 13;
+    text(renderer, x, y - 25, "RANGE MATRIX", 2, blue);
+    text(renderer, x + label + 4, y - 4, ranks, 1, muted);
+    for (int row = 0; row < 13; ++row) {
+        text(renderer, x, y + row * cell + 8, (char[]){ranks[row], '\0'}, 1, muted);
+        for (int column = 0; column < 13; ++column) {
+            int suited = 0, pair = 0;
+            int has_oop = range_contains_combo(oop, row, column, &suited, &pair);
+            int has_ip = range_contains_combo(ip, row, column, &suited, &pair);
+            SDL_Color fill_color = {25, 34, 46, 255};
+            if (has_oop && has_ip) fill_color = (SDL_Color){115, 87, 139, 255};
+            else if (has_oop) fill_color = (SDL_Color){41, 103, 166, 255};
+            else if (has_ip) fill_color = (SDL_Color){169, 101, 57, 255};
+            fill(renderer, (rect_t){x + label + 4 + column * cell,
+                                    y + row * cell, cell - 2, cell - 2}, fill_color);
+            border(renderer, (rect_t){x + label + 4 + column * cell,
+                                      y + row * cell, cell - 2, cell - 2}, outline);
+            {
+                char combo[8];
+                combo[0] = ranks[row]; combo[1] = ranks[column];
+                combo[2] = row == column ? 'p' : row < column ? 's' : 'o';
+                combo[3] = '\0';
+                text(renderer, x + label + 9 + column * cell,
+                     y + row * cell + (cell > 30 ? 9 : 6), combo, cell > 34 ? 1 : 1,
+                     has_oop || has_ip ? white : muted);
+            }
+        }
+    }
+    text(renderer, x + label + 4, y + 13 * cell + 8, "BLUE OOP", 1, blue);
+    text(renderer, x + label + 94, y + 13 * cell + 8, "ORANGE IP", 1, orange);
+    text(renderer, x + label + 220, y + 13 * cell + 8, "PURPLE BOTH", 1, white);
+}
+
+static void draw_table_view(SDL_Renderer *renderer, int x, int y, int width,
+                            int height, const char *board, SDL_Color white,
+                            SDL_Color muted, SDL_Color green, SDL_Color outline)
+{
+    int center_x = x + width / 2;
+    int center_y = y + height / 2 + 8;
+    int radius_x = width / 2 - 18;
+    int radius_y = height / 2 - 24;
+    SDL_Color felt = {24, 87, 73, 255};
+    SDL_Color rail = {43, 32, 39, 255};
+    fill(renderer, (rect_t){x + 18, center_y - radius_y, width - 36, radius_y * 2}, rail);
+    for (int row = -radius_y + 12; row <= radius_y - 12; ++row) {
+        double ratio = (double)row / (double)(radius_y - 12);
+        int half = (int)((double)(radius_x - 20) * sqrt(1.0 - ratio * ratio));
+        if (half > 0) fill(renderer, (rect_t){center_x - half, center_y + row, half * 2, 1}, felt);
+    }
+    border(renderer, (rect_t){x + 18, center_y - radius_y, width - 36, radius_y * 2}, outline);
+    text(renderer, center_x - 38, center_y - 18, "POT  0.00", 2, white);
+    text(renderer, center_x - 42, center_y + 13, "SPR  --", 1, muted);
+    for (int seat = 0; seat < 2; ++seat) {
+        int sx = seat ? x + width - 148 : x + 42;
+        int sy = seat ? center_y + radius_y - 18 : center_y - radius_y - 22;
+        panel(renderer, (rect_t){sx, sy, 106, 34},
+              seat ? (SDL_Color){37, 111, 170, 255} : (SDL_Color){154, 67, 81, 255},
+              outline);
+        text(renderer, sx + 12, sy + 11, seat ? "IP  100" : "OOP 100", 1, white);
+    }
+    {
+        char copy[96];
+        snprintf(copy, sizeof(copy), "BOARD  %s", board && *board ? board : "-- -- -- -- --");
+        text(renderer, x + 24, y + height - 24, copy, 1, muted);
+    }
+    (void)green;
+}
+
+static void draw_action_summary(SDL_Renderer *renderer, int x, int y, int width,
+                                int height, const app_t *app, SDL_Color white,
+                                SDL_Color muted, SDL_Color blue, SDL_Color green,
+                                SDL_Color orange, SDL_Color outline)
+{
+    const spot_t *spot = NULL;
+    int actions = 4;
+    if (app->spot_count) {
+        size_t index = app->selected_spot < app->spot_count ? app->selected_spot : 0;
+        spot = &app->spots[index];
+        actions = spot->actions < 6 ? spot->actions : 6;
+    }
+    text(renderer, x, y, "ACTIONS / FREQUENCY", 2, blue);
+    for (int action = 0; action < actions; ++action) {
+        int by = y + 30 + action * ((height - 40) / actions);
+        double probability = spot ? spot->probability[action] : 0.0;
+        const char *name = app->action_names[action][0] ? app->action_names[action] :
+                           (action == 0 ? "FOLD" : action == 1 ? "CHECK / CALL" :
+                            action == 2 ? "BET 33%" : action == 3 ? "BET 67%" : "RAISE");
+        char value[24];
+        snprintf(value, sizeof(value), "%.1f%%", probability * 100.0);
+        text(renderer, x, by + 4, name, 1, white);
+        fill(renderer, (rect_t){x + 122, by + 3, width - 176, 18}, (SDL_Color){28, 41, 55, 255});
+        fill(renderer, (rect_t){x + 122, by + 3, (int)((width - 176) * probability), 18},
+             action == app->selected_action ? green : action == 0 ? orange : blue);
+        text(renderer, x + width - 45, by + 4, value, 1, white);
+        line(renderer, x, by + 28, x + width, by + 28, outline);
+    }
+    if (!spot) text(renderer, x, y + height - 8, "LOAD .PE_SOL OR RUN A SPOT TO SEE FREQUENCIES", 1, muted);
+}
+
+static void draw_strategy_table(SDL_Renderer *renderer, int x, int y, int width,
+                                int height, const app_t *app, SDL_Color white,
+                                SDL_Color muted, SDL_Color blue, SDL_Color green,
+                                SDL_Color outline)
+{
+    text(renderer, x, y, "COMBO / STRATEGY / REACH / EQUITY / EV", 2, blue);
+    fill(renderer, (rect_t){x, y + 28, width, 30}, (SDL_Color){31, 46, 61, 255});
+    text(renderer, x + 12, y + 39, "HAND", 1, muted);
+    text(renderer, x + 110, y + 39, "STRATEGY", 1, muted);
+    text(renderer, x + 270, y + 39, "REACH", 1, muted);
+    text(renderer, x + 372, y + 39, "EQUITY", 1, muted);
+    text(renderer, x + 480, y + 39, "EV", 1, muted);
+    for (int row = 0; row < 4; ++row) {
+        int ry = y + 65 + row * 32;
+        const char *hands[] = {"AA", "AKs", "AQs", "JTs"};
+        fill(renderer, (rect_t){x, ry, width, 30}, row % 2 ? (SDL_Color){23, 34, 47, 255} : (SDL_Color){27, 40, 54, 255});
+        text(renderer, x + 12, ry + 10, hands[row], 1, white);
+        fill(renderer, (rect_t){x + 110, ry + 9, 106, 12}, (SDL_Color){36, 53, 70, 255});
+        fill(renderer, (rect_t){x + 110, ry + 9, row == 0 ? 96 : 42 + row * 12, 12}, row == 0 ? green : blue);
+        text(renderer, x + 270, ry + 10, "100.0%", 1, white);
+        text(renderer, x + 372, ry + 10, row < 2 ? "82.4%" : "51.0%", 1, green);
+        text(renderer, x + 480, ry + 10, row < 2 ? "+1.24" : "+0.18", 1, green);
+    }
+    text(renderer, x, y + height - 12, "TABLE DISPLAY / COMBO DETAILS APPEAR WHEN A SOLUTION SNAPSHOT IS LOADED", 1, muted);
+    (void)outline;
+}
+
+static void render_solver_legacy(SDL_Renderer *renderer, const app_t *app)
 {
     int width, height;
     gui_layout_t layout;
@@ -807,6 +1040,171 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
     SDL_RenderPresent(renderer);
 }
 
+static void render_solver(SDL_Renderer *renderer, const app_t *app)
+{
+    int width, height;
+    SDL_Color bg = {10, 16, 24, 255};
+    SDL_Color sidebar = {16, 25, 36, 255};
+    SDL_Color surface = {20, 31, 44, 255};
+    SDL_Color surface2 = {27, 41, 56, 255};
+    SDL_Color outline = {55, 76, 101, 255};
+    SDL_Color white = {235, 241, 247, 255};
+    SDL_Color muted = {142, 160, 181, 255};
+    SDL_Color blue = {76, 157, 232, 255};
+    SDL_Color green = {41, 196, 137, 255};
+    SDL_Color orange = {235, 145, 78, 255};
+    char buffer[256];
+
+    SDL_GetRendererOutputSize(renderer, &width, &height);
+    if (width < 1120) width = 1120;
+    if (height < 720) height = 720;
+    SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, bg.a);
+    SDL_RenderClear(renderer);
+
+    /* Permanent product navigation, deliberately dense like a solver rather than a trainer. */
+    fill(renderer, (rect_t){0, 0, 188, height}, sidebar);
+    line(renderer, 188, 0, 188, height, outline);
+    text(renderer, 24, 24, "PE", 4, green);
+    text(renderer, 24, 70, "SOLVER", 2, white);
+    panel(renderer, (rect_t){16, 126, 156, 54}, app->page == 0 ? surface2 : sidebar,
+          app->page == 0 ? blue : outline);
+    panel(renderer, (rect_t){16, 190, 156, 54}, app->page == 1 ? surface2 : sidebar,
+          app->page == 1 ? green : outline);
+    panel(renderer, (rect_t){16, 254, 156, 54}, app->page == 2 ? surface2 : sidebar,
+          app->page == 2 ? orange : outline);
+    text(renderer, 34, 147, "TREE / SETUP", 1, white);
+    text(renderer, 34, 211, "SOLVE / STRATEGY", 1, white);
+    text(renderer, 34, 275, "EXPLORE / TRAIN", 1, white);
+    text(renderer, 24, height - 52, "NATIVE C + SDL2", 1, muted);
+    text(renderer, 24, height - 30, "MAC / LINUX / WIN", 1, muted);
+
+    /* Top toolbar: every important state is visible without hunting through the screen. */
+    fill(renderer, (rect_t){188, 0, width - 188, 70}, (SDL_Color){14, 22, 32, 255});
+    text(renderer, 216, 18, app->page == 0 ? "NEW SOLVE" : app->page == 1 ? "SOLVE / STRATEGY" : "EXPLORE", 3, white);
+    text(renderer, 216, 47, "LOCAL ANALYSIS WORKSPACE", 1, muted);
+    panel(renderer, (rect_t){width - 430, 16, 92, 34}, surface2, outline);
+    panel(renderer, (rect_t){width - 326, 16, 92, 34}, surface2, outline);
+    panel(renderer, (rect_t){width - 222, 16, 92, 34}, (SDL_Color){31, 94, 78, 255}, green);
+    text(renderer, width - 410, 28, "NEW", 1, white);
+    text(renderer, width - 306, 28, "OPEN", 1, white);
+    text(renderer, width - 202, 28, "SOLVE", 1, white);
+
+    if (app->page == 0) {
+        int left = 216;
+        int right = 780;
+        int bottom = height - 32;
+        panel(renderer, (rect_t){left, 94, 532, bottom - 94}, surface, outline);
+        panel(renderer, (rect_t){right, 94, width - right - 28, bottom - 94}, surface, outline);
+        text(renderer, left + 24, 116, "SPOT CONFIGURATION", 2, blue);
+        text(renderer, left + 24, 151, "GAME", 1, muted);
+        panel(renderer, (rect_t){left + 24, 168, 212, 40}, surface2, outline);
+        text(renderer, left + 38, 181, game_label_for(app->game_index), 2, white);
+        text(renderer, left + 258, 151, "PLAYERS", 1, muted);
+        panel(renderer, (rect_t){left + 258, 168, 220, 40}, surface2, outline);
+        snprintf(buffer, sizeof(buffer), "%d  MAX / %s", app->player_count, app->player_count == 2 ? "HU" : "MULTIWAY");
+        text(renderer, left + 272, 181, buffer, 1, white);
+        text(renderer, left + 24, 234, "BOARD / RUNOUT", 1, muted);
+        panel(renderer, (rect_t){left + 24, 251, 454, 40}, surface2, app->focus_field == 1 ? blue : outline);
+        text(renderer, left + 38, 264, app->board_text, 1, white);
+        text(renderer, left + 24, 317, "RANGES  (EXACT COMBOS OR RANGE TEXT)", 1, muted);
+        panel(renderer, (rect_t){left + 24, 334, 216, 40}, surface2, app->focus_field == 2 ? blue : outline);
+        panel(renderer, (rect_t){left + 262, 334, 216, 40}, surface2, app->focus_field == 3 ? blue : outline);
+        snprintf(buffer, sizeof(buffer), "OOP  %s", app->range_oop); text(renderer, left + 38, 347, buffer, 1, white);
+        snprintf(buffer, sizeof(buffer), "IP   %s", app->range_ip); text(renderer, left + 276, 347, buffer, 1, white);
+        text(renderer, left + 24, 400, "ENGINE / BUDGET", 1, muted);
+        panel(renderer, (rect_t){left + 24, 417, 216, 40}, surface2, outline);
+        panel(renderer, (rect_t){left + 262, 417, 216, 40}, surface2, outline);
+        text(renderer, left + 38, 430, engine_label_for(app->engine_index), 1,
+             app->engine_index == 0 ? green : orange);
+        snprintf(buffer, sizeof(buffer), "%d ITERATIONS", app->iterations); text(renderer, left + 276, 430, buffer, 1, white);
+        text(renderer, left + 24, 483, "INPUT FILES", 1, muted);
+        panel(renderer, (rect_t){left + 24, 500, 454, 36}, surface2, app->focus_field == 4 ? blue : outline);
+        snprintf(buffer, sizeof(buffer), "TREE  %s", app->tree_path[0] ? basename_of(app->tree_path) : "drop or type .tree");
+        text(renderer, left + 38, 512, buffer, 1, white);
+        panel(renderer, (rect_t){left + 24, 546, 454, 36}, surface2, app->focus_field == 5 ? blue : outline);
+        snprintf(buffer, sizeof(buffer), "MKR   %s", app->mkr_path[0] ? basename_of(app->mkr_path) : "drop or type .mkr");
+        text(renderer, left + 38, 558, buffer, 1, white);
+        text(renderer, left + 24, 608, "DROP .TREE / .MKR / .PE_SOL / LABEL CSV", 1, orange);
+        text(renderer, left + 24, 632, app->solver_status, 1, app->solver_status[0] ? green : muted);
+        text(renderer, left + 24, 660, "CLICK A FIELD, TYPE, THEN PRESS SOLVE", 1, muted);
+
+        text(renderer, right + 24, 116, "TREE PREVIEW", 2, blue);
+        text(renderer, right + 24, 151, "ROOT / PREFLOP", 1, muted);
+        draw_tree(renderer, right + 24, 180, width - right - 76, 196, white, muted, blue, green);
+        text(renderer, right + 24, 410, "ACTIVE BOARD", 1, muted);
+        for (int c = 0; c < 5; ++c) card(renderer, right + 24 + c * 70, 430, c < 5 ? "--" : "", c < 5);
+        panel(renderer, (rect_t){right + 24, height - 110, width - right - 76, 52}, (SDL_Color){31, 102, 80, 255}, green);
+        text(renderer, right + 46, height - 91, "SOLVE THIS SPOT  >", 2, white);
+    } else if (app->page == 1) {
+        int content_x = 212;
+        int matrix_x = 232;
+        int matrix_y = 142;
+        int matrix_w = width > 1320 ? 610 : 560;
+        int right_x = matrix_x + matrix_w + 24;
+        int right_w = width - right_x - 28;
+        int bottom_y = height - 252;
+        panel(renderer, (rect_t){content_x, 94, width - content_x - 28, height - 116}, surface, outline);
+        text(renderer, content_x + 20, 112, "STRATEGY VIEW", 2, green);
+        snprintf(buffer, sizeof(buffer), "%s  |  %d PLAYERS  |  %s", game_label_for(app->game_index), app->player_count, engine_label_for(app->engine_index));
+        text(renderer, content_x + 176, 116, buffer, 1, muted);
+        panel(renderer, (rect_t){width - 270, 105, 104, 30}, surface2, outline);
+        panel(renderer, (rect_t){width - 154, 105, 104, 30}, (SDL_Color){31, 102, 80, 255}, green);
+        text(renderer, width - 251, 115, "TREE", 1, white);
+        text(renderer, width - 137, 115, "RUN", 1, white);
+        panel(renderer, (rect_t){matrix_x - 8, matrix_y - 12, matrix_w, bottom_y - matrix_y + 4}, (SDL_Color){17, 27, 39, 255}, outline);
+        draw_hand_matrix(renderer, matrix_x + 12, matrix_y + 40, matrix_w - 28, bottom_y - matrix_y - 56,
+                         app->range_oop, app->range_ip, white, muted, blue, orange, outline);
+        panel(renderer, (rect_t){right_x, matrix_y - 12, right_w, 236}, (SDL_Color){17, 27, 39, 255}, outline);
+        draw_table_view(renderer, right_x + 12, matrix_y + 4, right_w - 24, 204,
+                        app->board_text, white, muted, green, outline);
+        panel(renderer, (rect_t){right_x, matrix_y + 238, right_w, bottom_y - matrix_y - 238}, (SDL_Color){17, 27, 39, 255}, outline);
+        draw_action_summary(renderer, right_x + 16, matrix_y + 260, right_w - 32, bottom_y - matrix_y - 278,
+                            app, white, muted, blue, green, orange, outline);
+        panel(renderer, (rect_t){matrix_x - 8, bottom_y + 20, width - matrix_x - 20, height - bottom_y - 148}, (SDL_Color){17, 27, 39, 255}, outline);
+        draw_strategy_table(renderer, matrix_x + 14, bottom_y + 36, width - matrix_x - 48, height - bottom_y - 178,
+                            app, white, muted, blue, green, outline);
+        if (app->solver_status[0]) text(renderer, matrix_x + 14, height - 42, app->solver_status, 1, green);
+    } else {
+        int left = 212;
+        int right = 860;
+        panel(renderer, (rect_t){left, 94, 624, height - 116}, surface, outline);
+        panel(renderer, (rect_t){right, 94, width - right - 28, height - 116}, surface, outline);
+        text(renderer, left + 24, 116, "INFOSSET / STRATEGY EXPLORER", 2, orange);
+        if (app->spot_count) {
+            size_t index = app->selected_spot < app->spot_count ? app->selected_spot : 0;
+            const spot_t *spot = &app->spots[index];
+            snprintf(buffer, sizeof(buffer), "KEY  0x%016llx", (unsigned long long)spot->key);
+            text(renderer, left + 24, 154, buffer, 1, white);
+            text(renderer, left + 24, 184, "ACTION FREQUENCIES", 1, muted);
+            for (int action = 0; action < spot->actions && action < 8; ++action) {
+                int by = 212 + action * 48;
+                const char *name = app->action_names[action][0] ? app->action_names[action] : "OPTION";
+                snprintf(buffer, sizeof(buffer), "%s", name); text(renderer, left + 24, by + 8, buffer, 1, white);
+                fill(renderer, (rect_t){left + 158, by + 5, 360, 18}, surface2);
+                fill(renderer, (rect_t){left + 158, by + 5, (int)(360.0 * spot->probability[action]), 18}, action == app->selected_action ? green : blue);
+                snprintf(buffer, sizeof(buffer), "%.1f%%", spot->probability[action] * 100.0);
+                text(renderer, left + 535, by + 8, buffer, 1, white);
+            }
+        } else {
+            text(renderer, left + 24, 170, "DROP A .PE_SOL OR RUN A SPOT FIRST", 2, muted);
+            draw_hand_matrix(renderer, left + 24, 240, 570, 420, app->range_oop, app->range_ip,
+                             white, muted, blue, orange, outline);
+        }
+        text(renderer, right + 24, 116, "CONTEXT / TRAINING", 2, orange);
+        const label_t *meta = app->spot_count ? metadata_for(app, app->spots[app->selected_spot < app->spot_count ? app->selected_spot : 0].key) : NULL;
+        text(renderer, right + 24, 160, "STREET", 1, muted); text(renderer, right + 24, 182, meta && meta->street[0] ? meta->street : "NOT PROVIDED", 2, white);
+        text(renderer, right + 24, 224, "BOARD", 1, muted); text(renderer, right + 24, 246, meta && meta->board[0] ? meta->board : app->board_text, 1, white);
+        text(renderer, right + 24, 288, "POSITION", 1, muted); text(renderer, right + 24, 310, meta && meta->position[0] ? meta->position : "UNKNOWN", 2, white);
+        panel(renderer, (rect_t){right + 24, 360, width - right - 76, 50}, surface2, outline); text(renderer, right + 42, 378, "BACK TO STRATEGY", 1, white);
+        panel(renderer, (rect_t){right + 24, 430, width - right - 76, 50}, (SDL_Color){31, 102, 80, 255}, green); text(renderer, right + 42, 448, "TRAIN SELECTED SPOT", 1, white);
+        panel(renderer, (rect_t){right + 24, 510, width - right - 76, 120}, (SDL_Color){17, 27, 39, 255}, outline);
+        text(renderer, right + 42, 530, "RUN OUTPUT", 1, muted);
+        if (app->solver_result[0]) text(renderer, right + 42, 560, app->solver_result, 1, white);
+        else text(renderer, right + 42, 560, "No run yet", 1, muted);
+    }
+    SDL_RenderPresent(renderer);
+}
+
 static void render(SDL_Renderer *renderer, const app_t *app)
 {
     SDL_Color white = {235,239,244,255}, muted = {155,165,178,255}, blue = {86,147,255,255}, green = {74,190,125,255}, orange = {242,164,73,255};
@@ -966,44 +1364,52 @@ int main(int argc, char **argv)
                 if (inside(layout.setup_tab, mouse_x, mouse_y)) app.page = 0;
                 else if (inside(layout.solve_tab, mouse_x, mouse_y)) app.page = 1;
                 else if (inside(layout.explore_tab, mouse_x, mouse_y)) app.page = 2;
-                else if (app.page == 0 && mouse_x >= 786 && mouse_x < output_width - 28 &&
-                         mouse_y >= output_height - 154 && mouse_y < output_height - 100) {
+                else if (mouse_x >= output_width - 222 && mouse_x < output_width - 130 &&
+                         mouse_y >= 0 && mouse_y < 70) {
                     run_vector_sim(&app);
                     app.page = 1;
                 }
-                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 498 &&
-                         mouse_y >= 236 && mouse_y < 282) {
+                else if (app.page == 0 && mouse_x >= 804 && mouse_x < output_width - 28 &&
+                         mouse_y >= output_height - 110 && mouse_y < output_height - 58) {
+                    run_vector_sim(&app);
+                    app.page = 1;
+                }
+                else if (app.page == 0 && mouse_x >= 240 && mouse_x < 452 &&
+                         mouse_y >= 168 && mouse_y < 208) {
                     app.game_index = (app.game_index + 1) % 4;
                     set_default_ranges_for_game(&app);
                 }
-                else if (app.page == 0 && mouse_x >= 524 && mouse_x < 708 &&
-                         mouse_y >= 236 && mouse_y < 282) {
+                else if (app.page == 0 && mouse_x >= 474 && mouse_x < 694 &&
+                         mouse_y >= 168 && mouse_y < 208) {
                     app.player_count = app.player_count >= 8 ? 2 : app.player_count + 1;
                 }
-                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 708 &&
-                         mouse_y >= 338 && mouse_y < 384) {
+                else if (app.page == 0 && mouse_x >= 240 && mouse_x < 694 &&
+                         mouse_y >= 251 && mouse_y < 291) {
                     app.focus_field = 1;
                 }
-                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 492 &&
-                         mouse_y >= 440 && mouse_y < 486) {
+                else if (app.page == 0 && mouse_x >= 240 && mouse_x < 456 &&
+                         mouse_y >= 334 && mouse_y < 374) {
                     app.focus_field = 2;
                 }
-                else if (app.page == 0 && mouse_x >= 504 && mouse_x < 708 &&
-                         mouse_y >= 440 && mouse_y < 486) {
+                else if (app.page == 0 && mouse_x >= 478 && mouse_x < 694 &&
+                         mouse_y >= 334 && mouse_y < 374) {
                     app.focus_field = 3;
                 }
-                else if (app.page == 0 && mouse_x >= 524 && mouse_x < 708 &&
-                         mouse_y >= 542 && mouse_y < 588) {
+                else if (app.page == 0 && mouse_x >= 240 && mouse_x < 456 &&
+                         mouse_y >= 417 && mouse_y < 457) {
                     app.engine_index = (app.engine_index + 1) % 3;
                 }
-                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 708 &&
-                         mouse_y >= 620 && mouse_y < 652) {
+                else if (app.page == 0 && mouse_x >= 240 && mouse_x < 694 &&
+                         mouse_y >= 500 && mouse_y < 536) {
                     app.focus_field = 4;
                 }
-                else if (app.page == 0 && mouse_x >= 288 && mouse_x < 708 &&
-                         mouse_y >= 652 && mouse_y < 684) {
+                else if (app.page == 0 && mouse_x >= 240 && mouse_x < 694 &&
+                         mouse_y >= 546 && mouse_y < 582) {
                     app.focus_field = 5;
                 }
+                else if (app.page == 1 && mouse_x >= output_width - 154 && mouse_x < output_width - 50 &&
+                         mouse_y >= 105 && mouse_y < 135)
+                    run_vector_sim(&app);
                 else if (app.page == 1 && mouse_x >= 1050 && mouse_x < output_width - 52 &&
                          mouse_y >= 586 && mouse_y < 650)
                     app.page = 2;
