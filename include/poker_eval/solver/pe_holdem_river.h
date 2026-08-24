@@ -14,6 +14,8 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/solver/pe_betting_state.h>
+#include <poker_eval/solver/pe_holdem_deals.h>
+#include <poker_eval/solver/pe_pots.h>
 #include <poker_eval/solver/pe_vector.h>
 
 #ifdef __cplusplus
@@ -36,6 +38,22 @@ int pe_holdem_river_terminal_values(
     const pe_reach_vec_t *reach,
     pe_value_vec_t *out_values,
     uint8_t player_count);
+
+/*
+ * Exact weighted river showdown for correlated two-card ranges.  The result
+ * is net EV per player (payout minus that player's invested amount).  The
+ * function applies card removal before normalising range weights and supports
+ * up to PE_BETTING_MAX_PLAYERS players and side-pot slices.
+ */
+int pe_holdem_river_range_values(
+    const EvalContext *context,
+    mask_t board,
+    const pe_holdem_range_t *ranges,
+    const pe_betting_state_t *state,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum);
 
 #ifdef __cplusplus
 }

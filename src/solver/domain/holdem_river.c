@@ -1,6 +1,60 @@
 #include <poker_eval/solver/pe_holdem_river.h>
 
+#include <limits.h>
 #include <math.h>
+
+typedef struct
+{
+    const EvalContext *context;
+    mask_t board;
+    const pe_betting_state_t *state;
+    const pe_pot_slice_t *slices;
+    uint8_t slice_count;
+    uint8_t player_count;
+    double *values;
+} range_showdown_ctx_t;
+
+static int range_showdown_callback(const mask_t *holes, uint8_t player_count,
+                                   double weight, void *user)
+{
+    range_showdown_ctx_t *ctx = (range_showdown_ctx_t *)user;
+    eval_t strengths[PE_BETTING_MAX_PLAYERS];
+    uint8_t winners[PE_BETTING_MAX_PLAYERS];
+    double awards[PE_BETTING_MAX_PLAYERS];
+    uint8_t slice;
+    uint8_t player;
+    if (player_count != ctx->player_count)
+        return 1;
+    for (player = 0u; player < player_count; ++player)
+        strengths[player] = pe_eval_7c(ctx->context,
+                                       holes[player] | ctx->board);
+    for (slice = 0u; slice < ctx->slice_count; ++slice)
+    {
+        eval_t best = 0;
+        uint8_t found = 0u;
+        winners[slice] = 0u;
+        for (player = 0u; player < player_count; ++player)
+        {
+            if (!(ctx->slices[slice].eligible_mask & (uint8_t)(1u << player)))
+                continue;
+            if (!found || strengths[player] > best)
+            {
+                best = strengths[player];
+                winners[slice] = (uint8_t)(1u << player);
+                found = 1u;
+            }
+            else if (strengths[player] == best)
+                winners[slice] |= (uint8_t)(1u << player);
+        }
+    }
+    if (pe_pot_distribute(ctx->slices, ctx->slice_count, winners,
+                          player_count, awards) != 0)
+        return 1;
+    for (player = 0u; player < player_count; ++player)
+        ctx->values[player] += weight *
+                               (awards[player] - ctx->state->invested[player]);
+    return 0;
+}
 
 static int valid_spec(const pe_holdem_river_spec_t *spec,
                       const pe_betting_state_t *state,
@@ -98,5 +152,50 @@ int pe_holdem_river_terminal_values(
             out_values[player].v[combo] = value;
         }
     }
+    return 0;
+}
+
+int pe_holdem_river_range_values(
+    const EvalContext *context,
+    mask_t board,
+    const pe_holdem_range_t *ranges,
+    const pe_betting_state_t *state,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum)
+{
+    pe_pot_slice_t slices[PE_BETTING_MAX_PLAYERS];
+    range_showdown_ctx_t callback_context;
+    uint8_t slice_count = 0u;
+    uint8_t player;
+    int status;
+    if (!context || !mask_is_valid(board) || mask_popcount(board) != 5 ||
+        !ranges || !state || !out_values || !out_deal_count ||
+        !out_weight_sum || player_count == 0u ||
+        player_count > PE_BETTING_MAX_PLAYERS ||
+        state->player_count != player_count || state->winner >= 0)
+        return -1;
+    for (player = 0u; player < player_count; ++player)
+        out_values[player] = 0.0;
+    status = pe_pot_slices_build(state, slices, PE_BETTING_MAX_PLAYERS,
+                                 &slice_count);
+    if (status != 0)
+        return status;
+    callback_context.context = context;
+    callback_context.board = board;
+    callback_context.state = state;
+    callback_context.slices = slices;
+    callback_context.slice_count = slice_count;
+    callback_context.player_count = player_count;
+    callback_context.values = out_values;
+    status = pe_holdem_deals_enumerate(
+        board, ranges, player_count, range_showdown_callback,
+        &callback_context, out_deal_count, out_weight_sum);
+    if (status != 0 || *out_weight_sum <= 0.0 ||
+        !isfinite(*out_weight_sum))
+        return status != 0 ? status : -1;
+    for (player = 0u; player < player_count; ++player)
+        out_values[player] /= *out_weight_sum;
     return 0;
 }
