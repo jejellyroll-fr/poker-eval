@@ -99,6 +99,36 @@ famille AGPL du solving OSS.
    Deepsolver). Choix assumable pour un moteur exact, mais c'est la trajectoire du marché
    grand public.
 
+### Priorité 2 — tranche implémentée dans le noyau C
+
+Les briques suivantes sont maintenant livrées et testées, avec leurs limites explicites :
+
+5. **ICM asymétrique** : `pe_icm_calculate_asymmetric()` applique exactement la récursion
+   Malmuth-Harville à une matrice de gains joueur/position. `pe-icm` expose l'ICM standard
+   en JSON (`pe-icm/v1`) et accepte `--asym-payouts MATRIX.csv` pour cette variante. La
+   matrice permet de représenter une utilité bounty/PKO déjà calculée par l'appelant ; la
+   conversion automatique des bounties, le FGS et le modèle complet de tournoi restent à
+   construire.
+6. **Push/fold Nash** : `pe-push-fold` résout l'abstraction zéro-somme explicite
+   fold/push contre fold/call par regret matching et retourne fréquences, EV et
+   exploitabilité. Ce n'est pas encore un solveur HRC range-aware multiway.
+7. **Mapping hand history** : `pe-hand-history-import --mapping LABELS.csv` enrichit les
+   lignes PokerStars normalisées avec `infoset_key`, `mapped`/`unmapped` et les compteurs
+   de couverture. Le sidecar accepte les formats compact et riche du trainer ; les
+   parsers spécifiques aux rooms réseau et l'inférence de position à partir d'une main
+   sans métadonnées restent à ajouter.
+8. **Draw chance** : `pe_draw_chance_*()` consomme réellement `PE_CHANCE_DRAW_N` pour
+   Badugi et Triple Draw 2-7, énumère les combinaisons de remplacement et reconstruit la
+   main privée. L'adaptation complète au parcours CFR générique (états, actions de draw,
+   showdown et paytables) reste une étape séparée.
+9. **Depth-limited / modèle externe** : `cfr_config_t.depth_value_fn` permet de remplacer
+   proprement l'erreur de profondeur par une valeur vectorielle fournie par un modèle
+   externe ou neuronal. Le dépôt ne fournit volontairement pas de réseau pré-entraîné.
+
+Cette tranche ferme donc les contrats d'intégration et les CLI vérifiables ; elle ne doit
+pas être présentée comme un clone complet de HRC/ICMIZER/GTO Wizard ou comme un solver
+neuronal prêt à l'emploi.
+
 ---
 
 ## 4. Manques techniques

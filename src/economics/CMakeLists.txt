@@ -3,6 +3,7 @@
 set(ECONOMICS_SOURCES
     rake.c
     icm.c
+    push_fold.c
     tournament.c
     paytable_ev.c
     video_poker_strategy.c

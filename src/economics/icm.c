@@ -2,6 +2,52 @@
 #include <string.h>
 #include <math.h>
 
+static void asymmetric_recurse(int depth,
+                               const icm_asymmetric_input_t *input,
+                               int *active,
+                               double total_chips,
+                               double probability,
+                               icm_asymmetric_result_t *result)
+{
+    if (depth >= input->num_payouts || depth >= input->num_players ||
+        total_chips <= 0.0)
+        return;
+    for (int player = 0; player < input->num_players; ++player) {
+        if (!active[player]) continue;
+        double branch = probability * input->stacks[player] / total_chips;
+        result->finish_probability[player][depth] += branch;
+        result->ev[player] += branch * input->payouts[player][depth];
+        active[player] = 0;
+        asymmetric_recurse(depth + 1, input, active,
+                           total_chips - input->stacks[player], branch,
+                           result);
+        active[player] = 1;
+    }
+}
+
+int pe_icm_calculate_asymmetric(const icm_asymmetric_input_t *input,
+                                icm_asymmetric_result_t *result)
+{
+    int active[ICM_MAX_PLAYERS];
+    double total = 0.0;
+    if (!input || !result || input->num_players < 1 ||
+        input->num_players > ICM_MAX_PLAYERS || input->num_payouts < 1 ||
+        input->num_payouts > input->num_players)
+        return -1;
+    memset(result, 0, sizeof(*result));
+    for (int player = 0; player < input->num_players; ++player) {
+        if (!(input->stacks[player] > 0.0) || !isfinite(input->stacks[player]))
+            return -1;
+        total += input->stacks[player];
+        active[player] = 1;
+        for (int position = 0; position < input->num_payouts; ++position)
+            if (!isfinite(input->payouts[player][position])) return -1;
+    }
+    if (!(total > 0.0)) return -1;
+    asymmetric_recurse(0, input, active, total, 1.0, result);
+    return 0;
+}
+
 /*
  * Warning: This recursive implementation has factorial complexity O(P(N, K))
  * where N is players and K is payouts. It handles typical final tables (N<=9)

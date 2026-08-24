@@ -355,6 +355,9 @@ set(TEST_SOURCES
     test_courchevel.c
     test_rake.c
     test_icm.c
+    test_icm_asymmetric.c
+    test_push_fold.c
+    test_draw_chance.c
     test_a5_triple_draw.c
     test_paytable_ev.c
 )
@@ -596,6 +599,9 @@ endif()
 # Section 5.5: Economics tests
 set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
+set_tests_properties(test_icm_asymmetric PROPERTIES LABELS "economics;tournament")
+set_tests_properties(test_push_fold PROPERTIES LABELS "economics;tournament")
+set_tests_properties(test_draw_chance PROPERTIES LABELS "games;draw;engine")
 set_tests_properties(test_paytable_ev PROPERTIES LABELS "economics;paytable")
 set_tests_properties(test_draw_optimizer_fn PROPERTIES LABELS "economics;paytable")
 set_tests_properties(test_video_poker_strategy PROPERTIES LABELS "economics;paytable;fast")

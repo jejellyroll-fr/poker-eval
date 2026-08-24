@@ -66,6 +66,16 @@ typedef struct cfr_metrics_buffer_t cfr_metrics_buffer_t;
 typedef double (*pe_utility_fn)(const int32_t *final_stacks, int num_players,
                                 int player_id, void *user_data);
 
+/* Optional value estimate used instead of aborting when a depth-limited solve
+ * reaches a non-terminal leaf. The callback fills one utility per player.
+ * This is the integration contract for a neural/value-network evaluator; CFR
+ * itself remains model-agnostic and exact when the callback is NULL. */
+typedef void (*cfr_depth_value_fn)(cfr_game_t *game,
+                                   uint64_t state_key,
+                                   int num_players,
+                                   double *out_utilities,
+                                   void *user_data);
+
 typedef struct {
     pe_utility_fn utility_fn; /* Custom payoff fn (NULL = default linear chips) */
     void *user_data;          /* Opaque context passed to utility_fn */
@@ -318,6 +328,10 @@ struct cfr_config_t {
      * no change. A host that wants to capture progress, route it to a UI or
      * silence it installs its own adapter instead of redirecting a stream. */
     const pe_telemetry_ops_t *telemetry;
+
+    /* Depth-limited solving hook. NULL preserves the historical hard error. */
+    cfr_depth_value_fn depth_value_fn;
+    void *depth_value_user_data;
 };
 
 /**

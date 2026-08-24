@@ -69,6 +69,12 @@ void cfr_traverse_recursive(
     walk->recursion_depth++;
     if (walk->recursion_depth > depth_limit)
     {
+        if (config->depth_value_fn)
+        {
+            config->depth_value_fn(game, state_key, num_players, out_util,
+                                   config->depth_value_user_data);
+            goto cfr_exit;
+        }
         if (!walk->depth_exceeded)
         {
             pe_telemetry_emitf(walk->telemetry, PE_LOG_ERROR, "cfr", (uint64_t)walk->current_iter,
