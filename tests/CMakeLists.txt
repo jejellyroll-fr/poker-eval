@@ -357,6 +357,10 @@ set(TEST_SOURCES
     test_icm.c
     test_icm_asymmetric.c
     test_pko.c
+    test_pko_ranges.c
+    test_hrc.c
+    test_fgs_tree.c
+    test_nn_depth_value.c
     test_push_fold.c
     test_push_fold_multiway.c
     test_draw_chance.c
@@ -604,6 +608,10 @@ set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
 set_tests_properties(test_icm_asymmetric PROPERTIES LABELS "economics;tournament")
 set_tests_properties(test_pko PROPERTIES LABELS "economics;tournament;pko")
+set_tests_properties(test_pko_ranges PROPERTIES LABELS "economics;tournament;pko;range")
+set_tests_properties(test_hrc PROPERTIES LABELS "economics;tournament;hrc;range")
+set_tests_properties(test_fgs_tree PROPERTIES LABELS "economics;tournament;fgs")
+set_tests_properties(test_nn_depth_value PROPERTIES LABELS "engine;cfr;neural")
 set_tests_properties(test_push_fold PROPERTIES LABELS "economics;tournament")
 set_tests_properties(test_push_fold_multiway PROPERTIES LABELS "economics;tournament;multiway")
 set_tests_properties(test_draw_chance PROPERTIES LABELS "games;draw;engine")

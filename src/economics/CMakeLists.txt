@@ -4,6 +4,9 @@ set(ECONOMICS_SOURCES
     rake.c
     icm.c
     pko.c
+    pko_ranges.c
+    hrc.c
+    fgs.c
     push_fold.c
     push_fold_multiway.c
     tournament.c

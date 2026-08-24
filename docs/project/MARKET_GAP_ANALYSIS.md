@@ -138,6 +138,37 @@ Cette tranche ferme donc les contrats d'intégration et les CLI vérifiables ; e
 pas être présentée comme un clone complet de HRC/ICMIZER/GTO Wizard ou comme un solver
 neuronal prêt à l'emploi.
 
+### Priorité 2 — primitives tournoi et modèle embarqué ajoutées
+
+Les quatre manques de la tranche suivante disposent maintenant d'une implémentation C
+testée :
+
+10. **Arbre HRC multiway** : `pe_hrc_solve()` (`economics/hrc.h`) énumère les profils de
+    ranges indépendants en supprimant exactement les collisions de cartes, valide un arbre
+    de betting acyclique, puis applique le regret matching sur ses nœuds publics. Le callback
+    terminal reçoit les montants et le chemin d'actions, ce qui permet d'y brancher pots,
+    antes et side pots. La stratégie livrée est agrégée par nœud public (pas encore une
+    table privée par combo ni un import HRC propriétaire), et le solveur est volontairement
+    borné par `max_profiles`.
+11. **FGS dynamique** : `pe_fgs_calculate_tree()` (`economics/fgs.h`) parcourt un arbre de
+    transitions probabilistes de profondeur bornée, vérifie les probabilités locales et
+    agrège l'ICM de chaque feuille. Cela remplace le simple fichier de scénarios plat ; un
+    générateur de tournoi room-specific reste un adapter à écrire.
+12. **PKO depuis ranges** : `pe_pko_calculate_from_ranges()` énumère les profils pondérés
+    sans cartes communes, appelle un évaluateur de showdown/tournoi pour chaque profil et
+    construit automatiquement la matrice élimination → bounty → ICM. Les éliminations
+    multi-étapes, la modélisation des ranges qui se resserrent après chaque action et le
+    calcul PKO complet depuis un arbre restent à brancher au callback.
+13. **MLP embarqué** : `pe_nn_depth_value_callback()` adapte le MLP CPU déjà présent au
+    callback depth-limited de CFR. L'inférence est locale, sans runtime externe ni réseau
+    pré-entraîné fourni ; le modèle et l'extracteur de features sont injectés par l'appelant.
+
+Les tests `test_hrc`, `test_fgs_tree`, `test_pko_ranges` et `test_nn_depth_value` couvrent
+respectivement le parcours multiway avec card removal, l'agrégation dynamique, la dérivation
+PKO depuis ranges et le branchement du MLP. Cette livraison ferme les contrats noyau, pas
+les quatre produits finis : il reste l'éditeur/import d'arbres HRC, le modèle de tournoi
+FGS/PKO room-aware, des poids entraînés et une stratégie privée par combo.
+
 ---
 
 ## 4. Manques techniques

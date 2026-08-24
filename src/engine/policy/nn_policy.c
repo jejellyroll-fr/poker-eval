@@ -410,7 +410,8 @@ int nn_policy_evaluate(
     float *out_action_probs,
     int *out_best_action)
 {
-    if (!policy || !features || !out_action_probs)
+    if (!policy || !features || !features->values ||
+        features->size != policy->config.input_size || !out_action_probs)
         return -1;
 
     struct timespec start, end;
