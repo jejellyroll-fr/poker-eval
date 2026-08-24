@@ -848,7 +848,7 @@ set_tests_properties(test_pe_preflop_sampler PROPERTIES LABELS "solver;solver-v3
 add_poker_test(test_pe_preflop_betting)
 set_tests_properties(test_pe_preflop_betting PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;betting" TIMEOUT 30)
 add_poker_test(test_preflop_allin_game)
-set_tests_properties(test_preflop_allin_game PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;holdem;showdown" TIMEOUT 60)
+set_tests_properties(test_preflop_allin_game PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;holdem;plo5;multiway;showdown" TIMEOUT 60)
 add_poker_test(test_pe_runout_report)
 set_tests_properties(test_pe_runout_report PROPERTIES LABELS "solver;solver-v3;runout;holdem" TIMEOUT 30)
 
@@ -1725,5 +1725,32 @@ if(TARGET pe-preflop-solve)
             --output ${CMAKE_BINARY_DIR}/pe-preflop-solve-smoke.json)
     set_tests_properties(pe_preflop_solve_smoke PROPERTIES
         LABELS "product;solver;lane-b;preflop"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_plo5_multiway_smoke
+        COMMAND pe-preflop-solve
+            --game plo5
+            --players 3
+            --range0 AsKsQd3c9h
+            --range1 AhKhJdTc8s
+            --range2 AdKdQh2s3h
+            --iterations 2
+            --samples 8
+            --raise 2.5
+            --br-samples 8)
+    set_tests_properties(pe_preflop_solve_plo5_multiway_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;plo5;multiway;card-removal"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_plo6_smoke
+        COMMAND pe-preflop-solve
+            --game plo6
+            --players 2
+            --range0 AsKsQd3c9h5h
+            --range1 AhKhJdTc8s4s
+            --iterations 1
+            --samples 4
+            --raise 2.5
+            --br-samples 4)
+    set_tests_properties(pe_preflop_solve_plo6_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;plo6;card-removal"
         TIMEOUT 60)
 endif()

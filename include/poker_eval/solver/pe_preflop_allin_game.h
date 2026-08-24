@@ -24,11 +24,14 @@ extern "C" {
 
 typedef struct
 {
+    /* Hold'em or PLO4/PLO5/PLO6. */
+    pe_preflop_variant_t variant;
     int player_count;
     /* Chip stacks before forced bets. */
     double stacks[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     /* Forced bets: player 0 posts small_blind, player 1 posts big_blind,
-       every player posts ante (0 disables). Heads-up: player 0 acts first. */
+       every later player posts ante (0 disables). Heads-up player 0 acts
+       first; multiway games start at player 2 (UTG abstraction). */
     double small_blind;
     double big_blind;
     double ante;

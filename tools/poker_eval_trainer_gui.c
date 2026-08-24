@@ -23,6 +23,7 @@
 #define WINDOW_WIDTH 1440
 #define WINDOW_HEIGHT 900
 #define MAX_ACTIONS 256
+#define PE_PREFLOP_GUI_MAX_PLAYERS 6
 
 typedef struct {
     uint64_t key;
@@ -677,14 +678,14 @@ static int is_preflop_request(const char *board)
 static int run_preflop_solver(app_t *app)
 {
     char executable[1200], quoted_executable[1400];
-    char range0[4200], range1[4200];
-    char command[12000];
+    char ranges[PE_PREFLOP_GUI_MAX_PLAYERS][4200];
+    char command[32768];
     int iterations;
     if (!app)
         return -1;
-    if (app->game_index != 0 || app->player_count != 2) {
+    if (app->player_count < 2 || app->player_count > PE_PREFLOP_GUI_MAX_PLAYERS) {
         copy_field(app->solver_status, sizeof(app->solver_status),
-                   "Lane B preflop currently supports heads-up Hold'em");
+                   "Lane B preflop supports 2 to 6 players");
         return -1;
     }
     if (app->engine_index != 0) {
@@ -699,13 +700,20 @@ static int run_preflop_solver(app_t *app)
     else
         copy_field(executable, sizeof(executable), "pe-preflop-solve");
     shell_quote(executable, quoted_executable, sizeof(quoted_executable));
-    shell_quote(starter_range_for_player(app, 0), range0, sizeof(range0));
-    shell_quote(starter_range_for_player(app, 1), range1, sizeof(range1));
     iterations = app->iterations > 0 ? app->iterations : 10000;
     snprintf(command, sizeof(command),
-             "%s --game holdem --range0 %s --range1 %s --iterations %d "
-             "--samples 128 --raise 2.5 2>&1",
-             quoted_executable, range0, range1, iterations);
+             "%s --game %s --players %d --iterations %d "
+             "--samples 128 --raise 2.5 --br-samples 128",
+             quoted_executable, game_name_for(app->game_index),
+             app->player_count, iterations);
+    for (int player = 0; player < app->player_count; ++player) {
+        shell_quote(starter_range_for_player(app, player), ranges[player],
+                    sizeof(ranges[player]));
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --range%d %s", player, ranges[player]);
+    }
+    snprintf(command + strlen(command), sizeof(command) - strlen(command),
+             " 2>&1");
     return launch_solver(app, command, "Preflop Lane B complete",
                          "Preflop Lane B failed");
 }

@@ -55,6 +55,92 @@ static int pe_range_add_combo(pe_range_t *range, StdDeck_CardMask hand, double w
     return 1;
 }
 
+/* ARP's Omaha grammar is intentionally four-card oriented.  PLO5/PLO6
+ * still need a lossless path for concrete hands (the product-facing solver
+ * uses these tokens for imported ranges and GUI presets), so keep the small
+ * exact-hand tokenizer here rather than truncating a five/six-card hand to
+ * four cards.  Pattern expansion remains delegated to ARP below. */
+static int parse_fixed_omaha_token(pe_range_t *range, char *token,
+                                   StdDeck_CardMask dead_cards,
+                                   size_t expected_cards, double default_weight)
+{
+    char compact[32];
+    char *weight_text;
+    size_t length = 0u;
+    size_t cards;
+    double weight = default_weight;
+    StdDeck_CardMask hand;
+
+    if (!range || !token || expected_cards < 4u || expected_cards > 6u)
+        return 0;
+
+    weight_text = strchr(token, ':');
+    if (weight_text) {
+        char *end = NULL;
+        *weight_text++ = '\0';
+        weight = strtod(weight_text, &end);
+        if (end == weight_text || *end != '\0' || !isfinite(weight) || weight < 0.0)
+            return 0;
+    }
+
+    for (size_t i = 0u; token[i] != '\0'; ++i) {
+        if (!isspace((unsigned char)token[i])) {
+            if (length + 1u >= sizeof(compact))
+                return 0;
+            compact[length++] = token[i];
+        }
+    }
+    compact[length] = '\0';
+    if (length != expected_cards * 2u)
+        return 0;
+
+    StdDeck_CardMask_RESET(hand);
+    cards = 0u;
+    for (size_t i = 0u; i < length; i += 2u) {
+        int rank = char_to_rank(compact[i]);
+        int suit = char_to_suit(compact[i + 1u]);
+        int card;
+        if (rank < 0 || suit < 0)
+            return 0;
+        card = StdDeck_MAKE_CARD(rank, suit);
+        if (StdDeck_CardMask_CARD_IS_SET(hand, card) ||
+            StdDeck_CardMask_CARD_IS_SET(dead_cards, card))
+            return 0;
+        StdDeck_CardMask_SET(hand, card);
+        ++cards;
+    }
+    return cards == expected_cards && pe_range_add_combo(range, hand, weight);
+}
+
+static pe_status_t parse_fixed_omaha_range(enum_game_t variant,
+                                           const char *range_str,
+                                           StdDeck_CardMask dead_cards,
+                                           const pe_parse_opts_t *opts,
+                                           pe_range_t *range)
+{
+    char *copy;
+    char *token;
+    size_t expected_cards = variant == game_omaha5 ? 5u : 6u;
+    double default_weight = opts ? opts->default_weight : 1.0;
+
+    copy = strdup(range_str);
+    if (!copy)
+        return PE_STATUS_OUT_OF_MEMORY;
+    token = strtok(copy, ",");
+    while (token) {
+        while (isspace((unsigned char)*token))
+            ++token;
+        if (!*token || !parse_fixed_omaha_token(range, token, dead_cards,
+                                                expected_cards, default_weight)) {
+            free(copy);
+            return PE_STATUS_PARSE_ERROR;
+        }
+        token = strtok(NULL, ",");
+    }
+    free(copy);
+    return range->count > 0u ? PE_STATUS_OK : PE_STATUS_PARSE_ERROR;
+}
+
 /* Comparator for pe_combo_t (sort by hand mask) */
 static int pe_combo_compare(const void *a, const void *b) {
     const pe_combo_t *c1 = (const pe_combo_t *)a;
@@ -466,6 +552,21 @@ pe_status_t pe_range_parse(
         free(str_copy);
         *out_range = range;
         return PE_STATUS_OK;
+    }
+
+    /* ARP's concrete-hand grammar currently stops at PLO4.  Preserve the
+     * complete PLO5/PLO6 hand here; otherwise a product range such as
+     * AsKsQd3c9h would be rejected (or, worse, silently reduced to four
+     * cards).  The generic ARP path remains available for its PLO4 patterns. */
+    if (variant == game_omaha5 || variant == game_omaha6) {
+        pe_status_t fixed_status = parse_fixed_omaha_range(
+            variant, range_str, dead_cards, opts, range);
+        if (fixed_status == PE_STATUS_OK) {
+            *out_range = range;
+            return PE_STATUS_OK;
+        }
+        range->count = 0u;
+        range->total_weight = 0.0;
     }
 
     /* For Omaha and other non-Hold'em, use Omaha parser */

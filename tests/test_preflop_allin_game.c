@@ -21,6 +21,15 @@ static StdDeck_CardMask make_mask(int rank_a, int suit_a, int rank_b, int suit_b
     return mask;
 }
 
+static StdDeck_CardMask make_mask_n(const int *ranks, const int *suits, size_t count)
+{
+    StdDeck_CardMask mask;
+    StdDeck_CardMask_RESET(mask);
+    for (size_t i = 0u; i < count; ++i)
+        StdDeck_CardMask_SET(mask, StdDeck_MAKE_CARD(ranks[i], suits[i]));
+    return mask;
+}
+
 static void fill_rules(pe_preflop_allin_rules_t *rules, double stack,
                        int allow_nonallin_call)
 {
@@ -41,14 +50,15 @@ static int run_solve(pe_preflop_allin_game_t *game, int iterations,
                      uint64_t seed, pe_storage_t **out_storage)
 {
     pe_storage_t *storage = pe_storage_create(32);
-    pe_external_sampling_ctx_t ctx[2];
+    pe_external_sampling_ctx_t ctx[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     pe_update_batch_t batch = {0};
     const pe_external_game_t *external = pe_preflop_allin_external(game);
+    int players = pe_preflop_allin_player_count(game);
 
-    if (!storage)
+    if (!storage || players < 2 || players > PE_PREFLOP_ALLIN_MAX_PLAYERS)
         return -1;
     pe_preflop_allin_game_set_storage(game, storage);
-    for (int player = 0; player < 2; ++player)
+    for (int player = 0; player < players; ++player)
     {
         if (pe_external_sampling_ctx_init(&ctx[player], external,
                                           pe_storage_ram_ops(), storage,
@@ -60,12 +70,12 @@ static int run_solve(pe_preflop_allin_game_t *game, int iterations,
     }
     for (int iteration = 0; iteration < iterations; ++iteration)
     {
-        for (int player = 0; player < 2; ++player)
+        for (int player = 0; player < players; ++player)
         {
             if (pe_external_sampling_run(&ctx[player], &batch) != 0)
             {
                 pe_update_batch_destroy(&batch);
-                for (int q = 0; q < 2; ++q)
+                for (int q = 0; q < players; ++q)
                     pe_external_sampling_ctx_destroy(&ctx[q]);
                 pe_storage_destroy(storage);
                 return -1;
@@ -79,7 +89,7 @@ static int run_solve(pe_preflop_allin_game_t *game, int iterations,
                 if (!regret || !average)
                 {
                     pe_update_batch_destroy(&batch);
-                    for (int q = 0; q < 2; ++q)
+                    for (int q = 0; q < players; ++q)
                         pe_external_sampling_ctx_destroy(&ctx[q]);
                     pe_storage_destroy(storage);
                     return -1;
@@ -91,7 +101,7 @@ static int run_solve(pe_preflop_allin_game_t *game, int iterations,
         }
     }
     pe_update_batch_destroy(&batch);
-    for (int player = 0; player < 2; ++player)
+    for (int player = 0; player < players; ++player)
         pe_external_sampling_ctx_destroy(&ctx[player]);
     *out_storage = storage;
     return 0;
@@ -213,12 +223,68 @@ int main(void)
 
     /* ---- Invalid configurations are rejected ---- */
     {
-        pe_range_t *ranges[2] = {range_aa, range_kk};
+        pe_range_t *ranges[PE_PREFLOP_ALLIN_MAX_PLAYERS] =
+            {range_aa, range_kk, NULL, NULL, NULL, NULL};
         fill_rules(&rules, 10.0, 1);
         rules.player_count = 3;
         assert(pe_preflop_allin_game_create(&rules, ranges) == NULL);
         fill_rules(&rules, 0.5, 1); /* stack cannot cover the big blind */
         assert(pe_preflop_allin_game_create(&rules, ranges) == NULL);
+    }
+
+    /* ---- PLO5 multiway: five-card deals, card removal and BR traversal ---- */
+    {
+        pe_range_t *ranges[3] = {NULL, NULL, NULL};
+        pe_preflop_allin_game_t *game;
+        pe_storage_t *storage = NULL;
+        mask_t holes[3];
+        double equity[3];
+        const int ranks0[] = {StdDeck_Rank_ACE, StdDeck_Rank_KING,
+                              StdDeck_Rank_QUEEN, StdDeck_Rank_3, StdDeck_Rank_9};
+        const int suits0[] = {StdDeck_Suit_SPADES, StdDeck_Suit_SPADES,
+                              StdDeck_Suit_DIAMONDS, StdDeck_Suit_CLUBS,
+                              StdDeck_Suit_HEARTS};
+        const int ranks1[] = {StdDeck_Rank_ACE, StdDeck_Rank_KING,
+                              StdDeck_Rank_JACK, StdDeck_Rank_TEN, StdDeck_Rank_8};
+        const int suits1[] = {StdDeck_Suit_HEARTS, StdDeck_Suit_HEARTS,
+                              StdDeck_Suit_DIAMONDS, StdDeck_Suit_CLUBS,
+                              StdDeck_Suit_SPADES};
+        const int ranks2[] = {StdDeck_Rank_ACE, StdDeck_Rank_KING,
+                              StdDeck_Rank_QUEEN, StdDeck_Rank_2, StdDeck_Rank_3};
+        const int suits2[] = {StdDeck_Suit_DIAMONDS, StdDeck_Suit_DIAMONDS,
+                              StdDeck_Suit_HEARTS, StdDeck_Suit_SPADES,
+                              StdDeck_Suit_HEARTS};
+
+        assert(pe_solver_range_parse(game_omaha5, "AsKsQd3c9h", dead,
+                                     &ranges[0]) == PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_omaha5, "AhKhJdTc8s", dead,
+                                     &ranges[1]) == PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_omaha5, "AdKdQh2s3h", dead,
+                                     &ranges[2]) == PE_SOLVER_OK);
+        memset(&rules, 0, sizeof(rules));
+        rules.variant = PE_PREFLOP_PLO5;
+        rules.player_count = 3;
+        rules.stacks[0] = rules.stacks[1] = rules.stacks[2] = 10.0;
+        rules.small_blind = 0.5;
+        rules.big_blind = 1.0;
+        rules.min_raise = 1.0;
+        rules.showdown_samples = 32;
+        rules.showdown_seed = 0xA105u;
+        game = pe_preflop_allin_game_create(&rules, ranges);
+        assert(game != NULL);
+        assert(pe_preflop_allin_player_count(game) == 3);
+
+        holes[0] = cardmask_to_mask_t(make_mask_n(ranks0, suits0, 5u));
+        holes[1] = cardmask_to_mask_t(make_mask_n(ranks1, suits1, 5u));
+        holes[2] = cardmask_to_mask_t(make_mask_n(ranks2, suits2, 5u));
+        assert(pe_preflop_allin_showdown_equity(game, holes, equity) == 0);
+        assert(fabs(equity[0] + equity[1] + equity[2] - 1.0) < 1e-9);
+        assert(run_solve(game, 4, 0xA105u, &storage) == 0);
+        assert(storage != NULL && pe_storage_count(storage) > 0u);
+        pe_storage_destroy(storage);
+        pe_preflop_allin_game_destroy(game);
+        for (int player = 0; player < 3; ++player)
+            pe_range_free(ranges[player]);
     }
 
     pe_range_free(range_aa);

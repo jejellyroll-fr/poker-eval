@@ -1,9 +1,10 @@
 /* preflop_allin_game.c - production preflop game over sampled deals (Lane B)
  *
- * Model: heads-up preflop only (v1). Forced bets are player 0 = small blind,
- * player 1 = big blind. Terminals are fold-outs or called pots resolved as an
- * all-in showdown with boards sampled deterministically per deal, so MCCFR
- * iterations see a stable value for a given deal.
+ * Model: one complete preflop betting street over sampled private deals.
+ * Hold'em and Omaha 4/5/6 are supported for two to six players. Terminals
+ * are fold-outs or called pots resolved as an all-in showdown with boards
+ * sampled deterministically per deal, so MCCFR iterations see a stable value
+ * for a given deal.
  */
 
 #include <poker_eval/solver/pe_preflop_allin_game.h>
@@ -11,6 +12,7 @@
 #include <poker_eval/core/cardmask_compat.h>
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/pcg_rng.h>
+#include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/solver/pe_range.h>
 
 #include <math.h>
@@ -34,8 +36,10 @@ struct pe_preflop_allin_game_t
 {
     pe_preflop_allin_rules_t rules;
     pe_range_t *const *ranges;
-    pe_holdem_combo_t *combo_owned[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    pe_holdem_combo_t *holdem_combo_owned[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    pe_omaha_combo_t *omaha_combo_owned[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     pe_holdem_range_t holdem_ranges[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    pe_omaha_range_t omaha_ranges[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     pe_preflop_deal_sampler_t sampler;
     pe_betting_rules_t betting_rules;
     pe_preflop_betting_state_t root_betting;
@@ -44,7 +48,6 @@ struct pe_preflop_allin_game_t
     pe_external_game_t external;
     pe_storage_t *storage;
     EvalContext *eval_ctx;
-    double initial_contrib[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     preflop_infodesc_t *descs;
     size_t desc_count;
     size_t desc_capacity;
@@ -64,6 +67,15 @@ static uint64_t preflop_mix_u64(uint64_t hash, uint64_t value)
 static uint64_t preflop_quantize(double chips)
 {
     return (uint64_t)llround(chips * 2.0);
+}
+
+static unsigned preflop_card_count(StdDeck_CardMask hand)
+{
+    unsigned count = 0u;
+    for (int card = 0; card < StdDeck_N_CARDS; ++card)
+        if (StdDeck_CardMask_CARD_IS_SET(hand, card))
+            ++count;
+    return count;
 }
 
 /* ------------------------------------------------------------------ *
@@ -288,7 +300,12 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
     seed = game->rules.showdown_seed;
     for (int player = 0; player < players; ++player)
     {
-        if (mask_popcount(holes[player]) != 2u)
+        uint8_t required_hole_cards = game->rules.variant == PE_PREFLOP_HOLDEM
+            ? 2u
+            : game->rules.variant == PE_PREFLOP_PLO4
+                ? 4u
+                : game->rules.variant == PE_PREFLOP_PLO5 ? 5u : 6u;
+        if (mask_popcount(holes[player]) != required_hole_cards)
             return -1;
         if (dead & holes[player])
             return -1;
@@ -321,7 +338,18 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
         }
         for (player = 0; player < players; ++player)
         {
-            values[player] = pe_eval_7c(game->eval_ctx, holes[player] | board);
+            if (game->rules.variant == PE_PREFLOP_HOLDEM)
+                values[player] = pe_eval_7c(game->eval_ctx,
+                                            holes[player] | board);
+            else
+            {
+                HandVal omaha_value = HandVal_NOTHING;
+                if (StdDeck_OmahaHi_EVAL(mask_t_to_cardmask(holes[player]),
+                                         mask_t_to_cardmask(board),
+                                         &omaha_value) != 0)
+                    return -1;
+                values[player] = (eval_t)omaha_value;
+            }
             if (values[player] > best)
                 best = values[player];
         }
@@ -349,7 +377,7 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
 
     for (int p = 0; p < players; ++p)
     {
-        contrib[p] = game->initial_contrib[p] + betting->invested[p];
+        contrib[p] = betting->invested[p];
         pot_total += contrib[p];
     }
     if (betting->terminal)
@@ -414,10 +442,15 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int player;
 
-    if (!rules || !ranges || rules->player_count != 2 ||
+    if (!rules || !ranges || rules->player_count < 2 ||
+        rules->player_count > PE_PREFLOP_ALLIN_MAX_PLAYERS ||
+        rules->variant < PE_PREFLOP_HOLDEM ||
+        rules->variant > PE_PREFLOP_PLO6 ||
         rules->showdown_samples <= 0 ||
         !(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
         rules->big_blind < rules->small_blind ||
+        !isfinite(rules->ante) || rules->ante < 0.0 ||
+        rules->ante >= rules->big_blind ||
         rules->raise_count < 0 || rules->raise_count > PE_PREFLOP_ALLIN_MAX_RAISE_SIZES ||
         !(rules->min_raise > 0.0))
         return NULL;
@@ -438,42 +471,78 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     for (player = 0; player < rules->player_count; ++player)
     {
         pe_range_view_t view = pe_solver_range_view(ranges[player]);
-        pe_holdem_combo_t *combos =
-            calloc(view.count, sizeof(*combos));
-        if (!combos)
-        {
-            pe_preflop_allin_game_destroy(game);
-            return NULL;
+        unsigned required_cards = rules->variant == PE_PREFLOP_HOLDEM ? 2u :
+            rules->variant == PE_PREFLOP_PLO4 ? 4u :
+            rules->variant == PE_PREFLOP_PLO5 ? 5u : 6u;
+        for (size_t i = 0u; i < view.count; ++i) {
+            if (preflop_card_count(view.combos[i].hand) != required_cards) {
+                pe_preflop_allin_game_destroy(game);
+                return NULL;
+            }
         }
-        for (size_t i = 0u; i < view.count; ++i)
+        if (rules->variant == PE_PREFLOP_HOLDEM)
         {
-            combos[i].cards = cardmask_to_mask_t(view.combos[i].hand);
-            combos[i].weight = view.combos[i].weight;
+            pe_holdem_combo_t *combos = calloc(view.count, sizeof(*combos));
+            if (!combos)
+            {
+                pe_preflop_allin_game_destroy(game);
+                return NULL;
+            }
+            for (size_t i = 0u; i < view.count; ++i)
+            {
+                combos[i].cards = cardmask_to_mask_t(view.combos[i].hand);
+                combos[i].weight = view.combos[i].weight;
+            }
+            game->holdem_combo_owned[player] = combos;
+            game->holdem_ranges[player].combos = combos;
+            game->holdem_ranges[player].count = view.count;
         }
-        game->combo_owned[player] = combos;
-        game->holdem_ranges[player].combos = combos;
-        game->holdem_ranges[player].count = view.count;
+        else
+        {
+            pe_omaha_combo_t *combos = calloc(view.count, sizeof(*combos));
+            if (!combos)
+            {
+                pe_preflop_allin_game_destroy(game);
+                return NULL;
+            }
+            for (size_t i = 0u; i < view.count; ++i)
+            {
+                combos[i].cards = cardmask_to_mask_t(view.combos[i].hand);
+                combos[i].weight = view.combos[i].weight;
+            }
+            game->omaha_combo_owned[player] = combos;
+            game->omaha_ranges[player].combos = combos;
+            game->omaha_ranges[player].count = view.count;
+        }
     }
 
-    if (pe_preflop_deal_sampler_init_holdem(
-            &game->sampler, MASK_EMPTY, game->holdem_ranges,
-            (uint8_t)rules->player_count) != 0)
+    if ((rules->variant == PE_PREFLOP_HOLDEM &&
+         pe_preflop_deal_sampler_init_holdem(
+             &game->sampler, MASK_EMPTY, game->holdem_ranges,
+             (uint8_t)rules->player_count) != 0) ||
+        (rules->variant != PE_PREFLOP_HOLDEM &&
+         pe_preflop_deal_sampler_init_omaha(
+             &game->sampler, MASK_EMPTY, game->omaha_ranges,
+             (uint8_t)rules->player_count,
+             rules->variant == PE_PREFLOP_PLO4 ? 4u :
+             rules->variant == PE_PREFLOP_PLO5 ? 5u : 6u) != 0))
     {
         pe_preflop_allin_game_destroy(game);
         return NULL;
     }
 
-    /* Forced bets (v1: heads-up blinds). */
+    /* Forced bets: blinds plus an optional ante for every later seat. */
     posts[0] = rules->small_blind;
     posts[1] = rules->big_blind;
     for (player = 0; player < rules->player_count; ++player)
     {
+        if (player >= 2)
+            posts[player] = rules->ante;
         if (posts[player] >= rules->stacks[player])
         {
             pe_preflop_allin_game_destroy(game);
             return NULL;
         }
-        game->initial_contrib[player] = posts[player];
         stacks_after[player] = rules->stacks[player] - posts[player];
     }
 
@@ -484,15 +553,26 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->betting_rules.raise_cap = rules->raise_cap;
 
     memset(&game->root_betting, 0, sizeof(game->root_betting));
-    /* Heads-up: the small blind acts first and must complete the big blind. */
+    /* Heads-up starts at the small blind. Multiway starts at the first player
+       after the blinds/antes, which is the preflop UTG abstraction. */
     if (pe_betting_state_init(&game->root_betting.betting, &game->betting_rules,
-                              stacks_after, (uint8_t)rules->player_count, 0,
+                              stacks_after, (uint8_t)rules->player_count,
+                              rules->player_count > 2 ? 2 : 0,
                               posts[0] + posts[1],
-                              posts[1] - posts[0]) != PE_BETTING_OK)
+                              rules->big_blind - posts[rules->player_count > 2 ? 2 : 0]) != PE_BETTING_OK)
     {
         pe_preflop_allin_game_destroy(game);
         return NULL;
     }
+    game->root_betting.betting.current_bet = rules->big_blind;
+    for (player = 0; player < rules->player_count; ++player)
+    {
+        game->root_betting.betting.round_contrib[player] = posts[player];
+        game->root_betting.betting.invested[player] = posts[player];
+    }
+    game->root_betting.betting.pot = 0.0;
+    for (player = 0; player < rules->player_count; ++player)
+        game->root_betting.betting.pot += posts[player];
 
     game->ops.action_count = preflop_op_action_count;
     game->ops.action_at = preflop_op_action_at;
@@ -511,7 +591,8 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->external.action_probability = preflop_action_probability;
 
     {
-        EvalConfig config = eval_config_holdem();
+        EvalConfig config = rules->variant == PE_PREFLOP_HOLDEM
+            ? eval_config_holdem() : eval_config_omaha();
         game->eval_ctx = eval_context_create(&config);
         if (!game->eval_ctx)
         {
@@ -531,7 +612,10 @@ void pe_preflop_allin_game_destroy(pe_preflop_allin_game_t *game)
     if (game->eval_ctx)
         eval_context_destroy(game->eval_ctx);
     for (player = 0; player < PE_PREFLOP_ALLIN_MAX_PLAYERS; ++player)
-        free(game->combo_owned[player]);
+    {
+        free(game->holdem_combo_owned[player]);
+        free(game->omaha_combo_owned[player]);
+    }
     free(game->descs);
     free(game);
 }

@@ -3,8 +3,8 @@
  * This is the first complete vertical slice of the scalable preflop lane:
  * ranges are parsed once, private hands are sampled with card removal, the
  * sampled deal enters a real betting state, and called terminals are settled
- * by deterministic Monte-Carlo showdown.  The current product slice is
- * deliberately heads-up Hold'em; unsupported variants fail explicitly.
+ * by deterministic Monte-Carlo showdown.  Hold'em and PLO4/PLO5/PLO6 are
+ * supported for two to six players.
  */
 
 #include <poker_eval/core/enumdefs.h>
@@ -30,16 +30,19 @@
 
 typedef struct {
     const char *game;
-    const char *range[2];
+    const char *range[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    int players;
     uint64_t iterations;
     int showdown_samples;
     double stack;
     double small_blind;
     double big_blind;
+    double ante;
     double min_raise;
     double raise_sizes[PE_PREFLOP_ALLIN_MAX_RAISE_SIZES];
     int raise_count;
     int allow_nonallin_call;
+    uint64_t br_samples;
     uint64_t seed;
     const char *output;
 } options_t;
@@ -48,15 +51,17 @@ static void usage(FILE *stream)
 {
     fprintf(stream,
         "Usage: pe-preflop-solve [options]\n"
-        "  --game holdem                 heads-up Hold'em (only supported lane)\n"
-        "  --range0 TEXT --range1 TEXT  weighted private ranges (default 100%%)\n"
+        "  --game holdem|plo4|plo5|plo6  preflop game variant\n"
+        "  --players N                  2 to 6 players (default 2)\n"
+        "  --rangeN TEXT                private range for player N (default 100%%)\n"
         "  --iterations N               MCCFR iterations (default %u)\n"
         "  --samples N                  showdown boards per called terminal\n"
         "  --stack BB                   effective stack for both players\n"
-        "  --sb BB --bb BB              forced bets\n"
+        "  --sb BB --bb BB --ante BB   forced bets\n"
         "  --min-raise BB               minimum raise increment\n"
         "  --raise AMOUNT[,AMOUNT...]   raise increments above the call\n"
         "  --allow-calls                allow calls before all-in\n"
+        "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
         "  --help                       show this help\n", DEFAULT_ITERATIONS);
@@ -90,6 +95,23 @@ static int parse_positive_double(const char *text, double *out)
     return 0;
 }
 
+static int range_option_index(const char *arg)
+{
+    if (!arg || strncmp(arg, "--range", 7) != 0 ||
+        arg[7] < '0' || arg[7] > '5' || arg[8] != '\0')
+        return -1;
+    return arg[7] - '0';
+}
+
+static pe_preflop_variant_t parse_variant(const char *name)
+{
+    if (name && strcmp(name, "plo4") == 0) return PE_PREFLOP_PLO4;
+    if (name && strcmp(name, "plo5") == 0) return PE_PREFLOP_PLO5;
+    if (name && strcmp(name, "plo6") == 0) return PE_PREFLOP_PLO6;
+    return name && strcmp(name, "holdem") == 0
+        ? PE_PREFLOP_HOLDEM : (pe_preflop_variant_t)-1;
+}
+
 static int parse_raise_sizes(const char *text, options_t *options)
 {
     char buffer[512];
@@ -113,14 +135,17 @@ static int parse_options(int argc, char **argv, options_t *options)
 {
     memset(options, 0, sizeof(*options));
     options->game = "holdem";
-    options->range[0] = "100%";
-    options->range[1] = "100%";
+    for (int player = 0; player < PE_PREFLOP_ALLIN_MAX_PLAYERS; ++player)
+        options->range[player] = "100%";
+    options->players = 2;
     options->iterations = DEFAULT_ITERATIONS;
     options->showdown_samples = DEFAULT_SHOWDOWN_SAMPLES;
     options->stack = DEFAULT_STACK;
     options->small_blind = DEFAULT_SMALL_BLIND;
     options->big_blind = DEFAULT_BIG_BLIND;
+    options->ante = 0.0;
     options->min_raise = DEFAULT_MIN_RAISE;
+    options->br_samples = 256u;
     options->seed = UINT64_C(0x50455f5052464c42);
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -131,10 +156,11 @@ static int parse_options(int argc, char **argv, options_t *options)
         }
         if (i + 1 < argc)
             value = argv[i + 1];
-        if ((strcmp(arg, "--game") == 0 || strcmp(arg, "--range0") == 0 ||
-             strcmp(arg, "--range1") == 0 || strcmp(arg, "--iterations") == 0 ||
+        if ((strcmp(arg, "--game") == 0 || range_option_index(arg) >= 0 ||
+             strcmp(arg, "--iterations") == 0 || strcmp(arg, "--players") == 0 ||
              strcmp(arg, "--samples") == 0 || strcmp(arg, "--stack") == 0 ||
              strcmp(arg, "--sb") == 0 || strcmp(arg, "--bb") == 0 ||
+             strcmp(arg, "--ante") == 0 || strcmp(arg, "--br-samples") == 0 ||
              strcmp(arg, "--min-raise") == 0 || strcmp(arg, "--raise") == 0 ||
              strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0) &&
             (!value || value[0] == '-')) {
@@ -142,11 +168,16 @@ static int parse_options(int argc, char **argv, options_t *options)
             return -1;
         }
         if (strcmp(arg, "--game") == 0) options->game = value;
-        else if (strcmp(arg, "--range0") == 0) options->range[0] = value;
-        else if (strcmp(arg, "--range1") == 0) options->range[1] = value;
+        else if (range_option_index(arg) >= 0)
+            options->range[range_option_index(arg)] = value;
         else if (strcmp(arg, "--iterations") == 0) {
             if (parse_u64(value, &options->iterations) != 0 || options->iterations == 0u)
                 return -1;
+        } else if (strcmp(arg, "--players") == 0) {
+            uint64_t players;
+            if (parse_u64(value, &players) != 0 || players < 2u ||
+                players > PE_PREFLOP_ALLIN_MAX_PLAYERS) return -1;
+            options->players = (int)players;
         } else if (strcmp(arg, "--samples") == 0) {
             uint64_t samples;
             if (parse_u64(value, &samples) != 0 || samples == 0u || samples > 1000000u)
@@ -158,6 +189,9 @@ static int parse_options(int argc, char **argv, options_t *options)
             if (parse_positive_double(value, &options->small_blind) != 0) return -1;
         } else if (strcmp(arg, "--bb") == 0) {
             if (parse_positive_double(value, &options->big_blind) != 0) return -1;
+        } else if (strcmp(arg, "--ante") == 0) {
+            if (strcmp(value, "0") == 0) options->ante = 0.0;
+            else if (parse_positive_double(value, &options->ante) != 0) return -1;
         } else if (strcmp(arg, "--min-raise") == 0) {
             if (parse_positive_double(value, &options->min_raise) != 0) return -1;
         } else if (strcmp(arg, "--raise") == 0) {
@@ -165,6 +199,10 @@ static int parse_options(int argc, char **argv, options_t *options)
         } else if (strcmp(arg, "--allow-calls") == 0) {
             options->allow_nonallin_call = 1;
             continue;
+        } else if (strcmp(arg, "--br-samples") == 0) {
+            if (parse_u64(value, &options->br_samples) != 0 ||
+                options->br_samples == 0u || options->br_samples > UINT32_MAX)
+                return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
         } else if (strcmp(arg, "--output") == 0) options->output = value;
@@ -174,8 +212,10 @@ static int parse_options(int argc, char **argv, options_t *options)
         }
         ++i;
     }
-    if (strcmp(options->game, "holdem") != 0 ||
+    if (parse_variant(options->game) == (pe_preflop_variant_t)-1 ||
+        options->players < 2 || options->players > PE_PREFLOP_ALLIN_MAX_PLAYERS ||
         options->big_blind < options->small_blind ||
+        options->ante < 0.0 || options->ante >= options->big_blind ||
         options->stack <= options->big_blind)
         return -1;
     return 0;
@@ -203,25 +243,28 @@ static void write_report(const char *path, const options_t *options,
     }
     fprintf(file,
         "{\"schema\":\"pe-preflop-solve/v1\","
-        "\"game\":\"holdem\",\"players\":2,"
+        "\"game\":\"%s\",\"players\":%d,"
         "\"iterations\":%" PRIu64 ",\"showdown_samples\":%d,"
-        "\"stack\":%.17g,\"small_blind\":%.17g,\"big_blind\":%.17g,"
-        "\"allow_nonallin_call\":%s,\"infosets\":%zu,"
+        "\"stack\":%.17g,\"small_blind\":%.17g,\"big_blind\":%.17g,\"ante\":%.17g,"
+        "\"allow_nonallin_call\":%s,\"br_samples\":%" PRIu64 ",\"infosets\":%zu,"
         "\"progress\":{\"iteration\":%" PRIu64 ",\"complete\":%s},"
-        "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":null,"
-        "\"exploitability_mbb_per_game\":null,\"big_blind\":%.17g}}\n",
-        options->iterations, options->showdown_samples, options->stack,
-        options->small_blind, options->big_blind,
-        options->allow_nonallin_call ? "true" : "false", infosets,
+        "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
+        "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g}}\n",
+        options->game, options->players, options->iterations,
+        options->showdown_samples, options->stack,
+        options->small_blind, options->big_blind, options->ante,
+        options->allow_nonallin_call ? "true" : "false", options->br_samples,
+        infosets,
         progress->iteration, progress->complete ? "true" : "false",
-        guarantee_name(metrics->guarantee), options->big_blind);
+        guarantee_name(metrics->guarantee), metrics->exploitability_raw,
+        metrics->exploitability_mbb_per_game, options->big_blind);
     fclose(file);
 }
 
 int main(int argc, char **argv)
 {
     options_t options;
-    pe_range_t *ranges[2] = {NULL, NULL};
+    pe_range_t *ranges[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {NULL};
     pe_preflop_allin_rules_t rules;
     pe_preflop_allin_game_t *game = NULL;
     pe_solver_config_t config;
@@ -231,6 +274,7 @@ int main(int argc, char **argv)
     pe_progress_t progress = {0};
     pe_metrics_t metrics = {0};
     StdDeck_CardMask dead;
+    pe_preflop_variant_t variant;
 
     {
         int option_status = parse_options(argc, argv, &options);
@@ -241,22 +285,29 @@ int main(int argc, char **argv)
         return 2;
         }
     }
+    variant = parse_variant(options.game);
     StdDeck_CardMask_RESET(dead);
-    for (int player = 0; player < 2; ++player) {
-        if (pe_solver_range_parse(game_holdem, options.range[player], dead,
+    for (int player = 0; player < options.players; ++player) {
+        enum_game_t range_game = variant == PE_PREFLOP_HOLDEM ? game_holdem
+            : variant == PE_PREFLOP_PLO4 ? game_omaha
+            : variant == PE_PREFLOP_PLO5 ? game_omaha5 : game_omaha6;
+        if (pe_solver_range_parse(range_game, options.range[player], dead,
                                   &ranges[player]) != PE_SOLVER_OK ||
             !ranges[player]) {
-            fprintf(stderr, "invalid Hold'em range%d: %s\n", player,
+            fprintf(stderr, "invalid %s range%d: %s\n", options.game, player,
                     options.range[player]);
             goto fail;
         }
     }
 
     memset(&rules, 0, sizeof(rules));
-    rules.player_count = 2;
-    rules.stacks[0] = rules.stacks[1] = options.stack;
+    rules.variant = variant;
+    rules.player_count = options.players;
+    for (int player = 0; player < options.players; ++player)
+        rules.stacks[player] = options.stack;
     rules.small_blind = options.small_blind;
     rules.big_blind = options.big_blind;
+    rules.ante = options.ante;
     rules.min_raise = options.min_raise;
     rules.raise_cap = 0;
     rules.raise_count = options.raise_count;
@@ -282,6 +333,9 @@ int main(int argc, char **argv)
     config.problem.expected_actions = 8u;
     config.problem.expected_combos = 1u;
     config.max_iterations = options.iterations;
+    config.execution.big_blind = options.big_blind;
+    config.target_exploitability_mbb = 1.0;
+    config.exploitability_interval = options.br_samples;
     config.seed = options.seed;
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);
@@ -297,24 +351,26 @@ int main(int argc, char **argv)
     }
     {
         size_t infosets = pe_preflop_allin_infodesc_count(game);
-        printf("preflop_solver=lane-b external-mccfr game=holdem players=2\n");
+        printf("preflop_solver=lane-b external-mccfr game=%s players=%d\n",
+               options.game, options.players);
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
-        printf("guarantee=%s exploitability=not-available (BR requires a solved policy)\n",
-               guarantee_name(metrics.guarantee));
+        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
+               guarantee_name(metrics.guarantee), metrics.exploitability_raw,
+               metrics.exploitability_mbb_per_game, options.br_samples);
         if (options.output)
             write_report(options.output, &options, &metrics, &progress, infosets);
     }
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);
-    pe_range_free(ranges[0]);
-    pe_range_free(ranges[1]);
+    for (int player = 0; player < options.players; ++player)
+        pe_range_free(ranges[player]);
     return 0;
 
 fail:
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);
-    pe_range_free(ranges[0]);
-    pe_range_free(ranges[1]);
+    for (int player = 0; player < options.players; ++player)
+        pe_range_free(ranges[player]);
     return 1;
 }
