@@ -3,6 +3,7 @@
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,7 +102,7 @@ int main(void)
     if (pe_legacy_vector_adapter_init(&adapter, &legacy, 1u) != 0)
         return 1;
     config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
-    config.max_iterations = 1u;
+    config.max_iterations = 32u;
     config.problem.expected_infosets = 1u;
     config.problem.expected_actions = 2u;
     config.problem.expected_combos = 1u;
@@ -109,11 +110,36 @@ int main(void)
     solver = pe_solver_create(&config, &deps);
     if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
         pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
-        !progress.complete) {
+        !progress.complete || progress.iteration != 32u) {
         fprintf(stderr, "legacy vector adapter regression failed\n");
         pe_solver_destroy(solver);
         pe_legacy_vector_adapter_destroy(&adapter);
         return 1;
+    }
+    /* Action 0 strictly dominates in this game; the bridged solve must land
+     * on it, not merely complete. */
+    {
+        pe_strategy_query_t query;
+        pe_strategy_view_t view;
+        memset(&query, 0, sizeof(query));
+        if (pe_solver_strategy(solver, &query, &view) != PE_SOLVER_OK ||
+            view.action_count != 2u || view.combo_count != 1u ||
+            view.count != 2u) {
+            fprintf(stderr, "legacy vector adapter strategy query failed\n");
+            pe_solver_destroy(solver);
+            pe_legacy_vector_adapter_destroy(&adapter);
+            return 1;
+        }
+        if (fabs(view.values[0] + view.values[1] - 1.0) > 1e-9 ||
+            view.values[0] < 0.9 || view.values[0] <= view.values[1]) {
+            fprintf(stderr,
+                    "legacy vector adapter did not converge to the dominant "
+                    "action (got %.6f / %.6f)\n",
+                    view.values[0], view.values[1]);
+            pe_solver_destroy(solver);
+            pe_legacy_vector_adapter_destroy(&adapter);
+            return 1;
+        }
     }
     pe_solver_destroy(solver);
     pe_legacy_vector_adapter_destroy(&adapter);

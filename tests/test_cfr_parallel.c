@@ -68,10 +68,12 @@ int main(void)
     cfr_config_t config;
     cfr_parallel_config_t parallel;
     cfr_storage_t *storage = cfr_storage_create();
+    cfr_storage_t *rerun = cfr_storage_create();
     double exploitability = -1.0;
     double strategy[2];
+    double rerun_strategy[2];
 
-    if (!storage)
+    if (!storage || !rerun)
         return 1;
     memset(&config, 0, sizeof(config));
     config.max_iterations = 64;
@@ -87,6 +89,7 @@ int main(void)
     {
         fprintf(stderr, "parallel CFR run failed\n");
         cfr_storage_destroy(storage);
+        cfr_storage_destroy(rerun);
         return 1;
     }
     cfr_storage_get_avg_strategy(storage, 1u, 2, strategy);
@@ -95,8 +98,63 @@ int main(void)
     {
         fprintf(stderr, "parallel CFR strategy is not normalized\n");
         cfr_storage_destroy(storage);
+        cfr_storage_destroy(rerun);
         return 1;
     }
+    /* Action 0 strictly dominates in this game, so every independent worker
+     * solve must converge toward it and the merged average must preserve the
+     * direction. */
+    if (strategy[0] < 0.9 || strategy[0] <= strategy[1])
+    {
+        fprintf(stderr,
+                "parallel CFR did not converge to the dominant action "
+                "(got %.6f / %.6f)\n",
+                strategy[0], strategy[1]);
+        cfr_storage_destroy(storage);
+        cfr_storage_destroy(rerun);
+        return 1;
+    }
+    /* Utilities are +/-1 here, so the merged strategy must stay near
+     * exploitable-by-nothing regardless of the reporting convention. */
+    if (exploitability < 0.0 || exploitability > 0.25)
+    {
+        fprintf(stderr, "parallel CFR exploitability out of range: %.6f\n",
+                exploitability);
+        cfr_storage_destroy(storage);
+        cfr_storage_destroy(rerun);
+        return 1;
+    }
+    /* The batch merge is documented as deterministic: a second run with the
+     * same seed must reproduce the same merged strategy. */
+    {
+        double rerun_exploitability = -1.0;
+        if (cfr_solve_parallel_batch(game_factory, NULL, NULL, rerun,
+                                     &config, &parallel,
+                                     &rerun_exploitability) != 0)
+        {
+            fprintf(stderr, "parallel CFR rerun failed\n");
+            cfr_storage_destroy(storage);
+            cfr_storage_destroy(rerun);
+            return 1;
+        }
+        cfr_storage_get_avg_strategy(rerun, 1u, 2, rerun_strategy);
+        /* Bit-exact comparison: determinism means identical bytes, which
+         * also sidesteps -Wfloat-equal. */
+        if (memcmp(strategy, rerun_strategy, sizeof(strategy)) != 0 ||
+            memcmp(&exploitability, &rerun_exploitability,
+                   sizeof(exploitability)) != 0)
+        {
+            fprintf(stderr,
+                    "parallel CFR merge is not deterministic "
+                    "(%.6f/%.6f vs %.6f/%.6f)\n",
+                    strategy[0], strategy[1], rerun_strategy[0],
+                    rerun_strategy[1]);
+            cfr_storage_destroy(storage);
+            cfr_storage_destroy(rerun);
+            return 1;
+        }
+    }
     cfr_storage_destroy(storage);
+    cfr_storage_destroy(rerun);
     return 0;
 }
