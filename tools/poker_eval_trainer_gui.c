@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "pe_sol_format.h"
+
 #ifdef _WIN32
 #define PE_GUI_PATH_SEPARATOR '\\'
 #define PE_GUI_EXE_SUFFIX ".exe"
@@ -155,35 +157,41 @@ static void border(SDL_Renderer *renderer, rect_t rect, SDL_Color color)
     SDL_Rect target = {rect.x, rect.y, rect.w, rect.h}; SDL_RenderDrawRect(renderer, &target);
 }
 
-static uint16_t u16(const unsigned char *data, size_t offset)
-{ return (uint16_t)((uint16_t)data[offset] | ((uint16_t)data[offset + 1u] << 8)); }
-
-static uint32_t u32(const unsigned char *data, size_t offset)
-{ return (uint32_t)data[offset] | ((uint32_t)data[offset + 1u] << 8) | ((uint32_t)data[offset + 2u] << 16) | ((uint32_t)data[offset + 3u] << 24); }
-
-static uint64_t u64(const unsigned char *data, size_t offset)
-{
-    uint64_t value = 0; for (size_t i = 0; i < 8u; ++i) value |= (uint64_t)data[offset + i] << (i * 8u); return value;
-}
+static void copy_field(char *destination, size_t capacity, const char *source);
 
 static int load_solution(app_t *app, const char *path)
 {
-    FILE *file = fopen(path, "rb"); long size; unsigned char *data; size_t offset = 32u; uint64_t count; spot_t *spots;
+    FILE *file = fopen(path, "rb"); long size; unsigned char *data; size_t offset = PE_SOL_FMT_HEADER_SIZE; uint64_t count; spot_t *spots;
+    pe_sol_fmt_status_t status;
     if (!file || fseek(file, 0, SEEK_END) != 0) { if (file) fclose(file); return -1; }
-    size = ftell(file); rewind(file); if (size < 32) { fclose(file); return -1; }
+    size = ftell(file); rewind(file); if (size < 32) { fclose(file); copy_field(app->solver_status, sizeof(app->solver_status), "Truncated .pe_sol header"); return -1; }
     data = (unsigned char *)malloc((size_t)size);
     if (!data || fread(data, 1u, (size_t)size, file) != (size_t)size) { free(data); fclose(file); return -1; }
     fclose(file);
-    if (memcmp(data, "PESOL001", 8u) != 0 || u32(data, 8u) != 1u) { free(data); return -1; }
-    count = u64(data, 16u); if (count > SIZE_MAX / sizeof(*spots)) { free(data); return -1; }
+    status = pe_sol_fmt_parse_header(data, (size_t)size, &count);
+    if (status != PE_SOL_FMT_OK) {
+        static const char *messages[] = {
+            "", "Truncated .pe_sol header", "Not a PESOL001 v1 solution",
+            "Compressed (zstd) .pe_sol not supported by the GUI",
+            "Unknown .pe_sol flags", "Truncated .pe_sol records"};
+        free(data);
+        copy_field(app->solver_status, sizeof(app->solver_status), messages[status]);
+        return -1;
+    }
+    if (count > SIZE_MAX / sizeof(*spots)) { free(data); return -1; }
     spots = (spot_t *)calloc((size_t)count, sizeof(*spots)); if (!spots && count) { free(data); return -1; }
     for (uint64_t i = 0; i < count; ++i) {
         uint32_t actions;
         if (offset + 12u > (size_t)size) { free(spots); free(data); return -1; }
-        spots[i].key = u64(data, offset); actions = u32(data, offset + 8u); offset += 12u;
+        spots[i].key = pe_sol_fmt_u64(data, offset); actions = pe_sol_fmt_u32(data, offset + 8u); offset += 12u;
         if (actions == 0u || actions > MAX_ACTIONS || actions > ((size_t)size - offset) / 2u) { free(spots); free(data); return -1; }
         spots[i].actions = (int)actions;
-        for (uint32_t action = 0; action < actions; ++action) { uint16_t quantized = u16(data, offset + action * 2u); spots[i].probability[action] = (double)quantized / 65535.0; }
+        {
+            uint16_t quantized[MAX_ACTIONS];
+            for (uint32_t action = 0; action < actions; ++action)
+                quantized[action] = pe_sol_fmt_u16(data, offset + action * 2u);
+            pe_sol_fmt_dequantize_row(quantized, (int)actions, spots[i].probability);
+        }
         offset += (size_t)actions * 2u;
     }
     free(data); free(app->spots); app->spots = spots; app->spot_count = (size_t)count;

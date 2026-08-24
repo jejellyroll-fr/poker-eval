@@ -1643,6 +1643,11 @@ if(TARGET test_hand_history_parse)
     set_tests_properties(test_hand_history_parse PROPERTIES LABELS "product;import")
 endif()
 
+add_poker_test(test_pe_sol_format)
+if(TARGET test_pe_sol_format)
+    set_tests_properties(test_pe_sol_format PROPERTIES LABELS "product;import")
+endif()
+
 if(TARGET pe-hand-history-import)
     add_test(NAME pe_hand_history_import_smoke
         COMMAND pe-hand-history-import
