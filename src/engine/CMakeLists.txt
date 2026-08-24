@@ -18,6 +18,7 @@ set(ENGINE_SOURCES
     solvers/cfr/draw_game_adapter.c
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
+    solvers/cfr/cfr_parallel.c
     solvers/cfr/legacy_vector_adapter.c
     solvers/cfr/cfr_traversal_full_scalar.c
     solvers/cfr/cfr_locks.c
@@ -78,6 +79,11 @@ if(BUILD_TESTS)
         ${CMAKE_SOURCE_DIR}/tests/test_legacy_vector_adapter.c)
     target_link_libraries(test_legacy_vector_adapter PRIVATE poker_engine)
     add_test(NAME test_legacy_vector_adapter COMMAND test_legacy_vector_adapter)
+
+    add_executable(test_cfr_parallel
+        ${CMAKE_SOURCE_DIR}/tests/test_cfr_parallel.c)
+    target_link_libraries(test_cfr_parallel PRIVATE poker_engine)
+    add_test(NAME test_cfr_parallel COMMAND test_cfr_parallel)
 endif()
 
 install(TARGETS poker_engine

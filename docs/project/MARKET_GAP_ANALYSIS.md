@@ -183,11 +183,13 @@ entraînés et la modélisation des ranges qui évoluent après chaque action.
 ## 4. Manques techniques
 
 1. **Parallélisme du CFR principal** : le compute port v3 (`compute_cpu_par.c`) est
-   parallélisé et le legacy expose maintenant `cfr_config_t::num_threads` pour les
-   balayages indépendants du stockage (OpenMP quand disponible). La traversée récursive
-   legacy reste volontairement séquentielle : rendre ses callbacks et son hash-map
-   mutables thread-safe demande un contrat de clonage/merge de jeu, pas un pragma ajouté
-   au hasard. Le solveur local multi-thread complet reste donc à construire.
+   parallélisé. Le legacy expose `cfr_config_t::num_threads` pour les balayages
+   indépendants du stockage et `cfr_solve_parallel_batch()` pour lancer de vraies
+   traversées récursives concurrentes avec un jeu et un stockage privés par worker,
+   puis une fusion déterministe. Cette lane est sûre et portable, mais c'est du CFR
+   par lots : elle ne prétend pas reproduire bit à bit la continuation séquentielle.
+   La traversée legacy entièrement multi-threadée avec mémoire partagée reste hors
+   scope tant que les callbacks de jeu ne fournissent pas un contrat d'isolation.
 2. **SIMD dans le solver** : le regret matching legacy utilise maintenant une réduction
    AVX2 ou NEON (avec repli scalaire) dans `cfr_storage.c`. Ce n'est pas encore une
    vectorisation complète de la traversée ni un backend AVX-512.
@@ -199,7 +201,10 @@ entraînés et la modélisation des ranges qui évoluent après chaque action.
    zstd est disponible, avec repli explicite `ENOTSUP`. La mémoire est déjà un paramètre
    v3 (`max_ram_bytes`) validé avant allocation et détaillé par `pe_solver_estimate()`.
 5. **Isomorphismes de rang** : l'orbite complète des 24 permutations de couleurs existe
-   (`board_canonical.c`, ISO-01), pas les symétries de rangs.
+   (`board_canonical.c`, ISO-01). Un canonicaliseur de rangs est maintenant disponible
+   uniquement pour une variante qui fournit explicitement la liste de ses automorphismes
+   et un validateur sémantique. Le standard poker n'en active aucune : les quintes et
+   l'ordre des hauteurs rendent les permutations arbitraires incorrectes.
 6. **Cycle de vie v3 partiellement incomplet** : la cible
    `target_exploitability_mbb` est désormais exécutée par le parcours
    `PE_TRAVERSAL_FULL_VECTOR` (mesure BR périodique, métriques mBB et arrêt anticipé).
@@ -211,9 +216,9 @@ entraînés et la modélisation des ranges qui évoluent après chaque action.
    le solveur complet passe par `pe_solver_run` et ses compute ports.
 8. **WASM et distribué** : un profil `cmake/wasm.cmake` produit maintenant une cible
    portable sans GPU/OpenMP/zstd. Le header `pe_solver_cluster.h` fournit un sharding
-   stable par clé et par plage dense, testé et indépendant de la machine. Cela prépare
-   les manifests/checkpoints, mais ne constitue pas encore un orchestrateur réseau ni
-   un merge de solves distants.
+   stable et un manifeste de tâches/checkpoints lisible par un orchestrateur externe,
+   testé et indépendant de la machine. Le transport réseau, les leases et le merge de
+   solves distants restent à construire ; le profil WASM n'est pas encore une GUI.
 
 ---
 

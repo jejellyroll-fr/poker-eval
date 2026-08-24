@@ -853,6 +853,69 @@ void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
     }
 }
 
+typedef struct {
+    cfr_storage_t *destination;
+    double regret_scale;
+    double average_scale;
+    int failed;
+} cfr_storage_merge_context_t;
+
+static void cfr_storage_merge_callback(uint64_t key, int n_actions,
+                                       const double *regret,
+                                       const double *average,
+                                       void *user_data)
+{
+    cfr_storage_merge_context_t *ctx =
+        (cfr_storage_merge_context_t *)user_data;
+    double *scaled_regret;
+    double *scaled_average;
+    int i;
+
+    if (!ctx || ctx->failed || !regret || !average || n_actions <= 0)
+        return;
+    scaled_regret = (double *)malloc((size_t)n_actions * sizeof(double));
+    scaled_average = (double *)malloc((size_t)n_actions * sizeof(double));
+    if (!scaled_regret || !scaled_average)
+    {
+        free(scaled_regret);
+        free(scaled_average);
+        ctx->failed = 1;
+        return;
+    }
+    for (i = 0; i < n_actions; ++i)
+    {
+        scaled_regret[i] = regret[i] * ctx->regret_scale;
+        scaled_average[i] = average[i] * ctx->average_scale;
+    }
+    cfr_storage_update_regret(ctx->destination, key, n_actions,
+                              scaled_regret, 1.0);
+    cfr_storage_update_avg(ctx->destination, key, n_actions,
+                           scaled_average, 1.0);
+    free(scaled_regret);
+    free(scaled_average);
+}
+
+int cfr_storage_merge_scaled(cfr_storage_t *destination,
+                             const cfr_storage_t *source,
+                             double regret_scale,
+                             double average_scale)
+{
+    cfr_storage_merge_context_t ctx;
+    if (!destination || !source || !source->tab ||
+        !isfinite(regret_scale) || !isfinite(average_scale))
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    ctx.destination = destination;
+    ctx.regret_scale = regret_scale;
+    ctx.average_scale = average_scale;
+    ctx.failed = 0;
+    cfr_storage_iterate((cfr_storage_t *)source,
+                        cfr_storage_merge_callback, &ctx);
+    return ctx.failed ? -1 : 0;
+}
+
 void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
 {
     if (!s || !fn || !s->tab)

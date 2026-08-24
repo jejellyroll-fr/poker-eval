@@ -25,6 +25,15 @@ static mask_t card(int rank, int suit)
     return mask_set(MASK_EMPTY, MODERN_MAKE_CARD(rank, suit));
 }
 
+static int identity_rank_automorphism(const int permutation[13], void *user_data)
+{
+    (void)user_data;
+    for (int rank = 0; rank < 13; ++rank)
+        if (permutation[rank] != rank)
+            return 0;
+    return 1;
+}
+
 static int solve_board(mask_t h0, mask_t h1, mask_t board, double *out_expl, size_t *out_infosets)
 {
     EvalConfig ecfg = eval_config_holdem();
@@ -102,6 +111,26 @@ int main(void)
         rebuilt = mask_set(rebuilt, MODERN_MAKE_CARD(rank, perm[label]));
     }
     CHECK(rebuilt == (h0a | h1a | bda), "suit_perm must translate back to original suits");
+
+    /* Rank canonicalization is opt-in and proof-gated. Standard poker only
+     * admits the identity permutation because rank order is semantic. */
+    int identity[1][13];
+    for (int rank = 0; rank < 13; ++rank)
+        identity[0][rank] = rank;
+    mask_t rank_canon = MASK_EMPTY;
+    int winning_rank_perm[13];
+    CHECK(pe_board_canonicalize_rank_orbit(h0a | h1a | bda, 7, identity, 1,
+                                           identity_rank_automorphism, NULL,
+                                           &rank_canon, winning_rank_perm, NULL) == 0,
+          "identity rank canonicalization");
+    CHECK(rank_canon == canon, "identity rank orbit must preserve suit canonicalization");
+    int invalid[1][13];
+    memcpy(invalid[0], identity[0], sizeof(identity[0]));
+    invalid[0][0] = invalid[0][1];
+    CHECK(pe_board_canonicalize_rank_orbit(h0a | h1a | bda, 7, invalid, 1,
+                                           identity_rank_automorphism, NULL,
+                                           &rank_canon, NULL, NULL) != 0,
+          "non-bijective rank permutation must be rejected");
 
     /* Solve-equivalence: isomorphic boards must produce identical solves and
      * identical exported (average) strategies within convergence tolerance. */

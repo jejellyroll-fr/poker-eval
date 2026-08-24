@@ -220,3 +220,74 @@ int pe_board_canonicalize(mask_t cards, int n, mask_t *out_canon,
     *out_canon = canon;
     return 0;
 }
+
+static int bc_rank_perm_valid(const int perm[13])
+{
+    int seen[13] = {0};
+    int r;
+    if (!perm)
+        return 0;
+    for (r = 0; r < 13; ++r)
+    {
+        if (perm[r] < 0 || perm[r] >= 13 || seen[perm[r]])
+            return 0;
+        seen[perm[r]] = 1;
+    }
+    return 1;
+}
+
+int pe_board_canonicalize_rank_orbit(
+    mask_t cards,
+    int n,
+    const int (*rank_permutations)[13],
+    size_t permutation_count,
+    pe_rank_automorphism_validator_fn validator,
+    void *user_data,
+    mask_t *out_canon,
+    int out_rank_perm[13],
+    int out_suit_perm[4])
+{
+    bc_card_t input[52];
+    mask_t best_mask = MASK_EMPTY;
+    char best_key[1 + 2 * 52];
+    int have_best = 0;
+    size_t p;
+
+    if (!out_canon || !rank_permutations || permutation_count == 0 ||
+        !validator || bc_collect(cards, n, input, 52) != 0)
+        return -1;
+    for (p = 0; p < permutation_count; ++p)
+    {
+        mask_t transformed = MASK_EMPTY;
+        mask_t canonical = MASK_EMPTY;
+        int suit_perm[4];
+        char key[1 + 2 * 52];
+        int card;
+
+        if (!bc_rank_perm_valid(rank_permutations[p]) ||
+            !validator(rank_permutations[p], user_data))
+            return -1;
+        for (card = 0; card < MODERN_DECK_SIZE; ++card)
+            if (mask_is_set(cards, card))
+                transformed = mask_set(transformed,
+                    MODERN_MAKE_CARD(rank_permutations[p][MODERN_GET_RANK(card)],
+                                     MODERN_GET_SUIT(card)));
+        if (pe_board_canonicalize(transformed, n, &canonical, suit_perm) != 0 ||
+            pe_board_canonical_key(canonical, n, key, sizeof(key)) != 0)
+            return -1;
+        if (!have_best || strcmp(key, best_key) < 0)
+        {
+            memcpy(best_key, key, sizeof(best_key));
+            best_mask = canonical;
+            if (out_rank_perm)
+                memcpy(out_rank_perm, rank_permutations[p], 13 * sizeof(int));
+            if (out_suit_perm)
+                memcpy(out_suit_perm, suit_perm, 4 * sizeof(int));
+            have_best = 1;
+        }
+    }
+    if (!have_best)
+        return -1;
+    *out_canon = best_mask;
+    return 0;
+}

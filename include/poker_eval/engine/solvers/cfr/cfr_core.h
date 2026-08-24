@@ -615,6 +615,17 @@ double *cfr_storage_avg_span(cfr_storage_t *storage, uint64_t key, int n_actions
 
 void cfr_storage_scale_regrets(cfr_storage_t *storage, double factor);
 
+/* Merge one worker's independently accumulated CFR state into `destination`.
+ * The source is never modified.  This is intentionally an additive merge:
+ * source regrets and average-strategy masses are multiplied by their scales
+ * and added to the destination.  It is the primitive used by the batched
+ * parallel legacy solver; callers must not merge two storages that represent
+ * continuation states from the same infoset without an explicit policy. */
+int cfr_storage_merge_scaled(cfr_storage_t *destination,
+                             const cfr_storage_t *source,
+                             double regret_scale,
+                             double average_scale);
+
 void cfr_storage_iterate(
     cfr_storage_t* storage,
     cfr_iterate_callback callback,
