@@ -23,6 +23,7 @@ add_subdirectory(ofc)
 find_package(ZLIB REQUIRED)
 
 add_library(poker_solver
+    solver/domain/actions.c
     solver/domain/solver.c
     solver/domain/registry.c
     solver/domain/config.c
