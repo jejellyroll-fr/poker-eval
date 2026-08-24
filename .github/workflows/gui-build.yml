@@ -13,35 +13,67 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            install: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+            configure: >-
+              cmake -S . -B build -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=ON
+              -DBUILD_BINDINGS=OFF -DBUILD_GPU=OFF -DENABLE_OPENMP=OFF
+            build: cmake --build build --target poker-eval-trainer-gui -j
+            binary: build/tools/poker-eval-trainer-gui
           - os: macos-14
-            install: brew install sdl2
+            configure: >-
+              cmake -S . -B build -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=ON
+              -DBUILD_BINDINGS=OFF -DBUILD_GPU=OFF -DENABLE_OPENMP=OFF
+            build: cmake --build build --target poker-eval-trainer-gui -j
+            binary: build/tools/poker-eval-trainer-gui
+          # Windows uses the project preset (Visual Studio generator, static
+          # libs) and stages SDL2.dll next to the executable for the smoke.
+          - os: windows-latest
+            configure: cmake --preset windows-msvc
+            build: >-
+              cmake --build build/windows-msvc --target poker-eval-trainer-gui
+              --config Release
+            binary: build/windows-msvc/tools/Release/poker-eval-trainer-gui.exe
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install SDL2
-        run: ${{ matrix.install }}
+      - name: Install SDL2 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+      - name: Install SDL2 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl2
+
+      - name: Install SDL2 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sdl2.zip"
+          Expand-Archive "$env:RUNNER_TEMP\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\sdl2"
+          "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP\sdl2\SDL2-2.30.12" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure
-        run: |
-          cmake -S . -B build \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=ON \
-            -DBUILD_BINDINGS=OFF \
-            -DBUILD_GPU=OFF \
-            -DENABLE_OPENMP=OFF
+        run: ${{ matrix.configure }}
 
       # The GUI target only exists when CMake found SDL2, so a missing SDL2
       # fails this step instead of silently skipping the GUI.
       - name: Build GUI
-        run: cmake --build build --target poker-eval-trainer-gui -j
+        run: ${{ matrix.build }}
+
+      - name: Stage SDL2.dll (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >
+          Copy-Item
+          "$env:RUNNER_TEMP\sdl2\SDL2-2.30.12\lib\x64\SDL2.dll"
+          -Destination "build\windows-msvc\tools\Release\"
 
       - name: Check binary
-        run: test -x build/tools/poker-eval-trainer-gui
+        shell: bash
+        run: test -e "${{ matrix.binary }}"
 
       - name: Headless usage smoke
-        run: |
-          export SDL_VIDEODRIVER=dummy
-          ./build/tools/poker-eval-trainer-gui --help
+        shell: bash
+        run: SDL_VIDEODRIVER=dummy "${{ matrix.binary }}" --help
