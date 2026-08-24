@@ -25,7 +25,7 @@ int pe_holdem_street_from_board(mask_t board, pe_holdem_street_t *out_street)
     else if (count == 4)
         *out_street = PE_HOLDEM_TURN;
     else if (count == 5)
-        *out_street = PE_HOLDEM_SHOWDOWN;
+        *out_street = PE_HOLDEM_RIVER;
     else
         return -2;
     return 0;

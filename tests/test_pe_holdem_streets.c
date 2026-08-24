@@ -39,7 +39,7 @@ static void test_street_mapping(void)
           "turn mapping failed");
     CHECK(pe_holdem_street_from_board(card(0) | card(1) | card(2) | card(3) |
                                           card(4), &street) == 0 &&
-              street == PE_HOLDEM_SHOWDOWN &&
+              street == PE_HOLDEM_RIVER &&
               pe_holdem_next_public_count(street) == 0u,
           "river mapping failed");
 }
