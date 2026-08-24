@@ -67,7 +67,7 @@ nvcc --version
 # Ubuntu/Debian:
 sudo apt install opencl-headers ocl-icd-opencl-dev
 
-# macOS: (OpenCL included by default)
+# macOS: OpenCL is used when the platform framework is available.
 # No additional installation needed
 ```
 
@@ -85,9 +85,9 @@ make
 ### CFR solver migration
 
 The legacy `gpu_cfr_solve()` and `gpu_cfr_adapter_*()` APIs remain available for
-compatibility but are deprecated. They use an autonomous matrix solver and a
-CPU traversal that treats state pointers as infoset keys; they are not the
-canonical GPU path.
+compatibility but are deprecated and are not a production benchmark path. They
+use an autonomous matrix solver and a CPU traversal that treats state pointers
+as infoset keys; they are not the canonical GPU path.
 
 New integrations should construct a `pe_solver_config_t`, select the GPU update
 backend through its execution plan, and call `pe_solver_run()`. The v3 solver

@@ -96,9 +96,10 @@ famille AGPL du solving OSS.
    la RAM est le facteur limitant reconnu du marché.
 5. **Isomorphismes de rang** : l'orbite complète des 24 permutations de couleurs existe
    (`board_canonical.c`, ISO-01), pas les symétries de rangs.
-6. **Cycle de vie v3 incomplet** : `target_exploitability_mbb` validé dans `plan.c` mais
-   non exécuté dans `pe_solver_run` (`PE_SOLVER_ERR_NOT_IMPLEMENTED`) ; `pe_tree_port`
-   documenté dans SOLVER_ARCHITECTURE_V3.md sans code ; Lane B partielle.
+6. **Cycle de vie v3 partiellement incomplet** : la cible
+   `target_exploitability_mbb` est désormais exécutée par le parcours
+   `PE_TRAVERSAL_FULL_VECTOR` (mesure BR périodique, métriques mBB et arrêt anticipé).
+   Restent `pe_tree_port` et les parcours scalar/samplés ; Lane B partielle.
 7. **GPU-CFR** : déprécié/à l'état de stubs (`gpu_cfr_solve()` = boucle vide avec TODO)
    alors que `bench_gpu_cfr.c` promet « ×200–×400 speedup ». À nettoyer : c'est
    exactement le genre de claim reproché aux boîtes noires dans le panorama marché.
@@ -128,8 +129,9 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
 
 ## 6. Recommandations priorisées
 
-1. **Finir le cycle de vie v3** (stopping par cible d'exploitabilité, parallélisation
-   OpenMP complète) — chemin critique du backlog v3, ferme l'écart de performance n°1.
+1. **Finir le cycle de vie v3** (stopping vectoriel par cible d'exploitabilité ✅,
+   parallélisation OpenMP complète et ports scalar/samplés restants) — chemin critique
+   du backlog v3, ferme l'écart de performance n°1.
 2. **Purger les claims faux** (Metal, bench GPU-CFR, guides manquants, stubs `pe_cfr_*`
    ou leur documentation honnête) — coût faible, crédibilité forte.
 3. **Un viewer/GUI léger** (même web/WASM sur `.pe_sol`/`.pe_tree`) — fait passer de

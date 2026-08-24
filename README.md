@@ -87,7 +87,7 @@ The wrapper retains the methods used by fpdb: `poker_eval`, `best`,
 
 | Guide | Description |
 |-------|-------------|
-| [GPU Acceleration](docs/gpu/guides/GPU_ACCELERATION_GUIDE.md) | Architecture overview (CUDA / OpenCL / Metal) |
+| [GPU Acceleration](docs/gpu/guides/GPU_ACCELERATION_GUIDE.md) | Architecture overview (CUDA / OpenCL) |
 | [GPU Usage](docs/gpu/guides/GPU_USAGE_GUIDE.md) | Getting started with GPU-accelerated evaluation |
 | [GPU Batched Evaluation](docs/gpu/guides/GPU_BATCHED_EVALUATION.md) | High-throughput batched hand evaluation on GPU |
 | [GPU Multi-Game Quickstart](docs/gpu/guides/GPU_MULTI_GAME_QUICKSTART.md) | Running multiple game types on GPU in a single session |
@@ -118,7 +118,7 @@ The wrapper retains the methods used by fpdb: `poker_eval`, `best`,
 | `BUILD_PYTHON_BINDING` | `ON` | `pypokereval` + `pokereval.py` wrapper |
 | `BUILD_C_API` | `ON` | Stable C API |
 | `BUILD_EXAMPLES` | `ON` | Examples and CLI tools |
-| `BUILD_GPU` | `ON` | GPU support (CUDA / OpenCL / Metal) |
+| `BUILD_GPU` | `ON` | GPU support (CUDA / OpenCL when available) |
 | `POKER_EVAL_EXPERIMENTAL` | `OFF` | Experimental equity API (`poker_eval_calculate_equity*`) |
 
 GPU support requires the platform SDK and can be disabled with `-DBUILD_GPU=OFF`.

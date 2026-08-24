@@ -6,11 +6,11 @@ can jump directly to the topic you need.
 
 | Guide | Purpose | Status |
 |-------|---------|--------|
-| CFR Tree Format | Reference for predefined-tree JSON (profiles, nodes, validation) | ✅ |
-| CFR Metrics | Runtime metrics API, snapshots, examples | ✅ |
-| CFR Export Results | Post-run result exports (JSON / CSV) | ✅ |
-| CFR Performance | Perf counters & instrumentation tips | ✅ |
-| CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | ✅ |
+| CFR Tree Format | Reference for predefined-tree JSON (profiles, nodes, validation) | planned — use `mpf_tree.h` and `mpf_run_with_metrics --help` |
+| CFR Metrics | Runtime metrics API, snapshots, examples | planned — CLI/API exist, standalone guide absent |
+| CFR Export Results | Post-run result exports (JSON / CSV) | planned — see `mpf_dump_results` |
+| CFR Performance | Perf counters & instrumentation tips | planned |
+| CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | planned — see `examples/4way_postflop/` |
 | Hand Abstraction via Clustering | k-means hand clustering (FEAT-04): features, `.pe_bkt`, solver wiring | ✅ |
 | Subgame Re-solving | CFR-D gadget re-solving from a blueprint (FEAT-05): value constraints, API, 2-player | ✅ |
 
