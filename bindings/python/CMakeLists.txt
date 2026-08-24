@@ -70,6 +70,13 @@ if(Python3_FOUND)
         set_tests_properties(test_python_binding PROPERTIES
             ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:pypokereval>"
         )
+
+        add_test(NAME test_python_solver_v3
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/test_python_solver_v3.py)
+        set_tests_properties(test_python_solver_v3 PROPERTIES
+            ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:pypokereval>"
+        )
     endif()
 else()
     message(WARNING "Python 3 not found, Python binding will not be built")

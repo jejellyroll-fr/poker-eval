@@ -89,6 +89,13 @@ For target-based stopping, set `max_iterations = 0`, configure a positive
 `target_exploitability_mbb`, and choose a positive `exploitability_interval`.
 The target is currently executed by the full-vector traversal.
 
+The Python extension exposes the same lane for small custom games through
+`solver_v3_create(root, game, ...)`. The game object implements
+`is_terminal`, `acting_player`, `action_count`, `infoset_key`, `apply_action`
+and `terminal_values`; an optional `strategy` method can provide per-combo
+probabilities. `solver_v3_run`, `solver_v3_progress` and
+`solver_v3_strategy` operate on the returned capsule.
+
 ---
 
 ## Range API
