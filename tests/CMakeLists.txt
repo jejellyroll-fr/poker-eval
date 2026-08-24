@@ -1638,6 +1638,11 @@ if(TEST test_best_response_ii_leduc)
         TIMEOUT 180)
 endif()
 
+add_poker_test(test_hand_history_parse)
+if(TARGET test_hand_history_parse)
+    set_tests_properties(test_hand_history_parse PROPERTIES LABELS "product;import")
+endif()
+
 if(TARGET pe-hand-history-import)
     add_test(NAME pe_hand_history_import_smoke
         COMMAND pe-hand-history-import
@@ -1645,6 +1650,35 @@ if(TARGET pe-hand-history-import)
             --format json
             --output ${CMAKE_BINARY_DIR}/pe-hand-history-smoke.json)
     set_tests_properties(pe_hand_history_import_smoke PROPERTIES LABELS "product;import")
+
+    # Content-level regressions for the importer. ctest passes
+    # PASS_REGULAR_EXPRESSION when ANY listed pattern matches, so each check
+    # gets its own test. The tool writes JSON to stdout when --output is
+    # omitted. The fixture amounts are multi-digit on purpose: the old parser
+    # read "bets $10" as 0 and "raises $12 to $37" as 7.
+    add_test(NAME pe_hand_history_import_multi_digit_amount
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json)
+    set_tests_properties(pe_hand_history_import_multi_digit_amount PROPERTIES
+        LABELS "product;import"
+        PASS_REGULAR_EXPRESSION "\"amount\":37\\.00")
+
+    add_test(NAME pe_hand_history_import_clean_hand_id
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json)
+    set_tests_properties(pe_hand_history_import_clean_hand_id PROPERTIES
+        LABELS "product;import"
+        PASS_REGULAR_EXPRESSION "\"hand_id\":\"987654321\"")
+
+    add_test(NAME pe_hand_history_import_clean_player_names
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json)
+    set_tests_properties(pe_hand_history_import_clean_player_names PROPERTIES
+        LABELS "product;import"
+        PASS_REGULAR_EXPRESSION "\"player\":\"Villain\"")
 endif()
 
 if(TARGET pe-preflop-tree)

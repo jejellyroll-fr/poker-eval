@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "hand_history_parse.h"
+
 #define FIELD_SIZE 256
 #define BOARD_SIZE 128
 #define MAX_ROWS 65536
@@ -237,21 +239,6 @@ static int starts_with(const char *s, const char *prefix)
     return strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
-static void extract_hand_id(const char *line, char *out, size_t out_size)
-{
-    const char *hash = strchr(line, '#');
-    const char *p;
-    size_t n = 0u;
-    if (hash == NULL) {
-        return;
-    }
-    p = hash + 1;
-    while (*p != '\0' && !isspace((unsigned char)*p) && n + 1u < out_size) {
-        out[n++] = *p++;
-    }
-    out[n] = '\0';
-}
-
 static void extract_board(const char *line, char *out, size_t out_size)
 {
     const char *open = strchr(line, '[');
@@ -270,25 +257,6 @@ static void extract_board(const char *line, char *out, size_t out_size)
         open = strchr(close + 1, '[');
     }
     trim(out);
-}
-
-static int parse_amount(const char *text, double *amount)
-{
-    const char *p = text;
-    const char *last = NULL;
-    char *end;
-    while (*p != '\0') {
-        if (*p == '$' || isdigit((unsigned char)*p)) {
-            last = p + (*p == '$');
-        }
-        ++p;
-    }
-    if (last == NULL) {
-        return 0;
-    }
-    errno = 0;
-    *amount = strtod(last, &end);
-    return end != last && errno == 0;
 }
 
 static int parse_action(const char *line, action_row_t *row)
@@ -316,7 +284,8 @@ static int parse_action(const char *line, action_row_t *row)
     memcpy(row->player, line, (size_t)(hit - line));
     row->player[hit - line] = '\0';
     trim(row->player);
-    row->has_amount = parse_amount(hit + verb_len, &row->amount);
+    hh_strip_trailing_colon(row->player);
+    row->has_amount = hh_parse_amount(hit + verb_len, &row->amount);
     return row->player[0] != '\0';
 }
 
@@ -395,7 +364,7 @@ int main(int argc, char **argv)
             continue;
         }
         if (strstr(line, "Hand #") != NULL) {
-            extract_hand_id(line, hand_id, sizeof(hand_id));
+            hh_extract_hand_id(line, hand_id, sizeof(hand_id));
             strcpy(street, "preflop");
             board[0] = '\0';
         } else if (strstr(line, "*** FLOP ***") != NULL) {
