@@ -56,6 +56,7 @@ typedef struct {
     double probability_loss;
     char solution_path[1024];
     char labels_path[1024];
+    char session_path[1024];
     char action_names[MAX_ACTIONS][32];
     char feedback[256];
     int running;
@@ -278,7 +279,8 @@ static void render(SDL_Renderer *renderer, const app_t *app)
 
 static void save_session(const app_t *app)
 {
-    char path[1200]; snprintf(path, sizeof(path), "trainer-session.json"); FILE *file = fopen(path, "w"); if (!file) return;
+    const char *path = app->session_path[0] ? app->session_path : "trainer-session.json";
+    FILE *file = fopen(path, "w"); if (!file) return;
     fprintf(file, "{\"schema\":\"pe-trainer-session/v1\",\"solution\":\"%s\",\"answered\":%d,\"best_answers\":%d,\"probability_loss\":%.17g,\"events\":[", app->solution_path, app->answered, app->score, app->probability_loss);
     for (size_t i = 0; i < app->event_count; ++i) { if (i) fputc(',', file); fprintf(file, "{\"key\":\"0x%016llx\",\"selected\":%d,\"best\":%d}", (unsigned long long)app->events[i].key, app->events[i].selected, app->events[i].best); }
     fputs("]}\n", file); fclose(file);
@@ -290,7 +292,7 @@ int main(int argc, char **argv)
     memset(&app, 0, sizeof(app)); app.random_state = 1u; app.difficulty = 1; app.running = 1; font_init();
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--help") == 0) {
-            puts("usage: poker-eval-trainer-gui [--solution FILE] [--labels CSV] [--actions a,b,c]");
+            puts("usage: poker-eval-trainer-gui [--solution FILE] [--labels CSV] [--actions a,b,c] [--session-json FILE]");
             return 0;
         }
         if (i + 1 >= argc) {
@@ -300,6 +302,8 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--solution") == 0) load_solution(&app, argv[++i]);
         else if (strcmp(argv[i], "--labels") == 0) load_labels(&app, argv[++i]);
         else if (strcmp(argv[i], "--actions") == 0) load_action_names(&app, argv[++i]);
+        else if (strcmp(argv[i], "--session-json") == 0)
+            snprintf(app.session_path, sizeof(app.session_path), "%s", argv[++i]);
         else {
             fprintf(stderr, "unknown option: %s\n", argv[i]);
             return 2;

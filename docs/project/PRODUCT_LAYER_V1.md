@@ -94,6 +94,8 @@ build/tools/poker-eval-trainer-gui --solution solve.pe_sol \
 ```
 
 Les labels CSV restent prioritaires lorsqu’ils existent pour un infoset donné.
+Le chemin de session peut être choisi explicitement avec `--session-json`; sinon
+le GUI écrit `trainer-session.json` dans le répertoire courant.
 
 Sans arguments, il suffit de déposer le `.pe_sol` puis le CSV de labels dans la fenêtre.
 Le CSV est important : il transforme les indices techniques en `fold`, `call`, `bet`,
