@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct
 {
@@ -44,6 +45,7 @@ static void usage(const char *prog)
             "  --iterations <n>         Number of CFR iterations (default: 1000)\n"
             "  --lane-b                 Run the sampled v3 solver on this tree\n"
             "  --sample-batch <n>       Lane B trajectories per update (default: 1)\n"
+            "  --benchmark-json <path>  Write Lane B throughput metrics as JSON\n"
             "  --metrics-interval <n>   Emit metrics every n iterations (default: 50)\n"
             "  --metrics-file <path>    Write metrics snapshots as JSON lines (use '-' for stdout)\n"
             "  --node-map <path>        Save node->state key mapping for later exports\n"
@@ -701,6 +703,7 @@ int main(int argc, char **argv)
     int iterations = 1000;
     int lane_b = 0;
     int sample_batch = 1;
+    const char *benchmark_json_path = NULL;
     int metrics_interval = 50;
     int metrics_history = 128;
     int metrics_level = 2;
@@ -788,6 +791,10 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Invalid sample batch value\n");
                 return 1;
             }
+        }
+        else if (strcmp(argv[i], "--benchmark-json") == 0 && i + 1 < argc)
+        {
+            benchmark_json_path = argv[++i];
         }
         else if (strcmp(argv[i], "--metrics-interval") == 0 && i + 1 < argc)
         {
@@ -1331,6 +1338,7 @@ int main(int argc, char **argv)
         pe_solver_status_t lane_status;
         pe_progress_t lane_progress;
         pe_metrics_t lane_metrics;
+        clock_t benchmark_start = clock();
         if (mkr_path || pe_cfr_external_adapter_init(&adapter, &game) != 0)
         {
             fprintf(stderr, "Lane B requires a compatible solve tree and does not import --mkr strategies\n");
@@ -1359,8 +1367,19 @@ int main(int argc, char **argv)
         lane_deps.external_game = pe_cfr_external_adapter_game(&adapter);
         lane_solver = pe_solver_create(&lane_cfg, &lane_deps);
         lane_status = lane_solver ? pe_solver_run(lane_solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
+        clock_t benchmark_end = clock();
+        double elapsed_cpu = benchmark_end >= benchmark_start &&
+                CLOCKS_PER_SEC > 0
+            ? (double)(benchmark_end - benchmark_start) / (double)CLOCKS_PER_SEC
+            : 0.0;
+        uint64_t trajectories = (uint64_t)iterations * (uint64_t)sample_batch;
+        double trajectories_per_second = elapsed_cpu > 0.0
+            ? (double)trajectories / elapsed_cpu : 0.0;
         printf("lane_b=external-mccfr sample_batch=%d iterations=%d status=%d\n",
                sample_batch, iterations, (int)lane_status);
+        printf("lane_b_benchmark=cpu_seconds:%.6f trajectories:%llu throughput:%.3f/s\n",
+               elapsed_cpu, (unsigned long long)trajectories,
+               trajectories_per_second);
         if (lane_solver && pe_solver_progress(lane_solver, &lane_progress) == PE_SOLVER_OK)
             printf("lane_b_progress=%.6f complete=%d iteration=%llu\n",
                    lane_progress.fraction, lane_progress.complete,
@@ -1369,6 +1388,25 @@ int main(int argc, char **argv)
             printf("lane_b_br_guarantee=%d exploitability_mbb=%.6f\n",
                    (int)lane_metrics.guarantee,
                    lane_metrics.exploitability_mbb_per_game);
+        if (benchmark_json_path)
+        {
+            FILE *benchmark_file = fopen(benchmark_json_path, "w");
+            if (!benchmark_file)
+                fprintf(stderr, "Failed to write benchmark JSON '%s': %s\n",
+                        benchmark_json_path, strerror(errno));
+            else
+            {
+                fprintf(benchmark_file,
+                        "{\"schema\":\"pe-lane-b-benchmark/v1\","
+                        "\"iterations\":%d,\"sample_batch\":%d,"
+                        "\"trajectories\":%llu,\"cpu_seconds\":%.9f,"
+                        "\"trajectories_per_second\":%.9f,\"status\":%d}\n",
+                        iterations, sample_batch,
+                        (unsigned long long)trajectories, elapsed_cpu,
+                        trajectories_per_second, (int)lane_status);
+                fclose(benchmark_file);
+            }
+        }
         pe_solver_destroy(lane_solver);
         mpf_state_cleanup(&root_state);
         mpf_perf_stats_pool_destroy(perf_pool);

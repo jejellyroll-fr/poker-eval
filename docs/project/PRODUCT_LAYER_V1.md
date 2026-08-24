@@ -119,6 +119,17 @@ les boards turn/river conditionnels et vérifie que leur masse vaut 1.
 unilatérale par échantillonnage. Le résultat est marqué `empirical` : il sert au suivi
 Lane B, mais ne se présente pas comme une BR exacte.
 
+Le chemin CLI peut être mesuré sans parser la sortie humaine :
+
+```sh
+mpf_run_with_metrics --tree spot.tree --lane-b --iterations 10000 \
+  --sample-batch 32 --benchmark-json lane-b.json
+```
+
+Le fichier `pe-lane-b-benchmark/v1` contient le nombre de trajectoires, le temps CPU,
+le débit et le statut du solve. Ces chiffres sont des mesures de throughput local, pas
+une garantie de temps de résolution ou d'exploitabilité.
+
 Un arbre de mise préflop déclaratif peut être produit avec les ranges et les tailles
 d'actions du spot :
 
