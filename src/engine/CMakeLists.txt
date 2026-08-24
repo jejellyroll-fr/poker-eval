@@ -15,6 +15,7 @@ set(ENGINE_SOURCES
     solvers/cfr/draw_abstraction.c
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
+    solvers/cfr/legacy_vector_adapter.c
     solvers/cfr/cfr_traversal_full_scalar.c
     solvers/cfr/cfr_locks.c
     solvers/cfr/cfr_storage_legacy_port.c
@@ -59,6 +60,13 @@ target_include_directories(poker_engine PRIVATE
 # of writing to stderr itself. The dependency runs engine -> solver, which is
 # the migration direction; poker_solver itself links only poker_core.
 target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics poker_solver m)
+
+if(BUILD_TESTS)
+    add_executable(test_legacy_vector_adapter
+        ${CMAKE_SOURCE_DIR}/tests/test_legacy_vector_adapter.c)
+    target_link_libraries(test_legacy_vector_adapter PRIVATE poker_engine)
+    add_test(NAME test_legacy_vector_adapter COMMAND test_legacy_vector_adapter)
+endif()
 
 install(TARGETS poker_engine
         EXPORT poker-eval-targets

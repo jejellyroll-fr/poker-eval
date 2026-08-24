@@ -1,0 +1,121 @@
+#include <poker_eval/engine/solvers/cfr/legacy_vector_adapter.h>
+#include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_solver_config.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    int terminal;
+    int action;
+} state_t;
+
+static int is_terminal(cfr_game_t *game, uint64_t key, void *user)
+{
+    (void)game;
+    (void)user;
+    return ((state_t *)(uintptr_t)key)->terminal;
+}
+
+static int current_player(cfr_game_t *game, uint64_t key, void *user)
+{
+    (void)game;
+    (void)key;
+    (void)user;
+    return 0;
+}
+
+static int get_actions(cfr_game_t *game, uint64_t key, int *out, int max,
+                       void *user)
+{
+    (void)game;
+    (void)key;
+    (void)user;
+    if (max < 2)
+        return 0;
+    out[0] = 0;
+    out[1] = 1;
+    return 2;
+}
+
+static uint64_t apply_action(cfr_game_t *game, uint64_t key, int action,
+                             void *user)
+{
+    state_t *next;
+    (void)game;
+    (void)key;
+    (void)user;
+    next = (state_t *)calloc(1u, sizeof(*next));
+    if (!next)
+        return 0u;
+    next->terminal = 1;
+    next->action = action;
+    return (uint64_t)(uintptr_t)next;
+}
+
+static uint64_t infoset_key(const void *state)
+{
+    (void)state;
+    return 11u;
+}
+
+static double get_utility(cfr_game_t *game, uint64_t key, int player,
+                          void *user)
+{
+    state_t *state = (state_t *)(uintptr_t)key;
+    (void)game;
+    (void)user;
+    return player == 0 ? (state->action == 0 ? 1.0 : -1.0)
+                       : (state->action == 0 ? -1.0 : 1.0);
+}
+
+static void release_state(cfr_game_t *game, uint64_t key, void *user)
+{
+    (void)game;
+    (void)user;
+    free((void *)(uintptr_t)key);
+}
+
+int main(void)
+{
+    state_t root = {0, -1};
+    cfr_game_t legacy;
+    pe_legacy_vector_adapter_t adapter;
+    pe_solver_config_t config = pe_solver_config_default();
+    pe_solver_deps_t deps = pe_solver_deps_default();
+    pe_solver_t *solver;
+    pe_progress_t progress;
+    memset(&legacy, 0, sizeof(legacy));
+    legacy.current_player = current_player;
+    legacy.get_actions = get_actions;
+    legacy.apply_action = apply_action;
+    legacy.get_infoset_key = infoset_key;
+    legacy.is_terminal = is_terminal;
+    legacy.get_utility = get_utility;
+    legacy.release_state = release_state;
+    legacy.initial_state = &root;
+    legacy.num_players = 2;
+
+    if (pe_legacy_vector_adapter_init(&adapter, &legacy, 1u) != 0)
+        return 1;
+    config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+    config.max_iterations = 1u;
+    config.problem.expected_infosets = 1u;
+    config.problem.expected_actions = 2u;
+    config.problem.expected_combos = 1u;
+    deps.vector_game = pe_legacy_vector_adapter_game(&adapter);
+    solver = pe_solver_create(&config, &deps);
+    if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
+        pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+        !progress.complete) {
+        fprintf(stderr, "legacy vector adapter regression failed\n");
+        pe_solver_destroy(solver);
+        pe_legacy_vector_adapter_destroy(&adapter);
+        return 1;
+    }
+    pe_solver_destroy(solver);
+    pe_legacy_vector_adapter_destroy(&adapter);
+    return 0;
+}
