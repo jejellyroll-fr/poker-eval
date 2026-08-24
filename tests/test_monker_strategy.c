@@ -558,6 +558,58 @@ int main(void)
         pe_monker_tree_vector_destroy(&tree_game);
     }
 
+    /* Explicit chance nodes are composed by the topology adapter and the
+     * full vector traversal. They are not player actions and therefore must
+     * not ask the Monker strategy for an infoset or an action frequency. */
+    {
+        mpf_tree_def_t chance_tree = {0};
+        mpf_tree_node_t chance_nodes[3];
+        mpf_tree_action_t chance_actions[2];
+        pe_monker_tree_vector_t chance_game = {0};
+        pe_traversal_ctx_t chance_traversal = {0};
+        pe_update_batch_t chance_batch = {0};
+        tree_terminal_probe_t chance_probe = {0};
+        const pe_traversal_ops_t *ops = pe_traversal_full_vector_ops();
+
+        memset(chance_nodes, 0, sizeof(chance_nodes));
+        memset(chance_actions, 0, sizeof(chance_actions));
+        chance_tree.node_count = 3;
+        chance_tree.nodes = chance_nodes;
+        chance_tree.root_index = 0;
+        chance_nodes[0].type = MPF_TREE_NODE_CHANCE;
+        chance_nodes[0].actions = chance_actions;
+        chance_nodes[0].action_count = 2;
+        chance_actions[0].type = MPF_TREE_ACTION_CHANCE;
+        chance_actions[0].weight = 0.25;
+        chance_actions[0].next_index = 1;
+        chance_actions[1].type = MPF_TREE_ACTION_CHANCE;
+        chance_actions[1].weight = 0.75;
+        chance_actions[1].next_index = 2;
+        chance_nodes[1].type = MPF_TREE_NODE_TERMINAL;
+        chance_nodes[2].type = MPF_TREE_NODE_TERMINAL;
+        CHECK(pe_monker_tree_vector_init(&chance_game, &chance_tree, 2u, 1u,
+                                         tree_terminal_values,
+                                         &chance_probe) == 0,
+              "chance tree vector adapter did not initialise");
+        CHECK(pe_traversal_ctx_init(&chance_traversal, &chance_game.game) == 0,
+              "chance traversal context did not initialise");
+        if (chance_traversal.initialized)
+        {
+            CHECK(ops->begin_iteration(&chance_traversal, 2u) == 0,
+                  "chance traversal begin failed");
+            CHECK(ops->run_iteration(&chance_traversal, &chance_batch) == 0,
+                  "chance traversal failed");
+            CHECK(chance_traversal.visited_nodes == 3u &&
+                      chance_traversal.terminal_nodes == 2u,
+                  "chance traversal visited %zu/%zu nodes, expected 3/2",
+                  chance_traversal.visited_nodes,
+                  chance_traversal.terminal_nodes);
+        }
+        pe_update_batch_destroy(&chance_batch);
+        pe_traversal_ctx_destroy(&chance_traversal);
+        pe_monker_tree_vector_destroy(&chance_game);
+    }
+
     /* A concrete PLO4 deal is now valued after the imported policy is
      * applied. The fixture folds 200/256 and reaches showdown 56/256; the
      * selected hand wins at showdown, so net EV is -200/256 + 56/256. */

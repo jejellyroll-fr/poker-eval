@@ -12,6 +12,7 @@
 #include <poker_eval/solver/pe_regret.h>
 #include <poker_eval/solver/pe_traversal.h>
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -89,6 +90,98 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
                 state, reach, out_values, game->player_count, game->user) != 0)
             return -1;
         ctx->terminal_nodes++;
+        return 0;
+    }
+
+    if (game->is_chance && game->is_chance(state, game->user))
+    {
+        uint16_t outcomes;
+        double total_weight = 0.0;
+        pe_value_vec_t *child_values;
+        uint16_t outcome;
+
+        if (!game->chance_outcome_count || !game->apply_chance ||
+            !game->chance_outcome_weight)
+            return -1;
+        outcomes = game->chance_outcome_count(state, game->user);
+        if (outcomes == 0u)
+            return -1;
+        child_values = (pe_value_vec_t *)calloc(
+            (size_t)outcomes * game->player_count, sizeof(*child_values));
+        if (!child_values)
+            return -1;
+        for (outcome = 0u; outcome < outcomes; ++outcome)
+        {
+            double weight = game->chance_outcome_weight(
+                state, outcome, game->user);
+            const void *child;
+            int rc;
+            if (weight < 0.0 || !isfinite(weight))
+            {
+                for (uint16_t o = 0u; o < outcome; ++o)
+                    for (uint8_t p = 0u; p < game->player_count; ++p)
+                        pe_vec_free(&child_values[(size_t)o *
+                                                  game->player_count + p]);
+                free(child_values);
+                return -1;
+            }
+            total_weight += weight;
+            for (uint8_t p = 0u; p < game->player_count; ++p)
+                if (pe_vec_alloc(&child_values[(size_t)outcome *
+                                                game->player_count + p],
+                                 game->combo_count) != PE_SOLVER_OK)
+                {
+                    for (uint16_t o = 0u; o <= outcome; ++o)
+                        for (uint8_t q = 0u; q < game->player_count; ++q)
+                            pe_vec_free(&child_values[(size_t)o *
+                                                      game->player_count + q]);
+                    free(child_values);
+                    return -1;
+                }
+            child = game->apply_chance(state, outcome, game->user);
+            rc = child ? vector_visit(
+                              ctx, child, reach,
+                              &child_values[(size_t)outcome * game->player_count],
+                              out_batch)
+                       : -1;
+            if (rc != 0)
+            {
+                for (uint16_t o = 0u; o <= outcome; ++o)
+                    for (uint8_t q = 0u; q < game->player_count; ++q)
+                        pe_vec_free(&child_values[(size_t)o *
+                                                  game->player_count + q]);
+                free(child_values);
+                return -1;
+            }
+        }
+        if (!(total_weight > 0.0) || !isfinite(total_weight))
+        {
+            for (outcome = 0u; outcome < outcomes; ++outcome)
+                for (uint8_t p = 0u; p < game->player_count; ++p)
+                    pe_vec_free(&child_values[(size_t)outcome *
+                                              game->player_count + p]);
+            free(child_values);
+            return -1;
+        }
+        for (uint8_t p = 0u; p < game->player_count; ++p)
+            pe_vec_fill(&out_values[p], 0.0);
+        for (outcome = 0u; outcome < outcomes; ++outcome)
+        {
+            double weight = game->chance_outcome_weight(
+                state, outcome, game->user) / total_weight;
+            for (uint8_t p = 0u; p < game->player_count; ++p)
+            {
+                pe_value_vec_t *child = &child_values[
+                    (size_t)outcome * game->player_count + p];
+                for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+                    out_values[p].v[combo] += weight * child->v[combo];
+            }
+        }
+        for (outcome = 0u; outcome < outcomes; ++outcome)
+            for (uint8_t p = 0u; p < game->player_count; ++p)
+                pe_vec_free(&child_values[(size_t)outcome *
+                                          game->player_count + p]);
+        free(child_values);
         return 0;
     }
 

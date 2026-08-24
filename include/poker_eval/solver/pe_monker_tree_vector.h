@@ -41,12 +41,11 @@ typedef struct
 } pe_monker_tree_vector_t;
 
 /**
- * Create a vector game whose states are nodes in `tree`.
- *
- * The adapter deliberately rejects chance nodes: Monker betting trees store
- * public-card transitions outside this topology, and silently treating a
- * chance node as a player action would corrupt EV. A caller must compose the
- * appropriate street/chance game before the tree can be used for EV.
+ * Create a vector game whose states are nodes in `tree`. JSON trees may carry
+ * explicit chance nodes; their action weights are exposed through the vector
+ * game's exact chance callbacks. Binary Monker .tree files describe one
+ * betting street and normally contain no such nodes, so public-card dealing
+ * still belongs to the surrounding game adapter.
  */
 int pe_monker_tree_vector_init(
     pe_monker_tree_vector_t *out,

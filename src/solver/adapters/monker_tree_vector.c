@@ -27,6 +27,37 @@ static int vector_is_terminal(const void *state, void *user)
     return node != NULL && node->type == MPF_TREE_NODE_TERMINAL;
 }
 
+static int vector_is_chance(const void *state, void *user)
+{
+    const pe_monker_tree_vector_t *game =
+        (const pe_monker_tree_vector_t *)user;
+    const mpf_tree_node_t *node = tree_node(state, game);
+    return node != NULL && node->type == MPF_TREE_NODE_CHANCE;
+}
+
+static uint16_t vector_chance_count(const void *state, void *user)
+{
+    const pe_monker_tree_vector_t *game =
+        (const pe_monker_tree_vector_t *)user;
+    const mpf_tree_node_t *node = tree_node(state, game);
+    if (!node || node->type != MPF_TREE_NODE_CHANCE ||
+        node->action_count < 0 || node->action_count > UINT16_MAX)
+        return 0u;
+    return (uint16_t)node->action_count;
+}
+
+static double vector_chance_weight(const void *state, uint16_t outcome,
+                                   void *user)
+{
+    const pe_monker_tree_vector_t *game =
+        (const pe_monker_tree_vector_t *)user;
+    const mpf_tree_node_t *node = tree_node(state, game);
+    if (!node || node->type != MPF_TREE_NODE_CHANCE ||
+        outcome >= (uint16_t)node->action_count)
+        return 0.0;
+    return node->actions[outcome].weight;
+}
+
 static int vector_acting_player(const void *state, void *user)
 {
     const pe_monker_tree_vector_t *game =
@@ -113,6 +144,14 @@ static const void *vector_apply_action(const void *state, uint16_t action,
     return child;
 }
 
+static const void *vector_apply_chance(const void *state, int outcome,
+                                       void *user)
+{
+    if (outcome < 0 || outcome > UINT16_MAX)
+        return NULL;
+    return vector_apply_action(state, (uint16_t)outcome, user);
+}
+
 static int vector_terminal_values(const void *state,
                                   const pe_reach_vec_t *reach,
                                   pe_value_vec_t *out_values,
@@ -136,17 +175,11 @@ int pe_monker_tree_vector_init(
     pe_monker_tree_terminal_values_fn terminal_values,
     void *user)
 {
-    int node;
-
     if (!out || !tree || !tree->nodes || tree->node_count <= 0 ||
         tree->root_index < 0 || tree->root_index >= tree->node_count ||
         player_count == 0u || player_count > PE_TRAVERSAL_MAX_PLAYERS ||
         combo_count == 0u || !terminal_values)
         return -1;
-    for (node = 0; node < tree->node_count; ++node)
-        if (tree->nodes[node].type == MPF_TREE_NODE_CHANCE)
-            return -1;
-
     memset(out, 0, sizeof(*out));
     out->tree = tree;
     out->terminal_values = terminal_values;
@@ -156,6 +189,10 @@ int pe_monker_tree_vector_init(
     out->game.user = out;
     out->game.player_count = player_count;
     out->game.combo_count = combo_count;
+    out->game.is_chance = vector_is_chance;
+    out->game.chance_outcome_count = vector_chance_count;
+    out->game.chance_outcome_weight = vector_chance_weight;
+    out->game.apply_chance = vector_apply_chance;
     out->game.is_terminal = vector_is_terminal;
     out->game.acting_player = vector_acting_player;
     out->game.action_count = vector_action_count;
