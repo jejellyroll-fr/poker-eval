@@ -85,6 +85,16 @@ cmake --build build --target poker-eval-trainer-gui
 build/tools/poker-eval-trainer-gui --solution solve.pe_sol --labels labels.csv
 ```
 
+Pour une solution sans sidecar de labels, les boutons peuvent être nommés
+directement dans la commande :
+
+```sh
+build/tools/poker-eval-trainer-gui --solution solve.pe_sol \
+  --actions fold,check,call,bet,raise
+```
+
+Les labels CSV restent prioritaires lorsqu’ils existent pour un infoset donné.
+
 Sans arguments, il suffit de déposer le `.pe_sol` puis le CSV de labels dans la fenêtre.
 Le CSV est important : il transforme les indices techniques en `fold`, `call`, `bet`,
 etc. et fournit street, board, position et pot.

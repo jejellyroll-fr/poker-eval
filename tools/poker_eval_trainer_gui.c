@@ -56,6 +56,7 @@ typedef struct {
     double probability_loss;
     char solution_path[1024];
     char labels_path[1024];
+    char action_names[MAX_ACTIONS][32];
     char feedback[256];
     int running;
 } app_t;
@@ -184,6 +185,24 @@ static int load_labels(app_t *app, const char *path)
     fclose(file); free(app->labels); app->labels = labels; app->label_count = used; snprintf(app->labels_path, sizeof(app->labels_path), "%s", path); return 0;
 }
 
+static void load_action_names(app_t *app, const char *text)
+{
+    char buffer[1024];
+    char *field;
+    int action = 0;
+    if (!app || !text) return;
+    snprintf(buffer, sizeof(buffer), "%s", text);
+    field = strtok(buffer, ",");
+    while (field && action < MAX_ACTIONS)
+    {
+        while (*field == ' ' || *field == '\t') ++field;
+        snprintf(app->action_names[action], sizeof(app->action_names[action]),
+                 "%s", field);
+        ++action;
+        field = strtok(NULL, ",");
+    }
+}
+
 static const label_t *label_for(const app_t *app, uint64_t key, int action)
 { for (size_t i = 0; i < app->label_count; ++i) if (app->labels[i].key == key && app->labels[i].action == action) return &app->labels[i]; return NULL; }
 
@@ -227,7 +246,7 @@ static void render(SDL_Renderer *renderer, const app_t *app)
     fill(renderer, (rect_t){28,24,1124,80}, (SDL_Color){28,36,46,255}); text(renderer, 54, 42, "POKER-EVAL TRAINER", 4, white); text(renderer, 55, 67, "CHOISIS UNE ACTION, PUIS COMPARE-LA A LA STRATEGIE", 2, muted);
     fill(renderer, (rect_t){28,124,1124,64}, (SDL_Color){27,34,43,255});
     text(renderer, 52, 140, app->solution_path[0] ? "SOLUTION CHARGEE" : "DEPOSE UN FICHIER .PE_SOL", 2, app->solution_path[0] ? green : orange);
-    text(renderer, 300, 140, app->solution_path[0] ? basename_of(app->solution_path) : "puis un CSV de labels pour les noms d'actions", 2, white);
+    text(renderer, 300, 140, app->solution_path[0] ? basename_of(app->solution_path) : "puis un CSV de labels ou --actions", 2, white);
     text(renderer, 52, 164, app->labels_path[0] ? "LABELS CHARGES" : "LABELS MANQUANTS", 2, app->labels_path[0] ? green : orange);
     text(renderer, 300, 164, app->labels_path[0] ? basename_of(app->labels_path) : "glisse-depose un fichier CSV", 2, muted);
     fill(renderer, (rect_t){28,212,1124,280}, (SDL_Color){29,38,49,255}); border(renderer, (rect_t){28,212,1124,280}, (SDL_Color){57,73,91,255});
@@ -239,11 +258,13 @@ static void render(SDL_Renderer *renderer, const app_t *app)
         if (meta && meta->has_pot) { snprintf(line, sizeof(line), "POT : %.2f", meta->pot); text(renderer, 900, 238, line, 2, muted); }
         snprintf(line, sizeof(line), "SPOT %zu / %zu", app->current + 1u, app->spot_count); text(renderer, 54, 276, line, 3, blue);
         snprintf(line, sizeof(line), "Question : quelle action joues-tu ici ?"); text(renderer, 54, 318, line, 3, white);
-        if (app->labels_path[0] == '\0') text(renderer, 54, 354, "Les boutons seront nommes avec le CSV labels.", 2, orange);
+        if (app->labels_path[0] == '\0') text(renderer, 54, 354, "Utilise --actions fold,call,raise ou depose un CSV labels.", 2, orange);
         for (int action = 0; action < spot->actions && action < 8; ++action) {
             int column = action % 4, row = action / 4; rect_t button = {54 + column * 245, 382 + row * 48, 225, 38};
             const label_t *label = label_for(app, spot->key, action); char button_text[128];
-            snprintf(button_text, sizeof(button_text), "%s  %.1f%%", label ? label->label : "OPTION", spot->probability[action] * 100.0);
+            const char *name = label ? label->label :
+                (app->action_names[action][0] ? app->action_names[action] : "OPTION");
+            snprintf(button_text, sizeof(button_text), "%s  %.1f%%", name, spot->probability[action] * 100.0);
             fill(renderer, button, app->answered_current ? (SDL_Color){49,60,72,255} : (SDL_Color){53,80,112,255}); text(renderer, button.x + 14, button.y + 12, button_text, 2, white);
         }
     } else text(renderer, 54, 270, "DEPOSE TON .PE_SOL ICI POUR COMMENCER", 3, white);
@@ -267,7 +288,23 @@ int main(int argc, char **argv)
 {
     SDL_Window *window; SDL_Renderer *renderer; SDL_Event event; app_t app; int mouse_x, mouse_y;
     memset(&app, 0, sizeof(app)); app.random_state = 1u; app.difficulty = 1; app.running = 1; font_init();
-    for (int i = 1; i + 1 < argc; ++i) { if (strcmp(argv[i], "--solution") == 0) load_solution(&app, argv[++i]); else if (strcmp(argv[i], "--labels") == 0) load_labels(&app, argv[++i]); }
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--help") == 0) {
+            puts("usage: poker-eval-trainer-gui [--solution FILE] [--labels CSV] [--actions a,b,c]");
+            return 0;
+        }
+        if (i + 1 >= argc) {
+            fprintf(stderr, "missing value for %s\n", argv[i]);
+            return 2;
+        }
+        if (strcmp(argv[i], "--solution") == 0) load_solution(&app, argv[++i]);
+        else if (strcmp(argv[i], "--labels") == 0) load_labels(&app, argv[++i]);
+        else if (strcmp(argv[i], "--actions") == 0) load_action_names(&app, argv[++i]);
+        else {
+            fprintf(stderr, "unknown option: %s\n", argv[i]);
+            return 2;
+        }
+    }
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     window = SDL_CreateWindow("poker-eval Trainer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_RESIZABLE);
     renderer = window ? SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
