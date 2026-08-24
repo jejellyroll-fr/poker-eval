@@ -1,0 +1,47 @@
+name: GUI Build (SDL2)
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  gui-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            install: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+          - os: macos-14
+            install: brew install sdl2
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install SDL2
+        run: ${{ matrix.install }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF
+
+      # The GUI target only exists when CMake found SDL2, so a missing SDL2
+      # fails this step instead of silently skipping the GUI.
+      - name: Build GUI
+        run: cmake --build build --target poker-eval-trainer-gui -j
+
+      - name: Check binary
+        run: test -x build/tools/poker-eval-trainer-gui
+
+      - name: Headless usage smoke
+        run: |
+          export SDL_VIDEODRIVER=dummy
+          ./build/tools/poker-eval-trainer-gui --help

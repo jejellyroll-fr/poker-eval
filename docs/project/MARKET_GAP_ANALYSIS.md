@@ -65,12 +65,19 @@ famille AGPL du solving OSS.
    et un viewer HTML autonome avec filtre interactif par street/flop/board/nœud. La
    cible `poker-eval-trainer-gui` produit maintenant une application C + SDL2
    redimensionnable sur macOS, Linux et Windows, structurée en `Setup`, `Solve` et
-   `Explore` : glisser-déposer `.pe_sol`/CSV, arbre visuel, contexte du spot, index
-   d'infosets, fréquences d'actions, trainer et export de session JSON. Les choix
-   Hold'em/PLO4/PLO5/PLO6 et 2–8 joueurs alimentent désormais le solveur
-   `pe-vector-sim`; le moteur Vector CPU est branché et les autres choix signalent
-   leur indisponibilité ; `.tree/.mkr` peuvent être déposés ou saisis. Il manque encore
-   l'éditeur de ranges intégré et le sélecteur de fichiers natif.
+   `Explore` : glisser-déposer `.pe_sol`/CSV, contexte du spot, index d'infosets,
+   fréquences d'actions, trainer et export de session JSON. Limites connues :
+   l'arbre affiché est un schéma décoratif fixe et non un rendu de l'arbre chargé ;
+   le solving passe par des sous-processus bloquants vers `pe-vector-sim`
+   (EV terminale river exacte) ou `mpf_run_with_metrics` ; les ranges par défaut
+   sont des combos d'exemple ; l'en-tête `.pe_sol` est lu sans son champ `flags`
+   (une solution compressée zstd ne serait pas détectée). Les choix
+   Hold'em/PLO4/PLO5/PLO6 et 2–8 joueurs alimentent ces moteurs ; les autres choix
+   signalent leur indisponibilité ; `.tree/.mkr` peuvent être déposés ou saisis. La
+   cible est compilée par le job `gui-build.yml` (ubuntu-latest et macos-14, SDL2
+   installée, smoke headless `--help`) mais aucun test automatisé ne la couvre. Il
+   manque encore l'éditeur de ranges intégré, le sélecteur de fichiers natif, un
+   rendu réel de l'arbre et une intégration non bloquante du solveur.
 3. **Play-vs-solution / trainer riche.** `poker-eval-trainer` suit les transitions
    `next_key`, affiche street/board/runout/position/pot lorsqu'ils sont fournis, et
    exporte une session JSON avec les réponses, meilleurs choix, pertes de stratégie et
