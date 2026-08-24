@@ -70,9 +70,10 @@ famille AGPL du solving OSS.
 7. **Import de hand histories** : GTO Wizard, GTOBase, HRC, ICMIZER l'ont tous ; absent
    ici. C'est la porte d'entrée du workflow joueur moderne.
 8. **Solving des draw games** : `draw_abstraction.c` et `PE_CHANCE_DRAW_N` sont préparés
-   mais aucun adapter ne les consomme. C'est exactement la niche d'Oleg Solvers, et les
-   évaluateurs 2-7 TD/Badugi sont déjà prêts — potentiellement le seul solver open source
-   de draw games au monde.
+   mais aucun adapter de règles ne les consomme encore. Le pont legacy→v3 existe
+   maintenant pour les jeux qui exposent déjà `cfr_game_t` (Stud/Short Deck inclus) ;
+   Draw reste exactement la niche d'Oleg Solvers, avec les évaluateurs 2-7 TD/Badugi
+   déjà prêts.
 9. **Pas de couche neuronale / depth-limited solving** (tendance 2026 : GTO Wizard AI,
    Deepsolver). Choix assumable pour un moteur exact, mais c'est la trajectoire du marché
    grand public.
@@ -137,8 +138,8 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
    ou leur documentation honnête) — coût faible, crédibilité forte.
 3. **Un viewer/GUI léger** (même web/WASM sur `.pe_sol`/`.pe_tree`) — fait passer de
    « bibliothèque pour chercheurs » à « alternative Shark/TexasSolver » visible.
-4. **Draw-game adapters** — différenciateur absolu, quasi prêt (abstraction +
-   évaluateurs déjà présents).
+4. **Draw-game adapters** — différenciateur absolu, prochaine étape après le pont
+   Stud/Short Deck livré (abstraction + évaluateurs déjà présents).
 5. **Exposer le solver dans Python** (le wheel existe déjà) + import de hand histories —
    les deux portes d'entrée du plus large public. La façade C v3 est maintenant la
    base native de cette étape.
