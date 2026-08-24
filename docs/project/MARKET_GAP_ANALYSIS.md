@@ -117,7 +117,8 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
   backend GPU le plus pertinent.
 - `docs/cfr/guides/README.md` liste **7 guides « ✅ » dont 4 n'existent pas** (CFR Tree
   Format, CFR Metrics, CFR Export Results, CFR Performance, CFR Data Pipeline).
-- L'API C stable déclare une surface CFR non implémentée (stubs `pe_cfr_*`).
+- L'ancienne surface CFR `pe_cfr_*` de l'API C stable reste non implémentée, mais la
+  façade `pe_solver_api_*` expose désormais le cycle v3 générique.
 - Recette **Conan cassée** (`conanfile.py` : chemins d'export inexistants, option
   dépréciée) ; CI conan/vcpkg en quarantaine « jamais passée ».
 - Bug de build : `src/benchmarks/CMakeLists.txt` référence `gpu/ofc_gpu_benchmark.c` au
@@ -139,7 +140,8 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
 4. **Draw-game adapters** — différenciateur absolu, quasi prêt (abstraction +
    évaluateurs déjà présents).
 5. **Exposer le solver dans Python** (le wheel existe déjà) + import de hand histories —
-   les deux portes d'entrée du plus large public.
+   les deux portes d'entrée du plus large public. La façade C v3 est maintenant la
+   base native de cette étape.
 6. **Lane B préflop et ICM/PKO** ensuite, selon la roadmap existante (#153, M10–M11).
 
 ---
