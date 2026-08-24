@@ -4,7 +4,13 @@
 
 #include <stddef.h>
 
-#include <poker_eval/economics/icm.h>
+/* Only the player cap is needed from the ICM layer; defining it here keeps
+ * this header includable alongside either ICM implementation
+ * (economics/icm.h and utils/icm_calculator.h both use 23 but declare
+ * conflicting result types, so including one would poison the other). */
+#ifndef ICM_MAX_PLAYERS
+#define ICM_MAX_PLAYERS 23
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,6 +53,37 @@ typedef struct {
  * flat FGS list, a multi-round tournament tree, or a tree with shared stack
  * snapshots at every transition. */
 int pe_fgs_calculate_tree(const pe_fgs_tree_t *tree, pe_fgs_result_t *result);
+
+/* Input for pe_fgs_generate_even_contribution(). */
+typedef struct {
+    double stacks[ICM_MAX_PLAYERS];
+    int num_players;
+    /* Probability that each player wins the next simulated hand; renormalized
+     * over the still-active players at every level. All values >= 0. */
+    double win_probability[ICM_MAX_PLAYERS];
+    /* Chips contested by each simulated hand. */
+    double pot;
+    /* Number of future hands to simulate along each path. */
+    int depth;
+    double payouts[ICM_MAX_PLAYERS];
+    int num_payouts;
+} pe_fgs_scenario_input_t;
+
+/* Generate an FGS tree from stacks and per-player next-hand win
+ * probabilities. Each simulated hand transfers `pot` chips to the winner
+ * (edge probability = normalized win probability among active players),
+ * deducted evenly from the other active players and clamped at zero so no
+ * stack goes negative; the winner receives only what was actually deducted,
+ * keeping total chips constant. Expansion stops at `depth`, when fewer than
+ * two players hold chips, or when the pot is zero.
+ *
+ * The caller owns the node/edge storage; out_tree is filled with pointers
+ * into it and stays valid until those arrays are released. Returns 0 on
+ * success, -1 on invalid input or exhausted capacity. */
+int pe_fgs_generate_even_contribution(const pe_fgs_scenario_input_t *input,
+                                      pe_fgs_node_t *nodes, size_t node_capacity,
+                                      pe_fgs_edge_t *edges, size_t edge_capacity,
+                                      pe_fgs_tree_t *out_tree);
 
 #ifdef __cplusplus
 }

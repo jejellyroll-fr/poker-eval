@@ -1,3 +1,4 @@
+#include <poker_eval/economics/fgs.h>
 #include <poker_eval/utils/icm_calculator.h>
 
 #include <stdio.h>
@@ -52,13 +53,19 @@ static int load_scenarios(const char *path, icm_tournament_t *scenarios,
 static void usage(const char *program)
 {
     fprintf(stderr, "usage: %s --stacks 100,50 --payouts 70,30 --scenarios FILE [--json FILE]\n"
-                    "       scenarios: probability,stack0,stack1,...\n", program);
+                    "       scenarios: probability,stack0,stack1,...\n"
+                    "       %s --stacks 100,50 --payouts 70,30 --generate --win 0.5,0.5\n"
+                    "              --pot 20 --depth 2 [--json FILE]\n", program, program);
 }
 
 int main(int argc, char **argv)
 {
     const char *stacks_text = NULL, *payouts_text = NULL, *scenario_path = NULL, *json_path = NULL;
+    const char *win_text = NULL;
     double stacks[ICM_MAX_PLAYERS], payouts[ICM_MAX_PLAYERS];
+    double pot = 0.0;
+    int depth = 0;
+    int generate = 0;
     icm_tournament_t base, scenarios[256];
     icm_payout_structure_t payout = {0};
     icm_result_t result = {0};
@@ -70,12 +77,52 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--payouts") == 0 && i + 1 < argc) payouts_text = argv[++i];
         else if (strcmp(argv[i], "--scenarios") == 0 && i + 1 < argc) scenario_path = argv[++i];
         else if (strcmp(argv[i], "--json") == 0 && i + 1 < argc) json_path = argv[++i];
+        else if (strcmp(argv[i], "--generate") == 0) generate = 1;
+        else if (strcmp(argv[i], "--win") == 0 && i + 1 < argc) win_text = argv[++i];
+        else if (strcmp(argv[i], "--pot") == 0 && i + 1 < argc) pot = strtod(argv[++i], NULL);
+        else if (strcmp(argv[i], "--depth") == 0 && i + 1 < argc) depth = atoi(argv[++i]);
         else { usage(argv[0]); return 2; }
     }
     players = parse_values(stacks_text, stacks, ICM_MAX_PLAYERS);
     payout_count = parse_values(payouts_text, payouts, ICM_MAX_PLAYERS);
-    if (players <= 0 || payout_count <= 0 || payout_count > players || !scenario_path) {
+    if (players <= 0 || payout_count <= 0 || payout_count > players ||
+        (!generate && !scenario_path)) {
         usage(argv[0]); return 2;
+    }
+    if (generate) {
+        static pe_fgs_node_t nodes[4096];
+        static pe_fgs_edge_t edges[16384];
+        pe_fgs_scenario_input_t input;
+        pe_fgs_tree_t tree;
+        pe_fgs_result_t generated;
+        memset(&input, 0, sizeof(input));
+        input.num_players = players;
+        input.num_payouts = payout_count;
+        for (int p = 0; p < players; ++p) input.stacks[p] = stacks[p];
+        for (int p = 0; p < payout_count; ++p) input.payouts[p] = payouts[p];
+        if (parse_values(win_text, input.win_probability, ICM_MAX_PLAYERS) != players) {
+            fprintf(stderr, "--win needs one probability per player\n"); return 2;
+        }
+        input.pot = pot;
+        input.depth = depth;
+        if (pe_fgs_generate_even_contribution(&input, nodes, 4096, edges, 16384, &tree) != 0) {
+            fprintf(stderr, "FGS scenario generation failed\n"); return 1;
+        }
+        if (pe_fgs_calculate_tree(&tree, &generated) != 0) {
+            fprintf(stderr, "FGS calculation failed on generated tree\n"); return 1;
+        }
+        if (json_path) out = fopen(json_path, "w");
+        if (!out) { fprintf(stderr, "cannot open %s\n", json_path); return 1; }
+        fprintf(out, "{\"schema\":\"pe-fgs-generated/v1\",\"leaves\":%zu,"
+                     "\"probability\":%.9g,\"players\":[", generated.leaf_count,
+                generated.probability);
+        for (int p = 0; p < players; ++p) {
+            if (p) fputc(',', out);
+            fprintf(out, "{\"index\":%d,\"equity\":%.9g}", p, generated.ev[p]);
+        }
+        fputs("]}\n", out);
+        if (json_path) fclose(out);
+        return 0;
     }
     icm_tournament_init(&base);
     base.num_active_players = players;

@@ -362,6 +362,7 @@ set(TEST_SOURCES
     test_hrc_import.c
     test_hrc.c
     test_fgs_tree.c
+    test_fgs_generate.c
     test_nn_depth_value.c
     test_push_fold.c
     test_push_fold_multiway.c
@@ -615,6 +616,7 @@ set_tests_properties(test_pko_showdown PROPERTIES LABELS "economics;tournament;p
 set_tests_properties(test_hrc_import PROPERTIES LABELS "economics;tournament;hrc;pko;range;betting")
 set_tests_properties(test_hrc PROPERTIES LABELS "economics;tournament;hrc;range")
 set_tests_properties(test_fgs_tree PROPERTIES LABELS "economics;tournament;fgs")
+set_tests_properties(test_fgs_generate PROPERTIES LABELS "economics;tournament;fgs")
 set_tests_properties(test_nn_depth_value PROPERTIES LABELS "engine;cfr;neural")
 set_tests_properties(test_push_fold PROPERTIES LABELS "economics;tournament")
 set_tests_properties(test_push_fold_multiway PROPERTIES LABELS "economics;tournament;multiway")
