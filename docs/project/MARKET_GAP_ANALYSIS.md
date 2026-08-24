@@ -68,8 +68,11 @@ famille AGPL du solving OSS.
    poids, entropie et nombre d'infosets par groupe, en JSON ou HTML. La couverture est
    déterministe quand le caller fournit le sidecar CSV `key,street,board,weight` ; le
    mode `.tree` + `.mkr` lie maintenant automatiquement les slots aux nœuds et agrège
-   par street/nœud. Les runout reports et le décodage automatique d'un board depuis un
-   key Monker brut restent à construire.
+   par street/nœud. `pe-runout-report` produit maintenant les runouts exacts
+   conditionnels avec leur masse de probabilité. `pe-solution-report --decode-key`
+   sonde aussi les clés brutes : il décode les layouts packés documentés et refuse
+   explicitement les clés hashées, qui ne peuvent pas restituer un board sans
+   métadonnée ou nœud associé.
 
 ### Priorité 2 — segments de marché entiers non couverts
 

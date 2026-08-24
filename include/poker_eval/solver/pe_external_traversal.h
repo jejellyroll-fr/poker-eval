@@ -44,6 +44,11 @@ typedef struct pe_external_game_t
        legacy callback when both are set. */
     int (*sample_chance_with_user)(const void *state, pe_rng_t *rng,
                                    pe_chance_sample_t *out, void *user);
+    /* Optional direct sampler. It returns the already-created child state,
+       avoiding an unbounded outcome index for a large private-deal space. It
+       is called only when acting_player(state, user) is negative. */
+    const void *(*sample_chance_child)(const void *state, pe_rng_t *rng,
+                                       pe_chance_sample_t *out, void *user);
     const void *(*apply_chance)(const void *state, int outcome, void *user);
 } pe_external_game_t;
 

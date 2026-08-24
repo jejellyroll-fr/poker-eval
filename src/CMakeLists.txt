@@ -35,6 +35,8 @@ add_library(poker_solver
     solver/domain/variant_terminal.c
     solver/domain/omaha_deals.c
     solver/domain/preflop_deal_sampler.c
+    solver/domain/preflop_betting.c
+    solver/domain/runout_report.c
     solver/domain/omaha_river.c
     solver/domain/pots.c
     solver/domain/solver.c
@@ -73,6 +75,7 @@ add_library(poker_solver
     solver/adapters/evaluator_equity.c
     solver/adapters/evaluator_gpu.c
     solver/adapters/monker_classes.c
+    solver/adapters/monker_key.c
     solver/adapters/monker_strategy.c
     solver/adapters/monker_tree_vector.c
     solver/adapters/monker_omaha_tree.c

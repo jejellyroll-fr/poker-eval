@@ -73,6 +73,20 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
         return game->terminal_value(state, ctx->updating_player, game->user);
     }
 
+    if (game->sample_chance_child && game->acting_player(state, game->user) < 0)
+    {
+        pe_chance_sample_t sample;
+        const void *child;
+        memset(&sample, 0, sizeof(sample));
+        child = game->sample_chance_child(state, &ctx->rng, &sample,
+                                          game->user);
+        if (!child || sample.outcome < 0 || !isfinite(sample.importance_ratio) ||
+            sample.importance_ratio <= 0.0)
+            return NAN;
+        ctx->sampled_chance_nodes++;
+        return outcome_visit(ctx, child,
+                             inverse_sampling * sample.importance_ratio, batch);
+    }
     if ((game->sample_chance || game->sample_chance_with_user) &&
         game->apply_chance)
     {

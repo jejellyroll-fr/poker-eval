@@ -2,8 +2,10 @@
 
 #include <poker_eval/engine/solvers/cfr/mpf_compact_storage.h>
 #include <poker_eval/solver/pe_monker.h>
+#include <poker_eval/solver/pe_monker_key.h>
 
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -33,8 +35,9 @@ static void usage(const char *program)
     fprintf(stderr,
             "Usage: %s --solution FILE [--metadata CSV] [--json FILE] [--html FILE]\n"
             "       %s --monker-tree TREE --monker-mkr MKR [--entry NAME]\n"
+            "       %s --decode-key HEX [--packed-board-shift N --packed-board-cards N]\n"
             "Metadata CSV columns: key,street,board,weight\n",
-            program, program);
+            program, program, program);
 }
 
 static void trim(char *text)
@@ -274,6 +277,9 @@ int main(int argc, char **argv)
 {
     const char *solution = NULL, *metadata_path = NULL, *json_path = NULL, *html_path = NULL;
     const char *monker_tree = NULL, *monker_mkr = NULL, *monker_entry = NULL;
+    const char *decode_key_text = NULL;
+    unsigned packed_shift = 0u, packed_cards = 0u;
+    int packed_layout = 0;
     metadata_row_t *metadata = NULL;
     report_group_t *groups;
     size_t metadata_count = 0u, group_count = 0u;
@@ -288,7 +294,36 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--monker-tree") == 0 && i + 1 < argc) monker_tree = argv[++i];
         else if (strcmp(argv[i], "--monker-mkr") == 0 && i + 1 < argc) monker_mkr = argv[++i];
         else if (strcmp(argv[i], "--entry") == 0 && i + 1 < argc) monker_entry = argv[++i];
+        else if (strcmp(argv[i], "--decode-key") == 0 && i + 1 < argc) decode_key_text = argv[++i];
+        else if (strcmp(argv[i], "--packed-board-shift") == 0 && i + 1 < argc)
+        {
+            packed_shift = (unsigned)strtoul(argv[++i], NULL, 0);
+            packed_layout = 1;
+        }
+        else if (strcmp(argv[i], "--packed-board-cards") == 0 && i + 1 < argc)
+        {
+            packed_cards = (unsigned)strtoul(argv[++i], NULL, 0);
+            packed_layout = 1;
+        }
         else { usage(argv[0]); return 2; }
+    }
+    if (decode_key_text)
+    {
+        uint64_t key = strtoull(decode_key_text, NULL, 0);
+        mask_t board = MASK_EMPTY;
+        pe_monker_key_status_t status = packed_layout
+            ? pe_monker_key_decode_packed_board(key, packed_shift, packed_cards, &board)
+            : pe_monker_key_decode_board(key, &board);
+        if (status == PE_MONKER_KEY_OK)
+            printf("{\"schema\":\"pe-monker-key/v1\",\"key\":\"%s\","
+                   "\"decodable\":true,\"board_mask\":\"0x%016" PRIx64 "\","
+                   "\"status\":\"%s\"}\n", decode_key_text,
+                   (uint64_t)board, pe_monker_key_status_string(status));
+        else
+            printf("{\"schema\":\"pe-monker-key/v1\",\"key\":\"%s\","
+               "\"decodable\":false,\"board_mask\":null,\"status\":\"%s\"}\n",
+               decode_key_text, pe_monker_key_status_string(status));
+        return status == PE_MONKER_KEY_OK ? 0 : 1;
     }
     if ((!solution && (!monker_tree || !monker_mkr)) ||
         (solution && (monker_tree || monker_mkr)) ||

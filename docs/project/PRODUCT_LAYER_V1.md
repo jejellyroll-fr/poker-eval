@@ -73,3 +73,14 @@ visite, et les deals/chances sont fournis par l'adapter du jeu avec leur ratio
 d'importance. Le module `pe_preflop_deal_sampler` fournit maintenant les deals
 corrélés Hold'em/PLO4/PLO5/PLO6, le card removal séquentiel et le ratio d'importance
 optionnel contre la normalisation exacte de la range.
+
+`pe_preflop_betting_game` relie ces deals à `pe_betting_state_t` et expose le
+parcours préflop complet au sampler Lane B : chaque itération tire un deal privé
+corrélé, applique les actions sémantiques de l'arbre et atteint un terminal de mise.
+Les reports de runout exacts sont disponibles via `pe-runout-report`, qui énumère
+les boards turn/river conditionnels et vérifie que leur masse vaut 1.
+
+Pour une clé brute, `pe-solution-report --decode-key 0x...` indique explicitement
+si elle est décodable. Les clés d'infoset Monker/FNV sont des hash et ne peuvent pas
+être inversées en board sans métadonnée ; un champ packé n'est décodé que si son
+shift et son nombre de cartes sont fournis avec le format documenté.
