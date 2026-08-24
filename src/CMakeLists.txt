@@ -29,6 +29,7 @@ add_library(poker_solver
     solver/domain/holdem_river.c
     solver/domain/holdem_chance.c
     solver/domain/holdem_deals.c
+    solver/domain/holdem_streets.c
     solver/domain/pots.c
     solver/domain/solver.c
     solver/domain/registry.c
