@@ -13,6 +13,7 @@
 #include <poker_eval/solver/pe_holdem_deals.h>
 #include <poker_eval/solver/pe_holdem_river.h>
 #include <poker_eval/solver/pe_monker.h>
+#include <poker_eval/solver/pe_monker_strategy.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
@@ -54,11 +55,15 @@ typedef struct
     pe_monker_mkr_t archive;
     pe_monker_mkr_metadata_t metadata;
     pe_monker_mkr_strategy_t strategy;
+    pe_monker_classes_t *classes;
+    pe_monker_strategy_t *strategy_view;
     int tree_loaded;
     int ranges_loaded;
     int archive_loaded;
     int metadata_loaded;
     int strategy_loaded;
+    int classes_loaded;
+    int strategy_view_loaded;
 } monker_cli_t;
 
 static const game_spec_t GAME_SPECS[] = {
@@ -316,6 +321,10 @@ static void monker_cli_free(monker_cli_t *state)
 {
     if (!state)
         return;
+    if (state->strategy_view_loaded)
+        pe_monker_strategy_close(state->strategy_view);
+    if (state->classes_loaded)
+        pe_monker_classes_destroy(state->classes);
     if (state->strategy_loaded)
         pe_monker_mkr_strategy_free(&state->strategy);
     if (state->metadata_loaded)
@@ -429,6 +438,35 @@ static int monker_cli_load(const cli_options_t *options,
             goto fail;
         }
         out->strategy_loaded = 1;
+        if (out->tree_loaded)
+        {
+            /* The verified Monker class codec currently covers PLO4. Refuse
+             * to call a different game's class numbering "applied" until its
+             * real archive ordering has been measured. */
+            if (game->game != game_omaha)
+            {
+                fprintf(stderr,
+                        "Monker strategy application currently requires "
+                        "the verified PLO4 class codec (game=%s)\n",
+                        game->game_name);
+                goto fail;
+            }
+            if (pe_monker_classes_create(&out->classes) != PE_MONKER_OK)
+            {
+                fprintf(stderr, "could not build Monker PLO4 class codec\n");
+                goto fail;
+            }
+            out->classes_loaded = 1;
+            if (pe_monker_strategy_open(out->tree, &out->strategy,
+                                        out->classes,
+                                        &out->strategy_view) != PE_MONKER_OK)
+            {
+                fprintf(stderr,
+                        "Monker strategy does not bind to the supplied tree\n");
+                goto fail;
+            }
+            out->strategy_view_loaded = 1;
+        }
     }
     return 0;
 
@@ -655,6 +693,9 @@ int main(int argc, char **argv)
                monker.strategy_loaded ? monker.strategy.slot_count : 0u);
         if (monker.metadata_loaded)
             printf(" iterations=%lld", (long long)monker.metadata.iterations);
+        if (monker.strategy_view_loaded)
+            printf(" strategy_binding=vector classes=%u",
+                   pe_monker_strategy_class_count(monker.strategy_view));
     }
     for (player = 0u; player < options.player_count; ++player)
         printf(" ev%u=%.17g", player, values[player]);
