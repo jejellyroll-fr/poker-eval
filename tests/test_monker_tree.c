@@ -229,6 +229,11 @@ static void test_node_topology(void)
               tree->nodes[2].actions[0].type == MPF_TREE_ACTION_FOLD &&
               tree->nodes[2].actions[1].type == MPF_TREE_ACTION_CALL,
           "nested actions were not reconstructed");
+    CHECK(tree->nodes[0].acting_player == 0 &&
+              tree->nodes[2].acting_player == 1 &&
+              tree->nodes[1].acting_player == -1 &&
+              tree->nodes[3].acting_player == -1,
+          "tree actors were not propagated across the betting edge");
     CHECK(mpf_tree_validate(tree, &error) != 0,
           "reconstructed topology does not validate");
     mpf_tree_free(tree);

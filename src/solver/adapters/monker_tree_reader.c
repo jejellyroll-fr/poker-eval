@@ -528,9 +528,27 @@ pe_monker_status_t pe_monker_tree_load(const char *path,
 #endif
         node->id = copy_node_id(i);
         node->street = (mpf_street_t)header.street;
-        node->acting_player = header.first_to_act >= 0 ? header.first_to_act : 0;
         node->type = records.items[i].child_count == 0u
                          ? MPF_TREE_NODE_TERMINAL : MPF_TREE_NODE_PLAYER;
+        if (node->type == MPF_TREE_NODE_TERMINAL)
+            node->acting_player = -1;
+        else if (i == 0u)
+            node->acting_player =
+                header.first_to_act >= 0 ? header.first_to_act : 0;
+        else
+        {
+            int parent = records.items[i].parent;
+            int parent_player = parent >= 0
+                                    ? tree->nodes[parent].acting_player
+                                    : -1;
+            /* The binary Monker tree stores one betting street. A child
+             * after a player action belongs to the next player; public-card
+             * transitions are supplied by the surrounding street game. */
+            node->acting_player =
+                parent_player >= 0
+                    ? (parent_player + 1) % (int)header.player_count
+                    : (header.first_to_act >= 0 ? header.first_to_act : 0);
+        }
         node->action_count = records.items[i].child_count;
         if (!node->id)
         {
