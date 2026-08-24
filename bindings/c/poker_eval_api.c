@@ -7,6 +7,7 @@
  */
 
 #include "poker_eval_api.h"
+#include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/core/eval.h>
 #include <poker_eval/deck/deck_std.h>
@@ -30,6 +31,10 @@ struct pe_cfr_solver_t {
     /* CFR storage would go here */
     void* storage;
     uint64_t iteration;
+};
+
+struct pe_solver_api_t {
+    pe_solver_t* solver;
 };
 
 struct pe_icm_calc_t {
@@ -540,6 +545,77 @@ pe_error_t pe_cfr_get_exploitability(pe_cfr_handle_t cfr, double* exploitability
     if (!cfr || !exploitability) return PE_ERROR_INVALID_ARGUMENT;
     *exploitability = 0.0;
     return PE_ERROR_NOT_SUPPORTED;
+}
+
+/* ===== Solver v3 façade ===== */
+
+pe_solver_api_handle_t pe_solver_api_create(const pe_solver_config_t* config,
+                                            const pe_vector_game_t* game)
+{
+    struct pe_solver_api_t* api;
+    pe_solver_deps_t deps;
+
+    if (!config || !game)
+        return NULL;
+    api = (struct pe_solver_api_t*)calloc(1u, sizeof(*api));
+    if (!api)
+        return NULL;
+    deps = pe_solver_deps_default();
+    deps.vector_game = game;
+    api->solver = pe_solver_create(config, &deps);
+    if (!api->solver) {
+        free(api);
+        return NULL;
+    }
+    return api;
+}
+
+void pe_solver_api_free(pe_solver_api_handle_t api)
+{
+    if (!api)
+        return;
+    pe_solver_destroy(api->solver);
+    free(api);
+}
+
+pe_solver_status_t pe_solver_api_validate(pe_solver_api_handle_t api,
+                                          pe_diagnostics_t* diagnostics)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_validate(api->solver, diagnostics);
+}
+
+pe_solver_status_t pe_solver_api_run(pe_solver_api_handle_t api)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_run(api->solver);
+}
+
+pe_solver_status_t pe_solver_api_progress(pe_solver_api_handle_t api,
+                                          pe_progress_t* progress)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_progress(api->solver, progress);
+}
+
+pe_solver_status_t pe_solver_api_metrics(pe_solver_api_handle_t api,
+                                         pe_metrics_t* metrics)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_metrics(api->solver, metrics);
+}
+
+pe_solver_status_t pe_solver_api_strategy(pe_solver_api_handle_t api,
+                                          const pe_strategy_query_t* query,
+                                          pe_strategy_view_t* view)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_strategy(api->solver, query, view);
 }
 
 /* ===== ICM Calculator ===== */

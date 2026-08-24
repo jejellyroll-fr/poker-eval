@@ -7,10 +7,11 @@ This guide provides a comprehensive overview of the modern `pe_*` API for poker 
 1. [Quick Start](#quick-start)
 2. [Range API](#range-api)
 3. [Equity API](#equity-api)
-4. [Game Variants](#game-variants)
-5. [Error Handling](#error-handling)
-6. [Examples by Game Type](#examples-by-game-type)
-7. [Performance Tips](#performance-tips)
+4. [Solver v3 C façade](#solver-v3-c-façade)
+5. [Game Variants](#game-variants)
+6. [Error Handling](#error-handling)
+7. [Examples by Game Type](#examples-by-game-type)
+8. [Performance Tips](#performance-tips)
 
 ---
 
@@ -54,6 +55,39 @@ int main(void) {
     return 0;
 }
 ```
+
+## Solver v3 C façade
+
+The stable C binding exposes the executable v3 lifecycle through
+`pe_solver_api_*`. The façade borrows a caller-owned `pe_vector_game_t`, so the
+game callbacks and their state must remain alive until
+`pe_solver_api_free()`. The legacy `pe_cfr_*` functions are kept unchanged.
+
+```c
+#include <poker_eval_api.h>
+
+pe_solver_config_t config = pe_solver_config_default();
+pe_vector_game_t game = {0};
+/* Fill game.root, game.user and the vector-game callbacks here. */
+game.player_count = 2;
+game.combo_count = 1;
+config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+config.max_iterations = 1000;
+config.problem.expected_infosets = 100;
+config.problem.expected_actions = 2;
+config.problem.expected_combos = 1;
+
+pe_solver_api_handle_t solver = pe_solver_api_create(&config, &game);
+if (solver != NULL && pe_solver_api_run(solver) == PE_SOLVER_OK) {
+    pe_progress_t progress;
+    pe_solver_api_progress(solver, &progress);
+}
+pe_solver_api_free(solver);
+```
+
+For target-based stopping, set `max_iterations = 0`, configure a positive
+`target_exploitability_mbb`, and choose a positive `exploitability_interval`.
+The target is currently executed by the full-vector traversal.
 
 ---
 

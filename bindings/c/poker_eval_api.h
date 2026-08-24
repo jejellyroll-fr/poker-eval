@@ -21,6 +21,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_traversal.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -359,6 +363,48 @@ pe_error_t pe_cfr_load(pe_cfr_handle_t cfr, const char* filepath);
  * @return PE_OK on success
  */
 pe_error_t pe_cfr_get_exploitability(pe_cfr_handle_t cfr, double* exploitability);
+
+/* ===== Solver v3 façade ===== */
+
+/**
+ * Opaque handle for the architecture-v3 solver.
+ *
+ * The vector game and its callbacks are borrowed by the handle and must stay
+ * alive until pe_solver_api_free(). Configuration is copied at creation.
+ */
+typedef struct pe_solver_api_t* pe_solver_api_handle_t;
+
+/** Create a v3 solver backed by the supplied generic vector game. */
+pe_solver_api_handle_t pe_solver_api_create(
+    const pe_solver_config_t* config,
+    const pe_vector_game_t* game);
+
+/** Destroy a v3 solver façade. Safe on NULL. */
+void pe_solver_api_free(pe_solver_api_handle_t solver);
+
+/** Validate the configured plan without running it. */
+pe_solver_status_t pe_solver_api_validate(
+    pe_solver_api_handle_t solver,
+    pe_diagnostics_t* diagnostics);
+
+/** Run the configured solve until its configured stop condition. */
+pe_solver_status_t pe_solver_api_run(pe_solver_api_handle_t solver);
+
+/** Read lifecycle progress. */
+pe_solver_status_t pe_solver_api_progress(
+    pe_solver_api_handle_t solver,
+    pe_progress_t* progress);
+
+/** Read exploitability metrics after the target has been measured. */
+pe_solver_status_t pe_solver_api_metrics(
+    pe_solver_api_handle_t solver,
+    pe_metrics_t* metrics);
+
+/** Read an average strategy view after a completed solve. */
+pe_solver_status_t pe_solver_api_strategy(
+    pe_solver_api_handle_t solver,
+    const pe_strategy_query_t* query,
+    pe_strategy_view_t* view);
 
 /* ===== ICM Calculator ===== */
 
