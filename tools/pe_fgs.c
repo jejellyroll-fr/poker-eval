@@ -98,8 +98,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "invalid scenario file\n"); return 1;
     }
     for (int s = 0; s < scenario_count; ++s) scenarios[s].payout_structure = payout;
-    if (icm_calculate_future_scenarios(&base, scenarios, scenario_count, probabilities, &result) != ICM_SUCCESS) {
-        fprintf(stderr, "FGS calculation failed (probabilities must sum to 1)\n"); return 1;
+    {
+        icm_error_t fgs_error = icm_calculate_future_scenarios(&base, scenarios,
+                                                               scenario_count, probabilities, &result);
+        if (fgs_error != ICM_SUCCESS) {
+            fprintf(stderr, "FGS calculation failed: %s\n", icm_error_string(fgs_error));
+            return 1;
+        }
     }
     if (json_path) out = fopen(json_path, "w");
     if (!out) { fprintf(stderr, "cannot open %s\n", json_path); return 1; }

@@ -1,12 +1,14 @@
 /*
- * bench_gpu_cfr.c - GPU-CFR vs CPU-CFR benchmark
+ * bench_gpu_cfr.c - GPU vs CPU regret-matching primitive benchmark
  *
  * Copyright (C) 2025 poker-eval contributors
  *
- * Compares GPU-CFR (matrix-based) vs CPU-CFR (hash-map based)
- * for various problem sizes.
- *
- * Target: Demonstrate ×200-×400 speedup on GPU
+ * Compares the legacy GPU matrix regret-matching/average-strategy primitive
+ * against CPU storage updates of the same shape. Both sides operate on
+ * synthetic regret deltas without a game tree, so this measures update-kernel
+ * throughput only; it does not benchmark a full CFR solve and makes no
+ * speedup claim. Real solving goes through pe_solver_run() and its compute
+ * ports (see docs/gpu/guides/GPU_ACCELERATION_GUIDE.md).
  */
 
 #include <poker_eval/gpu/gpu_cfr.h>
