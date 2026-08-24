@@ -672,9 +672,26 @@ politique, la meilleure réponse de chaque joueur, chaque gain unilatéral et le
 
 Le board n'est volontairement pas inventé par l'import : le format `.tree` ne le porte
 pas. Le game adapter doit donc fournir le board, les règles, les terminaux et la
-correspondance des combos. Cette API constitue le comparateur ; l'outil CLI qui assemble
-automatiquement `.tree`, `.mkr`, ranges et paramètres de spot reste une tranche
-d'intégration distincte.
+correspondance des combos.
+
+Le chemin CLI est désormais disponible via `mpf_run_with_metrics` :
+
+```sh
+mpf_run_with_metrics \
+  --tree spot.tree --mkr solve.mkr --strategy storedstrategy0 \
+  --rules plo4 --street flop --board AsKdQc \
+  --range0 'AAxxds,AKQJ' --range1 'KKxxds,JT98r' \
+  --stack 100 --bb 1 --sb 0.5
+```
+
+Le programme accepte un `.tree` JSON ou binaire MonkerSolver, reprend les ranges du
+bloc binaire quand elles ne sont pas surchargées par `--range0`…`--range6`, et valide
+le binding `.mkr`/`storedstrategyN` avant toute itération. En mode `.mkr`, il parcourt
+les deals privés du moteur MPF, pose les fréquences importées comme stratégies
+verrouillées par infoset, puis imprime la valeur de politique, la meilleure réponse
+par joueur et la NashConv. `--validate-only` réalise l'assemblage et le binding sans
+lancer de solve. Les stratégies importées exactes sont actuellement celles de la
+table Omaha4 (16 432 classes) ; les autres règles restent utilisables sans `--mkr`.
 
 ### 11.5 Ce qu'on ne reprend pas
 

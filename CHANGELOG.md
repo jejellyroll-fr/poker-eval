@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Imported MonkerSolver strategies can now be attached to the vector game adapter
   and compared by policy value plus per-player best-response exploitability. The
   `.tree` topology remains separate from the caller-provided board and game rules.
+- `mpf_run_with_metrics` now assembles a JSON or binary Monker `.tree`, optional
+  `.mkr`/`storedstrategyN`, board, rules, ranges and spot parameters from one CLI
+  invocation. With `--mkr` it binds imported PLO4 frequencies to the MPF infosets
+  and reports policy EV plus best-response gaps; `--validate-only` stops after the
+  artifact and spot checks.
 - UniversalDeck delegation to the generalized deck layer (ISSUE-03 phase 2,
   #203): the internal implementation of `Universal_*` (mask ops, string
   conversions) now delegates to `pe_deck_spec_t` / `pe_card_mask_t` from

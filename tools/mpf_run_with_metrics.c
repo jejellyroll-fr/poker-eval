@@ -6,8 +6,14 @@
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
+#include <poker_eval/solver/pe_monker.h>
+#include <poker_eval/solver/pe_monker_classes.h>
+#include <poker_eval/solver/pe_monker_strategy.h>
+#include <poker_eval/solver/pe_range.h>
+#include <poker_eval/core/modern_cardmask.h>
 
 #include <errno.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +30,13 @@ static void usage(const char *prog)
             "Usage: %s --tree <path> [options]\n"
             "\n"
             "Required:\n"
-            "  --tree <path>            JSON file describing the predefined tree\n"
+            "  --tree <path>            JSON or MonkerSolver binary .tree\n"
+            "  --mkr <path>             MonkerSolver .mkr strategy archive\n"
+            "  --strategy <name>        Strategy entry (default: storedstrategy0)\n"
+            "  --rules <kind>           holdem, plo4, plo5 or plo6\n"
+            "  --street <kind>          preflop, flop, turn or river\n"
+            "  --board <cards>          Board such as AsKdQcJdTh\n"
+            "  --range<N> <expr>        Override player N range (N = 0..6)\n"
             "\n"
             "Options:\n"
             "  --iterations <n>         Number of CFR iterations (default: 1000)\n"
@@ -36,6 +48,13 @@ static void usage(const char *prog)
             "  --stack <amount>         Initial stack for every player (default: 100)\n"
             "  --bb <amount>            Big blind value (default: 1.0)\n"
             "  --sb <amount>            Small blind value (default: 0.5)\n"
+            "  --ante <amount>          Ante value (default: 0)\n"
+            "  --button <n>             Button index (default: 0)\n"
+            "  --pot <amount>           Existing pot at the spot\n"
+            "  --to-call <amount>      Current amount to call\n"
+            "  --current-bet <amount>  Current bet size\n"
+            "  --raises <n>             Raises already made\n"
+            "  --to-act <n>             Player to act at the spot\n"
             "  --algorithm <preset>    Select a v3 algorithm preset\n"
             "  --backend <kind>        Select a v3 backend (cpu, cpu_par, cuda, opencl)\n"
             "  --traversal <kind>      Override traversal (full-vector, full-scalar, ...)\n"
@@ -350,9 +369,328 @@ static int write_node_map_csv(const mpf_tree_def_t *tree, const char *path)
     return 0;
 }
 
+static int parse_rule_name(const char *name, mpf_rule_t *out_rule,
+                           enum_game_t *out_game)
+{
+    if (!name || !out_rule || !out_game)
+        return 0;
+    if (strcmp(name, "holdem") == 0)
+    {
+        *out_rule = MPF_RULE_HOLDEM;
+        *out_game = game_holdem;
+        return 1;
+    }
+    if (strcmp(name, "plo4") == 0 || strcmp(name, "omaha") == 0)
+    {
+        *out_rule = MPF_RULE_PLO4;
+        *out_game = game_omaha;
+        return 1;
+    }
+    if (strcmp(name, "plo5") == 0)
+    {
+        *out_rule = MPF_RULE_PLO5;
+        *out_game = game_omaha5;
+        return 1;
+    }
+    if (strcmp(name, "plo6") == 0)
+    {
+        *out_rule = MPF_RULE_PLO6;
+        *out_game = game_omaha6;
+        return 1;
+    }
+    return 0;
+}
+
+static int parse_street_name(const char *name, mpf_street_t *out)
+{
+    if (!name || !out)
+        return 0;
+    if (strcmp(name, "preflop") == 0) *out = MPF_STREET_PREFLOP;
+    else if (strcmp(name, "flop") == 0) *out = MPF_STREET_FLOP;
+    else if (strcmp(name, "turn") == 0) *out = MPF_STREET_TURN;
+    else if (strcmp(name, "river") == 0) *out = MPF_STREET_RIVER;
+    else return 0;
+    return 1;
+}
+
+static int parse_card(const char *text, int *out_card)
+{
+    static const char ranks[] = "23456789TJQKA";
+    int rank = -1;
+    int suit = -1;
+    char r;
+    char s;
+
+    if (!text || !out_card || text[0] == '\0' || text[1] == '\0')
+        return 0;
+    r = (char)toupper((unsigned char)text[0]);
+    s = (char)tolower((unsigned char)text[1]);
+    for (int i = 0; i < 13; ++i)
+        if (r == ranks[i])
+            rank = i;
+    if (s == 'c') suit = MODERN_SUIT_CLUBS;
+    else if (s == 'd') suit = MODERN_SUIT_DIAMONDS;
+    else if (s == 'h') suit = MODERN_SUIT_HEARTS;
+    else if (s == 's') suit = MODERN_SUIT_SPADES;
+    if (rank < 0 || suit < 0)
+        return 0;
+    *out_card = MODERN_MAKE_CARD(rank, suit);
+    return 1;
+}
+
+static int parse_board(const char *text, int out_cards[5], int *out_count,
+                       mask_t *out_mask)
+{
+    int count = 0;
+    mask_t mask = MASK_EMPTY;
+    size_t i = 0;
+
+    if (!text || !out_cards || !out_count || !out_mask)
+        return 0;
+    while (text[i] != '\0')
+    {
+        char card_text[3];
+        int card;
+        while (text[i] == ',' || text[i] == '/' || isspace((unsigned char)text[i]))
+            ++i;
+        if (text[i] == '\0')
+            break;
+        if (text[i + 1] == '\0')
+            return 0;
+        card_text[0] = text[i];
+        card_text[1] = text[i + 1];
+        card_text[2] = '\0';
+        if (!parse_card(card_text, &card) || count >= 5 || mask_is_set(mask, card))
+            return 0;
+        mask = mask_set(mask, card);
+        out_cards[count++] = card;
+        i += 2;
+    }
+    *out_count = count;
+    *out_mask = mask;
+    return 1;
+}
+
+static StdDeck_CardMask modern_to_std_mask(mask_t mask)
+{
+    StdDeck_CardMask out;
+    StdDeck_CardMask_RESET(out);
+    for (int card = 0; card < 52; ++card)
+        if (mask_is_set(mask, card))
+            StdDeck_CardMask_SET(out, card);
+    return out;
+}
+
+static void monker_to_internal_card_mask(pe_range_t *range)
+{
+    /* Monker's wire/class order is s,h,c,d; poker-eval's standard deck is
+       c,d,h,s. The range reader preserves the wire integer order, so this
+       conversion is intentionally kept at the interop boundary. */
+    static const int monker_to_internal_suit[4] = {
+        MODERN_SUIT_SPADES, MODERN_SUIT_HEARTS,
+        MODERN_SUIT_CLUBS, MODERN_SUIT_DIAMONDS
+    };
+    if (!range)
+        return;
+    for (size_t i = 0; i < range->count; ++i)
+    {
+        StdDeck_CardMask old = range->combos[i].hand;
+        StdDeck_CardMask fresh;
+        StdDeck_CardMask_RESET(fresh);
+        for (int card = 0; card < 52; ++card)
+            if (StdDeck_CardMask_CARD_IS_SET(old, card))
+            {
+                int external_suit = card / 13;
+                int rank = card % 13;
+                StdDeck_CardMask_SET(fresh,
+                    MODERN_MAKE_CARD(rank, monker_to_internal_suit[external_suit]));
+            }
+        range->combos[i].hand = fresh;
+    }
+}
+
+static int load_cli_tree(const char *path, mpf_tree_def_t **out_tree,
+                         pe_monker_tree_header_t *out_header, int *out_binary)
+{
+    pe_monker_status_t monker_status;
+    pe_monker_tree_header_t header;
+    mpf_tree_error_t err = {0};
+
+    if (!path || !out_tree)
+        return 0;
+    *out_tree = NULL;
+    if (out_binary)
+        *out_binary = 0;
+    memset(&header, 0, sizeof(header));
+    monker_status = pe_monker_tree_read_header(path, &header);
+    if (monker_status == PE_MONKER_OK)
+    {
+        monker_status = pe_monker_tree_load(path, out_tree);
+        if (monker_status != PE_MONKER_OK)
+        {
+            fprintf(stderr, "Monker .tree load error: %s\n",
+                    pe_monker_status_string(monker_status));
+            return 0;
+        }
+        if (out_header)
+            *out_header = header;
+        if (out_binary)
+            *out_binary = 1;
+        return 1;
+    }
+
+    size_t len = 0;
+    char *json = load_file(path, &len);
+    if (!json)
+    {
+        fprintf(stderr, "Failed to read tree file '%s': %s\n",
+                path, strerror(errno));
+        return 0;
+    }
+    *out_tree = mpf_tree_load_json(json, len, &err);
+    free(json);
+    if (!*out_tree)
+    {
+        fprintf(stderr, "Tree load error: %s\n",
+                err.message[0] ? err.message : "unknown");
+        return 0;
+    }
+    return 1;
+}
+
+typedef struct
+{
+    cfr_game_t *game;
+    cfr_storage_t *storage;
+    const pe_monker_strategy_t *strategy;
+    const pe_monker_classes_t *classes;
+    uint64_t *visited;
+    size_t visited_count;
+    size_t visited_capacity;
+    size_t lock_count;
+    int failed;
+} monker_lock_walk_t;
+
+static int monker_lock_seen(monker_lock_walk_t *walk, uint64_t key)
+{
+    for (size_t i = 0; i < walk->visited_count; ++i)
+        if (walk->visited[i] == key)
+            return 1;
+    if (walk->visited_count == walk->visited_capacity)
+    {
+        size_t next_capacity = walk->visited_capacity ? walk->visited_capacity * 2u : 256u;
+        uint64_t *next = (uint64_t *)realloc(walk->visited,
+                                             next_capacity * sizeof(*next));
+        if (!next)
+            return -1;
+        walk->visited = next;
+        walk->visited_capacity = next_capacity;
+    }
+    walk->visited[walk->visited_count++] = key;
+    return 0;
+}
+
+static int seed_monker_locks(monker_lock_walk_t *walk, uint64_t key, int depth)
+{
+    const mpf_state_t *state;
+    int seen;
+
+    if (!walk || !walk->game || depth > CFR_DEFAULT_MAX_DEPTH)
+        return -1;
+    state = mpf_state_for_key(walk->game, key);
+    if (!state)
+        return -1;
+    if (walk->game->is_terminal(walk->game, key, NULL))
+        return 0;
+    seen = monker_lock_seen(walk, key);
+    if (seen < 0)
+        return -1;
+    if (seen > 0)
+        return 0;
+
+    if (walk->game->is_chance && walk->game->is_chance(walk->game, key, NULL))
+    {
+        int outcomes = walk->game->get_chance_outcomes(walk->game, key, NULL);
+        for (int i = 0; i < outcomes; ++i)
+        {
+            uint64_t child = walk->game->apply_chance(walk->game, key, i, NULL);
+            if (!child || seed_monker_locks(walk, child, depth + 1) != 0)
+                return -1;
+        }
+        return 0;
+    }
+
+    int actions[CFR_MAX_ACTIONS];
+    int action_count = walk->game->get_actions(walk->game, key, actions,
+                                                CFR_MAX_ACTIONS, NULL);
+    int player = walk->game->current_player(walk->game, key, NULL);
+    if (action_count <= 0 || player < 0 || player >= MPF_MAX_PLAYERS)
+        return 0;
+    if (state->tree_node_idx < 0)
+    {
+        fprintf(stderr, "Cannot import strategy: state has no tree node\n");
+        return -1;
+    }
+
+    int cards[4];
+    int card_count = 0;
+    for (int card = 0; card < 52; ++card)
+        if (mask_is_set(state->hole[player], card))
+        {
+            if (card_count >= 4)
+                break;
+            /* Convert poker-eval's c,d,h,s suit order to Monker's s,h,c,d. */
+            static const int internal_to_monker_suit[4] = {1, 3, 2, 0};
+            int suit = card / 13;
+            cards[card_count++] = (internal_to_monker_suit[suit] * 13) + (card % 13);
+        }
+    if (card_count != 4)
+    {
+        fprintf(stderr, "Cannot import PLO strategy at node %d: player %d has %d hole cards\n",
+                state->tree_node_idx, player, card_count);
+        return -1;
+    }
+
+    double probs[CFR_MAX_ACTIONS];
+    uint16_t stored_actions = 0;
+    int specified = 0;
+    pe_monker_status_t status = pe_monker_strategy_probs(
+        walk->strategy, state->tree_node_idx, cards, probs,
+        CFR_MAX_ACTIONS, &stored_actions, &specified);
+    if (status != PE_MONKER_OK || stored_actions != (uint16_t)action_count)
+    {
+        fprintf(stderr, "Cannot import strategy at node %d: %s (tree actions=%d, archive actions=%u)\n",
+                state->tree_node_idx, pe_monker_status_string(status),
+                action_count, (unsigned)stored_actions);
+        return -1;
+    }
+    (void)specified;
+
+    uint64_t storage_key = walk->game->get_infoset_key ?
+        walk->game->get_infoset_key(state) : key;
+    if (cfr_storage_set_locked_strategy(walk->storage, storage_key,
+                                        probs, action_count) != 0)
+        return -1;
+    walk->lock_count++;
+
+    for (int i = 0; i < action_count; ++i)
+    {
+        uint64_t child = walk->game->apply_action(walk->game, key, actions[i], NULL);
+        if (!child || seed_monker_locks(walk, child, depth + 1) != 0)
+            return -1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *tree_path = NULL;
+    const char *mkr_path = NULL;
+    const char *strategy_name = "storedstrategy0";
+    const char *rules_name = NULL;
+    const char *street_name = NULL;
+    const char *board_text = NULL;
+    const char *range_text[MPF_MAX_PLAYERS] = {0};
     const char *metrics_path = NULL;
     const char *checkpoint_path = NULL;
     const char *node_map_path = NULL;
@@ -364,6 +702,18 @@ int main(int argc, char **argv)
     double stack_amount = 100.0;
     double sb_amount = 0.5;
     double bb_amount = 1.0;
+    double ante_amount = 0.0;
+    int button_index = 0;
+    int have_pot = 0;
+    double pot_amount = 0.0;
+    int have_to_call = 0;
+    double to_call_amount = 0.0;
+    int have_current_bet = 0;
+    double current_bet_amount = 0.0;
+    int have_raises = 0;
+    int raises_made = 0;
+    int have_to_act = 0;
+    int to_act = 0;
     const char *algorithm_name = NULL;
     const char *backend_name = NULL;
     int list_algorithms = 0;
@@ -385,6 +735,33 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--tree") == 0 && i + 1 < argc)
         {
             tree_path = argv[++i];
+        }
+        else if (strcmp(argv[i], "--mkr") == 0 && i + 1 < argc)
+        {
+            mkr_path = argv[++i];
+        }
+        else if (strcmp(argv[i], "--strategy") == 0 && i + 1 < argc)
+        {
+            strategy_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--rules") == 0 && i + 1 < argc)
+        {
+            rules_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--street") == 0 && i + 1 < argc)
+        {
+            street_name = argv[++i];
+        }
+        else if (strcmp(argv[i], "--board") == 0 && i + 1 < argc)
+        {
+            board_text = argv[++i];
+        }
+        else if (strncmp(argv[i], "--range", 7) == 0 &&
+                 argv[i][7] >= '0' && argv[i][7] <= '6' && i + 1 < argc)
+        {
+            int player = argv[i][7] - '0';
+            ++i;
+            range_text[player] = argv[i];
         }
         else if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc)
         {
@@ -453,6 +830,67 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Invalid small blind value\n");
                 return 1;
             }
+        }
+        else if (strcmp(argv[i], "--ante") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &ante_amount) || ante_amount < 0.0)
+            {
+                fprintf(stderr, "Invalid ante value\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--button") == 0 && i + 1 < argc)
+        {
+            if (!parse_int(argv[++i], &button_index) || button_index < 0)
+            {
+                fprintf(stderr, "Invalid button value\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--pot") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &pot_amount) || pot_amount < 0.0)
+            {
+                fprintf(stderr, "Invalid pot value\n");
+                return 1;
+            }
+            have_pot = 1;
+        }
+        else if (strcmp(argv[i], "--to-call") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &to_call_amount) || to_call_amount < 0.0)
+            {
+                fprintf(stderr, "Invalid to-call value\n");
+                return 1;
+            }
+            have_to_call = 1;
+        }
+        else if (strcmp(argv[i], "--current-bet") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &current_bet_amount) || current_bet_amount < 0.0)
+            {
+                fprintf(stderr, "Invalid current-bet value\n");
+                return 1;
+            }
+            have_current_bet = 1;
+        }
+        else if (strcmp(argv[i], "--raises") == 0 && i + 1 < argc)
+        {
+            if (!parse_int(argv[++i], &raises_made) || raises_made < 0)
+            {
+                fprintf(stderr, "Invalid raises value\n");
+                return 1;
+            }
+            have_raises = 1;
+        }
+        else if (strcmp(argv[i], "--to-act") == 0 && i + 1 < argc)
+        {
+            if (!parse_int(argv[++i], &to_act) || to_act < 0)
+            {
+                fprintf(stderr, "Invalid to-act value\n");
+                return 1;
+            }
+            have_to_act = 1;
         }
         else if (strcmp(argv[i], "--algorithm") == 0 && i + 1 < argc)
         {
@@ -609,8 +1047,8 @@ int main(int argc, char **argv)
             }
             overrides.have_precision = 1;
         }
-        if (show_capabilities || validate_only || estimate_only || print_plan ||
-            have_expert_override)
+        if (!tree_path && (show_capabilities || validate_only || estimate_only ||
+                           print_plan || have_expert_override))
         {
             if (have_expert_override && !show_capabilities && !validate_only &&
                 !estimate_only && !print_plan)
@@ -627,22 +1065,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    size_t json_len = 0;
-    char *json_data = load_file(tree_path, &json_len);
-    if (!json_data)
-    {
-        fprintf(stderr, "Failed to read tree file '%s': %s\n", tree_path, strerror(errno));
+    pe_monker_tree_header_t monker_header;
+    int binary_tree = 0;
+    mpf_tree_def_t *tree = NULL;
+    if (!load_cli_tree(tree_path, &tree, &monker_header, &binary_tree))
         return 1;
-    }
-
     mpf_tree_error_t tree_err = {0};
-    mpf_tree_def_t *tree = mpf_tree_load_json(json_data, json_len, &tree_err);
-    free(json_data);
-    if (!tree)
-    {
-        fprintf(stderr, "Tree load error: %s\n", tree_err.message[0] ? tree_err.message : "unknown");
-        return 1;
-    }
     if (!mpf_tree_validate(tree, &tree_err))
     {
         fprintf(stderr, "Tree validation error: %s\n", tree_err.message[0] ? tree_err.message : "unknown");
@@ -651,7 +1079,9 @@ int main(int argc, char **argv)
     }
 
     int inferred_players = infer_players_from_tree(tree);
-    int num_players = players_override > 0 ? players_override : (inferred_players > 0 ? inferred_players : 2);
+    int num_players = players_override > 0 ? players_override :
+        (binary_tree && monker_header.player_count > 0 ?
+         (int)monker_header.player_count : (inferred_players > 0 ? inferred_players : 2));
     if (num_players <= 0 || num_players > MPF_MAX_PLAYERS)
     {
         fprintf(stderr, "Unsupported player count: %d\n", num_players);
@@ -659,7 +1089,131 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    EvalConfig ecfg = eval_config_holdem();
+    mpf_rule_t rules = MPF_RULE_PLO4;
+    enum_game_t range_game = game_omaha;
+    if (rules_name)
+    {
+        if (!parse_rule_name(rules_name, &rules, &range_game))
+        {
+            fprintf(stderr, "Unknown rules kind: %s\n", rules_name);
+            mpf_tree_free(tree);
+            return 1;
+        }
+    }
+    else if (mkr_path)
+    {
+        /* The strategy class reader is currently exact for Monker's PLO4
+           four-card table. A future Hold'em archive can select its variant
+           explicitly with --rules. */
+        rules = MPF_RULE_PLO4;
+        range_game = game_omaha;
+    }
+    else
+    {
+        rules = MPF_RULE_HOLDEM;
+        range_game = game_holdem;
+    }
+
+    mpf_street_t start_street = binary_tree ?
+        (mpf_street_t)monker_header.street : MPF_STREET_PREFLOP;
+    if (street_name && !parse_street_name(street_name, &start_street))
+    {
+        fprintf(stderr, "Unknown street: %s\n", street_name);
+        mpf_tree_free(tree);
+        return 1;
+    }
+    if (start_street < MPF_STREET_PREFLOP || start_street > MPF_STREET_RIVER)
+    {
+        fprintf(stderr, "Unsupported start street: %d\n", (int)start_street);
+        mpf_tree_free(tree);
+        return 1;
+    }
+
+    int board_cards[5] = {0};
+    int board_count = 0;
+    mask_t board_mask = MASK_EMPTY;
+    if (board_text && !parse_board(board_text, board_cards, &board_count, &board_mask))
+    {
+        fprintf(stderr, "Invalid board (expected cards such as AsKdQcJdTh)\n");
+        mpf_tree_free(tree);
+        return 1;
+    }
+    int expected_board = start_street == MPF_STREET_FLOP ? 3 :
+                         start_street == MPF_STREET_TURN ? 4 :
+                         start_street == MPF_STREET_RIVER ? 5 : 0;
+    if ((expected_board > 0 && board_count != expected_board) ||
+        (expected_board == 0 && board_count != 0))
+    {
+        fprintf(stderr, "Board has %d cards but %s requires %d\n",
+                board_count, street_name ? street_name : "the selected street",
+                expected_board);
+        mpf_tree_free(tree);
+        return 1;
+    }
+    if (mkr_path && rules != MPF_RULE_PLO4)
+    {
+        fprintf(stderr, "Imported Monker strategies currently require --rules plo4\n");
+        mpf_tree_free(tree);
+        return 1;
+    }
+
+    pe_range_t *ranges[MPF_MAX_PLAYERS] = {0};
+    pe_monker_range_set_t tree_ranges = {0};
+    if (binary_tree)
+    {
+        pe_monker_status_t range_status = pe_monker_tree_read_ranges(tree_path, &tree_ranges);
+        if (range_status != PE_MONKER_OK)
+        {
+            fprintf(stderr, "Monker range block error: %s\n",
+                    pe_monker_status_string(range_status));
+            mpf_tree_free(tree);
+            return 1;
+        }
+        if (tree_ranges.player_count != 0 && tree_ranges.player_count != (uint32_t)num_players)
+        {
+            fprintf(stderr, "Tree contains ranges for %u players, spot has %d\n",
+                    tree_ranges.player_count, num_players);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+        for (uint32_t p = 0; p < tree_ranges.player_count; ++p)
+        {
+            monker_to_internal_card_mask(tree_ranges.players[p]);
+            if (pe_solver_range_prepare(tree_ranges.players[p]) != PE_SOLVER_OK)
+            {
+                fprintf(stderr, "Tree range %u is empty after conversion\n", p);
+                pe_monker_range_set_free(&tree_ranges);
+                mpf_tree_free(tree);
+                return 1;
+            }
+            ranges[p] = tree_ranges.players[p];
+        }
+        if (!rules_name && tree_ranges.combo_count == 270725u)
+        {
+            rules = MPF_RULE_PLO4;
+            range_game = game_omaha;
+        }
+    }
+    for (int p = 0; p < num_players; ++p)
+    {
+        if (!range_text[p])
+            continue;
+        if (pe_solver_range_parse(range_game, range_text[p],
+                                  modern_to_std_mask(board_mask), &ranges[p]) != PE_SOLVER_OK)
+        {
+            fprintf(stderr, "Invalid range for player %d: %s\n", p, range_text[p]);
+            for (int q = 0; q < num_players; ++q)
+                if (ranges[q] && (!tree_ranges.players || ranges[q] != tree_ranges.players[q]))
+                    pe_range_free(ranges[q]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+    }
+
+    EvalConfig ecfg = (rules == MPF_RULE_HOLDEM || rules == MPF_RULE_SHORTDECK) ?
+        eval_config_holdem() : eval_config_omaha();
     EvalContext *ctx = eval_context_create(&ecfg);
     if (!ctx)
     {
@@ -680,22 +1234,60 @@ int main(int argc, char **argv)
     mpf_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.ctx = ctx;
-    cfg.rules = MPF_RULE_HOLDEM;
+    cfg.rules = rules;
     cfg.num_players = num_players;
-    cfg.button_index = 0;
-    cfg.start_street = MPF_STREET_PREFLOP;
+    cfg.button_index = button_index % num_players;
+    cfg.start_street = start_street;
+    cfg.board_card_count = board_count;
+    for (int i = 0; i < board_count; ++i)
+        cfg.board_cards[i] = board_cards[i];
     cfg.bet_size_count_common = 1;
     cfg.bet_sizes_common[0] = bb_amount * 3.0;
     cfg.raise_cap = 4;
     cfg.enable_pot_sizing = 0;
     cfg.sb = sb_amount;
     cfg.bb = bb_amount;
-    cfg.ante = 0.0;
+    cfg.ante = ante_amount;
     cfg.tree = tree;
     cfg.tree_enforced = 1;
     cfg.perf_pool = perf_pool;
     for (int i = 0; i < cfg.num_players; ++i)
-        cfg.stacks[i] = stack_amount;
+    {
+        cfg.range[i] = ranges[i];
+        cfg.stacks[i] = (binary_tree && monker_header.stacks[i] > 0.0) ?
+            monker_header.stacks[i] : stack_amount;
+    }
+    if (binary_tree)
+    {
+        cfg.preflop.defined = 1;
+        cfg.preflop.has_to_act = 1;
+        cfg.preflop.to_act = monker_header.first_to_act;
+        if (start_street == MPF_STREET_PREFLOP)
+        {
+            double committed_pot = monker_header.dead_money;
+            cfg.preflop.has_round = 1;
+            for (int i = 0; i < cfg.num_players; ++i)
+            {
+                cfg.preflop.round_contrib[i] = monker_header.committed[i];
+                committed_pot += monker_header.committed[i];
+            }
+            cfg.preflop.has_pot = 1;
+            cfg.preflop.pot = committed_pot;
+        }
+    }
+    if (have_pot || have_to_call || have_current_bet || have_raises || have_to_act)
+    {
+        cfg.preflop.defined = 1;
+        if (have_pot) { cfg.preflop.has_pot = 1; cfg.preflop.pot = pot_amount; }
+        if (have_to_call) { cfg.preflop.has_to_call = 1; cfg.preflop.to_call = to_call_amount; }
+        if (have_current_bet)
+        {
+            cfg.preflop.has_current_bet = 1;
+            cfg.preflop.current_bet = current_bet_amount;
+        }
+        if (have_raises) { cfg.preflop.has_raises = 1; cfg.preflop.raises_made = raises_made; }
+        if (have_to_act) { cfg.preflop.has_to_act = 1; cfg.preflop.to_act = to_act; }
+    }
 
     cfr_game_t game;
     mpf_state_t root_state;
@@ -717,6 +1309,124 @@ int main(int argc, char **argv)
         eval_context_destroy(ctx);
         mpf_tree_free(tree);
         return 1;
+    }
+
+    pe_monker_mkr_t archive = {0};
+    pe_monker_mkr_metadata_t metadata = {0};
+    pe_monker_mkr_strategy_t stored = {0};
+    pe_monker_classes_t *classes = NULL;
+    pe_monker_strategy_t *imported = NULL;
+    if (mkr_path)
+    {
+        pe_monker_mkr_status_t mkr_status = pe_monker_mkr_read(mkr_path, &archive);
+        pe_monker_mkr_status_t strategy_status = PE_MONKER_MKR_OK;
+        int metadata_ok = pe_monker_mkr_read_metadata(&archive, &metadata) ==
+                          PE_MONKER_MKR_OK;
+        if (mkr_status == PE_MONKER_MKR_OK)
+            strategy_status = pe_monker_mkr_read_strategy(&archive, strategy_name, &stored);
+        if (mkr_status != PE_MONKER_MKR_OK || strategy_status != PE_MONKER_MKR_OK)
+        {
+            fprintf(stderr, "Monker .mkr load error: %s\n", mkr_status != PE_MONKER_MKR_OK ?
+                    pe_monker_mkr_status_string(mkr_status) :
+                    pe_monker_mkr_status_string(strategy_status));
+            pe_monker_mkr_strategy_free(&stored);
+            pe_monker_mkr_free(&archive);
+            cfr_storage_destroy(storage);
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+        if (pe_monker_classes_create(&classes) != PE_MONKER_OK ||
+            pe_monker_strategy_open(tree, &stored, classes, &imported) != PE_MONKER_OK)
+        {
+            fprintf(stderr, "Monker strategy does not match the supplied tree\n");
+            pe_monker_classes_destroy(classes);
+            pe_monker_mkr_strategy_free(&stored);
+            pe_monker_mkr_free(&archive);
+            cfr_storage_destroy(storage);
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+        if (metadata_ok)
+            printf("Monker archive: strategy=%s iterations=%lld version=%lld classes=%u\n",
+                   strategy_name, (long long)metadata.iterations,
+                   (long long)metadata.version,
+                   pe_monker_strategy_class_count(imported));
+        else
+            printf("Monker archive: strategy=%s classes=%u (metadata absent)\n",
+                   strategy_name, pe_monker_strategy_class_count(imported));
+    }
+
+    if (validate_only)
+    {
+        printf("validation=ok tree_format=%s players=%d street=%d ranges=%s strategy=%s\n",
+               binary_tree ? "monker" : "json", num_players, (int)start_street,
+               ranges[0] ? "loaded" : "not-supplied",
+               imported ? "bound" : "not-supplied");
+        if (imported)
+        {
+            pe_monker_strategy_close(imported);
+            pe_monker_classes_destroy(classes);
+            pe_monker_mkr_strategy_free(&stored);
+            pe_monker_mkr_free(&archive);
+        }
+        cfr_storage_destroy(storage);
+        mpf_state_cleanup(&root_state);
+        mpf_perf_stats_pool_destroy(perf_pool);
+        eval_context_destroy(ctx);
+        for (int p = 0; p < num_players; ++p)
+            if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                pe_range_free(ranges[p]);
+        pe_monker_range_set_free(&tree_ranges);
+        mpf_tree_free(tree);
+        return 0;
+    }
+
+    size_t imported_lock_count = 0;
+    if (imported)
+    {
+        monker_lock_walk_t walk;
+        memset(&walk, 0, sizeof(walk));
+        walk.game = &game;
+        walk.storage = storage;
+        walk.strategy = imported;
+        walk.classes = classes;
+        uint64_t root_key = (uint64_t)(uintptr_t)game.initial_state;
+        if (seed_monker_locks(&walk, root_key, 0) != 0)
+        {
+            fprintf(stderr, "Failed while binding imported strategy to the spot\n");
+            free(walk.visited);
+            pe_monker_strategy_close(imported);
+            pe_monker_classes_destroy(classes);
+            pe_monker_mkr_strategy_free(&stored);
+            pe_monker_mkr_free(&archive);
+            cfr_storage_destroy(storage);
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+        imported_lock_count = walk.lock_count;
+        free(walk.visited);
+        printf("Monker strategy bound: %zu infosets\n", imported_lock_count);
     }
 
     cfr_metrics_buffer_t *metrics_buffer = cfr_metrics_buffer_create(metrics_history);
@@ -760,7 +1470,41 @@ int main(int argc, char **argv)
     }
 
     double exploitability = 0.0;
-    cfr_solve(&game, storage, &solve_cfg, &exploitability);
+    if (imported)
+    {
+        cfr_exploitability_result_t result;
+        memset(&result, 0, sizeof(result));
+        if (cfr_exploitability_multiway(&game, storage, NULL, &result) != 0)
+        {
+            fprintf(stderr, "Failed to evaluate imported strategy exploitability\n");
+            if (metrics_file) fclose(metrics_file);
+            if (metrics_buffer) cfr_metrics_buffer_destroy(metrics_buffer);
+            pe_monker_strategy_close(imported);
+            pe_monker_classes_destroy(classes);
+            pe_monker_mkr_strategy_free(&stored);
+            pe_monker_mkr_free(&archive);
+            cfr_storage_destroy(storage);
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+        exploitability = result.total_exploitability;
+        printf("Imported strategy results: exploitability=%.6f\n", exploitability);
+        for (int p = 0; p < result.num_players; ++p)
+            printf("  player%d policy=%.6f br=%.6f gap=%.6f\n", p,
+                   result.policy_value[p], result.br_value[p],
+                   result.exploitability[p]);
+    }
+    else
+    {
+        cfr_solve(&game, storage, &solve_cfg, &exploitability);
+    }
 
     if (node_map_path)
     {
@@ -810,6 +1554,17 @@ int main(int argc, char **argv)
     if (metrics_buffer)
         cfr_metrics_buffer_destroy(metrics_buffer);
     cfr_storage_destroy(storage);
+    if (imported)
+    {
+        pe_monker_strategy_close(imported);
+        pe_monker_classes_destroy(classes);
+        pe_monker_mkr_strategy_free(&stored);
+        pe_monker_mkr_free(&archive);
+    }
+    for (int p = 0; p < num_players; ++p)
+        if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+            pe_range_free(ranges[p]);
+    pe_monker_range_set_free(&tree_ranges);
     mpf_state_cleanup(&root_state);
     mpf_perf_stats_pool_destroy(perf_pool);
     eval_context_destroy(ctx);
