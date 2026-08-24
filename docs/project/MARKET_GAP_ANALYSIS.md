@@ -66,18 +66,23 @@ famille AGPL du solving OSS.
    cible `poker-eval-trainer-gui` produit maintenant une application C + SDL2
    redimensionnable sur macOS, Linux et Windows, structurée en `Setup`, `Solve` et
    `Explore` : glisser-déposer `.pe_sol`/CSV, contexte du spot, index d'infosets,
-   fréquences d'actions, trainer et export de session JSON. Limites connues :
-   l'arbre affiché est un schéma décoratif fixe et non un rendu de l'arbre chargé ;
-   le solving passe par des sous-processus bloquants vers `pe-vector-sim`
-   (EV terminale river exacte) ou `mpf_run_with_metrics` ; les ranges par défaut
-   sont des combos d'exemple ; l'en-tête `.pe_sol` est lu sans son champ `flags`
-   (une solution compressée zstd ne serait pas détectée). Les choix
-   Hold'em/PLO4/PLO5/PLO6 et 2–8 joueurs alimentent ces moteurs ; les autres choix
-   signalent leur indisponibilité ; `.tree/.mkr` peuvent être déposés ou saisis. La
-   cible est compilée par le job `gui-build.yml` (ubuntu-latest et macos-14, SDL2
-   installée, smoke headless `--help`) mais aucun test automatisé ne la couvre. Il
-   manque encore l'éditeur de ranges intégré, le sélecteur de fichiers natif, un
-   rendu réel de l'arbre et une intégration non bloquante du solveur.
+   fréquences d'actions, trainer et export de session JSON. Le solving tourne dans un
+   thread SDL dédié (l'interface reste interactive pendant un solve, avec repli
+   bloquant si le thread ne démarre pas). L'arbre affiché est un rendu réel de la
+   topologie chargée : un `.tree` Monker déposé est converti en JSON mpf via
+   `pe-monker-validate --tree-json`, un `.json` d'arbre mpf est parsé directement,
+   et la vue montre la racine, ses actions et leurs nœuds enfants ; sans arbre
+   chargé, elle l'indique au lieu de dessiner des nœuds fictifs. L'en-tête
+   `.pe_sol` est lu avec son champ `flags` : une solution compressée zstd est
+   refusée avec un message explicite et chaque ligne quantisée est renormalisée.
+   Limites restantes : le rendu de l'arbre est borné à la racine et quatre enfants ;
+   les ranges par défaut sont des combos d'exemple ; il n'existe toujours aucun test
+   automatisé de la GUI. Les choix Hold'em/PLO4/PLO5/PLO6 et 2–8 joueurs alimentent
+   `pe-vector-sim` (EV terminale river exacte) et `mpf_run_with_metrics` ; les autres
+   choix signalent leur indisponibilité ; `.tree/.mkr` peuvent être déposés ou
+   saisis. La cible est compilée par le job `gui-build.yml` sur ubuntu-latest,
+   macos-14 et windows-latest (SDL2 installée, smoke headless `--help`). Il manque
+   encore l'éditeur de ranges intégré et le sélecteur de fichiers natif.
 3. **Play-vs-solution / trainer riche.** `poker-eval-trainer` suit les transitions
    `next_key`, affiche street/board/runout/position/pot lorsqu'ils sont fournis, et
    exporte une session JSON avec les réponses, meilleurs choix, pertes de stratégie et
@@ -142,8 +147,11 @@ Les briques suivantes sont maintenant livrées et testées, avec leurs limites e
 
 Les outils `pe-fgs` et la couche `pe_pko_calculate()` complètent cette tranche : FGS agrège
 des scénarios futurs pondérés via l'ICM existant, tandis que PKO ajoute les bounties à partir
-d'une matrice explicite de probabilités d'élimination. Ils ne déduisent pas encore les
-scénarios depuis un arbre de tournoi ni les éliminations depuis des ranges.
+d'une matrice explicite de probabilités d'élimination. Les scénarios peuvent maintenant être
+générés automatiquement (`pe_fgs_generate_even_contribution()`, voir point 11) et les
+éliminations déduites d'un vrai showdown all-in (`pe_pko_outcome_showdown()`, point 12) ;
+restent hors portée les scénarios dépendants d'un arbre de tournoi complet (ranges qui
+évoluent, pots variables par street).
 
 Cette tranche ferme donc les contrats d'intégration et les CLI vérifiables ; elle ne doit
 pas être présentée comme un clone complet de HRC/ICMIZER/GTO Wizard ou comme un solver
@@ -164,13 +172,22 @@ testée :
     propriétaire et le solveur est volontairement borné par `max_profiles`.
 11. **FGS dynamique** : `pe_fgs_calculate_tree()` (`economics/fgs.h`) parcourt un arbre de
     transitions probabilistes de profondeur bornée, vérifie les probabilités locales et
-    agrège l'ICM de chaque feuille. Cela remplace le simple fichier de scénarios plat ; un
-    générateur de tournoi room-specific reste un adapter à écrire.
+    agrège l'ICM de chaque feuille. `pe_fgs_generate_even_contribution()` génère
+    désormais l'arbre depuis les stacks, des probabilités de gain par joueur, un pot et
+    une profondeur : chaque main simulée transfère le pot au gagnant (déduit à parts
+    égales des autres joueurs actifs, borné par leurs stacks, total de jetons conservé).
+    `pe-fgs --generate --win P1,P2 --pot N --depth N` l'expose en CLI
+    (`pe-fgs-generated/v1`). Limites : pot constant par main, contribution égale, pas de
+    ranges ni de structure de blinds ; un générateur room-specific complet reste à écrire.
 12. **PKO depuis ranges** : `pe_pko_calculate_from_ranges()` énumère les profils pondérés
     sans cartes communes, appelle un évaluateur de showdown/tournoi pour chaque profil et
-    construit automatiquement la matrice élimination → bounty → ICM. Les éliminations
-    multi-étapes, la modélisation des ranges qui se resserrent après chaque action et le
-    calcul PKO complet depuis un arbre restent à brancher au callback.
+    construit automatiquement la matrice élimination → bounty → ICM. Le dépôt fournit
+    maintenant cet évaluateur : `pe_pko_outcome_showdown()` monte carlo un board par
+    profil, évalue chaque main Hold'em 7 cartes via `pe_eval_7c` et crédite le gagnant
+    unique du pot de l'élimination de tous ses adversaires (égalité exacte : personne).
+    Déterministe à seed fixée, contexte d'évaluation réutilisable entre profils. Les
+    éliminations multi-étapes, la modélisation des ranges qui se resserrent après chaque
+    action et le calcul PKO complet depuis un arbre restent à brancher au callback.
 13. **MLP embarqué** : `pe_nn_depth_value_callback()` adapte le MLP CPU déjà présent au
     callback depth-limited de CFR. L'inférence est locale, sans runtime externe ni réseau
     pré-entraîné fourni ; le modèle et l'extracteur de features sont injectés par l'appelant.
@@ -182,12 +199,15 @@ testée :
     ranges aux calculs PKO existants. `pe-hrc-import` permet de valider un fichier depuis
     la ligne de commande.
 
-Les tests `test_hrc`, `test_fgs_tree`, `test_pko_ranges`, `test_hrc_import` et
-`test_nn_depth_value` couvrent respectivement le parcours multiway avec card removal,
-l'agrégation dynamique, la dérivation PKO depuis ranges, l'import JSON avec pot accounting
-et le branchement du MLP. Cette livraison ferme les contrats noyau, pas les quatre produits
-finis : il reste l'éditeur visuel d'arbres, les adapters room-specific FGS/PKO, des poids
-entraînés et la modélisation des ranges qui évoluent après chaque action.
+Les tests `test_hrc`, `test_fgs_tree`, `test_fgs_generate`, `test_pko_ranges`,
+`test_pko_showdown`, `test_hrc_import` et `test_nn_depth_value` couvrent respectivement le
+parcours multiway avec card removal, l'agrégation dynamique, la génération de scénarios
+FGS (conservation des jetons, masse de probabilité, repli ICM à profondeur nulle), la
+dérivation PKO depuis ranges, le showdown all-in déterministe (AA vs 72o, symétrie AK),
+l'import JSON avec pot accounting et le branchement du MLP. Cette livraison ferme les
+contrats noyau, pas les quatre produits finis : il reste l'éditeur visuel d'arbres, les
+adapters room-specific FGS/PKO, des poids entraînés et la modélisation des ranges qui
+évoluent après chaque action.
 
 ---
 
