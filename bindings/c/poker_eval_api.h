@@ -42,6 +42,25 @@ typedef struct pe_context_t* pe_handle_t;
 /** CFR solver handle */
 typedef struct pe_cfr_solver_t* pe_cfr_handle_t;
 
+/* Callback description for a real legacy CFR game. States are opaque 64-bit
+ * keys; the callback user pointer is borrowed for the lifetime of the solver. */
+typedef int (*pe_cfr_is_terminal_fn)(uint64_t state, void *user);
+typedef int (*pe_cfr_current_player_fn)(uint64_t state, void *user);
+typedef int (*pe_cfr_get_actions_fn)(uint64_t state, int *actions,
+                                     int max_actions, void *user);
+typedef uint64_t (*pe_cfr_apply_action_fn)(uint64_t state, int action, void *user);
+typedef double (*pe_cfr_get_utility_fn)(uint64_t state, int player, void *user);
+typedef struct {
+    uint64_t initial_state;
+    int num_players;
+    pe_cfr_is_terminal_fn is_terminal;
+    pe_cfr_current_player_fn current_player;
+    pe_cfr_get_actions_fn get_actions;
+    pe_cfr_apply_action_fn apply_action;
+    pe_cfr_get_utility_fn get_utility;
+    void *user;
+} pe_cfr_game_desc_t;
+
 /** ICM calculator handle */
 typedef struct pe_icm_calc_t* pe_icm_handle_t;
 
@@ -306,6 +325,11 @@ pe_error_t pe_calculate_range_equity(pe_handle_t handle,
 pe_cfr_handle_t pe_cfr_create(pe_handle_t handle,
                               pe_game_type_t game,
                               const char* game_tree);
+
+/** Create a CFR handle backed by caller-owned game callbacks. */
+pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
+                                        const pe_cfr_game_desc_t *game,
+                                        int max_iterations);
 
 /**
  * Free CFR solver

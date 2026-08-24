@@ -4,7 +4,9 @@
  * Copyright (C) 2025 poker-eval contributors
  *
  * Matrix formulation of CFR for massive parallelization on GPU.
- * Target: ×200-×400 speedup vs CPU CFR implementation.
+ * This compatibility API is a matrix maintenance primitive. It does not
+ * claim a tree-solver speedup; use pe_solver_run with a compute port for a
+ * complete CFR solve.
  *
  * Key idea: Reformulate CFR updates as matrix operations (GEMV/SpMV)
  * that can be efficiently computed on GPU with thousands of threads.
@@ -167,14 +169,12 @@ int gpu_cfr_download_state(
 );
 
 /**
- * Run CFR iterations on GPU
+ * Run matrix maintenance iterations
  *
  * Performs the following per iteration:
- * 1. Compute current strategy π = regret_matching(R)
- * 2. Traverse game tree (or sample via MCCFR)
- * 3. Compute regret deltas Δ
- * 4. Update regrets: R' = discount * R + Δ  (GPU AXPY)
- * 5. Update avg strategy: S' = S + weight * π  (GPU AXPY)
+ * The compatibility API has no game callback, so it performs the matrix-side
+ * regret matching and average-strategy accumulation only. Complete tree
+ * traversal belongs to pe_solver_run and its compute ports.
  *
  * @param ctx         GPU-CFR context
  * @param iterations  Number of iterations to run

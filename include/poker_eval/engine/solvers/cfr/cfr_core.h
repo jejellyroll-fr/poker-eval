@@ -126,6 +126,7 @@ struct cfr_storage_t {
      * so two solves in one process silently shared an ECFR temperature. */
     int use_ecfr;
     double ecfr_lambda;
+    int num_threads;
 };
 
 /* CFR game interface (vtable) */
@@ -257,6 +258,10 @@ struct cfr_game_t {
 /* CFR configuration */
 struct cfr_config_t {
     int max_iterations;
+    /* Number of OpenMP workers used by storage-wide CFR maintenance. The
+     * recursive legacy walk remains single-walk unless a game supplies a
+     * thread-safe traversal contract; 0/1 keeps the historical behaviour. */
+    int num_threads;
     int max_depth;         /* Max tree recursion depth (0 = CFR_DEFAULT_MAX_DEPTH) */
     int checkpoint_interval;
     double convergence_threshold;
@@ -424,6 +429,7 @@ void cfr_storage_set_strategy_mode(int use_ecfr, double ecfr_lambda);
 void cfr_storage_set_memory_masks(cfr_storage_t *storage,
                                   uint32_t keep_avg_strategy_mask,
                                   uint32_t keep_ev_mask);
+void cfr_storage_set_num_threads(cfr_storage_t *storage, int num_threads);
 
 void cfr_storage_get_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
 void cfr_storage_update_regret_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);

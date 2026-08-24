@@ -275,6 +275,7 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 option(ENABLE_OPENMP "Enable OpenMP support" ON)
+option(ENABLE_ZSTD "Enable zstd-compressed .pe_sol snapshots when available" ON)
 find_package(OpenMP)
 
 if(NOT ENABLE_OPENMP)

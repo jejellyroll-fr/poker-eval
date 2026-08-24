@@ -14,6 +14,8 @@
 #include <poker_eval/games/rules_std.h>
 #include <poker_eval/core/evx_defs.h>
 #include <poker_eval/core/enumerate.h>
+#include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/engine/solvers/cfr/mpf_compact_storage.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -28,9 +30,13 @@ struct pe_context_t {
 struct pe_cfr_solver_t {
     pe_handle_t parent;
     pe_game_type_t game;
-    /* CFR storage would go here */
-    void* storage;
+    cfr_game_t cfr_game;
+    cfr_storage_t *storage;
+    cfr_config_t config;
+    pe_cfr_game_desc_t callbacks;
+    int ready;
     uint64_t iteration;
+    double exploitability;
 };
 
 struct pe_solver_api_t {
@@ -504,47 +510,134 @@ pe_cfr_handle_t pe_cfr_create(pe_handle_t handle,
     return cfr;
 }
 
+static int pe_cfr_cb_terminal(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.is_terminal(state, cfr->callbacks.user);
+}
+
+static int pe_cfr_cb_player(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.current_player(state, cfr->callbacks.user);
+}
+
+static int pe_cfr_cb_actions(cfr_game_t *game, uint64_t state, int *actions,
+                             int max_actions, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_actions(state, actions, max_actions, cfr->callbacks.user);
+}
+
+static uint64_t pe_cfr_cb_apply(cfr_game_t *game, uint64_t state, int action, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.apply_action(state, action, cfr->callbacks.user);
+}
+
+static double pe_cfr_cb_utility(cfr_game_t *game, uint64_t state, int player, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_utility(state, player, cfr->callbacks.user);
+}
+
+pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
+                                        const pe_cfr_game_desc_t *game,
+                                        int max_iterations)
+{
+    pe_cfr_handle_t cfr;
+    if (!handle || !game || max_iterations <= 0 || game->num_players < 2 ||
+        game->num_players > CFR_MAX_PLAYERS || !game->is_terminal ||
+        !game->current_player || !game->get_actions || !game->apply_action ||
+        !game->get_utility)
+        return NULL;
+    cfr = (pe_cfr_handle_t)calloc(1, sizeof(*cfr));
+    if (!cfr)
+        return NULL;
+    cfr->parent = handle;
+    cfr->callbacks = *game;
+    cfr->config.max_iterations = max_iterations;
+    cfr->config.num_threads = handle->config.num_threads;
+    cfr->config.exploitability_interval = 0;
+    cfr->config.max_depth = 0;
+    cfr->cfr_game.current_player = pe_cfr_cb_player;
+    cfr->cfr_game.get_actions = pe_cfr_cb_actions;
+    cfr->cfr_game.apply_action = pe_cfr_cb_apply;
+    cfr->cfr_game.is_terminal = pe_cfr_cb_terminal;
+    cfr->cfr_game.get_utility = pe_cfr_cb_utility;
+    cfr->cfr_game.game_data = cfr;
+    cfr->cfr_game.initial_state = (void *)(uintptr_t)game->initial_state;
+    cfr->cfr_game.num_players = game->num_players;
+    cfr->storage = cfr_storage_create();
+    if (!cfr->storage)
+    {
+        free(cfr);
+        return NULL;
+    }
+    cfr->ready = 1;
+    return cfr;
+}
+
 void pe_cfr_free(pe_cfr_handle_t cfr) {
     if (cfr) {
+        cfr_storage_destroy(cfr->storage);
         free(cfr);
     }
 }
 
 pe_error_t pe_cfr_solve(pe_cfr_handle_t cfr, int iterations) {
     if (!cfr || iterations <= 0) return PE_ERROR_INVALID_ARGUMENT;
-
-    /* CFR solving requires full library integration */
-    set_error(cfr->parent, "CFR solving requires linking with poker_engine library");
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready || !cfr->storage)
+    {
+        set_error(cfr->parent, "CFR handle has no callback-backed game; use pe_cfr_create_callbacks");
+        return PE_ERROR_INVALID_ARGUMENT;
+    }
+    cfr->config.max_iterations = iterations;
+    if (cfr_solve(&cfr->cfr_game, cfr->storage, &cfr->config,
+                  &cfr->exploitability) < 0.0)
+        return PE_ERROR_UNKNOWN;
+    cfr->iteration += (uint64_t)iterations;
+    return PE_OK;
 }
 
 int pe_cfr_get_strategy(pe_cfr_handle_t cfr,
                         uint64_t infoset_key,
                         double* strategy,
                         int max_actions) {
-    (void)infoset_key;
-    (void)strategy;
-    (void)max_actions;
-    if (!cfr) return -1;
-    return -1;
+    if (!cfr || !cfr->ready || !strategy || max_actions <= 0) return -1;
+    cfr_storage_get_avg_strategy(cfr->storage, infoset_key, max_actions, strategy);
+    return max_actions;
 }
 
 pe_error_t pe_cfr_save(pe_cfr_handle_t cfr, const char* filepath) {
-    (void)filepath;
+    size_t length;
     if (!cfr) return PE_ERROR_INVALID_HANDLE;
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready || !filepath) return PE_ERROR_INVALID_ARGUMENT;
+    length = strlen(filepath);
+    if ((length >= 5u && strcmp(filepath + length - 5u, ".zstd") == 0) ||
+        (length >= 4u && strcmp(filepath + length - 4u, ".zst") == 0))
+        return pe_cfr_save_storage_zstd(cfr->storage, filepath, 0) == 0
+            ? PE_OK : PE_ERROR_IO_FAILED;
+    return pe_cfr_save_storage(cfr->storage, filepath) == 0 ? PE_OK : PE_ERROR_IO_FAILED;
 }
 
 pe_error_t pe_cfr_load(pe_cfr_handle_t cfr, const char* filepath) {
-    (void)filepath;
     if (!cfr) return PE_ERROR_INVALID_HANDLE;
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready || !filepath) return PE_ERROR_INVALID_ARGUMENT;
+    return pe_cfr_load_storage(cfr->storage, filepath) == 0 ? PE_OK : PE_ERROR_IO_FAILED;
 }
 
 pe_error_t pe_cfr_get_exploitability(pe_cfr_handle_t cfr, double* exploitability) {
     if (!cfr || !exploitability) return PE_ERROR_INVALID_ARGUMENT;
-    *exploitability = 0.0;
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready)
+        return PE_ERROR_INVALID_ARGUMENT;
+    *exploitability = cfr->exploitability;
+    return PE_OK;
 }
 
 /* ===== Solver v3 façade ===== */

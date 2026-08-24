@@ -63,6 +63,15 @@ target_include_directories(poker_engine PRIVATE
 # of writing to stderr itself. The dependency runs engine -> solver, which is
 # the migration direction; poker_solver itself links only poker_core.
 target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics poker_solver m)
+if(POKER_EVAL_WITH_OPENMP)
+    target_link_libraries(poker_engine PUBLIC OpenMP::OpenMP_C)
+    target_compile_definitions(poker_engine PRIVATE PE_LEGACY_CFR_OPENMP=1)
+endif()
+if(POKER_EVAL_WITH_ZSTD)
+    target_include_directories(poker_engine PRIVATE ${PE_ZSTD_INCLUDE_DIR})
+    target_link_libraries(poker_engine PUBLIC ${PE_ZSTD_LIBRARY})
+    target_compile_definitions(poker_engine PRIVATE PE_HAVE_ZSTD=1)
+endif()
 
 if(BUILD_TESTS)
     add_executable(test_legacy_vector_adapter

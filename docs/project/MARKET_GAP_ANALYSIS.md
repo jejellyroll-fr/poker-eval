@@ -182,19 +182,22 @@ entraînés et la modélisation des ranges qui évoluent après chaque action.
 
 ## 4. Manques techniques
 
-1. **Parallélisme du CFR principal** : le moteur legacy (`src/engine/solvers/cfr/`) n'a
-   **aucun OpenMP** ; seul le compute port v3 (`src/solver/adapters/compute_cpu_par.c`)
-   est parallélisé. Pio vend 16/64 threads ; c'est le critère n°1 d'un solver local.
-   Écart de performance le plus concret.
-2. **SIMD dans le solver** : le SIMD (AVX2/AVX-512/NEON, bien réel dans
-   `src/equity/simd_operations.c`) sert l'equity, pas le CFR. postflop-solver et Shark en
-   font leur argument central.
-3. **Bindings du solver** : `pe_cfr_*` dans l'API C stable (`bindings/c/`) = stubs
-   retournant `PE_ERROR_NOT_SUPPORTED` ; Python (`bindings/python/`) n'expose rien du
-   solver. Le wheel pip est un atout inutilisé côté solving.
-4. **Compression** : quantification 16 bits ✅ (`.pe_sol`, storage v3 int16) mais pas de
-   zstd (postflop-solver : bincode+zstd) ; pas d'API de budget mémoire explicite alors que
-   la RAM est le facteur limitant reconnu du marché.
+1. **Parallélisme du CFR principal** : le compute port v3 (`compute_cpu_par.c`) est
+   parallélisé et le legacy expose maintenant `cfr_config_t::num_threads` pour les
+   balayages indépendants du stockage (OpenMP quand disponible). La traversée récursive
+   legacy reste volontairement séquentielle : rendre ses callbacks et son hash-map
+   mutables thread-safe demande un contrat de clonage/merge de jeu, pas un pragma ajouté
+   au hasard. Le solveur local multi-thread complet reste donc à construire.
+2. **SIMD dans le solver** : le regret matching legacy utilise maintenant une réduction
+   AVX2 ou NEON (avec repli scalaire) dans `cfr_storage.c`. Ce n'est pas encore une
+   vectorisation complète de la traversée ni un backend AVX-512.
+3. **Bindings du solver** : l'API C stable conserve la création historique sans arbre,
+   mais `pe_cfr_create_callbacks()` fournit désormais un chemin réel vers `cfr_solve`,
+   la stratégie, les snapshots et l'exploitabilité. Le module Python expose déjà le
+   solveur v3 callback-backed. Il reste à empaqueter une API haut niveau de jeu/ranges.
+4. **Compression** : `.pe_sol` propose maintenant `pe_cfr_save_storage_zstd()` quand
+   zstd est disponible, avec repli explicite `ENOTSUP`. La mémoire est déjà un paramètre
+   v3 (`max_ram_bytes`) validé avant allocation et détaillé par `pe_solver_estimate()`.
 5. **Isomorphismes de rang** : l'orbite complète des 24 permutations de couleurs existe
    (`board_canonical.c`, ISO-01), pas les symétries de rangs.
 6. **Cycle de vie v3 partiellement incomplet** : la cible
@@ -202,11 +205,15 @@ entraînés et la modélisation des ranges qui évoluent après chaque action.
    `PE_TRAVERSAL_FULL_VECTOR` (mesure BR périodique, métriques mBB et arrêt anticipé).
    Restent `pe_tree_port`, la mesure BR sur Lane B et les adapters de jeux préflop
    concrets ; Lane B est exécutable mais pas encore un solveur préflop produit complet.
-7. **GPU-CFR** : déprécié/à l'état de stubs (`gpu_cfr_solve()` = boucle vide avec TODO)
-   alors que `bench_gpu_cfr.c` promet « ×200–×400 speedup ». À nettoyer : c'est
-   exactement le genre de claim reproché aux boîtes noires dans le panorama marché.
-8. **Pas de WASM** (postflop-solver a WASM Postflop) ni de solving distribué/cluster
-   (Simple Poker cluster, PokerRL Ray) — deux niches cloud pertinentes pour un moteur.
+7. **GPU-CFR** : l'ancien `gpu_cfr_solve()` n'est plus une boucle vide et exécute
+   maintenant le sous-problème matriciel regret-matching/average-strategy. Comme cette
+   API ne reçoit pas d'arbre, elle ne prétend plus résoudre un jeu ni fournir ×200–×400 ;
+   le solveur complet passe par `pe_solver_run` et ses compute ports.
+8. **WASM et distribué** : un profil `cmake/wasm.cmake` produit maintenant une cible
+   portable sans GPU/OpenMP/zstd. Le header `pe_solver_cluster.h` fournit un sharding
+   stable par clé et par plage dense, testé et indépendant de la machine. Cela prépare
+   les manifests/checkpoints, mais ne constitue pas encore un orchestrateur réseau ni
+   un merge de solves distants.
 
 ---
 
@@ -219,8 +226,9 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
   backend GPU le plus pertinent.
 - `docs/cfr/guides/README.md` liste **7 guides « ✅ » dont 4 n'existent pas** (CFR Tree
   Format, CFR Metrics, CFR Export Results, CFR Performance, CFR Data Pipeline).
-- L'ancienne surface CFR `pe_cfr_*` de l'API C stable reste non implémentée, mais la
-  façade `pe_solver_api_*` expose désormais le cycle v3 générique.
+- L'ancienne création CFR sans description de jeu reste limitée, mais
+  `pe_cfr_create_callbacks()` et la façade `pe_solver_api_*` exposent désormais des
+  chemins de solving réels et testés.
 - Recette **Conan cassée** (`conanfile.py` : chemins d'export inexistants, option
   dépréciée) ; CI conan/vcpkg en quarantaine « jamais passée ».
 - Bug de build : `src/benchmarks/CMakeLists.txt` référence `gpu/ofc_gpu_benchmark.c` au

@@ -10,6 +10,60 @@
 #include <errno.h>
 #include <stdint.h>
 
+#ifdef PE_LEGACY_CFR_OPENMP
+#include <omp.h>
+#endif
+
+#if defined(HAS_AVX2)
+#include <immintrin.h>
+#endif
+#if defined(HAS_NEON) && (defined(__aarch64__) || defined(__arm64__))
+#include <arm_neon.h>
+#endif
+
+static double cfr_sum_positive(const double *values, int count)
+{
+#if defined(HAS_AVX2)
+    __m256d sum = _mm256_setzero_pd();
+    const __m256d zero = _mm256_setzero_pd();
+    int i = 0;
+    for (; i + 4 <= count; i += 4)
+    {
+        __m256d v = _mm256_loadu_pd(values + i);
+        sum = _mm256_add_pd(sum, _mm256_max_pd(v, zero));
+    }
+    double lanes[4];
+    _mm256_storeu_pd(lanes, sum);
+    double total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+    for (; i < count; ++i)
+        if (values[i] > 0.0)
+            total += values[i];
+    return total;
+#elif defined(HAS_NEON) && (defined(__aarch64__) || defined(__arm64__))
+    float64x2_t sum = vdupq_n_f64(0.0);
+    const float64x2_t zero = vdupq_n_f64(0.0);
+    int i = 0;
+    for (; i + 2 <= count; i += 2)
+    {
+        float64x2_t v = vld1q_f64(values + i);
+        sum = vaddq_f64(sum, vmaxq_f64(v, zero));
+    }
+    double lanes[2];
+    vst1q_f64(lanes, sum);
+    double total = lanes[0] + lanes[1];
+    for (; i < count; ++i)
+        if (values[i] > 0.0)
+            total += values[i];
+    return total;
+#else
+    double total = 0.0;
+    for (int i = 0; i < count; ++i)
+        if (values[i] > 0.0)
+            total += values[i];
+    return total;
+#endif
+}
+
 #if defined(_MSC_VER)
 #define CFR_THREAD_LOCAL __declspec(thread)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -199,6 +253,7 @@ cfr_storage_t *cfr_storage_create(void)
        temperature is 1.0, so it is set rather than assumed. */
     s->use_ecfr = 0;
     s->ecfr_lambda = 1.0;
+    s->num_threads = 1;
     s->tab = (entry_t *)calloc(s->cap, sizeof(entry_t));
     if (!s->tab)
     {
@@ -215,10 +270,20 @@ void cfr_storage_set_memory_masks(cfr_storage_t *s, uint32_t avg_mask, uint32_t 
     s->keep_ev_mask = ev_mask;
 }
 
+void cfr_storage_set_num_threads(cfr_storage_t *s, int num_threads)
+{
+    if (!s)
+        return;
+    s->num_threads = num_threads > 0 ? num_threads : 1;
+}
+
 void cfr_storage_destroy(cfr_storage_t *s)
 {
     if (!s)
         return;
+#ifdef PE_LEGACY_CFR_OPENMP
+#pragma omp parallel for schedule(static) num_threads(s->num_threads)
+#endif
     for (size_t i = 0; i < s->cap; i++)
         if (s->tab[i].used)
         {
@@ -472,13 +537,7 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
     }
     if (!s->use_ecfr)
     {
-        double sum_pos = 0.0;
-        for (int i = 0; i < action_count; i++)
-        {
-            double r = e->regret[i];
-            if (r > 0)
-                sum_pos += r;
-        }
+        double sum_pos = cfr_sum_positive(e->regret, action_count);
         if (sum_pos > 0)
         {
             for (int i = 0; i < action_count; i++)
@@ -781,6 +840,9 @@ void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
     if (factor == 1.0)
         return;
 
+#ifdef PE_LEGACY_CFR_OPENMP
+#pragma omp parallel for schedule(static) num_threads(s->num_threads)
+#endif
     for (size_t i = 0; i < s->cap; i++)
     {
         entry_t *e = &s->tab[i];

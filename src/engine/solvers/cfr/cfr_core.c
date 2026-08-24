@@ -94,6 +94,7 @@ int cfr_config_to_pe_solver_config(const cfr_config_t *legacy,
     out->seed = (uint64_t)(uint32_t)legacy->seed;
     out->max_iterations = legacy->max_iterations > 0
                               ? (uint64_t)legacy->max_iterations : 0u;
+    out->execution.cpu_threads = legacy->num_threads > 0 ? legacy->num_threads : 1;
     out->target_exploitability_mbb = legacy->convergence_threshold > 0.0
                                          ? legacy->convergence_threshold : 0.0;
     out->exploitability_interval = legacy->exploitability_interval > 0
@@ -352,6 +353,7 @@ double cfr_solve(
 
     cfr_storage_set_strategy_mode_for(storage, config->enable_ecfr, config->ecfr_lambda);
     cfr_storage_set_memory_masks(storage, config->keep_avg_strategy_mask, config->keep_ev_mask);
+    cfr_storage_set_num_threads(storage, config->num_threads);
     walk.use_flow_focus = config->enable_mccfvfp ? 1 : 0;
     walk.flow_pow = (fabs(config->mccfvfp_flow_pow) > 1e-9) ? config->mccfvfp_flow_pow : 1.0;
 

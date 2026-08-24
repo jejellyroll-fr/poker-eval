@@ -43,6 +43,9 @@ extern "C" {
  */
 int pe_cfr_save_storage(cfr_storage_t *storage, const char *path);
 
+/** Save a zstd-compressed .pe_sol snapshot. `level` 0 selects zstd's default. */
+int pe_cfr_save_storage_zstd(cfr_storage_t *storage, const char *path, int level);
+
 /**
  * Load a compact binary .pe_sol file into a CFR storage.
  *

@@ -22,6 +22,20 @@ add_subdirectory(ofc)
 # depends on ports, never on the engine, the evaluator or a GPU backend.
 find_package(ZLIB REQUIRED)
 
+if(ENABLE_ZSTD)
+    find_path(PE_ZSTD_INCLUDE_DIR zstd.h)
+    find_library(PE_ZSTD_LIBRARY NAMES zstd libzstd)
+    if(PE_ZSTD_INCLUDE_DIR AND PE_ZSTD_LIBRARY)
+        set(POKER_EVAL_WITH_ZSTD ON)
+        message(STATUS "zstd found, enabling compressed .pe_sol snapshots")
+    else()
+        set(POKER_EVAL_WITH_ZSTD OFF)
+        message(STATUS "zstd not found, compressed .pe_sol snapshots disabled")
+    endif()
+else()
+    set(POKER_EVAL_WITH_ZSTD OFF)
+endif()
+
 add_library(poker_solver
     solver/domain/actions.c
     solver/domain/betting_state.c
@@ -37,6 +51,7 @@ add_library(poker_solver
     solver/domain/preflop_deal_sampler.c
     solver/domain/preflop_betting.c
     solver/domain/cfr_external_adapter.c
+    solver/domain/cluster.c
     solver/domain/runout_report.c
     solver/domain/omaha_river.c
     solver/domain/pots.c
