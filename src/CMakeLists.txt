@@ -58,6 +58,7 @@ add_library(poker_solver
     solver/adapters/compute_opencl.c
     solver/adapters/evaluator_equity.c
     solver/adapters/evaluator_gpu.c
+    solver/adapters/monker_classes.c
     solver/adapters/monker_tree_reader.c
     solver/adapters/monker_mkr_reader.c
     solver/adapters/monker_filters.c
