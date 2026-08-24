@@ -42,24 +42,21 @@ target_include_directories(pe-preflop-tree PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-preflop-tree PRIVATE poker_eval_modular m)
 
 if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    find_program(POKER_EVAL_SWIFTC swiftc REQUIRED)
+    find_program(POKER_EVAL_CLANG clang REQUIRED)
     set(POKER_EVAL_DESKTOP_APP "${CMAKE_CURRENT_BINARY_DIR}/PokerEval Trainer.app")
     set(POKER_EVAL_DESKTOP_EXE "${POKER_EVAL_DESKTOP_APP}/Contents/MacOS/PokerEval Trainer")
     add_custom_command(
         OUTPUT "${POKER_EVAL_DESKTOP_EXE}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${POKER_EVAL_DESKTOP_APP}/Contents/MacOS"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${POKER_EVAL_DESKTOP_APP}/Contents/Resources"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/swift-module-cache"
-        COMMAND ${POKER_EVAL_SWIFTC} -O
-            -parse-as-library
-            -module-cache-path "${CMAKE_CURRENT_BINARY_DIR}/swift-module-cache"
-            "${CMAKE_CURRENT_SOURCE_DIR}/poker_eval_trainer_desktop.swift"
+        COMMAND ${POKER_EVAL_CLANG} -O2 -std=c99
+            "${CMAKE_CURRENT_SOURCE_DIR}/poker_eval_trainer_desktop.c"
             -o "${POKER_EVAL_DESKTOP_EXE}"
-            -framework AppKit
+            -framework Cocoa -lobjc
         COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_CURRENT_SOURCE_DIR}/poker_eval_trainer_desktop_Info.plist"
             "${POKER_EVAL_DESKTOP_APP}/Contents/Info.plist"
-        DEPENDS poker_eval_trainer_desktop.swift poker_eval_trainer_desktop_Info.plist
+        DEPENDS poker_eval_trainer_desktop.c poker_eval_trainer_desktop_Info.plist
         VERBATIM)
     add_custom_target(poker-eval-trainer-desktop DEPENDS "${POKER_EVAL_DESKTOP_EXE}")
 endif()
