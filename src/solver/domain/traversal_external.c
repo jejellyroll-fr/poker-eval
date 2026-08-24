@@ -82,8 +82,10 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
         ctx->sampled_chance_nodes++;
         own_reach *= sample.importance_ratio;
         opponent_reach *= sample.importance_ratio;
-        return sample.importance_ratio *
-               external_visit(ctx, child, own_reach, opponent_reach, batch);
+        double value = external_visit(ctx, child, own_reach, opponent_reach,
+                                      batch);
+        if (game->release_state) game->release_state(child, game->user);
+        return sample.importance_ratio * value;
     }
     if ((game->sample_chance || game->sample_chance_with_user) &&
         game->apply_chance)
@@ -106,9 +108,10 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
             ctx->sampled_chance_nodes++;
             own_reach *= sample.importance_ratio;
             opponent_reach *= sample.importance_ratio;
-            return sample.importance_ratio *
-                   external_visit(ctx, child, own_reach,
-                                  opponent_reach, batch);
+            double value = external_visit(ctx, child, own_reach,
+                                          opponent_reach, batch);
+            if (game->release_state) game->release_state(child, game->user);
+            return sample.importance_ratio * value;
         }
     }
 
@@ -138,6 +141,7 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
                 return NAN;
             values[a] = external_visit(ctx, child, own_reach * probs[a],
                                        opponent_reach, batch);
+            if (game->release_state) game->release_state(child, game->user);
             if (!isfinite(values[a]))
                 return NAN;
             node_value += probs[a] * values[a];
@@ -162,8 +166,10 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
     const void *child = game->apply_action(state, (uint16_t)action, game->user);
     if (!child)
         return NAN;
-    return external_visit(ctx, child, own_reach,
-                          opponent_reach * probs[action], batch);
+    double value = external_visit(ctx, child, own_reach,
+                                  opponent_reach * probs[action], batch);
+    if (game->release_state) game->release_state(child, game->user);
+    return value;
 }
 
 int pe_external_sampling_ctx_init(pe_external_sampling_ctx_t *ctx,

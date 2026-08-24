@@ -118,6 +118,9 @@ int main(void)
     cfg.problem.expected_infosets = 4u;
     cfg.problem.expected_actions = 2u;
     cfg.problem.expected_combos = 1u;
+    /* Exercise Lane B's batched trajectory path: the solver must merge the
+       four sampled updates before crossing the compute port. */
+    cfg.execution.sample_batch_size = 4u;
     cfg.seed = 0x1234u;
     cfg.target_exploitability_mbb = 1.0;
     cfg.exploitability_interval = 16u;

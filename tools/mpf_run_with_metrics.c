@@ -4,8 +4,10 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/solver/pe_capabilities.h>
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
+#include <poker_eval/solver/pe_cfr_external_adapter.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_monker_strategy.h>
@@ -40,6 +42,8 @@ static void usage(const char *prog)
             "\n"
             "Options:\n"
             "  --iterations <n>         Number of CFR iterations (default: 1000)\n"
+            "  --lane-b                 Run the sampled v3 solver on this tree\n"
+            "  --sample-batch <n>       Lane B trajectories per update (default: 1)\n"
             "  --metrics-interval <n>   Emit metrics every n iterations (default: 50)\n"
             "  --metrics-file <path>    Write metrics snapshots as JSON lines (use '-' for stdout)\n"
             "  --node-map <path>        Save node->state key mapping for later exports\n"
@@ -695,6 +699,8 @@ int main(int argc, char **argv)
     const char *checkpoint_path = NULL;
     const char *node_map_path = NULL;
     int iterations = 1000;
+    int lane_b = 0;
+    int sample_batch = 1;
     int metrics_interval = 50;
     int metrics_history = 128;
     int metrics_level = 2;
@@ -768,6 +774,18 @@ int main(int argc, char **argv)
             if (!parse_int(argv[++i], &iterations) || iterations <= 0)
             {
                 fprintf(stderr, "Invalid iterations value\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--lane-b") == 0)
+        {
+            lane_b = 1;
+        }
+        else if (strcmp(argv[i], "--sample-batch") == 0 && i + 1 < argc)
+        {
+            if (!parse_int(argv[++i], &sample_batch) || sample_batch <= 0)
+            {
+                fprintf(stderr, "Invalid sample batch value\n");
                 return 1;
             }
         }
@@ -1298,6 +1316,69 @@ int main(int argc, char **argv)
         eval_context_destroy(ctx);
         mpf_tree_free(tree);
         return 1;
+    }
+
+    /* The same fully configured legacy tree can now be driven by Lane B.  This
+       is intentionally a separate execution path: the legacy CFR storage is
+       not mixed with the v3 storage, while the game adapter preserves all
+       existing action, street, board-chance and terminal semantics. */
+    if (lane_b)
+    {
+        pe_cfr_external_adapter_t adapter;
+        pe_solver_config_t lane_cfg = pe_solver_config_default();
+        pe_solver_deps_t lane_deps = pe_solver_deps_default();
+        pe_solver_t *lane_solver;
+        pe_solver_status_t lane_status;
+        pe_progress_t lane_progress;
+        pe_metrics_t lane_metrics;
+        if (mkr_path || pe_cfr_external_adapter_init(&adapter, &game) != 0)
+        {
+            fprintf(stderr, "Lane B requires a compatible solve tree and does not import --mkr strategies\n");
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 1;
+        }
+        lane_cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
+        lane_cfg.execution.backend = PE_COMPUTE_CPU_REF;
+        lane_cfg.execution.stages.traversal = PE_COMPUTE_CPU_REF;
+        lane_cfg.execution.stages.update = PE_COMPUTE_CPU_REF;
+        lane_cfg.execution.stages.terminal_eval = PE_COMPUTE_CPU_REF;
+        lane_cfg.execution.sample_batch_size = (size_t)sample_batch;
+        lane_cfg.execution.deterministic = 1;
+        lane_cfg.problem.expected_infosets = 1u;
+        lane_cfg.problem.expected_actions = 2u;
+        lane_cfg.problem.expected_combos = 1u;
+        lane_cfg.max_iterations = (uint64_t)iterations;
+        lane_cfg.seed = UINT64_C(0x50455f4c414e455f) ^ (uint64_t)iterations;
+        lane_deps.external_game = pe_cfr_external_adapter_game(&adapter);
+        lane_solver = pe_solver_create(&lane_cfg, &lane_deps);
+        lane_status = lane_solver ? pe_solver_run(lane_solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
+        printf("lane_b=external-mccfr sample_batch=%d iterations=%d status=%d\n",
+               sample_batch, iterations, (int)lane_status);
+        if (lane_solver && pe_solver_progress(lane_solver, &lane_progress) == PE_SOLVER_OK)
+            printf("lane_b_progress=%.6f complete=%d iteration=%llu\n",
+                   lane_progress.fraction, lane_progress.complete,
+                   (unsigned long long)lane_progress.iteration);
+        if (lane_solver && pe_solver_metrics(lane_solver, &lane_metrics) == PE_SOLVER_OK)
+            printf("lane_b_br_guarantee=%d exploitability_mbb=%.6f\n",
+                   (int)lane_metrics.guarantee,
+                   lane_metrics.exploitability_mbb_per_game);
+        pe_solver_destroy(lane_solver);
+        mpf_state_cleanup(&root_state);
+        mpf_perf_stats_pool_destroy(perf_pool);
+        eval_context_destroy(ctx);
+        for (int p = 0; p < num_players; ++p)
+            if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                pe_range_free(ranges[p]);
+        pe_monker_range_set_free(&tree_ranges);
+        mpf_tree_free(tree);
+        return lane_status == PE_SOLVER_OK ? 0 : 1;
     }
 
     cfr_storage_t *storage = cfr_storage_create();

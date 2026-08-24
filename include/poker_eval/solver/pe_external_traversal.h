@@ -50,6 +50,11 @@ typedef struct pe_external_game_t
     const void *(*sample_chance_child)(const void *state, pe_rng_t *rng,
                                        pe_chance_sample_t *out, void *user);
     const void *(*apply_chance)(const void *state, int outcome, void *user);
+
+    /* Optional lifetime hook for adapters whose apply_action/apply_chance
+       allocate a temporary child.  Sampling adapters that own a per-deal
+       arena can leave this NULL and reclaim the arena at the chance boundary. */
+    void (*release_state)(const void *state, void *user);
 } pe_external_game_t;
 
 typedef struct

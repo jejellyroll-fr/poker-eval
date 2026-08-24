@@ -587,6 +587,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     pe_compute_config_t compute_config;
     void *compute_self = NULL;
     pe_update_batch_t batch = {0};
+    pe_update_batch_t aggregated_batch = {0};
     pe_external_sampling_ctx_t external = {0};
     pe_outcome_sampling_ctx_t outcome = {0};
     pe_sampled_adapter_t adapter;
@@ -659,21 +660,41 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
          iteration <= solver->config.max_iterations; ++iteration)
     {
         int updating_player = (int)((iteration - 1u) % game->player_count);
-        if (use_outcome)
+        /* A sampled Lane B iteration may contain several independent
+           trajectories.  Keep the traversal state local to the thread, merge
+           its updates once, and cross the compute port once.  The old value
+           (zero) deliberately means one trajectory, preserving the reference
+           behaviour while making the configured batch size useful for wide
+           preflop ranges. */
+        size_t samples = solver->config.execution.sample_batch_size;
+        if (samples == 0u) samples = 1u;
+        pe_update_batch_clear(&aggregated_batch);
+        rc = 0;
+        for (size_t sample_index = 0u; sample_index < samples; ++sample_index)
         {
-            outcome.updating_player = updating_player;
-            rc = pe_outcome_sampling_run(&outcome, &batch);
+            if (use_outcome)
+            {
+                outcome.updating_player = updating_player;
+                rc = pe_outcome_sampling_run(&outcome, &batch);
+            }
+            else
+            {
+                external.updating_player = updating_player;
+                rc = pe_external_sampling_run(&external, &batch);
+            }
+            if (rc != 0 || pe_update_batch_merge(&aggregated_batch, &batch) != 0)
+            {
+                rc = -1;
+                break;
+            }
         }
-        else
-        {
-            external.updating_player = updating_player;
-            rc = pe_external_sampling_run(&external, &batch);
-        }
-        if (rc == 0 && compute_ops->apply_update_batch(compute_self, &batch) != 0)
+        if (rc == 0 && compute_ops->apply_update_batch(
+                compute_self, &aggregated_batch) != 0)
             rc = -1;
         if (rc != 0)
         {
             pe_update_batch_destroy(&batch);
+            pe_update_batch_destroy(&aggregated_batch);
             if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
             else pe_external_sampling_ctx_destroy(&external);
             compute_ops->destroy(compute_self);
@@ -685,6 +706,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     if (compute_ops->sync && compute_ops->sync(compute_self) != 0)
     {
         pe_update_batch_destroy(&batch);
+        pe_update_batch_destroy(&aggregated_batch);
         if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
         else pe_external_sampling_ctx_destroy(&external);
         compute_ops->destroy(compute_self);
@@ -714,6 +736,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                                                   &br_config, &br_result) != 0)
             {
                 pe_update_batch_destroy(&batch);
+                pe_update_batch_destroy(&aggregated_batch);
                 if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
                 else pe_external_sampling_ctx_destroy(&external);
                 compute_ops->destroy(compute_self);
@@ -727,6 +750,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 solver->config.execution.big_blind, &solver->metrics) != PE_SOLVER_OK)
         {
             pe_update_batch_destroy(&batch);
+            pe_update_batch_destroy(&aggregated_batch);
             if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
             else pe_external_sampling_ctx_destroy(&external);
             compute_ops->destroy(compute_self);
@@ -737,6 +761,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         solver->metrics_available = 1;
     }
     pe_update_batch_destroy(&batch);
+    pe_update_batch_destroy(&aggregated_batch);
     if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
     else pe_external_sampling_ctx_destroy(&external);
     compute_ops->destroy(compute_self);

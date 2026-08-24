@@ -84,8 +84,11 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
             sample.importance_ratio <= 0.0)
             return NAN;
         ctx->sampled_chance_nodes++;
-        return outcome_visit(ctx, child,
-                             inverse_sampling * sample.importance_ratio, batch);
+        double value = outcome_visit(ctx, child,
+                                     inverse_sampling * sample.importance_ratio,
+                                     batch);
+        if (game->release_state) game->release_state(child, game->user);
+        return value;
     }
     if ((game->sample_chance || game->sample_chance_with_user) &&
         game->apply_chance)
@@ -106,9 +109,11 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
             if (!child)
                 return NAN;
             ctx->sampled_chance_nodes++;
-            return outcome_visit(ctx, child,
-                                 inverse_sampling * sample.importance_ratio,
-                                 batch);
+            double value = outcome_visit(ctx, child,
+                                         inverse_sampling * sample.importance_ratio,
+                                         batch);
+            if (game->release_state) game->release_state(child, game->user);
+            return value;
         }
     }
 
@@ -133,6 +138,7 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
     ctx->sampled_action_nodes++;
     value = outcome_visit(ctx, child,
                           inverse_sampling / sampling_probability, batch);
+    if (game->release_state) game->release_state(child, game->user);
     if (!isfinite(value))
         return NAN;
 

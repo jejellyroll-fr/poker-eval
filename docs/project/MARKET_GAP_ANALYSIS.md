@@ -54,8 +54,13 @@ famille AGPL du solving OSS.
    d'itérations. La preuve d'intégration couvre un arbre Hold'em et un PLO5 trois-way.
    `pe_external_best_response_sampled` ajoute une mesure BR empirique explicitement
    étiquetée. `pe-preflop-tree` construit désormais un arbre préflop JSON borné à
-   partir des stacks, tailles et ranges déclarées ; les transitions de street et un
-   solveur produit multi-rues restent distincts.
+   partir des stacks, tailles et ranges déclarées. Le nouveau pont
+   `pe_cfr_external_adapter` expose aussi les arbres `cfr_game_t` multi-rues au
+   chemin Lane B, y compris les nœuds de chance volumineux, et
+   `mpf_run_with_metrics --lane-b --sample-batch N` permet de les exécuter via le
+   solver v3 avec regroupement des trajectoires. Cela ferme le branchement
+   fonctionnel ; les benchmarks de production 2–10/9 joueurs et le parallélisme
+   des trajectoires restent à qualifier.
 2. **GUI / couche produit joueur.** `pe-solution-report` produit désormais un JSON v2
    et un viewer HTML autonome avec filtre interactif par street/flop/board/nœud. La
    cible `poker-eval-trainer-gui` produit maintenant la même application C + SDL2

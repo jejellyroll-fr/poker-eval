@@ -57,16 +57,27 @@ static const void *sample_chance(br_context_t *ctx, const void *state)
 
 static double policy_rollout(br_context_t *ctx, const void *state, uint16_t depth)
 {
+    const void *child;
+    double value;
     if (!state || depth >= ctx->max_depth) return NAN;
     if (ctx->game->is_terminal(state, ctx->game->user))
         return ctx->game->terminal_value(state, ctx->br_player, ctx->game->user);
     if (ctx->game->acting_player(state, ctx->game->user) < 0)
-        return policy_rollout(ctx, sample_chance(ctx, state), (uint16_t)(depth + 1u));
+    {
+        child = sample_chance(ctx, state);
+        value = policy_rollout(ctx, child, (uint16_t)(depth + 1u));
+        if (child && ctx->game->release_state)
+            ctx->game->release_state(child, ctx->game->user);
+        return value;
+    }
     uint16_t actions = ctx->game->action_count(state, ctx->game->user);
     int action = sample_action(ctx, state, actions);
     if (action < 0) return NAN;
-    return policy_rollout(ctx, ctx->game->apply_action(state, (uint16_t)action, ctx->game->user),
-                          (uint16_t)(depth + 1u));
+    child = ctx->game->apply_action(state, (uint16_t)action, ctx->game->user);
+    value = policy_rollout(ctx, child, (uint16_t)(depth + 1u));
+    if (child && ctx->game->release_state)
+        ctx->game->release_state(child, ctx->game->user);
+    return value;
 }
 
 static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth);
@@ -74,17 +85,28 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth);
 static double br_action_value(br_context_t *ctx, const void *state, uint16_t action,
                               uint16_t depth)
 {
-    return policy_rollout(ctx, ctx->game->apply_action(state, action, ctx->game->user),
-                          (uint16_t)(depth + 1u));
+    const void *child = ctx->game->apply_action(state, action, ctx->game->user);
+    double value = policy_rollout(ctx, child, (uint16_t)(depth + 1u));
+    if (child && ctx->game->release_state)
+        ctx->game->release_state(child, ctx->game->user);
+    return value;
 }
 
 static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
 {
+    const void *child;
+    double value;
     if (!state || depth >= ctx->max_depth) return NAN;
     if (ctx->game->is_terminal(state, ctx->game->user))
         return ctx->game->terminal_value(state, ctx->br_player, ctx->game->user);
     if (ctx->game->acting_player(state, ctx->game->user) < 0)
-        return br_rollout(ctx, sample_chance(ctx, state), (uint16_t)(depth + 1u));
+    {
+        child = sample_chance(ctx, state);
+        value = br_rollout(ctx, child, (uint16_t)(depth + 1u));
+        if (child && ctx->game->release_state)
+            ctx->game->release_state(child, ctx->game->user);
+        return value;
+    }
     uint16_t actions = ctx->game->action_count(state, ctx->game->user);
     int actor = ctx->game->acting_player(state, ctx->game->user);
     if (actions == 0u || actions > PE_EXTERNAL_MAX_ACTIONS) return NAN;
@@ -101,8 +123,11 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
     }
     int action = sample_action(ctx, state, actions);
     if (action < 0) return NAN;
-    return br_rollout(ctx, ctx->game->apply_action(state, (uint16_t)action, ctx->game->user),
-                      (uint16_t)(depth + 1u));
+    child = ctx->game->apply_action(state, (uint16_t)action, ctx->game->user);
+    value = br_rollout(ctx, child, (uint16_t)(depth + 1u));
+    if (child && ctx->game->release_state)
+        ctx->game->release_state(child, ctx->game->user);
+    return value;
 }
 
 pe_external_br_config_t pe_external_br_config_default(void)
