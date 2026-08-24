@@ -72,6 +72,14 @@ typedef struct {
 typedef struct {
     double action_probability[PE_HRC_MAX_NODES][PE_HRC_MAX_ACTIONS];
     double ev[PE_HRC_MAX_PLAYERS];
+    /* Private information strategy. Layout is
+     * [player][node][combo][action], with combo_stride nodes*max_combos*8. */
+    double *combo_action_probability;
+    size_t combo_stride;
+    size_t max_range_combos;
+    size_t range_combo_count[PE_HRC_MAX_PLAYERS];
+    size_t node_count;
+    int num_players;
     size_t profile_count;
     unsigned iterations;
 } pe_hrc_result_t;
@@ -80,10 +88,21 @@ typedef struct {
 pe_hrc_status_t pe_hrc_validate(const pe_hrc_config_t *config);
 
 /* Enumerate collision-free range profiles and solve the bounded action tree
- * with regret matching. Strategies are aggregate per public node; the private
- * range is used exactly for profile probabilities and card removal. */
+ * with regret matching. Strategies are maintained per public node and private
+ * combo; the public-node result is an aggregate view of those strategies. */
 pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
                              pe_hrc_result_t *result);
+
+/* Read a private information-set strategy from a solve result. Returns -1 on
+ * an invalid coordinate, otherwise P(action | node, player's combo). */
+double pe_hrc_result_combo_probability(const pe_hrc_result_t *result,
+                                       int player,
+                                       int node_index,
+                                       size_t combo_index,
+                                       int action);
+
+/* Release the private strategy buffer owned by a result. */
+void pe_hrc_result_free(pe_hrc_result_t *result);
 
 #ifdef __cplusplus
 }

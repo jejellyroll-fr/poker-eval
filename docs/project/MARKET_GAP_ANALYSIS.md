@@ -147,9 +147,10 @@ testée :
     ranges indépendants en supprimant exactement les collisions de cartes, valide un arbre
     de betting acyclique, puis applique le regret matching sur ses nœuds publics. Le callback
     terminal reçoit les montants et le chemin d'actions, ce qui permet d'y brancher pots,
-    antes et side pots. La stratégie livrée est agrégée par nœud public (pas encore une
-    table privée par combo ni un import HRC propriétaire), et le solveur est volontairement
-    borné par `max_profiles`.
+    antes et side pots. La stratégie est maintenant maintenue par nœud et par combo privé ;
+    `action_probability` expose aussi la vue publique agrégée et
+    `pe_hrc_result_combo_probability()` la décision privée. Il reste l'import HRC
+    propriétaire et le solveur est volontairement borné par `max_profiles`.
 11. **FGS dynamique** : `pe_fgs_calculate_tree()` (`economics/fgs.h`) parcourt un arbre de
     transitions probabilistes de profondeur bornée, vérifie les probabilités locales et
     agrège l'ICM de chaque feuille. Cela remplace le simple fichier de scénarios plat ; un
