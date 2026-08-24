@@ -17,6 +17,36 @@
 #define PE_MONKER_MAX_NODES 1000000u
 #define PE_MONKER_MAX_DEPTH 1024u
 
+pe_monker_status_t pe_monker_combo_layout_from_count(
+    uint32_t combo_count, pe_monker_combo_layout_t *out)
+{
+    if (!out)
+        return PE_MONKER_ERR_NULL_ARGUMENT;
+    switch (combo_count)
+    {
+    case 1326u:
+        out->game = game_holdem;
+        out->hole_cards = 2u;
+        break;
+    case 270725u:
+        out->game = game_omaha;
+        out->hole_cards = 4u;
+        break;
+    case 2598960u:
+        out->game = game_omaha5;
+        out->hole_cards = 5u;
+        break;
+    case 20358520u:
+        out->game = game_omaha6;
+        out->hole_cards = 6u;
+        break;
+    default:
+        return PE_MONKER_ERR_INVALID_HEADER;
+    }
+    out->combo_count = combo_count;
+    return PE_MONKER_OK;
+}
+
 static int read_bytes(FILE *file, unsigned char *out, size_t count)
 {
     return fread(out, 1u, count, file) == count ? 0 : -1;
@@ -616,10 +646,17 @@ static pe_monker_status_t load_payload(const char *path,
 static pe_range_t *allocate_fixed_range(uint32_t combo_count,
                                         unsigned combo_cards)
 {
+    pe_monker_combo_layout_t layout;
     pe_range_t *range = (pe_range_t *)calloc(1u, sizeof(*range));
     if (!range)
         return NULL;
-    range->game_type = combo_cards == 4u ? game_omaha : game_holdem;
+    if (pe_monker_combo_layout_from_count(combo_count, &layout) !=
+            PE_MONKER_OK || layout.hole_cards != combo_cards)
+    {
+        free(range);
+        return NULL;
+    }
+    range->game_type = layout.game;
     range->capacity = combo_count;
     range->count = combo_count;
     range->combos = (pe_combo_t *)calloc(combo_count, sizeof(*range->combos));
@@ -709,14 +746,15 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
     }
     combo_count = (uint32_t)((length - offset) /
                              ((size_t)header.player_count * sizeof(int32_t)));
-    if (combo_count == 1326u)
-        combo_cards = 2u;
-    else if (combo_count == 270725u)
-        combo_cards = 4u;
-    else
     {
-        free(bytes);
-        return PE_MONKER_ERR_INVALID_HEADER;
+        pe_monker_combo_layout_t layout;
+        if (pe_monker_combo_layout_from_count(combo_count, &layout) !=
+            PE_MONKER_OK)
+        {
+            free(bytes);
+            return PE_MONKER_ERR_INVALID_HEADER;
+        }
+        combo_cards = layout.hole_cards;
     }
 
     out->players = (pe_range_t **)calloc(header.player_count,

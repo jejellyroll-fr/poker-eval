@@ -54,6 +54,17 @@ typedef struct
     pe_range_t **players;
 } pe_monker_range_set_t;
 
+typedef struct
+{
+    enum_game_t game;
+    uint8_t hole_cards;
+    uint32_t combo_count;
+} pe_monker_combo_layout_t;
+
+/* Resolve the complete-deck combination count used by a Monker range block. */
+pe_monker_status_t pe_monker_combo_layout_from_count(
+    uint32_t combo_count, pe_monker_combo_layout_t *out);
+
 typedef enum
 {
     PE_MONKER_MKR_OK = 0,
