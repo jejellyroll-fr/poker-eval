@@ -34,10 +34,59 @@ typedef struct
 static void usage(const char *program)
 {
     fprintf(stderr, "Usage: %s --solution FILE [--labels CSV] [--rounds N] [--seed N]"
-                    " [--session-json FILE] [--export-html FILE]\n"
+                    " [--session-json FILE] [--resume-session FILE] [--export-html FILE]\n"
                     "       labels CSV: key,action,label or key,street,board,action,label,next_key\n"
                     "       rich labels: key,street,board,runout,position,pot,action,label,next_key\n",
             program);
+}
+
+/* Read the small scalar summary without depending on a JSON library.  The
+ * session writer owns the schema and emits these fields as JSON numbers, so a
+ * bounded field lookup is sufficient and keeps the trainer portable. */
+static int load_session_summary(const char *path, int *answered,
+                                int *best_answers, double *probability_loss)
+{
+    FILE *file;
+    long size;
+    char *data;
+    const char *fields[] = {"\"answered\":", "\"best_answers\":",
+                            "\"probability_loss\":"};
+    double parsed[3];
+    if (!path || !answered || !best_answers || !probability_loss)
+        return -1;
+    file = fopen(path, "rb");
+    if (!file || fseek(file, 0, SEEK_END) != 0)
+    {
+        if (file) fclose(file);
+        return -1;
+    }
+    size = ftell(file);
+    if (size < 0 || size > 16 * 1024 * 1024)
+    {
+        fclose(file);
+        return -1;
+    }
+    rewind(file);
+    data = (char *)malloc((size_t)size + 1u);
+    if (!data || fread(data, 1u, (size_t)size, file) != (size_t)size)
+    {
+        free(data); fclose(file); return -1;
+    }
+    fclose(file);
+    data[size] = '\0';
+    for (size_t i = 0u; i < 3u; ++i)
+    {
+        const char *at = strstr(data, fields[i]);
+        char *end = NULL;
+        if (!at) { free(data); return -1; }
+        parsed[i] = strtod(at + strlen(fields[i]), &end);
+        if (end == at + strlen(fields[i])) { free(data); return -1; }
+    }
+    *answered = parsed[0] < 0.0 ? 0 : (int)parsed[0];
+    *best_answers = parsed[1] < 0.0 ? 0 : (int)parsed[1];
+    *probability_loss = parsed[2] >= 0.0 ? parsed[2] : 0.0;
+    free(data);
+    return 0;
 }
 
 static void json_string(FILE *file, const char *value)
@@ -165,7 +214,8 @@ static unsigned next_random(unsigned *state)
 
 static int write_session(const char *path, const char *solution,
                          unsigned seed, int rounds, int answered, int correct,
-                         double probability_loss,
+                         double probability_loss, int difficulty,
+                         const char *resumed_from,
                          const trainer_event_t *events, size_t event_count)
 {
     FILE *file = fopen(path, "w");
@@ -177,8 +227,11 @@ static int write_session(const char *path, const char *solution,
         fputc(*p, file);
     }
     fprintf(file, "\",\"seed\":%u,\"rounds\":%d,\"answered\":%d,"
-                  "\"best_answers\":%d,\"probability_loss\":%.17g,\"events\":[",
-            seed, rounds, answered, correct, probability_loss);
+                  "\"best_answers\":%d,\"probability_loss\":%.17g,"
+                  "\"difficulty\":%d,\"resumed_from\":",
+            seed, rounds, answered, correct, probability_loss, difficulty);
+    json_string(file, resumed_from ? resumed_from : "");
+    fputs(",\"events\":[", file);
     for (size_t i = 0u; i < event_count; ++i)
     {
         if (i) fputc(',', file);
@@ -268,6 +321,7 @@ int main(int argc, char **argv)
     int rounds = 10;
     unsigned seed = 1u;
     const char *session_path = NULL;
+    const char *resume_path = NULL;
     const char *export_html = NULL;
     for (int i = 1; i < argc; ++i)
     {
@@ -281,6 +335,8 @@ int main(int argc, char **argv)
             seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (strcmp(argv[i], "--session-json") == 0 && i + 1 < argc)
             session_path = argv[++i];
+        else if (strcmp(argv[i], "--resume-session") == 0 && i + 1 < argc)
+            resume_path = argv[++i];
         else if (strcmp(argv[i], "--export-html") == 0 && i + 1 < argc)
             export_html = argv[++i];
         else
@@ -298,6 +354,24 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "Unable to open labels file\n");
         return 1;
+    }
+
+    int answered = 0;
+    int correct = 0;
+    int streak = 0;
+    int difficulty = 1;
+    double probability_loss = 0.0;
+    if (resume_path && load_session_summary(resume_path, &answered, &correct,
+                                            &probability_loss) != 0)
+    {
+        fprintf(stderr, "Unable to read trainer session %s\n", resume_path);
+        free(labels);
+        return 1;
+    }
+    if (answered > 0)
+    {
+        double accuracy = (double)correct / (double)answered;
+        difficulty = accuracy >= 0.80 ? 3 : accuracy >= 0.60 ? 2 : 1;
     }
 
     pe_sol_mmap_t *view = NULL;
@@ -329,9 +403,6 @@ int main(int argc, char **argv)
     printf("Action labels: %s\n", label_count ? "loaded from metadata" : "numeric fallback");
     printf("Enter an action number, or q to stop.\n\n");
 
-    int answered = 0;
-    int correct = 0;
-    double probability_loss = 0.0;
     trainer_event_t *events = NULL;
     size_t event_count = 0u;
     size_t event_capacity = 0u;
@@ -431,11 +502,15 @@ int main(int argc, char **argv)
         if (probabilities[selected] >= probabilities[best])
         {
             ++correct;
+            ++streak;
+            if (streak >= 3 && difficulty < 5) ++difficulty;
             printf("Correct: action %ld has the highest solved frequency.\n\n",
                    selected);
         }
         else
         {
+            streak = 0;
+            if (difficulty > 1) --difficulty;
             probability_loss += probabilities[best] - probabilities[selected];
             printf("Best action: %d (%.1f%%).\n\n", best, probabilities[best] * 100.0);
         }
@@ -450,6 +525,7 @@ int main(int argc, char **argv)
     printf("Cumulative strategy-probability loss: %.4f\n", probability_loss);
     if (session_path && write_session(session_path, solution, seed, rounds,
                                       answered, correct, probability_loss,
+                                      difficulty, resume_path,
                                       events, event_count) != 0)
         fprintf(stderr, "Unable to write trainer session %s\n", session_path);
     pe_sol_close_mmap(view);

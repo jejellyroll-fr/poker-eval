@@ -71,6 +71,10 @@ poker-eval-trainer --solution solve.pe_sol --labels labels.csv --rounds 20 \
   --session-json session.json
 ```
 
+Une session peut être reprise avec `--resume-session session.json` : le score,
+la perte de stratégie et le niveau de difficulté sont restaurés avant les
+nouveaux spots, puis réécrits dans le prochain export.
+
 Le trainer joueur est maintenant une application desktop portable en C + SDL2. La même
 cible fonctionne sur macOS, Linux et Windows, avec une fenêtre claire, glisser-déposer
 des fichiers `.pe_sol`/CSV, boutons d'actions, feedback, score, difficulté adaptative
