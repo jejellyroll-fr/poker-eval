@@ -10,6 +10,7 @@
 
 #include "pe_sol_format.h"
 #include "pe_tree_json.h"
+#include "pe_tree_layout.h"
 
 #ifdef _WIN32
 #define PE_GUI_PATH_SEPARATOR '\\'
@@ -858,31 +859,26 @@ static void stat_value(SDL_Renderer *renderer, int x, int y, const char *name,
 static const pe_tree_json_node_t *find_tree_node(const pe_tree_json_t *tree,
                                                  const char *id)
 {
-    size_t i;
-    if (!tree || !id || !id[0])
-        return NULL;
-    for (i = 0u; i < tree->count; ++i)
-        if (strcmp(tree->nodes[i].id, id) == 0)
-            return &tree->nodes[i];
-    return NULL;
+    return pe_tree_json_find_node(tree, id);
 }
 
-/* Render the loaded tree topology (root + its action children). When no tree
- * is loaded, say so instead of drawing placeholder nodes. */
+/* Render the loaded tree topology: BFS layout bounded to the first rows and
+ * depths that fit the panel. When no tree is loaded, say so instead of
+ * drawing placeholder nodes. */
 static void draw_tree(const app_t *app, SDL_Renderer *renderer, int x, int y,
                       int width, int height, SDL_Color white, SDL_Color muted,
                       SDL_Color blue, SDL_Color green)
 {
-    const pe_tree_json_node_t *root = NULL;
-    char label[32];
-    char caption[192];
-    if (app->tree_view.count > 0u)
-    {
-        root = find_tree_node(&app->tree_view, app->tree_view.root_id);
-        if (!root)
-            root = &app->tree_view.nodes[0];
-    }
-    if (!root)
+    enum { TREE_MAX_DEPTH = 3, TREE_MAX_PER_ROW = 6 };
+    static pe_tree_layout_entry_t entries[(TREE_MAX_DEPTH + 1) * TREE_MAX_PER_ROW];
+    pe_tree_layout_t layout;
+    char caption[224];
+    const int box_w = 104;
+    const int box_h = 34;
+    int row_step;
+    size_t i;
+
+    if (app->tree_view.count == 0u)
     {
         panel(renderer, (rect_t){x + width / 2 - 160, y + 20, 320, 42},
               (SDL_Color){39, 65, 91, 255}, blue);
@@ -891,43 +887,66 @@ static void draw_tree(const app_t *app, SDL_Renderer *renderer, int x, int y,
              "DROP A .tree OR TREE .json TO SHOW ITS TOPOLOGY", 2, muted);
         return;
     }
+    if (pe_tree_layout_bfs(&app->tree_view, TREE_MAX_DEPTH, TREE_MAX_PER_ROW,
+                           entries, (TREE_MAX_DEPTH + 1) * TREE_MAX_PER_ROW,
+                           &layout) != 0)
     {
-        int root_x = x + width / 2;
-        int child_y = y + 86;
-        int children = root->action_count < 4 ? root->action_count : 4;
-        int i;
-        panel(renderer, (rect_t){root_x - 66, y, 132, 42},
-              (SDL_Color){39, 65, 91, 255}, blue);
-        if (root->player >= 0)
-            snprintf(label, sizeof(label), "%s P%d",
-                     root->type[0] ? root->type : "node", root->player);
+        text(renderer, x + 18, y + 20, "TREE TOO LARGE TO PREVIEW", 2, muted);
+        return;
+    }
+    row_step = layout.depth_count > 1
+                   ? (height - 60 - box_h) / (layout.depth_count - 1)
+                   : 0;
+    if (row_step > box_h + 28)
+        row_step = box_h + 28;
+
+    /* Edges first so the boxes draw over them. */
+    for (i = 0u; i < layout.count; ++i)
+    {
+        const pe_tree_layout_entry_t *entry = &layout.entries[i];
+        const pe_tree_layout_entry_t *parent;
+        int px, py, cx, cy;
+        if (entry->parent_entry < 0)
+            continue;
+        parent = &layout.entries[entry->parent_entry];
+        px = x + (width * (parent->slot + 1)) / (parent->row_width + 1);
+        py = y + 8 + parent->depth * row_step + box_h;
+        cx = x + (width * (entry->slot + 1)) / (entry->row_width + 1);
+        cy = y + 8 + entry->depth * row_step;
+        line(renderer, px, py, cx, cy, muted);
+    }
+    for (i = 0u; i < layout.count; ++i)
+    {
+        const pe_tree_layout_entry_t *entry = &layout.entries[i];
+        const pe_tree_json_node_t *node =
+            &app->tree_view.nodes[entry->node_index];
+        const pe_tree_json_node_t *parent_node = NULL;
+        int cx = x + (width * (entry->slot + 1)) / (entry->row_width + 1);
+        int cy = y + 8 + entry->depth * row_step;
+        char label[32];
+        if (entry->parent_entry >= 0)
+            parent_node =
+                &app->tree_view.nodes[layout.entries[entry->parent_entry].node_index];
+        panel(renderer, (rect_t){cx - box_w / 2, cy, box_w, box_h},
+              entry->depth == 0 ? (SDL_Color){39, 65, 91, 255}
+                                : (SDL_Color){34, 57, 55, 255},
+              entry->depth == 0 ? blue : green);
+        if (parent_node && entry->action_from_parent >= 0 &&
+            parent_node->action_type[entry->action_from_parent][0])
+            snprintf(label, sizeof(label), "%s",
+                     parent_node->action_type[entry->action_from_parent]);
         else
             snprintf(label, sizeof(label), "%s",
-                     root->type[0] ? root->type : "node");
-        text(renderer, root_x - 58, y + 6, label, 1, muted);
-        snprintf(label, sizeof(label), "%.10s", root->id);
-        text(renderer, root_x - 58, y + 20, label, 2, white);
-        for (i = 0; i < children; ++i)
-        {
-            int child_x = x + (width * (i + 1)) / (children + 1);
-            const pe_tree_json_node_t *child =
-                find_tree_node(&app->tree_view, root->action_next[i]);
-            line(renderer, root_x, y + 42, child_x, child_y, muted);
-            panel(renderer, (rect_t){child_x - 66, child_y, 132, 42},
-                  (SDL_Color){34, 57, 55, 255}, green);
-            text(renderer, child_x - 58, child_y + 6,
-                 root->action_type[i][0] ? root->action_type[i] : "action",
-                 1, white);
-            snprintf(label, sizeof(label), "%.10s",
-                     child ? child->id : root->action_next[i]);
-            text(renderer, child_x - 58, child_y + 20, label, 2, white);
-        }
-        snprintf(caption, sizeof(caption), "TREE  /  ROOT %.24s  /  %zu NODES",
-                 app->tree_view.root_id[0] ? app->tree_view.root_id
-                                           : root->id,
-                 app->tree_view.count);
-        text(renderer, x + 18, y + height - 30, caption, 2, muted);
+                     node->type[0] ? node->type : "node");
+        text(renderer, cx - box_w / 2 + 6, cy + 4, label, 1, muted);
+        snprintf(label, sizeof(label), "%.8s", node->id);
+        text(renderer, cx - box_w / 2 + 6, cy + 16, label, 2, white);
     }
+    snprintf(caption, sizeof(caption), "TREE  /  ROOT %.20s  /  %zu NODES%s",
+             app->tree_view.root_id[0] ? app->tree_view.root_id
+                                       : app->tree_view.nodes[0].id,
+             app->tree_view.count, layout.truncated ? "  (VIEW BOUNDED)" : "");
+    text(renderer, x + 18, y + height - 30, caption, 2, muted);
 }
 
 static int rank_index(char rank)

@@ -1659,6 +1659,11 @@ if(TARGET test_pe_tree_json)
     set_tests_properties(test_pe_tree_json PROPERTIES LABELS "product;import")
 endif()
 
+add_poker_test(test_pe_tree_layout)
+if(TARGET test_pe_tree_layout)
+    set_tests_properties(test_pe_tree_layout PROPERTIES LABELS "product;import")
+endif()
+
 if(TARGET pe-hand-history-import)
     add_test(NAME pe_hand_history_import_smoke
         COMMAND pe-hand-history-import
