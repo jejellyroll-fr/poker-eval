@@ -76,9 +76,11 @@ la perte de stratégie et le niveau de difficulté sont restaurés avant les
 nouveaux spots, puis réécrits dans le prochain export.
 
 Le trainer joueur est maintenant une application desktop portable en C + SDL2. La même
-cible fonctionne sur macOS, Linux et Windows, avec une fenêtre claire, glisser-déposer
-des fichiers `.pe_sol`/CSV, boutons d'actions, feedback, score, difficulté adaptative
-et export de session JSON :
+cible fonctionne sur macOS, Linux et Windows. L'interface est organisée comme un vrai
+outil de solving : `Setup` pour le spot, `Solve` pour le suivi de l'arbre et du budget,
+`Explore` pour l'index des infosets, les fréquences et le contexte street/board/position.
+Elle accepte le glisser-déposer des fichiers `.pe_sol`/CSV, les boutons d'actions,
+le feedback, le score et l'export de session JSON :
 
 ```sh
 cmake --build build --target poker-eval-trainer-gui
@@ -102,6 +104,8 @@ la perte de stratégie et la difficulté sont restaurés au démarrage.
 Sans arguments, il suffit de déposer le `.pe_sol` puis le CSV de labels dans la fenêtre.
 Le CSV est important : il transforme les indices techniques en `fold`, `call`, `bet`,
 etc. et fournit street, board, position et pot.
+Les onglets sont aussi accessibles au clavier avec `1`, `2`, `3` ou `Tab`; `N` passe
+au spot suivant et `S` sauvegarde la session.
 
 Le mode `--export-html` de `poker-eval-trainer` reste disponible pour partager une
 session sans installer l'application, mais il n'est plus la surface principale du

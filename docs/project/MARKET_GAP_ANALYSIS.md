@@ -63,10 +63,11 @@ famille AGPL du solving OSS.
    des trajectoires restent à qualifier.
 2. **GUI / couche produit joueur.** `pe-solution-report` produit désormais un JSON v2
    et un viewer HTML autonome avec filtre interactif par street/flop/board/nœud. La
-   cible `poker-eval-trainer-gui` produit maintenant la même application C + SDL2
-   sur macOS, Linux et Windows : glisser-déposer `.pe_sol`/CSV, contexte du spot,
-   boutons d'actions, feedback, score, difficulté adaptative et export de session
-   JSON. Il manque encore l'éditeur de ranges intégré.
+   cible `poker-eval-trainer-gui` produit maintenant une application C + SDL2
+   redimensionnable sur macOS, Linux et Windows, structurée en `Setup`, `Solve` et
+   `Explore` : glisser-déposer `.pe_sol`/CSV, arbre visuel, contexte du spot, index
+   d'infosets, fréquences d'actions, trainer et export de session JSON. Il manque
+   encore l'éditeur de ranges intégré et le sélecteur de fichiers natif.
 3. **Play-vs-solution / trainer riche.** `poker-eval-trainer` suit les transitions
    `next_key`, affiche street/board/runout/position/pot lorsqu'ils sont fournis, et
    exporte une session JSON avec les réponses, meilleurs choix, pertes de stratégie et
