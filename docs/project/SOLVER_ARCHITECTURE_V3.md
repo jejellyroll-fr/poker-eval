@@ -647,7 +647,36 @@ Opérateurs : `,` (OU), `:` (ET), `!` (différence binaire, pas une négation un
 À ajouter comme dialecte de `pe_range_port` à côté de la syntaxe native
 (`AdvancedRangeParser`).
 
-### 11.4 Ce qu'on ne reprend pas
+### 11.4 Comparaison par exploitabilité
+
+Une stratégie importée ne se compare pas par une distance entre fréquences : deux
+équilibres peuvent choisir des actions différentes dans un nœud indifférent. La
+comparaison v3 branche donc les octets Monker sur le best-response vectoriel :
+
+```c
+pe_monker_strategy_game_t adapter;
+pe_exploitability_vector_result_t result;
+pe_best_response_vector_config_t br =
+    pe_best_response_vector_config_default();
+
+pe_monker_strategy_vector_game_init(
+    &adapter, &game, &monker_strategy, decode_combo, decode_user);
+pe_exploitability_vector(&adapter.game, &br, &result);
+```
+
+`decode_combo` fournit, pour chaque état et chaque classe de main, le nœud `.tree`
+correspondant et les quatre cartes canoniques. Le résultat contient la valeur de la
+politique, la meilleure réponse de chaque joueur, chaque gain unilatéral et leur somme
+(`exploitability_raw`, NashConv en multiway). La conversion en mbb/g reste celle de
+`pe_best_response_metrics_from_raw()` ou `pe_best_response_metrics_from_multiway()`.
+
+Le board n'est volontairement pas inventé par l'import : le format `.tree` ne le porte
+pas. Le game adapter doit donc fournir le board, les règles, les terminaux et la
+correspondance des combos. Cette API constitue le comparateur ; l'outil CLI qui assemble
+automatiquement `.tree`, `.mkr`, ranges et paramètres de spot reste une tranche
+d'intégration distincte.
+
+### 11.5 Ce qu'on ne reprend pas
 
 Les workers CFR de MonkerSolver ne sont pas désassemblés et n'ont pas à l'être. v3 ne
 copie **aucun algorithme**.

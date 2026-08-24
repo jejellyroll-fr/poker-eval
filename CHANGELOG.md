@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cfr_storage_scale_regrets()` is the new primitive that applies it.
 
 ### Added
+- Imported MonkerSolver strategies can now be attached to the vector game adapter
+  and compared by policy value plus per-player best-response exploitability. The
+  `.tree` topology remains separate from the caller-provided board and game rules.
 - UniversalDeck delegation to the generalized deck layer (ISSUE-03 phase 2,
   #203): the internal implementation of `Universal_*` (mask ops, string
   conversions) now delegates to `pe_deck_spec_t` / `pe_card_mask_t` from
