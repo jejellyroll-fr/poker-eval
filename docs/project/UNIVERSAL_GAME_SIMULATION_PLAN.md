@@ -1,5 +1,14 @@
 # Plan d'implémentation — simulations multi-variantes
 
+> État d’implémentation au 24 août 2026 : le parcours Monker PLO4 applique
+> maintenant les engagements call/raise/all-in au calcul d’EV (`d9c9f938`) et
+> le noyau vectoriel compose les nœuds de chance explicites avec leurs poids
+> (`1d8176bc`). Les codecs Monker Hold’em/PLO5/PLO6 et le terminal multi-rues
+> restent volontairement non déclarés comme terminés tant qu’ils n’ont pas été
+> confrontés à des dumps réels et à des runouts conditionnels aux cartes
+> privées. Les variantes Short Deck, Hi/Lo, Stud et Draw restent à brancher
+> dans ce parcours.
+
 Statut : plan d'exécution proposé  
 Date : 24 août 2026  
 Point de départ : `1637e55f` (`feat(monker): assemble spot comparison from CLI`)
