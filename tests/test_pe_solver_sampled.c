@@ -61,9 +61,10 @@ static double utility(const void *state, int player, void *user)
     return (uintptr_t)state < 110u ? 1.0 : -1.0;
 }
 
-static int sample_chance(const void *state, pe_rng_t *rng,
-                         pe_chance_sample_t *out)
+static int sample_chance_with_user(const void *state, pe_rng_t *rng,
+                                   pe_chance_sample_t *out, void *user)
 {
+    (void)user;
     if ((uintptr_t)state != 50u || !rng || !out) return -1;
     out->outcome = (int)pe_rng_below(rng, 2u);
     out->importance_ratio = 1.0;
@@ -94,7 +95,7 @@ int main(void)
     game.apply_action = apply_action;
     game.action_probability = probability;
     game.terminal_value = utility;
-    game.sample_chance = sample_chance;
+    game.sample_chance_with_user = sample_chance_with_user;
     game.apply_chance = apply_chance;
 
     cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;

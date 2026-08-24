@@ -815,6 +815,8 @@ add_poker_test(test_external_mccfr)
 set_tests_properties(test_external_mccfr PROPERTIES LABELS "solver;solver-v3;lnb01;mccfr" TIMEOUT 120)
 add_poker_test(test_pe_solver_sampled)
 set_tests_properties(test_pe_solver_sampled PROPERTIES LABELS "solver;solver-v3;lane-b;preflop" TIMEOUT 30)
+add_poker_test(test_pe_preflop_sampler)
+set_tests_properties(test_pe_preflop_sampler PROPERTIES LABELS "solver;solver-v3;preflop;holdem;plo4;plo5;plo6;card-removal" TIMEOUT 30)
 
 add_poker_test(test_outcome_mccfr)
 set_tests_properties(test_outcome_mccfr PROPERTIES LABELS "solver;solver-v3;out01;mccfr" TIMEOUT 120)

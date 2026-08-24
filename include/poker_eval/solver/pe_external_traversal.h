@@ -39,6 +39,11 @@ typedef struct pe_external_game_t
     /* Optional sampled chance layer. A non-zero sampler return means that the
        state is not a chance node and normal player callbacks are used. */
     pe_chance_sample_fn sample_chance;
+    /* Context-aware form for adapters that own a sampler (for example the
+       correlated Hold'em/PLO private-deal sampler). Takes precedence over the
+       legacy callback when both are set. */
+    int (*sample_chance_with_user)(const void *state, pe_rng_t *rng,
+                                   pe_chance_sample_t *out, void *user);
     const void *(*apply_chance)(const void *state, int outcome, void *user);
 } pe_external_game_t;
 

@@ -526,6 +526,14 @@ static const void *sampled_apply_chance(const void *state, int outcome,
     return adapter->base->apply_chance(state, outcome, adapter->base->user);
 }
 
+static int sampled_chance_with_user(const void *state, pe_rng_t *rng,
+                                    pe_chance_sample_t *out, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->sample_chance_with_user(
+        state, rng, out, adapter->base->user);
+}
+
 static double sampled_action_probability(const void *state, uint64_t key,
                                          uint16_t action, void *user)
 {
@@ -581,7 +589,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     if (!game || !game->root || solver->config.max_iterations == 0u ||
         !game->is_terminal || !game->acting_player || !game->action_count ||
         !game->apply_action || !game->terminal_value ||
-        (game->sample_chance && !game->apply_chance))
+        ((game->sample_chance || game->sample_chance_with_user) &&
+         !game->apply_chance))
         return PE_SOLVER_ERR_NOT_IMPLEMENTED;
     if (solver->config.target_exploitability_mbb > 0.0)
         /* Lane B has no exact BR measurement yet; accepting the target would
@@ -620,6 +629,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     sampled_game.action_probability = sampled_action_probability;
     sampled_game.terminal_value = sampled_terminal_value;
     sampled_game.sample_chance = game->sample_chance;
+    sampled_game.sample_chance_with_user = game->sample_chance_with_user
+        ? sampled_chance_with_user : NULL;
     sampled_game.apply_chance = game->apply_chance ? sampled_apply_chance : NULL;
 
     if (use_outcome)

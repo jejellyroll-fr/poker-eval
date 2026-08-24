@@ -69,12 +69,17 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
         return game->terminal_value(state, ctx->updating_player, game->user);
     }
 
-    if (game->sample_chance && game->apply_chance)
+    if ((game->sample_chance || game->sample_chance_with_user) &&
+        game->apply_chance)
     {
         pe_chance_sample_t sample;
         const void *child;
         memset(&sample, 0, sizeof(sample));
-        if (game->sample_chance(state, &ctx->rng, &sample) == 0)
+        int sampled = game->sample_chance_with_user
+            ? game->sample_chance_with_user(state, &ctx->rng, &sample,
+                                            game->user)
+            : game->sample_chance(state, &ctx->rng, &sample);
+        if (sampled == 0)
         {
             if (sample.outcome < 0 || !isfinite(sample.importance_ratio) ||
                 sample.importance_ratio < 0.0)

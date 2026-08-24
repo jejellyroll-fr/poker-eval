@@ -34,6 +34,7 @@ add_library(poker_solver
     solver/domain/variant.c
     solver/domain/variant_terminal.c
     solver/domain/omaha_deals.c
+    solver/domain/preflop_deal_sampler.c
     solver/domain/omaha_river.c
     solver/domain/pots.c
     solver/domain/solver.c

@@ -49,24 +49,27 @@ famille AGPL du solving OSS.
    `pe_solver`** : les presets `external-mccfr` et `outcome-mccfr` exécutent des parcours
    échantillonnés, relisent les regrets du storage et appliquent les mises à jour par
    batch. Cela supprime l'expansion obligatoire de tous les deals privés et boards. Le
-   bloqueur restant est l'adapter Hold'em/PLO préflop qui doit fournir les ranges
-   corrélées, card removal et sampler de deals à grande échelle (la preuve actuelle est
-   un jeu externe générique, pas encore le produit Pio Edge complet).
+   Le module `pe_preflop_deal_sampler` fournit maintenant les deals corrélés
+   Hold'em/PLO4/PLO5/PLO6, le card removal et le ratio d'importance optionnel contre la
+   normalisation exacte. Le bloqueur restant est l'adapter de betting/ranges qui branche
+   ces deals sur un arbre préflop complet, pas la primitive de chance privée.
 2. **GUI / couche produit joueur.** Un viewer HTML statique est maintenant produit par
    `pe-solution-report` avec un JSON versionné (`pe-solution-report/v1`) et des rapports
    groupés par street/board via metadata CSV. `poker-eval-trainer` accepte en plus un
-   fichier de libellés `key,action,label`, ce qui remplace l'affichage purement numérique.
-   Ce n'est pas encore une application interactive multi-rues : c'est la première couche
-   inspectable et partageable au-dessus de `.pe_sol`.
+   fichier de libellés multi-rues avec `street,board,next_key`, ce qui remplace
+   l'affichage purement numérique et permet de suivre une transition choisie.
+   Ce n'est pas encore une application graphique interactive complète : c'est la première
+   couche inspectable et partageable au-dessus de `.pe_sol`.
 3. **Play-vs-solution / trainer riche.** Le trainer reste volontairement léger : il
-   mesure la meilleure action et la perte de probabilité, avec libellés optionnels. Il
-   manque encore le parcours de décisions, l'état de table, les cartes/runouts et la
-   notation d'une session ; ce point n'est donc pas considéré comme fermé.
+   mesure la meilleure action et la perte de probabilité, avec libellés, street, board et
+   transitions optionnelles. Il manque encore l'état de table, les cartes/runouts et la
+   notation persistante d'une session ; ce point n'est donc pas considéré comme fermé.
 4. **Agrégation et reporting.** `pe-solution-report` agrège maintenant les fréquences,
    poids, entropie et nombre d'infosets par groupe, en JSON ou HTML. La couverture est
    déterministe quand le caller fournit le sidecar CSV `key,street,board,weight` ; le
-   décodage automatique d'un key Monker en board/range et les runout reports complets
-   restent à construire.
+   mode `.tree` + `.mkr` lie maintenant automatiquement les slots aux nœuds et agrège
+   par street/nœud. Les runout reports et le décodage automatique d'un board depuis un
+   key Monker brut restent à construire.
 
 ### Priorité 2 — segments de marché entiers non couverts
 
@@ -140,9 +143,9 @@ divulgués » du tableau marché). Or l'audit révèle des trous qui la minent :
 
 ## 6. Recommandations priorisées
 
-1. **Compléter Lane B côté jeu** (adapters Hold'em/PLO, ranges corrélées, card removal,
-   chance privée et mesure BR échantillonnée) — le cycle solver et le storage sont
-   désormais en place.
+1. **Compléter Lane B côté jeu** (adapters Hold'em/PLO de betting, ranges corrélées,
+   transitions de street et mesure BR échantillonnée) — la chance privée et le storage
+   sont désormais en place.
 2. **Purger les claims faux** (Metal, bench GPU-CFR, guides manquants, stubs `pe_cfr_*`
    ou leur documentation honnête) — coût faible, crédibilité forte.
 3. **Étendre le viewer/trainer léger** vers un parcours interactif multi-rues ; la
