@@ -65,6 +65,10 @@ add_executable(pe-preflop-tree pe_preflop_tree.c)
 target_include_directories(pe-preflop-tree PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-preflop-tree PRIVATE poker_eval_modular m)
 
+add_executable(pe-preflop-solve pe_preflop_solve.c)
+target_include_directories(pe-preflop-solve PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-preflop-solve PRIVATE poker_eval_modular m)
+
 find_path(PE_SDL2_INCLUDE_DIR SDL2/SDL.h)
 find_library(PE_SDL2_LIBRARY NAMES SDL2)
 if(PE_SDL2_INCLUDE_DIR AND PE_SDL2_LIBRARY)

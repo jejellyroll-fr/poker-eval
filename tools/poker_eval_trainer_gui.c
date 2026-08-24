@@ -651,6 +651,65 @@ static int run_vector_sim(app_t *app)
     return launch_solver(app, command, "Solve complete", "Solver failed");
 }
 
+static int is_preflop_request(const char *board)
+{
+    size_t length;
+    if (!board || !*board)
+        return 1;
+    length = strlen(board);
+    if (length == 7u) {
+        int equal = 1;
+        for (size_t i = 0u; i < length; ++i)
+            if (tolower((unsigned char)board[i]) !=
+                tolower((unsigned char)"preflop"[i])) equal = 0;
+        if (equal) return 1;
+    }
+    if (length == 4u) {
+        int equal = 1;
+        for (size_t i = 0u; i < length; ++i)
+            if (tolower((unsigned char)board[i]) !=
+                tolower((unsigned char)"none"[i])) equal = 0;
+        if (equal) return 1;
+    }
+    return 0;
+}
+
+static int run_preflop_solver(app_t *app)
+{
+    char executable[1200], quoted_executable[1400];
+    char range0[4200], range1[4200];
+    char command[12000];
+    int iterations;
+    if (!app)
+        return -1;
+    if (app->game_index != 0 || app->player_count != 2) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Lane B preflop currently supports heads-up Hold'em");
+        return -1;
+    }
+    if (app->engine_index != 0) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Preflop Lane B is currently wired to Vector CPU");
+        return -1;
+    }
+    if (app->executable_dir[0])
+        snprintf(executable, sizeof(executable), "%s%cpe-preflop-solve%s",
+                 app->executable_dir, PE_GUI_PATH_SEPARATOR,
+                 PE_GUI_EXE_SUFFIX);
+    else
+        copy_field(executable, sizeof(executable), "pe-preflop-solve");
+    shell_quote(executable, quoted_executable, sizeof(quoted_executable));
+    shell_quote(starter_range_for_player(app, 0), range0, sizeof(range0));
+    shell_quote(starter_range_for_player(app, 1), range1, sizeof(range1));
+    iterations = app->iterations > 0 ? app->iterations : 10000;
+    snprintf(command, sizeof(command),
+             "%s --game holdem --range0 %s --range1 %s --iterations %d "
+             "--samples 128 --raise 2.5 2>&1",
+             quoted_executable, range0, range1, iterations);
+    return launch_solver(app, command, "Preflop Lane B complete",
+                         "Preflop Lane B failed");
+}
+
 static int run_legacy_cfr(app_t *app, const char *backend_name)
 {
     char executable[1200], quoted_executable[1400];
@@ -701,6 +760,8 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
 static int run_selected_solver(app_t *app)
 {
     if (!app) return -1;
+    if (is_preflop_request(app->board_text))
+        return run_preflop_solver(app);
     if (app->engine_index == 0) return run_vector_sim(app);
     if (app->engine_index == 1) return run_legacy_cfr(app, NULL);
     return run_legacy_cfr(app, "opencl");
@@ -1481,7 +1542,7 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         panel(renderer, (rect_t){left + 258, 168, 220, 40}, surface2, outline);
         snprintf(buffer, sizeof(buffer), "%d  MAX / %s", app->player_count, app->player_count == 2 ? "HU" : "MULTIWAY");
         text(renderer, left + 272, 181, buffer, 1, white);
-        text(renderer, left + 24, 234, "BOARD / RUNOUT", 1, muted);
+        text(renderer, left + 24, 234, "BOARD / RUNOUT (EMPTY = PREFLOP)", 1, muted);
         panel(renderer, (rect_t){left + 24, 251, 454, 40}, surface2, app->focus_field == 1 ? blue : outline);
         text(renderer, left + 38, 264, app->board_text, 1, white);
         text(renderer, left + 24, 317, "RANGES  (EXACT COMBOS OR RANGE TEXT)", 1, muted);

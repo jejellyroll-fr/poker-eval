@@ -847,6 +847,8 @@ add_poker_test(test_pe_preflop_sampler)
 set_tests_properties(test_pe_preflop_sampler PROPERTIES LABELS "solver;solver-v3;preflop;holdem;plo4;plo5;plo6;card-removal" TIMEOUT 30)
 add_poker_test(test_pe_preflop_betting)
 set_tests_properties(test_pe_preflop_betting PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;betting" TIMEOUT 30)
+add_poker_test(test_preflop_allin_game)
+set_tests_properties(test_preflop_allin_game PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;holdem;showdown" TIMEOUT 60)
 add_poker_test(test_pe_runout_report)
 set_tests_properties(test_pe_runout_report PROPERTIES LABELS "solver;solver-v3;runout;holdem" TIMEOUT 30)
 
@@ -1709,4 +1711,19 @@ if(TARGET pe-preflop-tree)
             --range 0 "22+,AKs" --range 1 "random"
             --output ${CMAKE_BINARY_DIR}/pe-preflop-tree-smoke.json)
     set_tests_properties(pe_preflop_tree_smoke PROPERTIES LABELS "product;solver")
+endif()
+
+if(TARGET pe-preflop-solve)
+    add_test(NAME pe_preflop_solve_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 2
+            --samples 8
+            --raise 2.5
+            --output ${CMAKE_BINARY_DIR}/pe-preflop-solve-smoke.json)
+    set_tests_properties(pe_preflop_solve_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop"
+        TIMEOUT 60)
 endif()

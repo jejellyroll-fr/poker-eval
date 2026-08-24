@@ -50,6 +50,7 @@ add_library(poker_solver
     solver/domain/omaha_deals.c
     solver/domain/preflop_deal_sampler.c
     solver/domain/preflop_betting.c
+    solver/domain/preflop_allin_game.c
     solver/domain/cfr_external_adapter.c
     solver/domain/cluster.c
     solver/domain/runout_report.c
