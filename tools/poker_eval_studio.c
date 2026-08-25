@@ -16,6 +16,8 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <errno.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -59,9 +61,18 @@ struct _app_t
     Edit *range0_edit;
     Edit *range1_edit;
     Edit *runner_edit;
+    Edit *iterations_edit;
+    Edit *target_edit;
+    Edit *interval_edit;
     TextView *status;
-    Label *context;
+    Label *board_label;
+    Label *run_state;
+    Label *run_progress;
+    Label *run_metrics;
+    Label *run_config;
+    Progress *run_progress_bar;
     Button *solve_button;
+    Button *stop_button;
     Mutex *solve_mutex;
     Proc *solve_proc;
     int solve_running;
@@ -72,6 +83,34 @@ struct _app_t
 };
 
 static void i_on_close(App *app, Event *event);
+
+static int parse_ui_u64(const char *text, uint64_t *value)
+{
+    char *end = NULL;
+    unsigned long long parsed;
+    if (!text || !*text || !value)
+        return -1;
+    errno = 0;
+    parsed = strtoull(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || parsed == 0u)
+        return -1;
+    *value = (uint64_t)parsed;
+    return 0;
+}
+
+static int parse_ui_target(const char *text, double *value)
+{
+    char *end = NULL;
+    double parsed;
+    if (!text || !*text || !value)
+        return -1;
+    errno = 0;
+    parsed = strtod(text, &end);
+    if (errno != 0 || end == text || *end != '\0' || parsed < 0.0)
+        return -1;
+    *value = parsed;
+    return 0;
+}
 
 static int card_count(const char *text)
 {
@@ -161,6 +200,101 @@ static void status(App *app, const char *format, ...)
     textview_writef(app->status, buffer);
 }
 
+static int last_progress_line(const char *output, uint64_t *iteration,
+                              uint64_t *total, double *fraction,
+                              double *exploitability, double *target)
+{
+    const char *cursor;
+    const char *found = NULL;
+    if (!output)
+        return 0;
+    cursor = output;
+    while ((cursor = strstr(cursor, "progress iteration=")) != NULL)
+    {
+        found = cursor;
+        cursor += 9u;
+    }
+    if (!found || sscanf(found,
+                         "progress iteration=%" SCNu64 " total=%" SCNu64
+                         " fraction=%lf exploitability_mbb=%lf target_mbb=%lf",
+                         iteration, total, fraction, exploitability, target) != 5)
+        return 0;
+    return 1;
+}
+
+static int last_result_line(const char *output, char *guarantee,
+                            size_t guarantee_capacity, double *raw,
+                            double *mbb, uint64_t *samples)
+{
+    const char *cursor;
+    const char *found = NULL;
+    if (!output || !guarantee || guarantee_capacity == 0u)
+        return 0;
+    cursor = output;
+    while ((cursor = strstr(cursor, "guarantee=")) != NULL)
+    {
+        found = cursor;
+        cursor += 10u;
+    }
+    if (!found || sscanf(found,
+                         "guarantee=%31s exploitability_raw=%lf"
+                         " exploitability_mbb=%lf br_samples=%" SCNu64,
+                         guarantee, raw, mbb, samples) != 4)
+        return 0;
+    guarantee[guarantee_capacity - 1u] = '\0';
+    return 1;
+}
+
+static void update_result_view(App *app, const char *output, int running)
+{
+    uint64_t iteration = 0u;
+    uint64_t total = 0u;
+    uint64_t samples = 0u;
+    double fraction = 0.0;
+    double exploitability = 0.0;
+    double target = 0.0;
+    double raw = 0.0;
+    double mbb = 0.0;
+    char guarantee[32] = "not measured";
+    char text[256];
+
+    if (!app)
+        return;
+    if (last_progress_line(output, &iteration, &total, &fraction,
+                           &exploitability, &target))
+    {
+        progress_value(app->run_progress_bar, (real32_t)fraction);
+        snprintf(text, sizeof(text),
+                 "%s  |  iteration %" PRIu64 " / %" PRIu64
+                 "  |  %.1f%%",
+                 running ? "RUNNING" : "LAST CHECK", iteration, total,
+                 fraction * 100.0);
+        label_text(app->run_progress, text);
+        snprintf(text, sizeof(text),
+                 "Empirical exploitability: %.2f mBB  |  stop target: %.2f mBB",
+                 exploitability, target);
+        label_text(app->run_metrics, text);
+    }
+    else if (!running)
+    {
+        progress_value(app->run_progress_bar, 0.0f);
+        label_text(app->run_progress, "READY  |  no convergence sample yet");
+        label_text(app->run_metrics, "Empirical exploitability: not measured");
+    }
+
+    if (last_result_line(output, guarantee, sizeof(guarantee), &raw, &mbb,
+                         &samples))
+    {
+        snprintf(text, sizeof(text),
+                 "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64,
+                 guarantee, mbb, raw, samples);
+        label_text(app->run_metrics, text);
+    }
+    label_text(app->run_state, running ? "RUN IN PROGRESS"
+                                       : output && *output ? "RESULTS READY"
+                                                            : "READY");
+}
+
 static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header,
                      pe_monker_combo_layout_t *layout)
 {
@@ -197,7 +331,22 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
     if (header->player_count >= 2u && header->player_count <= 8u)
         combo_selected(app->players_combo, header->player_count - 2u);
     if (header->street == 0)
+    {
         edit_text(app->board_edit, "");
+        edit_text(app->range0_edit, "100%");
+        edit_text(app->range1_edit, "100%");
+    }
+    else
+    {
+        if (!edit_get_text(app->range0_edit) || !*edit_get_text(app->range0_edit))
+            edit_text(app->range0_edit, "100%");
+        if (!edit_get_text(app->range1_edit) || !*edit_get_text(app->range1_edit))
+            edit_text(app->range1_edit, "100%");
+    }
+    label_text(app->board_label, header->street == 0
+               ? "BOARD / RUNOUT: automatic through river"
+               : "BOARD / RUNOUT: enter the cards for this street");
+    update_result_view(app, "", 0);
     status(app,
            "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d\nRanges: %s\n\n%s",
            game_name(layout->game),
@@ -431,6 +580,7 @@ static void i_solve_update(App *app)
     running = app->solve_running;
     bmutex_unlock(app->solve_mutex);
     i_solve_copy_output(app, output, sizeof(output));
+    update_result_view(app, output, running);
     status(app, "%s\n%s\n\nClick Stop solve to interrupt the run.",
            running ? "SOLVING" : "SOLVE",
            output[0] ? output : "Waiting for progress...");
@@ -449,6 +599,7 @@ static void i_solve_end(App *app, const uint32_t exit_code)
     bmutex_unlock(app->solve_mutex);
     button_text(app->solve_button, "Solve this spot");
     i_solve_copy_output(app, output, sizeof(output));
+    update_result_view(app, output, 0);
     status(app, "%s\nexit_code=%u\n%s",
            cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
            exit_code, output[0] ? output : "No output from solver.");
@@ -469,9 +620,22 @@ static int i_start_solve(App *app, const char *command)
     app->solve_cancel_requested = 0;
     app->solve_running = 1;
     bmutex_unlock(app->solve_mutex);
-    button_text(app->solve_button, "Stop solve");
+    button_text(app->solve_button, "Solve running...");
     osapp_task(app, .10f, i_solve_main, i_solve_update, i_solve_end, App);
     return 0;
+}
+
+static void i_on_stop(App *app, Event *event)
+{
+    int running;
+    bmutex_lock(app->solve_mutex);
+    running = app->solve_running;
+    bmutex_unlock(app->solve_mutex);
+    if (running)
+        i_solve_request_stop(app);
+    else
+        status(app, "READY\nNo solver run is currently active.");
+    unref(event);
 }
 
 static void i_on_solve(App *app, Event *event)
@@ -484,11 +648,18 @@ static void i_on_solve(App *app, Event *event)
     size_t used = 0u;
     int board_cards;
     const char *tree_path = edit_get_text(app->tree_edit);
-    const char *board_text = edit_get_text(app->board_edit);
-    const char *runner_path = edit_get_text(app->runner_edit);
-    const char *mkr_path = edit_get_text(app->mkr_edit);
-    const char *range0_text = edit_get_text(app->range0_edit);
-    const char *range1_text = edit_get_text(app->range1_edit);
+    const char *board_text;
+    const char *runner_path;
+    const char *mkr_path;
+    const char *range0_text;
+    const char *range1_text;
+    const char *iterations_text;
+    const char *target_text;
+    const char *interval_text;
+    uint64_t iterations;
+    uint64_t interval;
+    double target_mbb;
+    char config_text[256];
 
     bmutex_lock(app->solve_mutex);
     if (app->solve_running)
@@ -502,6 +673,22 @@ static void i_on_solve(App *app, Event *event)
 
     if (!tree_path || !*tree_path || read_tree(app, tree_path, &header, &layout) != 0)
     {
+        unref(event);
+        return;
+    }
+    board_text = edit_get_text(app->board_edit);
+    runner_path = edit_get_text(app->runner_edit);
+    mkr_path = edit_get_text(app->mkr_edit);
+    range0_text = edit_get_text(app->range0_edit);
+    range1_text = edit_get_text(app->range1_edit);
+    iterations_text = edit_get_text(app->iterations_edit);
+    target_text = edit_get_text(app->target_edit);
+    interval_text = edit_get_text(app->interval_edit);
+    if (parse_ui_u64(iterations_text, &iterations) != 0 ||
+        parse_ui_u64(interval_text, &interval) != 0 ||
+        parse_ui_target(target_text, &target_mbb) != 0)
+    {
+        status(app, "SOLVE BLOCKED\nSet valid numeric values for max iterations,\nstop target mBB and convergence interval.");
         unref(event);
         return;
     }
@@ -533,9 +720,13 @@ static void i_on_solve(App *app, Event *event)
             return;
         }
         used = (size_t)snprintf(command, sizeof(command),
-                                "%s --game %s --players %u --tree %s --iterations 1000 --samples 128 --br-samples 32 --target-mbb 1 --exploitability-interval 32",
+                                "%s --game %s --players %u --tree %s"
+                                " --iterations %" PRIu64 " --samples 128"
+                                " --br-samples 32 --target-mbb %.17g"
+                                " --exploitability-interval %" PRIu64,
                                 runner, game_name(layout.game),
-                                header.player_count, tree);
+                                header.player_count, tree, iterations,
+                                target_mbb, interval);
         for (uint32_t player = 0u; player < header.player_count; ++player)
         {
             const char *range_text = player == 0u ? range0_text :
@@ -555,7 +746,12 @@ static void i_on_solve(App *app, Event *event)
         }
         (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
                        " 2>&1");
-        status(app, "SOLVING PREFLOP\n%s\n\n100%% ranges by default; boards are dealt through river.", command);
+        snprintf(config_text, sizeof(config_text),
+                 "Lane B preflop | stop target %.2f mBB | max iterations %" PRIu64
+                 " | check every %" PRIu64,
+                 target_mbb, iterations, interval);
+        label_text(app->run_config, config_text);
+        status(app, "SOLVING PREFLOP\n%s\n\nEmpty ranges are 100%%; boards are dealt through river.", command);
         if (i_start_solve(app, command) != 0)
             status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
         unref(event);
@@ -621,7 +817,7 @@ static void i_on_solve(App *app, Event *event)
 static Panel *i_setup_panel(App *app)
 {
     Panel *panel = panel_create();
-    Layout *layout = layout_create(2, 14);
+    Layout *layout = layout_create(2, 18);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
@@ -631,19 +827,28 @@ static Panel *i_setup_panel(App *app)
     Label *range0_label = label_create();
     Label *range1_label = label_create();
     Label *runner_label = label_create();
+    Label *iterations_label = label_create();
+    Label *target_label = label_create();
+    Label *interval_label = label_create();
     app->game_combo = combo_create();
     app->players_combo = combo_create();
     Button *browse_tree = button_push();
     Button *browse_mkr = button_push();
     Button *load = button_push();
     Button *solve = button_push();
+    Button *stop = button_push();
     app->solve_button = solve;
+    app->stop_button = stop;
     app->tree_edit = edit_create();
     app->mkr_edit = edit_create();
     app->board_edit = edit_create();
     app->range0_edit = edit_create();
     app->range1_edit = edit_create();
     app->runner_edit = edit_create();
+    app->iterations_edit = edit_create();
+    app->target_edit = edit_create();
+    app->interval_edit = edit_create();
+    app->board_label = board_label;
     label_text(title, "SPOT SETUP");
     label_text(game_label, "GAME");
     label_text(players_label, "PLAYERS");
@@ -653,6 +858,9 @@ static Panel *i_setup_panel(App *app)
     label_text(range0_label, "RANGE PLAYER 1");
     label_text(range1_label, "RANGE PLAYER 2");
     label_text(runner_label, "VECTOR RUNNER");
+    label_text(iterations_label, "MAX ITERATIONS");
+    label_text(target_label, "STOP TARGET (mBB, 0 = off)");
+    label_text(interval_label, "CONVERGENCE CHECK EVERY");
     combo_add_elem(app->game_combo, "Hold'em", NULL);
     combo_add_elem(app->game_combo, "PLO4", NULL);
     combo_add_elem(app->game_combo, "PLO5", NULL);
@@ -669,16 +877,21 @@ static Panel *i_setup_panel(App *app)
     button_text(browse_mkr, "Browse...");
     button_text(load, "Load and inspect tree");
     button_text(solve, "Solve this spot");
+    button_text(stop, "Stop run");
     edit_phtext(app->tree_edit, "/path/to/spot.tree");
     edit_phtext(app->mkr_edit, "/path/to/strategy.mkr");
-    edit_phtext(app->board_edit, "Ah Kd 7c 2s Qh");
+    edit_phtext(app->board_edit, "No board (preflop: automatic)");
     edit_phtext(app->range0_edit, "100%");
     edit_phtext(app->range1_edit, "100%");
     edit_text(app->runner_edit, "pe-vector-sim");
+    edit_text(app->iterations_edit, "10000");
+    edit_text(app->target_edit, "1.0");
+    edit_text(app->interval_edit, "256");
     button_OnClick(browse_tree, listener(app, i_on_tree, App));
     button_OnClick(browse_mkr, listener(app, i_on_mkr, App));
     button_OnClick(load, listener(app, i_on_load, App));
     button_OnClick(solve, listener(app, i_on_solve, App));
+    button_OnClick(stop, listener(app, i_on_stop, App));
     layout_label(layout, title, 0, 0);
     layout_label(layout, game_label, 0, 1);
     layout_combo(layout, app->game_combo, 0, 2);
@@ -700,6 +913,13 @@ static Panel *i_setup_panel(App *app)
     layout_edit(layout, app->runner_edit, 0, 12);
     layout_button(layout, load, 0, 13);
     layout_button(layout, solve, 1, 13);
+    layout_label(layout, iterations_label, 0, 14);
+    layout_label(layout, target_label, 1, 14);
+    layout_edit(layout, app->iterations_edit, 0, 15);
+    layout_edit(layout, app->target_edit, 1, 15);
+    layout_label(layout, interval_label, 0, 16);
+    layout_button(layout, stop, 1, 16);
+    layout_edit(layout, app->interval_edit, 0, 17);
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
@@ -711,6 +931,8 @@ static Panel *i_setup_panel(App *app)
     layout_vmargin(layout, 8, 8);
     layout_vmargin(layout, 10, 8);
     layout_vmargin(layout, 12, 8);
+    layout_vmargin(layout, 14, 8);
+    layout_vmargin(layout, 16, 8);
     panel_layout(panel, layout);
     return panel;
 }
@@ -718,19 +940,38 @@ static Panel *i_setup_panel(App *app)
 static Panel *i_result_panel(App *app)
 {
     Panel *panel = panel_create();
-    Layout *layout = layout_create(1, 2);
+    Layout *layout = layout_create(1, 7);
     Label *title = label_create();
     app->status = textview_create();
-    label_text(title, "CONTEXT / TREE VALIDATION / SOLVE OUTPUT");
+    app->run_state = label_create();
+    app->run_progress = label_create();
+    app->run_metrics = label_create();
+    app->run_config = label_create();
+    app->run_progress_bar = progress_create();
+    label_text(title, "RESULTS / CONVERGENCE / RUN LOG");
+    label_text(app->run_state, "READY");
+    label_text(app->run_progress, "READY  |  no convergence sample yet");
+    label_text(app->run_metrics, "Empirical exploitability: not measured");
+    label_text(app->run_config, "Configure the spot, then press Solve this spot.");
     textview_editable(app->status, FALSE);
     textview_wrap(app->status, TRUE);
     textview_printf(app->status, "Choose a .tree file, inspect it, then solve the exact spot.\n");
     layout_label(layout, title, 0, 0);
-    layout_textview(layout, app->status, 0, 1);
+    layout_label(layout, app->run_state, 0, 1);
+    layout_progress(layout, app->run_progress_bar, 0, 2);
+    layout_label(layout, app->run_progress, 0, 3);
+    layout_label(layout, app->run_metrics, 0, 4);
+    layout_label(layout, app->run_config, 0, 5);
+    layout_textview(layout, app->status, 0, 6);
     layout_hsize(layout, 0, 580);
-    layout_vsize(layout, 1, 520);
+    layout_vsize(layout, 6, 520);
     layout_margin(layout, 12);
     layout_vmargin(layout, 0, 8);
+    layout_vmargin(layout, 1, 8);
+    layout_vmargin(layout, 2, 8);
+    layout_vmargin(layout, 3, 8);
+    layout_vmargin(layout, 4, 8);
+    layout_vmargin(layout, 5, 8);
     panel_layout(panel, layout);
     return panel;
 }

@@ -23,9 +23,15 @@ The application workflow is strict:
    cards, so the application never invents them or keeps a stale board. A
    preflop tree correctly requires zero board cards; loading one clears the
    board field and synchronises the game/player selectors with the header.
-3. Press **Solve this spot**. The run is asynchronous: the output panel is
-   refreshed while the child solver is running, and the same button becomes
-   **Stop solve** and cancels the child process. River trees are sent to `pe-vector-sim`.
+3. Set **Max iterations**, **Stop target (mBB, 0 = off)**, and **Convergence
+   check every** in the setup panel. The stop target is not implicit: a value
+   of `0` disables exploitability stopping and the explicit iteration limit is
+   then the only automatic completion condition.
+4. Press **Solve this spot**. The run is asynchronous: the results panel shows
+   the current iteration, percentage, empirical exploitability and configured
+   target while the child solver is running. **Stop run** is always visible and
+   cancels the child process; the final result remains available in the same
+   results view. River trees are sent to `pe-vector-sim`.
    Preflop trees are sent to `pe-preflop-solve --tree`, use `100%` for any
    range left empty, follow the imported Monker betting nodes, deal flop,
    turn and river, and settle the showdown. A rangeless tree is therefore a
@@ -37,6 +43,8 @@ spots the Studio selects `pe-preflop-solve` automatically and resolves it from
 correlated private deals and public runouts. The output includes iteration,
 fraction, empirical exploitability in mBB, and the configured target at each
 measurement interval; increasing iterations improves coverage of the complete
-board distribution. The next UI tranche can replace the text output with the
-range matrix, tree canvas, and action/EV panels without changing the setup or
-solver seams.
+board distribution. Loading a preflop tree clears the board input, changes its
+placeholder to automatic runout, synchronises game/player selectors, and
+materialises an empty external range as `100%`. The next UI tranche can replace
+the text log with the range matrix, tree canvas, and action/EV panels without
+changing the setup or solver seams.
