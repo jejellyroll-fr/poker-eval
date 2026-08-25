@@ -31,7 +31,10 @@ typedef struct
 } metrics_writer_t;
 
 static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
-                                  const char *backend_name)
+                                  const char *backend_name,
+                                  pe_algorithm_preset_t algorithm,
+                                  pe_precision_mode_t precision,
+                                  int cpu_threads)
 {
     pe_legacy_vector_adapter_t adapter;
     pe_solver_config_t config = pe_solver_config_default();
@@ -68,9 +71,11 @@ static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
         return -1;
     adapter_ready = 1;
 
-    config.algorithm.preset = PE_PRESET_CFR_VECTOR;
+    config.algorithm.preset = algorithm;
     config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
     config.execution.backend = kind;
+    config.execution.precision = precision;
+    config.execution.cpu_threads = cpu_threads;
     /* OpenCL/CUDA update ports do not own the game-tree walk yet. Keep the
        traversal on the proven CPU adapter and offload regret/terminal batches
        to the selected device; this is a real hybrid GPU-CFR path, not a
@@ -121,6 +126,7 @@ static void usage(const char *prog)
             "  --iterations <n>         Number of CFR iterations (default: 1000)\n"
             "  --lane-b                 Run the sampled v3 solver on this tree\n"
             "  --sample-batch <n>       Lane B trajectories per update (default: 1)\n"
+            "  --threads <n>           CPU-parallel workers (default: 1)\n"
             "  --benchmark-json <path>  Write Lane B throughput metrics as JSON\n"
             "  --metrics-interval <n>   Emit metrics every n iterations (default: 50)\n"
             "  --metrics-file <path>    Write metrics snapshots as JSON lines (use '-' for stdout)\n"
@@ -790,6 +796,7 @@ int main(int argc, char **argv)
     int iterations = 1000;
     int lane_b = 0;
     int sample_batch = 1;
+    int cpu_threads = 1;
     const char *benchmark_json_path = NULL;
     int metrics_interval = 50;
     int metrics_history = 128;
@@ -822,6 +829,9 @@ int main(int argc, char **argv)
     const char *regret_name = NULL;
     const char *averaging_name = NULL;
     const char *precision_name = NULL;
+    pe_algorithm_preset_t selected_preset = PE_PRESET_EXTERNAL_MCCFR;
+    pe_compute_kind_t selected_backend = PE_COMPUTE_AUTO;
+    pe_precision_mode_t selected_precision = PE_PREC_F64;
     cli_solver_overrides_t overrides;
 
     memset(&overrides, 0, sizeof(overrides));
@@ -876,6 +886,14 @@ int main(int argc, char **argv)
             if (!parse_int(argv[++i], &sample_batch) || sample_batch <= 0)
             {
                 fprintf(stderr, "Invalid sample batch value\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc)
+        {
+            if (!parse_int(argv[++i], &cpu_threads) || cpu_threads <= 0)
+            {
+                fprintf(stderr, "Invalid threads value\n");
                 return 1;
             }
         }
@@ -1109,6 +1127,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Unknown algorithm preset: %s\n", algorithm_name);
                 return 1;
             }
+            selected_preset = preset;
         }
         if (have_backend)
         {
@@ -1118,6 +1137,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Unknown backend: %s\n", backend_name);
                 return 1;
             }
+            selected_backend = backend;
         }
         if (traversal_name != NULL)
         {
@@ -1158,6 +1178,7 @@ int main(int argc, char **argv)
                 return 1;
             }
             overrides.have_precision = 1;
+            selected_precision = overrides.precision;
         }
         if (!tree_path && (show_capabilities || validate_only || estimate_only ||
                            print_plan || have_expert_override))
@@ -1168,6 +1189,61 @@ int main(int argc, char **argv)
             return run_introspection(preset, have_preset, backend, have_backend,
                                      show_capabilities, validate_only,
                                      estimate_only, print_plan, &overrides);
+        }
+    }
+
+    /* Never let an explicit runtime choice disappear into the legacy path.
+       The old tree runner has its own fixed implementation; callers asking
+       for a v3 backend must opt into the v3 Lane B or GPU path explicitly. */
+    if (!lane_b && algorithm_name != NULL &&
+        !(selected_backend == PE_COMPUTE_CUDA ||
+          selected_backend == PE_COMPUTE_OPENCL))
+    {
+        fprintf(stderr,
+                "--algorithm is only honoured by --lane-b or the GPU vector path; "
+                "the legacy tree runner does not ignore it\n");
+        return 2;
+    }
+    if (!lane_b && (traversal_name != NULL || regret_name != NULL ||
+                    averaging_name != NULL || precision_name != NULL ||
+                    overrides.have_alpha || overrides.have_beta ||
+                    overrides.have_gamma) &&
+        !(selected_backend == PE_COMPUTE_CUDA ||
+          selected_backend == PE_COMPUTE_OPENCL))
+    {
+        fprintf(stderr,
+                "v3 algorithm-axis overrides require --lane-b or the GPU vector path; "
+                "the legacy tree runner does not ignore them\n");
+        return 2;
+    }
+    if (lane_b && (traversal_name != NULL || regret_name != NULL ||
+                   averaging_name != NULL || overrides.have_alpha ||
+                   overrides.have_beta || overrides.have_gamma))
+    {
+        fprintf(stderr,
+                "Lane B currently exposes algorithm presets, precision and threads; "
+                "manual traversal/regret/averaging/DCFR overrides are not wired to "
+                "the sampled update kernel yet\n");
+        return 2;
+    }
+
+    if (selected_backend != PE_COMPUTE_AUTO)
+    {
+        pe_runtime_capabilities_t runtime;
+        const pe_runtime_backend_info_t *backend_info;
+        if (pe_runtime_probe(&runtime) != 0 ||
+            selected_backend < 0 || selected_backend >= PE_COMPUTE_COUNT)
+        {
+            fprintf(stderr, "Could not probe the requested backend\n");
+            return 2;
+        }
+        backend_info = &runtime.backends[selected_backend];
+        if (!backend_info->runtime_available || !backend_info->validated)
+        {
+            fprintf(stderr, "backend refused: %s (%s)\n",
+                    pe_compute_kind_name(selected_backend),
+                    backend_info->reason);
+            return 2;
         }
     }
 
@@ -1412,10 +1488,31 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (backend_name && (strcmp(backend_name, "opencl") == 0 ||
-                         strcmp(backend_name, "cuda") == 0))
+    if (selected_backend == PE_COMPUTE_OPENCL ||
+        selected_backend == PE_COMPUTE_CUDA)
     {
-        int gpu_status = run_gpu_vector_backend(&game, iterations, backend_name);
+        pe_algorithm_preset_t gpu_algorithm = algorithm_name != NULL
+            ? selected_preset : PE_PRESET_CFR_VECTOR;
+        if (gpu_algorithm != PE_PRESET_CFR_VECTOR)
+        {
+            fprintf(stderr,
+                    "GPU vector path currently supports only cfr-vector; "
+                    "selected algorithm is %s\n",
+                    pe_preset_name(gpu_algorithm));
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 2;
+        }
+        int gpu_status = run_gpu_vector_backend(&game, iterations,
+                                                pe_compute_kind_name(selected_backend),
+                                                gpu_algorithm,
+                                                selected_precision, cpu_threads);
         mpf_state_cleanup(&root_state);
         mpf_perf_stats_pool_destroy(perf_pool);
         eval_context_destroy(ctx);
@@ -1454,11 +1551,52 @@ int main(int argc, char **argv)
             mpf_tree_free(tree);
             return 1;
         }
-        lane_cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
-        lane_cfg.execution.backend = PE_COMPUTE_CPU_REF;
-        lane_cfg.execution.stages.traversal = PE_COMPUTE_CPU_REF;
-        lane_cfg.execution.stages.update = PE_COMPUTE_CPU_REF;
-        lane_cfg.execution.stages.terminal_eval = PE_COMPUTE_CPU_REF;
+        pe_compute_kind_t lane_backend = selected_backend == PE_COMPUTE_AUTO
+            ? PE_COMPUTE_CPU_REF : selected_backend;
+
+        /* The sampled external adapter is a real Lane B path, but its current
+           update kernel is vanilla MCCFR only. Refuse presets whose regret or
+           averaging axes are not implemented here instead of reporting a
+           result under the wrong algorithm name. */
+        if (selected_preset != PE_PRESET_EXTERNAL_MCCFR &&
+            selected_preset != PE_PRESET_OUTCOME_MCCFR)
+        {
+            fprintf(stderr,
+                    "Lane B supports external-mccfr and outcome-mccfr; "
+                    "selected algorithm %s is not wired to sampled updates yet\n",
+                    pe_preset_name(selected_preset));
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 2;
+        }
+        if (lane_backend == PE_COMPUTE_CUDA || lane_backend == PE_COMPUTE_OPENCL)
+        {
+            fprintf(stderr,
+                    "Lane B sampled traversal is not GPU-enabled in this build; "
+                    "use the GPU vector path without --lane-b\n");
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 2;
+        }
+        lane_cfg.algorithm.preset = selected_preset;
+        lane_cfg.execution.backend = lane_backend;
+        lane_cfg.execution.stages.traversal = lane_backend;
+        lane_cfg.execution.stages.update = lane_backend;
+        lane_cfg.execution.stages.terminal_eval = lane_backend;
+        lane_cfg.execution.precision = selected_precision;
+        lane_cfg.execution.cpu_threads = cpu_threads;
         lane_cfg.execution.sample_batch_size = (size_t)sample_batch;
         lane_cfg.execution.deterministic = 1;
         lane_cfg.problem.expected_infosets = 1u;
@@ -1477,7 +1615,11 @@ int main(int argc, char **argv)
         uint64_t trajectories = (uint64_t)iterations * (uint64_t)sample_batch;
         double trajectories_per_second = elapsed_cpu > 0.0
             ? (double)trajectories / elapsed_cpu : 0.0;
-        printf("lane_b=external-mccfr sample_batch=%d iterations=%d status=%d\n",
+        printf("lane_b=algorithm=%s backend=%s precision=%s threads=%d "
+               "sample_batch=%d iterations=%d status=%d\n",
+               pe_preset_name(selected_preset),
+               pe_compute_kind_name(lane_backend),
+               pe_precision_name(selected_precision), cpu_threads,
                sample_batch, iterations, (int)lane_status);
         printf("lane_b_benchmark=cpu_seconds:%.6f trajectories:%llu throughput:%.3f/s\n",
                elapsed_cpu, (unsigned long long)trajectories,
@@ -1500,9 +1642,14 @@ int main(int argc, char **argv)
             {
                 fprintf(benchmark_file,
                         "{\"schema\":\"pe-lane-b-benchmark/v1\","
+                        "\"algorithm\":\"%s\",\"backend\":\"%s\","
+                        "\"precision\":\"%s\",\"threads\":%d,"
                         "\"iterations\":%d,\"sample_batch\":%d,"
                         "\"trajectories\":%llu,\"cpu_seconds\":%.9f,"
                         "\"trajectories_per_second\":%.9f,\"status\":%d}\n",
+                        pe_preset_name(selected_preset),
+                        pe_compute_kind_name(lane_backend),
+                        pe_precision_name(selected_precision), cpu_threads,
                         iterations, sample_batch,
                         (unsigned long long)trajectories, elapsed_cpu,
                         trajectories_per_second, (int)lane_status);
