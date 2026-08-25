@@ -120,6 +120,9 @@ struct _app_t
     Combo *algorithm_combo;
     Combo *policy_combo;
     Edit *lambda_edit;
+    Edit *dcfr_alpha_edit;
+    Edit *dcfr_beta_edit;
+    Edit *dcfr_gamma_edit;
     Combo *backend_combo;
     Combo *precision_combo;
     Combo *stop_mode_combo;
@@ -317,7 +320,7 @@ static int parse_ui_target(const char *text, double *value)
         return -1;
     errno = 0;
     parsed = strtod(text, &end);
-    if (errno != 0 || end == text || *end != '\0' || parsed < 0.0)
+    if (errno != 0 || end == text || *end != '\0' || !isfinite(parsed) || parsed < 0.0)
         return -1;
     *value = parsed;
     return 0;
@@ -405,6 +408,20 @@ static pe_algorithm_preset_t selected_algorithm(const App *app)
     return app && app->algorithm_combo
         ? (pe_algorithm_preset_t)combo_get_selected(app->algorithm_combo)
         : PE_PRESET_EXTERNAL_MCCFR;
+}
+
+static int preflop_algorithm_supported_ui(pe_algorithm_preset_t algorithm)
+{
+    switch (algorithm)
+    {
+    case PE_PRESET_EXTERNAL_MCCFR:
+    case PE_PRESET_EXTERNAL_DCFR:
+    case PE_PRESET_OUTCOME_MCCFR:
+    case PE_PRESET_EXTERNAL_ECFR:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static pe_policy_mode_t selected_policy(const App *app)
@@ -3498,6 +3515,9 @@ static void i_on_solve(App *app, Event *event)
     pe_compute_kind_t backend;
     pe_precision_mode_t precision;
     double exponential_lambda;
+    double dcfr_alpha;
+    double dcfr_beta;
+    double dcfr_gamma;
     uint64_t threads;
     char algorithm_options[320];
     char config_text[256];
@@ -3535,6 +3555,14 @@ static void i_on_solve(App *app, Event *event)
         exponential_lambda <= 0.0)
     {
         status(app, "SOLVE BLOCKED\nExponential policy temperature must be positive.");
+        unref(event);
+        return;
+    }
+    if (parse_ui_target(edit_get_text(app->dcfr_alpha_edit), &dcfr_alpha) != 0 ||
+        parse_ui_target(edit_get_text(app->dcfr_beta_edit), &dcfr_beta) != 0 ||
+        parse_ui_target(edit_get_text(app->dcfr_gamma_edit), &dcfr_gamma) != 0)
+    {
+        status(app, "SOLVE BLOCKED\nDCFR alpha, beta and gamma must be finite non-negative numbers.");
         unref(event);
         return;
     }
@@ -3595,6 +3623,17 @@ static void i_on_solve(App *app, Event *event)
             unref(event);
             return;
         }
+        if (!preflop_algorithm_supported_ui(algorithm))
+        {
+            status(app,
+                   "SOLVE BLOCKED\n"
+                   "Lane B preflop currently supports sampled presets only:\n"
+                   "external-mccfr, external-dcfr, outcome-mccfr, external-ecfr.\n"
+                   "'%s' is a full-tree/experimental preset and has no preflop adapter yet.",
+                   pe_preset_name(algorithm));
+            unref(event);
+            return;
+        }
         if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
             quote_argument(configured_runner, runner, sizeof(runner)) != 0)
         {
@@ -3620,6 +3659,14 @@ static void i_on_solve(App *app, Event *event)
             (void)snprintf(algorithm_options + options_len,
                            sizeof(algorithm_options) - options_len,
                            " --lambda %.17g", exponential_lambda);
+        }
+        if (algorithm == PE_PRESET_EXTERNAL_DCFR)
+        {
+            size_t options_len = strlen(algorithm_options);
+            (void)snprintf(algorithm_options + options_len,
+                           sizeof(algorithm_options) - options_len,
+                           " --alpha %.17g --beta %.17g --gamma %.17g",
+                           dcfr_alpha, dcfr_beta, dcfr_gamma);
         }
         used = (size_t)snprintf(command, sizeof(command),
                                 "%s --game %s --players %u --tree %s"
@@ -3770,6 +3817,9 @@ static Panel *i_setup_panel(App *app)
     Label *backend_label = label_create();
     Label *precision_label = label_create();
     Label *lambda_label = label_create();
+    Label *dcfr_alpha_label = label_create();
+    Label *dcfr_beta_label = label_create();
+    Label *dcfr_gamma_label = label_create();
     Label *threads_label = label_create();
     app->game_combo = combo_create();
     app->players_combo = combo_create();
@@ -3793,6 +3843,9 @@ static Panel *i_setup_panel(App *app)
     app->algorithm_combo = combo_create();
     app->policy_combo = combo_create();
     app->lambda_edit = edit_create();
+    app->dcfr_alpha_edit = edit_create();
+    app->dcfr_beta_edit = edit_create();
+    app->dcfr_gamma_edit = edit_create();
     app->backend_combo = combo_create();
     app->precision_combo = combo_create();
     app->stop_mode_combo = combo_create();
@@ -3815,6 +3868,9 @@ static Panel *i_setup_panel(App *app)
     label_text(backend_label, "COMPUTE BACKEND");
     label_text(precision_label, "PRECISION");
     label_text(lambda_label, "EXPONENTIAL LAMBDA");
+    label_text(dcfr_alpha_label, "DCFR ALPHA");
+    label_text(dcfr_beta_label, "DCFR BETA");
+    label_text(dcfr_gamma_label, "DCFR GAMMA");
     label_text(threads_label, "CPU THREADS (1+)");
     label_text(iterations_label, "MAX ITERATIONS (HARD STOP)");
     label_text(target_label, "EXPLOITABILITY TARGET (mBB)");
@@ -3883,6 +3939,9 @@ static Panel *i_setup_panel(App *app)
     edit_text(app->interval_edit, "256");
     edit_text(app->threads_edit, "1");
     edit_text(app->lambda_edit, "1.0");
+    edit_text(app->dcfr_alpha_edit, "1.5");
+    edit_text(app->dcfr_beta_edit, "0.0");
+    edit_text(app->dcfr_gamma_edit, "2.0");
     app->runtime_label = label_create();
     update_runtime_label(app);
     label_text(app->setup_run_state, "READY");
@@ -3922,24 +3981,30 @@ static Panel *i_setup_panel(App *app)
     layout_label(layout, lambda_label, 1, 15);
     layout_combo(layout, app->policy_combo, 0, 16);
     layout_edit(layout, app->lambda_edit, 1, 16);
-    layout_label(layout, runner_label, 0, 17);
-    layout_edit(layout, app->runner_edit, 0, 18);
-    layout_button(layout, load, 0, 19);
-    layout_button(layout, solve, 1, 19);
-    layout_label(layout, iterations_label, 0, 20);
-    layout_label(layout, condition_label, 1, 20);
-    layout_edit(layout, app->iterations_edit, 0, 21);
-    layout_combo(layout, app->stop_mode_combo, 1, 21);
-    layout_label(layout, target_label, 0, 22);
-    layout_label(layout, interval_label, 1, 22);
-    layout_edit(layout, app->target_edit, 0, 23);
-    layout_edit(layout, app->interval_edit, 1, 23);
-    layout_button(layout, stop, 1, 24);
-    layout_label(layout, app->runtime_label, 0, 25);
-    layout_label(layout, app->setup_run_state, 0, 26);
-    layout_label(layout, app->setup_run_progress, 1, 26);
-    layout_progress(layout, app->setup_progress_bar, 0, 27);
-    layout_label(layout, app->setup_run_metrics, 1, 27);
+    layout_label(layout, dcfr_alpha_label, 0, 17);
+    layout_label(layout, dcfr_beta_label, 1, 17);
+    layout_edit(layout, app->dcfr_alpha_edit, 0, 18);
+    layout_edit(layout, app->dcfr_beta_edit, 1, 18);
+    layout_label(layout, dcfr_gamma_label, 0, 19);
+    layout_edit(layout, app->dcfr_gamma_edit, 0, 20);
+    layout_label(layout, runner_label, 1, 19);
+    layout_edit(layout, app->runner_edit, 1, 20);
+    layout_button(layout, load, 0, 21);
+    layout_button(layout, solve, 1, 21);
+    layout_label(layout, iterations_label, 0, 22);
+    layout_label(layout, condition_label, 1, 22);
+    layout_edit(layout, app->iterations_edit, 0, 23);
+    layout_combo(layout, app->stop_mode_combo, 1, 23);
+    layout_label(layout, target_label, 0, 24);
+    layout_label(layout, interval_label, 1, 24);
+    layout_edit(layout, app->target_edit, 0, 25);
+    layout_edit(layout, app->interval_edit, 1, 25);
+    layout_button(layout, stop, 1, 26);
+    layout_label(layout, app->runtime_label, 0, 27);
+    layout_label(layout, app->setup_run_state, 0, 28);
+    layout_label(layout, app->setup_run_progress, 1, 28);
+    layout_progress(layout, app->setup_progress_bar, 0, 29);
+    layout_label(layout, app->setup_run_metrics, 1, 29);
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
