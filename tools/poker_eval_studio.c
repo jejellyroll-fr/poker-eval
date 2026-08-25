@@ -3531,6 +3531,7 @@ static void i_on_solve(App *app, Event *event)
     pe_algorithm_preset_t algorithm;
     pe_policy_mode_t policy;
     pe_compute_kind_t backend;
+    pe_compute_kind_t requested_backend;
     pe_precision_mode_t precision;
     double exponential_lambda;
     double dcfr_alpha;
@@ -3567,6 +3568,7 @@ static void i_on_solve(App *app, Event *event)
     algorithm = selected_algorithm(app);
     policy = selected_policy(app);
     backend = selected_backend(app);
+    requested_backend = backend;
     precision = selected_precision(app);
     exponential_lambda = 1.0;
     if (parse_ui_target(edit_get_text(app->lambda_edit), &exponential_lambda) != 0 ||
@@ -3602,27 +3604,11 @@ static void i_on_solve(App *app, Event *event)
     }
     if (stop_mode == 0u)
         target_mbb = 0.0;
-    if (backend != PE_COMPUTE_AUTO)
+    if (header.street == 0)
     {
         pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *info;
-        if (pe_runtime_probe(&runtime) != 0)
-        {
-            status(app, "SOLVE BLOCKED\nCould not inspect runtime compute capabilities.");
-            unref(event);
-            return;
-        }
-        info = &runtime.backends[backend];
-        if (!info->runtime_available || !info->validated)
-        {
-            status(app, "SOLVE BLOCKED\nBackend %s is not usable: %s",
-                   pe_compute_kind_name(backend), info->reason);
-            unref(event);
-            return;
-        }
-    }
-    if (header.street == 0)
-    {
+        char backend_display[96];
         const char *configured_runner = usable_optional_path(runner_path)
             ? runner_path : "pe-preflop-solve";
         if (strcmp(configured_runner, "pe-vector-sim") == 0)
@@ -3652,6 +3638,36 @@ static void i_on_solve(App *app, Event *event)
             unref(event);
             return;
         }
+        if (pe_runtime_probe(&runtime) != 0)
+        {
+            status(app, "SOLVE BLOCKED\nCould not inspect runtime compute capabilities.");
+            unref(event);
+            return;
+        }
+        if (backend == PE_COMPUTE_AUTO)
+        {
+            backend = pe_runtime_recommended_backend(&runtime);
+            if (backend == PE_COMPUTE_AUTO)
+            {
+                status(app, "SOLVE BLOCKED\nNo validated CPU/GPU backend is available.");
+                unref(event);
+                return;
+            }
+        }
+        info = &runtime.backends[backend];
+        if (!info->runtime_available || !info->validated)
+        {
+            status(app, "SOLVE BLOCKED\nBackend %s is not usable: %s",
+                   pe_compute_kind_name(backend), info->reason);
+            unref(event);
+            return;
+        }
+        if (requested_backend == PE_COMPUTE_AUTO)
+            snprintf(backend_display, sizeof(backend_display), "auto -> %s",
+                     pe_compute_kind_name(backend));
+        else
+            snprintf(backend_display, sizeof(backend_display), "%s",
+                     pe_compute_kind_name(backend));
         if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
             quote_argument(configured_runner, runner, sizeof(runner)) != 0)
         {
@@ -3718,15 +3734,17 @@ static void i_on_solve(App *app, Event *event)
         snprintf(config_text, sizeof(config_text),
                  "Lane B preflop | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
-                 " | policy %s%s",
+                 " | policy %s%s | SIMD %s",
                  stop_mode == 0u ? "iterations" : "exploitability",
                  target_mbb, iterations, interval,
-                 pe_preset_name(algorithm), pe_compute_kind_name(backend),
+                 pe_preset_name(algorithm), backend_display,
                  pe_precision_name(precision), threads,
                  policy == PE_POLICY_COUNT ? "preset" : pe_policy_name(policy),
-                 fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "");
+                 fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "",
+                 pe_runtime_simd_name(runtime.simd));
         label_text(app->run_config, config_text);
-        status(app, "SOLVING PREFLOP\n%s\n\nEmpty ranges are 100%%; boards are dealt through river.", command);
+        status(app, "SOLVING PREFLOP\n%s\n\nBackend: %s\nSIMD: %s\nEmpty ranges are 100%%; boards are dealt through river.",
+               command, backend_display, pe_runtime_simd_name(runtime.simd));
         if (i_start_solve(app, command) != 0)
             status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
         unref(event);
