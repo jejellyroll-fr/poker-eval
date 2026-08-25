@@ -509,6 +509,9 @@ typedef struct
     const pe_external_game_t *base;
     const pe_storage_ops_t *storage;
     void *storage_self;
+    pe_policy_mode_t policy;
+    pe_regret_mode_t regret;
+    double exponential_lambda;
 } pe_sampled_adapter_t;
 
 static int sampled_is_terminal(const void *state, void *user)
@@ -575,6 +578,7 @@ static double sampled_action_probability(const void *state, uint64_t key,
     const double *regrets;
     size_t length = 0u;
     double positive = 0.0;
+    double lambda;
     if (actions == 0u || action >= actions || !adapter->storage->resolve ||
         !adapter->storage->values_const)
         return 0.0;
@@ -586,6 +590,49 @@ static double sampled_action_probability(const void *state, uint64_t key,
                                              PE_VALUES_REGRET, &length);
     if (!regrets || length < actions)
         return 1.0 / (double)actions;
+
+    if (adapter->policy == PE_POLICY_EXPONENTIAL)
+    {
+        double maximum = 0.0;
+        double total = 0.0;
+
+        lambda = adapter->exponential_lambda;
+        if (!isfinite(lambda) || lambda <= 0.0)
+            lambda = 1.0;
+
+        /* The legacy exponential policy deliberately ignores non-positive
+           regrets.  Keep that behaviour for PE_REGRET_LEGACY_EXP; the v3
+           compute policy remains an all-regret softmax. */
+        if (adapter->regret == PE_REGRET_LEGACY_EXP)
+        {
+            for (uint16_t a = 0u; a < actions; ++a)
+                if (isfinite(regrets[a]) && regrets[a] > maximum)
+                    maximum = regrets[a];
+            if (maximum > 0.0)
+            {
+                for (uint16_t a = 0u; a < actions; ++a)
+                    if (isfinite(regrets[a]) && regrets[a] > 0.0)
+                        total += exp(lambda * (regrets[a] - maximum));
+                if (isfinite(total) && total > 0.0 &&
+                    isfinite(regrets[action]) && regrets[action] > 0.0)
+                    return exp(lambda * (regrets[action] - maximum)) / total;
+                if (isfinite(total) && total > 0.0)
+                    return 0.0;
+            }
+            return 1.0 / (double)actions;
+        }
+
+        for (uint16_t a = 0u; a < actions; ++a)
+            if (isfinite(regrets[a]) && regrets[a] > maximum)
+                maximum = regrets[a];
+        for (uint16_t a = 0u; a < actions; ++a)
+            if (isfinite(regrets[a]))
+                total += exp(lambda * (regrets[a] - maximum));
+        if (isfinite(total) && total > 0.0 && isfinite(regrets[action]))
+            return exp(lambda * (regrets[action] - maximum)) / total;
+        return 1.0 / (double)actions;
+    }
+
     for (uint16_t a = 0u; a < actions; ++a)
         if (isfinite(regrets[a]) && regrets[a] > 0.0) positive += regrets[a];
     if (positive <= 0.0) return 1.0 / (double)actions;
@@ -750,6 +797,9 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     adapter.base = game;
     adapter.storage = solver->storage;
     adapter.storage_self = solver->storage_self;
+    adapter.policy = plan->policy;
+    adapter.regret = plan->regret;
+    adapter.exponential_lambda = solver->config.algorithm.exponential_lambda;
     memset(&sampled_game, 0, sizeof(sampled_game));
     sampled_game.root = game->root;
     sampled_game.user = &adapter;

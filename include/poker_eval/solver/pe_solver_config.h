@@ -53,6 +53,7 @@ typedef enum {
     PE_PRESET_EXTERNAL_DCFR,     /* lane B, only after External is validated  */
     PE_PRESET_OUTCOME_MCCFR,     /* lane B                                    */
     PE_PRESET_ECFR,              /* experimental, preserves v2 behaviour      */
+    PE_PRESET_EXTERNAL_ECFR,     /* lane B, exponential opponent sampling     */
     PE_PRESET_COUNT
 } pe_algorithm_preset_t;
 

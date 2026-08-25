@@ -1569,10 +1569,12 @@ int main(int argc, char **argv)
            outside this sampled path and are refused here. */
         if (selected_preset != PE_PRESET_EXTERNAL_MCCFR &&
             selected_preset != PE_PRESET_EXTERNAL_DCFR &&
-            selected_preset != PE_PRESET_OUTCOME_MCCFR)
+            selected_preset != PE_PRESET_OUTCOME_MCCFR &&
+            selected_preset != PE_PRESET_EXTERNAL_ECFR)
         {
             fprintf(stderr,
-                    "Lane B supports external-mccfr, external-dcfr and outcome-mccfr; "
+                    "Lane B supports external-mccfr, external-dcfr, "
+                    "external-ecfr and outcome-mccfr; "
                     "selected algorithm %s is not wired to sampled updates\n",
                     pe_preset_name(selected_preset));
             mpf_state_cleanup(&root_state);

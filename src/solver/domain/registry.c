@@ -409,7 +409,10 @@ static const pe_algo_preset_entry_t k_preset_table[] = {
 
     { PE_PRESET_ECFR, "ecfr",
       PE_TRAVERSAL_FULL_SCALAR, PE_REGRET_LEGACY_EXP,
-      PE_POLICY_EXPONENTIAL, PE_AVG_UNIFORM, 1 }
+      PE_POLICY_EXPONENTIAL, PE_AVG_UNIFORM, 1 },
+    { PE_PRESET_EXTERNAL_ECFR, "external-ecfr",
+      PE_TRAVERSAL_EXTERNAL_SAMPLING, PE_REGRET_LEGACY_EXP,
+      PE_POLICY_EXPONENTIAL, PE_AVG_IMPORTANCE, 1 }
 };
 
 typedef char pe_preset_table_size_check[
