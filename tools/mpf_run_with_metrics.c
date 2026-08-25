@@ -147,11 +147,14 @@ static void usage(const char *prog)
             "  --backend <kind>        Select a v3 backend (cpu, cpu_par, cuda, opencl)\n"
             "  --traversal <kind>      Override traversal (full-vector, full-scalar, ...)\n"
             "  --regret <kind>         Override regret update (vanilla, plus, dcfr, ...)\n"
+            "  --policy <kind>         Override policy (regret-matching, exponential)\n"
             "  --averaging <kind>      Override averaging (uniform, linear, power, ...)\n"
             "  --precision <kind>      Override value precision (f64, f32, mixed, fixed16)\n"
             "  --alpha <x>             Override DCFR alpha\n"
             "  --beta <x>              Override DCFR beta\n"
             "  --gamma <x>             Override averaging/DCFR gamma\n"
+            "  --lambda <x>            Exponential policy temperature (> 0)\n"
+            "  --outcome-epsilon <x>   Outcome-sampling exploration (0..1)\n"
             "  --list-algorithms       List registered algorithm presets and exit\n"
             "  --list-backends         List registered compute backends and exit\n"
             "  --show-capabilities     Print the available capability bits and exit\n"
@@ -194,6 +197,8 @@ typedef struct
     pe_traversal_mode_t traversal;
     int have_regret;
     pe_regret_mode_t regret;
+    int have_policy;
+    pe_policy_mode_t policy;
     int have_averaging;
     pe_averaging_mode_t averaging;
     int have_precision;
@@ -204,12 +209,17 @@ typedef struct
     double beta;
     int have_gamma;
     double gamma;
+    int have_exponential_lambda;
+    double exponential_lambda;
+    int have_outcome_epsilon;
+    double outcome_epsilon;
 } cli_solver_overrides_t;
 
 static int overrides_have_axis(const cli_solver_overrides_t *overrides)
 {
     return overrides != NULL && (overrides->have_traversal ||
                                  overrides->have_regret ||
+                                 overrides->have_policy ||
                                  overrides->have_averaging);
 }
 
@@ -243,6 +253,8 @@ static int run_introspection(pe_algorithm_preset_t preset, int have_preset,
             config.algorithm.traversal = overrides->traversal;
         if (overrides->have_regret)
             config.algorithm.regret = overrides->regret;
+        if (overrides->have_policy)
+            config.algorithm.policy = overrides->policy;
         if (overrides->have_averaging)
             config.algorithm.averaging = overrides->averaging;
     }
@@ -256,6 +268,10 @@ static int run_introspection(pe_algorithm_preset_t preset, int have_preset,
             config.algorithm.dcfr_beta = overrides->beta;
         if (overrides->have_gamma)
             config.algorithm.dcfr_gamma = overrides->gamma;
+        if (overrides->have_exponential_lambda)
+            config.algorithm.exponential_lambda = overrides->exponential_lambda;
+        if (overrides->have_outcome_epsilon)
+            config.algorithm.outcome_epsilon = overrides->outcome_epsilon;
     }
     if (have_backend)
     {
@@ -827,6 +843,7 @@ int main(int argc, char **argv)
     int print_plan = 0;
     const char *traversal_name = NULL;
     const char *regret_name = NULL;
+    const char *policy_name = NULL;
     const char *averaging_name = NULL;
     const char *precision_name = NULL;
     pe_algorithm_preset_t selected_preset = PE_PRESET_EXTERNAL_MCCFR;
@@ -1038,6 +1055,10 @@ int main(int argc, char **argv)
         {
             regret_name = argv[++i];
         }
+        else if (strcmp(argv[i], "--policy") == 0 && i + 1 < argc)
+        {
+            policy_name = argv[++i];
+        }
         else if (strcmp(argv[i], "--averaging") == 0 && i + 1 < argc)
         {
             averaging_name = argv[++i];
@@ -1072,6 +1093,27 @@ int main(int argc, char **argv)
                 return 1;
             }
             overrides.have_gamma = 1;
+        }
+        else if (strcmp(argv[i], "--lambda") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &overrides.exponential_lambda) ||
+                !(overrides.exponential_lambda > 0.0))
+            {
+                fprintf(stderr, "Invalid lambda value (must be > 0)\n");
+                return 1;
+            }
+            overrides.have_exponential_lambda = 1;
+        }
+        else if (strcmp(argv[i], "--outcome-epsilon") == 0 && i + 1 < argc)
+        {
+            if (!parse_double(argv[++i], &overrides.outcome_epsilon) ||
+                overrides.outcome_epsilon < 0.0 ||
+                overrides.outcome_epsilon > 1.0)
+            {
+                fprintf(stderr, "Invalid outcome epsilon (must be in [0,1])\n");
+                return 1;
+            }
+            overrides.have_outcome_epsilon = 1;
         }
         else if (strcmp(argv[i], "--list-algorithms") == 0)
             list_algorithms = 1;
@@ -1115,9 +1157,12 @@ int main(int argc, char **argv)
         pe_algorithm_preset_t preset = PE_PRESET_COUNT;
         pe_compute_kind_t backend = PE_COMPUTE_COUNT;
         int have_expert_override = traversal_name != NULL || regret_name != NULL ||
+                                   policy_name != NULL ||
                                    averaging_name != NULL || precision_name != NULL ||
                                    overrides.have_alpha || overrides.have_beta ||
-                                   overrides.have_gamma;
+                                   overrides.have_gamma ||
+                                   overrides.have_exponential_lambda ||
+                                   overrides.have_outcome_epsilon;
 
         if (have_preset)
         {
@@ -1158,6 +1203,16 @@ int main(int argc, char **argv)
                 return 1;
             }
             overrides.have_regret = 1;
+        }
+        if (policy_name != NULL)
+        {
+            overrides.policy = pe_policy_from_name(policy_name);
+            if (overrides.policy == PE_POLICY_COUNT)
+            {
+                fprintf(stderr, "Unknown policy: %s\n", policy_name);
+                return 1;
+            }
+            overrides.have_policy = 1;
         }
         if (averaging_name != NULL)
         {
@@ -1205,9 +1260,12 @@ int main(int argc, char **argv)
         return 2;
     }
     if (!lane_b && (traversal_name != NULL || regret_name != NULL ||
+                    policy_name != NULL ||
                     averaging_name != NULL || precision_name != NULL ||
                     overrides.have_alpha || overrides.have_beta ||
-                    overrides.have_gamma) &&
+                    overrides.have_gamma ||
+                    overrides.have_exponential_lambda ||
+                    overrides.have_outcome_epsilon) &&
         !(selected_backend == PE_COMPUTE_CUDA ||
           selected_backend == PE_COMPUTE_OPENCL))
     {
@@ -1216,17 +1274,6 @@ int main(int argc, char **argv)
                 "the legacy tree runner does not ignore them\n");
         return 2;
     }
-    if (lane_b && (traversal_name != NULL || regret_name != NULL ||
-                   averaging_name != NULL || overrides.have_alpha ||
-                   overrides.have_beta || overrides.have_gamma))
-    {
-        fprintf(stderr,
-                "Lane B currently exposes algorithm presets, precision and threads; "
-                "manual traversal/regret/averaging/DCFR overrides are not wired to "
-                "the sampled update kernel yet\n");
-        return 2;
-    }
-
     {
         pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *backend_info;
@@ -1564,29 +1611,6 @@ int main(int argc, char **argv)
         pe_compute_kind_t lane_backend = selected_backend == PE_COMPUTE_AUTO
             ? PE_COMPUTE_CPU_REF : selected_backend;
 
-        /* Lane B supports the two sampled traversal families. External DCFR
-           is applied by the CPU update adapters; full-tree presets remain
-           outside this sampled path and are refused here. */
-        if (selected_preset != PE_PRESET_EXTERNAL_MCCFR &&
-            selected_preset != PE_PRESET_EXTERNAL_DCFR &&
-            selected_preset != PE_PRESET_OUTCOME_MCCFR &&
-            selected_preset != PE_PRESET_EXTERNAL_ECFR)
-        {
-            fprintf(stderr,
-                    "Lane B supports external-mccfr, external-dcfr, "
-                    "external-ecfr and outcome-mccfr; "
-                    "selected algorithm %s is not wired to sampled updates\n",
-                    pe_preset_name(selected_preset));
-            mpf_state_cleanup(&root_state);
-            mpf_perf_stats_pool_destroy(perf_pool);
-            eval_context_destroy(ctx);
-            for (int p = 0; p < num_players; ++p)
-                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
-                    pe_range_free(ranges[p]);
-            pe_monker_range_set_free(&tree_ranges);
-            mpf_tree_free(tree);
-            return 2;
-        }
         if (lane_backend == PE_COMPUTE_CUDA || lane_backend == PE_COMPUTE_OPENCL)
         {
             fprintf(stderr,
@@ -1603,6 +1627,78 @@ int main(int argc, char **argv)
             return 2;
         }
         lane_cfg.algorithm.preset = selected_preset;
+        if (overrides_have_axis(&overrides))
+        {
+            /* Keep the preset as the baseline, but make every explicit axis
+               authoritative. This is the same resolution contract exposed by
+               --print-execution-plan, now applied to the real Lane B run. */
+            if (pe_preset_expand(selected_preset, &lane_cfg.algorithm) != 0)
+            {
+                fprintf(stderr, "could not expand selected algorithm preset\n");
+                mpf_state_cleanup(&root_state);
+                mpf_perf_stats_pool_destroy(perf_pool);
+                eval_context_destroy(ctx);
+                for (int p = 0; p < num_players; ++p)
+                    if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                        pe_range_free(ranges[p]);
+                pe_monker_range_set_free(&tree_ranges);
+                mpf_tree_free(tree);
+                return 2;
+            }
+            lane_cfg.algorithm.preset = PE_PRESET_CUSTOM;
+            if (overrides.have_traversal)
+                lane_cfg.algorithm.traversal = overrides.traversal;
+            if (overrides.have_regret)
+                lane_cfg.algorithm.regret = overrides.regret;
+            if (overrides.have_policy)
+                lane_cfg.algorithm.policy = overrides.policy;
+            if (overrides.have_averaging)
+                lane_cfg.algorithm.averaging = overrides.averaging;
+        }
+        else if (pe_preset_expand(selected_preset, &lane_cfg.algorithm) != 0)
+        {
+            fprintf(stderr, "could not expand selected algorithm preset\n");
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 2;
+        }
+        if (overrides.have_alpha)
+            lane_cfg.algorithm.dcfr_alpha = overrides.alpha;
+        if (overrides.have_beta)
+            lane_cfg.algorithm.dcfr_beta = overrides.beta;
+        if (overrides.have_gamma)
+            lane_cfg.algorithm.dcfr_gamma = overrides.gamma;
+        if (overrides.have_exponential_lambda)
+            lane_cfg.algorithm.exponential_lambda = overrides.exponential_lambda;
+        if (overrides.have_outcome_epsilon)
+            lane_cfg.algorithm.outcome_epsilon = overrides.outcome_epsilon;
+
+        /* Lane B supports external and outcome sampling. A custom full-tree
+           axis is rejected here instead of silently falling back to a sampled
+           algorithm with different semantics. */
+        if (lane_cfg.algorithm.traversal != PE_TRAVERSAL_EXTERNAL_SAMPLING &&
+            lane_cfg.algorithm.traversal != PE_TRAVERSAL_OUTCOME_SAMPLING)
+        {
+            fprintf(stderr,
+                    "Lane B sampled traversal requires external-sampling or "
+                    "outcome-sampling; requested %s\n",
+                    pe_traversal_name(lane_cfg.algorithm.traversal));
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 2;
+        }
         lane_cfg.execution.backend = lane_backend;
         lane_cfg.execution.stages.traversal = lane_backend;
         lane_cfg.execution.stages.update = lane_backend;
@@ -1627,9 +1723,15 @@ int main(int argc, char **argv)
         uint64_t trajectories = (uint64_t)iterations * (uint64_t)sample_batch;
         double trajectories_per_second = elapsed_cpu > 0.0
             ? (double)trajectories / elapsed_cpu : 0.0;
-        printf("lane_b=algorithm=%s backend=%s precision=%s threads=%d "
+        printf("lane_b=algorithm=%s traversal=%s regret=%s policy=%s "
+               "averaging=%s backend=%s precision=%s threads=%d "
                "sample_batch=%d iterations=%d status=%d\n",
-               pe_preset_name(selected_preset),
+               lane_cfg.algorithm.preset == PE_PRESET_CUSTOM
+                   ? "custom" : pe_preset_name(selected_preset),
+               pe_traversal_name(lane_cfg.algorithm.traversal),
+               pe_regret_name(lane_cfg.algorithm.regret),
+               pe_policy_name(lane_cfg.algorithm.policy),
+               pe_averaging_name(lane_cfg.algorithm.averaging),
                pe_compute_kind_name(lane_backend),
                pe_precision_name(selected_precision), cpu_threads,
                sample_batch, iterations, (int)lane_status);
@@ -1654,12 +1756,19 @@ int main(int argc, char **argv)
             {
                 fprintf(benchmark_file,
                         "{\"schema\":\"pe-lane-b-benchmark/v1\","
-                        "\"algorithm\":\"%s\",\"backend\":\"%s\","
+                        "\"algorithm\":\"%s\",\"traversal\":\"%s\","
+                        "\"regret\":\"%s\",\"policy\":\"%s\","
+                        "\"averaging\":\"%s\",\"backend\":\"%s\","
                         "\"precision\":\"%s\",\"threads\":%d,"
                         "\"iterations\":%d,\"sample_batch\":%d,"
                         "\"trajectories\":%llu,\"cpu_seconds\":%.9f,"
                         "\"trajectories_per_second\":%.9f,\"status\":%d}\n",
-                        pe_preset_name(selected_preset),
+                        lane_cfg.algorithm.preset == PE_PRESET_CUSTOM
+                            ? "custom" : pe_preset_name(selected_preset),
+                        pe_traversal_name(lane_cfg.algorithm.traversal),
+                        pe_regret_name(lane_cfg.algorithm.regret),
+                        pe_policy_name(lane_cfg.algorithm.policy),
+                        pe_averaging_name(lane_cfg.algorithm.averaging),
                         pe_compute_kind_name(lane_backend),
                         pe_precision_name(selected_precision), cpu_threads,
                         iterations, sample_batch,

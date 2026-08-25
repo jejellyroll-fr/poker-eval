@@ -106,6 +106,23 @@ static void test_every_preset_expands(void)
           "NULL is not a precision mode");
 }
 
+static void test_policy_names_round_trip(void)
+{
+    CHECK(strcmp(pe_policy_name(PE_POLICY_REGRET_MATCHING),
+                 "regret-matching") == 0,
+          "regret matching policy has the wrong name");
+    CHECK(strcmp(pe_policy_name(PE_POLICY_EXPONENTIAL), "exponential") == 0,
+          "exponential policy has the wrong name");
+    CHECK(pe_policy_from_name("REGRET-MATCHING") == PE_POLICY_REGRET_MATCHING,
+          "policy lookup should be case-insensitive");
+    CHECK(pe_policy_from_name("exponential") == PE_POLICY_EXPONENTIAL,
+          "exponential policy does not map back");
+    CHECK(pe_policy_from_name("unknown") == PE_POLICY_COUNT,
+          "unknown policy should not resolve");
+    CHECK(pe_policy_from_name(NULL) == PE_POLICY_COUNT,
+          "NULL is not a policy name");
+}
+
 static void test_preset_matches_the_matrix(void)
 {
     pe_algorithm_config_t algo;
@@ -512,6 +529,7 @@ static void test_diagnostics_overflow_is_counted(void)
 int main(void)
 {
     test_every_preset_expands();
+    test_policy_names_round_trip();
     test_preset_matches_the_matrix();
     test_preset_leaves_tuning_alone();
     test_custom_expands_to_nothing();

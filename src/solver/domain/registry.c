@@ -551,6 +551,21 @@ const char *pe_policy_name(pe_policy_mode_t mode)
     return PE_NAME_OF(mode, names);
 }
 
+pe_policy_mode_t pe_policy_from_name(const char *name)
+{
+    static const char *const names[] = { "regret-matching", "exponential" };
+    size_t length;
+    size_t i;
+
+    if (name == NULL || *name == '\0')
+        return PE_POLICY_COUNT;
+    length = strlen(name);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (pe_name_equal_ci(names[i], name, length))
+            return (pe_policy_mode_t)i;
+    return PE_POLICY_COUNT;
+}
+
 const char *pe_averaging_name(pe_averaging_mode_t mode)
 {
     static const char *const names[] = {

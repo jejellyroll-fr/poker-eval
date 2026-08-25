@@ -154,6 +154,8 @@ pe_traversal_mode_t pe_traversal_from_name(const char *name);
 const char *pe_regret_name(pe_regret_mode_t mode);
 pe_regret_mode_t pe_regret_from_name(const char *name);
 const char *pe_policy_name(pe_policy_mode_t mode);
+/** Parse a policy name case-insensitively; PE_POLICY_COUNT means unknown. */
+pe_policy_mode_t pe_policy_from_name(const char *name);
 const char *pe_averaging_name(pe_averaging_mode_t mode);
 pe_averaging_mode_t pe_averaging_from_name(const char *name);
 const char *pe_pruning_name(pe_pruning_mode_t mode);
