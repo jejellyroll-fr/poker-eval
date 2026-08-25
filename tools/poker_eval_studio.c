@@ -17,6 +17,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <io.h>
+#define PE_ACCESS _access
+#define PE_X_OK 0
+#else
+#include <unistd.h>
+#define PE_ACCESS access
+#define PE_X_OK X_OK
+#endif
+
 #ifdef _WIN32
 #define POPEN _popen
 #define PCLOSE _pclose
@@ -221,6 +231,22 @@ static int quote_argument(const char *input, char *output, size_t capacity)
     return 0;
 }
 
+static int usable_optional_path(const char *path)
+{
+    return path && *path && strncmp(path, "/path/to/", 9u) != 0;
+}
+
+static const char *resolve_runner(const char *configured, const char *name)
+{
+    static char local_path[2048];
+    if (usable_optional_path(configured) && strcmp(configured, "pe-vector-sim") != 0)
+        return configured;
+    if (PE_ACCESS(name, PE_X_OK) == 0)
+        return name;
+    snprintf(local_path, sizeof(local_path), "build/tools/%s", name);
+    return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : name;
+}
+
 static void i_on_solve(App *app, Event *event)
 {
     pe_monker_tree_header_t header;
@@ -241,6 +267,67 @@ static void i_on_solve(App *app, Event *event)
 
     if (!tree_path || !*tree_path || read_tree(app, tree_path, &header, &layout) != 0)
     {
+        unref(event);
+        return;
+    }
+    if (header.street == 0)
+    {
+        const char *configured_runner = usable_optional_path(runner_path)
+            ? runner_path : "pe-preflop-solve";
+        if (strcmp(configured_runner, "pe-vector-sim") == 0)
+            configured_runner = "pe-preflop-solve";
+        configured_runner = resolve_runner(configured_runner, "pe-preflop-solve");
+        if (header.player_count < 2u || header.player_count > 6u ||
+            usable_optional_path(mkr_path))
+        {
+            status(app, "SOLVE BLOCKED\nPreflop Lane B supports 2..6 players and solves the tree from ranges; .mkr import is not used by this path.");
+            unref(event);
+            return;
+        }
+        if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
+            quote_argument(configured_runner, runner, sizeof(runner)) != 0)
+        {
+            status(app, "SOLVE ERROR\nPath is too long.");
+            unref(event);
+            return;
+        }
+        used = (size_t)snprintf(command, sizeof(command),
+                                "%s --game %s --players %u --tree %s --iterations 1000 --samples 128 --br-samples 32",
+                                runner, game_name(layout.game),
+                                header.player_count, tree);
+        for (uint32_t player = 0u; player < header.player_count; ++player)
+        {
+            const char *range_text = player == 0u ? range0_text :
+                                     player == 1u ? range1_text : NULL;
+            char range[4200];
+            if (!range_text || !*range_text)
+                range_text = "100%";
+            if (quote_argument(range_text, range, sizeof(range)) != 0 ||
+                used >= sizeof(command))
+            {
+                status(app, "SOLVE ERROR\nRange text is too long.");
+                unref(event);
+                return;
+            }
+            used += (size_t)snprintf(command + used, sizeof(command) - used,
+                                     " --range%u %s", player, range);
+        }
+        (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                       " 2>&1");
+        status(app, "SOLVING PREFLOP\n%s\n\n100%% ranges by default; boards are dealt through river.", command);
+        pipe = POPEN(command, "r");
+        if (!pipe)
+        {
+            status(app, "SOLVE ERROR\nCould not launch pe-preflop-solve. Set the runner path to its executable.");
+            unref(event);
+            return;
+        }
+        output[0] = '\0';
+        while (fgets(output + strlen(output),
+                      (int)(sizeof(output) - strlen(output)), pipe) != NULL)
+            if (strlen(output) + 1u >= sizeof(output)) break;
+        (void)PCLOSE(pipe);
+        status(app, "SOLVE RESULT\n%s", output[0] ? output : "No output from solver.");
         unref(event);
         return;
     }
@@ -292,7 +379,7 @@ static void i_on_solve(App *app, Event *event)
         used += (size_t)snprintf(command + used, sizeof(command) - used,
                                  " --range0 %s --range1 %s", range0, range1);
     }
-    if (mkr_path && *mkr_path && quote_argument(mkr_path, mkr, sizeof(mkr)) == 0)
+    if (usable_optional_path(mkr_path) && quote_argument(mkr_path, mkr, sizeof(mkr)) == 0)
         (void)snprintf(command + used, sizeof(command) - used, " --mkr %s", mkr);
     (void)snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
     status(app, "SOLVING\n%s", command);
@@ -366,8 +453,8 @@ static Panel *i_setup_panel(App *app)
     edit_phtext(app->tree_edit, "/path/to/spot.tree");
     edit_phtext(app->mkr_edit, "/path/to/strategy.mkr");
     edit_phtext(app->board_edit, "Ah Kd 7c 2s Qh");
-    edit_phtext(app->range0_edit, "AsKsQd3c");
-    edit_phtext(app->range1_edit, "AhKhJdTc");
+    edit_phtext(app->range0_edit, "100%");
+    edit_phtext(app->range1_edit, "100%");
     edit_text(app->runner_edit, "pe-vector-sim");
     button_OnClick(browse_tree, listener(app, i_on_tree, App));
     button_OnClick(browse_mkr, listener(app, i_on_mkr, App));

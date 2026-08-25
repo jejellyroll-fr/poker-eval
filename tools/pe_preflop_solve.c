@@ -9,7 +9,9 @@
 
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/range.h>
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 #include <poker_eval/solver/pe_preflop_allin_game.h>
+#include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_range.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
@@ -46,6 +48,7 @@ typedef struct {
     uint64_t br_samples;
     uint64_t seed;
     const char *output;
+    const char *tree;
 } options_t;
 
 static void usage(FILE *stream)
@@ -63,6 +66,7 @@ static void usage(FILE *stream)
         "  --raise AMOUNT[,AMOUNT...]   raise increments above the call\n"
         "  --allow-calls                allow calls before all-in\n"
         "  --postflop                   continue through flop, turn and river\n"
+        "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
@@ -164,7 +168,8 @@ static int parse_options(int argc, char **argv, options_t *options)
              strcmp(arg, "--sb") == 0 || strcmp(arg, "--bb") == 0 ||
              strcmp(arg, "--ante") == 0 || strcmp(arg, "--br-samples") == 0 ||
              strcmp(arg, "--min-raise") == 0 || strcmp(arg, "--raise") == 0 ||
-             strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0) &&
+             strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0 ||
+             strcmp(arg, "--tree") == 0) &&
             (!value || value[0] == '-')) {
             fprintf(stderr, "missing value for %s\n", arg);
             return -1;
@@ -211,6 +216,7 @@ static int parse_options(int argc, char **argv, options_t *options)
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
         } else if (strcmp(arg, "--output") == 0) options->output = value;
+        else if (strcmp(arg, "--tree") == 0) options->tree = value;
         else {
             fprintf(stderr, "unknown option: %s\n", arg);
             return -1;
@@ -281,6 +287,8 @@ int main(int argc, char **argv)
     pe_metrics_t metrics = {0};
     StdDeck_CardMask dead;
     pe_preflop_variant_t variant;
+    mpf_tree_def_t *tree = NULL;
+    pe_monker_tree_header_t tree_header;
 
     {
         int option_status = parse_options(argc, argv, &options);
@@ -292,6 +300,28 @@ int main(int argc, char **argv)
         }
     }
     variant = parse_variant(options.game);
+    memset(&tree_header, 0, sizeof(tree_header));
+    if (options.tree)
+    {
+        pe_monker_status_t tree_status = pe_monker_tree_read_header(
+            options.tree, &tree_header);
+        if (tree_status == PE_MONKER_OK)
+            tree_status = pe_monker_tree_load(options.tree, &tree);
+        if (tree_status != PE_MONKER_OK || !tree)
+        {
+            fprintf(stderr, "could not load Monker tree %s: %s\n",
+                    options.tree, pe_monker_status_string(tree_status));
+            goto fail;
+        }
+        if (tree_header.street != 0 ||
+            tree_header.player_count != (uint32_t)options.players)
+        {
+            fprintf(stderr,
+                    "tree must be preflop and contain %d players (got street=%u players=%u)\n",
+                    options.players, tree_header.street, tree_header.player_count);
+            goto fail;
+        }
+    }
     StdDeck_CardMask_RESET(dead);
     for (int player = 0; player < options.players; ++player) {
         enum_game_t range_game = variant == PE_PREFLOP_HOLDEM ? game_holdem
@@ -319,6 +349,8 @@ int main(int argc, char **argv)
     rules.raise_count = options.raise_count;
     rules.allow_nonallin_call = options.allow_nonallin_call;
     rules.postflop_streets = options.postflop_streets;
+    rules.tree = tree;
+    rules.tree_showdown = tree != NULL ? 1 : 0;
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
     memcpy(rules.raise_sizes, options.raise_sizes, sizeof(rules.raise_sizes));
@@ -358,8 +390,9 @@ int main(int argc, char **argv)
     }
     {
         size_t infosets = pe_preflop_allin_infodesc_count(game);
-        printf("preflop_solver=lane-b external-mccfr game=%s players=%d postflop=%d\n",
-               options.game, options.players, options.postflop_streets);
+        printf("preflop_solver=lane-b external-mccfr game=%s players=%d postflop=%d tree=%s\n",
+               options.game, options.players, options.postflop_streets,
+               tree ? options.tree : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
@@ -370,6 +403,7 @@ int main(int argc, char **argv)
     }
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);
+    mpf_tree_free(tree);
     for (int player = 0; player < options.players; ++player)
         pe_range_free(ranges[player]);
     return 0;
@@ -377,6 +411,7 @@ int main(int argc, char **argv)
 fail:
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);
+    mpf_tree_free(tree);
     for (int player = 0; player < options.players; ++player)
         pe_range_free(ranges[player]);
     return 1;

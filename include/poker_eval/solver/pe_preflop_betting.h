@@ -21,6 +21,9 @@ typedef struct pe_preflop_betting_state_t
     mask_t board;
     mask_t dead_cards;
     pe_holdem_street_t street;
+    /* Optional imported Monker preflop node.  -1 means that the generated
+       betting rules are active (the historical behaviour). */
+    int tree_node_index;
 } pe_preflop_betting_state_t;
 
 typedef struct

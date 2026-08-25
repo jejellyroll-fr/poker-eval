@@ -20,13 +20,18 @@ The application workflow is strict:
 1. Browse or paste a `.tree` path and inspect it. The binary header and
    embedded ranges determine the game, player count, street, and combo layout.
 2. Enter the board required by that street. A `.tree` does not contain board
-   cards, so the application never invents them or keeps a stale board.
-3. Optionally provide the matching `.mkr`, then press **Solve this spot**.
-   River trees are sent to `pe-vector-sim`; non-river trees are rejected by
-   this first native vector workflow with an explicit message rather than a
-   misleading result.
+   cards, so the application never invents them or keeps a stale board. A
+   preflop tree correctly requires zero board cards.
+3. Press **Solve this spot**. River trees are sent to `pe-vector-sim`.
+   Preflop trees are sent to `pe-preflop-solve --tree`, use `100%` for any
+   range left empty, follow the imported Monker betting nodes, deal flop,
+   turn and river, and settle the showdown. A rangeless tree is therefore a
+   valid all-combos simulation; it is not rejected as a malformed tree.
 
-The runner field defaults to `pe-vector-sim`, so it can point at an installed
-binary or at the build output on a developer machine. The next UI tranche can
-replace the text output with the range matrix, tree canvas, and action/EV
-panels without changing the setup or solver seams.
+The runner field defaults to `pe-vector-sim` for river spots. For preflop
+spots the Studio selects `pe-preflop-solve` automatically and resolves it from
+`build/tools` when running from a checkout. The current Lane B path samples
+correlated private deals and public runouts; increasing iterations improves
+coverage of the complete board distribution. The next UI tranche can replace
+the text output with the range matrix, tree canvas, and action/EV panels
+without changing the setup or solver seams.

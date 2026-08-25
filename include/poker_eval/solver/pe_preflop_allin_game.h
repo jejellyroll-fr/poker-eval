@@ -22,6 +22,8 @@ extern "C" {
 #define PE_PREFLOP_ALLIN_MAX_PLAYERS 6
 #define PE_PREFLOP_ALLIN_MAX_RAISE_SIZES 6
 
+struct mpf_tree_def_t;
+
 typedef struct
 {
     /* Hold'em or PLO4/PLO5/PLO6. */
@@ -48,6 +50,11 @@ typedef struct
     /* When set, a completed preflop round advances through flop, turn and
        river chance nodes before the terminal showdown. */
     int postflop_streets;
+    /* Optional imported Monker preflop tree.  Its terminal betting nodes are
+       followed by automatic flop/turn/river dealing and showdown when
+       tree_showdown is set. */
+    const struct mpf_tree_def_t *tree;
+    int tree_showdown;
     /* Showdown resolution. */
     int showdown_samples; /* sampled boards per called terminal */
     uint64_t showdown_seed;

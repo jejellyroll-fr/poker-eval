@@ -9,6 +9,8 @@
 
 #include <poker_eval/solver/pe_preflop_allin_game.h>
 
+#include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+
 #include <poker_eval/core/cardmask_compat.h>
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/pcg_rng.h>
@@ -53,6 +55,66 @@ struct pe_preflop_allin_game_t
     size_t desc_count;
     size_t desc_capacity;
 };
+
+static int tree_action_to_semantic(const mpf_tree_node_t *node, int index,
+                                   pe_action_t *out)
+{
+    const mpf_tree_action_t *source;
+    if (!node || !out || index < 0 || index >= node->action_count)
+        return -1;
+    source = &node->actions[index];
+    memset(out, 0, sizeof(*out));
+    switch (source->type)
+    {
+    case MPF_TREE_ACTION_FOLD:
+        out->kind = PE_ACTION_FOLD;
+        return 0;
+    case MPF_TREE_ACTION_CALL:
+        out->kind = PE_ACTION_CALL;
+        return 0;
+    case MPF_TREE_ACTION_RAISE:
+        if (source->size_index < 0 || source->size_index >= node->bet_size_count)
+            return -1;
+        if (fabs(node->bet_sizes[source->size_index] - (-1.0)) < PREFLOP_EPSILON)
+        {
+            out->kind = PE_ACTION_ALL_IN;
+            return 0;
+        }
+        out->kind = PE_ACTION_RAISE;
+        out->size_index = source->size_index;
+        if (fabs(node->bet_sizes[source->size_index] - (-2.0)) < PREFLOP_EPSILON)
+        {
+            out->amount_kind = PE_AMOUNT_MINIMUM;
+            out->amount = 0.0;
+        }
+        else if (node->use_pot_sizing)
+        {
+            out->amount_kind = PE_AMOUNT_POT_FRACTION;
+            out->amount = node->bet_sizes[source->size_index];
+        }
+        else
+        {
+            out->amount_kind = PE_AMOUNT_CHIPS;
+            out->amount = node->bet_sizes[source->size_index];
+        }
+        return 0;
+    case MPF_TREE_ACTION_CHANCE:
+    case MPF_TREE_ACTION_TERMINAL:
+        return -1;
+    default:
+        return -1;
+    }
+}
+
+static const mpf_tree_node_t *preflop_tree_node(
+    const pe_preflop_allin_game_t *game,
+    const pe_preflop_betting_state_t *state)
+{
+    if (!game || !state || !game->rules.tree || state->tree_node_index < 0 ||
+        state->tree_node_index >= game->rules.tree->node_count)
+        return NULL;
+    return &game->rules.tree->nodes[state->tree_node_index];
+}
 
 /* ------------------------------------------------------------------ *
  * Hashing helpers
@@ -104,6 +166,32 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
     uint16_t count = 0u;
     uint16_t i;
     int index;
+
+    if (game->rules.tree && state->street == PE_HOLDEM_PREFLOP &&
+        state->tree_node_index >= 0)
+    {
+        const mpf_tree_node_t *node = preflop_tree_node(game, state);
+        uint16_t kept = 0u;
+        if (!node || node->type != MPF_TREE_NODE_PLAYER ||
+            node->acting_player != betting->to_act)
+            return 0u;
+        for (index = 0; index < node->action_count && kept < max_actions; ++index)
+        {
+            pe_action_t candidate;
+            if (tree_action_to_semantic(node, index, &candidate) != 0)
+                continue;
+            if (candidate.kind == PE_ACTION_CALL && betting->to_call <= PREFLOP_EPSILON)
+                candidate.kind = PE_ACTION_CHECK;
+            if (pe_betting_action_is_legal(betting, &game->betting_rules,
+                                           &candidate) == PE_BETTING_OK)
+            {
+                if (out)
+                    out[kept] = candidate;
+                ++kept;
+            }
+        }
+        return kept;
+    }
 
     if (betting->terminal || betting->round_complete || betting->to_act < 0)
         return 0u;
@@ -218,6 +306,17 @@ static pe_action_status_t preflop_op_action_at(
         return PE_ACTION_ERR_OUT_OF_RANGE;
     *out = actions[action];
     return PE_ACTION_OK;
+}
+
+static int tree_action_matches(const pe_action_t *wanted,
+                               const pe_action_t *candidate)
+{
+    if (!wanted || !candidate || wanted->kind != candidate->kind)
+        return 0;
+    if (wanted->kind != PE_ACTION_RAISE)
+        return 1;
+    return wanted->amount_kind == candidate->amount_kind &&
+           fabs(wanted->amount - candidate->amount) < PREFLOP_EPSILON;
 }
 
 /* ------------------------------------------------------------------ *
@@ -467,7 +566,8 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
         contrib[p] = betting->invested[p];
         pot_total += contrib[p];
     }
-    if (game->rules.postflop_streets && state->betting.terminal &&
+    if ((game->rules.postflop_streets || game->rules.tree_showdown) &&
+        state->betting.terminal &&
         state->street == PE_HOLDEM_RIVER)
         return preflop_known_board_value(game, state, player);
     if (betting->terminal)
@@ -491,7 +591,7 @@ static int preflop_is_terminal(const pe_preflop_betting_state_t *state,
     const pe_preflop_allin_game_t *game = user;
     if (!state || !game)
         return 0;
-    if (!game->rules.postflop_streets)
+    if (!game->rules.postflop_streets && !game->rules.tree_showdown)
         return state->betting.terminal || state->betting.round_complete;
     return state->betting.terminal;
 }
@@ -501,9 +601,45 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
                                 pe_preflop_betting_state_t *child, void *user)
 {
     pe_preflop_allin_game_t *game = user;
-    (void)source;
-    (void)action;
-    if (!game || !child || !game->rules.postflop_streets)
+    if (!game || !child)
+        return 0;
+    if (game->rules.tree && source->street == PE_HOLDEM_PREFLOP &&
+        source->tree_node_index >= 0)
+    {
+        const mpf_tree_node_t *node = preflop_tree_node(game, source);
+        int next_index = -1;
+        if (node)
+        {
+            for (int i = 0; i < node->action_count; ++i)
+            {
+                pe_action_t candidate;
+                if (tree_action_to_semantic(node, i, &candidate) != 0)
+                    continue;
+                if (candidate.kind == PE_ACTION_CALL &&
+                    source->betting.to_call <= PREFLOP_EPSILON)
+                    candidate.kind = PE_ACTION_CHECK;
+                if (tree_action_matches(action, &candidate))
+                {
+                    next_index = node->actions[i].next_index;
+                    break;
+                }
+            }
+        }
+        child->tree_node_index = next_index;
+        if (game->rules.tree_showdown && !child->betting.terminal &&
+            (next_index < 0 || next_index >= game->rules.tree->node_count ||
+             game->rules.tree->nodes[next_index].type == MPF_TREE_NODE_TERMINAL))
+        {
+            child->betting.round_complete = 1;
+            child->betting.to_act = -1;
+            child->is_chance = 1;
+            child->tree_node_index = -1;
+            return 0;
+        }
+    }
+    if (!game->rules.postflop_streets && !game->rules.tree_showdown)
+        return 0;
+    if (game->rules.tree_showdown && child->is_chance)
         return 0;
     if (child->betting.terminal)
         return 0;
@@ -554,6 +690,28 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
     pe_preflop_allin_game_t *game = user;
     if (!source || !rng || !sample || !child || !game)
         return -1;
+    if (game->rules.tree_showdown &&
+        ((source->street != PE_HOLDEM_PREFLOP &&
+          source->street != PE_HOLDEM_RIVER) ||
+         (source->street == PE_HOLDEM_PREFLOP &&
+          source->dead_cards != MASK_EMPTY)))
+    {
+        mask_t next_board;
+        pe_holdem_street_t next_street;
+        if (preflop_draw_public_cards(source, rng, &next_board) != 0 ||
+            pe_holdem_street_from_board(next_board, &next_street) != 0)
+            return -1;
+        *child = *source;
+        child->board = next_board;
+        child->street = next_street;
+        child->is_chance = next_street != PE_HOLDEM_RIVER;
+        child->betting.to_act = -1;
+        child->betting.round_complete = 1;
+        child->betting.terminal = next_street == PE_HOLDEM_RIVER;
+        sample->outcome = 0;
+        sample->importance_ratio = 1.0;
+        return 0;
+    }
     if (source->street == PE_HOLDEM_PREFLOP && source->dead_cards == MASK_EMPTY)
     {
         pe_preflop_deal_sample_t deal;
@@ -768,6 +926,8 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->betting_rules.raise_cap = rules->raise_cap;
 
     memset(&game->root_betting, 0, sizeof(game->root_betting));
+    game->root_betting.tree_node_index = rules->tree
+        ? rules->tree->root_index : -1;
     /* Heads-up starts at the small blind. Multiway starts at the first player
        after the blinds/antes, which is the preflop UTG abstraction. */
     if (pe_betting_state_init(&game->root_betting.betting, &game->betting_rules,
