@@ -442,6 +442,25 @@ static const char *algorithm_scope_name(pe_algorithm_preset_t algorithm)
     }
 }
 
+static void algorithm_axes_label(pe_algorithm_preset_t algorithm,
+                                 char *out, size_t capacity)
+{
+    pe_algorithm_config_t axes;
+    if (!out || capacity == 0u)
+        return;
+    memset(&axes, 0, sizeof(axes));
+    axes.preset = algorithm;
+    if (pe_preset_expand(algorithm, &axes) != 0)
+    {
+        snprintf(out, capacity, "unavailable");
+        return;
+    }
+    snprintf(out, capacity, "traversal=%s regret=%s averaging=%s",
+             pe_traversal_name(axes.traversal),
+             pe_regret_name(axes.regret),
+             pe_averaging_name(axes.averaging));
+}
+
 static pe_policy_mode_t selected_policy(const App *app)
 {
     uint32_t selection;
@@ -3539,7 +3558,8 @@ static void i_on_solve(App *app, Event *event)
     double dcfr_gamma;
     uint64_t threads;
     char algorithm_options[320];
-    char config_text[256];
+    char config_text[512];
+    char algorithm_axes[192];
 
     bmutex_lock(app->solve_mutex);
     if (app->solve_running)
@@ -3566,6 +3586,7 @@ static void i_on_solve(App *app, Event *event)
     interval_text = edit_get_text(app->interval_edit);
     stop_mode = combo_get_selected(app->stop_mode_combo);
     algorithm = selected_algorithm(app);
+    algorithm_axes_label(algorithm, algorithm_axes, sizeof(algorithm_axes));
     policy = selected_policy(app);
     backend = selected_backend(app);
     requested_backend = backend;
@@ -3732,9 +3753,10 @@ static void i_on_solve(App *app, Event *event)
         (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
                        " 2>&1");
         snprintf(config_text, sizeof(config_text),
-                 "Lane B preflop | stop: %s | target %.2f mBB | max %" PRIu64
+                 "Lane B preflop | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
                  " | policy %s%s | SIMD %s",
+                 pe_preset_name(algorithm), algorithm_axes,
                  stop_mode == 0u ? "iterations" : "exploitability",
                  target_mbb, iterations, interval,
                  pe_preset_name(algorithm), backend_display,
@@ -3743,8 +3765,9 @@ static void i_on_solve(App *app, Event *event)
                  fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "",
                  pe_runtime_simd_name(runtime.simd));
         label_text(app->run_config, config_text);
-        status(app, "SOLVING PREFLOP\n%s\n\nBackend: %s\nSIMD: %s\nEmpty ranges are 100%%; boards are dealt through river.",
-               command, backend_display, pe_runtime_simd_name(runtime.simd));
+        status(app, "SOLVING PREFLOP\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\nSIMD detected: %s (CFR traversal scalar)\nEmpty ranges are 100%%; boards are dealt through river.",
+               command, pe_preset_name(algorithm), algorithm_axes,
+               backend_display, pe_runtime_simd_name(runtime.simd));
         if (i_start_solve(app, command) != 0)
             status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
         unref(event);
