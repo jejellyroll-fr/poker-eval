@@ -66,6 +66,7 @@ struct _app_t
     Edit *interval_edit;
     Combo *stop_mode_combo;
     TextView *status;
+    TextView *strategy_view;
     Label *board_label;
     Label *run_state;
     Label *run_progress;
@@ -82,7 +83,7 @@ struct _app_t
     int solve_cancel_requested;
     uint32_t solve_exit_code;
     char solve_command[8192];
-    char solve_output[16384];
+    char solve_output[131072];
 };
 
 static void i_on_close(App *app, Event *event);
@@ -201,6 +202,28 @@ static void status(App *app, const char *format, ...)
     va_end(args);
     textview_clear(app->status);
     textview_writef(app->status, buffer);
+}
+
+static void update_strategy_view(App *app, const char *output)
+{
+    const char *report = output ? strstr(output, "STRATEGY REPORT") : NULL;
+    if (!app || !app->strategy_view)
+        return;
+    textview_clear(app->strategy_view);
+    if (report)
+        textview_writef(app->strategy_view, report);
+    else if (output && (strstr(output, "pe-solution-report") ||
+                        strstr(output, "\"aggregation\"")))
+    {
+        textview_writef(app->strategy_view,
+                        "MKR REPORT / AGGREGATED STRATEGY\n\n");
+        textview_writef(app->strategy_view, output);
+    }
+    else
+        textview_writef(app->strategy_view,
+                        "No strategy snapshot yet.\n"
+                        "Run the spot or load a .mkr report to populate\n"
+                        "the decision steps and per-hand frequencies/EV.");
 }
 
 static int last_progress_line(const char *output, uint64_t *iteration,
@@ -350,6 +373,7 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
                ? "BOARD / RUNOUT: automatic through river"
                : "BOARD / RUNOUT: enter the cards for this street");
     update_result_view(app, "", 0);
+    update_strategy_view(app, "");
     status(app,
            "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d\nRanges: %s\n\n%s",
            game_name(layout->game),
@@ -576,7 +600,7 @@ static uint32_t i_solve_main(App *app)
 
 static void i_solve_update(App *app)
 {
-    char output[7800];
+    char output[64000];
     int running;
     if (!app)
         return;
@@ -585,6 +609,7 @@ static void i_solve_update(App *app)
     bmutex_unlock(app->solve_mutex);
     i_solve_copy_output(app, output, sizeof(output));
     update_result_view(app, output, running);
+    update_strategy_view(app, output);
     status(app, "%s\n%s\n\nClick Stop solve to interrupt the run.",
            running ? "SOLVING" : "SOLVE",
            output[0] ? output : "Waiting for progress...");
@@ -592,7 +617,7 @@ static void i_solve_update(App *app)
 
 static void i_solve_end(App *app, const uint32_t exit_code)
 {
-    char output[7800];
+    char output[64000];
     int cancelled;
     if (!app)
         return;
@@ -604,6 +629,7 @@ static void i_solve_end(App *app, const uint32_t exit_code)
     button_text(app->solve_button, "Solve this spot");
     i_solve_copy_output(app, output, sizeof(output));
     update_result_view(app, output, 0);
+    update_strategy_view(app, output);
     status(app, "%s\nexit_code=%u\n%s",
            cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
            exit_code, output[0] ? output : "No output from solver.");
@@ -1002,10 +1028,11 @@ static Panel *i_setup_panel(App *app)
 static Panel *i_result_panel(App *app)
 {
     Panel *panel = panel_create();
-    Layout *layout = layout_create(1, 8);
+    Layout *layout = layout_create(1, 10);
     Label *title = label_create();
     Button *load_mkr = button_push();
     app->status = textview_create();
+    app->strategy_view = textview_create();
     app->run_state = label_create();
     app->run_progress = label_create();
     app->run_metrics = label_create();
@@ -1020,6 +1047,11 @@ static Panel *i_result_panel(App *app)
     textview_editable(app->status, FALSE);
     textview_wrap(app->status, TRUE);
     textview_printf(app->status, "Choose a .tree file, inspect it, then solve the exact spot.\n");
+    textview_editable(app->strategy_view, FALSE);
+    textview_wrap(app->strategy_view, FALSE);
+    textview_printf(app->strategy_view,
+                    "No strategy snapshot yet.\n"
+                    "Run the spot or load a .mkr report to populate the result table.\n");
     layout_label(layout, title, 0, 0);
     layout_label(layout, app->run_state, 0, 1);
     layout_progress(layout, app->run_progress_bar, 0, 2);
@@ -1027,9 +1059,12 @@ static Panel *i_result_panel(App *app)
     layout_label(layout, app->run_metrics, 0, 4);
     layout_label(layout, app->run_config, 0, 5);
     layout_button(layout, load_mkr, 0, 6);
-    layout_textview(layout, app->status, 0, 7);
+    layout_textview(layout, app->strategy_view, 0, 7);
+    layout_label(layout, label_create(), 0, 8);
+    layout_textview(layout, app->status, 0, 9);
     layout_hsize(layout, 0, 580);
-    layout_vsize(layout, 7, 520);
+    layout_vsize(layout, 7, 360);
+    layout_vsize(layout, 9, 220);
     layout_margin(layout, 12);
     layout_vmargin(layout, 0, 8);
     layout_vmargin(layout, 1, 8);
@@ -1038,6 +1073,8 @@ static Panel *i_result_panel(App *app)
     layout_vmargin(layout, 4, 8);
     layout_vmargin(layout, 5, 8);
     layout_vmargin(layout, 6, 8);
+    layout_vmargin(layout, 7, 8);
+    layout_vmargin(layout, 8, 8);
     button_OnClick(load_mkr, listener(app, i_on_load_mkr, App));
     panel_layout(panel, layout);
     return panel;

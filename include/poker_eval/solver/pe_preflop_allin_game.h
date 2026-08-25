@@ -21,6 +21,8 @@ extern "C" {
 
 #define PE_PREFLOP_ALLIN_MAX_PLAYERS 6
 #define PE_PREFLOP_ALLIN_MAX_RAISE_SIZES 6
+#define PE_PREFLOP_ALLIN_MAX_ACTION_LABEL 64
+#define PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS 16
 
 struct mpf_tree_def_t;
 
@@ -62,6 +64,23 @@ typedef struct
 
 typedef struct pe_preflop_allin_game_t pe_preflop_allin_game_t;
 
+/* Human-readable snapshot of one sampled decision infoset. The solve is
+ * sampled, so a row is an observed exact deal/context, not a claim that all
+ * combinations have been enumerated. */
+typedef struct
+{
+    uint64_t key;
+    int actor;
+    int tree_node_index;
+    double pot;
+    double to_call;
+    char hand[32];
+    uint16_t action_count;
+    char actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS]
+                 [PE_PREFLOP_ALLIN_MAX_ACTION_LABEL];
+    char context[192];
+} pe_preflop_infodesc_view_t;
+
 /* Create the game from rules and one prepared (deduplicated, normalised)
  * pe_range_t per player. The ranges are borrowed; the caller keeps them
  * alive until destroy. Returns NULL on invalid input. */
@@ -88,6 +107,16 @@ size_t pe_preflop_allin_infodesc_count(const pe_preflop_allin_game_t *game);
 int pe_preflop_allin_infodesc_at(const pe_preflop_allin_game_t *game,
                                  size_t index, uint64_t *out_key,
                                  char *out_text, size_t text_capacity);
+
+int pe_preflop_allin_infodesc_view_at(
+    const pe_preflop_allin_game_t *game, size_t index,
+    pe_preflop_infodesc_view_t *out);
+
+/* Copy the complete sampled state behind a decision description. This is used
+ * by result evaluators for per-hand EV rollouts. */
+int pe_preflop_allin_infodesc_state_at(
+    const pe_preflop_allin_game_t *game, size_t index,
+    pe_preflop_betting_state_t *out);
 
 /* Terminal-value oracles, exposed for tests. showdown_equity fills
  * out_equity[0..player_count-1] for the given hole masks. */

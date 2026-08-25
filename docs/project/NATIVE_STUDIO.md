@@ -18,7 +18,8 @@ cmake --build build-studio --target poker-eval-studio
 The application has two real tabs:
 
 - **SETUP** contains the tree, board, ranges, runner and run controls.
-- **RESULTS** contains the convergence summary, final metrics and raw run log.
+- **RESULTS** contains the convergence summary, final metrics, an action-step
+  report, per-observed-hand frequencies/EV table, and the raw run log.
   Starting a solve switches to this tab automatically; loading a new tree
   switches back to setup. **Load .mkr report** runs the Monker tree/strategy
   aggregation report against the selected `.tree` and `.mkr` and displays its
@@ -54,6 +55,10 @@ fraction, empirical exploitability in mBB, and the configured target at each
 measurement interval; increasing iterations improves coverage of the complete
 board distribution. Loading a preflop tree clears the board input, changes its
 placeholder to automatic runout, synchronises game/player selectors, and
-materialises an empty external range as `100%`. The next UI tranche can replace
-the text log with the range matrix, tree canvas, and action/EV panels without
-changing the setup or solver seams.
+materialises an empty external range as `100%`. The preflop solver emits a
+`STRATEGY REPORT` with observed tree decision steps and one row per materialised
+sampled infoset: hand, tree node, player, action frequencies, and empirical EV
+for each action. Hold'em also gets a compact 13x13 highest-frequency action
+grid; PLO4, PLO5 and PLO6 remain in the wider hand table because an Omaha cell
+represents many more suit combinations. The EV is a rollout estimate under
+the current Lane B policy, not an exact full-tree EV.

@@ -222,6 +222,11 @@ const pe_storage_ops_t *pe_solver_get_storage(const pe_solver_t *solver)
     return solver->storage;
 }
 
+void *pe_solver_get_storage_instance(const pe_solver_t *solver)
+{
+    return solver ? solver->storage_self : NULL;
+}
+
 /* ------------------------------------------------------------------ *
  * Validation and introspection
  * ------------------------------------------------------------------ */
@@ -965,6 +970,27 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         }
     }
     out->values = solver->strategy_cache->values;
+    return PE_SOLVER_OK;
+}
+
+size_t pe_solver_strategy_count(const pe_solver_t *solver)
+{
+    if (solver == NULL || solver->storage == NULL ||
+        solver->storage->count == NULL)
+        return 0u;
+    return solver->storage->count(solver->storage_self);
+}
+
+pe_solver_status_t pe_solver_strategy_key_at(const pe_solver_t *solver,
+                                             uint32_t infoset,
+                                             uint64_t *out_key)
+{
+    if (solver == NULL || out_key == NULL)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (solver->storage == NULL || solver->storage->key_at == NULL)
+        return PE_SOLVER_ERR_EXECUTION;
+    if (solver->storage->key_at(solver->storage_self, infoset, out_key) != 0)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
     return PE_SOLVER_OK;
 }
 

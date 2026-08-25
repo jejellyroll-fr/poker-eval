@@ -1725,6 +1725,7 @@ if(TARGET pe-preflop-solve)
             --output ${CMAKE_BINARY_DIR}/pe-preflop-solve-smoke.json)
     set_tests_properties(pe_preflop_solve_smoke PROPERTIES
         LABELS "product;solver;lane-b;preflop"
+        PASS_REGULAR_EXPRESSION "STRATEGY REPORT;HAND TABLE;frequencies"
         TIMEOUT 60)
     add_test(NAME pe_preflop_solve_postflop_smoke
         COMMAND pe-preflop-solve

@@ -127,6 +127,9 @@ const pe_telemetry_ops_t *pe_solver_get_telemetry(const pe_solver_t *solver);
  */
 const pe_storage_ops_t *pe_solver_get_storage(const pe_solver_t *solver);
 
+/* Borrowed storage instance for result evaluators. Valid until destroy. */
+void *pe_solver_get_storage_instance(const pe_solver_t *solver);
+
 #ifdef __cplusplus
 }
 #endif

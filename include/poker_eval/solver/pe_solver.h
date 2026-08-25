@@ -288,6 +288,14 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
                                const pe_strategy_query_t *query,
                                pe_strategy_view_t *out);
 
+/** Number of infosets materialised by the completed solve. */
+size_t pe_solver_strategy_count(const pe_solver_t *solver);
+
+/** Stable storage key for one materialised infoset id. */
+pe_solver_status_t pe_solver_strategy_key_at(const pe_solver_t *solver,
+                                             uint32_t infoset,
+                                             uint64_t *out_key);
+
 /**
  * Metrics of the solve, including the plan that actually executed: effective
  * backend per stage, resolved precision, and the exploitability guarantee that

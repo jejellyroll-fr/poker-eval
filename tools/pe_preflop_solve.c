@@ -16,9 +16,12 @@
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_rng.h>
 
 #include <errno.h>
+#include <ctype.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +55,293 @@ typedef struct {
     const char *output;
     const char *tree;
 } options_t;
+
+typedef struct
+{
+    uint64_t key;
+    size_t index;
+} report_desc_ref_t;
+
+static size_t find_desc_index(const report_desc_ref_t *refs, size_t count,
+                              uint64_t key)
+{
+    for (size_t i = 0u; i < count; ++i)
+        if (refs[i].key == key)
+            return refs[i].index;
+    return SIZE_MAX;
+}
+
+static int report_rank_index(char rank)
+{
+    const char *ranks = "23456789TJQKA";
+    const char *found = strchr(ranks, rank);
+    return found ? (int)(found - ranks) : -1;
+}
+
+static void report_tree_action_label(const mpf_tree_node_t *node, int index,
+                                     char *out, size_t capacity)
+{
+    const mpf_tree_action_t *action;
+    if (!node || !out || capacity == 0u || index < 0 || index >= node->action_count)
+        return;
+    action = &node->actions[index];
+    if (action->type == MPF_TREE_ACTION_FOLD)
+        snprintf(out, capacity, "FOLD");
+    else if (action->type == MPF_TREE_ACTION_CALL)
+        snprintf(out, capacity, "CALL/CHECK");
+    else if (action->type == MPF_TREE_ACTION_RAISE &&
+             action->size_index >= 0 && action->size_index < node->bet_size_count)
+    {
+        double size = node->bet_sizes[action->size_index];
+        if (fabs(size + 1.0) < 1e-9) snprintf(out, capacity, "ALL-IN");
+        else if (node->use_pot_sizing) snprintf(out, capacity, "RAISE %.0f%% POT", size * 100.0);
+        else snprintf(out, capacity, "RAISE %.2f", size);
+    }
+    else
+        snprintf(out, capacity, "ACTION");
+}
+
+/* A result EV is measured by replaying the sampled deal from the decision,
+ * following the current regret-matching policy and sampling future chance.
+ * It is deliberately labelled empirical: Lane B does not enumerate the full
+ * game tree. */
+static double rollout_value(const pe_external_game_t *external,
+                            const void *state, int player, pe_rng_t *rng,
+                            int depth)
+{
+    int actor;
+    uint16_t count;
+    if (!external || !state || !rng || depth > 48)
+        return 0.0;
+    if (external->is_terminal(state, external->user))
+        return external->terminal_value(state, player, external->user);
+    actor = external->acting_player(state, external->user);
+    if (actor < 0)
+    {
+        pe_chance_sample_t sample;
+        const void *child = external->sample_chance_child
+            ? external->sample_chance_child(state, rng, &sample, external->user)
+            : NULL;
+        double value = child ? rollout_value(external, child, player, rng, depth + 1) : 0.0;
+        if (child && external->release_state)
+            external->release_state(child, external->user);
+        return value * (child ? sample.importance_ratio : 0.0);
+    }
+    count = external->action_count(state, external->user);
+    if (count == 0u)
+        return external->terminal_value(state, player, external->user);
+    {
+        double total = 0.0;
+        double draw;
+        uint16_t selected = 0u;
+        for (uint16_t action = 0u; action < count; ++action)
+        {
+            double probability = external->action_probability
+                ? external->action_probability(state,
+                                               external->infoset_key(state, external->user),
+                                               action, external->user)
+                : 1.0 / (double)count;
+            if (probability > 0.0 && isfinite(probability))
+                total += probability;
+        }
+        if (!(total > 0.0))
+            total = (double)count;
+        draw = pe_rng_uniform01(rng) * total;
+        for (uint16_t action = 0u; action < count; ++action)
+        {
+            double probability = external->action_probability
+                ? external->action_probability(state,
+                                               external->infoset_key(state, external->user),
+                                               action, external->user)
+                : 1.0 / (double)count;
+            if (!(probability > 0.0) || !isfinite(probability))
+                probability = 0.0;
+            draw -= probability;
+            if (draw <= 0.0) { selected = action; break; }
+        }
+        {
+            const void *child = external->apply_action(state, selected, external->user);
+            double value = child ? rollout_value(external, child, player, rng, depth + 1) : 0.0;
+            if (child && external->release_state)
+                external->release_state(child, external->user);
+            return value;
+        }
+    }
+}
+
+static double action_ev(const pe_external_game_t *external,
+                        const pe_preflop_betting_state_t *state,
+                        uint16_t action, int player, uint64_t seed)
+{
+    const void *child;
+    double total = 0.0;
+    const int samples = 8;
+    if (!external || !state)
+        return 0.0;
+    child = external->apply_action(state, action, external->user);
+    if (!child)
+        return 0.0;
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        pe_rng_t rng;
+        pe_rng_seed(&rng, pe_rng_derive(seed, (uint64_t)sample +
+                                         ((uint64_t)state->tree_node_index << 16) + action));
+        total += rollout_value(external, child, player, &rng, 0);
+    }
+    if (external->release_state)
+        external->release_state(child, external->user);
+    return total / (double)samples;
+}
+
+static void print_strategy_report(const options_t *options,
+                                  pe_preflop_allin_game_t *game,
+                                  pe_solver_t *solver,
+                                  const mpf_tree_def_t *tree)
+{
+    size_t desc_count = pe_preflop_allin_infodesc_count(game);
+    size_t solver_count = pe_solver_strategy_count(solver);
+    report_desc_ref_t *refs;
+    const pe_external_game_t *external = pe_preflop_allin_external(game);
+    size_t emitted = 0u;
+    char grid[13][13][8];
+    for (int row = 0; row < 13; ++row)
+        for (int col = 0; col < 13; ++col)
+            snprintf(grid[row][col], sizeof(grid[row][col]), "--");
+    if (desc_count == 0u || solver_count == 0u)
+    {
+        printf("STRATEGY REPORT\nNo sampled decision infosets were materialised.\n");
+        return;
+    }
+    refs = calloc(desc_count, sizeof(*refs));
+    if (!refs)
+        return;
+    for (size_t i = 0u; i < desc_count; ++i)
+    {
+        pe_preflop_infodesc_view_t view;
+        if (pe_preflop_allin_infodesc_view_at(game, i, &view) == 0)
+        {
+            refs[i].key = view.key;
+            refs[i].index = i;
+        }
+    }
+    printf("STRATEGY REPORT variant=%s rows=%zu/%zu ev=empirical-rollout\n",
+           options->game, solver_count, desc_count);
+    printf("DECISION STEPS (tree branches)\n");
+    if (tree)
+    {
+        int shown = 0;
+        for (int node_index = 0; node_index < tree->node_count && shown < 64; ++node_index)
+        {
+            const mpf_tree_node_t *node = &tree->nodes[node_index];
+            if (node->type != MPF_TREE_NODE_PLAYER)
+                continue;
+            printf("tree_step node=%d id=%s actor=P%d branches=", node_index,
+                   node->id ? node->id : "?", node->acting_player + 1);
+            for (int action = 0; action < node->action_count; ++action)
+            {
+                char label[80] = {0};
+                report_tree_action_label(node, action, label, sizeof(label));
+                printf("%s%s->%d", action ? "|" : "", label,
+                       node->actions[action].next_index);
+            }
+            putchar('\n');
+            ++shown;
+        }
+    }
+    else
+        printf("tree_step node=generated actor=sampled branches=from sampled decisions\n");
+    printf("OBSERVED DECISIONS\n");
+    for (size_t i = 0u; i < desc_count && emitted < 64u; ++i)
+    {
+        int duplicate = 0;
+        pe_preflop_infodesc_view_t view;
+        if (pe_preflop_allin_infodesc_view_at(game, i, &view) != 0)
+            continue;
+        for (size_t j = 0u; j < i; ++j)
+        {
+            pe_preflop_infodesc_view_t previous;
+            if (pe_preflop_allin_infodesc_view_at(game, j, &previous) == 0 &&
+                previous.tree_node_index == view.tree_node_index &&
+                previous.actor == view.actor)
+                duplicate = 1;
+        }
+        if (duplicate) continue;
+        printf("step node=%d actor=P%d hand=%s pot=%.2f to_call=%.2f actions=",
+               view.tree_node_index, view.actor + 1, view.hand,
+               view.pot, view.to_call);
+        for (uint16_t a = 0u; a < view.action_count; ++a)
+            printf("%s%s", a ? "|" : "", view.actions[a]);
+        putchar('\n');
+        ++emitted;
+    }
+    printf("HAND TABLE\nhand\tnode\tactor\tfrequencies\tEV by action\n");
+    for (size_t id = 0u; id < solver_count && emitted < 180u; ++id)
+    {
+        uint64_t key = 0u;
+        pe_strategy_query_t query;
+        pe_strategy_view_t strategy;
+        pe_preflop_infodesc_view_t view;
+        size_t desc_index;
+        pe_preflop_betting_state_t state;
+        if (pe_solver_strategy_key_at(solver, (uint32_t)id, &key) != PE_SOLVER_OK)
+            continue;
+        desc_index = find_desc_index(refs, desc_count, key);
+        if (desc_index == SIZE_MAX ||
+            pe_preflop_allin_infodesc_view_at(game, desc_index, &view) != 0 ||
+            pe_preflop_allin_infodesc_state_at(game, desc_index, &state) != 0)
+            continue;
+        query.infoset = (uint32_t)id;
+        if (pe_solver_strategy(solver, &query, &strategy) != PE_SOLVER_OK)
+            continue;
+        printf("%s\t%d\tP%d\t", view.hand, view.tree_node_index,
+               view.actor + 1);
+        for (uint16_t a = 0u; a < strategy.action_count; ++a)
+            printf("%s%s=%.1f%%", a ? "," : "",
+                   a < view.action_count ? view.actions[a] : "action",
+                   strategy.values[a * strategy.combo_count] * 100.0);
+        printf("\t");
+        for (uint16_t a = 0u; a < strategy.action_count; ++a)
+            printf("%s%s=%.2f", a ? "," : "",
+                   a < view.action_count ? view.actions[a] : "action",
+                   action_ev(external, &state, a, view.actor, options->seed));
+        putchar('\n');
+        if (strcmp(options->game, "holdem") == 0 && strlen(view.hand) >= 4u)
+        {
+            int r0 = report_rank_index(view.hand[0]);
+            int r1 = report_rank_index(view.hand[2]);
+            int row = r0 >= r1 ? 12 - r0 : 12 - r1;
+            int col = r0 >= r1 ? 12 - r1 : 12 - r0;
+            int best = 0;
+            for (uint16_t a = 1u; a < strategy.action_count; ++a)
+                if (strategy.values[a * strategy.combo_count] >
+                    strategy.values[best * strategy.combo_count])
+                    best = a;
+            if (r0 >= 0 && r1 >= 0 && row >= 0 && row < 13 && col >= 0 && col < 13)
+                snprintf(grid[row][col], sizeof(grid[row][col]), "%c",
+                         best < view.action_count && view.actions[best][0]
+                             ? (char)toupper((unsigned char)view.actions[best][0])
+                             : '?');
+        }
+        ++emitted;
+    }
+    if (strcmp(options->game, "holdem") == 0)
+    {
+        const char *ranks = "AKQJT98765432";
+        printf("RANGE GRID (highest-frequency action; F=fold C=call R=raise)\n   ");
+        for (int col = 0; col < 13; ++col) printf("%c ", ranks[col]);
+        putchar('\n');
+        for (int row = 0; row < 13; ++row)
+        {
+            printf("%c  ", ranks[row]);
+            for (int col = 0; col < 13; ++col)
+                printf("%s ", grid[row][col]);
+            putchar('\n');
+        }
+    }
+    if (emitted >= 180u)
+        printf("... report capped at 180 visible rows; the solve storage still contains all %zu infosets.\n", solver_count);
+    free(refs);
+}
 
 static void usage(FILE *stream)
 {
@@ -410,6 +700,8 @@ int main(int argc, char **argv)
         goto fail;
     }
     {
+        pe_preflop_allin_game_set_storage(
+            game, (pe_storage_t *)pe_solver_get_storage_instance(solver));
         size_t infosets = pe_preflop_allin_infodesc_count(game);
         printf("preflop_solver=lane-b external-mccfr game=%s players=%d postflop=%d tree=%s\n",
                options.game, options.players, options.postflop_streets,
@@ -419,6 +711,7 @@ int main(int argc, char **argv)
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
                metrics.exploitability_mbb_per_game, options.br_samples);
+        print_strategy_report(&options, game, solver, tree);
         if (options.output)
             write_report(options.output, &options, &metrics, &progress, infosets);
     }

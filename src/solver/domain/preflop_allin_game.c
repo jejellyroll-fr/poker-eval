@@ -27,12 +27,21 @@
 #define PREFLOP_FNV_PRIME 0x100000001b3ULL
 #define PREFLOP_EPSILON 1e-6
 #define PREFLOP_MAX_ACTIONS 16
-#define PREFLOP_DESC_TEXT 96
+#define PREFLOP_DESC_TEXT 192
 
 typedef struct
 {
     uint64_t key;
     char text[PREFLOP_DESC_TEXT];
+    pe_preflop_betting_state_t state;
+    int actor;
+    int tree_node_index;
+    double pot;
+    double to_call;
+    char hand[32];
+    uint16_t action_count;
+    char actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS]
+                 [PE_PREFLOP_ALLIN_MAX_ACTION_LABEL];
 } preflop_infodesc_t;
 
 struct pe_preflop_allin_game_t
@@ -327,6 +336,8 @@ static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
                                 const pe_preflop_betting_state_t *state)
 {
     const pe_betting_state_t *betting = &state->betting;
+    pe_action_t actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS];
+    uint16_t action_count;
     size_t i;
     for (i = 0u; i < game->desc_count; ++i)
         if (game->descs[i].key == key)
@@ -342,10 +353,68 @@ static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
         game->desc_capacity = capacity;
     }
     game->descs[game->desc_count].key = key;
+    game->descs[game->desc_count].state = *state;
+    game->descs[game->desc_count].actor = betting->to_act;
+    game->descs[game->desc_count].tree_node_index = state->tree_node_index;
+    game->descs[game->desc_count].pot = betting->pot;
+    game->descs[game->desc_count].to_call = betting->to_call;
+    game->descs[game->desc_count].hand[0] = '\0';
+    if (betting->to_act >= 0 && betting->to_act < betting->player_count)
+    {
+        size_t used = 0u;
+        const mask_t hand = state->holes[betting->to_act];
+        const char suit_chars[] = "cdhs";
+        for (int card = 0; card < 52 && used + 2u < sizeof(game->descs[game->desc_count].hand); ++card)
+        {
+            if (!mask_is_set(hand, card))
+                continue;
+            game->descs[game->desc_count].hand[used++] =
+                StdDeck_rankChars[MODERN_GET_RANK(card)];
+            game->descs[game->desc_count].hand[used++] =
+                suit_chars[MODERN_GET_SUIT(card)];
+        }
+        game->descs[game->desc_count].hand[used] = '\0';
+    }
+    action_count = preflop_enumerate(game, state, actions,
+                                      PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS);
+    game->descs[game->desc_count].action_count = action_count;
+    for (uint16_t action = 0u; action < action_count; ++action)
+    {
+        const pe_action_t *a = &actions[action];
+        char *label = game->descs[game->desc_count].actions[action];
+        if (a->kind == PE_ACTION_RAISE)
+        {
+            if (a->amount_kind == PE_AMOUNT_POT_FRACTION)
+                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL,
+                         "RAISE %.0f%% POT", a->amount * 100.0);
+            else if (a->amount_kind == PE_AMOUNT_MINIMUM)
+                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "MIN-RAISE");
+            else
+                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL,
+                         "RAISE %.2f", a->amount);
+        }
+        else
+            snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
+                     pe_action_kind_string(a->kind));
+    }
     snprintf(game->descs[game->desc_count].text, PREFLOP_DESC_TEXT,
-             "P%d pot=%.1f tocall=%.1f bet=%.1f raises=%d", betting->to_act,
+             "P%d hand=%s node=%d pot=%.1f tocall=%.1f bet=%.1f raises=%d actions=", betting->to_act,
+             game->descs[game->desc_count].hand, state->tree_node_index,
              betting->pot, betting->to_call, betting->current_bet,
              (int)betting->raises_made);
+    {
+        size_t used = strlen(game->descs[game->desc_count].text);
+        for (uint16_t action = 0u; action < action_count && used + 2u < PREFLOP_DESC_TEXT; ++action)
+        {
+            int written = snprintf(game->descs[game->desc_count].text + used,
+                                   PREFLOP_DESC_TEXT - used, "%s%s",
+                                   action ? "|" : "",
+                                   game->descs[game->desc_count].actions[action]);
+            if (written < 0 || (size_t)written >= PREFLOP_DESC_TEXT - used)
+                break;
+            used += (size_t)written;
+        }
+    }
     ++game->desc_count;
 }
 
@@ -1030,5 +1099,38 @@ int pe_preflop_allin_infodesc_at(const pe_preflop_allin_game_t *game,
         return -1;
     *out_key = game->descs[index].key;
     snprintf(out_text, text_capacity, "%s", game->descs[index].text);
+    return 0;
+}
+
+int pe_preflop_allin_infodesc_view_at(
+    const pe_preflop_allin_game_t *game, size_t index,
+    pe_preflop_infodesc_view_t *out)
+{
+    if (!game || !out || index >= game->desc_count)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    out->key = game->descs[index].key;
+    out->actor = game->descs[index].actor;
+    out->tree_node_index = game->descs[index].tree_node_index;
+    out->pot = game->descs[index].pot;
+    out->to_call = game->descs[index].to_call;
+    snprintf(out->hand, sizeof(out->hand), "%s", game->descs[index].hand);
+    snprintf(out->context, sizeof(out->context), "%s", game->descs[index].text);
+    out->action_count = game->descs[index].action_count;
+    if (out->action_count > PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS)
+        out->action_count = PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS;
+    for (uint16_t action = 0u; action < out->action_count; ++action)
+        snprintf(out->actions[action], PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
+                 game->descs[index].actions[action]);
+    return 0;
+}
+
+int pe_preflop_allin_infodesc_state_at(
+    const pe_preflop_allin_game_t *game, size_t index,
+    pe_preflop_betting_state_t *out)
+{
+    if (!game || !out || index >= game->desc_count)
+        return -1;
+    *out = game->descs[index].state;
     return 0;
 }
