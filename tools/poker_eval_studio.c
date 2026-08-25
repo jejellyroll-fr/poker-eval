@@ -424,6 +424,24 @@ static int preflop_algorithm_supported_ui(pe_algorithm_preset_t algorithm)
     }
 }
 
+static const char *algorithm_scope_name(pe_algorithm_preset_t algorithm)
+{
+    switch (algorithm)
+    {
+    case PE_PRESET_EXTERNAL_MCCFR:
+    case PE_PRESET_EXTERNAL_DCFR:
+    case PE_PRESET_OUTCOME_MCCFR:
+    case PE_PRESET_EXTERNAL_ECFR:
+        return "Lane B sampled";
+    case PE_PRESET_ECFR:
+        return "experimental";
+    case PE_PRESET_CUSTOM:
+        return "manual axes";
+    default:
+        return "Lane A full-tree";
+    }
+}
+
 static pe_policy_mode_t selected_policy(const App *app)
 {
     uint32_t selection;
@@ -3889,7 +3907,13 @@ static Panel *i_setup_panel(App *app)
     }
     combo_selected(app->players_combo, 0u);
     for (uint32_t preset = 0u; preset < PE_PRESET_COUNT; ++preset)
-        combo_add_elem(app->algorithm_combo, pe_preset_name((pe_algorithm_preset_t)preset), NULL);
+    {
+        char algorithm_text[96];
+        pe_algorithm_preset_t algorithm = (pe_algorithm_preset_t)preset;
+        snprintf(algorithm_text, sizeof(algorithm_text), "%s (%s)",
+                 pe_preset_name(algorithm), algorithm_scope_name(algorithm));
+        combo_add_elem(app->algorithm_combo, algorithm_text, NULL);
+    }
     combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
     combo_add_elem(app->policy_combo, "Preset default", NULL);
     combo_add_elem(app->policy_combo, "Regret matching", NULL);
