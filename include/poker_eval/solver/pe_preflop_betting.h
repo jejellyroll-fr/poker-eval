@@ -1,4 +1,4 @@
-/* pe_preflop_betting.h - sampled private deals + one complete betting street. */
+/* pe_preflop_betting.h - sampled deals plus callback-driven betting streets. */
 
 #ifndef PE_PREFLOP_BETTING_H
 #define PE_PREFLOP_BETTING_H
@@ -6,6 +6,7 @@
 #include <poker_eval/solver/pe_actions.h>
 #include <poker_eval/solver/pe_betting_state.h>
 #include <poker_eval/solver/pe_external_traversal.h>
+#include <poker_eval/solver/pe_holdem_streets.h>
 #include <poker_eval/solver/pe_preflop_deal_sampler.h>
 
 #ifdef __cplusplus
@@ -17,6 +18,9 @@ typedef struct pe_preflop_betting_state_t
     int is_chance;
     pe_betting_state_t betting;
     mask_t holes[PE_PREFLOP_MAX_PLAYERS];
+    mask_t board;
+    mask_t dead_cards;
+    pe_holdem_street_t street;
 } pe_preflop_betting_state_t;
 
 typedef struct
@@ -30,6 +34,13 @@ typedef struct
                             void *user);
     double (*terminal_value)(const pe_preflop_betting_state_t *state,
                              int player, void *user);
+    int (*is_terminal)(const pe_preflop_betting_state_t *state, void *user);
+    int (*after_action)(const pe_preflop_betting_state_t *source,
+                        const pe_action_t *action,
+                        pe_preflop_betting_state_t *child, void *user);
+    int (*chance_child)(const pe_preflop_betting_state_t *source,
+                        pe_rng_t *rng, pe_chance_sample_t *sample,
+                        pe_preflop_betting_state_t *child, void *user);
 } pe_preflop_betting_ops_t;
 
 typedef struct

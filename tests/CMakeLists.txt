@@ -1726,6 +1726,19 @@ if(TARGET pe-preflop-solve)
     set_tests_properties(pe_preflop_solve_smoke PROPERTIES
         LABELS "product;solver;lane-b;preflop"
         TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_postflop_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 1
+            --samples 1
+            --raise 2.5
+            --br-samples 1
+            --postflop)
+    set_tests_properties(pe_preflop_solve_postflop_smoke PROPERTIES
+        LABELS "product;solver;lane-b;postflop;holdem"
+        TIMEOUT 60)
     add_test(NAME pe_preflop_solve_plo5_multiway_smoke
         COMMAND pe-preflop-solve
             --game plo5

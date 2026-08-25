@@ -42,6 +42,7 @@ typedef struct {
     double raise_sizes[PE_PREFLOP_ALLIN_MAX_RAISE_SIZES];
     int raise_count;
     int allow_nonallin_call;
+    int postflop_streets;
     uint64_t br_samples;
     uint64_t seed;
     const char *output;
@@ -61,6 +62,7 @@ static void usage(FILE *stream)
         "  --min-raise BB               minimum raise increment\n"
         "  --raise AMOUNT[,AMOUNT...]   raise increments above the call\n"
         "  --allow-calls                allow calls before all-in\n"
+        "  --postflop                   continue through flop, turn and river\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
@@ -199,6 +201,9 @@ static int parse_options(int argc, char **argv, options_t *options)
         } else if (strcmp(arg, "--allow-calls") == 0) {
             options->allow_nonallin_call = 1;
             continue;
+        } else if (strcmp(arg, "--postflop") == 0) {
+            options->postflop_streets = 1;
+            continue;
         } else if (strcmp(arg, "--br-samples") == 0) {
             if (parse_u64(value, &options->br_samples) != 0 ||
                 options->br_samples == 0u || options->br_samples > UINT32_MAX)
@@ -246,14 +251,15 @@ static void write_report(const char *path, const options_t *options,
         "\"game\":\"%s\",\"players\":%d,"
         "\"iterations\":%" PRIu64 ",\"showdown_samples\":%d,"
         "\"stack\":%.17g,\"small_blind\":%.17g,\"big_blind\":%.17g,\"ante\":%.17g,"
-        "\"allow_nonallin_call\":%s,\"br_samples\":%" PRIu64 ",\"infosets\":%zu,"
+        "\"allow_nonallin_call\":%s,\"postflop_streets\":%s,\"br_samples\":%" PRIu64 ",\"infosets\":%zu,"
         "\"progress\":{\"iteration\":%" PRIu64 ",\"complete\":%s},"
         "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
         "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g}}\n",
         options->game, options->players, options->iterations,
         options->showdown_samples, options->stack,
         options->small_blind, options->big_blind, options->ante,
-        options->allow_nonallin_call ? "true" : "false", options->br_samples,
+        options->allow_nonallin_call ? "true" : "false",
+        options->postflop_streets ? "true" : "false", options->br_samples,
         infosets,
         progress->iteration, progress->complete ? "true" : "false",
         guarantee_name(metrics->guarantee), metrics->exploitability_raw,
@@ -312,6 +318,7 @@ int main(int argc, char **argv)
     rules.raise_cap = 0;
     rules.raise_count = options.raise_count;
     rules.allow_nonallin_call = options.allow_nonallin_call;
+    rules.postflop_streets = options.postflop_streets;
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
     memcpy(rules.raise_sizes, options.raise_sizes, sizeof(rules.raise_sizes));
@@ -351,8 +358,8 @@ int main(int argc, char **argv)
     }
     {
         size_t infosets = pe_preflop_allin_infodesc_count(game);
-        printf("preflop_solver=lane-b external-mccfr game=%s players=%d\n",
-               options.game, options.players);
+        printf("preflop_solver=lane-b external-mccfr game=%s players=%d postflop=%d\n",
+               options.game, options.players, options.postflop_streets);
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",

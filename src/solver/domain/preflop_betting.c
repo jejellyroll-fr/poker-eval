@@ -1,4 +1,4 @@
-/* preflop_betting.c - sampled private deals + one complete betting street. */
+/* preflop_betting.c - sampled private deals plus callback-driven streets. */
 
 #include <poker_eval/solver/pe_preflop_betting.h>
 
@@ -7,10 +7,13 @@
 
 static int is_terminal(const void *state, void *user)
 {
+    pe_preflop_betting_game_t *game = user;
     const pe_preflop_betting_state_t *current = state;
-    (void)user;
-    return !current->is_chance &&
-           (current->betting.terminal || current->betting.round_complete);
+    if (current->is_chance)
+        return 0;
+    return game->ops.is_terminal
+        ? game->ops.is_terminal(current, game->user)
+        : (current->betting.terminal || current->betting.round_complete);
 }
 
 static int acting_player(const void *state, void *user)
@@ -50,18 +53,6 @@ static int own_state(pe_preflop_betting_game_t *game,
     return 0;
 }
 
-/* The preflop adapter has one private-deal chance node. All states created
- * below it die when that traversal returns, so reclaim them before the next
- * sampled deal instead of accumulating one allocation per iteration. */
-static void reset_owned_states(pe_preflop_betting_game_t *game)
-{
-    if (!game)
-        return;
-    for (size_t i = 0u; i < game->owned_count; ++i)
-        free(game->owned_states[i]);
-    game->owned_count = 0u;
-}
-
 static const void *apply_action(const void *state, uint16_t action, void *user)
 {
     pe_preflop_betting_game_t *game = user;
@@ -80,6 +71,16 @@ static const void *apply_action(const void *state, uint16_t action, void *user)
         return NULL;
     }
     memcpy(child->holes, source->holes, sizeof(child->holes));
+    child->board = source->board;
+    child->dead_cards = source->dead_cards;
+    child->street = source->street;
+    if (game->ops.after_action &&
+        game->ops.after_action(source, &semantic, child, game->user) != 0)
+    {
+        game->owned_count--;
+        free(child);
+        return NULL;
+    }
     return child;
 }
 
@@ -93,25 +94,67 @@ static const void *sample_chance_child(const void *state, pe_rng_t *rng,
                                        pe_chance_sample_t *out, void *user)
 {
     pe_preflop_betting_game_t *game = user;
-    pe_preflop_deal_sample_t sample;
+    pe_chance_sample_t sample;
+    pe_preflop_deal_sample_t deal;
     pe_preflop_betting_state_t *child;
     const pe_preflop_betting_state_t *source = state;
-    if (!source->is_chance || pe_preflop_deal_sampler_sample(
-            &game->sampler, rng, &sample) != 0)
+    pe_preflop_betting_state_t snapshot;
+    if (!source->is_chance)
         return NULL;
-    reset_owned_states(game);
+    snapshot = *source;
     child = calloc(1u, sizeof(*child));
     if (!child || own_state(game, child) != 0)
     {
         free(child);
         return NULL;
     }
-    child->betting = source->betting;
-    child->is_chance = 0;
-    memcpy(child->holes, sample.holes, sizeof(child->holes));
-    out->outcome = 0;
-    out->importance_ratio = sample.importance_ratio;
+    if (game->ops.chance_child)
+    {
+        if (game->ops.chance_child(&snapshot, rng, &sample, child,
+                                   game->user) != 0)
+        {
+            game->owned_count--;
+            free(child);
+            return NULL;
+        }
+    }
+    else
+    {
+        if (pe_preflop_deal_sampler_sample(&game->sampler, rng, &deal) != 0)
+        {
+            game->owned_count--;
+            free(child);
+            return NULL;
+        }
+        child->betting = snapshot.betting;
+        child->is_chance = 0;
+        memcpy(child->holes, deal.holes, sizeof(child->holes));
+        child->board = snapshot.board;
+        child->dead_cards = snapshot.dead_cards;
+        child->street = snapshot.street;
+        sample.outcome = 0;
+        sample.importance_ratio = deal.importance_ratio;
+    }
+    *out = sample;
     return child;
+}
+
+static void release_state(const void *state, void *user)
+{
+    pe_preflop_betting_game_t *game = user;
+    if (!game || !state)
+        return;
+    for (size_t i = 0u; i < game->owned_count; ++i)
+    {
+        if (game->owned_states[i] == state)
+        {
+            free(game->owned_states[i]);
+            game->owned_states[i] =
+                game->owned_states[game->owned_count - 1u];
+            --game->owned_count;
+            return;
+        }
+    }
 }
 
 int pe_preflop_betting_game_init(
@@ -145,6 +188,7 @@ int pe_preflop_betting_game_init(
     out->game.apply_action = apply_action;
     out->game.terminal_value = terminal_value;
     out->game.sample_chance_child = sample_chance_child;
+    out->game.release_state = release_state;
     return 0;
 }
 

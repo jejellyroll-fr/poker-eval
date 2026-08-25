@@ -703,7 +703,7 @@ static int run_preflop_solver(app_t *app)
     iterations = app->iterations > 0 ? app->iterations : 10000;
     snprintf(command, sizeof(command),
              "%s --game %s --players %d --iterations %d "
-             "--samples 128 --raise 2.5 --br-samples 128",
+             "--samples 128 --raise 2.5 --br-samples 128 --postflop",
              quoted_executable, game_name_for(app->game_index),
              app->player_count, iterations);
     for (int player = 0; player < app->player_count; ++player) {

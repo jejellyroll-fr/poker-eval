@@ -1,10 +1,10 @@
 /* pe_preflop_allin_game.h - production preflop game over sampled deals (Lane B)
  *
- * One configurable betting street in front of sampled private deals. Every
- * terminal is either a fold-out (pot to the last aggressor) or a called pot
- * resolved as an all-in showdown: boards are sampled deterministically per
- * deal and hands are evaluated exactly. The model is documented as an
- * all-in-showdown preflop game; it does not continue to postflop streets.
+ * One configurable betting street in front of sampled private deals. With
+ * postflop_streets enabled, completed betting rounds continue through public
+ * flop, turn, and river chance nodes before the showdown. Fold-outs and
+ * called pots are evaluated with the same deterministic sampled-deal model;
+ * known river boards use exact high-hand and side-pot resolution.
  */
 
 #ifndef POKER_EVAL_PE_PREFLOP_ALLIN_GAME_H
@@ -45,6 +45,9 @@ typedef struct
     /* When zero, plain calls are only legal when they put the caller all in;
        this yields all-in-or-fold style trees. */
     int allow_nonallin_call;
+    /* When set, a completed preflop round advances through flop, turn and
+       river chance nodes before the terminal showdown. */
+    int postflop_streets;
     /* Showdown resolution. */
     int showdown_samples; /* sampled boards per called terminal */
     uint64_t showdown_seed;

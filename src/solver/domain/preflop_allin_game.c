@@ -13,6 +13,7 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/games/eval_omaha.h>
+#include <poker_eval/solver/pe_holdem_round.h>
 #include <poker_eval/solver/pe_range.h>
 
 #include <math.h>
@@ -260,6 +261,8 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
     int player;
 
     hash = preflop_mix_u64(hash, (uint64_t)actor);
+    hash = preflop_mix_u64(hash, (uint64_t)state->street);
+    hash = preflop_mix_u64(hash, (uint64_t)state->board);
     hash = preflop_mix_u64(hash, (uint64_t)betting->raises_made);
     for (player = 0; player < PE_PREFLOP_ALLIN_MAX_PLAYERS; ++player)
     {
@@ -284,6 +287,27 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
 /* ------------------------------------------------------------------ *
  * Terminals
  * ------------------------------------------------------------------ */
+
+static int preflop_evaluate_board(const pe_preflop_allin_game_t *game,
+                                  mask_t holes, mask_t board, eval_t *out)
+{
+    if (!game || !out || mask_popcount(board) != 5 ||
+        (holes & board) != MASK_EMPTY)
+        return -1;
+    if (game->rules.variant == PE_PREFLOP_HOLDEM)
+    {
+        *out = pe_eval_7c(game->eval_ctx, holes | board);
+        return 0;
+    }
+    {
+        HandVal value = HandVal_NOTHING;
+        if (StdDeck_OmahaHi_EVAL(mask_t_to_cardmask(holes),
+                                 mask_t_to_cardmask(board), &value) != 0)
+            return -1;
+        *out = (eval_t)value;
+    }
+    return 0;
+}
 
 int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
                                      const mask_t *holes, double *out_equity)
@@ -338,18 +362,9 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
         }
         for (player = 0; player < players; ++player)
         {
-            if (game->rules.variant == PE_PREFLOP_HOLDEM)
-                values[player] = pe_eval_7c(game->eval_ctx,
-                                            holes[player] | board);
-            else
-            {
-                HandVal omaha_value = HandVal_NOTHING;
-                if (StdDeck_OmahaHi_EVAL(mask_t_to_cardmask(holes[player]),
-                                         mask_t_to_cardmask(board),
-                                         &omaha_value) != 0)
-                    return -1;
-                values[player] = (eval_t)omaha_value;
-            }
+            if (preflop_evaluate_board(game, holes[player], board,
+                                       &values[player]) != 0)
+                return -1;
             if (values[player] > best)
                 best = values[player];
         }
@@ -366,6 +381,79 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
     return 0;
 }
 
+static int preflop_has_actionable_player(const pe_betting_state_t *betting)
+{
+    if (!betting)
+        return 0;
+    for (int player = 0; player < betting->player_count; ++player)
+        if (betting->active[player] && !betting->all_in[player])
+            return 1;
+    return 0;
+}
+
+static int preflop_first_actionable_player(const pe_betting_state_t *betting)
+{
+    if (!betting)
+        return -1;
+    for (int player = 0; player < betting->player_count; ++player)
+        if (betting->active[player] && !betting->all_in[player])
+            return player;
+    return -1;
+}
+
+static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
+                                        const pe_preflop_betting_state_t *state,
+                                        int player)
+{
+    const pe_betting_state_t *betting = &state->betting;
+    double levels[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    double payout[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
+    eval_t values[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    int level_count = 0;
+    int players = betting->player_count;
+
+    for (int p = 0; p < players; ++p)
+    {
+        if (preflop_evaluate_board(game, state->holes[p], state->board,
+                                   &values[p]) != 0)
+            return 0.0;
+        if (betting->invested[p] > 0.0)
+            levels[level_count++] = betting->invested[p];
+    }
+    for (int i = 0; i < level_count; ++i)
+        for (int j = i + 1; j < level_count; ++j)
+            if (levels[j] < levels[i]) {
+                double temp = levels[i]; levels[i] = levels[j]; levels[j] = temp;
+            }
+
+    int unique = 0;
+    for (int i = 0; i < level_count; ++i) {
+        double level = levels[i];
+        double previous = unique > 0 ? levels[unique - 1] : 0.0;
+        if (unique > 0 && level <= previous + PREFLOP_EPSILON)
+            continue;
+        levels[unique++] = level;
+        double layer = level - previous;
+        double pot = 0.0;
+        eval_t best = EVAL_INVALID;
+        int winners = 0;
+        for (int p = 0; p < players; ++p)
+            if (betting->invested[p] + PREFLOP_EPSILON >= level)
+                pot += layer;
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p] && betting->invested[p] + PREFLOP_EPSILON >= level) {
+                if (values[p] > best) { best = values[p]; winners = 1; }
+                else if (values[p] == best) ++winners;
+            }
+        if (winners > 0)
+            for (int p = 0; p < players; ++p)
+                if (betting->active[p] && betting->invested[p] + PREFLOP_EPSILON >= level &&
+                    values[p] == best)
+                    payout[p] += pot / (double)winners;
+    }
+    return payout[player] - betting->invested[player];
+}
+
 static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
                                         int player, void *user)
 {
@@ -375,11 +463,13 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
     double pot_total = 0.0;
     int players = betting->player_count;
 
-    for (int p = 0; p < players; ++p)
-    {
+    for (int p = 0; p < players; ++p) {
         contrib[p] = betting->invested[p];
         pot_total += contrib[p];
     }
+    if (game->rules.postflop_streets && state->betting.terminal &&
+        state->street == PE_HOLDEM_RIVER)
+        return preflop_known_board_value(game, state, player);
     if (betting->terminal)
     {
         int winner = betting->winner;
@@ -392,6 +482,131 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
         if (pe_preflop_allin_showdown_equity(game, state->holes, equity) != 0)
             return 0.0;
         return equity[player] * pot_total - contrib[player];
+    }
+}
+
+static int preflop_is_terminal(const pe_preflop_betting_state_t *state,
+                               void *user)
+{
+    const pe_preflop_allin_game_t *game = user;
+    if (!state || !game)
+        return 0;
+    if (!game->rules.postflop_streets)
+        return state->betting.terminal || state->betting.round_complete;
+    return state->betting.terminal;
+}
+
+static int preflop_after_action(const pe_preflop_betting_state_t *source,
+                                const pe_action_t *action,
+                                pe_preflop_betting_state_t *child, void *user)
+{
+    pe_preflop_allin_game_t *game = user;
+    (void)source;
+    (void)action;
+    if (!game || !child || !game->rules.postflop_streets)
+        return 0;
+    if (child->betting.terminal)
+        return 0;
+    if (!child->betting.round_complete)
+        return 0;
+    if (child->street == PE_HOLDEM_RIVER) {
+        child->betting.terminal = 1;
+        child->betting.to_act = -1;
+        return 0;
+    }
+    child->is_chance = 1;
+    return 0;
+}
+
+static int preflop_draw_public_cards(const pe_preflop_betting_state_t *source,
+                                     pe_rng_t *rng, mask_t *out_board)
+{
+    int available[52];
+    int count = 0;
+    uint8_t added;
+    mask_t used;
+
+    if (!source || !rng || !out_board || source->street == PE_HOLDEM_SHOWDOWN)
+        return -1;
+    added = pe_holdem_next_public_count(source->street);
+    used = source->board | source->dead_cards;
+    for (int card = 0; card < 52; ++card) {
+        mask_t bit = ((mask_t)1) << card;
+        if (!(used & bit))
+            available[count++] = card;
+    }
+    if (count < added || added == 0u)
+        return -1;
+    *out_board = source->board;
+    for (uint8_t i = 0u; i < added; ++i) {
+        uint32_t index = pe_rng_below(rng, (uint32_t)(count - (int)i));
+        int card = available[index];
+        *out_board |= ((mask_t)1) << card;
+        available[index] = available[count - 1 - (int)i];
+    }
+    return 0;
+}
+
+static int preflop_chance_child(const pe_preflop_betting_state_t *source,
+                                pe_rng_t *rng, pe_chance_sample_t *sample,
+                                pe_preflop_betting_state_t *child, void *user)
+{
+    pe_preflop_allin_game_t *game = user;
+    if (!source || !rng || !sample || !child || !game)
+        return -1;
+    if (source->street == PE_HOLDEM_PREFLOP && source->dead_cards == MASK_EMPTY)
+    {
+        pe_preflop_deal_sample_t deal;
+        if (pe_preflop_deal_sampler_sample(&game->sampler, rng, &deal) != 0)
+            return -1;
+        child->betting = source->betting;
+        child->is_chance = 0;
+        memcpy(child->holes, deal.holes, sizeof(child->holes));
+        child->board = MASK_EMPTY;
+        child->dead_cards = MASK_EMPTY;
+        for (int p = 0; p < game->rules.player_count; ++p)
+            child->dead_cards |= deal.holes[p];
+        child->street = PE_HOLDEM_PREFLOP;
+        sample->outcome = 0;
+        sample->importance_ratio = deal.importance_ratio;
+        return 0;
+    }
+    {
+        mask_t next_board;
+        pe_holdem_round_state_t round;
+        pe_holdem_round_state_t next;
+        pe_holdem_street_t next_street;
+        int first_to_act;
+        if (preflop_draw_public_cards(source, rng, &next_board) != 0 ||
+            pe_holdem_street_from_board(next_board, &next_street) != 0)
+            return -1;
+        memset(&round, 0, sizeof(round));
+        round.board = source->board;
+        round.dead_cards = source->dead_cards;
+        round.street = source->street;
+        round.betting = source->betting;
+        first_to_act = preflop_first_actionable_player(&source->betting);
+        if (first_to_act < 0)
+            first_to_act = 0;
+        if (pe_holdem_round_advance(&round, &game->betting_rules, next_board,
+                                    first_to_act, &next) != PE_HOLDEM_ROUND_OK)
+            return -1;
+        *child = *source;
+        child->betting = next.betting;
+        child->board = next_board;
+        child->street = next_street;
+        child->is_chance = 0;
+        if (next_street == PE_HOLDEM_RIVER &&
+            !preflop_has_actionable_player(&child->betting))
+            child->betting.terminal = 1;
+        else if (!preflop_has_actionable_player(&child->betting))
+        {
+            child->betting.round_complete = 1;
+            child->is_chance = 1;
+        }
+        sample->outcome = 0;
+        sample->importance_ratio = 1.0;
+        return 0;
     }
 }
 
@@ -578,6 +793,9 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->ops.action_at = preflop_op_action_at;
     game->ops.infoset_key = preflop_op_infoset_key;
     game->ops.terminal_value = preflop_op_terminal_value;
+    game->ops.is_terminal = preflop_is_terminal;
+    game->ops.after_action = preflop_after_action;
+    game->ops.chance_child = preflop_chance_child;
 
     if (pe_preflop_betting_game_init(&game->betting_game, &game->sampler,
                                      &game->betting_rules, &game->root_betting,

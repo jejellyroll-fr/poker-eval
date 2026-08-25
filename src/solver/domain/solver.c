@@ -723,6 +723,10 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         pe_external_br_config_t br_config = pe_external_br_config_default();
         double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
         uint8_t player;
+        /* Lane B can now cross four betting streets.  The historical BR
+           default (128 plies) was sufficient for a single all-in street but
+           truncates perfectly legal small-increment trees before river. */
+        br_config.max_depth = 4096u;
         br_config.samples = solver->config.exploitability_interval == 0u
             ? 256u
             : solver->config.exploitability_interval > UINT32_MAX

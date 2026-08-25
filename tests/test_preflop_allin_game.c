@@ -268,6 +268,7 @@ int main(void)
         rules.small_blind = 0.5;
         rules.big_blind = 1.0;
         rules.min_raise = 1.0;
+        rules.postflop_streets = 1;
         rules.showdown_samples = 32;
         rules.showdown_seed = 0xA105u;
         game = pe_preflop_allin_game_create(&rules, ranges);
@@ -285,6 +286,34 @@ int main(void)
         pe_preflop_allin_game_destroy(game);
         for (int player = 0; player < 3; ++player)
             pe_range_free(ranges[player]);
+    }
+
+    /* ---- Full Hold'em street traversal: preflop -> flop -> turn -> river ---- */
+    {
+        pe_range_t *ranges[2] = {NULL, NULL};
+        pe_preflop_allin_game_t *game;
+        pe_storage_t *storage = NULL;
+
+        assert(pe_solver_range_parse(game_holdem, "AsAh", dead,
+                                     &ranges[0]) == PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_holdem, "KcKd", dead,
+                                     &ranges[1]) == PE_SOLVER_OK);
+        fill_rules(&rules, 10.0, 0);
+        rules.raise_count = 1;
+        rules.raise_sizes[0] = 2.5;
+        rules.postflop_streets = 1;
+        rules.showdown_samples = 1;
+        game = pe_preflop_allin_game_create(&rules, ranges);
+        assert(game != NULL);
+        assert(run_solve(game, 1, 0x51EE7u, &storage) == 0);
+        assert(storage != NULL && pe_storage_count(storage) > 0u);
+        /* Street and board are part of the infoset identity, so a completed
+           run must expose more than the preflop root alone. */
+        assert(pe_preflop_allin_infodesc_count(game) >= 4u);
+        pe_storage_destroy(storage);
+        pe_preflop_allin_game_destroy(game);
+        pe_range_free(ranges[0]);
+        pe_range_free(ranges[1]);
     }
 
     pe_range_free(range_aa);
