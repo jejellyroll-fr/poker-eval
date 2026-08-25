@@ -1746,6 +1746,20 @@ if(TARGET pe-preflop-solve)
         LABELS "product;solver;lane-b;preflop;dcfr"
         PASS_REGULAR_EXPRESSION "regret=dcfr"
         TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_reports_execution_axes
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 1
+            --samples 1
+            --backend cpu_ref
+            --br-samples 1
+            --exploitability-interval 1)
+    set_tests_properties(pe_preflop_solve_reports_execution_axes PROPERTIES
+        LABELS "product;solver;lane-b;preflop;runtime"
+        PASS_REGULAR_EXPRESSION "backend=cpu_ref backend_validated=1;simd_cfr=not-integrated"
+        TIMEOUT 60)
     add_test(NAME pe_preflop_solve_rejects_full_tree_preset
         COMMAND pe-preflop-solve
             --game holdem
