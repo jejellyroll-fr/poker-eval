@@ -3945,10 +3945,13 @@ static Panel *i_setup_panel(App *app)
         {
             char backend_text[192];
             const pe_runtime_backend_info_t *info = &runtime.backends[backend];
-            snprintf(backend_text, sizeof(backend_text), "%s%s",
-                     pe_compute_kind_name((pe_compute_kind_t)backend),
-                     info->runtime_available && info->validated
-                         ? " (available)" : " (unavailable)");
+            if (info->runtime_available && info->validated)
+                snprintf(backend_text, sizeof(backend_text), "%s (available, validated)",
+                         pe_compute_kind_name((pe_compute_kind_t)backend));
+            else
+                snprintf(backend_text, sizeof(backend_text), "%s (unavailable: %s)",
+                         pe_compute_kind_name((pe_compute_kind_t)backend),
+                         info->reason[0] != '\0' ? info->reason : "not validated");
             combo_add_elem(app->backend_combo, backend_text, NULL);
         }
     }
