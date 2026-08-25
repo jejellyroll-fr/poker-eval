@@ -24,6 +24,16 @@ int main(void)
     if (pe_runtime_simd_name(runtime.simd) == NULL ||
         pe_runtime_simd_name(runtime.simd)[0] == '\0')
         return 5;
+    if (!runtime.openmp_available)
+    {
+        if (runtime.backends[PE_COMPUTE_CPU_PAR].runtime_available ||
+            runtime.backends[PE_COMPUTE_CPU_PAR].validated)
+            return 9;
+        if (pe_runtime_backend_status(&runtime.backends[PE_COMPUTE_CPU_PAR],
+                                      status, sizeof(status)) < 0 ||
+            strstr(status, "OpenMP") == NULL)
+            return 10;
+    }
     memset(&synthetic, 0, sizeof(synthetic));
     synthetic.openmp_available = 1;
     synthetic.backends[PE_COMPUTE_CPU_PAR].runtime_available = 1;

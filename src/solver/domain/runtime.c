@@ -119,9 +119,16 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
     if (!out->openmp_available &&
         out->backends[PE_COMPUTE_CPU_PAR].runtime_available)
     {
+        /* cpu_par is a parallel backend contract, not merely a second name
+         * for the scalar adapter.  The adapter can be instantiated without
+         * OpenMP, but advertising that instance as available makes the UI
+         * offer a backend that cannot deliver parallel execution. */
+        out->backends[PE_COMPUTE_CPU_PAR].runtime_available = 0;
+        out->backends[PE_COMPUTE_CPU_PAR].validated = 0;
+        out->backends[PE_COMPUTE_CPU_PAR].device_count = 0;
         snprintf(out->backends[PE_COMPUTE_CPU_PAR].reason,
                  sizeof(out->backends[PE_COMPUTE_CPU_PAR].reason),
-                 "adapter ready; OpenMP is not compiled, single-worker");
+                 "OpenMP is not compiled; CPU_PAR is unavailable (single-worker adapter)");
     }
 
 #if defined(PE_RUNTIME_CUDA_COMPILED)
