@@ -30,11 +30,36 @@ typedef struct
     FILE *stream;
 } metrics_writer_t;
 
-static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
-                                  const char *backend_name,
-                                  pe_algorithm_preset_t algorithm,
-                                  pe_precision_mode_t precision,
-                                  int cpu_threads)
+typedef struct
+{
+    int have_traversal;
+    pe_traversal_mode_t traversal;
+    int have_regret;
+    pe_regret_mode_t regret;
+    int have_policy;
+    pe_policy_mode_t policy;
+    int have_averaging;
+    pe_averaging_mode_t averaging;
+    int have_precision;
+    pe_precision_mode_t precision;
+    int have_alpha;
+    double alpha;
+    int have_beta;
+    double beta;
+    int have_gamma;
+    double gamma;
+    int have_exponential_lambda;
+    double exponential_lambda;
+    int have_outcome_epsilon;
+    double outcome_epsilon;
+} cli_solver_overrides_t;
+
+static int run_vector_backend(cfr_game_t *legacy, int iterations,
+                              const char *backend_name,
+                              pe_algorithm_preset_t algorithm,
+                              pe_precision_mode_t precision,
+                              int cpu_threads,
+                              const cli_solver_overrides_t *overrides)
 {
     pe_legacy_vector_adapter_t adapter;
     pe_solver_config_t config = pe_solver_config_default();
@@ -57,11 +82,15 @@ static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
     runtime_backend = &runtime.backends[kind];
     if (!runtime_backend->runtime_available || !runtime_backend->validated)
     {
-        fprintf(stderr, "gpu backend refused: %s (%s)\n",
+        fprintf(stderr, "v3 backend refused: %s (%s)\n",
                 pe_compute_kind_name(kind), runtime_backend->reason);
         return -1;
     }
-    if (kind == PE_COMPUTE_OPENCL)
+    if (kind == PE_COMPUTE_CPU_REF)
+        compute = pe_compute_cpu_ref_ops();
+    else if (kind == PE_COMPUTE_CPU_PAR)
+        compute = pe_compute_cpu_par_ops();
+    else if (kind == PE_COMPUTE_OPENCL)
         compute = pe_compute_opencl_ops();
     else if (kind == PE_COMPUTE_CUDA)
         compute = pe_compute_cuda_ops();
@@ -72,18 +101,57 @@ static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
     adapter_ready = 1;
 
     config.algorithm.preset = algorithm;
-    config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+    if (pe_preset_expand(algorithm, &config.algorithm) != 0)
+    {
+        pe_legacy_vector_adapter_destroy(&adapter);
+        return -1;
+    }
+    if (overrides != NULL)
+    {
+        if (overrides->have_traversal)
+            config.algorithm.traversal = overrides->traversal;
+        if (overrides->have_regret)
+            config.algorithm.regret = overrides->regret;
+        if (overrides->have_policy)
+            config.algorithm.policy = overrides->policy;
+        if (overrides->have_averaging)
+            config.algorithm.averaging = overrides->averaging;
+        if (overrides->have_alpha)
+            config.algorithm.dcfr_alpha = overrides->alpha;
+        if (overrides->have_beta)
+            config.algorithm.dcfr_beta = overrides->beta;
+        if (overrides->have_gamma)
+            config.algorithm.dcfr_gamma = overrides->gamma;
+        if (overrides->have_exponential_lambda)
+            config.algorithm.exponential_lambda = overrides->exponential_lambda;
+        if (overrides->have_outcome_epsilon)
+            config.algorithm.outcome_epsilon = overrides->outcome_epsilon;
+        if (overrides->have_precision)
+            precision = overrides->precision;
+    }
+    if (overrides != NULL &&
+        (overrides->have_traversal || overrides->have_regret ||
+         overrides->have_policy || overrides->have_averaging ||
+         overrides->have_alpha || overrides->have_beta ||
+         overrides->have_gamma || overrides->have_exponential_lambda ||
+         overrides->have_outcome_epsilon))
+    {
+        /* The explicit axes are authoritative for a full-tree run. Without
+           CUSTOM the solver would expand the original preset again during
+           creation and silently discard the CLI choices. */
+        config.algorithm.preset = PE_PRESET_CUSTOM;
+    }
     config.execution.backend = kind;
     config.execution.precision = precision;
     config.execution.cpu_threads = cpu_threads;
-    /* OpenCL/CUDA update ports do not own the game-tree walk yet. Keep the
-       traversal on the proven CPU adapter and offload regret/terminal batches
-       to the selected device; this is a real hybrid GPU-CFR path, not a
-       claim that the device traverses a betting tree by itself. */
+    /* The game tree remains owned by the exact legacy-to-vector adapter. GPU
+       compute ports are used for batched updates/terminal jobs; CPU backends
+       execute the same traversal with their selected update kernel. */
     config.execution.stages.traversal = PE_COMPUTE_CPU_REF;
     config.execution.stages.update = kind;
     config.execution.stages.terminal_eval = kind;
-    config.execution.deterministic = 0;
+    config.execution.deterministic =
+        (kind == PE_COMPUTE_CPU_REF || kind == PE_COMPUTE_CPU_PAR) ? 1 : 0;
     config.execution.terminal_batch_size = 256u;
     config.execution.update_batch_size = 256u;
     config.execution.max_ram_bytes = 512u * 1024u * 1024u;
@@ -95,13 +163,25 @@ static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
     deps.vector_game = pe_legacy_vector_adapter_game(&adapter);
     solver = pe_solver_create(&config, &deps);
     status = solver ? pe_solver_run(solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
-    printf("gpu_backend=%s status=%d\n", backend_name, (int)status);
+    printf("v3_backend=%s status=%d\n", backend_name, (int)status);
+    printf("v3_runtime=backend_validated=1 simd_detected=%s simd_cfr=%s "
+           "algorithm=%s traversal=%s regret=%s policy=%s averaging=%s\n",
+           pe_runtime_simd_name(runtime.simd),
+           (kind == PE_COMPUTE_CPU_REF || kind == PE_COMPUTE_CPU_PAR)
+               ? (runtime.simd == SIMD_NONE ? "scalar-fallback" : "integrated")
+               : "not-integrated",
+           config.algorithm.preset == PE_PRESET_CUSTOM
+               ? "custom" : pe_preset_name(algorithm),
+           pe_traversal_name(config.algorithm.traversal),
+           pe_regret_name(config.algorithm.regret),
+           pe_policy_name(config.algorithm.policy),
+           pe_averaging_name(config.algorithm.averaging));
     if (solver && pe_solver_progress(solver, &progress) == PE_SOLVER_OK)
-        printf("gpu_progress=%.6f complete=%d iteration=%llu\n",
+        printf("v3_progress=%.6f complete=%d iteration=%llu\n",
                progress.fraction, progress.complete,
                (unsigned long long)progress.iteration);
     if (solver && pe_solver_metrics(solver, &metrics) == PE_SOLVER_OK)
-        printf("gpu_exploitability=%.6f guarantee=%d\n",
+        printf("v3_exploitability=%.6f guarantee=%d\n",
                metrics.exploitability_mbb_per_game, (int)metrics.guarantee);
     if (solver) pe_solver_destroy(solver);
     if (adapter_ready) pe_legacy_vector_adapter_destroy(&adapter);
@@ -190,30 +270,6 @@ static void print_backends(void)
         printf("%s\n", line);
     }
 }
-
-typedef struct
-{
-    int have_traversal;
-    pe_traversal_mode_t traversal;
-    int have_regret;
-    pe_regret_mode_t regret;
-    int have_policy;
-    pe_policy_mode_t policy;
-    int have_averaging;
-    pe_averaging_mode_t averaging;
-    int have_precision;
-    pe_precision_mode_t precision;
-    int have_alpha;
-    double alpha;
-    int have_beta;
-    double beta;
-    int have_gamma;
-    double gamma;
-    int have_exponential_lambda;
-    double exponential_lambda;
-    int have_outcome_epsilon;
-    double outcome_epsilon;
-} cli_solver_overrides_t;
 
 static int overrides_have_axis(const cli_solver_overrides_t *overrides)
 {
@@ -1249,31 +1305,21 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Never let an explicit runtime choice disappear into the legacy path.
-       The old tree runner has its own fixed implementation; callers asking
-       for a v3 backend must opt into the v3 Lane B or GPU path explicitly. */
-    if (!lane_b && algorithm_name != NULL &&
-        !(selected_backend == PE_COMPUTE_CUDA ||
-          selected_backend == PE_COMPUTE_OPENCL))
+    /* Never let an explicit v3 choice disappear into the fixed legacy
+       runner. A full-tree v3 request is routed below after the shared tree
+       has been parsed, while --lane-b keeps its sampled semantics. */
+    if (!lane_b && mkr_path != NULL &&
+        (algorithm_name != NULL || backend_name != NULL ||
+         traversal_name != NULL || regret_name != NULL ||
+         policy_name != NULL || averaging_name != NULL ||
+         precision_name != NULL || overrides.have_alpha ||
+         overrides.have_beta || overrides.have_gamma ||
+         overrides.have_exponential_lambda ||
+         overrides.have_outcome_epsilon))
     {
         fprintf(stderr,
-                "--algorithm is only honoured by --lane-b or the GPU vector path; "
-                "the legacy tree runner does not ignore it\n");
-        return 2;
-    }
-    if (!lane_b && (traversal_name != NULL || regret_name != NULL ||
-                    policy_name != NULL ||
-                    averaging_name != NULL || precision_name != NULL ||
-                    overrides.have_alpha || overrides.have_beta ||
-                    overrides.have_gamma ||
-                    overrides.have_exponential_lambda ||
-                    overrides.have_outcome_epsilon) &&
-        !(selected_backend == PE_COMPUTE_CUDA ||
-          selected_backend == PE_COMPUTE_OPENCL))
-    {
-        fprintf(stderr,
-                "v3 algorithm-axis overrides require --lane-b or the GPU vector path; "
-                "the legacy tree runner does not ignore them\n");
+                "--mkr is an import path and cannot be combined with a full-tree "
+                "v3 algorithm/backend override; remove --mkr\n");
         return 2;
     }
     {
@@ -1547,17 +1593,23 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (selected_backend == PE_COMPUTE_OPENCL ||
-        selected_backend == PE_COMPUTE_CUDA)
+    if (!lane_b &&
+        (algorithm_name != NULL || backend_name != NULL ||
+         traversal_name != NULL || regret_name != NULL ||
+         policy_name != NULL || averaging_name != NULL ||
+         precision_name != NULL || overrides.have_alpha ||
+         overrides.have_beta || overrides.have_gamma ||
+         overrides.have_exponential_lambda ||
+         overrides.have_outcome_epsilon))
     {
-        pe_algorithm_preset_t gpu_algorithm = algorithm_name != NULL
+        pe_algorithm_preset_t v3_algorithm = algorithm_name != NULL
             ? selected_preset : PE_PRESET_CFR_VECTOR;
-        if (gpu_algorithm != PE_PRESET_CFR_VECTOR)
+        if (overrides.have_traversal &&
+            overrides.traversal == PE_TRAVERSAL_CHANCE_VECTOR)
         {
             fprintf(stderr,
-                    "GPU vector path currently supports only cfr-vector; "
-                    "selected algorithm is %s\n",
-                    pe_preset_name(gpu_algorithm));
+                    "full-tree v3 currently does not expose the chance-vector "
+                    "traversal; use full-vector/full-scalar or --lane-b\n");
             mpf_state_cleanup(&root_state);
             mpf_perf_stats_pool_destroy(perf_pool);
             eval_context_destroy(ctx);
@@ -1568,10 +1620,10 @@ int main(int argc, char **argv)
             mpf_tree_free(tree);
             return 2;
         }
-        int gpu_status = run_gpu_vector_backend(&game, iterations,
-                                                pe_compute_kind_name(selected_backend),
-                                                gpu_algorithm,
-                                                selected_precision, cpu_threads);
+        int v3_status = run_vector_backend(&game, iterations,
+                                           pe_compute_kind_name(selected_backend),
+                                           v3_algorithm, selected_precision,
+                                           cpu_threads, &overrides);
         mpf_state_cleanup(&root_state);
         mpf_perf_stats_pool_destroy(perf_pool);
         eval_context_destroy(ctx);
@@ -1580,7 +1632,7 @@ int main(int argc, char **argv)
                 pe_range_free(ranges[p]);
         pe_monker_range_set_free(&tree_ranges);
         mpf_tree_free(tree);
-        return gpu_status == 0 ? 0 : 1;
+        return v3_status == 0 ? 0 : 1;
     }
 
     /* The same fully configured legacy tree can now be driven by Lane B.  This

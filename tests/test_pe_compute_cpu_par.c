@@ -264,6 +264,20 @@ static void test_ragged_strategy_matches_cpu_ref(void)
 
 int main(void)
 {
+#ifndef _OPENMP
+    const pe_compute_ops_t *ops = pe_compute_cpu_par_ops();
+    pe_compute_config_t cfg = {.cpu_threads = 2, .deterministic = 1};
+    void *backend = NULL;
+
+    /* The adapter must refuse construction rather than masquerade as a
+       one-thread implementation when OpenMP is not part of this build. */
+    CHECK(ops != NULL && ops->create(&backend, &cfg) == -1 && backend == NULL,
+          "cpu_par must be unavailable without OpenMP");
+    if (failures != 0)
+        return 1;
+    puts("test_pe_compute_cpu_par: skipped (OpenMP unavailable)");
+    return 0;
+#else
     test_registration_and_capabilities();
     test_invalid_config_is_refused();
     test_update_batch_reaches_storage();
@@ -275,4 +289,5 @@ int main(void)
         return 1;
     puts("test_pe_compute_cpu_par: all tests passed");
     return 0;
+#endif
 }

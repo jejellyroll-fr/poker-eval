@@ -203,7 +203,7 @@ static void test_enum_values(void)
     /* CUSTOM is zero so a hand-written configuration needs no preset. */
     CHECK_EQ_INT(PE_PRESET_CUSTOM, 0);
     CHECK_EQ_INT(PE_PRESET_CFR,    1);
-    CHECK_EQ_INT(PE_PRESET_COUNT,  10);
+    CHECK_EQ_INT(PE_PRESET_COUNT,  11);
 }
 
 /* ------------------------------------------------------------------ *

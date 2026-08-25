@@ -337,6 +337,24 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
     return PE_SOLVER_OK;
 }
 
+static void pe_solver_vector_emit_heartbeat(pe_solver_t *solver,
+                                             uint64_t iteration)
+{
+    if (!solver)
+        return;
+    pe_telemetry_emitf(
+        solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+        "progress iteration=%" PRIu64 " total=%" PRIu64
+        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f\n",
+        iteration, solver->config.max_iterations,
+        solver->config.max_iterations > 0u
+            ? (double)iteration / (double)solver->config.max_iterations : 0.0,
+        solver->metrics_available
+            ? solver->metrics.exploitability_mbb_per_game : 0.0,
+        solver->config.target_exploitability_mbb);
+    pe_telemetry_flush(solver->deps.telemetry);
+}
+
 static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                                                 const pe_execution_plan_t *plan)
 {
@@ -354,9 +372,15 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     int rc;
 
     if (solver->deps.vector_game == NULL ||
-        plan->traversal != PE_TRAVERSAL_FULL_VECTOR ||
+        (plan->traversal != PE_TRAVERSAL_FULL_VECTOR &&
+         plan->traversal != PE_TRAVERSAL_FULL_SCALAR) ||
         (solver->config.max_iterations == 0u && !target_enabled))
         return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+
+    /* FULL_SCALAR is the scalar algorithm contract. The complete legacy game
+       adapter currently exposes the exact vector-form state interface, so it
+       uses the same full traversal while preserving the preset's regret,
+       policy and averaging axes. This is not a silent preset fallback. */
 
     ops = pe_traversal_full_vector_ops();
     if (ops == NULL || pe_traversal_ctx_init(&traversal,
@@ -445,7 +469,8 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         solver->iteration = iteration;
 
         if (target_enabled &&
-            (iteration % solver->config.exploitability_interval == 0u ||
+            ((solver->config.exploitability_interval > 0u &&
+              iteration % solver->config.exploitability_interval == 0u) ||
              (solver->config.max_iterations > 0u &&
               iteration == solver->config.max_iterations)))
         {
@@ -486,6 +511,10 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             solver->metrics_available = 1;
             target_reached = reached;
         }
+        /* Full-tree traversal can spend substantial time between BR checks.
+           Publish the iteration heartbeat independently so frontends never
+           confuse an expensive convergence check with a stalled solver. */
+        pe_solver_vector_emit_heartbeat(solver, iteration);
     }
 
     if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)

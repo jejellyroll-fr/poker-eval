@@ -186,9 +186,14 @@ static void test_thread_count_parity(void)
 
 int main(void)
 {
+#ifndef _OPENMP
+    puts("test_backend_parity: skipped (OpenMP unavailable)");
+    return 0;
+#else
     test_thread_count_parity();
     if (failures != 0)
         return 1;
     puts("test_backend_parity: cpu_par is bit-identical across worker counts");
     return 0;
+#endif
 }

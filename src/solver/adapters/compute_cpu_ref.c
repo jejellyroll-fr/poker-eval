@@ -7,6 +7,8 @@
 #include <poker_eval/core/eval.h>
 #include <poker_eval/games/eval_omaha.h>
 
+#include "compute_simd.h"
+
 #include <math.h>
 #include <stdlib.h>
 
@@ -174,13 +176,9 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
             continue;
         }
         for (action = 0u; action < actions; ++action)
-        {
-            float regret = in->regrets[begin + action];
-            if (!isfinite(regret))
+            if (!isfinite(in->regrets[begin + action]))
                 return -1;
-            if (regret > 0.0f)
-                positive += regret;
-        }
+        positive = pe_compute_simd_positive_sum(in->regrets + begin, actions);
         if (!isfinite(positive))
             return -1;
         for (action = 0u; action < actions; ++action)

@@ -88,6 +88,7 @@ add_library(poker_solver
     solver/adapters/persist_checkpoint.c
     solver/adapters/compute_cpu_ref.c
     solver/adapters/compute_cpu_par.c
+    solver/adapters/compute_simd.c
     solver/adapters/compute_gpu_updates.c
     solver/adapters/compute_cuda.c
     solver/adapters/compute_opencl.c

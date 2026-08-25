@@ -2,6 +2,7 @@
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -142,6 +143,46 @@ int main(void)
         }
     }
     pe_solver_destroy(solver);
+
+    /* Full-tree presets must all use the same exact legacy-to-vector bridge.
+     * In particular, CFR and ECFR declare FULL_SCALAR while CFR+ and DCFR
+     * declare FULL_VECTOR; neither is allowed to stop at a configuration-only
+     * validation path. */
+    {
+        const pe_algorithm_preset_t presets[] = {
+            PE_PRESET_CFR,
+            PE_PRESET_CFR_PLUS,
+            PE_PRESET_DCFR,
+            PE_PRESET_ECFR
+        };
+        size_t i;
+        for (i = 0u; i < sizeof(presets) / sizeof(presets[0]); ++i)
+        {
+            pe_solver_config_t preset_config = pe_solver_config_default();
+            pe_solver_deps_t preset_deps = pe_solver_deps_default();
+            pe_solver_t *preset_solver;
+            pe_progress_t preset_progress;
+            preset_config.algorithm.preset = presets[i];
+            preset_config.max_iterations = 2u;
+            preset_config.problem.expected_infosets = 1u;
+            preset_config.problem.expected_actions = 2u;
+            preset_config.problem.expected_combos = 1u;
+            preset_deps.vector_game = pe_legacy_vector_adapter_game(&adapter);
+            preset_solver = pe_solver_create(&preset_config, &preset_deps);
+            if (!preset_solver ||
+                pe_solver_run(preset_solver) != PE_SOLVER_OK ||
+                pe_solver_progress(preset_solver, &preset_progress) != PE_SOLVER_OK ||
+                !preset_progress.complete || preset_progress.iteration != 2u)
+            {
+                fprintf(stderr, "legacy adapter preset %s did not run full-tree\n",
+                        pe_preset_name(presets[i]));
+                pe_solver_destroy(preset_solver);
+                pe_legacy_vector_adapter_destroy(&adapter);
+                return 1;
+            }
+            pe_solver_destroy(preset_solver);
+        }
+    }
     pe_legacy_vector_adapter_destroy(&adapter);
     return 0;
 }

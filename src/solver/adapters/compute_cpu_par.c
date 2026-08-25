@@ -5,6 +5,8 @@
 #include <poker_eval/solver/pe_compute.h>
 #include <poker_eval/solver/pe_regret_dcfr.h>
 
+#include "compute_simd.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -36,6 +38,13 @@ static uint64_t cpu_par_capabilities(void *self)
 
 static int cpu_par_create(void **self, const pe_compute_config_t *cfg)
 {
+#ifndef _OPENMP
+    (void)self;
+    (void)cfg;
+    /* CPU_PAR is an execution contract, not a label. Never instantiate a
+       silently single-threaded adapter when the OpenMP runtime is absent. */
+    return -1;
+#else
     pe_cpu_par_t *backend;
 
     if (!self || !cfg || cfg->cpu_threads < 0 ||
@@ -46,12 +55,16 @@ static int cpu_par_create(void **self, const pe_compute_config_t *cfg)
     if (!backend)
         return -1;
     backend->config = *cfg;
-    /* OpenMP is optional in this build. The adapter remains a valid
-       deterministic backend with one worker until an OpenMP runtime is
-       available; the public contract does not silently claim a GPU path. */
-    backend->threads = cfg->cpu_threads > 0 ? cfg->cpu_threads : 1;
+    backend->threads = cfg->cpu_threads > 0 ? cfg->cpu_threads
+                                            : omp_get_max_threads();
+    if (backend->threads < 1)
+    {
+        free(backend);
+        return -1;
+    }
     *self = backend;
     return 0;
+#endif
 }
 
 static void cpu_par_destroy(void *self)
@@ -155,12 +168,7 @@ static void cpu_par_strategy_one(const pe_compute_config_t *config,
         return;
     }
 
-    for (action = 0u; action < actions; ++action)
-    {
-        float regret = in->regrets[begin + action];
-        if (regret > 0.0f)
-            positive += regret;
-    }
+    positive = pe_compute_simd_positive_sum(in->regrets + begin, actions);
     for (action = 0u; action < actions; ++action)
     {
         float regret = in->regrets[begin + action];

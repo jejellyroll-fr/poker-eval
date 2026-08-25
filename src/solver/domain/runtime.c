@@ -115,7 +115,7 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
                   pe_compute_cpu_par_ops(), 1, 1,
                   out->openmp_available
                       ? "parallel adapter could not be created"
-                      : "OpenMP is not compiled; adapter is single-worker");
+                      : "OpenMP is not compiled; parallel adapter is unavailable");
     if (!out->openmp_available &&
         out->backends[PE_COMPUTE_CPU_PAR].runtime_available)
     {
@@ -128,7 +128,7 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
         out->backends[PE_COMPUTE_CPU_PAR].device_count = 0;
         snprintf(out->backends[PE_COMPUTE_CPU_PAR].reason,
                  sizeof(out->backends[PE_COMPUTE_CPU_PAR].reason),
-                 "OpenMP is not compiled; CPU_PAR is unavailable (single-worker adapter)");
+                 "OpenMP is not compiled; CPU_PAR is unavailable (parallel adapter requires OpenMP)");
     }
 
 #if defined(PE_RUNTIME_CUDA_COMPILED)
