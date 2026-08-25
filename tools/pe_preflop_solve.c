@@ -688,7 +688,7 @@ static const char *guarantee_name(pe_guarantee_t guarantee)
 
 static void write_report(const char *path, const options_t *options,
                          const pe_metrics_t *metrics, pe_progress_t *progress,
-                         size_t infosets)
+                         size_t infosets, simd_capability_t detected_simd)
 {
     FILE *file = fopen(path, "w");
     if (!file) {
@@ -698,13 +698,19 @@ static void write_report(const char *path, const options_t *options,
     fprintf(file,
         "{\"schema\":\"pe-preflop-solve/v1\","
         "\"game\":\"%s\",\"players\":%d,"
+        "\"algorithm\":\"%s\",\"backend\":\"%s\","
+        "\"backend_validated\":true,\"precision\":\"%s\","
+        "\"simd_detected\":\"%s\",\"simd_cfr_integrated\":false,"
         "\"iterations\":%" PRIu64 ",\"showdown_samples\":%d,"
         "\"stack\":%.17g,\"small_blind\":%.17g,\"big_blind\":%.17g,\"ante\":%.17g,"
         "\"allow_nonallin_call\":%s,\"postflop_streets\":%s,\"br_samples\":%" PRIu64 ",\"infosets\":%zu,"
         "\"progress\":{\"iteration\":%" PRIu64 ",\"complete\":%s},"
         "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
         "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g}}\n",
-        options->game, options->players, options->iterations,
+        options->game, options->players, pe_preset_name(options->algorithm),
+        pe_compute_kind_name(options->backend),
+        pe_precision_name(options->precision), pe_runtime_simd_name(detected_simd),
+        options->iterations,
         options->showdown_samples, options->stack,
         options->small_blind, options->big_blind, options->ante,
         options->allow_nonallin_call ? "true" : "false",
@@ -935,7 +941,8 @@ int main(int argc, char **argv)
                metrics.exploitability_mbb_per_game, options.br_samples);
         print_strategy_report(&options, game, solver, tree);
         if (options.output)
-            write_report(options.output, &options, &metrics, &progress, infosets);
+            write_report(options.output, &options, &metrics, &progress, infosets,
+                         detected_simd);
     }
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);
