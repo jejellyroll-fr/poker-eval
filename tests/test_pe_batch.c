@@ -55,7 +55,10 @@ static void test_merge_reduces_same_slot(void)
     CHECK(pe_update_batch_push(&destination, first) == 0, "destination push");
     CHECK(pe_update_batch_push(&source, second) == 0, "source duplicate push");
     CHECK(pe_update_batch_push(&source, other) == 0, "source distinct push");
+    destination.iteration = 7u;
+    source.iteration = 7u;
     CHECK(pe_update_batch_merge(&destination, &source) == 0, "merge failed");
+    CHECK(destination.iteration == 7u, "merge lost iteration metadata");
     CHECK(destination.count == 2u, "merge kept %zu slots, expected 2",
           destination.count);
     CHECK(destination.items[0].delta == 7.0 &&
@@ -68,6 +71,36 @@ static void test_merge_reduces_same_slot(void)
           "self-merge must be refused");
     pe_update_batch_destroy(&source);
     pe_update_batch_destroy(&destination);
+}
+
+static void test_reduction_preserves_iteration_metadata(void)
+{
+    pe_update_batch_t left = {0};
+    pe_update_batch_t right = {0};
+    pe_update_batch_t reduced = {0};
+    pe_update_batch_t conflicting = {0};
+    pe_update_batch_source_t sources[2];
+
+    left.iteration = 11u;
+    right.iteration = 11u;
+    conflicting.iteration = 12u;
+    CHECK(pe_update_batch_push(&left, (pe_update_t){1u, 0u, 0u, 1.0, 0.0}) == 0,
+          "left iteration push");
+    CHECK(pe_update_batch_push(&right, (pe_update_t){2u, 0u, 0u, 1.0, 0.0}) == 0,
+          "right iteration push");
+    sources[0] = (pe_update_batch_source_t){0u, &left};
+    sources[1] = (pe_update_batch_source_t){1u, &right};
+    CHECK(pe_update_batch_reduce(sources, 2u, &reduced) == 0 &&
+              reduced.iteration == 11u,
+          "reduction did not preserve the common iteration");
+    sources[1].batch = &conflicting;
+    CHECK(pe_update_batch_reduce(sources, 2u, &reduced) == -1,
+          "reduction accepted conflicting iterations");
+
+    pe_update_batch_destroy(&left);
+    pe_update_batch_destroy(&right);
+    pe_update_batch_destroy(&conflicting);
+    pe_update_batch_destroy(&reduced);
 }
 
 static int same_results(const pe_update_batch_t *left,
@@ -139,6 +172,7 @@ int main(void)
 {
     test_large_batch_round_trip();
     test_merge_reduces_same_slot();
+    test_reduction_preserves_iteration_metadata();
     test_reduction_ignores_arrival_order();
     if (failures != 0)
         return 1;

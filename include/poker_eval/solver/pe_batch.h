@@ -31,6 +31,9 @@ typedef struct
     pe_update_t *items;
     size_t count;
     size_t capacity;
+    /* Iteration at which this batch is applied. Zero means no algorithm
+       discounting is requested; solver-driven batches always set it. */
+    uint64_t iteration;
 } pe_update_batch_t;
 
 /* A batch together with the stable logical thread id that produced it. The

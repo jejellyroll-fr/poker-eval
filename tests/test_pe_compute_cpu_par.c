@@ -4,6 +4,7 @@
 
 #include <poker_eval/solver/pe_compute.h>
 
+#include <math.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -107,6 +108,60 @@ static void test_update_batch_reaches_storage(void)
     storage_ops->destroy(storage);
 }
 
+static void test_regret_and_average_modes(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_par_ops();
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    pe_compute_config_t cfg = {
+        .cpu_threads = 2,
+        .deterministic = 1,
+        .storage = storage_ops,
+        .regret_mode = PE_REGRET_DCFR,
+        .averaging_mode = PE_AVG_POWER,
+        .dcfr_alpha = 1.5,
+        .dcfr_beta = 0.0,
+        .dcfr_gamma = 2.0
+    };
+    pe_update_batch_t batch = {0};
+    void *storage = NULL;
+    void *backend = NULL;
+    pe_infoset_id_t id;
+    double *regrets;
+    const double *average;
+    size_t length;
+
+    CHECK(storage_ops->create(&storage, 1u) == 0 && storage,
+          "mode test storage creation failed");
+    if (!storage)
+        return;
+    cfg.storage_self = storage;
+    id = storage_ops->resolve(storage, 0xDCAFu, 2u, 1u, PE_STREET_UNKNOWN);
+    CHECK(id != PE_INFOSET_ID_INVALID, "mode test infoset resolution failed");
+    regrets = storage_ops->values(storage, id, PE_VALUES_REGRET, &length);
+    CHECK(regrets != NULL && length == 2u, "mode test regret storage unavailable");
+    if (regrets)
+        regrets[0] = 8.0;
+    CHECK(ops->create(&backend, &cfg) == 0 && backend,
+          "mode test cpu_par creation failed");
+    if (backend) {
+        batch.iteration = 1u;
+        CHECK(pe_update_batch_push(&batch,
+                                   (pe_update_t){id, 0u, 0u, 0.0, 4.0}) == 0,
+              "mode test update push failed");
+        CHECK(ops->apply_update_batch(backend, &batch) == 0,
+              "mode test update failed");
+        regrets = storage_ops->values(storage, id, PE_VALUES_REGRET, &length);
+        average = storage_ops->values_const(storage, id, PE_VALUES_AVERAGE,
+                                            &length);
+        CHECK(regrets && average && fabs(regrets[0] - 4.0) < 1e-12 &&
+                  fabs(average[0] - 1.0) < 1e-12,
+              "cpu_par did not apply DCFR semantics");
+        ops->destroy(backend);
+    }
+    pe_update_batch_destroy(&batch);
+    storage_ops->destroy(storage);
+}
+
 static void test_ragged_strategy_batch(void)
 {
     const pe_compute_ops_t *ops = pe_compute_cpu_par_ops();
@@ -183,6 +238,7 @@ int main(void)
     test_registration_and_capabilities();
     test_invalid_config_is_refused();
     test_update_batch_reaches_storage();
+    test_regret_and_average_modes();
     test_ragged_strategy_batch();
     test_ragged_strategy_matches_cpu_ref();
     if (failures != 0)

@@ -19,7 +19,10 @@ typedef struct
 void pe_update_batch_clear(pe_update_batch_t *batch)
 {
     if (batch)
+    {
         batch->count = 0u;
+        batch->iteration = 0u;
+    }
 }
 
 void pe_update_batch_destroy(pe_update_batch_t *batch)
@@ -87,6 +90,11 @@ int pe_update_batch_merge(pe_update_batch_t *destination,
     if ((destination->count != 0u && !destination->items) ||
         (source->count != 0u && !source->items))
         return -1;
+    if (destination->iteration != 0u && source->iteration != 0u &&
+        destination->iteration != source->iteration)
+        return -1;
+    if (destination->iteration == 0u)
+        destination->iteration = source->iteration;
 
     for (i = 0u; i < source->count; ++i)
     {
@@ -125,6 +133,7 @@ int pe_update_batch_reduce(const pe_update_batch_source_t *sources,
     size_t total = 0u;
     size_t source_index;
     size_t at = 0u;
+    uint64_t iteration = 0u;
 
     if (!out_reduced || (source_count != 0u && !sources))
         return -1;
@@ -136,8 +145,14 @@ int pe_update_batch_reduce(const pe_update_batch_source_t *sources,
         if (!batch || (batch->count != 0u && !batch->items) ||
             total > SIZE_MAX - batch->count)
             return -1;
+        if (batch->iteration != 0u) {
+            if (iteration != 0u && iteration != batch->iteration)
+                return -1;
+            iteration = batch->iteration;
+        }
         total += batch->count;
     }
+    out_reduced->iteration = iteration;
     if (total == 0u)
         return 0;
     if (total > SIZE_MAX / sizeof(*ordered))

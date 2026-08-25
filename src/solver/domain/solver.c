@@ -399,6 +399,12 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     compute_config.sample_batch_size = solver->config.execution.sample_batch_size;
     compute_config.terminal_batch_size = solver->config.execution.terminal_batch_size;
     compute_config.update_batch_size = solver->config.execution.update_batch_size;
+    compute_config.regret_mode = plan->regret;
+    compute_config.averaging_mode = plan->averaging;
+    compute_config.dcfr_alpha = solver->config.algorithm.dcfr_alpha;
+    compute_config.dcfr_beta = solver->config.algorithm.dcfr_beta;
+    compute_config.dcfr_gamma = solver->config.algorithm.dcfr_gamma;
+    compute_config.averaging_delay = solver->config.algorithm.averaging_delay;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
     if (compute_ops == NULL || compute_ops->create == NULL ||
@@ -421,6 +427,8 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             rc = ops->run_iteration(&traversal, &batch);
         if (rc == 0)
             rc = ops->end_iteration(&traversal, iteration);
+        if (rc == 0)
+            batch.iteration = iteration;
         if (rc == 0 && compute_ops->apply_update_batch(compute_self, &batch) != 0)
             rc = -1;
         if (rc != 0)
@@ -720,6 +728,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     compute_config.sample_batch_size = solver->config.execution.sample_batch_size;
     compute_config.terminal_batch_size = solver->config.execution.terminal_batch_size;
     compute_config.update_batch_size = solver->config.execution.update_batch_size;
+    compute_config.regret_mode = plan->regret;
+    compute_config.averaging_mode = plan->averaging;
+    compute_config.dcfr_alpha = solver->config.algorithm.dcfr_alpha;
+    compute_config.dcfr_beta = solver->config.algorithm.dcfr_beta;
+    compute_config.dcfr_gamma = solver->config.algorithm.dcfr_gamma;
+    compute_config.averaging_delay = solver->config.algorithm.averaging_delay;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
     if (!compute_ops || !compute_ops->create || !compute_ops->destroy ||
@@ -806,9 +820,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 break;
             }
         }
-        if (rc == 0 && compute_ops->apply_update_batch(
-                compute_self, &aggregated_batch) != 0)
-            rc = -1;
+        if (rc == 0) {
+            aggregated_batch.iteration = iteration;
+            if (compute_ops->apply_update_batch(
+                    compute_self, &aggregated_batch) != 0)
+                rc = -1;
+        }
         if (rc != 0)
         {
             pe_update_batch_destroy(&batch);

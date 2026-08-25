@@ -4,6 +4,7 @@
 
 #include <poker_eval/solver/pe_compute.h>
 
+#include <math.h>
 #include <stdio.h>
 
 static int failures;
@@ -62,14 +63,107 @@ static void test_reference_contract(void)
               "update push failed");
         CHECK(ops->apply_update_batch(backend, &batch) == 0,
               "reference update failed");
-        regrets = storage_ops->values_const(storage, id, PE_VALUES_REGRET,
-                                            &length);
+        regrets = storage_ops->values(storage, id, PE_VALUES_REGRET,
+                                      &length);
         average = storage_ops->values_const(storage, id, PE_VALUES_AVERAGE,
                                             &length);
         CHECK(regrets != NULL && average != NULL && regrets[3] == 1.5 &&
                   average[3] == 2.5,
               "reference update did not reach storage");
         CHECK(ops->sync(backend) == 0, "reference sync failed");
+        ops->destroy(backend);
+    }
+    pe_update_batch_destroy(&batch);
+    storage_ops->destroy(storage);
+}
+
+static void test_regret_and_average_modes(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    pe_compute_config_t plus_cfg = {
+        .cpu_threads = 1,
+        .deterministic = 1,
+        .storage = storage_ops,
+        .regret_mode = PE_REGRET_PLUS,
+        .averaging_mode = PE_AVG_UNIFORM
+    };
+    pe_compute_config_t dcfr_cfg = {
+        .cpu_threads = 1,
+        .deterministic = 1,
+        .storage = storage_ops,
+        .regret_mode = PE_REGRET_DCFR,
+        .averaging_mode = PE_AVG_POWER,
+        .dcfr_alpha = 1.5,
+        .dcfr_beta = 0.0,
+        .dcfr_gamma = 2.0
+    };
+    pe_update_batch_t batch = {0};
+    void *storage = NULL;
+    void *backend = NULL;
+    pe_infoset_id_t id;
+    double *regrets;
+    const double *average;
+    size_t length;
+
+    CHECK(storage_ops->create(&storage, 1u) == 0 && storage,
+          "mode test storage creation failed");
+    if (!storage)
+        return;
+    plus_cfg.storage_self = storage;
+    id = storage_ops->resolve(storage, 0xA11CEu, 2u, 1u, PE_STREET_UNKNOWN);
+    CHECK(id != PE_INFOSET_ID_INVALID, "CFR+ infoset resolution failed");
+    CHECK(ops->create(&backend, &plus_cfg) == 0 && backend,
+          "CFR+ backend creation failed");
+    if (backend) {
+        batch.iteration = 1u;
+        CHECK(pe_update_batch_push(&batch,
+                                   (pe_update_t){id, 1u, 0u, -2.0, 1.0}) == 0,
+              "CFR+ update push failed");
+        CHECK(ops->apply_update_batch(backend, &batch) == 0,
+              "CFR+ update failed");
+        regrets = storage_ops->values(storage, id, PE_VALUES_REGRET,
+                                      &length);
+        average = storage_ops->values_const(storage, id, PE_VALUES_AVERAGE,
+                                            &length);
+        CHECK(regrets && average && regrets[1] == 0.0 && average[1] == 1.0,
+              "CFR+ did not clamp regret or preserve average update");
+        ops->destroy(backend);
+    }
+    pe_update_batch_clear(&batch);
+    storage_ops->destroy(storage);
+    storage = NULL;
+    backend = NULL;
+
+    CHECK(storage_ops->create(&storage, 1u) == 0 && storage,
+          "DCFR storage creation failed");
+    if (!storage) {
+        pe_update_batch_destroy(&batch);
+        return;
+    }
+    dcfr_cfg.storage_self = storage;
+    id = storage_ops->resolve(storage, 0xDCFEu, 2u, 1u, PE_STREET_UNKNOWN);
+    CHECK(id != PE_INFOSET_ID_INVALID, "DCFR infoset resolution failed");
+    regrets = storage_ops->values(storage, id, PE_VALUES_REGRET, &length);
+    CHECK(regrets != NULL && length == 2u, "DCFR regret storage unavailable");
+    if (regrets)
+        regrets[0] = 8.0;
+    CHECK(ops->create(&backend, &dcfr_cfg) == 0 && backend,
+          "DCFR backend creation failed");
+    if (backend) {
+        batch.iteration = 1u;
+        CHECK(pe_update_batch_push(&batch,
+                                   (pe_update_t){id, 0u, 0u, 0.0, 4.0}) == 0,
+              "DCFR update push failed");
+        CHECK(ops->apply_update_batch(backend, &batch) == 0,
+              "DCFR update failed");
+        regrets = storage_ops->values(storage, id, PE_VALUES_REGRET,
+                                      &length);
+        average = storage_ops->values_const(storage, id, PE_VALUES_AVERAGE,
+                                            &length);
+        CHECK(regrets && average && fabs(regrets[0] - 4.0) < 1e-12 &&
+                  fabs(average[0] - 1.0) < 1e-12,
+              "DCFR did not discount regret and power-weight average");
         ops->destroy(backend);
     }
     pe_update_batch_destroy(&batch);
@@ -139,6 +233,7 @@ static void test_ragged_strategy_batch(void)
 int main(void)
 {
     test_reference_contract();
+    test_regret_and_average_modes();
     test_invalid_parallel_config();
     test_terminal_batch();
     test_ragged_strategy_batch();

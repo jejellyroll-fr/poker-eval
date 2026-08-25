@@ -7,6 +7,7 @@
 
 #include <poker_eval/solver/pe_batch.h>
 #include <poker_eval/solver/pe_capabilities.h>
+#include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_vector.h>
 #include <poker_eval/core/enumdefs.h>
 
@@ -30,6 +31,17 @@ typedef struct pe_compute_config_t
        injects its storage port. */
     const pe_storage_ops_t *storage;
     void *storage_self;
+
+    /* Update semantics are part of the compute contract.  Keeping them here
+       prevents a backend from silently treating CFR+, DCFR or a weighted
+       average as vanilla CFR. Appending these fields preserves source
+       compatibility for existing positional initializers. */
+    pe_regret_mode_t regret_mode;
+    pe_averaging_mode_t averaging_mode;
+    double dcfr_alpha;
+    double dcfr_beta;
+    double dcfr_gamma;
+    int averaging_delay;
 } pe_compute_config_t;
 
 /*

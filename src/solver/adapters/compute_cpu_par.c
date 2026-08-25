@@ -3,6 +3,7 @@
  */
 
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/solver/pe_regret_dcfr.h>
 
 #include <math.h>
 #include <stdint.h>
@@ -23,8 +24,8 @@ typedef struct
     double *regrets;
     double *average;
     size_t slot;
-    double regret_delta;
-    double average_delta;
+    double regret_value;
+    double average_value;
 } pe_update_target_t;
 
 static uint64_t cpu_par_capabilities(void *self)
@@ -56,6 +57,65 @@ static int cpu_par_create(void **self, const pe_compute_config_t *cfg)
 static void cpu_par_destroy(void *self)
 {
     free(self);
+}
+
+static int cpu_par_update_values(const pe_compute_config_t *config,
+                                 const pe_update_batch_t *batch,
+                                 const pe_update_t *update,
+                                 double old_regret, double old_average,
+                                 double *out_regret, double *out_average)
+{
+    double regret = old_regret;
+    double average_delta = update->average_delta;
+
+    if (!config || !batch || !update || !out_regret || !out_average ||
+        !isfinite(old_regret) || !isfinite(old_average))
+        return -1;
+    if (config->regret_mode == PE_REGRET_DCFR) {
+        pe_dcfr_params_t params = {
+            config->dcfr_alpha, config->dcfr_beta, config->dcfr_gamma
+        };
+        if (pe_dcfr_discount_regrets(&regret, 1u, batch->iteration,
+                                     &params) != 0)
+            return -1;
+    }
+    regret += update->delta;
+    if (config->regret_mode == PE_REGRET_PLUS && regret < 0.0)
+        regret = 0.0;
+
+    switch (config->averaging_mode) {
+    case PE_AVG_LINEAR:
+        if (batch->iteration == 0u)
+            return -1;
+        average_delta *= (double)batch->iteration;
+        break;
+    case PE_AVG_POWER: {
+        double weight;
+        if (pe_dcfr_average_weight(batch->iteration, config->dcfr_gamma,
+                                   &weight) != 0)
+            return -1;
+        average_delta *= weight;
+        break;
+    }
+    case PE_AVG_DELAYED_LINEAR:
+        if (batch->iteration <= (uint64_t)(config->averaging_delay < 0
+                                             ? 0 : config->averaging_delay))
+            average_delta = 0.0;
+        else
+            average_delta *= (double)(batch->iteration -
+                                      (uint64_t)config->averaging_delay);
+        break;
+    case PE_AVG_UNIFORM:
+    case PE_AVG_IMPORTANCE:
+    case PE_AVG_COUNT:
+    default:
+        break;
+    }
+    if (!isfinite(regret) || !isfinite(old_average + average_delta))
+        return -1;
+    *out_regret = regret;
+    *out_average = old_average + average_delta;
+    return 0;
 }
 
 static void cpu_par_strategy_one(const pe_infoset_batch_t *in,
@@ -188,9 +248,15 @@ static int cpu_par_apply_update_batch(void *self,
             average = backend->config.storage->values(
                 backend->config.storage_self, update->infoset,
                 PE_VALUES_AVERAGE, &average_len);
-            if (!regrets || !average || slot >= regret_len || slot >= average_len ||
-                !isfinite(regrets[slot] + update->delta) ||
-                !isfinite(average[slot] + update->average_delta))
+            if (!regrets || !average || slot >= regret_len || slot >= average_len)
+            {
+                free(targets);
+                return -1;
+            }
+            if (cpu_par_update_values(&backend->config, batch, update,
+                                      regrets[slot], average[slot],
+                                      &targets[i].regret_value,
+                                      &targets[i].average_value) != 0)
             {
                 free(targets);
                 return -1;
@@ -198,8 +264,6 @@ static int cpu_par_apply_update_batch(void *self,
             targets[i].regrets = regrets;
             targets[i].average = average;
             targets[i].slot = slot;
-            targets[i].regret_delta = update->delta;
-            targets[i].average_delta = update->average_delta;
         }
     }
 
@@ -210,8 +274,8 @@ static int cpu_par_apply_update_batch(void *self,
     {
         if (targets != NULL)
         {
-            targets[i].regrets[targets[i].slot] += targets[i].regret_delta;
-            targets[i].average[targets[i].slot] += targets[i].average_delta;
+            targets[i].regrets[targets[i].slot] = targets[i].regret_value;
+            targets[i].average[targets[i].slot] = targets[i].average_value;
         }
     }
     free(targets);

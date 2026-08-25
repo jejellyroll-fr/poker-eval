@@ -1564,16 +1564,16 @@ int main(int argc, char **argv)
         pe_compute_kind_t lane_backend = selected_backend == PE_COMPUTE_AUTO
             ? PE_COMPUTE_CPU_REF : selected_backend;
 
-        /* The sampled external adapter is a real Lane B path, but its current
-           update kernel is vanilla MCCFR only. Refuse presets whose regret or
-           averaging axes are not implemented here instead of reporting a
-           result under the wrong algorithm name. */
+        /* Lane B supports the two sampled traversal families. External DCFR
+           is applied by the CPU update adapters; full-tree presets remain
+           outside this sampled path and are refused here. */
         if (selected_preset != PE_PRESET_EXTERNAL_MCCFR &&
+            selected_preset != PE_PRESET_EXTERNAL_DCFR &&
             selected_preset != PE_PRESET_OUTCOME_MCCFR)
         {
             fprintf(stderr,
-                    "Lane B supports external-mccfr and outcome-mccfr; "
-                    "selected algorithm %s is not wired to sampled updates yet\n",
+                    "Lane B supports external-mccfr, external-dcfr and outcome-mccfr; "
+                    "selected algorithm %s is not wired to sampled updates\n",
                     pe_preset_name(selected_preset));
             mpf_state_cleanup(&root_state);
             mpf_perf_stats_pool_destroy(perf_pool);

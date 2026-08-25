@@ -146,6 +146,27 @@ int main(void)
         return 1;
     }
     pe_solver_destroy(solver);
+
+    cfg = pe_solver_config_default();
+    cfg.algorithm.preset = PE_PRESET_EXTERNAL_DCFR;
+    cfg.max_iterations = 4u;
+    cfg.problem.expected_infosets = 4u;
+    cfg.problem.expected_actions = 2u;
+    cfg.problem.expected_combos = 1u;
+    cfg.execution.sample_batch_size = 2u;
+    cfg.seed = 0x5678u;
+    cfg.target_exploitability_mbb = 0.0;
+    cfg.exploitability_interval = 2u;
+    solver = pe_solver_create(&cfg, &deps);
+    if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
+        pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+        !progress.complete || progress.iteration != cfg.max_iterations)
+    {
+        fprintf(stderr, "test_pe_solver_sampled: external DCFR lifecycle failed\n");
+        pe_solver_destroy(solver);
+        return 1;
+    }
+    pe_solver_destroy(solver);
     puts("test_pe_solver_sampled: external sampling lifecycle passed");
     return 0;
 }
