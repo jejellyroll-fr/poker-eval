@@ -46,6 +46,10 @@ typedef struct pe_runtime_capabilities_t
 /** Probe the current process and host. Returns 0 on success, -1 on NULL. */
 int pe_runtime_probe(pe_runtime_capabilities_t *out);
 
+/** Choose the best validated backend for an automatic frontend request. */
+pe_compute_kind_t pe_runtime_recommended_backend(
+    const pe_runtime_capabilities_t *runtime);
+
 /** Return a stable user-facing name for the selected SIMD capability. */
 const char *pe_runtime_simd_name(simd_capability_t capability);
 

@@ -1227,7 +1227,6 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    if (selected_backend != PE_COMPUTE_AUTO)
     {
         pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *backend_info;
@@ -1236,6 +1235,17 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "Could not probe the requested backend\n");
             return 2;
+        }
+        if (selected_backend == PE_COMPUTE_AUTO)
+        {
+            selected_backend = pe_runtime_recommended_backend(&runtime);
+            if (selected_backend == PE_COMPUTE_AUTO)
+            {
+                fprintf(stderr, "no validated runtime solver backend is available\n");
+                return 2;
+            }
+            printf("backend_auto_resolved=%s\n",
+                   pe_compute_kind_name(selected_backend));
         }
         backend_info = &runtime.backends[selected_backend];
         if (!backend_info->runtime_available || !backend_info->validated)

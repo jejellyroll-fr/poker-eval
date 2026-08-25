@@ -7,6 +7,7 @@
 int main(void)
 {
     pe_runtime_capabilities_t runtime;
+    pe_runtime_capabilities_t synthetic;
     char status[256];
     if (pe_runtime_probe(&runtime) != 0)
         return 1;
@@ -23,6 +24,20 @@ int main(void)
     if (pe_runtime_simd_name(runtime.simd) == NULL ||
         pe_runtime_simd_name(runtime.simd)[0] == '\0')
         return 5;
+    memset(&synthetic, 0, sizeof(synthetic));
+    synthetic.openmp_available = 1;
+    synthetic.backends[PE_COMPUTE_CPU_PAR].runtime_available = 1;
+    synthetic.backends[PE_COMPUTE_CPU_PAR].validated = 1;
+    synthetic.backends[PE_COMPUTE_CPU_REF].runtime_available = 1;
+    synthetic.backends[PE_COMPUTE_CPU_REF].validated = 1;
+    if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_CPU_PAR)
+        return 6;
+    synthetic.openmp_available = 0;
+    if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_CPU_REF)
+        return 7;
+    memset(&synthetic, 0, sizeof(synthetic));
+    if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_AUTO)
+        return 8;
     printf("runtime: cpus=%u openmp=%d simd=%s cpu_ref=%s\n",
            runtime.logical_cpus, runtime.openmp_available,
            pe_runtime_simd_name(runtime.simd), status);

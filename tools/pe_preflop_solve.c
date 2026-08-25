@@ -684,12 +684,22 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    if (options.backend != PE_COMPUTE_AUTO)
     {
         pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *backend;
         if (pe_runtime_probe(&runtime) != 0)
             return 1;
+        if (options.backend == PE_COMPUTE_AUTO)
+        {
+            options.backend = pe_runtime_recommended_backend(&runtime);
+            if (options.backend == PE_COMPUTE_AUTO)
+            {
+                fprintf(stderr, "no validated runtime solver backend is available\n");
+                return 2;
+            }
+            printf("backend_auto_resolved=%s\n",
+                   pe_compute_kind_name(options.backend));
+        }
         backend = &runtime.backends[options.backend];
         if (!backend->runtime_available || !backend->validated)
         {

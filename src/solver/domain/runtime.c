@@ -150,6 +150,27 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
     return 0;
 }
 
+pe_compute_kind_t pe_runtime_recommended_backend(
+    const pe_runtime_capabilities_t *runtime)
+{
+    const pe_runtime_backend_info_t *parallel;
+    const pe_runtime_backend_info_t *reference;
+
+    if (!runtime)
+        return PE_COMPUTE_AUTO;
+
+    parallel = &runtime->backends[PE_COMPUTE_CPU_PAR];
+    if (runtime->openmp_available && parallel->runtime_available &&
+        parallel->validated)
+        return PE_COMPUTE_CPU_PAR;
+
+    reference = &runtime->backends[PE_COMPUTE_CPU_REF];
+    if (reference->runtime_available && reference->validated)
+        return PE_COMPUTE_CPU_REF;
+
+    return PE_COMPUTE_AUTO;
+}
+
 const char *pe_runtime_simd_name(simd_capability_t capability)
 {
     const char *name = simd_capability_name(capability);
