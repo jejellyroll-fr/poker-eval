@@ -799,6 +799,8 @@ static int seed_monker_locks(monker_lock_walk_t *walk, uint64_t key, int depth)
 
 int main(int argc, char **argv)
 {
+    pe_runtime_capabilities_t runtime_caps = {0};
+    int runtime_caps_valid = 0;
     const char *tree_path = NULL;
     const char *mkr_path = NULL;
     const char *strategy_name = "storedstrategy0";
@@ -1275,17 +1277,17 @@ int main(int argc, char **argv)
         return 2;
     }
     {
-        pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *backend_info;
-        if (pe_runtime_probe(&runtime) != 0 ||
+        if (pe_runtime_probe(&runtime_caps) != 0 ||
             selected_backend < 0 || selected_backend >= PE_COMPUTE_COUNT)
         {
             fprintf(stderr, "Could not probe the requested backend\n");
             return 2;
         }
+        runtime_caps_valid = 1;
         if (selected_backend == PE_COMPUTE_AUTO)
         {
-            selected_backend = pe_runtime_recommended_backend(&runtime);
+            selected_backend = pe_runtime_recommended_backend(&runtime_caps);
             if (selected_backend == PE_COMPUTE_AUTO)
             {
                 fprintf(stderr, "no validated runtime solver backend is available\n");
@@ -1294,7 +1296,7 @@ int main(int argc, char **argv)
             printf("backend_auto_resolved=%s\n",
                    pe_compute_kind_name(selected_backend));
         }
-        backend_info = &runtime.backends[selected_backend];
+        backend_info = &runtime_caps.backends[selected_backend];
         if (!backend_info->runtime_available || !backend_info->validated)
         {
             fprintf(stderr, "backend refused: %s (%s)\n",
@@ -1735,6 +1737,11 @@ int main(int argc, char **argv)
                pe_compute_kind_name(lane_backend),
                pe_precision_name(selected_precision), cpu_threads,
                sample_batch, iterations, (int)lane_status);
+        printf("lane_b_runtime=backend_validated=%d simd_detected=%s "
+               "simd_cfr=not-integrated\n",
+               runtime_caps_valid ? 1 : 0,
+               runtime_caps_valid ? pe_runtime_simd_name(runtime_caps.simd)
+                                   : "unknown");
         printf("lane_b_benchmark=cpu_seconds:%.6f trajectories:%llu throughput:%.3f/s\n",
                elapsed_cpu, (unsigned long long)trajectories,
                trajectories_per_second);
@@ -1759,7 +1766,9 @@ int main(int argc, char **argv)
                         "\"algorithm\":\"%s\",\"traversal\":\"%s\","
                         "\"regret\":\"%s\",\"policy\":\"%s\","
                         "\"averaging\":\"%s\",\"backend\":\"%s\","
-                        "\"precision\":\"%s\",\"threads\":%d,"
+                        "\"backend_validated\":%s,\"precision\":\"%s\","
+                        "\"simd_detected\":\"%s\","
+                        "\"simd_cfr_integrated\":false,\"threads\":%d,"
                         "\"iterations\":%d,\"sample_batch\":%d,"
                         "\"trajectories\":%llu,\"cpu_seconds\":%.9f,"
                         "\"trajectories_per_second\":%.9f,\"status\":%d}\n",
@@ -1770,7 +1779,11 @@ int main(int argc, char **argv)
                         pe_policy_name(lane_cfg.algorithm.policy),
                         pe_averaging_name(lane_cfg.algorithm.averaging),
                         pe_compute_kind_name(lane_backend),
-                        pe_precision_name(selected_precision), cpu_threads,
+                        runtime_caps_valid ? "true" : "false",
+                        pe_precision_name(selected_precision),
+                        runtime_caps_valid ? pe_runtime_simd_name(runtime_caps.simd)
+                                           : "unknown",
+                        cpu_threads,
                         iterations, sample_batch,
                         (unsigned long long)trajectories, elapsed_cpu,
                         trajectories_per_second, (int)lane_status);
