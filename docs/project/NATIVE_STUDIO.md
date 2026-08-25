@@ -21,8 +21,11 @@ The application workflow is strict:
    embedded ranges determine the game, player count, street, and combo layout.
 2. Enter the board required by that street. A `.tree` does not contain board
    cards, so the application never invents them or keeps a stale board. A
-   preflop tree correctly requires zero board cards.
-3. Press **Solve this spot**. River trees are sent to `pe-vector-sim`.
+   preflop tree correctly requires zero board cards; loading one clears the
+   board field and synchronises the game/player selectors with the header.
+3. Press **Solve this spot**. The run is asynchronous: the output panel is
+   refreshed while the child solver is running, and the same button becomes
+   **Stop solve** and cancels the child process. River trees are sent to `pe-vector-sim`.
    Preflop trees are sent to `pe-preflop-solve --tree`, use `100%` for any
    range left empty, follow the imported Monker betting nodes, deal flop,
    turn and river, and settle the showdown. A rangeless tree is therefore a
@@ -31,7 +34,9 @@ The application workflow is strict:
 The runner field defaults to `pe-vector-sim` for river spots. For preflop
 spots the Studio selects `pe-preflop-solve` automatically and resolves it from
 `build/tools` when running from a checkout. The current Lane B path samples
-correlated private deals and public runouts; increasing iterations improves
-coverage of the complete board distribution. The next UI tranche can replace
-the text output with the range matrix, tree canvas, and action/EV panels
-without changing the setup or solver seams.
+correlated private deals and public runouts. The output includes iteration,
+fraction, empirical exploitability in mBB, and the configured target at each
+measurement interval; increasing iterations improves coverage of the complete
+board distribution. The next UI tranche can replace the text output with the
+range matrix, tree canvas, and action/EV panels without changing the setup or
+solver seams.

@@ -31,6 +31,7 @@
 #include <poker_eval/solver/pe_outcome_traversal.h>
 
 #include <stddef.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -166,7 +167,7 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
        the injection silently dropped the adapter. */
     event.level = PE_LOG_INFO;
     event.category = "solver";
-    event.message = "solver created";
+    event.message = "solver created\n";
     event.iteration = 0;
     pe_telemetry_emit(solver->deps.telemetry, &event);
 
@@ -575,6 +576,56 @@ static double sampled_terminal_value(const void *state, int player, void *user)
     return adapter->base->terminal_value(state, player, adapter->base->user);
 }
 
+static pe_solver_status_t pe_solver_sampled_measure_br(
+    pe_solver_t *solver, const pe_external_game_t *sampled_game,
+    uint64_t iteration, int *target_reached)
+{
+    pe_external_br_config_t br_config = pe_external_br_config_default();
+    double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
+    uint8_t player;
+    int reached = 0;
+
+    if (!solver || !sampled_game || !target_reached)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    br_config.max_depth = 4096u;
+    br_config.samples = solver->config.exploitability_interval == 0u
+        ? 256u
+        : solver->config.exploitability_interval > UINT32_MAX
+            ? UINT32_MAX
+            : (uint32_t)solver->config.exploitability_interval;
+    br_config.seed = solver->config.seed ^ iteration;
+    for (player = 0u; player < sampled_game->player_count; ++player)
+    {
+        pe_external_br_result_t br_result;
+        if (pe_external_best_response_sampled(sampled_game, player,
+                                              &br_config, &br_result) != 0)
+            return PE_SOLVER_ERR_EXECUTION;
+        gaps[player] = br_result.br_gap;
+    }
+    if (pe_best_response_metrics_from_multiway(
+            sampled_game->player_count, 1, gaps, 0.0, 0.0,
+            solver->config.execution.big_blind, &solver->metrics) != PE_SOLVER_OK)
+        return PE_SOLVER_ERR_EXECUTION;
+    solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
+    solver->metrics_available = 1;
+    if (pe_best_response_target_reached(
+            solver->metrics.exploitability_mbb_per_game,
+            solver->config.target_exploitability_mbb, &reached) != PE_SOLVER_OK)
+        return PE_SOLVER_ERR_EXECUTION;
+    *target_reached = reached;
+    pe_telemetry_emitf(
+        solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+        "progress iteration=%" PRIu64 " total=%" PRIu64
+        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f\n",
+        iteration, solver->config.max_iterations,
+        solver->config.max_iterations > 0u
+            ? (double)iteration / (double)solver->config.max_iterations : 0.0,
+        solver->metrics.exploitability_mbb_per_game,
+        solver->config.target_exploitability_mbb);
+    pe_telemetry_flush(solver->deps.telemetry);
+    return PE_SOLVER_OK;
+}
+
 /* Lane B keeps the state space sampled instead of expanding every private
  * deal and every future board.  This is the execution path intended for wide
  * preflop ranges: the external game owns the deal/range sampler, while the
@@ -594,6 +645,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     pe_external_game_t sampled_game;
     uint64_t iteration;
     int use_outcome = plan->traversal == PE_TRAVERSAL_OUTCOME_SAMPLING;
+    int target_reached = 0;
     int rc;
 
     if (!game || !game->root || solver->config.max_iterations == 0u ||
@@ -657,7 +709,9 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
 
     solver->state = PE_SOLVER_STATE_RUNNING;
     for (iteration = solver->iteration + 1u;
-         iteration <= solver->config.max_iterations; ++iteration)
+         iteration <= solver->config.max_iterations &&
+         solver->state == PE_SOLVER_STATE_RUNNING && !target_reached;
+         ++iteration)
     {
         int updating_player = (int)((iteration - 1u) % game->player_count);
         /* A sampled Lane B iteration may contain several independent
@@ -702,6 +756,33 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             return PE_SOLVER_ERR_EXECUTION;
         }
         solver->iteration = iteration;
+
+        if (solver->config.target_exploitability_mbb > 0.0 &&
+            solver->config.exploitability_interval > 0u &&
+            (iteration % solver->config.exploitability_interval == 0u ||
+             iteration == solver->config.max_iterations))
+        {
+            if (pe_solver_sampled_measure_br(solver, &sampled_game,
+                                             iteration, &target_reached) != PE_SOLVER_OK)
+            {
+                pe_update_batch_destroy(&batch);
+                pe_update_batch_destroy(&aggregated_batch);
+                if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+                else pe_external_sampling_ctx_destroy(&external);
+                compute_ops->destroy(compute_self);
+                solver->state = PE_SOLVER_STATE_STOPPED;
+                return PE_SOLVER_ERR_EXECUTION;
+            }
+        }
+    }
+    if (solver->state == PE_SOLVER_STATE_STOPPED)
+    {
+        pe_update_batch_destroy(&batch);
+        pe_update_batch_destroy(&aggregated_batch);
+        if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+        else pe_external_sampling_ctx_destroy(&external);
+        compute_ops->destroy(compute_self);
+        return PE_SOLVER_OK;
     }
     if (compute_ops->sync && compute_ops->sync(compute_self) != 0)
     {
@@ -718,40 +799,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
        empirical measurement. It is still useful for a configured target and
        for reporting: the caller receives a sampled empirical gap rather
        than a false exact/Nash claim. */
-    if (solver->config.target_exploitability_mbb > 0.0)
+    if (solver->config.target_exploitability_mbb > 0.0 &&
+        !solver->metrics_available)
     {
-        pe_external_br_config_t br_config = pe_external_br_config_default();
-        double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
-        uint8_t player;
-        /* Lane B can now cross four betting streets.  The historical BR
-           default (128 plies) was sufficient for a single all-in street but
-           truncates perfectly legal small-increment trees before river. */
-        br_config.max_depth = 4096u;
-        br_config.samples = solver->config.exploitability_interval == 0u
-            ? 256u
-            : solver->config.exploitability_interval > UINT32_MAX
-                ? UINT32_MAX
-                : (uint32_t)solver->config.exploitability_interval;
-        br_config.seed = solver->config.seed ^ solver->iteration;
-        for (player = 0u; player < sampled_game.player_count; ++player)
-        {
-            pe_external_br_result_t br_result;
-            if (pe_external_best_response_sampled(&sampled_game, player,
-                                                  &br_config, &br_result) != 0)
-            {
-                pe_update_batch_destroy(&batch);
-                pe_update_batch_destroy(&aggregated_batch);
-                if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
-                else pe_external_sampling_ctx_destroy(&external);
-                compute_ops->destroy(compute_self);
-                solver->state = PE_SOLVER_STATE_STOPPED;
-                return PE_SOLVER_ERR_EXECUTION;
-            }
-            gaps[player] = br_result.br_gap;
-        }
-        if (pe_best_response_metrics_from_multiway(
-                sampled_game.player_count, 1, gaps, 0.0, 0.0,
-                solver->config.execution.big_blind, &solver->metrics) != PE_SOLVER_OK)
+        if (pe_solver_sampled_measure_br(solver, &sampled_game,
+                                         solver->iteration,
+                                         &target_reached) != PE_SOLVER_OK)
         {
             pe_update_batch_destroy(&batch);
             pe_update_batch_destroy(&aggregated_batch);
@@ -761,8 +814,6 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             solver->state = PE_SOLVER_STATE_STOPPED;
             return PE_SOLVER_ERR_EXECUTION;
         }
-        solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
-        solver->metrics_available = 1;
     }
     pe_update_batch_destroy(&batch);
     pe_update_batch_destroy(&aggregated_batch);

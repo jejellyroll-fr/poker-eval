@@ -46,6 +46,8 @@ typedef struct {
     int allow_nonallin_call;
     int postflop_streets;
     uint64_t br_samples;
+    uint64_t exploitability_interval;
+    double target_mbb;
     uint64_t seed;
     const char *output;
     const char *tree;
@@ -68,6 +70,8 @@ static void usage(FILE *stream)
         "  --postflop                   continue through flop, turn and river\n"
         "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
+        "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
+        "  --exploitability-interval N  measure/print convergence every N iterations\n"
         "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
         "  --help                       show this help\n", DEFAULT_ITERATIONS);
@@ -152,6 +156,8 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->ante = 0.0;
     options->min_raise = DEFAULT_MIN_RAISE;
     options->br_samples = 256u;
+    options->exploitability_interval = 256u;
+    options->target_mbb = 1.0;
     options->seed = UINT64_C(0x50455f5052464c42);
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -169,7 +175,9 @@ static int parse_options(int argc, char **argv, options_t *options)
              strcmp(arg, "--ante") == 0 || strcmp(arg, "--br-samples") == 0 ||
              strcmp(arg, "--min-raise") == 0 || strcmp(arg, "--raise") == 0 ||
              strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0 ||
-             strcmp(arg, "--tree") == 0) &&
+             strcmp(arg, "--tree") == 0 ||
+             strcmp(arg, "--target-mbb") == 0 ||
+             strcmp(arg, "--exploitability-interval") == 0) &&
             (!value || value[0] == '-')) {
             fprintf(stderr, "missing value for %s\n", arg);
             return -1;
@@ -212,6 +220,18 @@ static int parse_options(int argc, char **argv, options_t *options)
         } else if (strcmp(arg, "--br-samples") == 0) {
             if (parse_u64(value, &options->br_samples) != 0 ||
                 options->br_samples == 0u || options->br_samples > UINT32_MAX)
+                return -1;
+        } else if (strcmp(arg, "--target-mbb") == 0) {
+            char *end = NULL;
+            double target;
+            errno = 0;
+            target = strtod(value, &end);
+            if (errno || end == value || *end != '\0' || target < 0.0)
+                return -1;
+            options->target_mbb = target;
+        } else if (strcmp(arg, "--exploitability-interval") == 0) {
+            if (parse_u64(value, &options->exploitability_interval) != 0 ||
+                options->exploitability_interval == 0u)
                 return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
@@ -373,11 +393,12 @@ int main(int argc, char **argv)
     config.problem.expected_combos = 1u;
     config.max_iterations = options.iterations;
     config.execution.big_blind = options.big_blind;
-    config.target_exploitability_mbb = 1.0;
-    config.exploitability_interval = options.br_samples;
+    config.target_exploitability_mbb = options.target_mbb;
+    config.exploitability_interval = options.exploitability_interval;
     config.seed = options.seed;
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);
+    deps.telemetry = pe_telemetry_stdout();
     solver = pe_solver_create(&config, &deps);
     status = solver ? pe_solver_run(solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
     if (solver)

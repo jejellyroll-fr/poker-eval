@@ -11,6 +11,8 @@
 
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+#include <osbs/bmutex.h>
+#include <osbs/bproc.h>
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -59,6 +61,14 @@ struct _app_t
     Edit *runner_edit;
     TextView *status;
     Label *context;
+    Button *solve_button;
+    Mutex *solve_mutex;
+    Proc *solve_proc;
+    int solve_running;
+    int solve_cancel_requested;
+    uint32_t solve_exit_code;
+    char solve_command[8192];
+    char solve_output[16384];
 };
 
 static void i_on_close(App *app, Event *event);
@@ -97,6 +107,14 @@ static const char *game_name(enum_game_t game)
     if (game == game_omaha5) return "plo5";
     if (game == game_omaha6) return "plo6";
     return "unknown";
+}
+
+static uint32_t game_index(enum_game_t game)
+{
+    if (game == game_holdem) return 0u;
+    if (game == game_omaha) return 1u;
+    if (game == game_omaha5) return 2u;
+    return 3u;
 }
 
 static enum_game_t game_from_index(uint32_t index)
@@ -175,13 +193,20 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
         layout->hole_cards = hole_cards_from_game(layout->game);
         layout->combo_count = ranges.combo_count;
     }
+    combo_selected(app->game_combo, game_index(layout->game));
+    if (header->player_count >= 2u && header->player_count <= 8u)
+        combo_selected(app->players_combo, header->player_count - 2u);
+    if (header->street == 0)
+        edit_text(app->board_edit, "");
     status(app,
-           "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d\nRanges: %s\n\nThe board is not stored in .tree. Enter the %d board cards before Solve.",
+           "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d\nRanges: %s\n\n%s",
            game_name(layout->game),
            ranges_present ? " (from tree)" : " (selected)",
            header->player_count, street_name(header->street), tree->node_count,
            ranges_present ? "embedded" : "not embedded; enter external ranges",
-           street_cards(header->street));
+           header->street == 0
+               ? "Preflop Lane B: ranges are sampled with card removal; public boards are dealt through river."
+               : "Enter the board cards for this tree street before Solve.");
     mpf_tree_free(tree);
     pe_monker_range_set_free(&ranges);
     return 0;
@@ -312,6 +337,143 @@ static const char *resolve_runner(const char *configured, const char *name)
     return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : NULL;
 }
 
+static void i_solve_copy_output(App *app, char *out, size_t capacity)
+{
+    size_t total, length;
+    if (!app || !out || capacity == 0u)
+        return;
+    bmutex_lock(app->solve_mutex);
+    total = strlen(app->solve_output);
+    length = total < capacity - 1u ? total : capacity - 1u;
+    memcpy(out, app->solve_output + total - length, length);
+    out[length] = '\0';
+    bmutex_unlock(app->solve_mutex);
+}
+
+static void i_solve_append_output(App *app, const char *data, size_t length)
+{
+    size_t current;
+    if (!app || !data || length == 0u)
+        return;
+    bmutex_lock(app->solve_mutex);
+    current = strlen(app->solve_output);
+    if (length >= sizeof(app->solve_output))
+    {
+        data += length - (sizeof(app->solve_output) - 1u);
+        length = sizeof(app->solve_output) - 1u;
+        current = 0u;
+    }
+    if (current + length >= sizeof(app->solve_output))
+    {
+        size_t drop = current + length - (sizeof(app->solve_output) - 1u);
+        memmove(app->solve_output, app->solve_output + drop, current - drop);
+        current -= drop;
+    }
+    memcpy(app->solve_output + current, data, length);
+    app->solve_output[current + length] = '\0';
+    bmutex_unlock(app->solve_mutex);
+}
+
+static void i_solve_request_stop(App *app)
+{
+    Proc *proc;
+    if (!app)
+        return;
+    bmutex_lock(app->solve_mutex);
+    app->solve_cancel_requested = 1;
+    proc = app->solve_proc;
+    if (proc)
+        (void)bproc_cancel(proc);
+    bmutex_unlock(app->solve_mutex);
+    status(app, "STOPPING\nThe solver is being stopped at the current safe point...");
+}
+
+static uint32_t i_solve_main(App *app)
+{
+    Proc *proc;
+    perror_t error = ekPOK;
+    byte_t buffer[2048];
+    uint32_t read_size = 0u;
+    uint32_t exit_code = 1u;
+
+    proc = bproc_exec(app->solve_command, &error);
+    bmutex_lock(app->solve_mutex);
+    app->solve_proc = proc;
+    if (proc && app->solve_cancel_requested)
+        (void)bproc_cancel(proc);
+    bmutex_unlock(app->solve_mutex);
+    if (!proc)
+    {
+        i_solve_append_output(app, "Could not launch solver process.\n", 34u);
+        return exit_code;
+    }
+    while (bproc_read(proc, buffer, sizeof(buffer), &read_size, &error))
+    {
+        i_solve_append_output(app, (const char *)buffer, read_size);
+        read_size = 0u;
+    }
+    exit_code = bproc_wait(proc);
+    bmutex_lock(app->solve_mutex);
+    app->solve_proc = NULL;
+    app->solve_exit_code = exit_code;
+    bmutex_unlock(app->solve_mutex);
+    bproc_close(&proc);
+    return exit_code;
+}
+
+static void i_solve_update(App *app)
+{
+    char output[7800];
+    int running;
+    if (!app)
+        return;
+    bmutex_lock(app->solve_mutex);
+    running = app->solve_running;
+    bmutex_unlock(app->solve_mutex);
+    i_solve_copy_output(app, output, sizeof(output));
+    status(app, "%s\n%s\n\nClick Stop solve to interrupt the run.",
+           running ? "SOLVING" : "SOLVE",
+           output[0] ? output : "Waiting for progress...");
+}
+
+static void i_solve_end(App *app, const uint32_t exit_code)
+{
+    char output[7800];
+    int cancelled;
+    if (!app)
+        return;
+    bmutex_lock(app->solve_mutex);
+    cancelled = app->solve_cancel_requested;
+    app->solve_running = 0;
+    app->solve_cancel_requested = 0;
+    bmutex_unlock(app->solve_mutex);
+    button_text(app->solve_button, "Solve this spot");
+    i_solve_copy_output(app, output, sizeof(output));
+    status(app, "%s\nexit_code=%u\n%s",
+           cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
+           exit_code, output[0] ? output : "No output from solver.");
+}
+
+static int i_start_solve(App *app, const char *command)
+{
+    if (!app || !command || !*command)
+        return -1;
+    bmutex_lock(app->solve_mutex);
+    if (app->solve_running)
+    {
+        bmutex_unlock(app->solve_mutex);
+        return -1;
+    }
+    snprintf(app->solve_command, sizeof(app->solve_command), "%s", command);
+    app->solve_output[0] = '\0';
+    app->solve_cancel_requested = 0;
+    app->solve_running = 1;
+    bmutex_unlock(app->solve_mutex);
+    button_text(app->solve_button, "Stop solve");
+    osapp_task(app, .10f, i_solve_main, i_solve_update, i_solve_end, App);
+    return 0;
+}
+
 static void i_on_solve(App *app, Event *event)
 {
     pe_monker_tree_header_t header;
@@ -319,8 +481,6 @@ static void i_on_solve(App *app, Event *event)
     char tree[2048], board[256], runner[2048], mkr[2048];
     char range0[4200], range1[4200];
     char command[8192];
-    char output[8192];
-    FILE *pipe;
     size_t used = 0u;
     int board_cards;
     const char *tree_path = edit_get_text(app->tree_edit);
@@ -329,6 +489,16 @@ static void i_on_solve(App *app, Event *event)
     const char *mkr_path = edit_get_text(app->mkr_edit);
     const char *range0_text = edit_get_text(app->range0_edit);
     const char *range1_text = edit_get_text(app->range1_edit);
+
+    bmutex_lock(app->solve_mutex);
+    if (app->solve_running)
+    {
+        bmutex_unlock(app->solve_mutex);
+        i_solve_request_stop(app);
+        unref(event);
+        return;
+    }
+    bmutex_unlock(app->solve_mutex);
 
     if (!tree_path || !*tree_path || read_tree(app, tree_path, &header, &layout) != 0)
     {
@@ -363,7 +533,7 @@ static void i_on_solve(App *app, Event *event)
             return;
         }
         used = (size_t)snprintf(command, sizeof(command),
-                                "%s --game %s --players %u --tree %s --iterations 1000 --samples 128 --br-samples 32",
+                                "%s --game %s --players %u --tree %s --iterations 1000 --samples 128 --br-samples 32 --target-mbb 1 --exploitability-interval 32",
                                 runner, game_name(layout.game),
                                 header.player_count, tree);
         for (uint32_t player = 0u; player < header.player_count; ++player)
@@ -386,19 +556,8 @@ static void i_on_solve(App *app, Event *event)
         (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
                        " 2>&1");
         status(app, "SOLVING PREFLOP\n%s\n\n100%% ranges by default; boards are dealt through river.", command);
-        pipe = POPEN(command, "r");
-        if (!pipe)
-        {
-            status(app, "SOLVE ERROR\nCould not launch pe-preflop-solve. Set the runner path to its executable.");
-            unref(event);
-            return;
-        }
-        output[0] = '\0';
-        while (fgets(output + strlen(output),
-                      (int)(sizeof(output) - strlen(output)), pipe) != NULL)
-            if (strlen(output) + 1u >= sizeof(output)) break;
-        (void)PCLOSE(pipe);
-        status(app, "SOLVE RESULT\n%s", output[0] ? output : "No output from solver.");
+        if (i_start_solve(app, command) != 0)
+            status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
         unref(event);
         return;
     }
@@ -454,20 +613,8 @@ static void i_on_solve(App *app, Event *event)
         (void)snprintf(command + used, sizeof(command) - used, " --mkr %s", mkr);
     (void)snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
     status(app, "SOLVING\n%s", command);
-    pipe = POPEN(command, "r");
-    if (!pipe)
-    {
-        status(app, "SOLVE ERROR\nCould not launch pe-vector-sim. Set the runner path.");
-        unref(event);
-        return;
-    }
-    output[0] = '\0';
-    while (fgets(output + strlen(output), (int)(sizeof(output) - strlen(output)), pipe) != NULL)
-    {
-        if (strlen(output) + 1u >= sizeof(output)) break;
-    }
-    (void)PCLOSE(pipe);
-    status(app, "SOLVE RESULT\n%s", output[0] ? output : "No output from solver.");
+    if (i_start_solve(app, command) != 0)
+        status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
     unref(event);
 }
 
@@ -490,6 +637,7 @@ static Panel *i_setup_panel(App *app)
     Button *browse_mkr = button_push();
     Button *load = button_push();
     Button *solve = button_push();
+    app->solve_button = solve;
     app->tree_edit = edit_create();
     app->mkr_edit = edit_create();
     app->board_edit = edit_create();
@@ -594,6 +742,7 @@ static App *i_create(void)
     Layout *layout = layout_create(2, 1);
     Panel *setup = i_setup_panel(app);
     Panel *result = i_result_panel(app);
+    app->solve_mutex = bmutex_create();
     layout_panel(layout, setup, 0, 0);
     layout_panel(layout, result, 1, 0);
     layout_hsize(layout, 0, 640);
@@ -612,6 +761,15 @@ static App *i_create(void)
 
 static void i_on_close(App *app, Event *event)
 {
+    bmutex_lock(app->solve_mutex);
+    if (app->solve_running)
+    {
+        bmutex_unlock(app->solve_mutex);
+        i_solve_request_stop(app);
+        unref(event);
+        return;
+    }
+    bmutex_unlock(app->solve_mutex);
     osapp_finish();
     unref(app);
     unref(event);
@@ -619,6 +777,7 @@ static void i_on_close(App *app, Event *event)
 
 static void i_destroy(App **app)
 {
+    bmutex_close(&(*app)->solve_mutex);
     window_destroy(&(*app)->window);
     heap_delete(app, App);
 }
