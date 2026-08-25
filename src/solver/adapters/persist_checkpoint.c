@@ -185,6 +185,7 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->max_iterations);
     HASH_FIELD(config->target_exploitability_mbb);
     HASH_FIELD(config->exploitability_interval);
+    HASH_FIELD(config->br_samples);
 #undef HASH_FIELD
     return hash;
 }

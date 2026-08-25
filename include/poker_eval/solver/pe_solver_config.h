@@ -268,6 +268,12 @@ struct pe_solver_config_t {
     /* BR-04: zero disables the exploitability stop condition. */
     double target_exploitability_mbb;
     uint64_t exploitability_interval;
+
+    /* Number of sampled trajectories used by each empirical BR check. Zero
+       keeps the adapter default. This is deliberately separate from
+       exploitability_interval: the latter controls *when* a check runs, not
+       how expensive the check is. */
+    uint32_t br_samples;
 };
 
 /* ------------------------------------------------------------------ *

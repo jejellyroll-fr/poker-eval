@@ -114,6 +114,8 @@ static void test_default_top_level(void)
     /* A default that never terminates would be a bad default. */
     CHECK(cfg.max_iterations > 0, "the default must carry an iteration limit");
     CHECK_EQ_INT(cfg.max_iterations, 1000);
+    CHECK_EQ_INT(cfg.exploitability_interval, 0);
+    CHECK_EQ_INT(cfg.br_samples, 0);
 }
 
 static void test_default_is_stable(void)

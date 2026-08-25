@@ -36,6 +36,7 @@ static void pe_telemetry_stdout_emit(void *self, const pe_telemetry_event_t *eve
     if (event == NULL || event->message == NULL)
         return;
     fputs(event->message, stdout);
+    fflush(stdout);
 }
 
 static void pe_telemetry_stdout_flush(void *self)

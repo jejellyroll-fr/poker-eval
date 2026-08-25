@@ -61,6 +61,7 @@ add_library(poker_solver
     solver/domain/config.c
     solver/domain/rng.c
     solver/domain/plan.c
+    solver/domain/runtime.c
     solver/domain/storage_v2.c
     solver/domain/range.c
     solver/domain/reach.c
@@ -128,11 +129,13 @@ endif()
 # the existing batched GPU library and its CUDA headers/runtime.
 if(TARGET poker_cuda_batch AND TARGET poker_gpu_unified)
     target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_CUDA_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_CUDA_COMPILED=1)
     target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
 endif()
 
 if(TARGET poker_opencl AND TARGET poker_gpu_unified)
     target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_OPENCL_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_OPENCL_COMPILED=1)
     target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
 endif()
 

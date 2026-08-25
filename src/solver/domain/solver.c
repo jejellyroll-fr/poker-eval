@@ -379,11 +379,17 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             break;
         case PE_COMPUTE_CPU_REF:
         case PE_COMPUTE_AUTO:
+            compute_ops = pe_compute_cpu_ref_ops();
+            break;
         case PE_COMPUTE_CUDA:
+            compute_ops = pe_compute_cuda_ops();
+            break;
         case PE_COMPUTE_OPENCL:
+            compute_ops = pe_compute_opencl_ops();
+            break;
         case PE_COMPUTE_COUNT:
         default:
-            compute_ops = pe_compute_cpu_ref_ops();
+            compute_ops = NULL;
             break;
         }
     }
@@ -593,11 +599,9 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
     if (!solver || !sampled_game || !target_reached)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
     br_config.max_depth = 4096u;
-    br_config.samples = solver->config.exploitability_interval == 0u
+    br_config.samples = solver->config.br_samples == 0u
         ? 256u
-        : solver->config.exploitability_interval > UINT32_MAX
-            ? UINT32_MAX
-            : (uint32_t)solver->config.exploitability_interval;
+        : solver->config.br_samples;
     br_config.seed = solver->config.seed ^ iteration;
     for (player = 0u; player < sampled_game->player_count; ++player)
     {
@@ -613,7 +617,12 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
         return PE_SOLVER_ERR_EXECUTION;
     solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
     solver->metrics_available = 1;
-    if (pe_best_response_target_reached(
+    /* A zero target means "run to the iteration budget", not "disable
+       telemetry".  Keep measuring and publishing the empirical BR at the
+       configured interval, but only evaluate early stopping when the caller
+       selected an exploitability target. */
+    if (solver->config.target_exploitability_mbb > 0.0 &&
+        pe_best_response_target_reached(
             solver->metrics.exploitability_mbb_per_game,
             solver->config.target_exploitability_mbb, &reached) != PE_SOLVER_OK)
         return PE_SOLVER_ERR_EXECUTION;
@@ -629,6 +638,28 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
         solver->config.target_exploitability_mbb);
     pe_telemetry_flush(solver->deps.telemetry);
     return PE_SOLVER_OK;
+}
+
+static void pe_solver_sampled_emit_heartbeat(
+    pe_solver_t *solver, uint64_t iteration)
+{
+    if (!solver)
+        return;
+    /* BR checks are deliberately less frequent than traversal updates: a
+       desktop monitor must still show the iteration counter while a sampled
+       BR measurement is being accumulated.  The last measured BR is kept
+       until the next check and is never presented as a new measurement. */
+    pe_telemetry_emitf(
+        solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+        "progress iteration=%" PRIu64 " total=%" PRIu64
+        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f\n",
+        iteration, solver->config.max_iterations,
+        solver->config.max_iterations > 0u
+            ? (double)iteration / (double)solver->config.max_iterations : 0.0,
+        solver->metrics_available
+            ? solver->metrics.exploitability_mbb_per_game : 0.0,
+        solver->config.target_exploitability_mbb);
+    pe_telemetry_flush(solver->deps.telemetry);
 }
 
 /* Lane B keeps the state space sampled instead of expanding every private
@@ -661,8 +692,28 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         return PE_SOLVER_ERR_NOT_IMPLEMENTED;
     compute_ops = solver->deps.compute;
     if (compute_ops == NULL)
-        compute_ops = plan->stages.update == PE_COMPUTE_CPU_PAR
-            ? pe_compute_cpu_par_ops() : pe_compute_cpu_ref_ops();
+    {
+        switch (plan->stages.update)
+        {
+        case PE_COMPUTE_CPU_PAR:
+            compute_ops = pe_compute_cpu_par_ops();
+            break;
+        case PE_COMPUTE_CPU_REF:
+        case PE_COMPUTE_AUTO:
+            compute_ops = pe_compute_cpu_ref_ops();
+            break;
+        case PE_COMPUTE_CUDA:
+            compute_ops = pe_compute_cuda_ops();
+            break;
+        case PE_COMPUTE_OPENCL:
+            compute_ops = pe_compute_opencl_ops();
+            break;
+        case PE_COMPUTE_COUNT:
+        default:
+            compute_ops = NULL;
+            break;
+        }
+    }
     memset(&compute_config, 0, sizeof(compute_config));
     compute_config.cpu_threads = solver->config.execution.cpu_threads;
     compute_config.deterministic = solver->config.execution.deterministic;
@@ -713,6 +764,14 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     }
 
     solver->state = PE_SOLVER_STATE_RUNNING;
+    {
+        uint64_t heartbeat_interval = solver->config.exploitability_interval;
+        if (heartbeat_interval == 0u)
+            heartbeat_interval = 16u;
+        else if (heartbeat_interval > 16u)
+            heartbeat_interval /= 16u;
+        if (heartbeat_interval == 0u)
+            heartbeat_interval = 1u;
     for (iteration = solver->iteration + 1u;
          iteration <= solver->config.max_iterations &&
          solver->state == PE_SOLVER_STATE_RUNNING && !target_reached;
@@ -762,8 +821,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         }
         solver->iteration = iteration;
 
-        if (solver->config.target_exploitability_mbb > 0.0 &&
-            solver->config.exploitability_interval > 0u &&
+        if (solver->config.exploitability_interval > 0u &&
             (iteration % solver->config.exploitability_interval == 0u ||
              iteration == solver->config.max_iterations))
         {
@@ -779,6 +837,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 return PE_SOLVER_ERR_EXECUTION;
             }
         }
+        else if (iteration == 1u || iteration % heartbeat_interval == 0u ||
+                 iteration == solver->config.max_iterations)
+        {
+            pe_solver_sampled_emit_heartbeat(solver, iteration);
+        }
+    }
     }
     if (solver->state == PE_SOLVER_STATE_STOPPED)
     {
@@ -804,8 +868,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
        empirical measurement. It is still useful for a configured target and
        for reporting: the caller receives a sampled empirical gap rather
        than a false exact/Nash claim. */
-    if (solver->config.target_exploitability_mbb > 0.0 &&
-        !solver->metrics_available)
+    if (!solver->metrics_available)
     {
         if (pe_solver_sampled_measure_br(solver, &sampled_game,
                                          solver->iteration,

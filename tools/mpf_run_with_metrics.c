@@ -7,6 +7,7 @@
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
+#include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/solver/pe_cfr_external_adapter.h>
 #include <poker_eval/engine/solvers/cfr/legacy_vector_adapter.h>
 #include <poker_eval/solver/pe_compute.h>
@@ -41,11 +42,22 @@ static int run_gpu_vector_backend(cfr_game_t *legacy, int iterations,
     pe_solver_status_t status;
     pe_progress_t progress;
     pe_metrics_t metrics;
+    pe_runtime_capabilities_t runtime;
+    const pe_runtime_backend_info_t *runtime_backend;
     int adapter_ready = 0;
 
     if (!legacy || !backend_name || iterations <= 0)
         return -1;
     kind = pe_compute_kind_from_name(backend_name);
+    if (kind == PE_COMPUTE_COUNT || pe_runtime_probe(&runtime) != 0)
+        return -1;
+    runtime_backend = &runtime.backends[kind];
+    if (!runtime_backend->runtime_available || !runtime_backend->validated)
+    {
+        fprintf(stderr, "gpu backend refused: %s (%s)\n",
+                pe_compute_kind_name(kind), runtime_backend->reason);
+        return -1;
+    }
     if (kind == PE_COMPUTE_OPENCL)
         compute = pe_compute_opencl_ops();
     else if (kind == PE_COMPUTE_CUDA)
@@ -156,8 +168,18 @@ static void print_algorithms(void)
 
 static void print_backends(void)
 {
+    pe_runtime_capabilities_t runtime;
+    if (pe_runtime_probe(&runtime) != 0)
+        return;
+    printf("runtime cpus=%u openmp=%s simd=%s\n",
+           runtime.logical_cpus, runtime.openmp_available ? "yes" : "no",
+           pe_runtime_simd_name(runtime.simd));
     for (int i = 0; i < PE_COMPUTE_COUNT; ++i)
-        printf("%s\n", pe_compute_kind_name((pe_compute_kind_t)i));
+    {
+        char line[256];
+        pe_runtime_backend_status(&runtime.backends[i], line, sizeof(line));
+        printf("%s\n", line);
+    }
 }
 
 typedef struct
@@ -255,6 +277,7 @@ static int run_introspection(pe_algorithm_preset_t preset, int have_preset,
             pe_caps_to_string(caps, text, sizeof(text));
             printf("capabilities=%s\n", text);
         }
+        print_backends();
     }
 
     if (validate_only)

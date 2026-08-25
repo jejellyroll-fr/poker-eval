@@ -15,12 +15,15 @@
 #include <poker_eval/solver/pe_range.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_solver_plan.h>
+#include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_rng.h>
 
 #include <errno.h>
 #include <ctype.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +57,11 @@ typedef struct {
     uint64_t seed;
     const char *output;
     const char *tree;
+    pe_algorithm_preset_t algorithm;
+    pe_compute_kind_t backend;
+    pe_precision_mode_t precision;
+    int cpu_threads;
+    int show_capabilities;
 } options_t;
 
 typedef struct
@@ -175,7 +183,10 @@ static double action_ev(const pe_external_game_t *external,
 {
     const void *child;
     double total = 0.0;
-    const int samples = 8;
+    /* Per-row EV is a display estimate.  Keep it cheap so report
+     * materialisation cannot hide the strategy table for minutes after the
+     * solver has reached its stop condition. */
+    const int samples = 1;
     if (!external || !state)
         return 0.0;
     child = external->apply_action(state, action, external->user);
@@ -207,9 +218,13 @@ static void print_strategy_report(const options_t *options,
     for (int row = 0; row < 13; ++row)
         for (int col = 0; col < 13; ++col)
             snprintf(grid[row][col], sizeof(grid[row][col]), "--");
+    printf("report_phase=starting rows=%zu infosets=%zu\n", solver_count, desc_count);
+    printf("STRATEGY REPORT variant=%s rows=%zu/%zu ev=empirical-rollout samples=1\n",
+           options->game, solver_count, desc_count);
+    fflush(stdout);
     if (desc_count == 0u || solver_count == 0u)
     {
-        printf("STRATEGY REPORT\nNo sampled decision infosets were materialised.\n");
+        printf("No sampled decision infosets were materialised.\n");
         return;
     }
     refs = calloc(desc_count, sizeof(*refs));
@@ -224,8 +239,6 @@ static void print_strategy_report(const options_t *options,
             refs[i].index = i;
         }
     }
-    printf("STRATEGY REPORT variant=%s rows=%zu/%zu ev=empirical-rollout\n",
-           options->game, solver_count, desc_count);
     printf("DECISION STEPS (tree branches)\n");
     if (tree)
     {
@@ -300,11 +313,22 @@ static void print_strategy_report(const options_t *options,
                    a < view.action_count ? view.actions[a] : "action",
                    strategy.values[a * strategy.combo_count] * 100.0);
         printf("\t");
+        /* Publish the row before doing any rollout.  This makes the strategy
+         * grid useful while the optional EV estimates are still being
+         * materialised. */
+        for (uint16_t a = 0u; a < strategy.action_count; ++a)
+            printf("%s%s=pending", a ? "," : "",
+                   a < view.action_count ? view.actions[a] : "action");
+        putchar('\n');
+        fflush(stdout);
+        printf("ev_update\t%s\t%d\tP%d\t", view.hand,
+               view.tree_node_index, view.actor + 1);
         for (uint16_t a = 0u; a < strategy.action_count; ++a)
             printf("%s%s=%.2f", a ? "," : "",
                    a < view.action_count ? view.actions[a] : "action",
                    action_ev(external, &state, a, view.actor, options->seed));
         putchar('\n');
+        fflush(stdout);
         if (strcmp(options->game, "holdem") == 0 && strlen(view.hand) >= 4u)
         {
             int r0 = report_rank_index(view.hand[0]);
@@ -340,6 +364,8 @@ static void print_strategy_report(const options_t *options,
     }
     if (emitted >= 180u)
         printf("... report capped at 180 visible rows; the solve storage still contains all %zu infosets.\n", solver_count);
+    printf("report_phase=complete rows=%zu\n", emitted);
+    fflush(stdout);
     free(refs);
 }
 
@@ -359,6 +385,11 @@ static void usage(FILE *stream)
         "  --allow-calls                allow calls before all-in\n"
         "  --postflop                   continue through flop, turn and river\n"
         "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
+        "  --algorithm NAME             cfr, cfr+, dcfr, external-mccfr, ...\n"
+        "  --backend NAME               auto, cpu_ref, cpu_par, cuda, opencl\n"
+        "  --precision NAME             f64, f32, mixed, fixed16\n"
+        "  --threads N                  worker threads for cpu_par\n"
+        "  --show-capabilities          print detected CPU/SIMD/backend capabilities\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
         "  --exploitability-interval N  measure/print convergence every N iterations\n"
@@ -449,6 +480,10 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->exploitability_interval = 256u;
     options->target_mbb = 1.0;
     options->seed = UINT64_C(0x50455f5052464c42);
+    options->algorithm = PE_PRESET_EXTERNAL_MCCFR;
+    options->backend = PE_COMPUTE_AUTO;
+    options->precision = PE_PREC_F64;
+    options->cpu_threads = 0;
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
         const char *value = NULL;
@@ -466,6 +501,10 @@ static int parse_options(int argc, char **argv, options_t *options)
              strcmp(arg, "--min-raise") == 0 || strcmp(arg, "--raise") == 0 ||
              strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0 ||
              strcmp(arg, "--tree") == 0 ||
+             strcmp(arg, "--algorithm") == 0 ||
+             strcmp(arg, "--backend") == 0 ||
+             strcmp(arg, "--precision") == 0 ||
+             strcmp(arg, "--threads") == 0 ||
              strcmp(arg, "--target-mbb") == 0 ||
              strcmp(arg, "--exploitability-interval") == 0) &&
             (!value || value[0] == '-')) {
@@ -527,6 +566,23 @@ static int parse_options(int argc, char **argv, options_t *options)
             if (parse_u64(value, &options->seed) != 0) return -1;
         } else if (strcmp(arg, "--output") == 0) options->output = value;
         else if (strcmp(arg, "--tree") == 0) options->tree = value;
+        else if (strcmp(arg, "--algorithm") == 0) {
+            options->algorithm = pe_preset_from_name(value);
+            if (options->algorithm == PE_PRESET_COUNT) return -1;
+        } else if (strcmp(arg, "--backend") == 0) {
+            options->backend = pe_compute_kind_from_name(value);
+            if (options->backend == PE_COMPUTE_COUNT) return -1;
+        } else if (strcmp(arg, "--precision") == 0) {
+            options->precision = pe_precision_from_name(value);
+            if (options->precision == PE_PREC_COUNT) return -1;
+        } else if (strcmp(arg, "--threads") == 0) {
+            uint64_t threads;
+            if (parse_u64(value, &threads) != 0 || threads > INT_MAX) return -1;
+            options->cpu_threads = (int)threads;
+        } else if (strcmp(arg, "--show-capabilities") == 0) {
+            options->show_capabilities = 1;
+            continue;
+        }
         else {
             fprintf(stderr, "unknown option: %s\n", arg);
             return -1;
@@ -537,7 +593,7 @@ static int parse_options(int argc, char **argv, options_t *options)
         options->players < 2 || options->players > PE_PREFLOP_ALLIN_MAX_PLAYERS ||
         options->big_blind < options->small_blind ||
         options->ante < 0.0 || options->ante >= options->big_blind ||
-        options->stack <= options->big_blind)
+        options->stack <= options->big_blind || options->cpu_threads < 0)
         return -1;
     return 0;
 }
@@ -600,13 +656,46 @@ int main(int argc, char **argv)
     mpf_tree_def_t *tree = NULL;
     pe_monker_tree_header_t tree_header;
 
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     {
         int option_status = parse_options(argc, argv, &options);
         if (option_status == 1)
             return 0;
         if (option_status != 0) {
         usage(stderr);
-        return 2;
+            return 2;
+        }
+    }
+    if (options.show_capabilities)
+    {
+        pe_runtime_capabilities_t runtime;
+        if (pe_runtime_probe(&runtime) != 0)
+            return 1;
+        printf("runtime cpus=%u openmp=%s simd=%s\n",
+               runtime.logical_cpus, runtime.openmp_available ? "yes" : "no",
+               pe_runtime_simd_name(runtime.simd));
+        for (int i = 0; i < PE_COMPUTE_COUNT; ++i)
+        {
+            char line[256];
+            pe_runtime_backend_status(&runtime.backends[i], line, sizeof(line));
+            printf("%s\n", line);
+        }
+        return 0;
+    }
+    if (options.backend != PE_COMPUTE_AUTO)
+    {
+        pe_runtime_capabilities_t runtime;
+        const pe_runtime_backend_info_t *backend;
+        if (pe_runtime_probe(&runtime) != 0)
+            return 1;
+        backend = &runtime.backends[options.backend];
+        if (!backend->runtime_available || !backend->validated)
+        {
+            fprintf(stderr, "backend refused: %s (%s)\n",
+                    pe_compute_kind_name(options.backend), backend->reason);
+            return 2;
         }
     }
     variant = parse_variant(options.game);
@@ -671,11 +760,13 @@ int main(int argc, char **argv)
     }
 
     config = pe_solver_config_default();
-    config.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
-    config.execution.backend = PE_COMPUTE_CPU_REF;
-    config.execution.stages.traversal = PE_COMPUTE_CPU_REF;
-    config.execution.stages.update = PE_COMPUTE_CPU_REF;
-    config.execution.stages.terminal_eval = PE_COMPUTE_CPU_REF;
+    config.algorithm.preset = options.algorithm;
+    config.execution.backend = options.backend;
+    config.execution.stages.traversal = options.backend;
+    config.execution.stages.update = options.backend;
+    config.execution.stages.terminal_eval = options.backend;
+    config.execution.precision = options.precision;
+    config.execution.cpu_threads = options.cpu_threads;
     config.execution.deterministic = 1;
     config.execution.sample_batch_size = 1u;
     config.problem.expected_infosets = 4096u;
@@ -685,6 +776,7 @@ int main(int argc, char **argv)
     config.execution.big_blind = options.big_blind;
     config.target_exploitability_mbb = options.target_mbb;
     config.exploitability_interval = options.exploitability_interval;
+    config.br_samples = (uint32_t)options.br_samples;
     config.seed = options.seed;
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);
@@ -703,11 +795,19 @@ int main(int argc, char **argv)
         pe_preflop_allin_game_set_storage(
             game, (pe_storage_t *)pe_solver_get_storage_instance(solver));
         size_t infosets = pe_preflop_allin_infodesc_count(game);
-        printf("preflop_solver=lane-b external-mccfr game=%s players=%d postflop=%d tree=%s\n",
+        printf("preflop_solver=lane-b algorithm=%s backend=%s precision=%s game=%s players=%d postflop=%d tree=%s\n",
+               pe_preset_name(options.algorithm),
+               pe_compute_kind_name(options.backend),
+               pe_precision_name(options.precision),
                options.game, options.players, options.postflop_streets,
                tree ? options.tree : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
+        printf("solver_phase=complete stop_reason=%s report=starting\n",
+               options.target_mbb > 0.0 &&
+               metrics.exploitability_mbb_per_game <= options.target_mbb
+                   ? "target" : "max_iterations");
+        fflush(stdout);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
                metrics.exploitability_mbb_per_game, options.br_samples);

@@ -853,6 +853,9 @@ int main(int argc, char **argv)
     int status;
     uint8_t player;
 
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     status = parse_args(argc, argv, &options, &game);
     if (status != 0)
     {

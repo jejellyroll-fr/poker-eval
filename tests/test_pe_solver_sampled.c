@@ -122,7 +122,10 @@ int main(void)
        four sampled updates before crossing the compute port. */
     cfg.execution.sample_batch_size = 4u;
     cfg.seed = 0x1234u;
-    cfg.target_exploitability_mbb = 1.0;
+    /* A pure iteration-budget run must still produce the empirical BR used
+       by desktop/CLI progress monitors.  A zero target disables early stop;
+       it must not disable convergence telemetry. */
+    cfg.target_exploitability_mbb = 0.0;
     cfg.exploitability_interval = 16u;
     deps.external_game = &game;
     solver = pe_solver_create(&cfg, &deps);

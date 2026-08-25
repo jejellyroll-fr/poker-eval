@@ -88,6 +88,7 @@ pe_solver_config_t pe_solver_config_default(void)
     cfg.max_iterations = 1000;
     cfg.target_exploitability_mbb = 0.0;
     cfg.exploitability_interval = 0;
+    cfg.br_samples = 0;
 
     return cfg;
 }
