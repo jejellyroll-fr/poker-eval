@@ -118,13 +118,42 @@ static int cpu_par_update_values(const pe_compute_config_t *config,
     return 0;
 }
 
-static void cpu_par_strategy_one(const pe_infoset_batch_t *in,
+static void cpu_par_strategy_one(const pe_compute_config_t *config,
+                                 const pe_infoset_batch_t *in,
                                  pe_strategy_batch_t *out, size_t infoset)
 {
     uint32_t begin = in->offsets[infoset];
     uint16_t actions = in->action_counts[infoset];
     float positive = 0.0f;
     uint16_t action;
+
+    if (config->policy_mode == PE_POLICY_EXPONENTIAL)
+    {
+        float maximum = -INFINITY;
+        double total = 0.0;
+
+        for (action = 0u; action < actions; ++action)
+        {
+            float regret = in->regrets[begin + action];
+            if (regret > maximum)
+                maximum = regret;
+        }
+        for (action = 0u; action < actions; ++action)
+            total += exp(config->exponential_lambda *
+                         ((double)in->regrets[begin + action] -
+                          (double)maximum));
+        for (action = 0u; action < actions; ++action)
+        {
+            double weight = exp(config->exponential_lambda *
+                                ((double)in->regrets[begin + action] -
+                                 (double)maximum));
+            out->strategies[begin + action] = (float)(weight / total);
+        }
+        for (uint32_t slot = begin + actions;
+             slot < in->offsets[infoset + 1u]; ++slot)
+            out->strategies[slot] = 0.0f;
+        return;
+    }
 
     for (action = 0u; action < actions; ++action)
     {
@@ -165,6 +194,10 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
         return -1;
     if (!out->offsets)
         out->offsets = in->offsets;
+    if (backend->config.policy_mode == PE_POLICY_EXPONENTIAL &&
+        (!isfinite(backend->config.exponential_lambda) ||
+         backend->config.exponential_lambda <= 0.0))
+        return -1;
 
     /* Validate all metadata before entering the parallel region so an invalid
        batch cannot leave a partially written output. */
@@ -174,7 +207,8 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
         uint32_t end = in->offsets[infoset + 1u];
         float positive = 0.0f;
         uint16_t action;
-        if (end < begin || (uint32_t)in->action_counts[infoset] > end - begin)
+        if (end < begin || in->action_counts[infoset] == 0u ||
+            (uint32_t)in->action_counts[infoset] > end - begin)
             return -1;
         for (action = 0u; action < in->action_counts[infoset]; ++action)
         {
@@ -191,7 +225,7 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
 #pragma omp parallel for schedule(static) num_threads(backend->threads)
 #endif
     for (infoset = 0u; infoset < in->count; ++infoset)
-        cpu_par_strategy_one(in, out, infoset);
+        cpu_par_strategy_one(&backend->config, in, out, infoset);
     out->count = in->count;
     return 0;
 }

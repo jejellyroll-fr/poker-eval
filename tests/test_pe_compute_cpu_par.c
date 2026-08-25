@@ -162,6 +162,35 @@ static void test_regret_and_average_modes(void)
     storage_ops->destroy(storage);
 }
 
+static void test_exponential_policy(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_par_ops();
+    pe_compute_config_t cfg = {
+        .cpu_threads = 2,
+        .deterministic = 1,
+        .policy_mode = PE_POLICY_EXPONENTIAL,
+        .exponential_lambda = 1.0
+    };
+    const uint32_t offsets[] = {0u, 2u};
+    const uint16_t actions[] = {2u};
+    const float regrets[] = {1.0f, 0.0f};
+    float strategies[2] = {0.0f, 0.0f};
+    pe_infoset_batch_t input = {1u, offsets, actions, regrets};
+    pe_strategy_batch_t output = {0u, 2u, NULL, strategies};
+    void *backend = NULL;
+
+    CHECK(ops->create(&backend, &cfg) == 0 && backend,
+          "cpu_par exponential backend creation failed");
+    if (!backend)
+        return;
+    CHECK(ops->strategy_batch(backend, &input, &output) == 0,
+          "cpu_par exponential policy evaluation failed");
+    CHECK(fabs((double)strategies[0] - 0.7310586) < 1e-5 &&
+              fabs((double)strategies[1] - 0.2689414) < 1e-5,
+          "cpu_par exponential policy did not produce a stable softmax");
+    ops->destroy(backend);
+}
+
 static void test_ragged_strategy_batch(void)
 {
     const pe_compute_ops_t *ops = pe_compute_cpu_par_ops();
@@ -239,6 +268,7 @@ int main(void)
     test_invalid_config_is_refused();
     test_update_batch_reaches_storage();
     test_regret_and_average_modes();
+    test_exponential_policy();
     test_ragged_strategy_batch();
     test_ragged_strategy_matches_cpu_ref();
     if (failures != 0)

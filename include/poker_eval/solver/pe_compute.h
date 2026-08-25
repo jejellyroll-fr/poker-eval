@@ -37,11 +37,13 @@ typedef struct pe_compute_config_t
        average as vanilla CFR. Appending these fields preserves source
        compatibility for existing positional initializers. */
     pe_regret_mode_t regret_mode;
+    pe_policy_mode_t policy_mode;
     pe_averaging_mode_t averaging_mode;
     double dcfr_alpha;
     double dcfr_beta;
     double dcfr_gamma;
     int averaging_delay;
+    double exponential_lambda;
 } pe_compute_config_t;
 
 /*

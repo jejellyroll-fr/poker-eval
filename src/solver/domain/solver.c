@@ -400,11 +400,14 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     compute_config.terminal_batch_size = solver->config.execution.terminal_batch_size;
     compute_config.update_batch_size = solver->config.execution.update_batch_size;
     compute_config.regret_mode = plan->regret;
+    compute_config.policy_mode = plan->policy;
     compute_config.averaging_mode = plan->averaging;
     compute_config.dcfr_alpha = solver->config.algorithm.dcfr_alpha;
     compute_config.dcfr_beta = solver->config.algorithm.dcfr_beta;
     compute_config.dcfr_gamma = solver->config.algorithm.dcfr_gamma;
     compute_config.averaging_delay = solver->config.algorithm.averaging_delay;
+    compute_config.exponential_lambda =
+        solver->config.algorithm.exponential_lambda;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
     if (compute_ops == NULL || compute_ops->create == NULL ||
@@ -729,11 +732,14 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     compute_config.terminal_batch_size = solver->config.execution.terminal_batch_size;
     compute_config.update_batch_size = solver->config.execution.update_batch_size;
     compute_config.regret_mode = plan->regret;
+    compute_config.policy_mode = plan->policy;
     compute_config.averaging_mode = plan->averaging;
     compute_config.dcfr_alpha = solver->config.algorithm.dcfr_alpha;
     compute_config.dcfr_beta = solver->config.algorithm.dcfr_beta;
     compute_config.dcfr_gamma = solver->config.algorithm.dcfr_gamma;
     compute_config.averaging_delay = solver->config.algorithm.averaging_delay;
+    compute_config.exponential_lambda =
+        solver->config.algorithm.exponential_lambda;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
     if (!compute_ops || !compute_ops->create || !compute_ops->destroy ||

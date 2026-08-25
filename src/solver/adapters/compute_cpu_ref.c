@@ -105,13 +105,17 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
 static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
                                   pe_strategy_batch_t *out)
 {
+    const pe_cpu_ref_t *backend = (const pe_cpu_ref_t *)self;
     size_t infoset;
 
-    (void)self;
-    if (!in || !out || (in->count != 0u &&
+    if (!backend || !in || !out || (in->count != 0u &&
                        (!in->offsets || !in->action_counts || !in->regrets)) ||
         (out->capacity != 0u && !out->strategies) ||
         out->capacity < (in->count != 0u ? in->offsets[in->count] : 0u))
+        return -1;
+    if (backend->config.policy_mode == PE_POLICY_EXPONENTIAL &&
+        (!isfinite(backend->config.exponential_lambda) ||
+         backend->config.exponential_lambda <= 0.0))
         return -1;
     if (in->count == 0u)
     {
@@ -131,8 +135,44 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
         float positive = 0.0f;
         uint16_t action;
 
-        if (end < begin || (uint32_t)actions > end - begin)
+        if (end < begin || actions == 0u ||
+            (uint32_t)actions > end - begin)
             return -1;
+        if (backend->config.policy_mode == PE_POLICY_EXPONENTIAL)
+        {
+            float maximum = -INFINITY;
+            double total = 0.0;
+
+            for (action = 0u; action < actions; ++action)
+            {
+                float regret = in->regrets[begin + action];
+                if (!isfinite(regret))
+                    return -1;
+                if (regret > maximum)
+                    maximum = regret;
+            }
+            for (action = 0u; action < actions; ++action)
+            {
+                double weight = exp(backend->config.exponential_lambda *
+                                    ((double)in->regrets[begin + action] -
+                                     (double)maximum));
+                if (!isfinite(weight))
+                    return -1;
+                total += weight;
+            }
+            if (!isfinite(total) || total <= 0.0)
+                return -1;
+            for (action = 0u; action < actions; ++action)
+            {
+                double weight = exp(backend->config.exponential_lambda *
+                                    ((double)in->regrets[begin + action] -
+                                     (double)maximum));
+                out->strategies[begin + action] = (float)(weight / total);
+            }
+            for (uint32_t slot = begin + actions; slot < end; ++slot)
+                out->strategies[slot] = 0.0f;
+            continue;
+        }
         for (action = 0u; action < actions; ++action)
         {
             float regret = in->regrets[begin + action];
