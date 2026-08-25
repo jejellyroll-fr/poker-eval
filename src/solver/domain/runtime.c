@@ -2,6 +2,7 @@
 
 #include <poker_eval/solver/pe_runtime.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,6 +11,157 @@
 #else
 #include <unistd.h>
 #endif
+
+static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
+{
+    const pe_compute_ops_t *cpu_ops = pe_compute_cpu_ref_ops();
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    pe_compute_config_t config;
+    pe_compute_config_t cpu_config;
+    pe_compute_config_t gpu_config;
+    pe_terminal_batch_t terminal;
+    pe_infoset_batch_t infosets;
+    pe_strategy_batch_t cpu_strategy;
+    pe_strategy_batch_t gpu_strategy;
+    pe_update_t updates[2];
+    pe_update_batch_t batch;
+    uint32_t offsets[] = {0u, 3u};
+    uint16_t action_counts[] = {3u};
+    float regrets[] = {4.0f, -2.0f, 1.0f};
+    float cpu_values[3] = {0.0f, 0.0f, 0.0f};
+    float gpu_values[3] = {0.0f, 0.0f, 0.0f};
+    uint8_t cards[8u * 7u];
+    uint32_t cpu_terminal[8u] = {0u};
+    uint32_t gpu_terminal[8u] = {0u};
+    void *cpu = NULL;
+    void *gpu = NULL;
+    void *cpu_storage = NULL;
+    void *gpu_storage = NULL;
+    pe_infoset_id_t cpu_id;
+    pe_infoset_id_t gpu_id;
+    size_t i;
+    int ok = 0;
+
+    if (gpu_ops == NULL || cpu_ops == NULL || storage_ops == NULL ||
+        gpu_ops->create == NULL || gpu_ops->strategy_batch == NULL ||
+        gpu_ops->apply_update_batch == NULL ||
+        gpu_ops->terminal_eval_batch == NULL)
+        return 0;
+
+    memset(&config, 0, sizeof(config));
+    config.cpu_threads = 1;
+    config.deterministic = 1;
+    config.sample_batch_size = 8u;
+    config.terminal_batch_size = 8u;
+    config.update_batch_size = 2u;
+    if (storage_ops->create(&cpu_storage, 1u) != 0 ||
+        storage_ops->create(&gpu_storage, 1u) != 0)
+        goto cleanup;
+    cpu_id = storage_ops->resolve(cpu_storage, UINT64_C(0xFACE), 2u, 1u,
+                                  PE_STREET_UNKNOWN);
+    gpu_id = storage_ops->resolve(gpu_storage, UINT64_C(0xFACE), 2u, 1u,
+                                  PE_STREET_UNKNOWN);
+    if (cpu_id == PE_INFOSET_ID_INVALID || gpu_id == PE_INFOSET_ID_INVALID)
+        goto cleanup;
+
+    cpu_config = config;
+    gpu_config = config;
+    cpu_config.storage = storage_ops;
+    cpu_config.storage_self = cpu_storage;
+    gpu_config.storage = storage_ops;
+    gpu_config.storage_self = gpu_storage;
+    if (cpu_ops->create(&cpu, &cpu_config) != 0 || cpu == NULL ||
+        gpu_ops->create(&gpu, &gpu_config) != 0 || gpu == NULL)
+        goto cleanup;
+
+    infosets.count = 1u;
+    infosets.offsets = offsets;
+    infosets.action_counts = action_counts;
+    infosets.regrets = regrets;
+    cpu_strategy.count = 1u;
+    cpu_strategy.capacity = 3u;
+    cpu_strategy.offsets = offsets;
+    cpu_strategy.strategies = cpu_values;
+    gpu_strategy = cpu_strategy;
+    gpu_strategy.strategies = gpu_values;
+    if (cpu_ops->strategy_batch(cpu, &infosets, &cpu_strategy) != 0 ||
+        gpu_ops->strategy_batch(gpu, &infosets, &gpu_strategy) != 0)
+        goto cleanup;
+    for (i = 0u; i < 3u; ++i)
+        if (fabsf(cpu_values[i] - gpu_values[i]) > 1.0e-5f)
+            goto cleanup;
+
+    for (i = 0u; i < 8u; ++i)
+    {
+        size_t card;
+        for (card = 0u; card < 7u; ++card)
+            cards[i * 7u + card] = (uint8_t)((i * 7u + card) % 52u);
+    }
+    terminal.game = game_holdem;
+    terminal.cards = cards;
+    terminal.hole = NULL;
+    terminal.board = NULL;
+    terminal.count = 8u;
+    {
+        pe_value_batch_t cpu_output = {cpu_terminal, 8u, 0u};
+        pe_value_batch_t gpu_output = {gpu_terminal, 8u, 0u};
+        if (cpu_ops->terminal_eval_batch(cpu, &terminal, &cpu_output) != 0 ||
+            gpu_ops->terminal_eval_batch(gpu, &terminal, &gpu_output) != 0 ||
+            cpu_output.count != gpu_output.count || cpu_output.count != 8u)
+            goto cleanup;
+        for (i = 0u; i < 8u; ++i)
+            if (cpu_terminal[i] != gpu_terminal[i])
+                goto cleanup;
+    }
+
+    memset(&batch, 0, sizeof(batch));
+    updates[0].infoset = cpu_id;
+    updates[0].action = 0u;
+    updates[0].combo = 0u;
+    updates[0].delta = 1.0;
+    updates[0].average_delta = 0.5;
+    updates[1] = updates[0];
+    updates[1].action = 1u;
+    updates[1].delta = -2.0;
+    updates[1].average_delta = 0.25;
+    batch.items = updates;
+    batch.count = 2u;
+    batch.capacity = 2u;
+    if (cpu_ops->apply_update_batch(cpu, &batch) != 0 ||
+        gpu_ops->apply_update_batch(gpu, &batch) != 0)
+        goto cleanup;
+    {
+        size_t cpu_length = 0u;
+        size_t gpu_length = 0u;
+        const double *cpu_regrets = storage_ops->values_const(
+            cpu_storage, cpu_id, PE_VALUES_REGRET, &cpu_length);
+        const double *gpu_regrets = storage_ops->values_const(
+            gpu_storage, gpu_id, PE_VALUES_REGRET, &gpu_length);
+        const double *cpu_average = storage_ops->values_const(
+            cpu_storage, cpu_id, PE_VALUES_AVERAGE, NULL);
+        const double *gpu_average = storage_ops->values_const(
+            gpu_storage, gpu_id, PE_VALUES_AVERAGE, NULL);
+        if (cpu_regrets == NULL || gpu_regrets == NULL || cpu_average == NULL ||
+            gpu_average == NULL || cpu_length < 2u || gpu_length < 2u)
+            goto cleanup;
+        for (i = 0u; i < 2u; ++i)
+            if (fabs(cpu_regrets[i] - gpu_regrets[i]) > 1.0e-5 ||
+                fabs(cpu_average[i] - gpu_average[i]) > 1.0e-5)
+                goto cleanup;
+    }
+    ok = 1;
+
+cleanup:
+    if (cpu != NULL)
+        cpu_ops->destroy(cpu);
+    if (gpu != NULL)
+        gpu_ops->destroy(gpu);
+    if (cpu_storage != NULL)
+        storage_ops->destroy(cpu_storage);
+    if (gpu_storage != NULL)
+        storage_ops->destroy(gpu_storage);
+    return ok;
+}
 
 static void set_backend(pe_runtime_backend_info_t *info,
                         pe_compute_kind_t kind, const char *name,
@@ -51,6 +203,15 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
     created = ops && ops->create ? ops->create(&backend, &config) : -1;
     if (created == 0 && backend != NULL)
     {
+        if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+            !validate_gpu_backend(ops))
+        {
+            if (ops->destroy)
+                ops->destroy(backend);
+            set_backend(info, kind, name, compiled, 0, 0, 0u, 0,
+                        "device/context available; CPU/GPU parity validation failed");
+            return;
+        }
         capabilities = ops->capabilities ? ops->capabilities(backend) : 0u;
         if (ops->destroy)
             ops->destroy(backend);
