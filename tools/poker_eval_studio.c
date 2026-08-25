@@ -289,7 +289,8 @@ static const char *resolve_runner(const char *configured, const char *name)
 {
     static char local_path[2048];
     char executable_dir[2048];
-    if (usable_optional_path(configured) && strcmp(configured, "pe-vector-sim") != 0)
+    if (usable_optional_path(configured) && strcmp(configured, "pe-vector-sim") != 0 &&
+        (strchr(configured, '/') != NULL || strchr(configured, '\\') != NULL))
         return PE_ACCESS(configured, PE_X_OK) == 0 ? configured : NULL;
     if (PE_ACCESS(name, PE_X_OK) == 0)
         return name;
