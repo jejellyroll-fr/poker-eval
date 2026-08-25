@@ -1760,6 +1760,16 @@ if(TARGET pe-preflop-solve)
         LABELS "product;solver;lane-b;preflop;runtime"
         PASS_REGULAR_EXPRESSION "backend=cpu_ref backend_validated=1;simd_cfr=not-integrated"
         TIMEOUT 60)
+    add_test(NAME mpf_lane_b_reports_runtime_metadata
+        COMMAND mpf_run_with_metrics
+            --tree ${PROJECT_SOURCE_DIR}/examples/heads_up_river/tree.json
+            --lane-b
+            --iterations 1
+            --benchmark-json ${CMAKE_CURRENT_BINARY_DIR}/mpf-lane-b-runtime.json)
+    set_tests_properties(mpf_lane_b_reports_runtime_metadata PROPERTIES
+        LABELS "product;solver;lane-b;runtime"
+        PASS_REGULAR_EXPRESSION "lane_b_runtime=backend_validated=1;simd_cfr=not-integrated"
+        TIMEOUT 60)
     add_test(NAME pe_preflop_solve_rejects_full_tree_preset
         COMMAND pe-preflop-solve
             --game holdem
