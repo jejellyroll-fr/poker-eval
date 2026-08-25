@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "pe_sol_format.h"
+#include "poker_eval/solver/pe_monker.h"
 #include "pe_tree_json.h"
 #include "pe_tree_layout.h"
 
@@ -106,6 +107,11 @@ typedef struct {
     char solve_failure[64];
     /* Loaded tree topology rendered by draw_tree. */
     pe_tree_json_t tree_view;
+    pe_monker_tree_header_t tree_header;
+    uint32_t tree_combo_count;
+    uint8_t tree_hole_cards;
+    int tree_header_valid;
+    int tree_ranges_valid;
     int tree_json_pending;
     char tree_json_path[1024];
 } app_t;
@@ -344,6 +350,29 @@ static const char *engine_label_for(int index)
     return index >= 0 && index < 3 ? labels[index] : labels[0];
 }
 
+static int tree_board_count(int street)
+{
+    if (street == 1) return 3;
+    if (street == 2) return 4;
+    if (street == 3) return 5;
+    return 0;
+}
+
+static const char *tree_street_label(int street)
+{
+    static const char *labels[] = {"PREFLOP", "FLOP", "TURN", "RIVER"};
+    return street >= 0 && street < 4 ? labels[street] : "UNKNOWN STREET";
+}
+
+static int gui_game_index(enum_game_t game)
+{
+    if (game == game_holdem) return 0;
+    if (game == game_omaha) return 1;
+    if (game == game_omaha5) return 2;
+    if (game == game_omaha6) return 3;
+    return -1;
+}
+
 static void copy_field(char *destination, size_t capacity, const char *source);
 static void range_matrix_sync_from_fields(app_t *app);
 
@@ -526,6 +555,68 @@ static int launch_solver(app_t *app, const char *command, const char *success,
  * output. Safe to call every frame; does nothing while a solve is in flight. */
 static int load_tree_json_file(app_t *app, const char *path);
 
+/* Read the binary header before rendering or solving.  A Monker .tree does
+ * not contain a board, so the UI must expose that fact instead of silently
+ * retaining the previous spot's board. */
+static int load_tree_context(app_t *app, const char *path)
+{
+    pe_monker_range_set_t ranges;
+    pe_monker_combo_layout_t layout;
+    char message[256];
+    int game_index;
+
+    if (!app || !path)
+        return -1;
+    memset(&ranges, 0, sizeof(ranges));
+    if (pe_monker_tree_read_header(path, &app->tree_header) != PE_MONKER_OK)
+    {
+        app->tree_header_valid = 0;
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Tree rejected: invalid Monker header");
+        return -1;
+    }
+    app->tree_header_valid = 1;
+    app->tree_ranges_valid = 0;
+    app->tree_combo_count = 0u;
+    app->tree_hole_cards = 0u;
+    if (pe_monker_tree_read_ranges(path, &ranges) != PE_MONKER_OK ||
+        pe_monker_combo_layout_from_count(ranges.combo_count, &layout) !=
+            PE_MONKER_OK)
+    {
+        pe_monker_range_set_free(&ranges);
+        app->tree_header_valid = 0;
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Tree rejected: embedded ranges/combo layout unavailable");
+        return -1;
+    }
+    app->tree_ranges_valid = 1;
+    app->tree_combo_count = ranges.combo_count;
+    app->tree_hole_cards = layout.hole_cards;
+    game_index = gui_game_index(layout.game);
+    if (game_index >= 0)
+    {
+        app->game_index = game_index;
+        copy_field(app->game_name, sizeof(app->game_name),
+                   game_label_for(game_index));
+    }
+    pe_monker_range_set_free(&ranges);
+    if (app->tree_header.player_count >= 2u &&
+        app->tree_header.player_count <= 8u)
+        app->player_count = (int)app->tree_header.player_count;
+
+    /* A stale board is more dangerous than an empty board: clear it and make
+     * the missing input explicit. The tree's street tells us how many cards
+     * the user must provide, but the cards themselves are not in .tree. */
+    copy_field(app->board_text, sizeof(app->board_text), "");
+    snprintf(message, sizeof(message),
+             "Tree loaded: %s, %u players. Board is not stored in .tree; enter %d cards.",
+             tree_street_label(app->tree_header.street),
+             app->tree_header.player_count,
+             tree_board_count(app->tree_header.street));
+    copy_field(app->solver_status, sizeof(app->solver_status), message);
+    return 0;
+}
+
 static void finish_pending_solve(app_t *app)
 {
     if (SDL_AtomicGet(&app->solve_state) != SOLVE_DONE)
@@ -611,12 +702,18 @@ static int run_vector_sim(app_t *app)
                    "Selected engine is not wired to this spot runner yet");
         return -1;
     }
-    if (card_token_count(app->board_text) != 5) {
+    if (app->tree_path[0] && app->tree_header_valid &&
+        app->tree_header.street != 3) {
         copy_field(app->solver_status, sizeof(app->solver_status),
-                   "Board must contain exactly five cards");
+                   "Vector CPU currently supports loaded trees at river only; choose Legacy CFR for this street");
         return -1;
     }
-    if (!app->range_oop[0] || !app->range_ip[0]) {
+    if (card_token_count(app->board_text) != 5) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Vector CPU needs a complete five-card river board");
+        return -1;
+    }
+    if (!app->tree_path[0] && (!app->range_oop[0] || !app->range_ip[0])) {
         copy_field(app->solver_status, sizeof(app->solver_status),
                    "Enter an OOP and IP range before solving");
         return -1;
@@ -634,14 +731,17 @@ static int run_vector_sim(app_t *app)
     snprintf(command, sizeof(command), "%s --game %s --board %s --players %d",
              quoted_executable, game_name_for(app->game_index), board,
              app->player_count > 1 ? app->player_count : 2);
-    for (int player = 0; player < app->player_count && player < 8; ++player)
-    {
-        const char *player_range = starter_range_for_player(app, player);
-        char quoted_range[4200];
-        shell_quote(player_range, quoted_range, sizeof(quoted_range));
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
-                 " --range%d %s", player, quoted_range);
-    }
+    /* A Monker tree carries its own correlated ranges. Sending the GUI's
+     * starter ranges alongside it would silently override those real inputs. */
+    if (!app->tree_path[0])
+        for (int player = 0; player < app->player_count && player < 8; ++player)
+        {
+            const char *player_range = starter_range_for_player(app, player);
+            char quoted_range[4200];
+            shell_quote(player_range, quoted_range, sizeof(quoted_range));
+            snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                     " --range%d %s", player, quoted_range);
+        }
     if (app->tree_path[0])
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
                  " --tree %s", tree);
@@ -683,6 +783,11 @@ static int run_preflop_solver(app_t *app)
     int iterations;
     if (!app)
         return -1;
+    if (app->tree_path[0] || app->mkr_path[0]) {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   "Loaded .tree/.mkr belongs to a tree spot; enter its board and choose a tree engine");
+        return -1;
+    }
     if (app->player_count < 2 || app->player_count > PE_PREFLOP_GUI_MAX_PLAYERS) {
         copy_field(app->solver_status, sizeof(app->solver_status),
                    "Lane B preflop supports 2 to 6 players");
@@ -724,6 +829,8 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
     char board[160], tree[1200], mkr[1200];
     char ranges[8][4200];
     char command[32768];
+    const char *street = "river";
+    char street_name[16];
     if (!app) return -1;
     if (!app->tree_path[0]) {
         copy_field(app->solver_status, sizeof(app->solver_status),
@@ -735,6 +842,27 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
                    "Legacy CFR variant is not configured");
         return -1;
     }
+    if (app->tree_header_valid)
+    {
+        if (app->tree_header.street < 0 || app->tree_header.street > 3)
+        {
+            copy_field(app->solver_status, sizeof(app->solver_status),
+                       "Tree rejected: unsupported starting street");
+            return -1;
+        }
+        copy_field(street_name, sizeof(street_name),
+                   tree_street_label(app->tree_header.street));
+        for (char *cursor = street_name; *cursor; ++cursor)
+            *cursor = (char)tolower((unsigned char)*cursor);
+        street = street_name;
+        if (card_token_count(app->board_text) !=
+            tree_board_count(app->tree_header.street))
+        {
+            copy_field(app->solver_status, sizeof(app->solver_status),
+                       "Board card count does not match the loaded tree street");
+            return -1;
+        }
+    }
     if (app->executable_dir[0])
         snprintf(executable, sizeof(executable), "%s%c%s%s",
                  app->executable_dir, PE_GUI_PATH_SEPARATOR,
@@ -744,9 +872,10 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
     shell_quote(app->tree_path, tree, sizeof(tree));
     shell_quote(app->board_text, board, sizeof(board));
     snprintf(command, sizeof(command),
-             "%s --tree %s --rules %s --street river --board %s --players %d --iterations %d",
-             quoted_executable, tree, game_name_for(app->game_index), board,
-             app->player_count, app->iterations > 0 ? app->iterations : 1000);
+             "%s --tree %s --rules %s --street %s --board %s --players %d --iterations %d",
+             quoted_executable, tree, game_name_for(app->game_index), street,
+             board, app->player_count,
+             app->iterations > 0 ? app->iterations : 1000);
     if (backend_name)
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
                  " --backend %s", backend_name);
@@ -768,6 +897,24 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
 static int run_selected_solver(app_t *app)
 {
     if (!app) return -1;
+    if (app->tree_path[0])
+    {
+        if (!app->tree_header_valid)
+        {
+            copy_field(app->solver_status, sizeof(app->solver_status),
+                       "Loaded tree has no valid context; reload the .tree file");
+            return -1;
+        }
+        if (app->engine_index == 0)
+            return run_vector_sim(app);
+        return run_legacy_cfr(app, app->engine_index == 2 ? "opencl" : NULL);
+    }
+    if (app->mkr_path[0])
+    {
+        copy_field(app->solver_status, sizeof(app->solver_status),
+                   ".mkr is a strategy archive; load the matching .tree before solving");
+        return -1;
+    }
     if (is_preflop_request(app->board_text))
         return run_preflop_solver(app);
     if (app->engine_index == 0) return run_vector_sim(app);
@@ -802,8 +949,8 @@ static void set_dropped_file(app_t *app, const char *path)
     else if (has_suffix(path, ".tree"))
     {
         copy_field(app->tree_path, sizeof(app->tree_path), path);
-        copy_field(app->solver_status, sizeof(app->solver_status), "Tree loaded - converting topology");
-        start_tree_conversion(app);
+        if (load_tree_context(app, path) == 0)
+            start_tree_conversion(app);
     }
     else if (has_suffix(path, ".json"))
     {
@@ -1867,13 +2014,13 @@ int main(int argc, char **argv)
                 else if (inside(layout.range_tab, mouse_x, mouse_y)) app.page = 3;
                 else if (mouse_x >= output_width - 222 && mouse_x < output_width - 130 &&
                          mouse_y >= 0 && mouse_y < 70) {
-                    run_selected_solver(&app);
-                    app.page = 1;
+                    if (run_selected_solver(&app) == 0)
+                        app.page = 1;
                 }
                 else if (app.page == 0 && mouse_x >= 804 && mouse_x < output_width - 28 &&
                          mouse_y >= output_height - 110 && mouse_y < output_height - 58) {
-                    run_selected_solver(&app);
-                    app.page = 1;
+                    if (run_selected_solver(&app) == 0)
+                        app.page = 1;
                 }
                 else if (app.page == 0 && mouse_x >= 240 && mouse_x < 452 &&
                          mouse_y >= 168 && mouse_y < 208) {
