@@ -1746,6 +1746,18 @@ if(TARGET pe-preflop-solve)
         LABELS "product;solver;lane-b;preflop;dcfr"
         PASS_REGULAR_EXPRESSION "regret=dcfr"
         TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_rejects_full_tree_preset
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 1
+            --samples 1
+            --algorithm dcfr)
+    set_tests_properties(pe_preflop_solve_rejects_full_tree_preset PROPERTIES
+        LABELS "product;solver;lane-b;validation"
+        WILL_FAIL TRUE
+        TIMEOUT 60)
     add_test(NAME pe_preflop_solve_postflop_smoke
         COMMAND pe-preflop-solve
             --game holdem
