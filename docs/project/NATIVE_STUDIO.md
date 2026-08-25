@@ -15,6 +15,15 @@ cmake -S . -B build-studio \
 cmake --build build-studio --target poker-eval-studio
 ```
 
+The application has two real tabs:
+
+- **SETUP** contains the tree, board, ranges, runner and run controls.
+- **RESULTS** contains the convergence summary, final metrics and raw run log.
+  Starting a solve switches to this tab automatically; loading a new tree
+  switches back to setup. **Load .mkr report** runs the Monker tree/strategy
+  aggregation report against the selected `.tree` and `.mkr` and displays its
+  JSON result in this tab.
+
 The application workflow is strict:
 
 1. Browse or paste a `.tree` path and inspect it. The binary header and
@@ -23,15 +32,15 @@ The application workflow is strict:
    cards, so the application never invents them or keeps a stale board. A
    preflop tree correctly requires zero board cards; loading one clears the
    board field and synchronises the game/player selectors with the header.
-3. Set **Max iterations**, **Stop target (mBB, 0 = off)**, and **Convergence
-   check every** in the setup panel. The stop target is not implicit: a value
-   of `0` disables exploitability stopping and the explicit iteration limit is
-   then the only automatic completion condition.
+3. Choose one **Stop condition**: **Max iterations** or **Exploitability
+   target**. They are mutually exclusive. **Convergence check every** only
+   controls how often the empirical BR is measured and is not a third stop
+   condition.
 4. Press **Solve this spot**. The run is asynchronous: the results panel shows
    the current iteration, percentage, empirical exploitability and configured
    target while the child solver is running. **Stop run** is always visible and
-   cancels the child process; the final result remains available in the same
-   results view. River trees are sent to `pe-vector-sim`.
+   cancels the child process; the final result remains available in the
+   **RESULTS** tab. River trees are sent to `pe-vector-sim`.
    Preflop trees are sent to `pe-preflop-solve --tree`, use `100%` for any
    range left empty, follow the imported Monker betting nodes, deal flop,
    turn and river, and settle the showdown. A rangeless tree is therefore a

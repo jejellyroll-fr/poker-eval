@@ -64,6 +64,7 @@ struct _app_t
     Edit *iterations_edit;
     Edit *target_edit;
     Edit *interval_edit;
+    Combo *stop_mode_combo;
     TextView *status;
     Label *board_label;
     Label *run_state;
@@ -73,6 +74,8 @@ struct _app_t
     Progress *run_progress_bar;
     Button *solve_button;
     Button *stop_button;
+    Tabs *tabs;
+    Panel *pages;
     Mutex *solve_mutex;
     Proc *solve_proc;
     int solve_running;
@@ -392,6 +395,7 @@ static void i_on_load(App *app, Event *event)
         status(app, "Choose a .tree file first.");
     else
     {
+        tabs_selected(app->tabs, 0u);
         infer_game_from_path(app, path);
         (void)read_tree(app, path, &header, &layout);
     }
@@ -621,6 +625,7 @@ static int i_start_solve(App *app, const char *command)
     app->solve_running = 1;
     bmutex_unlock(app->solve_mutex);
     button_text(app->solve_button, "Solve running...");
+    tabs_selected(app->tabs, 1u);
     osapp_task(app, .10f, i_solve_main, i_solve_update, i_solve_end, App);
     return 0;
 }
@@ -635,6 +640,49 @@ static void i_on_stop(App *app, Event *event)
         i_solve_request_stop(app);
     else
         status(app, "READY\nNo solver run is currently active.");
+    unref(event);
+}
+
+static void i_on_tab(App *app, Event *event)
+{
+    if (app && app->pages && app->tabs)
+        panel_visible_layout(app->pages, tabs_get_selected(app->tabs));
+    unref(event);
+}
+
+static void i_on_load_mkr(App *app, Event *event)
+{
+    char tree[2048];
+    char mkr[2048];
+    char runner[2048];
+    char command[8192];
+    const char *tree_path = edit_get_text(app->tree_edit);
+    const char *mkr_path = edit_get_text(app->mkr_edit);
+    const char *reporter = resolve_runner("pe-solution-report", "pe-solution-report");
+
+    if (!tree_path || !*tree_path || !usable_optional_path(mkr_path))
+    {
+        status(app, "MKR REPORT BLOCKED\nChoose a .tree and a .mkr strategy archive in SETUP first.");
+        tabs_selected(app->tabs, 1u);
+        unref(event);
+        return;
+    }
+    if (!reporter || quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
+        quote_argument(mkr_path, mkr, sizeof(mkr)) != 0 ||
+        quote_argument(reporter, runner, sizeof(runner)) != 0)
+    {
+        status(app, "MKR REPORT ERROR\nCould not find pe-solution-report or a path is too long.");
+        tabs_selected(app->tabs, 1u);
+        unref(event);
+        return;
+    }
+    (void)snprintf(command, sizeof(command),
+                   "%s --monker-tree %s --monker-mkr %s --aggregate board 2>&1",
+                   runner, tree, mkr);
+    label_text(app->run_config, "Monker report | aggregate: board | source: .mkr");
+    status(app, "LOADING MKR REPORT\n%s", command);
+    if (i_start_solve(app, command) != 0)
+        status(app, "MKR REPORT ERROR\nA run is already active.");
     unref(event);
 }
 
@@ -659,6 +707,7 @@ static void i_on_solve(App *app, Event *event)
     uint64_t iterations;
     uint64_t interval;
     double target_mbb;
+    uint32_t stop_mode;
     char config_text[256];
 
     bmutex_lock(app->solve_mutex);
@@ -684,14 +733,18 @@ static void i_on_solve(App *app, Event *event)
     iterations_text = edit_get_text(app->iterations_edit);
     target_text = edit_get_text(app->target_edit);
     interval_text = edit_get_text(app->interval_edit);
+    stop_mode = combo_get_selected(app->stop_mode_combo);
     if (parse_ui_u64(iterations_text, &iterations) != 0 ||
         parse_ui_u64(interval_text, &interval) != 0 ||
-        parse_ui_target(target_text, &target_mbb) != 0)
+        (stop_mode == 1u && (parse_ui_target(target_text, &target_mbb) != 0 ||
+                             target_mbb <= 0.0)))
     {
         status(app, "SOLVE BLOCKED\nSet valid numeric values for max iterations,\nstop target mBB and convergence interval.");
         unref(event);
         return;
     }
+    if (stop_mode == 0u)
+        target_mbb = 0.0;
     if (header.street == 0)
     {
         const char *configured_runner = usable_optional_path(runner_path)
@@ -747,8 +800,9 @@ static void i_on_solve(App *app, Event *event)
         (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
                        " 2>&1");
         snprintf(config_text, sizeof(config_text),
-                 "Lane B preflop | stop target %.2f mBB | max iterations %" PRIu64
+                 "Lane B preflop | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64,
+                 stop_mode == 0u ? "iterations" : "exploitability",
                  target_mbb, iterations, interval);
         label_text(app->run_config, config_text);
         status(app, "SOLVING PREFLOP\n%s\n\nEmpty ranges are 100%%; boards are dealt through river.", command);
@@ -817,7 +871,7 @@ static void i_on_solve(App *app, Event *event)
 static Panel *i_setup_panel(App *app)
 {
     Panel *panel = panel_create();
-    Layout *layout = layout_create(2, 18);
+    Layout *layout = layout_create(2, 19);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
@@ -830,6 +884,7 @@ static Panel *i_setup_panel(App *app)
     Label *iterations_label = label_create();
     Label *target_label = label_create();
     Label *interval_label = label_create();
+    Label *condition_label = label_create();
     app->game_combo = combo_create();
     app->players_combo = combo_create();
     Button *browse_tree = button_push();
@@ -848,6 +903,7 @@ static Panel *i_setup_panel(App *app)
     app->iterations_edit = edit_create();
     app->target_edit = edit_create();
     app->interval_edit = edit_create();
+    app->stop_mode_combo = combo_create();
     app->board_label = board_label;
     label_text(title, "SPOT SETUP");
     label_text(game_label, "GAME");
@@ -859,8 +915,9 @@ static Panel *i_setup_panel(App *app)
     label_text(range1_label, "RANGE PLAYER 2");
     label_text(runner_label, "VECTOR RUNNER");
     label_text(iterations_label, "MAX ITERATIONS");
-    label_text(target_label, "STOP TARGET (mBB, 0 = off)");
+    label_text(target_label, "STOP TARGET (mBB)");
     label_text(interval_label, "CONVERGENCE CHECK EVERY");
+    label_text(condition_label, "STOP CONDITION");
     combo_add_elem(app->game_combo, "Hold'em", NULL);
     combo_add_elem(app->game_combo, "PLO4", NULL);
     combo_add_elem(app->game_combo, "PLO5", NULL);
@@ -878,6 +935,9 @@ static Panel *i_setup_panel(App *app)
     button_text(load, "Load and inspect tree");
     button_text(solve, "Solve this spot");
     button_text(stop, "Stop run");
+    combo_add_elem(app->stop_mode_combo, "Max iterations", NULL);
+    combo_add_elem(app->stop_mode_combo, "Exploitability target", NULL);
+    combo_selected(app->stop_mode_combo, 0u);
     edit_phtext(app->tree_edit, "/path/to/spot.tree");
     edit_phtext(app->mkr_edit, "/path/to/strategy.mkr");
     edit_phtext(app->board_edit, "No board (preflop: automatic)");
@@ -914,12 +974,14 @@ static Panel *i_setup_panel(App *app)
     layout_button(layout, load, 0, 13);
     layout_button(layout, solve, 1, 13);
     layout_label(layout, iterations_label, 0, 14);
-    layout_label(layout, target_label, 1, 14);
+    layout_label(layout, condition_label, 1, 14);
     layout_edit(layout, app->iterations_edit, 0, 15);
-    layout_edit(layout, app->target_edit, 1, 15);
-    layout_label(layout, interval_label, 0, 16);
-    layout_button(layout, stop, 1, 16);
-    layout_edit(layout, app->interval_edit, 0, 17);
+    layout_combo(layout, app->stop_mode_combo, 1, 15);
+    layout_label(layout, target_label, 0, 16);
+    layout_label(layout, interval_label, 1, 16);
+    layout_edit(layout, app->target_edit, 0, 17);
+    layout_edit(layout, app->interval_edit, 1, 17);
+    layout_button(layout, stop, 1, 18);
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
@@ -940,8 +1002,9 @@ static Panel *i_setup_panel(App *app)
 static Panel *i_result_panel(App *app)
 {
     Panel *panel = panel_create();
-    Layout *layout = layout_create(1, 7);
+    Layout *layout = layout_create(1, 8);
     Label *title = label_create();
+    Button *load_mkr = button_push();
     app->status = textview_create();
     app->run_state = label_create();
     app->run_progress = label_create();
@@ -949,6 +1012,7 @@ static Panel *i_result_panel(App *app)
     app->run_config = label_create();
     app->run_progress_bar = progress_create();
     label_text(title, "RESULTS / CONVERGENCE / RUN LOG");
+    button_text(load_mkr, "Load .mkr report");
     label_text(app->run_state, "READY");
     label_text(app->run_progress, "READY  |  no convergence sample yet");
     label_text(app->run_metrics, "Empirical exploitability: not measured");
@@ -962,9 +1026,10 @@ static Panel *i_result_panel(App *app)
     layout_label(layout, app->run_progress, 0, 3);
     layout_label(layout, app->run_metrics, 0, 4);
     layout_label(layout, app->run_config, 0, 5);
-    layout_textview(layout, app->status, 0, 6);
+    layout_button(layout, load_mkr, 0, 6);
+    layout_textview(layout, app->status, 0, 7);
     layout_hsize(layout, 0, 580);
-    layout_vsize(layout, 6, 520);
+    layout_vsize(layout, 7, 520);
     layout_margin(layout, 12);
     layout_vmargin(layout, 0, 8);
     layout_vmargin(layout, 1, 8);
@@ -972,6 +1037,8 @@ static Panel *i_result_panel(App *app)
     layout_vmargin(layout, 3, 8);
     layout_vmargin(layout, 4, 8);
     layout_vmargin(layout, 5, 8);
+    layout_vmargin(layout, 6, 8);
+    button_OnClick(load_mkr, listener(app, i_on_load_mkr, App));
     panel_layout(panel, layout);
     return panel;
 }
@@ -980,15 +1047,27 @@ static App *i_create(void)
 {
     App *app = heap_new0(App);
     Panel *root = panel_create();
-    Layout *layout = layout_create(2, 1);
+    Layout *layout = layout_create(1, 2);
     Panel *setup = i_setup_panel(app);
     Panel *result = i_result_panel(app);
+    Layout *setup_layout = layout_create(1, 1);
+    Layout *result_layout = layout_create(1, 1);
+    Tabs *tabs = tabs_create((gui_pos_t)ekTABS_TOP);
+    Panel *pages = panel_create();
+    app->tabs = tabs;
+    app->pages = pages;
+    tabs_add_elem(tabs, "SETUP", NULL);
+    tabs_add_elem(tabs, "RESULTS", NULL);
+    tabs_OnSelect(tabs, listener(app, i_on_tab, App));
+    layout_panel(setup_layout, setup, 0, 0);
+    layout_panel(result_layout, result, 0, 0);
+    panel_layout(pages, setup_layout);
+    panel_layout(pages, result_layout);
+    panel_visible_layout(pages, 0u);
     app->solve_mutex = bmutex_create();
-    layout_panel(layout, setup, 0, 0);
-    layout_panel(layout, result, 1, 0);
-    layout_hsize(layout, 0, 640);
-    layout_hsize(layout, 1, 700);
-    layout_hmargin(layout, 0, 16);
+    layout_tabs(layout, tabs, 0, 0);
+    layout_panel(layout, pages, 0, 1);
+    layout_vsize(layout, 1, 720);
     layout_margin(layout, 16);
     panel_layout(root, layout);
     app->window = window_create(ekWINDOW_STDRES);
