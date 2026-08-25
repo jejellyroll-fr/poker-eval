@@ -60,6 +60,12 @@ typedef struct {
     pe_algorithm_preset_t algorithm;
     pe_policy_mode_t policy;
     double exponential_lambda;
+    double dcfr_alpha;
+    double dcfr_beta;
+    double dcfr_gamma;
+    int have_dcfr_alpha;
+    int have_dcfr_beta;
+    int have_dcfr_gamma;
     pe_compute_kind_t backend;
     pe_precision_mode_t precision;
     int cpu_threads;
@@ -390,6 +396,9 @@ static void usage(FILE *stream)
         "  --algorithm NAME             cfr, cfr+, dcfr, external-mccfr, ...\n"
         "  --policy NAME                regret-matching or exponential\n"
         "  --lambda X                   exponential policy temperature (> 0)\n"
+        "  --alpha X                   DCFR positive-regret discount exponent (>= 0)\n"
+        "  --beta X                    DCFR negative-regret discount exponent (>= 0)\n"
+        "  --gamma X                   DCFR average-strategy exponent (>= 0)\n"
         "  --backend NAME               auto, cpu_ref, cpu_par, cuda, opencl\n"
         "  --precision NAME             f64, f32, mixed, fixed16\n"
         "  --threads N                  worker threads for cpu_par\n"
@@ -430,6 +439,20 @@ static int parse_positive_double(const char *text, double *out)
     return 0;
 }
 
+static int parse_nonnegative_double(const char *text, double *out)
+{
+    char *end = NULL;
+    double value;
+    if (!text || !out || !*text)
+        return -1;
+    errno = 0;
+    value = strtod(text, &end);
+    if (errno || end == text || *end != '\0' || !isfinite(value) || value < 0.0)
+        return -1;
+    *out = value;
+    return 0;
+}
+
 static int range_option_index(const char *arg)
 {
     if (!arg || strncmp(arg, "--range", 7) != 0 ||
@@ -445,6 +468,17 @@ static pe_preflop_variant_t parse_variant(const char *name)
     if (name && strcmp(name, "plo6") == 0) return PE_PREFLOP_PLO6;
     return name && strcmp(name, "holdem") == 0
         ? PE_PREFLOP_HOLDEM : (pe_preflop_variant_t)-1;
+}
+
+static int preflop_algorithm_supported(pe_algorithm_preset_t algorithm)
+{
+    /* Lane B samples chance and opponent actions. The full-tree presets are
+     * valid solver algorithms elsewhere, but this driver must not silently
+     * reinterpret them as sampled CFR. */
+    return algorithm == PE_PRESET_EXTERNAL_MCCFR ||
+           algorithm == PE_PRESET_EXTERNAL_DCFR ||
+           algorithm == PE_PRESET_OUTCOME_MCCFR ||
+           algorithm == PE_PRESET_EXTERNAL_ECFR;
 }
 
 static int parse_raise_sizes(const char *text, options_t *options)
@@ -487,6 +521,9 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->algorithm = PE_PRESET_EXTERNAL_MCCFR;
     options->policy = PE_POLICY_COUNT;
     options->exponential_lambda = 1.0;
+    options->dcfr_alpha = 1.5;
+    options->dcfr_beta = 0.0;
+    options->dcfr_gamma = 2.0;
     options->backend = PE_COMPUTE_AUTO;
     options->precision = PE_PREC_F64;
     options->cpu_threads = 0;
@@ -510,6 +547,9 @@ static int parse_options(int argc, char **argv, options_t *options)
              strcmp(arg, "--algorithm") == 0 ||
              strcmp(arg, "--policy") == 0 ||
              strcmp(arg, "--lambda") == 0 ||
+             strcmp(arg, "--alpha") == 0 ||
+             strcmp(arg, "--beta") == 0 ||
+             strcmp(arg, "--gamma") == 0 ||
              strcmp(arg, "--backend") == 0 ||
              strcmp(arg, "--precision") == 0 ||
              strcmp(arg, "--threads") == 0 ||
@@ -583,6 +623,18 @@ static int parse_options(int argc, char **argv, options_t *options)
         } else if (strcmp(arg, "--lambda") == 0) {
             if (parse_positive_double(value, &options->exponential_lambda) != 0)
                 return -1;
+        } else if (strcmp(arg, "--alpha") == 0) {
+            if (parse_nonnegative_double(value, &options->dcfr_alpha) != 0)
+                return -1;
+            options->have_dcfr_alpha = 1;
+        } else if (strcmp(arg, "--beta") == 0) {
+            if (parse_nonnegative_double(value, &options->dcfr_beta) != 0)
+                return -1;
+            options->have_dcfr_beta = 1;
+        } else if (strcmp(arg, "--gamma") == 0) {
+            if (parse_nonnegative_double(value, &options->dcfr_gamma) != 0)
+                return -1;
+            options->have_dcfr_gamma = 1;
         } else if (strcmp(arg, "--backend") == 0) {
             options->backend = pe_compute_kind_from_name(value);
             if (options->backend == PE_COMPUTE_COUNT) return -1;
@@ -609,6 +661,14 @@ static int parse_options(int argc, char **argv, options_t *options)
         options->ante < 0.0 || options->ante >= options->big_blind ||
         options->stack <= options->big_blind || options->cpu_threads < 0)
         return -1;
+    if (!preflop_algorithm_supported(options->algorithm)) {
+        fprintf(stderr,
+                "preflop Lane B requires a sampled preset: external-mccfr, "
+                "external-dcfr, outcome-mccfr or external-ecfr; '%s' is a "
+                "full-tree preset and is not silently remapped\n",
+                pe_preset_name(options->algorithm));
+        return -1;
+    }
     return 0;
 }
 
@@ -786,7 +846,8 @@ int main(int argc, char **argv)
     config = pe_solver_config_default();
     config.algorithm.preset = options.algorithm;
     if (options.policy != PE_POLICY_COUNT ||
-        fabs(options.exponential_lambda - 1.0) > 1e-15) {
+        fabs(options.exponential_lambda - 1.0) > 1e-15 ||
+        options.have_dcfr_alpha || options.have_dcfr_beta || options.have_dcfr_gamma) {
         if (pe_preset_expand(options.algorithm, &config.algorithm) != 0)
             goto fail;
         config.algorithm.preset = PE_PRESET_CUSTOM;
@@ -797,6 +858,12 @@ int main(int argc, char **argv)
         }
     }
     config.algorithm.exponential_lambda = options.exponential_lambda;
+    if (options.have_dcfr_alpha)
+        config.algorithm.dcfr_alpha = options.dcfr_alpha;
+    if (options.have_dcfr_beta)
+        config.algorithm.dcfr_beta = options.dcfr_beta;
+    if (options.have_dcfr_gamma)
+        config.algorithm.dcfr_gamma = options.dcfr_gamma;
     config.execution.backend = options.backend;
     config.execution.stages.traversal = options.backend;
     config.execution.stages.update = options.backend;
@@ -832,7 +899,8 @@ int main(int argc, char **argv)
             game, (pe_storage_t *)pe_solver_get_storage_instance(solver));
         size_t infosets = pe_preflop_allin_infodesc_count(game);
         printf("preflop_solver=lane-b algorithm=%s traversal=%s regret=%s policy=%s "
-               "backend=%s precision=%s game=%s players=%d postflop=%d tree=%s\n",
+               "backend=%s precision=%s dcfr_alpha=%.6g dcfr_beta=%.6g "
+               "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s\n",
                config.algorithm.preset == PE_PRESET_CUSTOM
                    ? "custom" : pe_preset_name(options.algorithm),
                pe_traversal_name(config.algorithm.traversal),
@@ -840,6 +908,8 @@ int main(int argc, char **argv)
                pe_policy_name(config.algorithm.policy),
                pe_compute_kind_name(options.backend),
                pe_precision_name(options.precision),
+               config.algorithm.dcfr_alpha, config.algorithm.dcfr_beta,
+               config.algorithm.dcfr_gamma, config.algorithm.exponential_lambda,
                options.game, options.players, options.postflop_streets,
                tree ? options.tree : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",

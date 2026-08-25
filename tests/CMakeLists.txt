@@ -1729,6 +1729,23 @@ if(TARGET pe-preflop-solve)
         LABELS "product;solver;lane-b;preflop"
         PASS_REGULAR_EXPRESSION "STRATEGY REPORT;HAND TABLE;frequencies"
         TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_external_dcfr_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 2
+            --samples 1
+            --algorithm external-dcfr
+            --alpha 2.25
+            --beta 0.5
+            --gamma 1.75
+            --br-samples 1
+            --exploitability-interval 1)
+    set_tests_properties(pe_preflop_solve_external_dcfr_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;dcfr"
+        PASS_REGULAR_EXPRESSION "regret=dcfr"
+        TIMEOUT 60)
     add_test(NAME pe_preflop_solve_postflop_smoke
         COMMAND pe-preflop-solve
             --game holdem
