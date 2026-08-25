@@ -58,6 +58,8 @@ typedef struct {
     const char *output;
     const char *tree;
     pe_algorithm_preset_t algorithm;
+    pe_policy_mode_t policy;
+    double exponential_lambda;
     pe_compute_kind_t backend;
     pe_precision_mode_t precision;
     int cpu_threads;
@@ -386,6 +388,8 @@ static void usage(FILE *stream)
         "  --postflop                   continue through flop, turn and river\n"
         "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
         "  --algorithm NAME             cfr, cfr+, dcfr, external-mccfr, ...\n"
+        "  --policy NAME                regret-matching or exponential\n"
+        "  --lambda X                   exponential policy temperature (> 0)\n"
         "  --backend NAME               auto, cpu_ref, cpu_par, cuda, opencl\n"
         "  --precision NAME             f64, f32, mixed, fixed16\n"
         "  --threads N                  worker threads for cpu_par\n"
@@ -481,6 +485,8 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->target_mbb = 1.0;
     options->seed = UINT64_C(0x50455f5052464c42);
     options->algorithm = PE_PRESET_EXTERNAL_MCCFR;
+    options->policy = PE_POLICY_COUNT;
+    options->exponential_lambda = 1.0;
     options->backend = PE_COMPUTE_AUTO;
     options->precision = PE_PREC_F64;
     options->cpu_threads = 0;
@@ -502,6 +508,8 @@ static int parse_options(int argc, char **argv, options_t *options)
              strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0 ||
              strcmp(arg, "--tree") == 0 ||
              strcmp(arg, "--algorithm") == 0 ||
+             strcmp(arg, "--policy") == 0 ||
+             strcmp(arg, "--lambda") == 0 ||
              strcmp(arg, "--backend") == 0 ||
              strcmp(arg, "--precision") == 0 ||
              strcmp(arg, "--threads") == 0 ||
@@ -569,6 +577,12 @@ static int parse_options(int argc, char **argv, options_t *options)
         else if (strcmp(arg, "--algorithm") == 0) {
             options->algorithm = pe_preset_from_name(value);
             if (options->algorithm == PE_PRESET_COUNT) return -1;
+        } else if (strcmp(arg, "--policy") == 0) {
+            options->policy = pe_policy_from_name(value);
+            if (options->policy == PE_POLICY_COUNT) return -1;
+        } else if (strcmp(arg, "--lambda") == 0) {
+            if (parse_positive_double(value, &options->exponential_lambda) != 0)
+                return -1;
         } else if (strcmp(arg, "--backend") == 0) {
             options->backend = pe_compute_kind_from_name(value);
             if (options->backend == PE_COMPUTE_COUNT) return -1;
@@ -771,6 +785,18 @@ int main(int argc, char **argv)
 
     config = pe_solver_config_default();
     config.algorithm.preset = options.algorithm;
+    if (options.policy != PE_POLICY_COUNT ||
+        fabs(options.exponential_lambda - 1.0) > 1e-15) {
+        if (pe_preset_expand(options.algorithm, &config.algorithm) != 0)
+            goto fail;
+        config.algorithm.preset = PE_PRESET_CUSTOM;
+        if (options.policy != PE_POLICY_COUNT) {
+            config.algorithm.policy = options.policy;
+            if (options.policy == PE_POLICY_EXPONENTIAL)
+                config.algorithm.regret = PE_REGRET_LEGACY_EXP;
+        }
+    }
+    config.algorithm.exponential_lambda = options.exponential_lambda;
     config.execution.backend = options.backend;
     config.execution.stages.traversal = options.backend;
     config.execution.stages.update = options.backend;
@@ -805,8 +831,13 @@ int main(int argc, char **argv)
         pe_preflop_allin_game_set_storage(
             game, (pe_storage_t *)pe_solver_get_storage_instance(solver));
         size_t infosets = pe_preflop_allin_infodesc_count(game);
-        printf("preflop_solver=lane-b algorithm=%s backend=%s precision=%s game=%s players=%d postflop=%d tree=%s\n",
-               pe_preset_name(options.algorithm),
+        printf("preflop_solver=lane-b algorithm=%s traversal=%s regret=%s policy=%s "
+               "backend=%s precision=%s game=%s players=%d postflop=%d tree=%s\n",
+               config.algorithm.preset == PE_PRESET_CUSTOM
+                   ? "custom" : pe_preset_name(options.algorithm),
+               pe_traversal_name(config.algorithm.traversal),
+               pe_regret_name(config.algorithm.regret),
+               pe_policy_name(config.algorithm.policy),
                pe_compute_kind_name(options.backend),
                pe_precision_name(options.precision),
                options.game, options.players, options.postflop_streets,
