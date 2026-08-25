@@ -732,6 +732,7 @@ int main(int argc, char **argv)
     pe_preflop_variant_t variant;
     mpf_tree_def_t *tree = NULL;
     pe_monker_tree_header_t tree_header;
+    simd_capability_t detected_simd = SIMD_NONE;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -753,6 +754,10 @@ int main(int argc, char **argv)
         printf("runtime cpus=%u openmp=%s simd=%s\n",
                runtime.logical_cpus, runtime.openmp_available ? "yes" : "no",
                pe_runtime_simd_name(runtime.simd));
+        printf("simd_solver_path=not-integrated (SIMD is used by equity/terminal adapters; "
+               "CFR regret traversal remains scalar)\n");
+        printf("lane_b_algorithms=external-mccfr,external-dcfr,outcome-mccfr,external-ecfr\n");
+        printf("lane_a_algorithms=cfr,cfr+,dcfr,mccfr (full-tree adapter pending)\n");
         for (int i = 0; i < PE_COMPUTE_COUNT; ++i)
         {
             char line[256];
@@ -766,6 +771,7 @@ int main(int argc, char **argv)
         const pe_runtime_backend_info_t *backend;
         if (pe_runtime_probe(&runtime) != 0)
             return 1;
+        detected_simd = runtime.simd;
         if (options.backend == PE_COMPUTE_AUTO)
         {
             options.backend = pe_runtime_recommended_backend(&runtime);
@@ -902,7 +908,8 @@ int main(int argc, char **argv)
             game, (pe_storage_t *)pe_solver_get_storage_instance(solver));
         size_t infosets = pe_preflop_allin_infodesc_count(game);
         printf("preflop_solver=lane-b algorithm=%s traversal=%s regret=%s policy=%s "
-               "backend=%s precision=%s dcfr_alpha=%.6g dcfr_beta=%.6g "
+               "backend=%s backend_validated=1 precision=%s simd_detected=%s "
+               "simd_cfr=not-integrated dcfr_alpha=%.6g dcfr_beta=%.6g "
                "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s\n",
                config.algorithm.preset == PE_PRESET_CUSTOM
                    ? "custom" : pe_preset_name(options.algorithm),
@@ -911,6 +918,7 @@ int main(int argc, char **argv)
                pe_policy_name(config.algorithm.policy),
                pe_compute_kind_name(options.backend),
                pe_precision_name(options.precision),
+               pe_runtime_simd_name(detected_simd),
                config.algorithm.dcfr_alpha, config.algorithm.dcfr_beta,
                config.algorithm.dcfr_gamma, config.algorithm.exponential_lambda,
                options.game, options.players, options.postflop_streets,
