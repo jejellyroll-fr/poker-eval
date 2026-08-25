@@ -118,6 +118,8 @@ struct _app_t
     Edit *interval_edit;
     Edit *threads_edit;
     Combo *algorithm_combo;
+    Combo *policy_combo;
+    Edit *lambda_edit;
     Combo *backend_combo;
     Combo *precision_combo;
     Combo *stop_mode_combo;
@@ -403,6 +405,18 @@ static pe_algorithm_preset_t selected_algorithm(const App *app)
     return app && app->algorithm_combo
         ? (pe_algorithm_preset_t)combo_get_selected(app->algorithm_combo)
         : PE_PRESET_EXTERNAL_MCCFR;
+}
+
+static pe_policy_mode_t selected_policy(const App *app)
+{
+    uint32_t selection;
+    if (!app || !app->policy_combo)
+        return PE_POLICY_COUNT;
+    selection = combo_get_selected(app->policy_combo);
+    /* Entry zero means that the selected algorithm preset supplies the
+       policy. The explicit entries follow the public enum order. */
+    return selection == 0u ? PE_POLICY_COUNT
+                           : (pe_policy_mode_t)(selection - 1u);
 }
 
 static pe_compute_kind_t selected_backend(const App *app)
@@ -3480,9 +3494,12 @@ static void i_on_solve(App *app, Event *event)
     double target_mbb;
     uint32_t stop_mode;
     pe_algorithm_preset_t algorithm;
+    pe_policy_mode_t policy;
     pe_compute_kind_t backend;
     pe_precision_mode_t precision;
+    double exponential_lambda;
     uint64_t threads;
+    char algorithm_options[320];
     char config_text[256];
 
     bmutex_lock(app->solve_mutex);
@@ -3510,8 +3527,17 @@ static void i_on_solve(App *app, Event *event)
     interval_text = edit_get_text(app->interval_edit);
     stop_mode = combo_get_selected(app->stop_mode_combo);
     algorithm = selected_algorithm(app);
+    policy = selected_policy(app);
     backend = selected_backend(app);
     precision = selected_precision(app);
+    exponential_lambda = 1.0;
+    if (parse_ui_target(edit_get_text(app->lambda_edit), &exponential_lambda) != 0 ||
+        exponential_lambda <= 0.0)
+    {
+        status(app, "SOLVE BLOCKED\nExponential policy temperature must be positive.");
+        unref(event);
+        return;
+    }
     threads = 1u;
     if (parse_ui_u64(edit_get_text(app->threads_edit), &threads) != 0)
     {
@@ -3576,19 +3602,35 @@ static void i_on_solve(App *app, Event *event)
             unref(event);
             return;
         }
+        (void)snprintf(algorithm_options, sizeof(algorithm_options),
+                       " --algorithm %s --backend %s --precision %s",
+                       pe_preset_name(algorithm),
+                       pe_compute_kind_name(backend),
+                       pe_precision_name(precision));
+        if (policy != PE_POLICY_COUNT)
+        {
+            size_t options_len = strlen(algorithm_options);
+            (void)snprintf(algorithm_options + options_len,
+                           sizeof(algorithm_options) - options_len,
+                           " --policy %s", pe_policy_name(policy));
+        }
+        if (fabs(exponential_lambda - 1.0) > 1e-15)
+        {
+            size_t options_len = strlen(algorithm_options);
+            (void)snprintf(algorithm_options + options_len,
+                           sizeof(algorithm_options) - options_len,
+                           " --lambda %.17g", exponential_lambda);
+        }
         used = (size_t)snprintf(command, sizeof(command),
                                 "%s --game %s --players %u --tree %s"
                                 " --iterations %" PRIu64 " --samples 1"
                                 " --br-samples 32 --target-mbb %.17g"
                                 " --exploitability-interval %" PRIu64
-                                " --algorithm %s --backend %s --precision %s"
-                                " --threads %" PRIu64,
+                                "%s --threads %" PRIu64,
                                 runner, game_name(layout.game),
                                 header.player_count, tree, iterations,
                                 target_mbb, interval,
-                                pe_preset_name(algorithm),
-                                pe_compute_kind_name(backend),
-                                pe_precision_name(precision), threads);
+                                algorithm_options, threads);
         for (uint32_t player = 0u; player < header.player_count; ++player)
         {
             const char *range_text = player == 0u ? range0_text :
@@ -3610,11 +3652,14 @@ static void i_on_solve(App *app, Event *event)
                        " 2>&1");
         snprintf(config_text, sizeof(config_text),
                  "Lane B preflop | stop: %s | target %.2f mBB | max %" PRIu64
-                 " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads",
+                 " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
+                 " | policy %s%s",
                  stop_mode == 0u ? "iterations" : "exploitability",
                  target_mbb, iterations, interval,
                  pe_preset_name(algorithm), pe_compute_kind_name(backend),
-                 pe_precision_name(precision), threads);
+                 pe_precision_name(precision), threads,
+                 policy == PE_POLICY_COUNT ? "preset" : pe_policy_name(policy),
+                 fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "");
         label_text(app->run_config, config_text);
         status(app, "SOLVING PREFLOP\n%s\n\nEmpty ranges are 100%%; boards are dealt through river.", command);
         if (i_start_solve(app, command) != 0)
@@ -3684,7 +3729,7 @@ static void i_on_solve(App *app, Event *event)
 static Panel *i_setup_panel(App *app)
 {
     Panel *panel = panel_create();
-    Layout *layout = layout_create(2, 28);
+    Layout *layout = layout_create(2, 30);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
@@ -3699,8 +3744,10 @@ static Panel *i_setup_panel(App *app)
     Label *interval_label = label_create();
     Label *condition_label = label_create();
     Label *algorithm_label = label_create();
+    Label *policy_label = label_create();
     Label *backend_label = label_create();
     Label *precision_label = label_create();
+    Label *lambda_label = label_create();
     Label *threads_label = label_create();
     app->game_combo = combo_create();
     app->players_combo = combo_create();
@@ -3722,6 +3769,8 @@ static Panel *i_setup_panel(App *app)
     app->interval_edit = edit_create();
     app->threads_edit = edit_create();
     app->algorithm_combo = combo_create();
+    app->policy_combo = combo_create();
+    app->lambda_edit = edit_create();
     app->backend_combo = combo_create();
     app->precision_combo = combo_create();
     app->stop_mode_combo = combo_create();
@@ -3740,8 +3789,10 @@ static Panel *i_setup_panel(App *app)
     label_text(range1_label, "RANGE PLAYER 2");
     label_text(runner_label, "SOLVER DRIVER");
     label_text(algorithm_label, "ALGORITHM");
+    label_text(policy_label, "REGRET POLICY");
     label_text(backend_label, "COMPUTE BACKEND");
     label_text(precision_label, "PRECISION");
+    label_text(lambda_label, "EXPONENTIAL LAMBDA");
     label_text(threads_label, "CPU THREADS (1+)");
     label_text(iterations_label, "MAX ITERATIONS (HARD STOP)");
     label_text(target_label, "EXPLOITABILITY TARGET (mBB)");
@@ -3762,6 +3813,10 @@ static Panel *i_setup_panel(App *app)
     for (uint32_t preset = 0u; preset < PE_PRESET_COUNT; ++preset)
         combo_add_elem(app->algorithm_combo, pe_preset_name((pe_algorithm_preset_t)preset), NULL);
     combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
+    combo_add_elem(app->policy_combo, "Preset default", NULL);
+    combo_add_elem(app->policy_combo, "Regret matching", NULL);
+    combo_add_elem(app->policy_combo, "Exponential", NULL);
+    combo_selected(app->policy_combo, 0u);
 
     {
         pe_runtime_capabilities_t runtime;
@@ -3805,6 +3860,7 @@ static Panel *i_setup_panel(App *app)
     edit_text(app->target_edit, "1.0");
     edit_text(app->interval_edit, "256");
     edit_text(app->threads_edit, "1");
+    edit_text(app->lambda_edit, "1.0");
     app->runtime_label = label_create();
     update_runtime_label(app);
     label_text(app->setup_run_state, "READY");
@@ -3840,24 +3896,28 @@ static Panel *i_setup_panel(App *app)
     layout_label(layout, threads_label, 1, 13);
     layout_combo(layout, app->precision_combo, 0, 14);
     layout_edit(layout, app->threads_edit, 1, 14);
-    layout_label(layout, runner_label, 0, 15);
-    layout_edit(layout, app->runner_edit, 0, 16);
-    layout_button(layout, load, 0, 17);
-    layout_button(layout, solve, 1, 17);
-    layout_label(layout, iterations_label, 0, 18);
-    layout_label(layout, condition_label, 1, 18);
-    layout_edit(layout, app->iterations_edit, 0, 19);
-    layout_combo(layout, app->stop_mode_combo, 1, 19);
-    layout_label(layout, target_label, 0, 20);
-    layout_label(layout, interval_label, 1, 20);
-    layout_edit(layout, app->target_edit, 0, 21);
-    layout_edit(layout, app->interval_edit, 1, 21);
-    layout_button(layout, stop, 1, 22);
-    layout_label(layout, app->runtime_label, 0, 23);
-    layout_label(layout, app->setup_run_state, 0, 24);
-    layout_label(layout, app->setup_run_progress, 1, 24);
-    layout_progress(layout, app->setup_progress_bar, 0, 25);
-    layout_label(layout, app->setup_run_metrics, 1, 25);
+    layout_label(layout, policy_label, 0, 15);
+    layout_label(layout, lambda_label, 1, 15);
+    layout_combo(layout, app->policy_combo, 0, 16);
+    layout_edit(layout, app->lambda_edit, 1, 16);
+    layout_label(layout, runner_label, 0, 17);
+    layout_edit(layout, app->runner_edit, 0, 18);
+    layout_button(layout, load, 0, 19);
+    layout_button(layout, solve, 1, 19);
+    layout_label(layout, iterations_label, 0, 20);
+    layout_label(layout, condition_label, 1, 20);
+    layout_edit(layout, app->iterations_edit, 0, 21);
+    layout_combo(layout, app->stop_mode_combo, 1, 21);
+    layout_label(layout, target_label, 0, 22);
+    layout_label(layout, interval_label, 1, 22);
+    layout_edit(layout, app->target_edit, 0, 23);
+    layout_edit(layout, app->interval_edit, 1, 23);
+    layout_button(layout, stop, 1, 24);
+    layout_label(layout, app->runtime_label, 0, 25);
+    layout_label(layout, app->setup_run_state, 0, 26);
+    layout_label(layout, app->setup_run_progress, 1, 26);
+    layout_progress(layout, app->setup_progress_bar, 0, 27);
+    layout_label(layout, app->setup_run_metrics, 1, 27);
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
@@ -3875,6 +3935,7 @@ static Panel *i_setup_panel(App *app)
     layout_vmargin(layout, 20, 8);
     layout_vmargin(layout, 22, 8);
     layout_vmargin(layout, 24, 8);
+    layout_vmargin(layout, 26, 8);
     panel_layout(panel, layout);
     return panel;
 }
