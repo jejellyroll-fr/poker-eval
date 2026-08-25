@@ -3682,6 +3682,24 @@ static void i_on_solve(App *app, Event *event)
         unref(event);
         return;
     }
+    /* pe-vector-sim is a terminal evaluator/tree-path replay, not a CFR
+     * runner. Keep the setup controls honest for postflop trees: an
+     * explicitly requested GPU backend or non-reference precision cannot be
+     * silently ignored by the command. */
+    if (backend != PE_COMPUTE_AUTO && backend != PE_COMPUTE_CPU_REF)
+    {
+        status(app, "SOLVE BLOCKED\nPostflop vector evaluation currently uses CPU reference only.\n"
+               "CUDA/OpenCL are available for the sampled preflop solver when validated.");
+        unref(event);
+        return;
+    }
+    if (precision != PE_PREC_F64)
+    {
+        status(app, "SOLVE BLOCKED\nPostflop vector evaluation currently uses f64.\n"
+               "Select f64 or use the sampled preflop solver for alternate precision.");
+        unref(event);
+        return;
+    }
     if (layout.combo_count == 0u && header.player_count != 2u)
     {
         status(app, "SOLVE BLOCKED\nThis native vector screen needs one external range per player; current tree has %u players.",
@@ -3720,7 +3738,11 @@ static void i_on_solve(App *app, Event *event)
     if (usable_optional_path(mkr_path) && quote_argument(mkr_path, mkr, sizeof(mkr)) == 0)
         (void)snprintf(command + used, sizeof(command) - used, " --mkr %s", mkr);
     (void)snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
-    status(app, "SOLVING\n%s", command);
+    snprintf(config_text, sizeof(config_text),
+             "Postflop vector terminal | engine vector-terminal | CPU reference"
+             " | f64 | SIMD detected automatically | CFR controls not applicable");
+    label_text(app->run_config, config_text);
+    status(app, "EVALUATING POSTFLOP\n%s\n\nThis path replays the tree and evaluates terminal equities; it does not run CFR.", command);
     if (i_start_solve(app, command) != 0)
         status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
     unref(event);

@@ -18,6 +18,7 @@
 #include <poker_eval/solver/pe_monker_tree_vector.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
+#include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/solver/pe_traversal.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
@@ -846,6 +847,7 @@ int main(int argc, char **argv)
     monker_cli_t monker;
     EvalConfig config;
     EvalContext *context;
+    pe_runtime_capabilities_t runtime;
     mask_t board;
     double values[PE_VECTOR_SIM_MAX_PLAYERS] = {0};
     size_t deal_count = 0u;
@@ -871,6 +873,15 @@ int main(int argc, char **argv)
     }
     if (monker_cli_load(&options, &game, &monker) != 0)
         return 2;
+    /* This executable evaluates terminal equities and replays imported tree
+     * paths; it is not a CFR driver. Report the actual path explicitly so a
+     * result cannot be mistaken for a GPU/CFR solve. */
+    if (pe_runtime_probe(&runtime) != 0)
+    {
+        fprintf(stderr, "could not inspect runtime capabilities\n");
+        monker_cli_free(&monker);
+        return 1;
+    }
     if (monker.ranges_loaded)
     {
         for (player = 0u; player < options.player_count; ++player)
@@ -921,7 +932,10 @@ int main(int argc, char **argv)
         weight_sum = monker.tree_weight_sum;
         monker.tree_ev_loaded = 1;
     }
-    printf("game=%s players=%u board=", game.game_name, options.player_count);
+    printf("engine=vector-terminal algorithm=not-applicable backend=cpu_ref "
+           "precision=f64 simd=%s game=%s players=%u board=",
+           pe_runtime_simd_name(runtime.simd), game.game_name,
+           options.player_count);
     {
         char board_text[128];
         printf("%s", mask_to_string(board, board_text, sizeof(board_text)));
