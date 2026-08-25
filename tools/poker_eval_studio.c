@@ -19,9 +19,18 @@
 
 #if defined(_WIN32)
 #include <io.h>
+#include <windows.h>
 #define PE_ACCESS _access
 #define PE_X_OK 0
+#define PE_PATH_SEPARATOR '\\'
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#define PE_PATH_SEPARATOR '/'
+#include <unistd.h>
+#define PE_ACCESS access
+#define PE_X_OK X_OK
 #else
+#define PE_PATH_SEPARATOR '/'
 #include <unistd.h>
 #define PE_ACCESS access
 #define PE_X_OK X_OK
@@ -236,15 +245,70 @@ static int usable_optional_path(const char *path)
     return path && *path && strncmp(path, "/path/to/", 9u) != 0;
 }
 
+static int executable_directory(char *out, size_t capacity)
+{
+    size_t length = 0u;
+    char *separator;
+
+    if (!out || capacity < 2u)
+        return 0;
+#if defined(_WIN32)
+    {
+        DWORD result = GetModuleFileNameA(NULL, out, (DWORD)capacity);
+        if (result == 0u || result >= (DWORD)capacity)
+            return 0;
+        length = (size_t)result;
+    }
+#elif defined(__APPLE__)
+    {
+        uint32_t size = (uint32_t)capacity;
+        if (_NSGetExecutablePath(out, &size) != 0)
+            return 0;
+        out[capacity - 1u] = '\0';
+        length = strlen(out);
+    }
+#elif defined(__linux__)
+    {
+        ssize_t result = readlink("/proc/self/exe", out, capacity - 1u);
+        if (result <= 0)
+            return 0;
+        out[result] = '\0';
+        length = (size_t)result;
+    }
+#else
+    return 0;
+#endif
+    separator = strrchr(out, PE_PATH_SEPARATOR);
+    if (!separator || separator == out)
+        return 0;
+    *separator = '\0';
+    return length > 0u;
+}
+
 static const char *resolve_runner(const char *configured, const char *name)
 {
     static char local_path[2048];
+    char executable_dir[2048];
     if (usable_optional_path(configured) && strcmp(configured, "pe-vector-sim") != 0)
-        return configured;
+        return PE_ACCESS(configured, PE_X_OK) == 0 ? configured : NULL;
     if (PE_ACCESS(name, PE_X_OK) == 0)
         return name;
+    if (executable_directory(executable_dir, sizeof(executable_dir)))
+    {
+        /* The Studio build lives in build-studio/tools while the solver
+           tools live in build/tools.  This also works when launched by
+           Finder/the desktop, where the process cwd is not the repository. */
+        (void)snprintf(local_path, sizeof(local_path),
+                       "%s/../../build/tools/%s", executable_dir, name);
+        if (PE_ACCESS(local_path, PE_X_OK) == 0)
+            return local_path;
+        (void)snprintf(local_path, sizeof(local_path), "%s/%s",
+                       executable_dir, name);
+        if (PE_ACCESS(local_path, PE_X_OK) == 0)
+            return local_path;
+    }
     snprintf(local_path, sizeof(local_path), "build/tools/%s", name);
-    return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : name;
+    return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : NULL;
 }
 
 static void i_on_solve(App *app, Event *event)
@@ -277,6 +341,12 @@ static void i_on_solve(App *app, Event *event)
         if (strcmp(configured_runner, "pe-vector-sim") == 0)
             configured_runner = "pe-preflop-solve";
         configured_runner = resolve_runner(configured_runner, "pe-preflop-solve");
+        if (!configured_runner)
+        {
+            status(app, "SOLVE ERROR\nCould not find pe-preflop-solve next to Studio or in build/tools.");
+            unref(event);
+            return;
+        }
         if (header.player_count < 2u || header.player_count > 6u ||
             usable_optional_path(mkr_path))
         {
