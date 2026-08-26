@@ -62,7 +62,9 @@ int main(void)
     pe_preflop_deal_sampler_t sampler;
     pe_betting_rules_t rules;
     pe_preflop_betting_state_t root;
-    pe_preflop_betting_ops_t ops;
+    /* The three optional callbacks below must be NULL, not stack garbage:
+       preflop_betting.c calls them whenever the pointer is non-NULL. */
+    pe_preflop_betting_ops_t ops = {0};
     pe_preflop_betting_game_t game;
     pe_solver_config_t cfg = pe_solver_config_default();
     pe_solver_deps_t deps = pe_solver_deps_default();
