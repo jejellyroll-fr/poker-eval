@@ -11,6 +11,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct
 {
@@ -104,10 +105,23 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
     return 0;
 }
 
+/*
+ * Every group is computed into a staging buffer seeded with the values the
+ * storage currently holds, and the staging buffer is copied back only once
+ * the whole batch has succeeded. A refused batch therefore leaves storage
+ * byte-identical, which the AoS path gets for free from its target array and
+ * which the caller is entitled to on the reference backend above all: it is
+ * the oracle every other backend is compared against.
+ */
 static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                              const pe_update_batch_t *batch)
 {
     size_t group_index;
+    double *scratch_regrets = NULL;
+    double *scratch_average = NULL;
+    double **dest_regrets = NULL;
+    double **dest_average = NULL;
+    int status = -1;
 
     if (backend->config.storage == NULL || backend->config.storage_self == NULL)
         return 0;
@@ -115,6 +129,20 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
         !pe_storage_serves(backend->config.storage, PE_VALUES_REGRET) ||
         !pe_storage_serves(backend->config.storage, PE_VALUES_AVERAGE))
         return -1;
+    if (batch->soa.value_count > SIZE_MAX / sizeof(double) ||
+        batch->soa.group_count > SIZE_MAX / sizeof(double *))
+        return -1;
+    scratch_regrets = (double *)malloc(
+        batch->soa.value_count * sizeof(double));
+    scratch_average = (double *)malloc(
+        batch->soa.value_count * sizeof(double));
+    dest_regrets = (double **)malloc(
+        batch->soa.group_count * sizeof(double *));
+    dest_average = (double **)malloc(
+        batch->soa.group_count * sizeof(double *));
+    if (scratch_regrets == NULL || scratch_average == NULL ||
+        dest_regrets == NULL || dest_average == NULL)
+        goto done;
 
     for (group_index = 0u; group_index < batch->soa.group_count; ++group_index)
     {
@@ -132,12 +160,12 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
             (size_t)group->actions > SIZE_MAX / (size_t)group->combos ||
             (size_t)group->actions * (size_t)group->combos >
                 batch->soa.value_count - group->offset)
-            return -1;
+            goto done;
         if (backend->config.storage->shape(
                 backend->config.storage_self, group->infoset,
                 &actions, &combos, NULL) != 0 || actions != group->actions ||
             combos != group->combos)
-            return -1;
+            goto done;
         regrets = backend->config.storage->values(
             backend->config.storage_self, group->infoset,
             PE_VALUES_REGRET, &regret_length);
@@ -147,7 +175,18 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
         if (regrets == NULL || average == NULL ||
             regret_length < (size_t)actions * combos ||
             average_length < (size_t)actions * combos)
-            return -1;
+            goto done;
+        /* From here on the group works on its staging span, seeded with what
+           storage holds today, so the kernels and the scalar path below need
+           no change to become fail-before-write. */
+        dest_regrets[group_index] = regrets;
+        dest_average[group_index] = average;
+        memcpy(scratch_regrets + group->offset, regrets,
+               (size_t)actions * combos * sizeof(double));
+        memcpy(scratch_average + group->offset, average,
+               (size_t)actions * combos * sizeof(double));
+        regrets = scratch_regrets + group->offset;
+        average = scratch_average + group->offset;
 
         {
             size_t values = (size_t)actions * (size_t)combos;
@@ -226,7 +265,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                     batch->soa.average_deltas[group->offset + check_index];
                 if (!isfinite(old_regret) || !isfinite(delta) ||
                     !isfinite(old_average) || !isfinite(average_delta))
-                    return -1;
+                    goto done;
                 if (backend->config.regret_mode == PE_REGRET_PLUS &&
                     signbit(old_regret + delta) && old_regret + delta == 0.0)
                     fast_safe = 0;
@@ -249,7 +288,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 for (check_index = 0u; check_index < values; ++check_index)
                     if (!isfinite(regrets[check_index]) ||
                         !isfinite(average[check_index]))
-                        return -1;
+                        goto done;
                 continue;
             }
         }
@@ -273,12 +312,29 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 cpu_ref_update_values(&backend->config, batch, &update,
                                       regrets[slot], average[slot],
                                       &new_regret, &new_average) != 0)
-                return -1;
+                goto done;
             regrets[slot] = new_regret;
             average[slot] = new_average;
         }
     }
-    return 0;
+
+    for (group_index = 0u; group_index < batch->soa.group_count; ++group_index)
+    {
+        const pe_update_group_t *group = &batch->soa.groups[group_index];
+        size_t values = (size_t)group->actions * (size_t)group->combos;
+        memcpy(dest_regrets[group_index], scratch_regrets + group->offset,
+               values * sizeof(double));
+        memcpy(dest_average[group_index], scratch_average + group->offset,
+               values * sizeof(double));
+    }
+    status = 0;
+
+done:
+    free(scratch_regrets);
+    free(scratch_average);
+    free(dest_regrets);
+    free(dest_average);
+    return status;
 }
 
 static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,

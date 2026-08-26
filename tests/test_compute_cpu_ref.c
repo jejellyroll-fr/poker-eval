@@ -233,6 +233,94 @@ cleanup:
     storage_ops->destroy(storage);
 }
 
+/*
+ * A batch that cannot be applied must leave storage exactly as it was.
+ * The failure is placed in the second group so the first has already been
+ * computed when it happens: staging is what keeps the first group's values
+ * out of storage. Without it the caller sees -1 over half-updated regrets,
+ * and a checkpoint taken afterwards would persist them.
+ */
+static void test_failed_batch_leaves_storage_untouched(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    pe_compute_config_t cfg = {
+        .cpu_threads = 1,
+        .deterministic = 1,
+        .storage = storage_ops,
+        .regret_mode = PE_REGRET_LEGACY_EXP,
+        .averaging_mode = PE_AVG_UNIFORM
+    };
+    pe_update_batch_t batch = {0};
+    void *storage = NULL;
+    void *backend = NULL;
+    pe_infoset_id_t good;
+    pe_infoset_id_t bad;
+    double *good_deltas;
+    double *good_average;
+    double *bad_deltas;
+    double *bad_average;
+    const double *stored;
+    size_t length;
+    size_t i;
+
+    CHECK(storage_ops->create(&storage, 2u) == 0 && storage,
+          "atomicity: storage creation failed");
+    if (!storage)
+        return;
+    cfg.storage_self = storage;
+    good = storage_ops->resolve(storage, 0xA11u, 2u, 2u, PE_STREET_UNKNOWN);
+    bad = storage_ops->resolve(storage, 0xA12u, 2u, 2u, PE_STREET_UNKNOWN);
+    CHECK(good != PE_INFOSET_ID_INVALID && bad != PE_INFOSET_ID_INVALID,
+          "atomicity: infoset resolution failed");
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, good, 2u, 2u, &good_deltas, &good_average) == 0 &&
+              pe_update_batch_soa_begin_group(
+                  &batch, bad, 2u, 2u, &bad_deltas, &bad_average) == 0,
+          "atomicity: group creation failed");
+    if (good_deltas == NULL || bad_deltas == NULL)
+        goto cleanup;
+    for (i = 0u; i < 4u; ++i)
+    {
+        good_deltas[i] = 1.0 + (double)i;
+        good_average[i] = 2.0 + (double)i;
+        bad_deltas[i] = 1.0;
+        bad_average[i] = 1.0;
+    }
+    /* One value the update rule cannot produce a finite result for. */
+    bad_deltas[3] = INFINITY;
+    batch.iteration = 1u;
+
+    CHECK(ops->create(&backend, &cfg) == 0 && backend,
+          "atomicity: backend creation failed");
+    if (!backend)
+        goto cleanup;
+    CHECK(ops->apply_update_batch(backend, &batch) == -1,
+          "atomicity: a non-finite update was accepted");
+
+    stored = storage_ops->values_const(storage, good, PE_VALUES_REGRET,
+                                       &length);
+    CHECK(stored != NULL && length >= 4u, "atomicity: storage read failed");
+    if (stored != NULL)
+        for (i = 0u; i < 4u; ++i)
+            CHECK(stored[i] == 0.0,
+                  "atomicity: regret %zu was written by a refused batch (%f)",
+                  i, stored[i]);
+    stored = storage_ops->values_const(storage, good, PE_VALUES_AVERAGE,
+                                       &length);
+    if (stored != NULL)
+        for (i = 0u; i < 4u; ++i)
+            CHECK(stored[i] == 0.0,
+                  "atomicity: average %zu was written by a refused batch (%f)",
+                  i, stored[i]);
+
+cleanup:
+    if (backend)
+        ops->destroy(backend);
+    pe_update_batch_destroy(&batch);
+    storage_ops->destroy(storage);
+}
+
 static void test_exponential_policy(void)
 {
     const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
@@ -327,6 +415,7 @@ int main(void)
     test_reference_contract();
     test_regret_and_average_modes();
     test_soa_update_reaches_storage();
+    test_failed_batch_leaves_storage_untouched();
     test_exponential_policy();
     test_invalid_parallel_config();
     test_terminal_batch();

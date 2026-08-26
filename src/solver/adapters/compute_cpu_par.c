@@ -10,6 +10,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -342,6 +343,9 @@ static int cpu_par_apply_update_batch(void *self,
             double positive_factor = 1.0;
             double negative_factor = 1.0;
             double average_scale = 1.0;
+            double *scratch_regrets = NULL;
+            double *scratch_average = NULL;
+            const int clamp = backend->config.regret_mode == PE_REGRET_PLUS;
             int weighted_mode =
                 backend->config.regret_mode == PE_REGRET_VANILLA ||
                 backend->config.regret_mode == PE_REGRET_PLUS ||
@@ -396,6 +400,13 @@ static int cpu_par_apply_update_batch(void *self,
                 break;
             }
 
+            /* Everything the weighted kernel will produce is checked here,
+               before a single value is written, so a batch that cannot be
+               applied leaves storage exactly as it was. Predicting the result
+               costs no extra memory traffic: the four operands are already
+               loaded for the finiteness checks. A predicted non-finite result
+               falls through to the scalar path, which reports the failure
+               without writing either. */
             if (fast_safe)
             {
                 for (group_index = 0u;
@@ -416,13 +427,52 @@ static int cpu_par_apply_update_batch(void *self,
                             groups[group_index].average[value_index];
                         double average_delta = batch->soa.average_deltas[
                             group->offset + value_index];
+                        double new_regret;
+                        double new_average;
                         if (!isfinite(old_regret) || !isfinite(delta) ||
                             !isfinite(old_average) || !isfinite(average_delta) ||
-                            (backend->config.regret_mode == PE_REGRET_PLUS &&
-                             signbit(old_regret + delta) &&
+                            (clamp && signbit(old_regret + delta) &&
                              old_regret + delta == 0.0))
+                        {
                             fast_safe = 0;
+                            break;
+                        }
+                        new_regret = old_regret *
+                            (old_regret >= 0.0 ? positive_factor
+                                               : negative_factor) + delta;
+                        if (clamp && new_regret < 0.0)
+                            new_regret = 0.0;
+                        new_average = old_average +
+                            average_delta * average_scale;
+                        if (!isfinite(new_regret) || !isfinite(new_average))
+                        {
+                            fast_safe = 0;
+                            break;
+                        }
                     }
+                }
+            }
+
+            /* A pre-validated weighted batch cannot fail, so it writes in
+               place. Every other mode can still refuse a value halfway
+               through, and those stage their results instead. */
+            if (!fast_safe && batch->soa.value_count != 0u)
+            {
+                if (batch->soa.value_count > SIZE_MAX / sizeof(double))
+                {
+                    free(groups);
+                    return -1;
+                }
+                scratch_regrets = (double *)malloc(
+                    batch->soa.value_count * sizeof(double));
+                scratch_average = (double *)malloc(
+                    batch->soa.value_count * sizeof(double));
+                if (scratch_regrets == NULL || scratch_average == NULL)
+                {
+                    free(scratch_regrets);
+                    free(scratch_average);
+                    free(groups);
+                    return -1;
                 }
             }
 
@@ -434,16 +484,46 @@ static int cpu_par_apply_update_batch(void *self,
         {
             const pe_update_group_t *group = groups[group_index].group;
             size_t value_index;
+            /* Reached only when fast_safe is false, which is exactly when
+               scratch was allocated. */
+            double *out_regrets = scratch_regrets + group->offset;
+            double *out_average = scratch_average + group->offset;
 
-            if (fast_safe && pe_compute_simd_apply_weighted(
-                    groups[group_index].regrets,
-                    groups[group_index].average,
-                    batch->soa.deltas + group->offset,
-                    batch->soa.average_deltas + group->offset,
-                    (size_t)group->actions * group->combos,
-                    positive_factor, negative_factor, average_scale,
-                    backend->config.regret_mode == PE_REGRET_PLUS))
+            if (fast_safe)
+            {
+                size_t values = (size_t)group->actions * group->combos;
+                if (!pe_compute_simd_apply_weighted(
+                        groups[group_index].regrets,
+                        groups[group_index].average,
+                        batch->soa.deltas + group->offset,
+                        batch->soa.average_deltas + group->offset,
+                        values, positive_factor, negative_factor,
+                        average_scale, clamp))
+                {
+                    /* The same arithmetic the kernel would have performed,
+                       for a build whose ISA does not provide one. It mirrors
+                       the kernel rather than calling the general update rule
+                       so that the two cannot drift, and because the values
+                       were validated above it cannot fail -- which is what
+                       lets this branch write in place. */
+                    for (value_index = 0u; value_index < values; ++value_index)
+                    {
+                        double *regret =
+                            &groups[group_index].regrets[value_index];
+                        double updated = *regret *
+                            (*regret >= 0.0 ? positive_factor
+                                            : negative_factor) +
+                            batch->soa.deltas[group->offset + value_index];
+                        if (clamp && updated < 0.0)
+                            updated = 0.0;
+                        *regret = updated;
+                        groups[group_index].average[value_index] +=
+                            batch->soa.average_deltas[
+                                group->offset + value_index] * average_scale;
+                    }
+                }
                 continue;
+            }
 
             for (value_index = 0u;
                  value_index < (size_t)group->actions * group->combos;
@@ -458,40 +538,46 @@ static int cpu_par_apply_update_batch(void *self,
                 };
                 size_t slot = pe_storage_slot_at(
                     group->combos, update.action, update.combo);
-                double new_regret;
-                double new_average;
                 if (slot >= groups[group_index].regret_length ||
                     slot >= groups[group_index].average_length ||
                     cpu_par_update_values(
                         &backend->config, batch, &update,
                         groups[group_index].regrets[slot],
                         groups[group_index].average[slot],
-                        &new_regret, &new_average) != 0)
+                        &out_regrets[slot], &out_average[slot]) != 0)
                 {
 #ifdef _OPENMP
 #pragma omp atomic write
 #endif
                     failed = 1;
-                    continue;
+                    break;
                 }
-                groups[group_index].regrets[slot] = new_regret;
-                groups[group_index].average[slot] = new_average;
             }
         }
-        if (fast_safe)
+        /* Commit only once every group has produced a value. Until here the
+           scalar path has written nothing, so a refused batch cannot leave
+           storage half-updated -- the property the AoS path got for free from
+           its target array. */
+        if (!fast_safe && !failed)
         {
-            for (group_index = 0u;
-                 group_index < batch->soa.group_count; ++group_index)
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#endif
+            for (group_index = 0u; group_index < batch->soa.group_count;
+                 ++group_index)
             {
                 const pe_update_group_t *group = groups[group_index].group;
-                size_t value_index;
                 size_t values = (size_t)group->actions * group->combos;
-                for (value_index = 0u; value_index < values; ++value_index)
-                    if (!isfinite(groups[group_index].regrets[value_index]) ||
-                        !isfinite(groups[group_index].average[value_index]))
-                        failed = 1;
+                memcpy(groups[group_index].regrets,
+                       scratch_regrets + group->offset,
+                       values * sizeof(*scratch_regrets));
+                memcpy(groups[group_index].average,
+                       scratch_average + group->offset,
+                       values * sizeof(*scratch_average));
             }
         }
+        free(scratch_regrets);
+        free(scratch_average);
         }
         free(groups);
         return failed ? -1 : 0;
