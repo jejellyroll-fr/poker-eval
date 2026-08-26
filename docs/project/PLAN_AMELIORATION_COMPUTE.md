@@ -464,6 +464,12 @@ calibre automatiquement ce seuil sur les tailles 1/8/32/128/256 contre
 `CPU_REF`, avec une marge de 5 % pour éviter les décisions instables dues au
 bruit de mesure.
 
+Une configuration solver laissée en `AUTO` consulte désormais ce descripteur
+avant la validation du plan : chaque stage (`traversal`, `update`,
+`terminal_eval`) est résolu avec son batch propre, puis le driver instancie le
+backend effectivement choisi. Une configuration explicite ou un compute port
+injecté conserve la priorité sur cette sélection runtime.
+
 ---
 
 # L4 — Exécution distribuée

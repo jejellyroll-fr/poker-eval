@@ -22,6 +22,7 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_compute.h>
+#include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_telemetry.h>
@@ -35,6 +36,8 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define PE_SOLVER_DEFAULT_GPU_BATCH 256u
 
 typedef struct
 {
@@ -79,6 +82,8 @@ struct pe_solver_t {
        ports whose absence is meaningful (persist, where NULL means "refuse to
        save" rather than "write somewhere"). */
     pe_solver_deps_t deps;
+    pe_runtime_capabilities_t runtime;
+    int runtime_probed;
     int state;
     int checkpoint_loaded;
     uint64_t iteration;
@@ -167,6 +172,18 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
        driver is installed. Keep the dependency view coherent for accessors
        and for that next tranche. */
     solver->deps.storage = solver->storage;
+
+    /* Runtime probing is deliberately lazy at the solver boundary: a caller
+       that selected a concrete backend pays no probe cost, while AUTO gets a
+       real machine-specific decision before plan validation. An injected
+       compute port remains authoritative and is not second-guessed by the
+       host probe. */
+    if ((solver->config.execution.backend == PE_COMPUTE_AUTO ||
+         solver->config.execution.stages.traversal == PE_COMPUTE_AUTO ||
+         solver->config.execution.stages.update == PE_COMPUTE_AUTO ||
+         solver->config.execution.stages.terminal_eval == PE_COMPUTE_AUTO) &&
+        solver->deps.compute == NULL && pe_runtime_probe(&solver->runtime) == 0)
+        solver->runtime_probed = 1;
 
     /* Resolve the ports exactly once. Substituting the sink here is what lets
        every later emit call be unconditional. */
@@ -269,6 +286,60 @@ static uint64_t pe_solver_validation_caps(const pe_solver_t *solver)
     return caps;
 }
 
+static size_t pe_solver_stage_batch(const pe_solver_config_t *cfg,
+                                    const char *stage_name)
+{
+    if (strcmp(stage_name, "terminal_eval") == 0)
+        return cfg->execution.terminal_batch_size;
+    if (strcmp(stage_name, "traversal") == 0)
+        return cfg->execution.sample_batch_size;
+    return cfg->execution.update_batch_size;
+}
+
+static void pe_solver_apply_runtime_backends(const pe_solver_t *solver,
+                                             pe_solver_config_t *cfg)
+{
+    struct {
+        pe_compute_kind_t *stage;
+        const char *name;
+    } stages[3];
+    size_t i;
+
+    if (!solver || !cfg || !solver->runtime_probed ||
+        cfg->execution.backend != PE_COMPUTE_AUTO)
+        return;
+    stages[0].stage = &cfg->execution.stages.traversal;
+    stages[0].name = "traversal";
+    stages[1].stage = &cfg->execution.stages.update;
+    stages[1].name = "update";
+    stages[2].stage = &cfg->execution.stages.terminal_eval;
+    stages[2].name = "terminal_eval";
+    for (i = 0u; i < sizeof(stages) / sizeof(stages[0]); ++i)
+    {
+        pe_compute_kind_t selected;
+        if (*stages[i].stage != PE_COMPUTE_AUTO)
+            continue;
+        selected = pe_runtime_recommended_backend_for_batch(
+            &solver->runtime, pe_solver_stage_batch(cfg, stages[i].name));
+        if (selected != PE_COMPUTE_AUTO)
+            *stages[i].stage = selected;
+    }
+}
+
+static pe_valid_severity_t pe_solver_resolve_plan(
+    const pe_solver_t *solver, pe_execution_plan_t *out_plan,
+    pe_diagnostics_t *out_diag)
+{
+    pe_solver_config_t cfg;
+
+    if (!solver || !out_plan)
+        return PE_VALID_ERROR;
+    cfg = solver->config;
+    pe_solver_apply_runtime_backends(solver, &cfg);
+    return pe_plan_resolve(&cfg, pe_solver_validation_caps(solver), out_plan,
+                           out_diag);
+}
+
 pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
                                pe_diagnostics_t *out)
 {
@@ -285,8 +356,7 @@ pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
          solver->config.execution.big_blind <= 0.0))
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
-    if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
-                        &plan, diag) == PE_VALID_ERROR)
+    if (pe_solver_resolve_plan(solver, &plan, diag) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
     /* Nothing has been allocated at this point, and nothing will be if the
@@ -317,8 +387,7 @@ pe_solver_status_t pe_solver_estimate(const pe_solver_t *solver,
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
-    if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
-                        &plan, NULL) == PE_VALID_ERROR)
+    if (pe_solver_resolve_plan(solver, &plan, NULL) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
     switch (pe_plan_estimate(&plan, &solver->config.problem,
@@ -343,8 +412,7 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
-    if (pe_plan_resolve(&solver->config, pe_solver_validation_caps(solver),
-                        out, NULL) == PE_VALID_ERROR)
+    if (pe_solver_resolve_plan(solver, out, NULL) == PE_VALID_ERROR)
         return PE_SOLVER_ERR_INVALID_CONFIG;
     return PE_SOLVER_OK;
 }
@@ -446,6 +514,10 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         solver->config.algorithm.exponential_lambda;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
+    if ((plan->stages.update == PE_COMPUTE_CUDA ||
+         plan->stages.update == PE_COMPUTE_OPENCL) &&
+        compute_config.terminal_batch_size == 0u)
+        compute_config.terminal_batch_size = PE_SOLVER_DEFAULT_GPU_BATCH;
     if (compute_ops == NULL || compute_ops->create == NULL ||
         compute_ops->destroy == NULL || compute_ops->apply_update_batch == NULL ||
         compute_ops->create(&compute_self, &compute_config) != 0)
@@ -838,6 +910,10 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         solver->config.algorithm.exponential_lambda;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
+    if ((plan->stages.update == PE_COMPUTE_CUDA ||
+         plan->stages.update == PE_COMPUTE_OPENCL) &&
+        compute_config.terminal_batch_size == 0u)
+        compute_config.terminal_batch_size = PE_SOLVER_DEFAULT_GPU_BATCH;
     if (!compute_ops || !compute_ops->create || !compute_ops->destroy ||
         !compute_ops->apply_update_batch ||
         compute_ops->create(&compute_self, &compute_config) != 0)

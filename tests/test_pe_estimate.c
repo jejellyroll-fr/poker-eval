@@ -339,6 +339,33 @@ static void test_invalid_config_fails_before_the_budget(void)
     pe_solver_destroy(solver);
 }
 
+static void test_auto_backend_is_runtime_resolved(void)
+{
+    pe_solver_config_t cfg = sized(1000, 3, 1);
+    pe_execution_plan_t plan;
+    pe_solver_t *solver;
+
+    cfg.execution.backend = PE_COMPUTE_AUTO;
+    cfg.execution.stages.traversal = PE_COMPUTE_AUTO;
+    cfg.execution.stages.update = PE_COMPUTE_AUTO;
+    cfg.execution.stages.terminal_eval = PE_COMPUTE_AUTO;
+    cfg.execution.sample_batch_size = 1u;
+    cfg.execution.terminal_batch_size = 1u;
+    cfg.execution.update_batch_size = 1u;
+    solver = pe_solver_create(&cfg, NULL);
+    CHECK(solver != NULL, "AUTO solver creation failed");
+    if (solver != NULL)
+    {
+        CHECK(pe_solver_plan(solver, &plan) == PE_SOLVER_OK,
+              "AUTO plan resolution failed");
+        CHECK(plan.stages.traversal != PE_COMPUTE_AUTO &&
+                  plan.stages.update != PE_COMPUTE_AUTO &&
+                  plan.stages.terminal_eval != PE_COMPUTE_AUTO,
+              "AUTO plan retained an unresolved stage");
+        pe_solver_destroy(solver);
+    }
+}
+
 int main(void)
 {
     test_estimate_matches_the_storage();
@@ -350,6 +377,7 @@ int main(void)
     test_run_validates_before_dispatch();
     test_empty_problem_is_refused();
     test_invalid_config_fails_before_the_budget();
+    test_auto_backend_is_runtime_resolved();
 
     if (g_failures != 0)
     {
