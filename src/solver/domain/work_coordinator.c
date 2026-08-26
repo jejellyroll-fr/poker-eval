@@ -29,6 +29,18 @@ static double effective_rate(const pe_runtime_backend_info_t *backend)
     return rate;
 }
 
+static int backend_usable(const pe_runtime_backend_info_t *backend,
+                          pe_compute_kind_t kind)
+{
+    if (!backend || !backend->compiled || !backend->runtime_available ||
+        !backend->validated)
+        return 0;
+    if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+        !(backend->capabilities & PE_CAP_GPU_TERMINAL_EVAL))
+        return 0;
+    return 1;
+}
+
 static pe_compute_kind_t worker_backend(
     const pe_runtime_capabilities_t *runtime)
 {
@@ -39,7 +51,7 @@ static pe_compute_kind_t worker_backend(
     for (i = 1u; i < PE_COMPUTE_COUNT; ++i) {
         const pe_runtime_backend_info_t *info = &runtime->backends[i];
         double rate;
-        if (!info->compiled || !info->runtime_available || !info->validated)
+        if (!backend_usable(info, (pe_compute_kind_t)i))
             continue;
         rate = effective_rate(info);
         if (best == PE_COMPUTE_AUTO || rate > best_rate) {
@@ -157,7 +169,7 @@ int pe_work_coordinator_schedule(
         if (backend <= PE_COMPUTE_AUTO || backend >= PE_COMPUTE_COUNT)
             continue;
         info = &coordinator->workers[i].runtime.backends[backend];
-        if (!info->compiled || !info->runtime_available || !info->validated)
+        if (!backend_usable(info, backend))
             continue;
         candidates[candidate_count].worker_id =
             coordinator->workers[i].worker_id;

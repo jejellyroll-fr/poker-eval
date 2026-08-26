@@ -19,6 +19,18 @@ static double backend_rate(const pe_runtime_backend_info_t *backend)
     return rate;
 }
 
+static int backend_usable(const pe_runtime_backend_info_t *backend,
+                          pe_compute_kind_t kind)
+{
+    if (!backend || !backend->compiled || !backend->runtime_available ||
+        !backend->validated)
+        return 0;
+    if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+        !(backend->capabilities & PE_CAP_GPU_TERMINAL_EVAL))
+        return 0;
+    return 1;
+}
+
 pe_compute_kind_t pe_work_worker_backend(
     const pe_runtime_capabilities_t *runtime)
 {
@@ -31,7 +43,7 @@ pe_compute_kind_t pe_work_worker_backend(
     for (i = 1u; i < PE_COMPUTE_COUNT; ++i) {
         const pe_runtime_backend_info_t *info = &runtime->backends[i];
         double rate;
-        if (!info->compiled || !info->runtime_available || !info->validated)
+        if (!backend_usable(info, (pe_compute_kind_t)i))
             continue;
         rate = backend_rate(info);
         if (best == PE_COMPUTE_AUTO || rate > best_rate) {

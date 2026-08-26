@@ -17,6 +17,8 @@ static void mark_backend(pe_runtime_capabilities_t *runtime,
     runtime->backends[kind].runtime_available = 1;
     runtime->backends[kind].validated = 1;
     runtime->backends[kind].update_elements_per_s = update_rate;
+    if (kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL)
+        runtime->backends[kind].capabilities = PE_CAP_GPU_TERMINAL_EVAL;
 }
 
 static void test_heterogeneous_schedule(void)

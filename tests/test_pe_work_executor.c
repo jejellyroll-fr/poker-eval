@@ -46,6 +46,8 @@ static void test_one_shot_worker(void)
     runtime.backends[PE_COMPUTE_CUDA].compiled = 1;
     runtime.backends[PE_COMPUTE_CUDA].runtime_available = 1;
     runtime.backends[PE_COMPUTE_CUDA].validated = 1;
+    runtime.backends[PE_COMPUTE_CUDA].capabilities =
+        PE_CAP_GPU_TERMINAL_EVAL;
     runtime.backends[PE_COMPUTE_CUDA].update_elements_per_s = 10.0;
     assert(pe_work_worker_backend(&runtime) == PE_COMPUTE_CUDA);
     pe_work_unit_init(&unit);

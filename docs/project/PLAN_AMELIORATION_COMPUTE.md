@@ -451,6 +451,11 @@ mesure ne peut pas ouvrir seule la porte de parité. Ces trois débits sont
 également inclus dans la ligne de statut `pe_runtime`, afin que la décision
 `AUTO` soit observable dans les logs et dans le diagnostic distribué.
 
+Le worker et le coordinateur appliquent la même contrainte pour un `WorkUnit`
+CFR : un backend CUDA/OpenCL doit aussi annoncer `GPU_TERMINAL_EVAL`, sinon il
+est écarté même s'il annonce un débit d'update élevé. Cela évite d'envoyer un
+sous-arbre à un worker incapable d'évaluer ses feuilles.
+
 ---
 
 # L4 — Exécution distribuée

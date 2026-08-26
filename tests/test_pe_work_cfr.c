@@ -145,6 +145,8 @@ int main(void)
             runtime.backends[PE_COMPUTE_CUDA].compiled = 1;
             runtime.backends[PE_COMPUTE_CUDA].runtime_available = 1;
             runtime.backends[PE_COMPUTE_CUDA].validated = 1;
+            runtime.backends[PE_COMPUTE_CUDA].capabilities =
+                PE_CAP_GPU_TERMINAL_EVAL;
             runtime.backends[PE_COMPUTE_CUDA].update_elements_per_s = 10.0;
             runtime.backends[PE_COMPUTE_CUDA].kind = PE_COMPUTE_CUDA;
             game_context.compute_ops = cuda_ops;
