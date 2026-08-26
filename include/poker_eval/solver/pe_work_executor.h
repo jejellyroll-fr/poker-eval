@@ -7,6 +7,8 @@
 
 #include <poker_eval/solver/pe_work_protocol.h>
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,6 +30,14 @@ int pe_work_worker_run_once(pe_work_socket_t socket,
                             const pe_runtime_capabilities_t *runtime,
                             pe_work_execute_fn execute,
                             void *user_data);
+
+/** Execute exactly `unit_count` sequential units; `processed` is optional. */
+int pe_work_worker_run_batch(pe_work_socket_t socket,
+                             const pe_runtime_capabilities_t *runtime,
+                             pe_work_execute_fn execute,
+                             void *user_data,
+                             size_t unit_count,
+                             size_t *processed);
 
 #ifdef __cplusplus
 }

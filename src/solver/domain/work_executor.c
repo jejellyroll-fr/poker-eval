@@ -73,3 +73,25 @@ int pe_work_worker_run_once(pe_work_socket_t socket,
     pe_work_unit_destroy(&unit);
     return rc;
 }
+
+int pe_work_worker_run_batch(pe_work_socket_t socket,
+                             const pe_runtime_capabilities_t *runtime,
+                             pe_work_execute_fn execute,
+                             void *user_data,
+                             size_t unit_count,
+                             size_t *processed)
+{
+    size_t i;
+
+    if (processed)
+        *processed = 0u;
+    if (socket == PE_WORK_SOCKET_INVALID || !runtime || !execute)
+        return -1;
+    for (i = 0u; i < unit_count; ++i) {
+        if (pe_work_worker_run_once(socket, runtime, execute, user_data) != 0)
+            return -1;
+        if (processed)
+            *processed = i + 1u;
+    }
+    return 0;
+}

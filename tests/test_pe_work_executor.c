@@ -72,8 +72,68 @@ static void test_one_shot_worker(void)
 #endif
 }
 
+static int execute_batch_unit(const pe_work_unit_t *unit,
+                              pe_compute_kind_t backend,
+                              pe_work_result_t *result,
+                              void *user_data)
+{
+    (void)user_data;
+    assert(backend == PE_COMPUTE_CPU_REF);
+    result->iterations = unit->iteration_end - unit->iteration_begin;
+    result->infosets_trained = 1u;
+    result->constraints_satisfied = 1;
+    result->exploitability = 0.1;
+    return 0;
+}
+
+static void test_batch_worker(void)
+{
+#if defined(_WIN32)
+    return;
+#else
+    pe_runtime_capabilities_t runtime = {0};
+    pe_work_unit_t units[3];
+    pe_work_result_t result;
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE +
+                  PE_WORK_PROTOCOL_RESULT_FIXED_SIZE];
+    size_t frame_size;
+    size_t processed;
+    int sockets[2];
+    size_t i;
+
+    runtime.backends[PE_COMPUTE_CPU_REF].compiled = 1;
+    runtime.backends[PE_COMPUTE_CPU_REF].runtime_available = 1;
+    runtime.backends[PE_COMPUTE_CPU_REF].validated = 1;
+    for (i = 0u; i < 3u; ++i) {
+        pe_work_unit_init(&units[i]);
+        units[i].public_state = i + 10u;
+        units[i].iteration_end = 1u;
+    }
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    for (i = 0u; i < 3u; ++i)
+        assert(pe_work_socket_send_work_unit((pe_work_socket_t)sockets[0],
+                                              &units[i]) == 0);
+    assert(pe_work_worker_run_batch((pe_work_socket_t)sockets[1], &runtime,
+                                    execute_batch_unit, NULL, 3u,
+                                    &processed) == 0);
+    assert(processed == 3u);
+    for (i = 0u; i < 3u; ++i) {
+        assert(pe_work_socket_recv_frame((pe_work_socket_t)sockets[0], frame,
+                                         sizeof(frame), &frame_size) == 0);
+        assert(pe_work_frame_decode_result(frame, frame_size, &result) == 0);
+        assert(result.public_state == i + 10u);
+        assert(result.backend == PE_COMPUTE_CPU_REF);
+    }
+    for (i = 0u; i < 3u; ++i)
+        pe_work_unit_destroy(&units[i]);
+    pe_work_socket_close((pe_work_socket_t)sockets[0]);
+    pe_work_socket_close((pe_work_socket_t)sockets[1]);
+#endif
+}
+
 int main(void)
 {
     test_one_shot_worker();
+    test_batch_worker();
     return 0;
 }
