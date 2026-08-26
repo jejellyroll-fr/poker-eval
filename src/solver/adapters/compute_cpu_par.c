@@ -338,6 +338,94 @@ static int cpu_par_apply_update_batch(void *self,
             return -1;
         }
 
+        {
+            double positive_factor = 1.0;
+            double negative_factor = 1.0;
+            double average_scale = 1.0;
+            int weighted_mode =
+                backend->config.regret_mode == PE_REGRET_VANILLA ||
+                backend->config.regret_mode == PE_REGRET_PLUS ||
+                backend->config.regret_mode == PE_REGRET_DCFR;
+            int fast_safe = weighted_mode;
+
+            if (backend->config.regret_mode == PE_REGRET_DCFR)
+            {
+                double factors[2] = {1.0, -1.0};
+                pe_dcfr_params_t params = {
+                    backend->config.dcfr_alpha,
+                    backend->config.dcfr_beta,
+                    backend->config.dcfr_gamma
+                };
+                if (pe_dcfr_discount_regrets(
+                        factors, 2u, batch->iteration, &params) != 0)
+                    fast_safe = 0;
+                else
+                {
+                    positive_factor = factors[0];
+                    negative_factor = -factors[1];
+                }
+            }
+
+            switch (backend->config.averaging_mode)
+            {
+            case PE_AVG_LINEAR:
+                if (batch->iteration == 0u)
+                    fast_safe = 0;
+                else
+                    average_scale = (double)batch->iteration;
+                break;
+            case PE_AVG_POWER:
+                if (pe_dcfr_average_weight(
+                        batch->iteration, backend->config.dcfr_gamma,
+                        &average_scale) != 0)
+                    fast_safe = 0;
+                break;
+            case PE_AVG_DELAYED_LINEAR:
+                if (batch->iteration <= (uint64_t)(
+                        backend->config.averaging_delay < 0
+                            ? 0 : backend->config.averaging_delay))
+                    average_scale = 0.0;
+                else
+                    average_scale = (double)(batch->iteration -
+                                             (uint64_t)backend->config.averaging_delay);
+                break;
+            case PE_AVG_UNIFORM:
+            case PE_AVG_IMPORTANCE:
+            case PE_AVG_COUNT:
+            default:
+                break;
+            }
+
+            if (fast_safe)
+            {
+                for (group_index = 0u;
+                     group_index < batch->soa.group_count && fast_safe;
+                     ++group_index)
+                {
+                    const pe_update_group_t *group =
+                        groups[group_index].group;
+                    size_t value_index;
+                    size_t values = (size_t)group->actions * group->combos;
+                    for (value_index = 0u; value_index < values; ++value_index)
+                    {
+                        double old_regret =
+                            groups[group_index].regrets[value_index];
+                        double delta = batch->soa.deltas[
+                            group->offset + value_index];
+                        double old_average =
+                            groups[group_index].average[value_index];
+                        double average_delta = batch->soa.average_deltas[
+                            group->offset + value_index];
+                        if (!isfinite(old_regret) || !isfinite(delta) ||
+                            !isfinite(old_average) || !isfinite(average_delta) ||
+                            (backend->config.regret_mode == PE_REGRET_PLUS &&
+                             signbit(old_regret + delta) &&
+                             old_regret + delta == 0.0))
+                            fast_safe = 0;
+                    }
+                }
+            }
+
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(backend->threads)
 #endif
@@ -346,6 +434,17 @@ static int cpu_par_apply_update_batch(void *self,
         {
             const pe_update_group_t *group = groups[group_index].group;
             size_t value_index;
+
+            if (fast_safe && pe_compute_simd_apply_weighted(
+                    groups[group_index].regrets,
+                    groups[group_index].average,
+                    batch->soa.deltas + group->offset,
+                    batch->soa.average_deltas + group->offset,
+                    (size_t)group->actions * group->combos,
+                    positive_factor, negative_factor, average_scale,
+                    backend->config.regret_mode == PE_REGRET_PLUS))
+                continue;
+
             for (value_index = 0u;
                  value_index < (size_t)group->actions * group->combos;
                  ++value_index)
@@ -378,6 +477,21 @@ static int cpu_par_apply_update_batch(void *self,
                 groups[group_index].regrets[slot] = new_regret;
                 groups[group_index].average[slot] = new_average;
             }
+        }
+        if (fast_safe)
+        {
+            for (group_index = 0u;
+                 group_index < batch->soa.group_count; ++group_index)
+            {
+                const pe_update_group_t *group = groups[group_index].group;
+                size_t value_index;
+                size_t values = (size_t)group->actions * group->combos;
+                for (value_index = 0u; value_index < values; ++value_index)
+                    if (!isfinite(groups[group_index].regrets[value_index]) ||
+                        !isfinite(groups[group_index].average[value_index]))
+                        failed = 1;
+            }
+        }
         }
         free(groups);
         return failed ? -1 : 0;

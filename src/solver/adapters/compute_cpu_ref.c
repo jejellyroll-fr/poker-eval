@@ -158,6 +158,11 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 backend->config.regret_mode == PE_REGRET_VANILLA ||
                 backend->config.regret_mode == PE_REGRET_PLUS ||
                 backend->config.regret_mode == PE_REGRET_DCFR;
+            int weighted_update =
+                backend->config.regret_mode == PE_REGRET_DCFR ||
+                backend->config.averaging_mode == PE_AVG_LINEAR ||
+                backend->config.averaging_mode == PE_AVG_POWER ||
+                backend->config.averaging_mode == PE_AVG_DELAYED_LINEAR;
             int fast_safe = weighted_mode;
             size_t check_index;
 
@@ -226,12 +231,20 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                     signbit(old_regret + delta) && old_regret + delta == 0.0)
                     fast_safe = 0;
             }
-            if (fast_safe && pe_compute_simd_apply_weighted(
-                    regrets, average,
-                    batch->soa.deltas + group->offset,
-                    batch->soa.average_deltas + group->offset,
-                    values, positive_factor, negative_factor, average_scale,
-                    backend->config.regret_mode == PE_REGRET_PLUS))
+            if (fast_safe && (weighted_update
+                    ? pe_compute_simd_apply_weighted(
+                          regrets, average,
+                          batch->soa.deltas + group->offset,
+                          batch->soa.average_deltas + group->offset,
+                          values, positive_factor, negative_factor,
+                          average_scale,
+                          backend->config.regret_mode == PE_REGRET_PLUS)
+                    : pe_compute_simd_apply_uniform(
+                          regrets, average,
+                          batch->soa.deltas + group->offset,
+                          batch->soa.average_deltas + group->offset,
+                          values,
+                          backend->config.regret_mode == PE_REGRET_PLUS)))
             {
                 for (check_index = 0u; check_index < values; ++check_index)
                     if (!isfinite(regrets[check_index]) ||

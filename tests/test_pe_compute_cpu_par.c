@@ -170,7 +170,11 @@ static void test_soa_update_reaches_storage(void)
         .cpu_threads = 2,
         .deterministic = 1,
         .storage = storage_ops,
-        .averaging_mode = PE_AVG_UNIFORM
+        .regret_mode = PE_REGRET_DCFR,
+        .averaging_mode = PE_AVG_POWER,
+        .dcfr_alpha = 1.5,
+        .dcfr_beta = 0.0,
+        .dcfr_gamma = 2.0
     };
     pe_update_batch_t batch = {0};
     void *storage = NULL;
@@ -215,7 +219,7 @@ static void test_soa_update_reaches_storage(void)
     if (regrets != NULL && average != NULL)
         for (size_t i = 0u; i < 6u; ++i)
             CHECK(fabs(regrets[i] - deltas[i]) < 1e-12 &&
-                      fabs(average[i] - averages[i]) < 1e-12,
+                      fabs(average[i] - averages[i] * 0.25) < 1e-12,
                   "SoA value %zu was not applied", i);
 
 cleanup:
