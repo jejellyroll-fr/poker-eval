@@ -562,15 +562,17 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
 
     if (out_batch != NULL && ctx->storage != NULL)
     {
+        pe_vec_t opponent = {NULL, 0u};
         double *opponent_reach;
         double *deltas;
         double *average_deltas;
 
         /* The opponent product is independent of the action.  Computing it
-           once per combo removes a player-count loop from the action loop. */
-        opponent_reach = (double *)malloc(
-            (size_t)game->combo_count * sizeof(*opponent_reach));
-        if (opponent_reach == NULL)
+           once per combo removes a player-count loop from the action loop.
+           It comes from the same arena as every other per-node vector, so a
+           node costs no allocation once the arena has grown. */
+        if (vector_alloc(ctx, &opponent,
+                         (size_t)game->combo_count) != PE_SOLVER_OK)
         {
             for (uint16_t a = 0u; a < actions; ++a)
                 for (uint8_t q = 0u; q < game->player_count; ++q)
@@ -579,6 +581,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             free(child_values);
             return -1;
         }
+        opponent_reach = opponent.v;
         for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
         {
             opponent_reach[combo] = 1.0;
@@ -590,7 +593,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                 out_batch, infoset, actions, game->combo_count,
                 &deltas, &average_deltas) != 0)
         {
-            free(opponent_reach);
+            pe_vec_free(&opponent);
             for (uint16_t a = 0u; a < actions; ++a)
                 for (uint8_t q = 0u; q < game->player_count; ++q)
                     pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
@@ -621,7 +624,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                     strategies[slot];
             }
         }
-        free(opponent_reach);
+        pe_vec_free(&opponent);
     }
 
     for (uint16_t action = 0u; action < actions; ++action)
