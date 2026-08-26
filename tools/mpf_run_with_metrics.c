@@ -1331,7 +1331,11 @@ int main(int argc, char **argv)
             return 2;
         }
         runtime_caps_valid = 1;
-        if (selected_backend == PE_COMPUTE_AUTO)
+        /* Lane B passes AUTO through to pe_solver_run so the main solver can
+         * resolve each stage with its measured batch-aware runtime data. The
+         * legacy/full-tree path still resolves AUTO here for its explicit
+         * backend runner. */
+        if (selected_backend == PE_COMPUTE_AUTO && !lane_b)
         {
             selected_backend = pe_runtime_recommended_backend(&runtime_caps);
             if (selected_backend == PE_COMPUTE_AUTO)
@@ -1342,8 +1346,10 @@ int main(int argc, char **argv)
             printf("backend_auto_resolved=%s\n",
                    pe_compute_kind_name(selected_backend));
         }
-        backend_info = &runtime_caps.backends[selected_backend];
-        if (!backend_info->runtime_available || !backend_info->validated)
+        backend_info = selected_backend == PE_COMPUTE_AUTO
+            ? NULL : &runtime_caps.backends[selected_backend];
+        if (backend_info != NULL &&
+            (!backend_info->runtime_available || !backend_info->validated))
         {
             fprintf(stderr, "backend refused: %s (%s)\n",
                     pe_compute_kind_name(selected_backend),
@@ -1662,8 +1668,7 @@ int main(int argc, char **argv)
             mpf_tree_free(tree);
             return 1;
         }
-        pe_compute_kind_t lane_backend = selected_backend == PE_COMPUTE_AUTO
-            ? PE_COMPUTE_CPU_REF : selected_backend;
+        pe_compute_kind_t lane_backend = selected_backend;
 
         if (lane_backend == PE_COMPUTE_CUDA || lane_backend == PE_COMPUTE_OPENCL)
         {
@@ -1768,6 +1773,18 @@ int main(int argc, char **argv)
         lane_cfg.seed = UINT64_C(0x50455f4c414e455f) ^ (uint64_t)iterations;
         lane_deps.external_game = pe_cfr_external_adapter_game(&adapter);
         lane_solver = pe_solver_create(&lane_cfg, &lane_deps);
+        if (lane_solver && selected_backend == PE_COMPUTE_AUTO)
+        {
+            pe_execution_plan_t resolved_plan;
+            if (pe_solver_plan(lane_solver, &resolved_plan) != PE_SOLVER_OK)
+            {
+                fprintf(stderr, "AUTO backend resolution failed for Lane B\n");
+                pe_solver_destroy(lane_solver);
+                lane_solver = NULL;
+            }
+            else
+                lane_backend = resolved_plan.stages.update;
+        }
         lane_status = lane_solver ? pe_solver_run(lane_solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
         clock_t benchmark_end = clock();
         double elapsed_cpu = benchmark_end >= benchmark_start &&

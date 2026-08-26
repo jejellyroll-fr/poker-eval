@@ -346,8 +346,9 @@ static const char *game_label_for(int index)
 
 static const char *engine_label_for(int index)
 {
-    static const char *labels[] = {"VECTOR CPU", "LEGACY CFR", "GPU VECTOR"};
-    return index >= 0 && index < 3 ? labels[index] : labels[0];
+    static const char *labels[] = {"VECTOR CPU", "LEGACY CFR", "GPU VECTOR",
+                                   "AUTO V3"};
+    return index >= 0 && index < 4 ? labels[index] : labels[0];
 }
 
 static int tree_board_count(int street)
@@ -823,7 +824,7 @@ static int run_preflop_solver(app_t *app)
                          "Preflop Lane B failed");
 }
 
-static int run_legacy_cfr(app_t *app, const char *backend_name)
+static int run_legacy_cfr(app_t *app, const char *backend_name, int lane_b)
 {
     char executable[1200], quoted_executable[1400];
     char board[160], tree[1200], mkr[1200];
@@ -879,6 +880,9 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
     if (backend_name)
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
                  " --backend %s", backend_name);
+    if (lane_b)
+        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+                 " --lane-b --sample-batch 128");
     for (int player = 0; player < app->player_count && player < 8; ++player) {
         shell_quote(starter_range_for_player(app, player), ranges[player], sizeof(ranges[player]));
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
@@ -890,8 +894,11 @@ static int run_legacy_cfr(app_t *app, const char *backend_name)
     }
     snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
     return launch_solver(app, command,
-                         backend_name ? "Hybrid GPU CFR complete" : "Legacy CFR complete",
-                         backend_name ? "GPU CFR unavailable or failed" : "Legacy CFR failed");
+                         lane_b ? "AUTO V3 solve complete" :
+                         backend_name ? "GPU CFR complete" : "Legacy CFR complete",
+                         lane_b ? "AUTO V3 solve failed" :
+                         backend_name ? "GPU CFR unavailable or failed" :
+                                        "Legacy CFR failed");
 }
 
 static int run_selected_solver(app_t *app)
@@ -907,7 +914,10 @@ static int run_selected_solver(app_t *app)
         }
         if (app->engine_index == 0)
             return run_vector_sim(app);
-        return run_legacy_cfr(app, app->engine_index == 2 ? "opencl" : NULL);
+        if (app->engine_index == 3)
+            return run_legacy_cfr(app, "auto", 1);
+        return run_legacy_cfr(app, app->engine_index == 2 ? "opencl" : NULL,
+                              0);
     }
     if (app->mkr_path[0])
     {
@@ -918,8 +928,11 @@ static int run_selected_solver(app_t *app)
     if (is_preflop_request(app->board_text))
         return run_preflop_solver(app);
     if (app->engine_index == 0) return run_vector_sim(app);
-    if (app->engine_index == 1) return run_legacy_cfr(app, NULL);
-    return run_legacy_cfr(app, "opencl");
+    if (app->engine_index == 1) return run_legacy_cfr(app, NULL, 0);
+    if (app->engine_index == 2) return run_legacy_cfr(app, "opencl", 0);
+    copy_field(app->solver_status, sizeof(app->solver_status),
+               "AUTO V3 requires a compatible .tree file");
+    return -1;
 }
 
 static int has_suffix(const char *path, const char *suffix)
@@ -2045,7 +2058,7 @@ int main(int argc, char **argv)
                 }
                 else if (app.page == 0 && mouse_x >= 240 && mouse_x < 456 &&
                          mouse_y >= 417 && mouse_y < 457) {
-                    app.engine_index = (app.engine_index + 1) % 3;
+                    app.engine_index = (app.engine_index + 1) % 4;
                 }
                 else if (app.page == 0 && mouse_x >= 240 && mouse_x < 694 &&
                          mouse_y >= 500 && mouse_y < 536) {
