@@ -53,6 +53,13 @@ typedef struct
     size_t value_count;
     size_t value_capacity;
     uint64_t iteration;
+    /* Open-addressing index from infoset to group slot, holding group_index+1
+       so that zero means empty. Without it, re-visiting an infoset costs a
+       linear scan of every group already in the batch, which is quadratic in
+       the number of distinct infosets a traversal touches. Rebuilt on growth
+       and on clear; never observed by callers. */
+    uint32_t *group_index_table;
+    size_t group_index_capacity;
 } pe_update_soa_t;
 
 typedef struct

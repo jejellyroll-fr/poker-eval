@@ -67,6 +67,96 @@ int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update)
     return 0;
 }
 
+/*
+ * Hash index over the SoA groups.
+ *
+ * begin_group has to find an infoset that is already in the batch, because a
+ * traversal may reach the same infoset by several betting paths and the deltas
+ * must accumulate into one span. Scanning every group to answer that question
+ * is quadratic in the number of distinct infosets, which is exactly the cost
+ * the SoA layout exists to remove. The table below answers it in constant time.
+ *
+ * Slots hold group_index + 1 so that a zeroed table means "empty" and needs no
+ * separate sentinel. The load factor is kept at or below one half.
+ */
+
+static size_t soa_hash_slot(pe_infoset_id_t infoset, size_t capacity)
+{
+    /* Fibonacci hashing: infoset ids are dense and near-sequential, so the
+       multiply is what spreads them across the table. */
+    uint64_t mixed = (uint64_t)infoset * UINT64_C(0x9E3779B97F4A7C15);
+    return (size_t)(mixed >> 32) & (capacity - 1u);
+}
+
+static void soa_index_insert(pe_update_soa_t *soa, pe_infoset_id_t infoset,
+                             size_t group_index)
+{
+    size_t slot = soa_hash_slot(infoset, soa->group_index_capacity);
+
+    while (soa->group_index_table[slot] != 0u)
+        slot = (slot + 1u) & (soa->group_index_capacity - 1u);
+    soa->group_index_table[slot] = (uint32_t)(group_index + 1u);
+}
+
+/* Grow and repopulate the table so it can hold group_count + 1 entries at a
+   load factor of one half. Returns -1 only on allocation failure. */
+static int soa_index_reserve(pe_update_soa_t *soa)
+{
+    size_t needed = (soa->group_count + 1u) * 2u;
+    size_t capacity;
+    uint32_t *table;
+    size_t group_index;
+
+    if (soa->group_index_capacity >= needed &&
+        soa->group_index_table != NULL)
+        return 0;
+    capacity = soa->group_index_capacity != 0u ? soa->group_index_capacity : 32u;
+    while (capacity < needed)
+    {
+        if (capacity > SIZE_MAX / 2u)
+            return -1;
+        capacity *= 2u;
+    }
+    if (capacity > SIZE_MAX / sizeof(*table))
+        return -1;
+    table = (uint32_t *)calloc(capacity, sizeof(*table));
+    if (table == NULL)
+        return -1;
+    free(soa->group_index_table);
+    soa->group_index_table = table;
+    soa->group_index_capacity = capacity;
+    for (group_index = 0u; group_index < soa->group_count; ++group_index)
+        soa_index_insert(soa, soa->groups[group_index].infoset, group_index);
+    return 0;
+}
+
+/* Find an existing group for this exact shape, or SIZE_MAX. An infoset whose
+   shape differs from the stored one is not a match: begin_group's contract
+   keys on all three fields. */
+static size_t soa_index_find(const pe_update_soa_t *soa,
+                             pe_infoset_id_t infoset,
+                             uint16_t actions, uint16_t combos)
+{
+    size_t slot;
+
+    if (soa->group_index_table == NULL || soa->group_index_capacity == 0u)
+        return SIZE_MAX;
+    slot = soa_hash_slot(infoset, soa->group_index_capacity);
+    while (soa->group_index_table[slot] != 0u)
+    {
+        size_t candidate = (size_t)soa->group_index_table[slot] - 1u;
+        if (candidate < soa->group_count)
+        {
+            const pe_update_group_t *group = &soa->groups[candidate];
+            if (group->infoset == infoset && group->actions == actions &&
+                group->combos == combos)
+                return candidate;
+        }
+        slot = (slot + 1u) & (soa->group_index_capacity - 1u);
+    }
+    return SIZE_MAX;
+}
+
 void pe_update_soa_clear(pe_update_soa_t *soa)
 {
     if (soa == NULL)
@@ -74,6 +164,10 @@ void pe_update_soa_clear(pe_update_soa_t *soa)
     soa->group_count = 0u;
     soa->value_count = 0u;
     soa->iteration = 0u;
+    /* Keep the allocation, drop the entries: the next traversal refills it. */
+    if (soa->group_index_table != NULL)
+        memset(soa->group_index_table, 0,
+               soa->group_index_capacity * sizeof(*soa->group_index_table));
 }
 
 void pe_update_soa_destroy(pe_update_soa_t *soa)
@@ -83,6 +177,7 @@ void pe_update_soa_destroy(pe_update_soa_t *soa)
     free(soa->groups);
     free(soa->deltas);
     free(soa->average_deltas);
+    free(soa->group_index_table);
     memset(soa, 0, sizeof(*soa));
 }
 
@@ -125,18 +220,20 @@ int pe_update_batch_soa_begin_group(pe_update_batch_t *batch,
         (soa->value_count != 0u &&
          (soa->deltas == NULL || soa->average_deltas == NULL)))
         return -1;
-    for (group_capacity = 0u; group_capacity < soa->group_count;
-         ++group_capacity)
     {
-        pe_update_group_t *existing = &soa->groups[group_capacity];
-        if (existing->infoset == infoset && existing->actions == actions &&
-            existing->combos == combos)
+        size_t existing_index = soa_index_find(soa, infoset, actions, combos);
+        if (existing_index != SIZE_MAX)
         {
+            const pe_update_group_t *existing = &soa->groups[existing_index];
             *out_deltas = soa->deltas + existing->offset;
             *out_average_deltas = soa->average_deltas + existing->offset;
             return 0;
         }
     }
+    /* Reserve the index before any array grows, so a failure here leaves the
+       batch exactly as it was. */
+    if (soa_index_reserve(soa) != 0)
+        return -1;
     group_capacity = soa->group_capacity;
     if (group_capacity < soa->group_count + 1u)
     {
@@ -190,6 +287,7 @@ int pe_update_batch_soa_begin_group(pe_update_batch_t *batch,
     soa->groups[soa->group_count].actions = actions;
     soa->groups[soa->group_count].combos = combos;
     soa->groups[soa->group_count].offset = (uint32_t)soa->value_count;
+    soa_index_insert(soa, infoset, soa->group_count);
     soa->group_count++;
     *out_deltas = soa->deltas + soa->value_count;
     *out_average_deltas = soa->average_deltas + soa->value_count;

@@ -201,6 +201,111 @@ static void test_soa_group_layout(void)
     pe_update_batch_destroy(&batch);
 }
 
+/*
+ * Re-entering an infoset must return the span that is already in the batch, so
+ * a traversal reaching the same infoset by two betting paths accumulates into
+ * one group instead of creating a second one. This is the path the group index
+ * answers; without a test, replacing the lookup would be unverifiable.
+ */
+static void test_soa_revisit_accumulates_in_place(void)
+{
+    pe_update_batch_t batch = {0};
+    double *first_deltas = NULL;
+    double *first_average = NULL;
+    double *again_deltas = NULL;
+    double *again_average = NULL;
+    double *other_deltas = NULL;
+    double *other_average = NULL;
+    size_t i;
+
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, 42u, 2u, 3u, &first_deltas, &first_average) == 0,
+          "SoA revisit: first group allocation failed");
+    for (i = 0u; i < 6u; ++i)
+    {
+        first_deltas[i] = 1.0;
+        first_average[i] = 2.0;
+    }
+
+    /* A different infoset in between, so a match cannot come from the group
+       simply being the most recent one. */
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, 43u, 2u, 3u, &other_deltas, &other_average) == 0,
+          "SoA revisit: second infoset allocation failed");
+    CHECK(other_deltas != first_deltas,
+          "SoA revisit: distinct infosets shared a span");
+
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, 42u, 2u, 3u, &again_deltas, &again_average) == 0,
+          "SoA revisit: revisit failed");
+    CHECK(again_deltas == first_deltas && again_average == first_average,
+          "SoA revisit: revisit did not return the existing span");
+    CHECK(batch.soa.group_count == 2u,
+          "SoA revisit: revisit created a duplicate group");
+
+    /* The span must not have been re-zeroed by the revisit. */
+    for (i = 0u; i < 6u; ++i)
+        again_deltas[i] += 1.0;
+    CHECK(first_deltas[0] == 2.0 && first_deltas[5] == 2.0 &&
+              first_average[0] == 2.0,
+          "SoA revisit: revisit cleared values instead of accumulating");
+
+    /* A same-id group with a different shape is a different group. */
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, 42u, 3u, 3u, &other_deltas, &other_average) == 0,
+          "SoA revisit: reshaped group allocation failed");
+    CHECK(other_deltas != first_deltas && batch.soa.group_count == 3u,
+          "SoA revisit: a different shape reused an existing span");
+
+    /* After a clear, the same infoset must allocate a fresh zeroed span. */
+    pe_update_batch_clear(&batch);
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, 42u, 2u, 3u, &again_deltas, &again_average) == 0,
+          "SoA revisit: post-clear allocation failed");
+    CHECK(batch.soa.group_count == 1u && again_deltas[0] == 0.0 &&
+              again_deltas[5] == 0.0,
+          "SoA revisit: clear left a stale group or stale values");
+    pe_update_batch_destroy(&batch);
+}
+
+/* Many distinct infosets, each revisited: the lookup must stay usable at a
+   scale where a linear scan over the groups would not be. */
+static void test_soa_many_infosets_revisited(void)
+{
+    pe_update_batch_t batch = {0};
+    const pe_infoset_id_t count = 4096u;
+    pe_infoset_id_t id;
+    int ok = 1;
+
+    for (id = 0u; id < count; ++id)
+    {
+        double *deltas = NULL;
+        double *average = NULL;
+        if (pe_update_batch_soa_begin_group(
+                &batch, id, 2u, 2u, &deltas, &average) != 0)
+        {
+            ok = 0;
+            break;
+        }
+        deltas[0] = (double)id;
+    }
+    CHECK(ok && batch.soa.group_count == (size_t)count,
+          "SoA scale: distinct infosets were not all recorded");
+
+    for (id = 0u; id < count && ok; ++id)
+    {
+        double *deltas = NULL;
+        double *average = NULL;
+        if (pe_update_batch_soa_begin_group(
+                &batch, id, 2u, 2u, &deltas, &average) != 0 ||
+            deltas[0] != (double)id)
+            ok = 0;
+    }
+    CHECK(ok && batch.soa.group_count == (size_t)count,
+          "SoA scale: revisiting resolved to the wrong span");
+    pe_update_batch_destroy(&batch);
+}
+
 static void test_soa_reduction(void)
 {
     pe_update_batch_t left = {0};
@@ -249,6 +354,8 @@ int main(void)
     test_reduction_preserves_iteration_metadata();
     test_reduction_ignores_arrival_order();
     test_soa_group_layout();
+    test_soa_revisit_accumulates_in_place();
+    test_soa_many_infosets_revisited();
     test_soa_reduction();
     if (failures != 0)
         return 1;
