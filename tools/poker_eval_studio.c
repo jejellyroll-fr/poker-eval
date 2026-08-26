@@ -4799,7 +4799,7 @@ static Panel *i_result_panel(App *app)
     Panel *left_panel = panel_create();
     Panel *right_panel = panel_create();
     Layout *left_layout = layout_create(1, 14);
-    Layout *right_layout = layout_create(1, 5);
+    Layout *right_layout = layout_create(1, 6);
 
     /* Left Components */
     Label *board_hdr = label_create();
@@ -5015,21 +5015,27 @@ static Panel *i_result_panel(App *app)
 
     /* Top Scope & Filters Header */
     {
-        Layout *hdr = layout_create(5, 1);
+        Layout *hdr = layout_create(6, 1);
         layout_label(hdr, app->strategy_scope, 0, 0);
-        layout_view(hdr, app->hand_preview_view, 1, 0);
-        layout_combo(hdr, app->street_filter, 2, 0);
-        layout_combo(hdr, app->step_filter, 3, 0);
-        layout_combo(hdr, app->board_filter, 4, 0);
+        /* The caption explains what the preview beside it is showing. It was
+           built and updated but never placed, so the preview had no label and
+           the control was never destroyed with the window. */
+        layout_label(hdr, app->cards_caption, 1, 0);
+        layout_view(hdr, app->hand_preview_view, 2, 0);
+        layout_combo(hdr, app->street_filter, 3, 0);
+        layout_combo(hdr, app->step_filter, 4, 0);
+        layout_combo(hdr, app->board_filter, 5, 0);
         layout_hsize(hdr, 0, 240.0f);
-        layout_hsize(hdr, 1, 150.0f);
-        layout_hsize(hdr, 2, 130.0f);
-        layout_hsize(hdr, 3, 240.0f);
-        layout_hsize(hdr, 4, 220.0f);
+        layout_hsize(hdr, 1, 250.0f);
+        layout_hsize(hdr, 2, 150.0f);
+        layout_hsize(hdr, 3, 130.0f);
+        layout_hsize(hdr, 4, 240.0f);
+        layout_hsize(hdr, 5, 220.0f);
         layout_hmargin(hdr, 0, 6.0f);
         layout_hmargin(hdr, 1, 6.0f);
         layout_hmargin(hdr, 2, 6.0f);
         layout_hmargin(hdr, 3, 6.0f);
+        layout_hmargin(hdr, 4, 6.0f);
         layout_layout(right_layout, hdr, 0, 0);
     }
 
@@ -5148,21 +5154,36 @@ static Panel *i_result_panel(App *app)
         layout_layout(right_layout, monitor, 0, 3);
     }
 
+    /* The run configuration line and the progress bar were both updated from
+       the solve callbacks but never placed in a layout: the user could not see
+       either, and NAppGUI never owned them, so they outlived the window. */
+    {
+        Layout *runline = layout_create(2, 1);
+        layout_label(runline, app->run_config, 0, 0);
+        layout_progress(runline, app->run_progress_bar, 1, 0);
+        layout_hsize(runline, 0, 700.0f);
+        layout_hsize(runline, 1, 320.0f);
+        layout_hmargin(runline, 0, 12.0f);
+        layout_layout(right_layout, runline, 0, 4);
+    }
+
     textview_editable(app->status, FALSE);
     textview_wrap(app->status, TRUE);
     textview_printf(app->status, "Choose a .tree file, inspect it, then solve the spot.\n");
-    layout_textview(right_layout, app->status, 0, 4);
+    layout_textview(right_layout, app->status, 0, 5);
 
     layout_hsize(right_layout, 0, 1040.0f);
     layout_vsize(right_layout, 0, 36.0f);
     layout_vsize(right_layout, 1, 540.0f);
     layout_vsize(right_layout, 2, 34.0f);
     layout_vsize(right_layout, 3, 44.0f);
-    layout_vsize(right_layout, 4, 80.0f);
+    layout_vsize(right_layout, 4, 24.0f);
+    layout_vsize(right_layout, 5, 80.0f);
     layout_vmargin(right_layout, 0, 4.0f);
     layout_vmargin(right_layout, 1, 6.0f);
     layout_vmargin(right_layout, 2, 6.0f);
     layout_vmargin(right_layout, 3, 4.0f);
+    layout_vmargin(right_layout, 4, 4.0f);
     panel_layout(right_panel, right_layout);
 
     /* Root 2-Column Split */
