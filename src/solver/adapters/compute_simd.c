@@ -25,7 +25,7 @@ static float scalar_positive_sum(const float *values, size_t count)
 
 int pe_compute_simd_enabled(void)
 {
-    return simd_detect_capability() != SIMD_NONE;
+    return simd_runtime_capability() != SIMD_NONE;
 }
 
 float pe_compute_simd_positive_sum(const float *values, size_t count)

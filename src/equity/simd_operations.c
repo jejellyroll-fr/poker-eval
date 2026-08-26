@@ -89,44 +89,58 @@ static simd_capability_t detected_capability = SIMD_NONE;
 static int capability_detected = 0;
 
 #ifdef __x86_64__
-static void detect_cpu_features(void) {
+static simd_capability_t detect_cpu_features(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    /* The builtin performs the CPUID/XGETBV checks at runtime and remains
+     * available when this translation unit was built without an ISA flag. */
+    if (__builtin_cpu_supports("avx512f"))
+        return SIMD_AVX512;
+    if (__builtin_cpu_supports("avx2"))
+        return SIMD_AVX2;
+    if (__builtin_cpu_supports("sse2"))
+        return SIMD_SSE2;
+#else
     unsigned int eax, ebx, ecx, edx;
-    
-    /* Check for AVX2 support */
-    if (__get_cpuid_max(0, NULL) >= 7) {
+
+    if (__get_cpuid_max(0, NULL) >= 7)
+    {
         __cpuid_count(7, 0, eax, ebx, ecx, edx);
-        /* Runtime CPU support is only usable when this translation unit was
-         * compiled with the corresponding ISA. Generic builds intentionally
-         * omit -mavx2/-mavx512f and must therefore stay on the scalar path. */
-#if defined(__AVX2__)
-        if (ebx & (1 << 5)) { /* AVX2 */
-            detected_capability = SIMD_AVX2;
-        }
-#endif
-        
-        /* Check for AVX-512F support */
-#if defined(__AVX512F__)
-        if (ebx & (1 << 16)) { /* AVX-512F */
-            detected_capability = SIMD_AVX512;
-        }
-#endif
+        if (ebx & (1u << 16))
+            return SIMD_AVX512;
+        if (ebx & (1u << 5))
+            return SIMD_AVX2;
     }
+#endif
+    return SIMD_NONE;
 }
 #endif
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
-static void detect_cpu_features(void) {
+static simd_capability_t detect_cpu_features(void) {
     /* NEON is mandatory on AArch64 and universally available on ARMv7 with
      * __ARM_NEON defined; there is no runtime query analogous to CPUID. */
-    detected_capability = SIMD_NEON;
+    return SIMD_NEON;
 }
 #endif
+
+simd_capability_t simd_compiled_capability(void)
+{
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    return SIMD_NEON;
+#elif defined(__AVX512F__) && defined(__AVX2__)
+    return SIMD_AVX512;
+#elif defined(__AVX2__)
+    return SIMD_AVX2;
+#else
+    return SIMD_NONE;
+#endif
+}
 
 simd_capability_t simd_detect_capability(void) {
     if (!capability_detected) {
         simd_init_tables(); /* Ensure tables are ready */
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__ARM_NEON)
-        detect_cpu_features();
+        detected_capability = detect_cpu_features();
 #endif
         /* Allow env overrides */
         const char* force512 = getenv("PE_FORCE_AVX512");
@@ -135,23 +149,28 @@ simd_capability_t simd_detect_capability(void) {
         if (disable && (strcmp(disable, "1") == 0 || strcasecmp(disable, "true") == 0 || strcasecmp(disable, "yes") == 0)) {
             detected_capability = SIMD_NONE;
         } else if (force512 && (strcmp(force512, "1") == 0 || strcasecmp(force512, "true") == 0)) {
-#ifdef __AVX512F__
             detected_capability = SIMD_AVX512;
-#elif defined(__AVX2__)
-            detected_capability = SIMD_AVX2;
-#else
-            detected_capability = SIMD_NONE;
-#endif
         } else if (force2 && (strcmp(force2, "1") == 0 || strcasecmp(force2, "true") == 0)) {
-#ifdef __AVX2__
             detected_capability = SIMD_AVX2;
-#else
-            detected_capability = SIMD_NONE;
-#endif
         }
         capability_detected = 1;
     }
     return detected_capability;
+}
+
+simd_capability_t simd_runtime_capability(void)
+{
+    simd_capability_t machine = simd_detect_capability();
+    simd_capability_t compiled = simd_compiled_capability();
+
+    if (machine == SIMD_NEON && compiled == SIMD_NEON)
+        return SIMD_NEON;
+    if (machine == SIMD_AVX512 && compiled == SIMD_AVX512)
+        return SIMD_AVX512;
+    if ((machine == SIMD_AVX512 || machine == SIMD_AVX2) &&
+        (compiled == SIMD_AVX512 || compiled == SIMD_AVX2))
+        return SIMD_AVX2;
+    return SIMD_NONE;
 }
 
 const char* simd_capability_name(simd_capability_t cap) {
@@ -668,7 +687,7 @@ int simd_eval_batch_hands_neon(const simd_card_batch_t* batch, simd_result_batch
 
 /* Adaptive batch evaluation */
 int simd_eval_batch_hands_adaptive(const simd_card_batch_t* batch, simd_result_batch_t* results) {
-    simd_capability_t cap = simd_detect_capability();
+    simd_capability_t cap = simd_runtime_capability();
     int rc = 0;
     
     switch (cap) {

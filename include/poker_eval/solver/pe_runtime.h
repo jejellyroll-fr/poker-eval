@@ -39,6 +39,11 @@ typedef struct pe_runtime_capabilities_t
 {
     uint32_t logical_cpus;
     int openmp_available;
+    /* SIMD capability reported by the host, independent of compiler flags. */
+    simd_capability_t simd_machine;
+    /* Highest SIMD kernel actually linked into this binary. */
+    simd_capability_t simd_compiled;
+    /* Capability safe to dispatch: intersection of machine and binary. */
     simd_capability_t simd;
     pe_runtime_backend_info_t backends[PE_COMPUTE_COUNT];
 } pe_runtime_capabilities_t;

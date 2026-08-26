@@ -11,7 +11,9 @@ int main(void)
     char status[256];
     if (pe_runtime_probe(&runtime) != 0)
         return 1;
-    if (runtime.logical_cpus == 0u || runtime.simd < SIMD_NONE ||
+    if (runtime.logical_cpus == 0u || runtime.simd_machine < SIMD_NONE ||
+        runtime.simd_machine > SIMD_NEON || runtime.simd_compiled < SIMD_NONE ||
+        runtime.simd_compiled > SIMD_NEON || runtime.simd < SIMD_NONE ||
         runtime.simd > SIMD_NEON)
         return 2;
     if (!runtime.backends[PE_COMPUTE_CPU_REF].runtime_available ||
@@ -48,8 +50,10 @@ int main(void)
     memset(&synthetic, 0, sizeof(synthetic));
     if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_AUTO)
         return 8;
-    printf("runtime: cpus=%u openmp=%d simd=%s cpu_ref=%s\n",
+    printf("runtime: cpus=%u openmp=%d simd_machine=%s simd_compiled=%s simd=%s cpu_ref=%s\n",
            runtime.logical_cpus, runtime.openmp_available,
+           pe_runtime_simd_name(runtime.simd_machine),
+           pe_runtime_simd_name(runtime.simd_compiled),
            pe_runtime_simd_name(runtime.simd), status);
     return 0;
 }

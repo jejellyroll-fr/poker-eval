@@ -46,7 +46,12 @@ typedef struct {
 } simd_result_batch_t;
 
 /* SIMD capability detection */
+/* Capability supported by the host CPU, regardless of linked kernels. */
 simd_capability_t simd_detect_capability(void);
+/* Highest SIMD implementation compiled into this binary. */
+simd_capability_t simd_compiled_capability(void);
+/* Safe dispatch capability: intersection of host and linked implementations. */
+simd_capability_t simd_runtime_capability(void);
 const char* simd_capability_name(simd_capability_t cap);
 
 /* Batch evaluation functions */

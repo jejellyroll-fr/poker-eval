@@ -262,7 +262,9 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
     }
 #endif
     out->logical_cpus = cpus;
-    out->simd = simd_detect_capability();
+    out->simd_machine = simd_detect_capability();
+    out->simd_compiled = simd_compiled_capability();
+    out->simd = simd_runtime_capability();
 #if defined(_OPENMP)
     out->openmp_available = 1;
 #else
