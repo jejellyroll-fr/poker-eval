@@ -119,3 +119,67 @@ int pe_work_schedule(const pe_runtime_capabilities_t *runtime,
     }
     return (int)usable;
 }
+
+int pe_work_assign(const pe_work_allocation_t *allocations,
+                   size_t allocation_count,
+                   size_t total_units,
+                   pe_work_assignment_t *out,
+                   size_t capacity)
+{
+    size_t i;
+    size_t first = 0u;
+    size_t positive = 0u;
+    size_t seen = 0u;
+    unsigned int seen_backends = 0u;
+
+    if ((!allocations && allocation_count != 0u) ||
+        (!out && capacity != 0u))
+        return -1;
+    for (i = 0u; i < allocation_count; ++i) {
+        unsigned int bit;
+        if (allocations[i].backend <= PE_COMPUTE_AUTO ||
+            allocations[i].backend >= PE_COMPUTE_COUNT)
+            return -1;
+        bit = 1u << (unsigned int)allocations[i].backend;
+        if ((seen_backends & bit) != 0u)
+            return -1;
+        seen_backends |= bit;
+        if (allocations[i].unit_count > total_units - seen)
+            return -1;
+        seen += allocations[i].unit_count;
+        if (allocations[i].unit_count != 0u)
+            ++positive;
+    }
+    if (seen != total_units || positive > capacity)
+        return -1;
+
+    positive = 0u;
+    for (i = 0u; i < allocation_count; ++i) {
+        if (allocations[i].unit_count == 0u)
+            continue;
+        out[positive].backend = allocations[i].backend;
+        out[positive].first_unit = first;
+        out[positive].unit_count = allocations[i].unit_count;
+        first += allocations[i].unit_count;
+        ++positive;
+    }
+    return (int)positive;
+}
+
+int pe_work_schedule_assignments(const pe_runtime_capabilities_t *runtime,
+                                 size_t total_units,
+                                 pe_work_assignment_t *out,
+                                 size_t capacity)
+{
+    pe_work_allocation_t allocations[PE_COMPUTE_COUNT];
+    int allocation_count;
+
+    if (total_units == 0u)
+        return 0;
+    allocation_count = pe_work_schedule(runtime, total_units, allocations,
+                                         PE_COMPUTE_COUNT);
+    if (allocation_count < 0)
+        return -1;
+    return pe_work_assign(allocations, (size_t)allocation_count, total_units,
+                          out, capacity);
+}
