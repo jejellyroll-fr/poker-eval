@@ -1,0 +1,65 @@
+/*
+ * pe_work_coordinator.h - heterogeneous worker registry and dispatcher
+ */
+
+#ifndef POKER_EVAL_PE_WORK_COORDINATOR_H
+#define POKER_EVAL_PE_WORK_COORDINATOR_H
+
+#include <poker_eval/solver/pe_runtime.h>
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define PE_WORK_COORDINATOR_MAX_WORKERS 32u
+
+typedef struct pe_work_worker_t
+{
+    uint32_t worker_id;
+    pe_runtime_capabilities_t runtime;
+} pe_work_worker_t;
+
+typedef struct pe_work_coordinator_t
+{
+    pe_work_worker_t workers[PE_WORK_COORDINATOR_MAX_WORKERS];
+    size_t worker_count;
+} pe_work_coordinator_t;
+
+typedef struct pe_work_worker_assignment_t
+{
+    uint32_t worker_id;
+    pe_compute_kind_t backend;
+    size_t first_unit;
+    size_t unit_count;
+    double units_per_s;
+} pe_work_worker_assignment_t;
+
+void pe_work_coordinator_init(pe_work_coordinator_t *coordinator);
+
+/** Add or replace a worker announcement identified by worker_id. */
+int pe_work_coordinator_register(pe_work_coordinator_t *coordinator,
+                                 uint32_t worker_id,
+                                 const pe_runtime_capabilities_t *runtime);
+
+/** Remove a worker; returns -1 when the id is not registered. */
+int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
+                                   uint32_t worker_id);
+
+/**
+ * Schedule concrete unit ranges across registered workers. Each worker uses
+ * its own recommended backend; workers with no usable backend are skipped.
+ */
+int pe_work_coordinator_schedule(
+    const pe_work_coordinator_t *coordinator,
+    size_t total_units,
+    pe_work_worker_assignment_t *out,
+    size_t capacity);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POKER_EVAL_PE_WORK_COORDINATOR_H */
