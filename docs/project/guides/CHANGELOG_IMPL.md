@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-08-26
+
+### Performance & Numerical Behavior
+- Reworked `pe_vec_sum` and `pe_vec_dot` as four-lane, branchless Neumaier
+  reductions. The public API and `double` storage remain unchanged; results
+  can differ in the low bits because the accumulation order is now explicit.
+- FP32 storage for regrets and averages is not enabled by this change; it
+  remains a separately measured, opt-in follow-up.
+
 ## [1.1.0] - 2026-07-30
 
 ### Documentation & Translation
