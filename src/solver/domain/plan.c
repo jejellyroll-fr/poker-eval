@@ -117,6 +117,8 @@ static uint64_t pe_stage_caps(pe_compute_kind_t kind, uint64_t gpu_cap)
         return PE_CAP_CPU_PARALLEL | PE_CAP_BATCH_UPDATES;
     case PE_COMPUTE_CUDA:
     case PE_COMPUTE_OPENCL:
+    case PE_COMPUTE_HIP:
+    case PE_COMPUTE_METAL:
         return gpu_cap | PE_CAP_BATCH_UPDATES;
     case PE_COMPUTE_AUTO:
     case PE_COMPUTE_CPU_REF:
@@ -485,10 +487,8 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
 
     /* A device holds the value arrays and nothing else so far: the traversal
        runs on the host until GPU-4. */
-    if (plan->stages.traversal == PE_COMPUTE_CUDA ||
-        plan->stages.traversal == PE_COMPUTE_OPENCL ||
-        plan->stages.update == PE_COMPUTE_CUDA ||
-        plan->stages.update == PE_COMPUTE_OPENCL)
+    if (pe_compute_kind_is_gpu(plan->stages.traversal) ||
+        pe_compute_kind_is_gpu(plan->stages.update))
         out->device_bytes = slots * per_slot * arrays;
 
     out->budget_bytes = budget_bytes;

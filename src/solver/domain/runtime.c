@@ -172,7 +172,20 @@ static size_t calibrate_terminal_min_batch(const pe_compute_ops_t *gpu_ops,
     return threshold;
 }
 
-static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
+/*
+ * Parity against cpu_ref, reported per stage.
+ *
+ * A backend need not serve every stage. HIP and Metal carry the regret
+ * kernels but have no batched terminal evaluator, and an all-or-nothing
+ * verdict would have refused them for a stage they never claimed. What must
+ * never happen is a stage advertised without matching the reference, so a
+ * stage that declines and a stage that answers wrongly are treated alike:
+ * neither sets its bit.
+ *
+ * Returns the capability bits that were actually verified; zero means the
+ * backend is unusable.
+ */
+static uint64_t validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
 {
     const pe_compute_ops_t *cpu_ops = pe_compute_cpu_ref_ops();
     const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
@@ -200,7 +213,7 @@ static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
     pe_infoset_id_t cpu_id;
     pe_infoset_id_t gpu_id;
     size_t i;
-    int ok = 0;
+    uint64_t verified = 0u;
 
     if (gpu_ops == NULL || cpu_ops == NULL || storage_ops == NULL ||
         gpu_ops->create == NULL || gpu_ops->strategy_batch == NULL ||
@@ -265,13 +278,17 @@ static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
     {
         pe_value_batch_t cpu_output = {cpu_terminal, 8u, 0u};
         pe_value_batch_t gpu_output = {gpu_terminal, 8u, 0u};
-        if (cpu_ops->terminal_eval_batch(cpu, &terminal, &cpu_output) != 0 ||
-            gpu_ops->terminal_eval_batch(gpu, &terminal, &gpu_output) != 0 ||
-            cpu_output.count != gpu_output.count || cpu_output.count != 8u)
-            goto cleanup;
-        for (i = 0u; i < 8u; ++i)
+        int matched = cpu_ops->terminal_eval_batch(
+                          cpu, &terminal, &cpu_output) == 0 &&
+                      gpu_ops->terminal_eval_batch(
+                          gpu, &terminal, &gpu_output) == 0 &&
+                      cpu_output.count == gpu_output.count &&
+                      cpu_output.count == 8u;
+        for (i = 0u; matched && i < 8u; ++i)
             if (cpu_terminal[i] != gpu_terminal[i])
-                goto cleanup;
+                matched = 0;
+        if (matched)
+            verified |= PE_CAP_GPU_TERMINAL_EVAL;
     }
 
     memset(&batch, 0, sizeof(batch));
@@ -309,7 +326,8 @@ static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
                 fabs(cpu_average[i] - gpu_average[i]) > 1.0e-5)
                 goto cleanup;
     }
-    ok = 1;
+    /* strategy_batch and apply_update_batch both matched to get here. */
+    verified |= PE_CAP_GPU_REGRET_UPDATE;
 
 cleanup:
     if (cpu != NULL)
@@ -320,7 +338,7 @@ cleanup:
         storage_ops->destroy(cpu_storage);
     if (gpu_storage != NULL)
         storage_ops->destroy(gpu_storage);
-    return ok;
+    return verified;
 }
 
 static void set_backend(pe_runtime_backend_info_t *info,
@@ -365,17 +383,17 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
     created = ops && ops->create ? ops->create(&backend, &config) : -1;
     if (created == 0 && backend != NULL)
     {
-        if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
-            !validate_gpu_backend(ops))
+        if (pe_compute_kind_is_gpu(kind))
         {
-            if (ops->destroy)
-                ops->destroy(backend);
-            set_backend(info, kind, name, compiled, 0, 0, 0u, 0,
-                        "device/context available; CPU/GPU parity validation failed");
-            return;
-        }
-        if (kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL)
-        {
+            uint64_t verified = validate_gpu_backend(ops);
+            if (verified == 0u)
+            {
+                if (ops->destroy)
+                    ops->destroy(backend);
+                set_backend(info, kind, name, compiled, 0, 0, 0u, 0,
+                            "device/context available; CPU/GPU parity validation failed");
+                return;
+            }
             if (gpu_parity_gate_disabled())
             {
                 if (ops->destroy)
@@ -384,16 +402,19 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
                             "GPU parity passed; gate disabled by PE_GPU_SKIP_PARITY");
                 return;
             }
-            /* Runtime probing is the production opener.  The validation
-             * above exercises strategy, update and terminal paths against
-             * cpu_ref before either GPU capability becomes visible. */
-            pe_gpu_terminal_eval_gate_open();
-            pe_gpu_regret_update_gate_open();
+            /* Runtime probing is the production opener, and it opens only
+             * the gates this backend actually proved against cpu_ref. A
+             * backend that serves regret updates and no terminal evaluator
+             * gets the one gate it earned. */
+            if (verified & PE_CAP_GPU_TERMINAL_EVAL)
+                pe_gpu_terminal_eval_gate_open();
+            if (verified & PE_CAP_GPU_REGRET_UPDATE)
+                pe_gpu_regret_update_gate_open();
         }
         capabilities = ops->capabilities ? ops->capabilities(backend) : 0u;
         terminal_rate = measure_terminal_rate(ops, backend,
                                               config.terminal_batch_size);
-        if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+        if (pe_compute_kind_is_gpu(kind) &&
             (capabilities & PE_CAP_GPU_TERMINAL_EVAL))
             terminal_min_batch_size = calibrate_terminal_min_batch(
                 ops, backend, &config);
@@ -403,7 +424,7 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
          * behind the solver's parity gate.  Do not advertise that as a
          * usable solver backend: the frontends must refuse it instead of
          * silently producing a CPU result. */
-        if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+        if (pe_compute_kind_is_gpu(kind) &&
             capabilities == 0u)
         {
             set_backend(info, kind, name, compiled, 1, 0, capabilities, 1,
@@ -500,6 +521,26 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
                 "OpenCL adapter is not compiled in this build");
 #endif
 
+#if defined(PE_RUNTIME_HIP_COMPILED)
+    probe_adapter(&out->backends[PE_COMPUTE_HIP], PE_COMPUTE_HIP,
+                  pe_compute_hip_ops(), 1, 0,
+                  "HIP adapter compiled but no usable device/context");
+#else
+    set_backend(&out->backends[PE_COMPUTE_HIP], PE_COMPUTE_HIP,
+                "hip", 0, 0, 0, 0u, 0,
+                "HIP adapter is not compiled in this build");
+#endif
+
+#if defined(PE_RUNTIME_METAL_COMPILED)
+    probe_adapter(&out->backends[PE_COMPUTE_METAL], PE_COMPUTE_METAL,
+                  pe_compute_metal_ops(), 1, 0,
+                  "Metal adapter compiled but no usable device/context");
+#else
+    set_backend(&out->backends[PE_COMPUTE_METAL], PE_COMPUTE_METAL,
+                "metal", 0, 0, 0, 0u, 0,
+                "Metal adapter is not compiled in this build");
+#endif
+
     set_backend(&out->backends[PE_COMPUTE_AUTO], PE_COMPUTE_AUTO, "auto", 1,
                 1, 1, out->backends[PE_COMPUTE_CPU_REF].capabilities, 0,
                 "resolved by the solver plan");
@@ -545,8 +586,7 @@ pe_compute_kind_t pe_runtime_recommended_backend_for_batch(
     {
         const pe_runtime_backend_info_t *candidate = &runtime->backends[i];
         double rate;
-        if ((candidate->kind != PE_COMPUTE_CUDA &&
-             candidate->kind != PE_COMPUTE_OPENCL) ||
+        if (!pe_compute_kind_is_gpu(candidate->kind) ||
             !candidate->compiled || !candidate->runtime_available ||
             !candidate->validated ||
             !(candidate->capabilities & PE_CAP_GPU_TERMINAL_EVAL) ||

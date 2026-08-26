@@ -491,6 +491,12 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         case PE_COMPUTE_OPENCL:
             compute_ops = pe_compute_opencl_ops();
             break;
+        case PE_COMPUTE_HIP:
+            compute_ops = pe_compute_hip_ops();
+            break;
+        case PE_COMPUTE_METAL:
+            compute_ops = pe_compute_metal_ops();
+            break;
         case PE_COMPUTE_COUNT:
         default:
             compute_ops = NULL;
@@ -514,8 +520,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         solver->config.algorithm.exponential_lambda;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
-    if ((plan->stages.update == PE_COMPUTE_CUDA ||
-         plan->stages.update == PE_COMPUTE_OPENCL) &&
+    if (pe_compute_kind_is_gpu(plan->stages.update) &&
         compute_config.terminal_batch_size == 0u)
         compute_config.terminal_batch_size = PE_SOLVER_DEFAULT_GPU_BATCH;
     if (compute_ops == NULL || compute_ops->create == NULL ||
@@ -887,6 +892,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         case PE_COMPUTE_OPENCL:
             compute_ops = pe_compute_opencl_ops();
             break;
+        case PE_COMPUTE_HIP:
+            compute_ops = pe_compute_hip_ops();
+            break;
+        case PE_COMPUTE_METAL:
+            compute_ops = pe_compute_metal_ops();
+            break;
         case PE_COMPUTE_COUNT:
         default:
             compute_ops = NULL;
@@ -910,8 +921,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         solver->config.algorithm.exponential_lambda;
     compute_config.storage = solver->storage;
     compute_config.storage_self = solver->storage_self;
-    if ((plan->stages.update == PE_COMPUTE_CUDA ||
-         plan->stages.update == PE_COMPUTE_OPENCL) &&
+    if (pe_compute_kind_is_gpu(plan->stages.update) &&
         compute_config.terminal_batch_size == 0u)
         compute_config.terminal_batch_size = PE_SOLVER_DEFAULT_GPU_BATCH;
     if (!compute_ops || !compute_ops->create || !compute_ops->destroy ||

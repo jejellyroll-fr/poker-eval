@@ -144,8 +144,24 @@ typedef enum {
     PE_COMPUTE_CPU_PAR,
     PE_COMPUTE_CUDA,
     PE_COMPUTE_OPENCL,
+    PE_COMPUTE_HIP,          /* AMD ROCm; same kernels as CUDA                */
+    PE_COMPUTE_METAL,        /* Apple GPU, unified memory                     */
     PE_COMPUTE_COUNT
 } pe_compute_kind_t;
+
+/*
+ * True for every backend that runs on a device rather than the host.
+ *
+ * This exists so that adding a backend is one enum entry plus one line here,
+ * instead of an edit to every `kind == CUDA || kind == OPENCL` test scattered
+ * across the plan, the runtime probe, the solver and the work distribution --
+ * the shape a missed site takes is a GPU that silently skips parity gating.
+ */
+static inline int pe_compute_kind_is_gpu(pe_compute_kind_t kind)
+{
+    return kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL ||
+           kind == PE_COMPUTE_HIP || kind == PE_COMPUTE_METAL;
+}
 
 /*
  * Backends are chosen per stage, so terminal evaluation can run on a GPU long

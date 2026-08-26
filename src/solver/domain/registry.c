@@ -620,13 +620,15 @@ pe_precision_mode_t pe_precision_from_name(const char *name)
 
 const char *pe_compute_kind_name(pe_compute_kind_t kind)
 {
-    static const char *const names[] = { "auto", "cpu_ref", "cpu_par", "cuda", "opencl" };
+    static const char *const names[] = { "auto", "cpu_ref", "cpu_par", "cuda",
+                                         "opencl", "hip", "metal" };
     return PE_NAME_OF(kind, names);
 }
 
 pe_compute_kind_t pe_compute_kind_from_name(const char *name)
 {
-    static const char *const names[] = { "auto", "cpu_ref", "cpu_par", "cuda", "opencl" };
+    static const char *const names[] = { "auto", "cpu_ref", "cpu_par", "cuda",
+                                         "opencl", "hip", "metal" };
     size_t length;
     size_t i;
 

@@ -147,6 +147,12 @@ const pe_compute_ops_t *pe_compute_cuda_ops(void);
 /** OpenCL terminal evaluator; capability is gated until GPU-05 parity passes. */
 const pe_compute_ops_t *pe_compute_opencl_ops(void);
 
+/** HIP/ROCm adapter. Shares its kernels with CUDA; same parity gate. */
+const pe_compute_ops_t *pe_compute_hip_ops(void);
+
+/** Metal adapter for Apple GPUs. Unified memory, same parity gate. */
+const pe_compute_ops_t *pe_compute_metal_ops(void);
+
 #ifdef __cplusplus
 }
 #endif

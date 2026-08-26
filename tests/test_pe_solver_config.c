@@ -198,7 +198,11 @@ static void test_enum_values(void)
     CHECK_EQ_INT(PE_COMPUTE_CPU_PAR, 2);
     CHECK_EQ_INT(PE_COMPUTE_CUDA,    3);
     CHECK_EQ_INT(PE_COMPUTE_OPENCL,  4);
-    CHECK_EQ_INT(PE_COMPUTE_COUNT,   5);
+    /* Appended by GPU-02/GPU-03. The existing values above must never move:
+       they cross the public ABI and are written into saved plans. */
+    CHECK_EQ_INT(PE_COMPUTE_HIP,     5);
+    CHECK_EQ_INT(PE_COMPUTE_METAL,   6);
+    CHECK_EQ_INT(PE_COMPUTE_COUNT,   7);
 
     /* CUSTOM is zero so a hand-written configuration needs no preset. */
     CHECK_EQ_INT(PE_PRESET_CUSTOM, 0);

@@ -35,7 +35,7 @@ static int backend_usable(const pe_runtime_backend_info_t *backend,
     if (!backend || !backend->compiled || !backend->runtime_available ||
         !backend->validated)
         return 0;
-    if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+    if (pe_compute_kind_is_gpu(kind) &&
         !(backend->capabilities & PE_CAP_GPU_TERMINAL_EVAL))
         return 0;
     return 1;
