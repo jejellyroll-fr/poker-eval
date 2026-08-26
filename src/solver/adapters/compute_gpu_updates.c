@@ -27,11 +27,105 @@ static int pack_alloc(pe_gpu_update_pack_t *pack, size_t count)
     return 0;
 }
 
+/*
+ * Open-addressing index over uint64 keys, holding value + 1 so that a zeroed
+ * table means empty.
+ *
+ * Packing a batch asks two lookup questions per update -- which group is this
+ * infoset, and has this slot been seen -- and both used to be answered by
+ * scanning everything accumulated so far. That is quadratic in the number of
+ * distinct infosets a batch touches, which for a wide preflop range is the
+ * whole batch. The table answers both in constant time.
+ */
+typedef struct
+{
+    uint64_t *keys;   /* key + 1; zero means the slot is free */
+    uint32_t *values;
+    size_t capacity;
+} pe_pack_index_t;
+
+static void pack_index_destroy(pe_pack_index_t *index)
+{
+    if (index == NULL)
+        return;
+    free(index->keys);
+    free(index->values);
+    index->keys = NULL;
+    index->values = NULL;
+    index->capacity = 0u;
+}
+
+/* Sized once for the whole batch: at most `count` entries at a load factor of
+   one half, so it never has to grow or rehash. */
+static int pack_index_create(pe_pack_index_t *index, size_t count)
+{
+    size_t capacity = 32u;
+
+    index->keys = NULL;
+    index->values = NULL;
+    index->capacity = 0u;
+    if (count > SIZE_MAX / 4u)
+        return -1;
+    while (capacity < count * 2u)
+    {
+        if (capacity > SIZE_MAX / 2u)
+            return -1;
+        capacity *= 2u;
+    }
+    if (capacity > SIZE_MAX / sizeof(uint64_t) ||
+        capacity > SIZE_MAX / sizeof(uint32_t))
+        return -1;
+    index->keys = (uint64_t *)calloc(capacity, sizeof(*index->keys));
+    index->values = (uint32_t *)calloc(capacity, sizeof(*index->values));
+    if (index->keys == NULL || index->values == NULL)
+    {
+        pack_index_destroy(index);
+        return -1;
+    }
+    index->capacity = capacity;
+    return 0;
+}
+
+/* Fibonacci hashing: infoset ids and slot numbers are both dense and near
+   sequential, so the multiply is what spreads them across the table. */
+static size_t pack_index_probe(const pe_pack_index_t *index, uint64_t key)
+{
+    uint64_t stored = key + 1u;
+    size_t slot = (size_t)((key * UINT64_C(0x9E3779B97F4A7C15)) >> 32) &
+                  (index->capacity - 1u);
+
+    while (index->keys[slot] != 0u && index->keys[slot] != stored)
+        slot = (slot + 1u) & (index->capacity - 1u);
+    return slot;
+}
+
+/* SIZE_MAX when the key is absent. */
+static size_t pack_index_find(const pe_pack_index_t *index, uint64_t key)
+{
+    size_t slot;
+
+    if (index->capacity == 0u)
+        return SIZE_MAX;
+    slot = pack_index_probe(index, key);
+    return index->keys[slot] == key + 1u ? (size_t)index->values[slot]
+                                         : SIZE_MAX;
+}
+
+static void pack_index_insert(pe_pack_index_t *index, uint64_t key,
+                              uint32_t value)
+{
+    size_t slot = pack_index_probe(index, key);
+    index->keys[slot] = key + 1u;
+    index->values[slot] = value;
+}
+
 int pe_gpu_update_pack_build(const pe_compute_config_t *config,
                              const pe_update_batch_t *batch,
                              pe_gpu_update_pack_t *out)
 {
     const pe_storage_ops_t *storage;
+    pe_pack_index_t group_index = {NULL, NULL, 0u};
+    pe_pack_index_t slot_index = {NULL, NULL, 0u};
     size_t total_slots = 0u;
     size_t i;
 
@@ -41,6 +135,9 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
     memset(out, 0, sizeof(*out));
     if (batch->count == 0u)
         return 0;
+    if (pack_index_create(&group_index, batch->count) != 0 ||
+        pack_index_create(&slot_index, batch->count) != 0)
+        goto fail;
     storage = config->storage;
     if (config->storage_self == NULL || storage == NULL || storage->shape == NULL ||
         storage->values == NULL ||
@@ -56,11 +153,10 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
 
         if (!isfinite(update->delta) || !isfinite(update->average_delta))
             goto fail;
-        for (group = 0u; group < out->group_count; ++group)
-            if (out->groups[group].id == update->infoset)
-                break;
-        if (group != out->group_count)
+        if (pack_index_find(&group_index, (uint64_t)update->infoset) !=
+            SIZE_MAX)
             continue;
+        group = out->group_count;
         if (update->infoset == PE_INFOSET_ID_INVALID ||
             storage->shape(config->storage_self, update->infoset,
                            &out->groups[group].actions,
@@ -75,6 +171,8 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
             total_slots + out->groups[group].length > UINT32_MAX)
             goto fail;
         total_slots += out->groups[group].length;
+        pack_index_insert(&group_index, (uint64_t)update->infoset,
+                          (uint32_t)group);
         ++out->group_count;
     }
     if (out->group_count == 0u || total_slots == 0u ||
@@ -134,16 +232,23 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
         uint32_t slot;
         float regret_delta = (float)batch->items[i].delta;
         float average_delta = (float)batch->items[i].average_delta;
+        size_t group;
         size_t prior;
 
+        /* The group index built above is exactly what the public resolver
+           would rediscover by scanning, so use it and go straight to the
+           arithmetic. slot_at re-checks that the entry really is this
+           infoset's, so a wrong index is refused rather than addressing
+           another span. */
+        group = pack_index_find(&group_index,
+                                (uint64_t)batch->items[i].infoset);
         if (!isfinite(regret_delta) || !isfinite(average_delta) ||
-            pe_infoset_layout_resolve_slot(&out->layout, &batch->items[i],
-                                           &slot) != 0)
+            group == SIZE_MAX ||
+            pe_infoset_layout_slot_at(&out->layout, group, &batch->items[i],
+                                      &slot) != 0)
             goto fail;
-        for (prior = 0u; prior < out->count; ++prior)
-            if (out->slots[prior] == slot)
-                break;
-        if (prior != out->count)
+        prior = pack_index_find(&slot_index, (uint64_t)slot);
+        if (prior != SIZE_MAX)
         {
             out->regret_deltas[prior] += regret_delta;
             out->average_deltas[prior] += average_delta;
@@ -156,12 +261,18 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
             out->slots[out->count] = slot;
             out->regret_deltas[out->count] = regret_delta;
             out->average_deltas[out->count] = average_delta;
+            pack_index_insert(&slot_index, (uint64_t)slot,
+                              (uint32_t)out->count);
             ++out->count;
         }
     }
+    pack_index_destroy(&group_index);
+    pack_index_destroy(&slot_index);
     return 0;
 
 fail:
+    pack_index_destroy(&group_index);
+    pack_index_destroy(&slot_index);
     pe_gpu_update_pack_destroy(out);
     return -1;
 }

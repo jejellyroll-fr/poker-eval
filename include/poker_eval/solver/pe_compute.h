@@ -83,10 +83,24 @@ typedef struct pe_infoset_layout_t
     const uint16_t *combo_counts;  /* count entries                        */
 } pe_infoset_layout_t;
 
-/** Resolve one logical update to its flattened ragged slot. */
+/**
+ * Resolve one logical update to its flattened ragged slot.
+ *
+ * The search is linear: the layout need not be sorted or dense. A caller
+ * resolving many updates against one layout should build its own index and
+ * use pe_infoset_layout_slot_at, or the batch becomes quadratic.
+ */
 int pe_infoset_layout_resolve_slot(const pe_infoset_layout_t *layout,
                                    const pe_update_t *update,
                                    uint32_t *out_slot);
+
+/**
+ * The same resolution for a caller that already knows which entry the update
+ * belongs to. Validates that `index` really is that entry, so a wrong index
+ * is refused rather than silently addressing another infoset's span.
+ */
+int pe_infoset_layout_slot_at(const pe_infoset_layout_t *layout, size_t index,
+                              const pe_update_t *update, uint32_t *out_slot);
 typedef struct pe_showdown_job_t pe_showdown_job_t;
 
 /*
