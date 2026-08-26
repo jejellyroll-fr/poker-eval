@@ -11,4 +11,12 @@ float pe_compute_simd_positive_sum(const float *values, size_t count);
 /* True only when the SIMD kernel is both compiled and enabled at runtime. */
 int pe_compute_simd_enabled(void);
 
+/* Apply the uniform regret/average update kernel in-place. Returns 1 when an
+ * ISA-specific implementation handled the complete span, 0 when callers
+ * should use their scalar implementation. Inputs must already be finite. */
+int pe_compute_simd_apply_uniform(double *regrets, double *averages,
+                                  const double *deltas,
+                                  const double *average_deltas,
+                                  size_t count, int clamp_regret);
+
 #endif

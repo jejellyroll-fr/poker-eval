@@ -17,6 +17,11 @@ the scalar evaluator otherwise.
 `simd_compiled`, and `simd`. This lets frontends distinguish a capable host
 from a binary that was intentionally built without a particular kernel.
 
+The same dispatch is used by the hot compute kernels: positive regret sums and
+uniform SoA regret/average updates use the selected ISA. DCFR and weighted
+averaging retain their scalar path because their per-update transformations
+need additional parameters and must preserve the reference semantics.
+
 The portable CI configuration uses `-DENABLE_NATIVE_ARCH=OFF`, exports
 `compile_commands.json`, rejects global `-mavx2`, `-mavx512f`, and
 `-march=native` flags, and runs `test_simd_operations` plus `test_pe_runtime`.

@@ -149,6 +149,49 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
             average_length < (size_t)actions * combos)
             return -1;
 
+        {
+            size_t values = (size_t)actions * (size_t)combos;
+            int uniform_mode =
+                backend->config.regret_mode == PE_REGRET_VANILLA ||
+                backend->config.regret_mode == PE_REGRET_PLUS;
+            int average_mode =
+                backend->config.averaging_mode == PE_AVG_UNIFORM ||
+                backend->config.averaging_mode == PE_AVG_IMPORTANCE ||
+                backend->config.averaging_mode == PE_AVG_COUNT;
+            int fast_safe = uniform_mode && average_mode;
+            size_t check_index;
+
+            /* Validate before entering the SIMD kernel. This preserves the
+               scalar API's fail-before-write behavior and excludes negative
+               zero, whose sign is not preserved by max(+0, -0). */
+            for (check_index = 0u; check_index < values; ++check_index)
+            {
+                double old_regret = regrets[check_index];
+                double delta = batch->soa.deltas[group->offset + check_index];
+                double old_average = average[check_index];
+                double average_delta =
+                    batch->soa.average_deltas[group->offset + check_index];
+                if (!isfinite(old_regret) || !isfinite(delta) ||
+                    !isfinite(old_average) || !isfinite(average_delta))
+                    return -1;
+                if (backend->config.regret_mode == PE_REGRET_PLUS &&
+                    signbit(old_regret + delta) && old_regret + delta == 0.0)
+                    fast_safe = 0;
+            }
+            if (fast_safe && pe_compute_simd_apply_uniform(
+                    regrets, average,
+                    batch->soa.deltas + group->offset,
+                    batch->soa.average_deltas + group->offset,
+                    values, backend->config.regret_mode == PE_REGRET_PLUS))
+            {
+                for (check_index = 0u; check_index < values; ++check_index)
+                    if (!isfinite(regrets[check_index]) ||
+                        !isfinite(average[check_index]))
+                        return -1;
+                continue;
+            }
+        }
+
         for (value_index = 0u;
              value_index < (size_t)actions * (size_t)combos; ++value_index)
         {

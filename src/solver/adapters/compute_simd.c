@@ -126,3 +126,127 @@ float pe_compute_simd_positive_sum(const float *values, size_t count)
     }
     return scalar_positive_sum(values, count);
 }
+
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
+static PE_COMPUTE_TARGET_AVX2 void avx2_apply_uniform(
+    double *regrets, double *averages, const double *deltas,
+    const double *average_deltas, size_t count, int clamp_regret)
+{
+    size_t i = 0u;
+    __m256d zero = _mm256_setzero_pd();
+
+    for (; i + 4u <= count; i += 4u)
+    {
+        __m256d regret = _mm256_add_pd(_mm256_loadu_pd(regrets + i),
+                                       _mm256_loadu_pd(deltas + i));
+        if (clamp_regret)
+            regret = _mm256_max_pd(regret, zero);
+        _mm256_storeu_pd(regrets + i, regret);
+        _mm256_storeu_pd(averages + i,
+                         _mm256_add_pd(_mm256_loadu_pd(averages + i),
+                                       _mm256_loadu_pd(average_deltas + i)));
+    }
+    for (; i < count; ++i)
+    {
+        double regret = regrets[i] + deltas[i];
+        regrets[i] = clamp_regret && regret < 0.0 ? 0.0 : regret;
+        averages[i] += average_deltas[i];
+    }
+}
+#endif
+
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX512F__)
+static PE_COMPUTE_TARGET_AVX512 void avx512_apply_uniform(
+    double *regrets, double *averages, const double *deltas,
+    const double *average_deltas, size_t count, int clamp_regret)
+{
+    size_t i = 0u;
+    __m512d zero = _mm512_setzero_pd();
+
+    for (; i + 8u <= count; i += 8u)
+    {
+        __m512d regret = _mm512_add_pd(_mm512_loadu_pd(regrets + i),
+                                       _mm512_loadu_pd(deltas + i));
+        if (clamp_regret)
+            regret = _mm512_max_pd(regret, zero);
+        _mm512_storeu_pd(regrets + i, regret);
+        _mm512_storeu_pd(averages + i,
+                         _mm512_add_pd(_mm512_loadu_pd(averages + i),
+                                       _mm512_loadu_pd(average_deltas + i)));
+    }
+    for (; i < count; ++i)
+    {
+        double regret = regrets[i] + deltas[i];
+        regrets[i] = clamp_regret && regret < 0.0 ? 0.0 : regret;
+        averages[i] += average_deltas[i];
+    }
+}
+#endif
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+static void neon_apply_uniform(double *regrets, double *averages,
+                               const double *deltas,
+                               const double *average_deltas, size_t count,
+                               int clamp_regret)
+{
+    size_t i = 0u;
+    float64x2_t zero = vdupq_n_f64(0.0);
+
+    for (; i + 2u <= count; i += 2u)
+    {
+        float64x2_t regret = vaddq_f64(vld1q_f64(regrets + i),
+                                       vld1q_f64(deltas + i));
+        if (clamp_regret)
+            regret = vmaxq_f64(regret, zero);
+        vst1q_f64(regrets + i, regret);
+        vst1q_f64(averages + i,
+                  vaddq_f64(vld1q_f64(averages + i),
+                            vld1q_f64(average_deltas + i)));
+    }
+    for (; i < count; ++i)
+    {
+        double regret = regrets[i] + deltas[i];
+        regrets[i] = clamp_regret && regret < 0.0 ? 0.0 : regret;
+        averages[i] += average_deltas[i];
+    }
+}
+#endif
+
+int pe_compute_simd_apply_uniform(double *regrets, double *averages,
+                                  const double *deltas,
+                                  const double *average_deltas,
+                                  size_t count, int clamp_regret)
+{
+    if (!regrets || !averages || !deltas || !average_deltas || count == 0u)
+        return 0;
+
+    switch (simd_runtime_capability())
+    {
+        case SIMD_AVX512:
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX512F__)
+            avx512_apply_uniform(regrets, averages, deltas, average_deltas,
+                                 count, clamp_regret);
+            return 1;
+#endif
+            break;
+        case SIMD_AVX2:
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
+            avx2_apply_uniform(regrets, averages, deltas, average_deltas,
+                               count, clamp_regret);
+            return 1;
+#endif
+            break;
+        case SIMD_NEON:
+#if defined(__aarch64__) || defined(__ARM_NEON)
+            neon_apply_uniform(regrets, averages, deltas, average_deltas,
+                               count, clamp_regret);
+            return 1;
+#endif
+            break;
+        case SIMD_NONE:
+        case SIMD_SSE2:
+        default:
+            break;
+    }
+    return 0;
+}
