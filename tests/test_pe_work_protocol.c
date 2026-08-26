@@ -104,6 +104,50 @@ static void test_socket_transport(void)
 #endif
 }
 
+static void test_socket_payload_helpers(void)
+{
+#if defined(_WIN32)
+    return;
+#else
+    pe_runtime_capabilities_t source_runtime;
+    pe_runtime_capabilities_t decoded_runtime;
+    pe_work_unit_t source_unit;
+    pe_work_unit_t decoded_unit;
+    uint8_t boards[] = {1u, 2u, 3u, 4u};
+    double regrets[] = {2.0, -1.0};
+    int sockets[2];
+
+    assert(pe_runtime_probe(&source_runtime) == 0);
+    pe_work_unit_init(&source_unit);
+    pe_work_unit_init(&decoded_unit);
+    source_unit.public_state = 0xabcdu;
+    source_unit.iteration_end = 7u;
+    source_unit.boards = boards;
+    source_unit.board_count = 2u;
+    source_unit.board_width = 2u;
+    source_unit.regret_snapshot = regrets;
+    source_unit.regret_count = 2u;
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    assert(pe_work_socket_send_capabilities(
+               (pe_work_socket_t)sockets[0], &source_runtime) == 0);
+    assert(pe_work_socket_recv_capabilities(
+               (pe_work_socket_t)sockets[1], &decoded_runtime) == 0);
+    assert(decoded_runtime.logical_cpus == source_runtime.logical_cpus);
+    assert(pe_work_socket_send_work_unit(
+               (pe_work_socket_t)sockets[0], &source_unit) == 0);
+    assert(pe_work_socket_recv_work_unit(
+               (pe_work_socket_t)sockets[1], &decoded_unit) == 0);
+    assert(decoded_unit.public_state == source_unit.public_state);
+    assert(decoded_unit.board_count == source_unit.board_count);
+    assert(memcmp(decoded_unit.boards, boards, sizeof(boards)) == 0);
+    assert(memcmp(decoded_unit.regret_snapshot, regrets,
+                  sizeof(regrets)) == 0);
+    pe_work_unit_destroy(&decoded_unit);
+    assert(pe_work_socket_close((pe_work_socket_t)sockets[0]) == 0);
+    assert(pe_work_socket_close((pe_work_socket_t)sockets[1]) == 0);
+#endif
+}
+
 static void test_capabilities_frame(void)
 {
     pe_runtime_capabilities_t source;
@@ -184,6 +228,7 @@ int main(void)
     test_work_unit_frame();
     test_result_frame();
     test_socket_transport();
+    test_socket_payload_helpers();
     test_capabilities_frame();
     pe_work_transport_cleanup();
     return 0;

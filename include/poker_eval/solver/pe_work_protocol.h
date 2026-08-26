@@ -69,6 +69,18 @@ int pe_work_socket_recv_frame(pe_work_socket_t socket,
 /** Close a socket created by the caller. */
 int pe_work_socket_close(pe_work_socket_t socket);
 
+/** Send/receive the two control payloads with owned temporary buffers. */
+int pe_work_socket_send_capabilities(
+    pe_work_socket_t socket,
+    const pe_runtime_capabilities_t *runtime);
+int pe_work_socket_recv_capabilities(
+    pe_work_socket_t socket,
+    pe_runtime_capabilities_t *out);
+int pe_work_socket_send_work_unit(pe_work_socket_t socket,
+                                  const pe_work_unit_t *unit);
+int pe_work_socket_recv_work_unit(pe_work_socket_t socket,
+                                  pe_work_unit_t *out);
+
 /**
  * Return the complete frame size, or zero when the payload is invalid or the
  * size calculation would overflow.

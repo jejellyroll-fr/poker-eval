@@ -7,6 +7,7 @@
 #include <math.h>
 #include <limits.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -222,6 +223,85 @@ int pe_work_socket_close(pe_work_socket_t socket)
 #else
     return close((int)socket) == 0 ? 0 : -1;
 #endif
+}
+
+int pe_work_socket_send_capabilities(
+    pe_work_socket_t socket,
+    const pe_runtime_capabilities_t *runtime)
+{
+    uint8_t *buffer;
+    size_t capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                      PE_RUNTIME_DESCRIPTOR_MAX + 1u;
+    size_t frame_size;
+    int rc;
+
+    buffer = (uint8_t *)malloc(capacity);
+    if (!buffer)
+        return -1;
+    rc = pe_work_frame_encode_capabilities(runtime, buffer, capacity,
+                                            &frame_size);
+    if (rc == 0)
+        rc = pe_work_socket_send_frame(socket, buffer, frame_size);
+    free(buffer);
+    return rc;
+}
+
+int pe_work_socket_recv_capabilities(
+    pe_work_socket_t socket,
+    pe_runtime_capabilities_t *out)
+{
+    uint8_t *buffer;
+    size_t capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                      PE_RUNTIME_DESCRIPTOR_MAX + 1u;
+    size_t frame_size;
+    int rc;
+
+    buffer = (uint8_t *)malloc(capacity);
+    if (!buffer)
+        return -1;
+    rc = pe_work_socket_recv_frame(socket, buffer, capacity, &frame_size);
+    if (rc == 0)
+        rc = pe_work_frame_decode_capabilities(buffer, frame_size, out);
+    free(buffer);
+    return rc;
+}
+
+int pe_work_socket_send_work_unit(pe_work_socket_t socket,
+                                  const pe_work_unit_t *unit)
+{
+    uint8_t *buffer;
+    size_t capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                      PE_WORK_UNIT_DESCRIPTOR_MAX + 1u;
+    size_t frame_size;
+    int rc;
+
+    buffer = (uint8_t *)malloc(capacity);
+    if (!buffer)
+        return -1;
+    rc = pe_work_frame_encode_work_unit(unit, buffer, capacity, &frame_size);
+    if (rc == 0)
+        rc = pe_work_socket_send_frame(socket, buffer, frame_size);
+    free(buffer);
+    return rc;
+}
+
+int pe_work_socket_recv_work_unit(pe_work_socket_t socket,
+                                  pe_work_unit_t *out)
+{
+    uint8_t *buffer;
+    size_t capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                      PE_WORK_UNIT_DESCRIPTOR_MAX + 1u;
+    size_t frame_size;
+    int rc;
+
+    buffer = (uint8_t *)malloc(capacity);
+    if (!buffer)
+        return -1;
+    rc = pe_work_socket_recv_frame(socket, buffer, capacity, &frame_size);
+    if (rc == 0)
+        rc = pe_work_frame_decode_work_unit(buffer, frame_size, out);
+    free(buffer);
+    return rc;
 }
 
 int pe_work_frame_encode(pe_work_message_type_t type,
