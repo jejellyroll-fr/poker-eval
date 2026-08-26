@@ -2,6 +2,10 @@
 
 #include <assert.h>
 
+#if !defined(_WIN32)
+#include <sys/socket.h>
+#endif
+
 static void mark_backend(pe_runtime_capabilities_t *runtime,
                          pe_compute_kind_t kind,
                          double update_rate)
@@ -59,9 +63,68 @@ static void test_registry_and_filters(void)
     assert(pe_work_coordinator_schedule(&coordinator, 1u, &assignment, 1u) == 0);
 }
 
+static void test_dispatch_channels(void)
+{
+#if defined(_WIN32)
+    return;
+#else
+    pe_runtime_capabilities_t cpu = {0};
+    pe_runtime_capabilities_t gpu = {0};
+    pe_work_coordinator_t coordinator;
+    pe_work_worker_channel_t channels[2];
+    pe_work_worker_assignment_t assignments[2];
+    pe_work_unit_t units[10];
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE +
+                  PE_WORK_UNIT_DESCRIPTOR_MAX + 1u];
+    size_t frame_size;
+    int cpu_sockets[2];
+    int gpu_sockets[2];
+    size_t i;
+    int count;
+
+    mark_backend(&cpu, PE_COMPUTE_CPU_REF, 1.0);
+    mark_backend(&gpu, PE_COMPUTE_CUDA, 9.0);
+    pe_work_coordinator_init(&coordinator);
+    assert(pe_work_coordinator_register(&coordinator, 11u, &cpu) == 0);
+    assert(pe_work_coordinator_register(&coordinator, 22u, &gpu) == 0);
+    for (i = 0u; i < 10u; ++i) {
+        pe_work_unit_init(&units[i]);
+        units[i].public_state = (uint64_t)i + 1u;
+        units[i].iteration_end = 1u;
+    }
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, cpu_sockets) == 0);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, gpu_sockets) == 0);
+    channels[0].worker_id = 11u;
+    channels[0].socket = (pe_work_socket_t)cpu_sockets[0];
+    channels[1].worker_id = 22u;
+    channels[1].socket = (pe_work_socket_t)gpu_sockets[0];
+    count = pe_work_coordinator_dispatch(&coordinator, units, 10u,
+                                         channels, 2u, assignments, 2u);
+    assert(count == 2);
+    assert(assignments[0].worker_id == 11u &&
+           assignments[0].unit_count == 1u);
+    assert(assignments[1].worker_id == 22u &&
+           assignments[1].unit_count == 9u);
+    assert(pe_work_socket_recv_frame((pe_work_socket_t)cpu_sockets[1], frame,
+                                     sizeof(frame), &frame_size) == 0);
+    assert(pe_work_frame_decode_work_unit(frame, frame_size, &units[0]) == 0);
+    assert(pe_work_socket_recv_frame((pe_work_socket_t)gpu_sockets[1], frame,
+                                     sizeof(frame), &frame_size) == 0);
+    assert(pe_work_frame_decode_work_unit(frame, frame_size, &units[0]) == 0);
+    pe_work_unit_destroy(&units[0]);
+    for (i = 1u; i < 10u; ++i)
+        pe_work_unit_destroy(&units[i]);
+    pe_work_socket_close((pe_work_socket_t)cpu_sockets[0]);
+    pe_work_socket_close((pe_work_socket_t)cpu_sockets[1]);
+    pe_work_socket_close((pe_work_socket_t)gpu_sockets[0]);
+    pe_work_socket_close((pe_work_socket_t)gpu_sockets[1]);
+#endif
+}
+
 int main(void)
 {
     test_heterogeneous_schedule();
     test_registry_and_filters();
+    test_dispatch_channels();
     return 0;
 }

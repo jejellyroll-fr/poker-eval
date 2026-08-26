@@ -176,3 +176,61 @@ int pe_work_coordinator_schedule(
     }
     return (int)assigned;
 }
+
+int pe_work_coordinator_dispatch(
+    const pe_work_coordinator_t *coordinator,
+    const pe_work_unit_t *units,
+    size_t unit_count,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
+    pe_work_worker_assignment_t *out,
+    size_t capacity)
+{
+    pe_work_worker_assignment_t assignments[PE_WORK_COORDINATOR_MAX_WORKERS];
+    size_t i;
+    int assignment_count;
+
+    if (!coordinator || (unit_count != 0u && !units) ||
+        (!channels && channel_count != 0u))
+        return -1;
+    assignment_count = pe_work_coordinator_schedule(
+        coordinator, unit_count, assignments,
+        PE_WORK_COORDINATOR_MAX_WORKERS);
+    if (assignment_count < 0 || (size_t)assignment_count > capacity ||
+        (assignment_count != 0 && !out))
+        return -1;
+
+    for (i = 0u; i < (size_t)assignment_count; ++i) {
+        size_t channel_index;
+        int found = 0;
+        for (channel_index = 0u; channel_index < channel_count;
+             ++channel_index) {
+            if (channels[channel_index].worker_id ==
+                assignments[i].worker_id) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found)
+            return -1;
+    }
+
+    for (i = 0u; i < (size_t)assignment_count; ++i) {
+        size_t channel_index;
+        size_t unit_index;
+        for (channel_index = 0u; channel_index < channel_count;
+             ++channel_index)
+            if (channels[channel_index].worker_id ==
+                assignments[i].worker_id)
+                break;
+        for (unit_index = assignments[i].first_unit;
+             unit_index < assignments[i].first_unit +
+                           assignments[i].unit_count; ++unit_index) {
+            if (pe_work_socket_send_work_unit(channels[channel_index].socket,
+                                               &units[unit_index]) != 0)
+                return -1;
+        }
+        out[i] = assignments[i];
+    }
+    return assignment_count;
+}

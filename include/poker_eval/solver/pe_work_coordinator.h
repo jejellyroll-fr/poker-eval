@@ -6,6 +6,7 @@
 #define POKER_EVAL_PE_WORK_COORDINATOR_H
 
 #include <poker_eval/solver/pe_runtime.h>
+#include <poker_eval/solver/pe_work_protocol.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,6 +38,12 @@ typedef struct pe_work_worker_assignment_t
     double units_per_s;
 } pe_work_worker_assignment_t;
 
+typedef struct pe_work_worker_channel_t
+{
+    uint32_t worker_id;
+    pe_work_socket_t socket;
+} pe_work_worker_channel_t;
+
 void pe_work_coordinator_init(pe_work_coordinator_t *coordinator);
 
 /** Add or replace a worker announcement identified by worker_id. */
@@ -55,6 +62,19 @@ int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
 int pe_work_coordinator_schedule(
     const pe_work_coordinator_t *coordinator,
     size_t total_units,
+    pe_work_worker_assignment_t *out,
+    size_t capacity);
+
+/**
+ * Schedule and send a contiguous WorkUnit array over registered worker
+ * channels. On success, `out` describes the ranges that were sent.
+ */
+int pe_work_coordinator_dispatch(
+    const pe_work_coordinator_t *coordinator,
+    const pe_work_unit_t *units,
+    size_t unit_count,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
     pe_work_worker_assignment_t *out,
     size_t capacity);
 
