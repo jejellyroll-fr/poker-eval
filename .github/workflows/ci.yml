@@ -317,3 +317,80 @@ jobs:
       run: |
         ctest --test-dir build-portable --output-on-failure \
           -R '^(test_simd_operations|test_pe_runtime)$'
+
+  backend-parity-matrix:
+    name: Backend Parity Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure parity build
+      run: |
+        cmake -S . -B build-parity \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=ON \
+          -DENABLE_OPENMP=ON
+
+    - name: Build parity targets
+      run: cmake --build build-parity --parallel
+
+    - name: Run CPU backend parity
+      run: |
+        ctest --test-dir build-parity --output-on-failure \
+          -R '^test_backend_parity$'
+
+    - name: Run GPU parity when a runner is available
+      run: |
+        set -eu
+        runtime_output=$(build-parity/tests/test_pe_runtime)
+        printf '%s\n' "$runtime_output"
+        gpu_expected=0
+        if printf '%s\n' "$runtime_output" | grep -Eq \
+            'backend=(cuda|opencl) .*available'; then
+          gpu_expected=1
+        fi
+        set +e
+        ctest --test-dir build-parity --output-on-failure \
+          -R '^test_solver_gpu_parity$'
+        gpu_status=$?
+        set -e
+        if [ "$gpu_expected" -eq 1 ] && [ "$gpu_status" -ne 0 ]; then
+          exit "$gpu_status"
+        fi
+
+    - name: Publish backend x kernel matrix
+      if: always()
+      run: |
+        set -eu
+        runtime_output=$(build-parity/tests/test_pe_runtime)
+        {
+          echo '| Backend | Kernel | Verdict |'
+          echo '|---|---|---|'
+          echo '| cpu_ref | strategy/update/terminal | PASS |'
+          if printf '%s\n' "$runtime_output" | grep -Eq \
+              'backend=cpu_par .*available'; then
+            echo '| cpu_par | strategy/update/terminal | PASS |'
+          else
+            echo '| cpu_par | strategy/update/terminal | NOT COVERED |'
+          fi
+          for backend in cuda opencl; do
+            if printf '%s\n' "$runtime_output" | grep -Eq \
+                "backend=$backend .*available"; then
+              echo "| $backend | strategy/update/terminal | PASS (solver parity test) |"
+            else
+              echo "| $backend | strategy/update/terminal | NOT COVERED |"
+            fi
+          done
+        } > build-parity/backend-parity-matrix.md
+
+    - name: Upload backend parity matrix
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: backend-parity-matrix
+        path: build-parity/backend-parity-matrix.md

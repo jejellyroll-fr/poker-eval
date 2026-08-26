@@ -50,10 +50,18 @@ int main(void)
     memset(&synthetic, 0, sizeof(synthetic));
     if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_AUTO)
         return 8;
-    printf("runtime: cpus=%u openmp=%d simd_machine=%s simd_compiled=%s simd=%s cpu_ref=%s\n",
+    printf("runtime: cpus=%u openmp=%d simd_machine=%s simd_compiled=%s simd=%s\n",
            runtime.logical_cpus, runtime.openmp_available,
            pe_runtime_simd_name(runtime.simd_machine),
            pe_runtime_simd_name(runtime.simd_compiled),
-           pe_runtime_simd_name(runtime.simd), status);
+           pe_runtime_simd_name(runtime.simd));
+    for (pe_compute_kind_t kind = PE_COMPUTE_AUTO;
+         kind < PE_COMPUTE_COUNT; ++kind)
+    {
+        if (pe_runtime_backend_status(&runtime.backends[kind],
+                                      status, sizeof(status)) >= 0)
+            printf("backend=%s %s\n",
+                   pe_compute_kind_name(kind), status);
+    }
     return 0;
 }
