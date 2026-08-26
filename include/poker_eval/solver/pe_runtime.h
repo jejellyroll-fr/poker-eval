@@ -37,6 +37,9 @@ typedef struct pe_runtime_backend_info_t
     double strategy_elements_per_s;
     double update_elements_per_s;
     double terminal_elements_per_s;
+    /* Smallest terminal batch for which this backend should be considered.
+       Zero means that no launch threshold is known. */
+    size_t terminal_min_batch_size;
     char name[PE_RUNTIME_NAME_MAX];
     char reason[PE_RUNTIME_REASON_MAX];
 } pe_runtime_backend_info_t;
@@ -60,6 +63,13 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out);
 /** Choose the best validated backend for an automatic frontend request. */
 pe_compute_kind_t pe_runtime_recommended_backend(
     const pe_runtime_capabilities_t *runtime);
+
+/**
+ * Choose a backend while honoring a known terminal launch threshold.
+ * `terminal_batch_size == 0` preserves the unconstrained resolver behavior.
+ */
+pe_compute_kind_t pe_runtime_recommended_backend_for_batch(
+    const pe_runtime_capabilities_t *runtime, size_t terminal_batch_size);
 
 /** Return a stable user-facing name for the selected SIMD capability. */
 const char *pe_runtime_simd_name(simd_capability_t capability);

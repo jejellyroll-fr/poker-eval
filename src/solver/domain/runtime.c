@@ -461,8 +461,8 @@ int pe_runtime_probe(pe_runtime_capabilities_t *out)
     return 0;
 }
 
-pe_compute_kind_t pe_runtime_recommended_backend(
-    const pe_runtime_capabilities_t *runtime)
+pe_compute_kind_t pe_runtime_recommended_backend_for_batch(
+    const pe_runtime_capabilities_t *runtime, size_t terminal_batch_size)
 {
     const pe_runtime_backend_info_t *parallel;
     const pe_runtime_backend_info_t *reference;
@@ -504,7 +504,10 @@ pe_compute_kind_t pe_runtime_recommended_backend(
              candidate->kind != PE_COMPUTE_OPENCL) ||
             !candidate->compiled || !candidate->runtime_available ||
             !candidate->validated ||
-            !(candidate->capabilities & PE_CAP_GPU_TERMINAL_EVAL))
+            !(candidate->capabilities & PE_CAP_GPU_TERMINAL_EVAL) ||
+            (terminal_batch_size != 0u &&
+             candidate->terminal_min_batch_size != 0u &&
+             terminal_batch_size < candidate->terminal_min_batch_size))
             continue;
         rate = runtime_backend_rate(candidate);
         if (best != PE_COMPUTE_AUTO && best_rate > 0.0 && rate > best_rate)
@@ -515,6 +518,12 @@ pe_compute_kind_t pe_runtime_recommended_backend(
     }
 
     return best;
+}
+
+pe_compute_kind_t pe_runtime_recommended_backend(
+    const pe_runtime_capabilities_t *runtime)
+{
+    return pe_runtime_recommended_backend_for_batch(runtime, 0u);
 }
 
 const char *pe_runtime_simd_name(simd_capability_t capability)
@@ -530,7 +539,7 @@ int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
     if (!backend || !out || capacity == 0u)
         return -1;
     written = snprintf(out, capacity,
-                       "%s: %s%s%s (strategy=%.3f/s update=%.3f/s terminal=%.3f/s; %s)",
+                       "%s: %s%s%s (strategy=%.3f/s update=%.3f/s terminal=%.3f/s terminal_min_batch=%zu; %s)",
                        backend->name,
                        backend->runtime_available ? "available" : "unavailable",
                        backend->validated ? ", validated" : "",
@@ -538,6 +547,7 @@ int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
                        backend->strategy_elements_per_s,
                        backend->update_elements_per_s,
                        backend->terminal_elements_per_s,
+                       backend->terminal_min_batch_size,
                        backend->reason);
     return written < 0 ? -1 : written;
 }
@@ -609,13 +619,14 @@ size_t pe_runtime_descriptor_to_string(
             return 0u;
         runtime_descriptor_appendf(
             out, capacity, &position,
-            ";b%zu=%d,%d,%d,%d,0x%016llx,%a,%a,%a", i,
+            ";b%zu=%d,%d,%d,%d,0x%016llx,%a,%a,%a,%zu", i,
             backend->compiled, backend->runtime_available, backend->validated,
             backend->device_count,
             (unsigned long long)backend->capabilities,
             backend->strategy_elements_per_s,
             backend->update_elements_per_s,
-            backend->terminal_elements_per_s);
+            backend->terminal_elements_per_s,
+            backend->terminal_min_batch_size);
     }
     if (out != NULL && capacity != 0u)
         out[position < capacity ? position : capacity - 1u] = '\0';
@@ -713,7 +724,10 @@ int pe_runtime_descriptor_from_string(
             double strategy_rate;
             double update_rate;
             double terminal_rate;
+            size_t terminal_min_batch_size = 0u;
             char extra;
+            int scanned;
+            int old_scanned;
 
             if (index_end == token + 1 || *index_end != '\0')
                 return -1;
@@ -723,11 +737,16 @@ int pe_runtime_descriptor_from_string(
                 cursor = end != NULL ? end + 1 : cursor + length;
                 continue;
             }
+            scanned = sscanf(value, "%d,%d,%d,%d,%llx,%la,%la,%la,%zu%c",
+                             &compiled, &available, &validated, &devices,
+                             &capabilities, &strategy_rate, &update_rate,
+                             &terminal_rate, &terminal_min_batch_size, &extra);
+            old_scanned = sscanf(value, "%d,%d,%d,%d,%llx,%la,%la,%la%c",
+                                 &compiled, &available, &validated, &devices,
+                                 &capabilities, &strategy_rate, &update_rate,
+                                 &terminal_rate, &extra);
             if ((backend_seen & (1u << index)) != 0u ||
-                sscanf(value, "%d,%d,%d,%d,%llx,%la,%la,%la%c",
-                       &compiled, &available, &validated, &devices,
-                       &capabilities, &strategy_rate, &update_rate,
-                       &terminal_rate, &extra) != 8 ||
+                (scanned != 9 && old_scanned != 8) ||
                 compiled < 0 || compiled > 1 || available < 0 || available > 1 ||
                 validated < 0 || validated > 1 || devices < 0 ||
                 !isfinite(strategy_rate) || !isfinite(update_rate) ||
@@ -743,6 +762,8 @@ int pe_runtime_descriptor_from_string(
             parsed.backends[index].strategy_elements_per_s = strategy_rate;
             parsed.backends[index].update_elements_per_s = update_rate;
             parsed.backends[index].terminal_elements_per_s = terminal_rate;
+            parsed.backends[index].terminal_min_batch_size =
+                scanned == 9 ? terminal_min_batch_size : 0u;
             snprintf(parsed.backends[index].name,
                      sizeof(parsed.backends[index].name), "%s",
                      pe_compute_kind_name((pe_compute_kind_t)index));

@@ -12,7 +12,10 @@ int main(void)
     pe_runtime_capabilities_t decoded;
     char status[256];
     char descriptor[PE_RUNTIME_DESCRIPTOR_MAX];
+    char legacy_descriptor[PE_RUNTIME_DESCRIPTOR_MAX];
     size_t descriptor_length;
+    size_t legacy_length = 0u;
+    size_t descriptor_index;
     if (pe_runtime_probe(&runtime) != 0)
         return 1;
     if (runtime.logical_cpus == 0u || runtime.simd_machine < SIMD_NONE ||
@@ -53,6 +56,25 @@ int main(void)
                &wire.backends[PE_COMPUTE_CPU_REF].terminal_elements_per_s,
                sizeof(double)) != 0)
         return 11;
+    /* V1 descriptors emitted before the batch threshold field remain valid. */
+    for (descriptor_index = 0u; descriptor_index < descriptor_length;
+         ++descriptor_index)
+    {
+        if (descriptor[descriptor_index] == ',' &&
+            descriptor[descriptor_index + 1u] == '0' &&
+            (descriptor_index + 2u == descriptor_length ||
+             descriptor[descriptor_index + 2u] == ';'))
+        {
+            ++descriptor_index;
+            continue;
+        }
+        legacy_descriptor[legacy_length++] = descriptor[descriptor_index];
+    }
+    legacy_descriptor[legacy_length] = '\0';
+    memset(&decoded, 0, sizeof(decoded));
+    if (pe_runtime_descriptor_from_string(legacy_descriptor, &decoded) != 0 ||
+        decoded.backends[PE_COMPUTE_CPU_REF].terminal_min_batch_size != 0u)
+        return 14;
     if (!runtime.openmp_available)
     {
         if (runtime.backends[PE_COMPUTE_CPU_PAR].runtime_available ||
@@ -88,8 +110,14 @@ int main(void)
     synthetic.backends[PE_COMPUTE_CUDA].capabilities =
         PE_CAP_GPU_TERMINAL_EVAL;
     synthetic.backends[PE_COMPUTE_CUDA].terminal_elements_per_s = 100.0;
+    synthetic.backends[PE_COMPUTE_CUDA].terminal_min_batch_size = 64u;
     if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_CUDA)
         return 12;
+    if (pe_runtime_recommended_backend_for_batch(&synthetic, 32u) !=
+            PE_COMPUTE_CPU_REF ||
+        pe_runtime_recommended_backend_for_batch(&synthetic, 64u) !=
+            PE_COMPUTE_CUDA)
+        return 13;
     printf("runtime: cpus=%u openmp=%d simd_machine=%s simd_compiled=%s simd=%s\n",
            runtime.logical_cpus, runtime.openmp_available,
            pe_runtime_simd_name(runtime.simd_machine),

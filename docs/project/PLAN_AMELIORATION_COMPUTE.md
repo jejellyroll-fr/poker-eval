@@ -456,6 +456,11 @@ CFR : un backend CUDA/OpenCL doit aussi annoncer `GPU_TERMINAL_EVAL`, sinon il
 est écarté même s'il annonce un débit d'update élevé. Cela évite d'envoyer un
 sous-arbre à un worker incapable d'évaluer ses feuilles.
 
+Le seuil `terminal_min_batch_size` est maintenant transporté dans le
+descripteur runtime et appliqué par `pe_runtime_recommended_backend_for_batch`.
+Les descripteurs V1 historiques sans ce champ restent acceptés et conservent
+un seuil inconnu (`0`).
+
 ---
 
 # L4 — Exécution distribuée
