@@ -12,6 +12,7 @@
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_runtime.h>
+#include "pe_analysis_model.h"
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
@@ -19,7 +20,6 @@
 #include <osbs/bproc.h>
 
 #include "pe_tree_editor_model.h"
-#include "pe_analysis_model.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -721,6 +721,52 @@ static int tree_editor_layout_nodes(const pe_tree_editor_t *editor,
     return tail;
 }
 
+/*
+ * Node geometry, in one place.
+ *
+ * The draw handler and the click handler have to agree on where a node is;
+ * computing that twice is how a canvas ends up selecting the box next to the
+ * one under the cursor. Both call this.
+ */
+typedef struct
+{
+    real32_t box_w;
+    real32_t box_h;
+    real32_t col_gap;
+    real32_t row_gap;
+} pe_tree_canvas_metrics_t;
+
+static pe_tree_canvas_metrics_t tree_editor_metrics(real32_t width,
+                                                    real32_t height,
+                                                    int max_depth,
+                                                    int max_rows)
+{
+    pe_tree_canvas_metrics_t m;
+    m.box_w = 112.0f;
+    m.box_h = 32.0f;
+    m.col_gap = max_depth > 0
+        ? (width - 32.0f - m.box_w) / (real32_t)max_depth - m.box_w
+        : 0.0f;
+    if (m.col_gap < 10.0f)
+        m.col_gap = 10.0f;
+    m.row_gap = max_rows > 1
+        ? (height - 52.0f - m.box_h) / (real32_t)(max_rows - 1)
+        : 0.0f;
+    if (m.row_gap < 12.0f)
+        m.row_gap = 12.0f;
+    return m;
+}
+
+static real32_t tree_editor_node_x(const pe_tree_canvas_metrics_t *m, int depth)
+{
+    return 16.0f + (real32_t)depth * (m->box_w + m->col_gap);
+}
+
+static real32_t tree_editor_node_y(const pe_tree_canvas_metrics_t *m, int order)
+{
+    return 26.0f + (real32_t)order * m->row_gap;
+}
+
 static void i_on_draw_tree_editor(App *app, Event *event)
 {
     const EvDraw *params = event_params(event, EvDraw);
@@ -731,10 +777,9 @@ static void i_on_draw_tree_editor(App *app, Event *event)
     int max_rows = 1;
     real32_t width = params->width;
     real32_t height = params->height;
-    real32_t box_w = 112.0f;
-    real32_t box_h = 32.0f;
-    real32_t col_gap;
-    real32_t row_gap;
+    pe_tree_canvas_metrics_t metrics;
+    real32_t box_w;
+    real32_t box_h;
     int selected = tree_editor_selected_node(app);
 
     draw_fill_color(ctx, color_rgb(18, 22, 27));
@@ -752,16 +797,9 @@ static void i_on_draw_tree_editor(App *app, Event *event)
         return;
     }
 
-    col_gap = max_depth > 0
-        ? (width - 32.0f - box_w) / (real32_t)max_depth - box_w
-        : 0.0f;
-    if (col_gap < 10.0f)
-        col_gap = 10.0f;
-    row_gap = max_rows > 1
-        ? (height - 52.0f - box_h) / (real32_t)(max_rows - 1)
-        : 0.0f;
-    if (row_gap < 12.0f)
-        row_gap = 12.0f;
+    metrics = tree_editor_metrics(width, height, max_depth, max_rows);
+    box_w = metrics.box_w;
+    box_h = metrics.box_h;
 
     /* Draw connectors first, so node cards sit above the action lines. */
     draw_line_width(ctx, 1.0f);
@@ -771,8 +809,8 @@ static void i_on_draw_tree_editor(App *app, Event *event)
         real32_t x0, y0;
         if (depth[node_index] < 0)
             continue;
-        x0 = 16.0f + (real32_t)depth[node_index] * (box_w + col_gap);
-        y0 = 26.0f + (real32_t)order[node_index] * row_gap;
+        x0 = tree_editor_node_x(&metrics, depth[node_index]);
+        y0 = tree_editor_node_y(&metrics, order[node_index]);
         for (int action = 0; action < node->action_count; ++action)
         {
             int next = node->actions[action].next_index;
@@ -780,8 +818,8 @@ static void i_on_draw_tree_editor(App *app, Event *event)
             real32_t x1, y1;
             if (next < 0 || next >= app->tree_editor.node_count || depth[next] < 0)
                 continue;
-            x1 = 16.0f + (real32_t)depth[next] * (box_w + col_gap);
-            y1 = 26.0f + (real32_t)order[next] * row_gap;
+            x1 = tree_editor_node_x(&metrics, depth[next]);
+            y1 = tree_editor_node_y(&metrics, order[next]);
             draw_line_color(ctx, color_rgb(95, 105, 115));
             draw_line(ctx, x0 + box_w, y0 + box_h * 0.5f, x1, y1 + box_h * 0.5f);
             if (node->actions[action].type == MPF_TREE_ACTION_RAISE &&
@@ -808,8 +846,8 @@ static void i_on_draw_tree_editor(App *app, Event *event)
         char node_label[96];
         if (depth[node_index] < 0)
             continue;
-        x = 16.0f + (real32_t)depth[node_index] * (box_w + col_gap);
-        y = 26.0f + (real32_t)order[node_index] * row_gap;
+        x = tree_editor_node_x(&metrics, depth[node_index]);
+        y = tree_editor_node_y(&metrics, order[node_index]);
         if (node_index == selected)
         {
             draw_fill_color(ctx, color_rgb(37, 99, 235));
@@ -858,6 +896,134 @@ static int tree_editor_import_tree(App *app, const mpf_tree_def_t *tree)
         return 0;
     tree_editor_refresh(app, tree->root_index);
     return 1;
+}
+
+
+/*
+ * Click a node to select it.
+ *
+ * Selecting through the NODE dropdown alone meant scrolling a list to reach a
+ * box already visible on the canvas; on any tree deeper than the demo that is
+ * the slowest part of building one. The dropdown stays -- it is how a node is
+ * named -- but the canvas is now the fast path, and the two stay in sync
+ * because both write through tree_editor_refresh.
+ */
+static void i_on_click_tree_editor(App *app, Event *event)
+{
+    const EvMouse *mouse = event_params(event, EvMouse);
+    int depth[PE_TREE_EDITOR_MAX_NODES];
+    int order[PE_TREE_EDITOR_MAX_NODES];
+    int max_depth = 0;
+    int max_rows = 1;
+    pe_tree_canvas_metrics_t metrics;
+    real32_t width;
+    real32_t height;
+    int node_index;
+
+    if (app == NULL || !app->tree_editor_ready ||
+        app->tree_editor_canvas == NULL)
+        return;
+    if (tree_editor_layout_nodes(&app->tree_editor, depth, order,
+                                 &max_depth, &max_rows) <= 0)
+        return;
+    {
+        S2Df size;
+        view_get_size(app->tree_editor_canvas, &size);
+        width = size.width;
+        height = size.height;
+    }
+    metrics = tree_editor_metrics(width, height, max_depth, max_rows);
+    for (node_index = 0; node_index < app->tree_editor.node_count; ++node_index)
+    {
+        real32_t x;
+        real32_t y;
+        if (depth[node_index] < 0)
+            continue;
+        x = tree_editor_node_x(&metrics, depth[node_index]);
+        y = tree_editor_node_y(&metrics, order[node_index]);
+        if (mouse->x >= x && mouse->x <= x + metrics.box_w &&
+            mouse->y >= y && mouse->y <= y + metrics.box_h)
+        {
+            tree_editor_refresh(app, node_index);
+            return;
+        }
+    }
+}
+
+/*
+ * One click per standard size, the way a tree actually gets built.
+ *
+ * Typing "0.75" into a field to add a three-quarter-pot raise is a step that
+ * exists only because the field does; these are the sizes a betting tree is
+ * made of. The size field stays for anything non-standard.
+ */
+static void i_tree_editor_add_sized(App *app, mpf_tree_action_type_t type,
+                                    double size)
+{
+    int node = tree_editor_selected_node(app);
+    int child = -1;
+
+    if (app == NULL || !app->tree_editor_ready)
+    {
+        status(app, "TREE BUILDER\nCreate or import a tree before adding an action.");
+        return;
+    }
+    if (!pe_tree_editor_add_action(&app->tree_editor, node, type, size, &child))
+    {
+        status(app, "TREE BUILDER\nCould not add this action. Player nodes accept "
+               "up to %d actions; chance and terminal nodes are not editable.",
+               PE_TREE_EDITOR_MAX_ACTIONS);
+        return;
+    }
+    if (type == MPF_TREE_ACTION_RAISE)
+        status(app, "TREE BUILDER\nAdded a %.2gx pot raise on node %d -> node %d.",
+               size, node, child);
+    else
+        status(app, "TREE BUILDER\nAdded %s on node %d -> node %d.",
+               pe_tree_editor_action_name(type), node, child);
+    tree_editor_refresh(app, child >= 0 ? child : node);
+}
+
+static void i_on_tree_quick_fold(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_FOLD, 0.0);
+}
+
+static void i_on_tree_quick_call(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_CALL, 0.0);
+}
+
+static void i_on_tree_quick_25(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_RAISE, 0.25);
+}
+
+static void i_on_tree_quick_50(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_RAISE, 0.5);
+}
+
+static void i_on_tree_quick_75(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_RAISE, 0.75);
+}
+
+static void i_on_tree_quick_pot(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_RAISE, 1.0);
+}
+
+static void i_on_tree_quick_overbet(App *app, Event *event)
+{
+    unref(event);
+    i_tree_editor_add_sized(app, MPF_TREE_ACTION_RAISE, 2.0);
 }
 
 static void i_on_tree_editor_new(App *app, Event *event)
@@ -1054,9 +1220,19 @@ static Panel *i_tree_editor_panel(App *app)
     Button *remove_action = button_push();
     Button *save_tree = button_push();
     Button *use_setup = button_push();
+    Button *quick_fold = button_push();
+    Button *quick_call = button_push();
+    Button *quick_25 = button_push();
+    Button *quick_50 = button_push();
+    Button *quick_75 = button_push();
+    Button *quick_pot = button_push();
+    Button *quick_over = button_push();
+    Label *quick_label = label_create();
 
     app->tree_editor_view = textview_create();
     app->tree_editor_canvas = view_create();
+    view_OnClick(app->tree_editor_canvas,
+                 listener(app, i_on_click_tree_editor, App));
     app->tree_editor_status = textview_create();
     app->tree_editor_node_combo = combo_create();
     app->tree_editor_action_combo = combo_create();
@@ -1070,7 +1246,7 @@ static Panel *i_tree_editor_panel(App *app)
     textview_wrap(app->tree_editor_status, TRUE);
     textview_printf(app->tree_editor_status,
                     "Create a tree, select a node and add actions.\n");
-    label_text(title, "TREE BUILDER | Monker-style topology editor");
+    label_text(title, "TREE BUILDER | click a node on the map to select it");
     label_text(node_label, "NODE");
     label_text(action_label, "ACTION");
     label_text(size_label, "RAISE SIZE (pot multiple)");
@@ -1100,6 +1276,21 @@ static Panel *i_tree_editor_panel(App *app)
     button_OnClick(remove_action, listener(app, i_on_tree_editor_remove, App));
     button_OnClick(save_tree, listener(app, i_on_tree_editor_save, App));
     button_OnClick(use_setup, listener(app, i_on_tree_editor_setup, App));
+    label_text(quick_label, "QUICK ACTIONS (add to selected node)");
+    button_text(quick_fold, "Fold");
+    button_text(quick_call, "Call / Check");
+    button_text(quick_25, "25%");
+    button_text(quick_50, "50%");
+    button_text(quick_75, "75%");
+    button_text(quick_pot, "Pot");
+    button_text(quick_over, "2x Pot");
+    button_OnClick(quick_fold, listener(app, i_on_tree_quick_fold, App));
+    button_OnClick(quick_call, listener(app, i_on_tree_quick_call, App));
+    button_OnClick(quick_25, listener(app, i_on_tree_quick_25, App));
+    button_OnClick(quick_50, listener(app, i_on_tree_quick_50, App));
+    button_OnClick(quick_75, listener(app, i_on_tree_quick_75, App));
+    button_OnClick(quick_pot, listener(app, i_on_tree_quick_pot, App));
+    button_OnClick(quick_over, listener(app, i_on_tree_quick_overbet, App));
     combo_OnSelect(app->tree_editor_node_combo,
                    listener(app, i_on_tree_editor_node_select, App));
     view_size(app->tree_editor_canvas, s2df(760.0f, 350.0f));
@@ -1126,8 +1317,30 @@ static Panel *i_tree_editor_panel(App *app)
     layout_button(right, remove_action, 1, 6);
     layout_button(right, save_tree, 0, 7);
     layout_button(right, use_setup, 1, 7);
-    layout_label(right, app->tree_editor_selection_label, 0, 8);
-    layout_textview(right, app->tree_editor_status, 0, 9);
+    {
+        /* One row of standard sizes, the way a betting tree is actually
+           built. The size field above stays for anything non-standard. */
+        Layout *quick = layout_create(4, 2);
+        layout_button(quick, quick_fold, 0, 0);
+        layout_button(quick, quick_call, 1, 0);
+        layout_button(quick, quick_25, 2, 0);
+        layout_button(quick, quick_50, 3, 0);
+        layout_button(quick, quick_75, 0, 1);
+        layout_button(quick, quick_pot, 1, 1);
+        layout_button(quick, quick_over, 2, 1);
+        layout_hsize(quick, 0, 108.0f);
+        layout_hsize(quick, 1, 108.0f);
+        layout_hsize(quick, 2, 108.0f);
+        layout_hsize(quick, 3, 108.0f);
+        layout_hmargin(quick, 0, 4.0f);
+        layout_hmargin(quick, 1, 4.0f);
+        layout_hmargin(quick, 2, 4.0f);
+        layout_vmargin(quick, 0, 4.0f);
+        layout_label(right, quick_label, 0, 8);
+        layout_layout(right, quick, 0, 9);
+    }
+    layout_label(right, app->tree_editor_selection_label, 0, 10);
+    layout_textview(right, app->tree_editor_status, 0, 11);
     layout_hsize(right, 0, 190.0f);
     layout_hsize(right, 1, 270.0f);
     layout_hmargin(right, 0, 8.0f);
@@ -1137,7 +1350,9 @@ static Panel *i_tree_editor_panel(App *app)
     layout_vmargin(right, 5, 8.0f);
     layout_vmargin(right, 6, 8.0f);
     layout_vmargin(right, 7, 12.0f);
-    layout_vsize(right, 9, 180.0f);
+    layout_vmargin(right, 8, 4.0f);
+    layout_vmargin(right, 9, 10.0f);
+    layout_vsize(right, 11, 180.0f);
     layout_layout(root, left, 0, 0);
     layout_layout(root, right, 1, 0);
     layout_hsize(root, 0, 760.0f);
