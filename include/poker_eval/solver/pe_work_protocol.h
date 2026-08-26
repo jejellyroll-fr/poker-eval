@@ -20,6 +20,9 @@ extern "C" {
 #define PE_WORK_PROTOCOL_MAX_PAYLOAD (16u * 1024u * 1024u)
 #define PE_WORK_PROTOCOL_RESULT_FIXED_SIZE 80u
 
+typedef intptr_t pe_work_socket_t;
+#define PE_WORK_SOCKET_INVALID ((pe_work_socket_t)-1)
+
 typedef enum pe_work_message_type_t
 {
     PE_WORK_MESSAGE_CAPABILITIES = 1,
@@ -43,6 +46,24 @@ typedef struct pe_work_result_t
     const uint8_t *delta;
     size_t delta_size;
 } pe_work_result_t;
+
+/** Initialize/tear down the platform socket runtime (no-op on POSIX). */
+int pe_work_transport_init(void);
+void pe_work_transport_cleanup(void);
+
+/** Send one already encoded frame, handling short writes. */
+int pe_work_socket_send_frame(pe_work_socket_t socket,
+                              const uint8_t *frame,
+                              size_t frame_size);
+
+/** Receive one frame into caller storage, handling short reads. */
+int pe_work_socket_recv_frame(pe_work_socket_t socket,
+                              uint8_t *buffer,
+                              size_t capacity,
+                              size_t *out_size);
+
+/** Close a socket created by the caller. */
+int pe_work_socket_close(pe_work_socket_t socket);
 
 /**
  * Return the complete frame size, or zero when the payload is invalid or the

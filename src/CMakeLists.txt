@@ -129,6 +129,10 @@ if(OpenMP_C_FOUND)
     target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)
 endif()
 
+if(WIN32)
+    target_link_libraries(poker_solver PRIVATE ws2_32)
+endif()
+
 # The adapter itself is always present, but only the CUDA build gets access to
 # the existing batched GPU library and its CUDA headers/runtime.
 if(TARGET poker_cuda_batch AND TARGET poker_gpu_unified)

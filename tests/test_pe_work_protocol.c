@@ -5,6 +5,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#if !defined(_WIN32)
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 static void test_work_unit_frame(void)
 {
     pe_work_unit_t source;
@@ -70,6 +75,35 @@ static void test_result_frame(void)
     assert(memcmp(decoded.delta, delta, sizeof(delta)) == 0);
 }
 
+static void test_socket_transport(void)
+{
+#if defined(_WIN32)
+    /* The codec remains fully covered on Windows; socket integration is
+       exercised by the POSIX loopback test and compiled through ws2_32. */
+    return;
+#else
+    const uint8_t payload[] = {0x10, 0x20, 0x30};
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE + sizeof(payload)];
+    uint8_t received[sizeof(frame)];
+    size_t frame_size;
+    size_t received_size;
+    int sockets[2];
+
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    assert(pe_work_frame_encode(PE_WORK_MESSAGE_CAPABILITIES, payload,
+                                sizeof(payload), frame, sizeof(frame),
+                                &frame_size) == 0);
+    assert(pe_work_socket_send_frame((pe_work_socket_t)sockets[0], frame,
+                                     frame_size) == 0);
+    assert(pe_work_socket_recv_frame((pe_work_socket_t)sockets[1], received,
+                                     sizeof(received), &received_size) == 0);
+    assert(received_size == frame_size);
+    assert(memcmp(received, frame, frame_size) == 0);
+    assert(pe_work_socket_close((pe_work_socket_t)sockets[0]) == 0);
+    assert(pe_work_socket_close((pe_work_socket_t)sockets[1]) == 0);
+#endif
+}
+
 static void test_round_trip(void)
 {
     const uint8_t payload[] = {0x00, 0x01, 0x7f, 0x80, 0xff};
@@ -125,9 +159,12 @@ static void test_rejects_invalid_frames(void)
 
 int main(void)
 {
+    assert(pe_work_transport_init() == 0);
     test_round_trip();
     test_rejects_invalid_frames();
     test_work_unit_frame();
     test_result_frame();
+    test_socket_transport();
+    pe_work_transport_cleanup();
     return 0;
 }

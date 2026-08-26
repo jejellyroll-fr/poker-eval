@@ -5,10 +5,67 @@
 #include <poker_eval/solver/pe_work_protocol.h>
 
 #include <math.h>
+#include <limits.h>
 #include <stddef.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <errno.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 static const uint8_t pe_work_magic[4] = {'P', 'E', 'W', '1'};
+
+static int socket_read_all(pe_work_socket_t socket,
+                           uint8_t *buffer, size_t size)
+{
+    size_t offset = 0u;
+    while (offset < size) {
+        size_t remaining = size - offset;
+        int requested = (remaining > (size_t)INT_MAX)
+            ? INT_MAX : (int)remaining;
+#if defined(_WIN32)
+        int received = recv((SOCKET)socket, (char *)(buffer + offset),
+                            requested, 0);
+#else
+        ssize_t received = recv((int)socket, buffer + offset,
+                                (size_t)requested, 0);
+        if (received < 0 && errno == EINTR)
+            continue;
+#endif
+        if (received <= 0)
+            return -1;
+        offset += (size_t)received;
+    }
+    return 0;
+}
+
+static int socket_write_all(pe_work_socket_t socket,
+                            const uint8_t *buffer, size_t size)
+{
+    size_t offset = 0u;
+    while (offset < size) {
+        size_t remaining = size - offset;
+        int requested = (remaining > (size_t)INT_MAX)
+            ? INT_MAX : (int)remaining;
+#if defined(_WIN32)
+        int sent = send((SOCKET)socket, (const char *)(buffer + offset),
+                        requested, 0);
+#else
+        ssize_t sent = send((int)socket, buffer + offset,
+                            (size_t)requested, 0);
+        if (sent < 0 && errno == EINTR)
+            continue;
+#endif
+        if (sent <= 0)
+            return -1;
+        offset += (size_t)sent;
+    }
+    return 0;
+}
 
 static int valid_type(pe_work_message_type_t type)
 {
@@ -32,6 +89,26 @@ static uint64_t get_u64_be(const uint8_t *in)
     return value;
 }
 
+static int valid_header(const uint8_t *header, size_t *out_payload_size)
+{
+    uint64_t encoded_size;
+    size_t i;
+
+    for (i = 0u; i < sizeof(pe_work_magic); ++i) {
+        if (header[i] != pe_work_magic[i])
+            return -1;
+    }
+    if (header[4] != PE_WORK_PROTOCOL_VERSION || header[6] != 0u ||
+        header[7] != 0u || !valid_type((pe_work_message_type_t)header[5]))
+        return -1;
+    encoded_size = get_u64_be(header + 8u);
+    if (encoded_size > PE_WORK_PROTOCOL_MAX_PAYLOAD ||
+        encoded_size > SIZE_MAX - PE_WORK_PROTOCOL_HEADER_SIZE)
+        return -1;
+    *out_payload_size = (size_t)encoded_size;
+    return 0;
+}
+
 static void put_double_be(uint8_t *out, double value)
 {
     uint64_t bits;
@@ -53,6 +130,81 @@ size_t pe_work_frame_size(size_t payload_size)
         payload_size > SIZE_MAX - PE_WORK_PROTOCOL_HEADER_SIZE)
         return 0u;
     return PE_WORK_PROTOCOL_HEADER_SIZE + payload_size;
+}
+
+int pe_work_transport_init(void)
+{
+#if defined(_WIN32)
+    WSADATA data;
+    return WSAStartup(MAKEWORD(2, 2), &data) == 0 ? 0 : -1;
+#else
+    return 0;
+#endif
+}
+
+void pe_work_transport_cleanup(void)
+{
+#if defined(_WIN32)
+    WSACleanup();
+#endif
+}
+
+int pe_work_socket_send_frame(pe_work_socket_t socket,
+                              const uint8_t *frame,
+                              size_t frame_size)
+{
+    pe_work_message_type_t type;
+    const uint8_t *payload;
+    size_t payload_size;
+
+    if (socket == PE_WORK_SOCKET_INVALID ||
+        pe_work_frame_decode(frame, frame_size, &type, &payload,
+                             &payload_size) != 0)
+        return -1;
+    (void)type;
+    (void)payload;
+    (void)payload_size;
+    return socket_write_all(socket, frame, frame_size);
+}
+
+int pe_work_socket_recv_frame(pe_work_socket_t socket,
+                              uint8_t *buffer,
+                              size_t capacity,
+                              size_t *out_size)
+{
+    uint8_t header[PE_WORK_PROTOCOL_HEADER_SIZE];
+    pe_work_message_type_t type;
+    const uint8_t *payload;
+    size_t payload_size;
+    size_t frame_size;
+
+    if (socket == PE_WORK_SOCKET_INVALID || !buffer || !out_size ||
+        capacity < PE_WORK_PROTOCOL_HEADER_SIZE ||
+        socket_read_all(socket, header, sizeof(header)) != 0 ||
+        valid_header(header, &payload_size) != 0)
+        return -1;
+    frame_size = PE_WORK_PROTOCOL_HEADER_SIZE + payload_size;
+    if (frame_size > capacity ||
+        socket_read_all(socket, buffer + PE_WORK_PROTOCOL_HEADER_SIZE,
+                        payload_size) != 0)
+        return -1;
+    memcpy(buffer, header, sizeof(header));
+    if (pe_work_frame_decode(buffer, frame_size, &type, &payload,
+                             &payload_size) != 0)
+        return -1;
+    *out_size = frame_size;
+    return 0;
+}
+
+int pe_work_socket_close(pe_work_socket_t socket)
+{
+    if (socket == PE_WORK_SOCKET_INVALID)
+        return -1;
+#if defined(_WIN32)
+    return closesocket((SOCKET)socket) == 0 ? 0 : -1;
+#else
+    return close((int)socket) == 0 ? 0 : -1;
+#endif
 }
 
 int pe_work_frame_encode(pe_work_message_type_t type,
