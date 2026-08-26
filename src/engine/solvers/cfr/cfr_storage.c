@@ -916,6 +916,272 @@ int cfr_storage_merge_scaled(cfr_storage_t *destination,
     return ctx.failed ? -1 : 0;
 }
 
+/* A storage delta is deliberately a value snapshot rather than a dump of the
+ * private hash table.  Workers can therefore be built against a different
+ * table size and the coordinator still has one stable merge format. */
+#define CFR_DELTA_MAGIC "CFRDELTA"
+#define CFR_DELTA_VERSION 1u
+#define CFR_DELTA_HEADER_SIZE 16u
+#define CFR_DELTA_RECORD_HEADER_SIZE 16u
+
+typedef struct {
+    uint64_t key;
+    int n;
+    const double *regret;
+    const double *average;
+} cfr_delta_entry_t;
+
+typedef struct {
+    cfr_delta_entry_t *entries;
+    size_t count;
+    size_t capacity;
+    int failed;
+} cfr_delta_collect_t;
+
+static void cfr_delta_put_u32(uint8_t *out, uint32_t value)
+{
+    out[0] = (uint8_t)(value >> 24u);
+    out[1] = (uint8_t)(value >> 16u);
+    out[2] = (uint8_t)(value >> 8u);
+    out[3] = (uint8_t)value;
+}
+
+static void cfr_delta_put_u64(uint8_t *out, uint64_t value)
+{
+    size_t i;
+    for (i = 0u; i < 8u; ++i)
+        out[i] = (uint8_t)(value >> (56u - 8u * i));
+}
+
+static uint32_t cfr_delta_get_u32(const uint8_t *in)
+{
+    return ((uint32_t)in[0] << 24u) | ((uint32_t)in[1] << 16u) |
+           ((uint32_t)in[2] << 8u) | (uint32_t)in[3];
+}
+
+static uint64_t cfr_delta_get_u64(const uint8_t *in)
+{
+    size_t i;
+    uint64_t value = 0u;
+    for (i = 0u; i < 8u; ++i)
+        value = (value << 8u) | (uint64_t)in[i];
+    return value;
+}
+
+static void cfr_delta_put_double(uint8_t *out, double value)
+{
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    cfr_delta_put_u64(out, bits);
+}
+
+static double cfr_delta_get_double(const uint8_t *in)
+{
+    uint64_t bits = cfr_delta_get_u64(in);
+    double value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static int cfr_delta_entry_before(const void *left_ptr, const void *right_ptr)
+{
+    const cfr_delta_entry_t *left = (const cfr_delta_entry_t *)left_ptr;
+    const cfr_delta_entry_t *right = (const cfr_delta_entry_t *)right_ptr;
+    if (left->key != right->key)
+        return left->key < right->key ? -1 : 1;
+    if (left->n != right->n)
+        return left->n < right->n ? -1 : 1;
+    return 0;
+}
+
+static void cfr_delta_collect_callback(uint64_t key, int n_actions,
+                                       const double *regret,
+                                       const double *average,
+                                       void *user_data)
+{
+    cfr_delta_collect_t *collect = (cfr_delta_collect_t *)user_data;
+    if (!collect || collect->failed || !regret || !average || n_actions <= 0)
+        return;
+    if (collect->count == collect->capacity) {
+        size_t next = collect->capacity ? collect->capacity * 2u : 64u;
+        cfr_delta_entry_t *grown;
+        if (next < collect->capacity ||
+            next > SIZE_MAX / sizeof(*grown)) {
+            collect->failed = 1;
+            return;
+        }
+        grown = (cfr_delta_entry_t *)realloc(collect->entries,
+                                             next * sizeof(*grown));
+        if (!grown) {
+            collect->failed = 1;
+            return;
+        }
+        collect->entries = grown;
+        collect->capacity = next;
+    }
+    collect->entries[collect->count].key = key;
+    collect->entries[collect->count].n = n_actions;
+    collect->entries[collect->count].regret = regret;
+    collect->entries[collect->count].average = average;
+    ++collect->count;
+}
+
+int cfr_storage_export_delta(const cfr_storage_t *storage,
+                             uint8_t **out_blob,
+                             size_t *out_size)
+{
+    cfr_delta_collect_t collect = {0};
+    size_t total = CFR_DELTA_HEADER_SIZE;
+    size_t i;
+    uint8_t *blob;
+    uint8_t *cursor;
+
+    if (!storage || !out_blob || !out_size) {
+        errno = EINVAL;
+        return -1;
+    }
+    *out_blob = NULL;
+    *out_size = 0u;
+    cfr_storage_iterate((cfr_storage_t *)storage,
+                        cfr_delta_collect_callback, &collect);
+    if (collect.failed) {
+        free(collect.entries);
+        return -1;
+    }
+    if (collect.count > UINT32_MAX) {
+        free(collect.entries);
+        return -1;
+    }
+    qsort(collect.entries, collect.count, sizeof(*collect.entries),
+          cfr_delta_entry_before);
+    if (collect.count > (SIZE_MAX - total) / 16u) {
+        free(collect.entries);
+        return -1;
+    }
+    for (i = 0u; i < collect.count; ++i) {
+        size_t n = (size_t)collect.entries[i].n;
+        size_t values;
+        if (n > (SIZE_MAX - CFR_DELTA_RECORD_HEADER_SIZE) /
+                 (2u * sizeof(double))) {
+            free(collect.entries);
+            return -1;
+        }
+        values = CFR_DELTA_RECORD_HEADER_SIZE + 2u * n * sizeof(double);
+        if (total > SIZE_MAX - values) {
+            free(collect.entries);
+            return -1;
+        }
+        total += values;
+    }
+    blob = (uint8_t *)malloc(total);
+    if (!blob) {
+        free(collect.entries);
+        return -1;
+    }
+    memcpy(blob, CFR_DELTA_MAGIC, 8u);
+    cfr_delta_put_u32(blob + 8u, CFR_DELTA_VERSION);
+    cfr_delta_put_u32(blob + 12u, (uint32_t)collect.count);
+    cursor = blob + CFR_DELTA_HEADER_SIZE;
+    for (i = 0u; i < collect.count; ++i) {
+        const cfr_delta_entry_t *entry = &collect.entries[i];
+        size_t action;
+        cfr_delta_put_u64(cursor, entry->key);
+        cfr_delta_put_u32(cursor + 8u, (uint32_t)entry->n);
+        cfr_delta_put_u32(cursor + 12u, 0u);
+        cursor += CFR_DELTA_RECORD_HEADER_SIZE;
+        for (action = 0u; action < (size_t)entry->n; ++action) {
+            cfr_delta_put_double(cursor, entry->regret[action]);
+            cursor += sizeof(double);
+        }
+        for (action = 0u; action < (size_t)entry->n; ++action) {
+            cfr_delta_put_double(cursor, entry->average[action]);
+            cursor += sizeof(double);
+        }
+    }
+    free(collect.entries);
+    *out_blob = blob;
+    *out_size = total;
+    return 0;
+}
+
+int cfr_storage_apply_delta(cfr_storage_t *storage,
+                            const uint8_t *blob,
+                            size_t blob_size,
+                            double scale)
+{
+    size_t cursor = CFR_DELTA_HEADER_SIZE;
+    uint32_t count;
+    uint32_t version;
+    uint32_t index;
+    double *regret = NULL;
+    double *average = NULL;
+
+    if (!storage || !blob || blob_size < CFR_DELTA_HEADER_SIZE ||
+        !isfinite(scale) || memcmp(blob, CFR_DELTA_MAGIC, 8u) != 0)
+        return -1;
+    version = cfr_delta_get_u32(blob + 8u);
+    count = cfr_delta_get_u32(blob + 12u);
+    if (version != CFR_DELTA_VERSION)
+        return -1;
+    for (index = 0u; index < count; ++index) {
+        uint64_t key;
+        uint32_t n32;
+        size_t n;
+        size_t bytes;
+        size_t action;
+        if (blob_size - cursor < CFR_DELTA_RECORD_HEADER_SIZE)
+            goto fail;
+        key = cfr_delta_get_u64(blob + cursor);
+        n32 = cfr_delta_get_u32(blob + cursor + 8u);
+        if (cfr_delta_get_u32(blob + cursor + 12u) != 0u || n32 == 0u)
+            goto fail;
+        n = (size_t)n32;
+        if ((uint64_t)n != (uint64_t)n32)
+            goto fail;
+        if (n > (SIZE_MAX - CFR_DELTA_RECORD_HEADER_SIZE) /
+                 (2u * sizeof(double)))
+            goto fail;
+        bytes = CFR_DELTA_RECORD_HEADER_SIZE + 2u * n * sizeof(double);
+        if (bytes > blob_size - cursor)
+            goto fail;
+        regret = (double *)malloc(n * sizeof(double));
+        average = (double *)malloc(n * sizeof(double));
+        if (!regret || !average)
+            goto fail;
+        cursor += CFR_DELTA_RECORD_HEADER_SIZE;
+        for (action = 0u; action < n; ++action) {
+            regret[action] = cfr_delta_get_double(blob + cursor);
+            cursor += sizeof(double);
+            if (!isfinite(regret[action]))
+                goto fail;
+        }
+        for (action = 0u; action < n; ++action) {
+            average[action] = cfr_delta_get_double(blob + cursor);
+            cursor += sizeof(double);
+            if (!isfinite(average[action]))
+                goto fail;
+        }
+        for (action = 0u; action < n; ++action) {
+            regret[action] *= scale;
+            average[action] *= scale;
+        }
+        cfr_storage_update_regret(storage, key, (int)n, regret, 1.0);
+        cfr_storage_update_avg(storage, key, (int)n, average, 1.0);
+        free(regret);
+        free(average);
+        regret = NULL;
+        average = NULL;
+    }
+    if (cursor != blob_size)
+        return -1;
+    return 0;
+
+fail:
+    free(regret);
+    free(average);
+    return -1;
+}
+
 void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
 {
     if (!s || !fn || !s->tab)

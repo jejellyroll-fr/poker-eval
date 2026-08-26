@@ -60,7 +60,31 @@ les règles d’ownership avant d’ouvrir des sockets TCP.
 
 ## Décision
 
-DIST-04 reste une étude clôturée avec un chemin d’intégration clair. Aucun
-changement n’est proposé dans `cfr_resolve.c` tant que l’adaptateur de jeu et
+DIST-04 reste une étude clôturée avec un chemin d'intégration clair. Aucun
+changement n'est proposé dans `cfr_resolve.c` tant que l'adaptateur de jeu et
 le reducer distribué ne sont pas spécifiés : modifier le gadget maintenant
 augmenterait le risque sans rapprocher le DoD de DIST-03.
+
+## Implémentation DIST-02/03
+
+Le contrat décrit ci-dessus est maintenant câblé par
+`cfr_work_adapter.h/c` : un builder reconstruit un `cfr_game_t` depuis le
+WorkUnit, `pe_cfr_work_execute()` exécute le vrai `cfr_solve()` et exporte un
+snapshot CFR endian-indépendant. Le reducer applique ensuite ces snapshots dans
+l'ordre déterministe `(public_state, iteration_begin, iteration_end, worker)`.
+Un builder Hold'em river fixe est fourni pour les WorkUnits dont `ranges`
+contient `(h0, h1)` et dont `boards` contient le board en masques uint64
+big-endian.
+
+Le protocole RESULT transporte aussi `elapsed_ns` et `units_per_s`, mesurés par
+le worker. Les helpers TCP (`listen`, `accept`, `connect`) et la session worker
+permettent d’exercer le cycle réseau complet ; le test d’intégration river
+compare la stratégie et l’exploitabilité du chemin WorkUnit à un solve local.
+
+Le builder Hold’em accepte en outre un `pe_compute_ops_t` optionnel : lorsqu’un
+worker dispose d’un backend CUDA/OpenCL réellement initialisé, les évaluations
+terminales du `cfr_solve()` passent par son port `terminal_eval_batch`. Le test
+river exécute alors aussi la parité CUDA ; sur une machine CPU seule, cette
+branche est un skip de capacité explicite. HIP et Metal ne sont pas inclus dans
+le périmètre de cette implémentation : aucun backend correspondant n’existe
+encore dans l’ABI/runtime v3 du dépôt.

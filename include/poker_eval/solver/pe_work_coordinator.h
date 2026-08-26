@@ -58,6 +58,12 @@ int pe_work_coordinator_accept_announcement(
     uint32_t worker_id,
     pe_work_socket_t socket);
 
+/** Accept one TCP worker connection and consume its capability announcement. */
+int pe_work_coordinator_accept_tcp(pe_work_coordinator_t *coordinator,
+                                   pe_work_socket_t listener,
+                                   uint32_t worker_id,
+                                   pe_work_worker_channel_t *out_channel);
+
 /** Remove a worker; returns -1 when the id is not registered. */
 int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id);

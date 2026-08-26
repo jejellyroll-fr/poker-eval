@@ -92,6 +92,27 @@ int pe_work_coordinator_accept_announcement(
     return pe_work_coordinator_register(coordinator, worker_id, &runtime);
 }
 
+int pe_work_coordinator_accept_tcp(pe_work_coordinator_t *coordinator,
+                                   pe_work_socket_t listener,
+                                   uint32_t worker_id,
+                                   pe_work_worker_channel_t *out_channel)
+{
+    pe_work_socket_t socket;
+    if (!coordinator || !out_channel || worker_id == 0u)
+        return -1;
+    socket = pe_work_tcp_accept(listener);
+    if (socket == PE_WORK_SOCKET_INVALID)
+        return -1;
+    if (pe_work_coordinator_accept_announcement(coordinator, worker_id,
+                                                socket) != 0) {
+        (void)pe_work_socket_close(socket);
+        return -1;
+    }
+    out_channel->worker_id = worker_id;
+    out_channel->socket = socket;
+    return 0;
+}
+
 int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id)
 {

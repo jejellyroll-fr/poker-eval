@@ -16,10 +16,10 @@
 extern "C" {
 #endif
 
-#define PE_WORK_PROTOCOL_VERSION 1u
+#define PE_WORK_PROTOCOL_VERSION 2u
 #define PE_WORK_PROTOCOL_HEADER_SIZE 16u
 #define PE_WORK_PROTOCOL_MAX_PAYLOAD (16u * 1024u * 1024u)
-#define PE_WORK_PROTOCOL_RESULT_FIXED_SIZE 80u
+#define PE_WORK_PROTOCOL_RESULT_FIXED_SIZE 96u
 
 typedef intptr_t pe_work_socket_t;
 #define PE_WORK_SOCKET_INVALID ((pe_work_socket_t)-1)
@@ -43,13 +43,18 @@ typedef struct pe_work_result_t
     double exploitability;
     double worst_margin;
     double mean_margin;
+    uint64_t elapsed_ns;
+    double units_per_s;
     /* Optional backend-specific delta, borrowed when decoded. */
     const uint8_t *delta;
     size_t delta_size;
+    /* Local-only ownership bit; never serialized on the wire. */
+    int delta_owned;
 } pe_work_result_t;
 
 /** Validate a result independently of its frame representation. */
 int pe_work_result_validate(const pe_work_result_t *result);
+void pe_work_result_release(pe_work_result_t *result);
 
 /** Initialize/tear down the platform socket runtime (no-op on POSIX). */
 int pe_work_transport_init(void);
@@ -68,6 +73,11 @@ int pe_work_socket_recv_frame(pe_work_socket_t socket,
 
 /** Close a socket created by the caller. */
 int pe_work_socket_close(pe_work_socket_t socket);
+
+/** Small TCP lifecycle helpers used by the coordinator and worker process. */
+pe_work_socket_t pe_work_tcp_listen(uint16_t port, uint16_t *out_bound_port);
+pe_work_socket_t pe_work_tcp_accept(pe_work_socket_t listener);
+pe_work_socket_t pe_work_tcp_connect(const char *host, uint16_t port);
 
 /** Send/receive the two control payloads with owned temporary buffers. */
 int pe_work_socket_send_capabilities(

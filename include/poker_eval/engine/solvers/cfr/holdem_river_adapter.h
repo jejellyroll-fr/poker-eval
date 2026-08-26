@@ -13,6 +13,7 @@
 #include "board_texture.h"
 #include "poker_eval/core/eval_context.h"
 #include "poker_eval/core/modern_cardmask.h"
+#include <poker_eval/solver/pe_compute.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,6 +63,9 @@ typedef struct {
      * texture merging can also collapse turn nodes reached from different
      * 4-board runs; MASK_EMPTY when solving river-only. */
     mask_t turn_board;
+    /* Optional terminal evaluator borrowed from the compute layer. */
+    const pe_compute_ops_t *compute_ops;
+    void *compute_self;
 } holdem_river_state_t;
 
 /* Create Hold'em river adapter */

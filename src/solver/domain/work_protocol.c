@@ -7,14 +7,19 @@
 #include <math.h>
 #include <limits.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <errno.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -135,11 +140,23 @@ int pe_work_result_validate(const pe_work_result_t *result)
         !isfinite(result->exploitability) ||
         !isfinite(result->worst_margin) ||
         !isfinite(result->mean_margin) ||
+        !isfinite(result->units_per_s) || result->units_per_s < 0.0 ||
         result->delta_size > PE_WORK_PROTOCOL_MAX_PAYLOAD -
                              PE_WORK_PROTOCOL_RESULT_FIXED_SIZE ||
         (result->delta_size != 0u && !result->delta))
         return -1;
     return 0;
+}
+
+void pe_work_result_release(pe_work_result_t *result)
+{
+    if (!result)
+        return;
+    if (result->delta_owned)
+        free((void *)(uintptr_t)result->delta);
+    result->delta = NULL;
+    result->delta_size = 0u;
+    result->delta_owned = 0;
 }
 
 size_t pe_work_frame_size(size_t payload_size)
@@ -223,6 +240,112 @@ int pe_work_socket_close(pe_work_socket_t socket)
 #else
     return close((int)socket) == 0 ? 0 : -1;
 #endif
+}
+
+pe_work_socket_t pe_work_tcp_listen(uint16_t port, uint16_t *out_bound_port)
+{
+#if defined(_WIN32)
+    SOCKET fd;
+    int address_length = (int)sizeof(struct sockaddr_in);
+#else
+    int fd;
+    socklen_t address_length = (socklen_t)sizeof(struct sockaddr_in);
+#endif
+    int reuse = 1;
+    struct sockaddr_in address;
+
+    if (out_bound_port)
+        *out_bound_port = 0u;
+#if defined(_WIN32)
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKET)
+#else
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+#endif
+        return PE_WORK_SOCKET_INVALID;
+#if defined(_WIN32)
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse,
+                     (int)sizeof(reuse));
+#else
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse,
+                     (socklen_t)sizeof(reuse));
+#endif
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(port);
+    if (bind(fd, (const struct sockaddr *)&address, sizeof(address)) != 0 ||
+        listen(fd, 16) != 0) {
+        (void)pe_work_socket_close((pe_work_socket_t)fd);
+        return PE_WORK_SOCKET_INVALID;
+    }
+    if (out_bound_port &&
+        getsockname(fd, (struct sockaddr *)&address, &address_length) == 0)
+        *out_bound_port = ntohs(address.sin_port);
+    return (pe_work_socket_t)fd;
+}
+
+pe_work_socket_t pe_work_tcp_accept(pe_work_socket_t listener)
+{
+#if defined(_WIN32)
+    SOCKET fd;
+#else
+    int fd;
+#endif
+    if (listener == PE_WORK_SOCKET_INVALID)
+        return PE_WORK_SOCKET_INVALID;
+#if defined(_WIN32)
+    fd = accept((SOCKET)listener, NULL, NULL);
+    return fd == INVALID_SOCKET ? PE_WORK_SOCKET_INVALID :
+           (pe_work_socket_t)fd;
+#else
+    fd = accept((int)listener, NULL, NULL);
+    return fd < 0 ? PE_WORK_SOCKET_INVALID : (pe_work_socket_t)fd;
+#endif
+}
+
+pe_work_socket_t pe_work_tcp_connect(const char *host, uint16_t port)
+{
+    struct addrinfo hints;
+    struct addrinfo *addresses = NULL;
+    struct addrinfo *current;
+    char service[8];
+    pe_work_socket_t connected = PE_WORK_SOCKET_INVALID;
+
+    if (!host || !*host)
+        return PE_WORK_SOCKET_INVALID;
+    (void)snprintf(service, sizeof(service), "%u", (unsigned)port);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_family = AF_UNSPEC;
+    if (getaddrinfo(host, service, &hints, &addresses) != 0)
+        return PE_WORK_SOCKET_INVALID;
+    for (current = addresses; current != NULL; current = current->ai_next) {
+#if defined(_WIN32)
+        SOCKET fd = socket(current->ai_family, current->ai_socktype,
+                           current->ai_protocol);
+        if (fd == INVALID_SOCKET)
+            continue;
+        if (connect(fd, current->ai_addr, (int)current->ai_addrlen) == 0) {
+            connected = (pe_work_socket_t)fd;
+            break;
+        }
+        (void)closesocket(fd);
+#else
+        int fd = socket(current->ai_family, current->ai_socktype,
+                        current->ai_protocol);
+        if (fd < 0)
+            continue;
+        if (connect(fd, current->ai_addr, current->ai_addrlen) == 0) {
+            connected = (pe_work_socket_t)fd;
+            break;
+        }
+        (void)close(fd);
+#endif
+    }
+    freeaddrinfo(addresses);
+    return connected;
 }
 
 int pe_work_socket_send_capabilities(
@@ -463,6 +586,8 @@ int pe_work_frame_encode_result(const pe_work_result_t *result,
     put_double_be(payload + 56u, result->worst_margin);
     put_double_be(payload + 64u, result->mean_margin);
     put_u64_be(payload + 72u, (uint64_t)result->delta_size);
+    put_u64_be(payload + 80u, result->elapsed_ns);
+    put_double_be(payload + 88u, result->units_per_s);
     if (result->delta_size != 0u)
         memcpy(payload + PE_WORK_PROTOCOL_RESULT_FIXED_SIZE, result->delta,
                result->delta_size);
@@ -506,8 +631,11 @@ int pe_work_frame_decode_result(const uint8_t *frame,
     out->exploitability = get_double_be(payload + 48u);
     out->worst_margin = get_double_be(payload + 56u);
     out->mean_margin = get_double_be(payload + 64u);
+    out->elapsed_ns = get_u64_be(payload + 80u);
+    out->units_per_s = get_double_be(payload + 88u);
     out->delta = payload + PE_WORK_PROTOCOL_RESULT_FIXED_SIZE;
     out->delta_size = (size_t)delta_size;
+    out->delta_owned = 0;
     if (pe_work_result_validate(out) != 0)
         return -1;
     return 0;

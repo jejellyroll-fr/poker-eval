@@ -43,6 +43,14 @@ int pe_work_worker_run_batch(pe_work_socket_t socket,
                              size_t unit_count,
                              size_t *processed);
 
+/** Announce, execute and close a complete worker session. */
+int pe_work_worker_serve(pe_work_socket_t socket,
+                         const pe_runtime_capabilities_t *runtime,
+                         pe_work_execute_fn execute,
+                         void *user_data,
+                         size_t unit_count,
+                         size_t *processed);
+
 #ifdef __cplusplus
 }
 #endif

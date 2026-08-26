@@ -78,6 +78,7 @@ int pe_work_worker_run_once(pe_work_socket_t socket,
         rc = -1;
     if (rc == 0)
         rc = pe_work_socket_send_result(socket, &result);
+    pe_work_result_release(&result);
     pe_work_unit_destroy(&unit);
     return rc;
 }
@@ -102,4 +103,20 @@ int pe_work_worker_run_batch(pe_work_socket_t socket,
             *processed = i + 1u;
     }
     return 0;
+}
+
+int pe_work_worker_serve(pe_work_socket_t socket,
+                         const pe_runtime_capabilities_t *runtime,
+                         pe_work_execute_fn execute,
+                         void *user_data,
+                         size_t unit_count,
+                         size_t *processed)
+{
+    int rc;
+    if (pe_work_worker_announce(socket, runtime) != 0)
+        return -1;
+    rc = pe_work_worker_run_batch(socket, runtime, execute, user_data,
+                                  unit_count, processed);
+    (void)pe_work_socket_close(socket);
+    return rc;
 }

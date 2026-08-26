@@ -19,6 +19,7 @@ set(ENGINE_SOURCES
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
     solvers/cfr/cfr_parallel.c
+    solvers/cfr/cfr_work_adapter.c
     solvers/cfr/legacy_vector_adapter.c
     solvers/cfr/cfr_traversal_full_scalar.c
     solvers/cfr/cfr_locks.c

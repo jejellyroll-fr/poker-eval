@@ -626,6 +626,17 @@ int cfr_storage_merge_scaled(cfr_storage_t *destination,
                              double regret_scale,
                              double average_scale);
 
+/* Stable, endian-independent snapshot used by distributed CFR workers. The
+ * blob contains sorted (infoset key, regret, average-strategy) records and is
+ * intentionally independent of the private hash-table layout. */
+int cfr_storage_export_delta(const cfr_storage_t *storage,
+                             uint8_t **out_blob,
+                             size_t *out_size);
+int cfr_storage_apply_delta(cfr_storage_t *storage,
+                            const uint8_t *blob,
+                            size_t blob_size,
+                            double scale);
+
 void cfr_storage_iterate(
     cfr_storage_t* storage,
     cfr_iterate_callback callback,

@@ -206,7 +206,8 @@ static void test_rejects_invalid_frames(void)
     assert(pe_work_frame_decode(frame, sizeof(frame), &type, &payload,
                                 &payload_size) == 0);
     assert(payload_size == 0u);
-    frame[4] = 2u;
+    frame[4] = (uint8_t)(PE_WORK_PROTOCOL_VERSION == 0xffu
+                             ? 0u : PE_WORK_PROTOCOL_VERSION + 1u);
     assert(pe_work_frame_decode(frame, sizeof(frame), &type, &payload,
                                 &payload_size) == -1);
     frame[4] = PE_WORK_PROTOCOL_VERSION;
