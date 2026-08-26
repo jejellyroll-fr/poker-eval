@@ -66,6 +66,32 @@ static void test_registry_and_filters(void)
     assert(pe_work_coordinator_schedule(&coordinator, 1u, &assignment, 1u) == 0);
 }
 
+static void test_capability_handshake(void)
+{
+#if defined(_WIN32)
+    return;
+#else
+    pe_runtime_capabilities_t runtime = {0};
+    pe_work_coordinator_t coordinator;
+    int sockets[2];
+
+    assert(pe_runtime_probe(&runtime) == 0);
+    mark_backend(&runtime, PE_COMPUTE_CPU_REF, 2.0);
+    pe_work_coordinator_init(&coordinator);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    assert(pe_work_worker_announce((pe_work_socket_t)sockets[0],
+                                   &runtime) == 0);
+    assert(pe_work_coordinator_accept_announcement(
+               &coordinator, 42u, (pe_work_socket_t)sockets[1]) == 0);
+    assert(coordinator.worker_count == 1u);
+    assert(coordinator.workers[0].worker_id == 42u);
+    assert(coordinator.workers[0].runtime.backends[PE_COMPUTE_CPU_REF]
+               .update_elements_per_s == 2.0);
+    pe_work_socket_close((pe_work_socket_t)sockets[0]);
+    pe_work_socket_close((pe_work_socket_t)sockets[1]);
+#endif
+}
+
 static void test_dispatch_channels(void)
 {
 #if defined(_WIN32)
@@ -280,6 +306,7 @@ int main(void)
 {
     test_heterogeneous_schedule();
     test_registry_and_filters();
+    test_capability_handshake();
     test_dispatch_channels();
     test_collect_results();
     test_end_to_end_dispatch();

@@ -52,6 +52,12 @@ int pe_work_coordinator_register(pe_work_coordinator_t *coordinator,
                                  uint32_t worker_id,
                                  const pe_runtime_capabilities_t *runtime);
 
+/** Receive a worker announcement on a channel and register its capabilities. */
+int pe_work_coordinator_accept_announcement(
+    pe_work_coordinator_t *coordinator,
+    uint32_t worker_id,
+    pe_work_socket_t socket);
+
 /** Remove a worker; returns -1 when the id is not registered. */
 int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id);

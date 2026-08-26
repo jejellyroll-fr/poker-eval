@@ -22,6 +22,10 @@ typedef int (*pe_work_execute_fn)(const pe_work_unit_t *unit,
 pe_compute_kind_t pe_work_worker_backend(
     const pe_runtime_capabilities_t *runtime);
 
+/** Send the worker's runtime announcement before accepting WorkUnits. */
+int pe_work_worker_announce(pe_work_socket_t socket,
+                            const pe_runtime_capabilities_t *runtime);
+
 /**
  * Receive one UNIT, execute it through the callback and send one RESULT.
  * The callback owns any temporary delta storage until it returns.

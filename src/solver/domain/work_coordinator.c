@@ -78,6 +78,20 @@ int pe_work_coordinator_register(pe_work_coordinator_t *coordinator,
     return 0;
 }
 
+int pe_work_coordinator_accept_announcement(
+    pe_work_coordinator_t *coordinator,
+    uint32_t worker_id,
+    pe_work_socket_t socket)
+{
+    pe_runtime_capabilities_t runtime;
+
+    if (!coordinator || worker_id == 0u ||
+        socket == PE_WORK_SOCKET_INVALID ||
+        pe_work_socket_recv_capabilities(socket, &runtime) != 0)
+        return -1;
+    return pe_work_coordinator_register(coordinator, worker_id, &runtime);
+}
+
 int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id)
 {

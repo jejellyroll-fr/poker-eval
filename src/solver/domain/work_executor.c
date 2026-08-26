@@ -42,6 +42,14 @@ pe_compute_kind_t pe_work_worker_backend(
     return best;
 }
 
+int pe_work_worker_announce(pe_work_socket_t socket,
+                            const pe_runtime_capabilities_t *runtime)
+{
+    if (socket == PE_WORK_SOCKET_INVALID || !runtime)
+        return -1;
+    return pe_work_socket_send_capabilities(socket, runtime);
+}
+
 int pe_work_worker_run_once(pe_work_socket_t socket,
                             const pe_runtime_capabilities_t *runtime,
                             pe_work_execute_fn execute,
