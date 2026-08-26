@@ -10,6 +10,7 @@
 
 #include "pe_sol_format.h"
 #include "poker_eval/solver/pe_monker.h"
+#include "poker_eval/solver/pe_runtime.h"
 #include "pe_tree_json.h"
 #include "pe_tree_layout.h"
 
@@ -87,6 +88,7 @@ typedef struct {
     char range_oop[4096];
     char range_ip[4096];
     int iterations;
+    int sample_batch_size;
     int game_index;
     int player_count;
     int engine_index;
@@ -114,6 +116,8 @@ typedef struct {
     int tree_ranges_valid;
     int tree_json_pending;
     char tree_json_path[1024];
+    pe_runtime_capabilities_t runtime;
+    int runtime_valid;
 } app_t;
 
 typedef struct { int x; int y; int w; int h; } rect_t;
@@ -349,6 +353,18 @@ static const char *engine_label_for(int index)
     static const char *labels[] = {"VECTOR CPU", "LEGACY CFR", "GPU VECTOR",
                                    "AUTO V3"};
     return index >= 0 && index < 4 ? labels[index] : labels[0];
+}
+
+static const char *runtime_backend_state(
+    const pe_runtime_backend_info_t *backend)
+{
+    if (!backend || !backend->compiled)
+        return "not-built";
+    if (!backend->runtime_available)
+        return "unavailable";
+    if (!backend->validated)
+        return "rejected";
+    return "ready";
 }
 
 static int tree_board_count(int street)
@@ -882,7 +898,8 @@ static int run_legacy_cfr(app_t *app, const char *backend_name, int lane_b)
                  " --backend %s", backend_name);
     if (lane_b)
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
-                 " --lane-b --sample-batch 128");
+                 " --lane-b --sample-batch %d",
+                 app->sample_batch_size > 0 ? app->sample_batch_size : 128);
     for (int player = 0; player < app->player_count && player < 8; ++player) {
         shell_quote(starter_range_for_player(app, player), ranges[player], sizeof(ranges[player]));
         snprintf(command + strlen(command), sizeof(command) - strlen(command),
@@ -1733,7 +1750,18 @@ static void render_solver(SDL_Renderer *renderer, const app_t *app)
         text(renderer, left + 38, 558, buffer, 1, white);
         text(renderer, left + 24, 608, "DROP .TREE / .MKR / .PE_SOL / LABEL CSV", 1, orange);
         text(renderer, left + 24, 632, app->solver_status, 1, app->solver_status[0] ? green : muted);
-        text(renderer, left + 24, 660, "CLICK A FIELD, TYPE, THEN PRESS SOLVE", 1, muted);
+        snprintf(buffer, sizeof(buffer),
+                 "AUTO BATCH %d  /  CPU:%s  CUDA:%s  OPENCL:%s",
+                 app->sample_batch_size > 0 ? app->sample_batch_size : 128,
+                 app->runtime_valid ? runtime_backend_state(
+                     &app->runtime.backends[PE_COMPUTE_CPU_REF]) : "unknown",
+                 app->runtime_valid ? runtime_backend_state(
+                     &app->runtime.backends[PE_COMPUTE_CUDA]) : "unknown",
+                 app->runtime_valid ? runtime_backend_state(
+                     &app->runtime.backends[PE_COMPUTE_OPENCL]) : "unknown");
+        text(renderer, left + 24, 660, buffer, 1, muted);
+        text(renderer, left + 24, 684,
+             "HIP / METAL / DISTRIBUTED: NOT INTEGRATED", 1, orange);
 
         text(renderer, right + 24, 116, "TREE PREVIEW", 2, blue);
         text(renderer, right + 24, 151, "ROOT / PREFLOP", 1, muted);
@@ -1932,10 +1960,12 @@ int main(int argc, char **argv)
     app.page = 0;
     app.selected_action = -1;
     app.iterations = 100000;
+    app.sample_batch_size = 128;
     app.game_index = 0;
     app.player_count = 2;
     app.engine_index = 0;
     app.focus_field = 0;
+    app.runtime_valid = pe_runtime_probe(&app.runtime) == 0;
     snprintf(app.game_name, sizeof(app.game_name), "HOLDEM");
     snprintf(app.board_text, sizeof(app.board_text), "2c 7d Th Js Qc");
     set_default_ranges_for_game(&app);
