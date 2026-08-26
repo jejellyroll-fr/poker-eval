@@ -444,7 +444,10 @@ sécurité : un GPU n'est candidat que si sa parité est validée, si
 `GPU_TERMINAL_EVAL` est annoncé et si son débit mesuré dépasse le meilleur CPU.
 En cas de débit absent ou à égalité, le CPU reste sélectionné. La mesure d'un
 seuil de lancement propre à chaque machine reste une étape ultérieure de
-profiling.
+profiling. Le probe runtime renseigne désormais automatiquement
+`terminal_elements_per_s` avec un micro-benchmark Hold'em borné ; les
+opérations non supportées conservent un débit nul (« inconnu »), et cette
+mesure ne peut pas ouvrir seule la porte de parité.
 
 ---
 

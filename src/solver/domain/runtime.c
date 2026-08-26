@@ -1,6 +1,7 @@
 /* pe_runtime.c - Runtime backend/SIMD capability discovery. */
 
 #include <poker_eval/solver/pe_runtime.h>
+#include <poker_eval/core/time_compat.h>
 
 #include <math.h>
 #include <stdarg.h>
@@ -36,6 +37,100 @@ static double runtime_backend_rate(const pe_runtime_backend_info_t *backend)
     if (!(rate > 0.0) || !isfinite(rate))
         rate = backend->strategy_elements_per_s;
     return rate > 0.0 && isfinite(rate) ? rate : 0.0;
+}
+
+static uint64_t runtime_clock_ns(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0u;
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) +
+           (uint64_t)ts.tv_nsec;
+}
+
+static double measure_terminal_rate(const pe_compute_ops_t *ops, void *backend,
+                                    size_t batch_size)
+{
+    pe_terminal_batch_t terminal;
+    pe_value_batch_t output;
+    uint8_t *cards;
+    uint32_t *values;
+    uint64_t start;
+    uint64_t end;
+    uint64_t elapsed;
+    size_t index;
+    size_t card;
+    size_t repeat;
+    const size_t repeats = 3u;
+    const size_t card_count = 7u;
+
+    if (ops == NULL || backend == NULL || ops->terminal_eval_batch == NULL ||
+        batch_size == 0u || batch_size > SIZE_MAX / card_count)
+        return 0.0;
+    cards = (uint8_t *)malloc(batch_size * card_count);
+    values = (uint32_t *)malloc(batch_size * sizeof(*values));
+    if (cards == NULL || values == NULL)
+    {
+        free(cards);
+        free(values);
+        return 0.0;
+    }
+    for (index = 0u; index < batch_size; ++index)
+        for (card = 0u; card < card_count; ++card)
+            cards[index * card_count + card] =
+                (uint8_t)((index * card_count + card) % 52u);
+
+    terminal.game = game_holdem;
+    terminal.cards = cards;
+    terminal.hole = NULL;
+    terminal.board = NULL;
+    terminal.count = batch_size;
+    output.values = values;
+    output.capacity = batch_size;
+    output.count = 0u;
+    /* Warm up lazy device/context initialization before recording a rate. */
+    if (ops->terminal_eval_batch(backend, &terminal, &output) != 0 ||
+        output.count != batch_size)
+    {
+        free(values);
+        free(cards);
+        return 0.0;
+    }
+    start = runtime_clock_ns();
+    if (start == 0u)
+    {
+        free(values);
+        free(cards);
+        return 0.0;
+    }
+    for (repeat = 0u; repeat < repeats; ++repeat)
+    {
+        output.count = 0u;
+        if (ops->terminal_eval_batch(backend, &terminal, &output) != 0 ||
+            output.count != batch_size)
+        {
+            free(values);
+            free(cards);
+            return 0.0;
+        }
+    }
+    if (ops->sync != NULL && ops->sync(backend) != 0)
+    {
+        free(values);
+        free(cards);
+        return 0.0;
+    }
+    end = runtime_clock_ns();
+    free(values);
+    free(cards);
+    if (end == 0u || end <= start)
+        return 0.0;
+    elapsed = end - start;
+    if (elapsed == 0u)
+        return 0.0;
+    return ((double)batch_size * (double)repeats * 1.0e9) /
+           (double)elapsed;
 }
 
 static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
@@ -218,13 +313,14 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
     void *backend = NULL;
     int created;
     uint64_t capabilities = 0u;
+    double terminal_rate = 0.0;
     const char *name = ops && ops->name ? ops->name : "unknown";
 
     memset(&config, 0, sizeof(config));
     config.cpu_threads = 1;
     config.deterministic = deterministic;
     config.sample_batch_size = 1u;
-    config.terminal_batch_size = 1u;
+    config.terminal_batch_size = 256u;
     config.update_batch_size = 1u;
     created = ops && ops->create ? ops->create(&backend, &config) : -1;
     if (created == 0 && backend != NULL)
@@ -255,6 +351,8 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
             pe_gpu_regret_update_gate_open();
         }
         capabilities = ops->capabilities ? ops->capabilities(backend) : 0u;
+        terminal_rate = measure_terminal_rate(ops, backend,
+                                              config.terminal_batch_size);
         if (ops->destroy)
             ops->destroy(backend);
         /* A GPU context can be created even when the adapter is still
@@ -271,6 +369,7 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
         {
             set_backend(info, kind, name, compiled, 1, 1, capabilities, 1,
                         "ready");
+            info->terminal_elements_per_s = terminal_rate;
         }
     }
     else
