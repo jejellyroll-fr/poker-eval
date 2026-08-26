@@ -36,6 +36,40 @@ static void test_work_unit_frame(void)
     pe_work_unit_destroy(&decoded);
 }
 
+static void test_result_frame(void)
+{
+    const uint8_t delta[] = {0xde, 0xad, 0xbe, 0xef};
+    pe_work_result_t source = {0};
+    pe_work_result_t decoded = {0};
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE +
+                  PE_WORK_PROTOCOL_RESULT_FIXED_SIZE + sizeof(delta)];
+    size_t frame_size;
+
+    source.public_state = 0x55u;
+    source.iteration_begin = 4u;
+    source.iteration_end = 8u;
+    source.iterations = 4u;
+    source.infosets_trained = 17u;
+    source.backend = PE_COMPUTE_CPU_PAR;
+    source.constraints_satisfied = 1;
+    source.exploitability = 1.25;
+    source.worst_margin = -0.0;
+    source.mean_margin = -3.5;
+    source.delta = delta;
+    source.delta_size = sizeof(delta);
+    assert(pe_work_frame_encode_result(&source, frame, sizeof(frame),
+                                       &frame_size) == 0);
+    assert(pe_work_frame_decode_result(frame, frame_size, &decoded) == 0);
+    assert(decoded.public_state == source.public_state);
+    assert(decoded.backend == source.backend);
+    assert(decoded.iteration_begin == source.iteration_begin);
+    assert(decoded.iteration_end == source.iteration_end);
+    assert(memcmp(&decoded.worst_margin, &source.worst_margin,
+                  sizeof(double)) == 0);
+    assert(decoded.delta_size == sizeof(delta));
+    assert(memcmp(decoded.delta, delta, sizeof(delta)) == 0);
+}
+
 static void test_round_trip(void)
 {
     const uint8_t payload[] = {0x00, 0x01, 0x7f, 0x80, 0xff};
@@ -94,5 +128,6 @@ int main(void)
     test_round_trip();
     test_rejects_invalid_frames();
     test_work_unit_frame();
+    test_result_frame();
     return 0;
 }
