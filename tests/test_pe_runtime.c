@@ -8,7 +8,11 @@ int main(void)
 {
     pe_runtime_capabilities_t runtime;
     pe_runtime_capabilities_t synthetic;
+    pe_runtime_capabilities_t wire;
+    pe_runtime_capabilities_t decoded;
     char status[256];
+    char descriptor[PE_RUNTIME_DESCRIPTOR_MAX];
+    size_t descriptor_length;
     if (pe_runtime_probe(&runtime) != 0)
         return 1;
     if (runtime.logical_cpus == 0u || runtime.simd_machine < SIMD_NONE ||
@@ -26,6 +30,28 @@ int main(void)
     if (pe_runtime_simd_name(runtime.simd) == NULL ||
         pe_runtime_simd_name(runtime.simd)[0] == '\0')
         return 5;
+    wire = runtime;
+    wire.backends[PE_COMPUTE_CPU_REF].capabilities |= UINT64_C(1) << 63;
+    wire.backends[PE_COMPUTE_CPU_REF].strategy_elements_per_s = 123.5;
+    wire.backends[PE_COMPUTE_CPU_REF].update_elements_per_s = 456.25;
+    wire.backends[PE_COMPUTE_CPU_REF].terminal_elements_per_s = 789.75;
+    descriptor_length = pe_runtime_descriptor_to_string(
+        &wire, descriptor, sizeof(descriptor));
+    if (descriptor_length == 0u ||
+        descriptor_length != pe_runtime_descriptor_to_string(&wire, NULL, 0u) ||
+        pe_runtime_descriptor_from_string(descriptor, &decoded) != 0 ||
+        decoded.backends[PE_COMPUTE_CPU_REF].capabilities !=
+            wire.backends[PE_COMPUTE_CPU_REF].capabilities ||
+        memcmp(&decoded.backends[PE_COMPUTE_CPU_REF].strategy_elements_per_s,
+               &wire.backends[PE_COMPUTE_CPU_REF].strategy_elements_per_s,
+               sizeof(double)) != 0 ||
+        memcmp(&decoded.backends[PE_COMPUTE_CPU_REF].update_elements_per_s,
+               &wire.backends[PE_COMPUTE_CPU_REF].update_elements_per_s,
+               sizeof(double)) != 0 ||
+        memcmp(&decoded.backends[PE_COMPUTE_CPU_REF].terminal_elements_per_s,
+               &wire.backends[PE_COMPUTE_CPU_REF].terminal_elements_per_s,
+               sizeof(double)) != 0)
+        return 11;
     if (!runtime.openmp_available)
     {
         if (runtime.backends[PE_COMPUTE_CPU_PAR].runtime_available ||

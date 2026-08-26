@@ -22,6 +22,8 @@ extern "C" {
 
 #define PE_RUNTIME_NAME_MAX 64
 #define PE_RUNTIME_REASON_MAX 192
+#define PE_RUNTIME_DESCRIPTOR_MAX 4096
+#define PE_RUNTIME_DESCRIPTOR_VERSION 1
 
 typedef struct pe_runtime_backend_info_t
 {
@@ -31,6 +33,10 @@ typedef struct pe_runtime_backend_info_t
     int validated;
     int device_count;
     uint64_t capabilities;
+    /* Optional measured rates, in elements per second. Zero means unknown. */
+    double strategy_elements_per_s;
+    double update_elements_per_s;
+    double terminal_elements_per_s;
     char name[PE_RUNTIME_NAME_MAX];
     char reason[PE_RUNTIME_REASON_MAX];
 } pe_runtime_backend_info_t;
@@ -61,6 +67,19 @@ const char *pe_runtime_simd_name(simd_capability_t capability);
 /** Render a compact backend status line for logs and CLI output. */
 int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
                               char *out, size_t capacity);
+
+/**
+ * Serialize a runtime descriptor in the stable PE_RUNTIME_V1 text format.
+ * Unknown capability bits are carried as hexadecimal values. The return value
+ * is the required length excluding the NUL terminator; a short buffer is
+ * safely truncated. Passing NULL with capacity 0 measures the descriptor.
+ */
+size_t pe_runtime_descriptor_to_string(
+    const pe_runtime_capabilities_t *runtime, char *out, size_t capacity);
+
+/** Parse a PE_RUNTIME_V1 descriptor, preserving unknown capability bits. */
+int pe_runtime_descriptor_from_string(
+    const char *text, pe_runtime_capabilities_t *out);
 
 #ifdef __cplusplus
 }

@@ -3,6 +3,7 @@
 #include <poker_eval/solver/pe_runtime.h>
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -388,4 +389,219 @@ int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
                        backend->compiled ? "" : ", not compiled",
                        backend->reason);
     return written < 0 ? -1 : written;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+#define PE_RUNTIME_PRINTF_LIKE(a, b) __attribute__((format(printf, a, b)))
+#else
+#define PE_RUNTIME_PRINTF_LIKE(a, b)
+#endif
+
+static void runtime_descriptor_appendf(
+    char *out, size_t capacity, size_t *position, const char *format, ...)
+    PE_RUNTIME_PRINTF_LIKE(4, 5);
+
+static void runtime_descriptor_appendf(char *out, size_t capacity,
+                                       size_t *position, const char *format, ...)
+{
+    va_list args;
+    int needed;
+
+    va_start(args, format);
+    needed = vsnprintf(NULL, 0u, format, args);
+    va_end(args);
+    if (needed <= 0)
+        return;
+    if (out != NULL && *position < capacity)
+    {
+        va_start(args, format);
+        (void)vsnprintf(out + *position, capacity - *position, format, args);
+        va_end(args);
+    }
+    *position += (size_t)needed;
+}
+
+size_t pe_runtime_descriptor_to_string(
+    const pe_runtime_capabilities_t *runtime, char *out, size_t capacity)
+{
+    size_t position = 0u;
+    size_t i;
+
+    if (runtime == NULL || (out == NULL && capacity != 0u) ||
+        runtime->logical_cpus == 0u || runtime->openmp_available < 0 ||
+        runtime->openmp_available > 1 || runtime->simd_machine < SIMD_NONE ||
+        runtime->simd_machine > SIMD_NEON || runtime->simd_compiled < SIMD_NONE ||
+        runtime->simd_compiled > SIMD_NEON || runtime->simd < SIMD_NONE ||
+        runtime->simd > SIMD_NEON)
+        return 0u;
+
+    runtime_descriptor_appendf(
+        out, capacity, &position,
+        "PE_RUNTIME_V%u;cpus=%u;openmp=%d;simd_machine=%d;simd_compiled=%d;simd=%d",
+        PE_RUNTIME_DESCRIPTOR_VERSION, runtime->logical_cpus,
+        runtime->openmp_available, (int)runtime->simd_machine,
+        (int)runtime->simd_compiled, (int)runtime->simd);
+    for (i = 0u; i < PE_COMPUTE_COUNT; ++i)
+    {
+        const pe_runtime_backend_info_t *backend = &runtime->backends[i];
+        if (backend->kind != (pe_compute_kind_t)i ||
+            backend->compiled < 0 || backend->compiled > 1 ||
+            backend->runtime_available < 0 || backend->runtime_available > 1 ||
+            backend->validated < 0 || backend->validated > 1 ||
+            backend->device_count < 0 ||
+            !isfinite(backend->strategy_elements_per_s) ||
+            !isfinite(backend->update_elements_per_s) ||
+            !isfinite(backend->terminal_elements_per_s) ||
+            backend->strategy_elements_per_s < 0.0 ||
+            backend->update_elements_per_s < 0.0 ||
+            backend->terminal_elements_per_s < 0.0)
+            return 0u;
+        runtime_descriptor_appendf(
+            out, capacity, &position,
+            ";b%zu=%d,%d,%d,%d,0x%016llx,%a,%a,%a", i,
+            backend->compiled, backend->runtime_available, backend->validated,
+            backend->device_count,
+            (unsigned long long)backend->capabilities,
+            backend->strategy_elements_per_s,
+            backend->update_elements_per_s,
+            backend->terminal_elements_per_s);
+    }
+    if (out != NULL && capacity != 0u)
+        out[position < capacity ? position : capacity - 1u] = '\0';
+    return position;
+}
+
+static int runtime_descriptor_parse_int(const char *value, int *out)
+{
+    char extra;
+    return value != NULL && out != NULL && sscanf(value, "%d%c", out, &extra) == 1;
+}
+
+static int runtime_descriptor_parse_uint(const char *value, unsigned *out)
+{
+    char extra;
+    return value != NULL && out != NULL &&
+           sscanf(value, "%u%c", out, &extra) == 1;
+}
+
+int pe_runtime_descriptor_from_string(
+    const char *text, pe_runtime_capabilities_t *out)
+{
+    pe_runtime_capabilities_t parsed;
+    unsigned seen = 0u;
+    unsigned backend_seen = 0u;
+    const char *cursor;
+
+    if (text == NULL || out == NULL ||
+        strncmp(text, "PE_RUNTIME_V1;", 14u) != 0)
+        return -1;
+    memset(&parsed, 0, sizeof(parsed));
+    cursor = text + 14u;
+    while (*cursor != '\0')
+    {
+        const char *end = strchr(cursor, ';');
+        size_t length = end != NULL ? (size_t)(end - cursor) : strlen(cursor);
+        char token[512];
+        char *equals;
+        const char *value;
+
+        if (length == 0u || length >= sizeof(token))
+            return -1;
+        memcpy(token, cursor, length);
+        token[length] = '\0';
+        equals = strchr(token, '=');
+        if (equals == NULL || equals == token)
+            return -1;
+        *equals = '\0';
+        value = equals + 1;
+        if (strcmp(token, "cpus") == 0)
+        {
+            if ((seen & (1u << 0)) != 0u ||
+                !runtime_descriptor_parse_uint(value, &parsed.logical_cpus))
+                return -1;
+            seen |= 1u << 0;
+        }
+        else if (strcmp(token, "openmp") == 0)
+        {
+            int parsed_value;
+            if ((seen & (1u << 1)) != 0u ||
+                !runtime_descriptor_parse_int(value, &parsed_value) ||
+                parsed_value < 0 || parsed_value > 1)
+                return -1;
+            parsed.openmp_available = parsed_value;
+            seen |= 1u << 1;
+        }
+        else if (strcmp(token, "simd_machine") == 0 ||
+                 strcmp(token, "simd_compiled") == 0 ||
+                 strcmp(token, "simd") == 0)
+        {
+            int parsed_value;
+            unsigned bit = strcmp(token, "simd_machine") == 0 ? 2u :
+                           strcmp(token, "simd_compiled") == 0 ? 3u : 4u;
+            if ((seen & (1u << bit)) != 0u ||
+                !runtime_descriptor_parse_int(value, &parsed_value) ||
+                parsed_value < SIMD_NONE || parsed_value > SIMD_NEON)
+                return -1;
+            if (bit == 2u)
+                parsed.simd_machine = (simd_capability_t)parsed_value;
+            else if (bit == 3u)
+                parsed.simd_compiled = (simd_capability_t)parsed_value;
+            else
+                parsed.simd = (simd_capability_t)parsed_value;
+            seen |= 1u << bit;
+        }
+        else if (token[0] == 'b')
+        {
+            char *index_end;
+            unsigned long index = strtoul(token + 1, &index_end, 10);
+            int compiled;
+            int available;
+            int validated;
+            int devices;
+            unsigned long long capabilities;
+            double strategy_rate;
+            double update_rate;
+            double terminal_rate;
+            char extra;
+
+            if (index_end == token + 1 || *index_end != '\0')
+                return -1;
+            /* Unknown future backend slots are intentionally ignored. */
+            if (index >= PE_COMPUTE_COUNT)
+            {
+                cursor = end != NULL ? end + 1 : cursor + length;
+                continue;
+            }
+            if ((backend_seen & (1u << index)) != 0u ||
+                sscanf(value, "%d,%d,%d,%d,%llx,%la,%la,%la%c",
+                       &compiled, &available, &validated, &devices,
+                       &capabilities, &strategy_rate, &update_rate,
+                       &terminal_rate, &extra) != 8 ||
+                compiled < 0 || compiled > 1 || available < 0 || available > 1 ||
+                validated < 0 || validated > 1 || devices < 0 ||
+                !isfinite(strategy_rate) || !isfinite(update_rate) ||
+                !isfinite(terminal_rate) || strategy_rate < 0.0 ||
+                update_rate < 0.0 || terminal_rate < 0.0)
+                return -1;
+            parsed.backends[index].kind = (pe_compute_kind_t)index;
+            parsed.backends[index].compiled = compiled;
+            parsed.backends[index].runtime_available = available;
+            parsed.backends[index].validated = validated;
+            parsed.backends[index].device_count = devices;
+            parsed.backends[index].capabilities = (uint64_t)capabilities;
+            parsed.backends[index].strategy_elements_per_s = strategy_rate;
+            parsed.backends[index].update_elements_per_s = update_rate;
+            parsed.backends[index].terminal_elements_per_s = terminal_rate;
+            snprintf(parsed.backends[index].name,
+                     sizeof(parsed.backends[index].name), "%s",
+                     pe_compute_kind_name((pe_compute_kind_t)index));
+            backend_seen |= 1u << index;
+        }
+        cursor = end != NULL ? end + 1 : cursor + length;
+    }
+    if (parsed.logical_cpus == 0u || seen != 0x1Fu ||
+        backend_seen != ((1u << PE_COMPUTE_COUNT) - 1u))
+        return -1;
+    *out = parsed;
+    return 0;
 }
