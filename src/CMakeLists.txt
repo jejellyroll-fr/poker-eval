@@ -62,6 +62,7 @@ add_library(poker_solver
     solver/domain/rng.c
     solver/domain/plan.c
     solver/domain/runtime.c
+    solver/domain/work_unit.c
     solver/domain/storage_v2.c
     solver/domain/range.c
     solver/domain/reach.c
