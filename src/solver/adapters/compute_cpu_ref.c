@@ -151,15 +151,63 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
 
         {
             size_t values = (size_t)actions * (size_t)combos;
-            int uniform_mode =
+            double positive_factor = 1.0;
+            double negative_factor = 1.0;
+            double average_scale = 1.0;
+            int weighted_mode =
                 backend->config.regret_mode == PE_REGRET_VANILLA ||
-                backend->config.regret_mode == PE_REGRET_PLUS;
-            int average_mode =
-                backend->config.averaging_mode == PE_AVG_UNIFORM ||
-                backend->config.averaging_mode == PE_AVG_IMPORTANCE ||
-                backend->config.averaging_mode == PE_AVG_COUNT;
-            int fast_safe = uniform_mode && average_mode;
+                backend->config.regret_mode == PE_REGRET_PLUS ||
+                backend->config.regret_mode == PE_REGRET_DCFR;
+            int fast_safe = weighted_mode;
             size_t check_index;
+
+            if (backend->config.regret_mode == PE_REGRET_DCFR)
+            {
+                double factors[2] = {1.0, -1.0};
+                pe_dcfr_params_t params = {
+                    backend->config.dcfr_alpha,
+                    backend->config.dcfr_beta,
+                    backend->config.dcfr_gamma
+                };
+                if (pe_dcfr_discount_regrets(
+                        factors, 2u, batch->iteration, &params) != 0)
+                    fast_safe = 0;
+                else
+                {
+                    positive_factor = factors[0];
+                    negative_factor = -factors[1];
+                }
+            }
+
+            switch (backend->config.averaging_mode)
+            {
+            case PE_AVG_LINEAR:
+                if (batch->iteration == 0u)
+                    fast_safe = 0;
+                else
+                    average_scale = (double)batch->iteration;
+                break;
+            case PE_AVG_POWER:
+                if (pe_dcfr_average_weight(
+                        batch->iteration, backend->config.dcfr_gamma,
+                        &average_scale) != 0)
+                    fast_safe = 0;
+                break;
+            case PE_AVG_DELAYED_LINEAR:
+                if (batch->iteration <= (uint64_t)(
+                        backend->config.averaging_delay < 0
+                            ? 0 : backend->config.averaging_delay))
+                    average_scale = 0.0;
+                else
+                    average_scale = (double)(batch->iteration -
+                                             (uint64_t)backend->config.averaging_delay);
+                break;
+            case PE_AVG_UNIFORM:
+            case PE_AVG_IMPORTANCE:
+            case PE_AVG_COUNT:
+            default:
+                break;
+            }
 
             /* Validate before entering the SIMD kernel. This preserves the
                scalar API's fail-before-write behavior and excludes negative
@@ -178,11 +226,12 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                     signbit(old_regret + delta) && old_regret + delta == 0.0)
                     fast_safe = 0;
             }
-            if (fast_safe && pe_compute_simd_apply_uniform(
+            if (fast_safe && pe_compute_simd_apply_weighted(
                     regrets, average,
                     batch->soa.deltas + group->offset,
                     batch->soa.average_deltas + group->offset,
-                    values, backend->config.regret_mode == PE_REGRET_PLUS))
+                    values, positive_factor, negative_factor, average_scale,
+                    backend->config.regret_mode == PE_REGRET_PLUS))
             {
                 for (check_index = 0u; check_index < values; ++check_index)
                     if (!isfinite(regrets[check_index]) ||

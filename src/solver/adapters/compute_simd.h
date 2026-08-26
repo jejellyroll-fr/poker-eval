@@ -24,4 +24,15 @@ int pe_compute_simd_apply_uniform(double *regrets, double *averages,
                                   const double *average_deltas,
                                   size_t count, int clamp_regret);
 
+/* Apply a sign-dependent regret discount and weighted average update in-place.
+ * Returns 1 when an ISA-specific implementation handled the complete span,
+ * 0 when callers should use their scalar implementation. Inputs must already
+ * be finite. */
+int pe_compute_simd_apply_weighted(double *regrets, double *averages,
+                                  const double *deltas,
+                                  const double *average_deltas, size_t count,
+                                  double positive_factor,
+                                  double negative_factor,
+                                  double average_scale, int clamp_regret);
+
 #endif

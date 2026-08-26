@@ -252,6 +252,171 @@ int pe_compute_simd_apply_uniform(double *regrets, double *averages,
 }
 
 #if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
+static PE_COMPUTE_TARGET_AVX2 void avx2_apply_weighted(
+    double *regrets, double *averages, const double *deltas,
+    const double *average_deltas, size_t count, double positive_factor,
+    double negative_factor, double average_scale, int clamp_regret)
+{
+    size_t i = 0u;
+    __m256d zero = _mm256_setzero_pd();
+    __m256d positive = _mm256_set1_pd(positive_factor);
+    __m256d negative = _mm256_set1_pd(negative_factor);
+    __m256d average_multiplier = _mm256_set1_pd(average_scale);
+
+    for (; i + 4u <= count; i += 4u)
+    {
+        __m256d old_regret = _mm256_loadu_pd(regrets + i);
+        __m256d mask = _mm256_cmp_pd(old_regret, zero, _CMP_GE_OQ);
+        __m256d factor = _mm256_blendv_pd(negative, positive, mask);
+        __m256d regret = _mm256_add_pd(
+            _mm256_mul_pd(old_regret, factor),
+            _mm256_loadu_pd(deltas + i));
+        if (clamp_regret)
+            regret = _mm256_max_pd(regret, zero);
+        _mm256_storeu_pd(regrets + i, regret);
+        _mm256_storeu_pd(averages + i,
+                         _mm256_add_pd(
+                             _mm256_loadu_pd(averages + i),
+                             _mm256_mul_pd(_mm256_loadu_pd(average_deltas + i),
+                                           average_multiplier)));
+    }
+    for (; i < count; ++i)
+    {
+        double old_regret = regrets[i];
+        double factor = old_regret >= 0.0 ? positive_factor : negative_factor;
+        double regret = old_regret * factor + deltas[i];
+        regrets[i] = clamp_regret && regret < 0.0 ? 0.0 : regret;
+        averages[i] += average_deltas[i] * average_scale;
+    }
+}
+#endif
+
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX512F__)
+static PE_COMPUTE_TARGET_AVX512 void avx512_apply_weighted(
+    double *regrets, double *averages, const double *deltas,
+    const double *average_deltas, size_t count, double positive_factor,
+    double negative_factor, double average_scale, int clamp_regret)
+{
+    size_t i = 0u;
+    __m512d zero = _mm512_setzero_pd();
+    __m512d positive = _mm512_set1_pd(positive_factor);
+    __m512d negative = _mm512_set1_pd(negative_factor);
+    __m512d average_multiplier = _mm512_set1_pd(average_scale);
+
+    for (; i + 8u <= count; i += 8u)
+    {
+        __m512d old_regret = _mm512_loadu_pd(regrets + i);
+        __mmask8 mask = _mm512_cmp_pd_mask(old_regret, zero, _CMP_GE_OQ);
+        __m512d factor = _mm512_mask_blend_pd(mask, negative, positive);
+        __m512d regret = _mm512_add_pd(
+            _mm512_mul_pd(old_regret, factor),
+            _mm512_loadu_pd(deltas + i));
+        if (clamp_regret)
+            regret = _mm512_max_pd(regret, zero);
+        _mm512_storeu_pd(regrets + i, regret);
+        _mm512_storeu_pd(averages + i,
+                         _mm512_add_pd(
+                             _mm512_loadu_pd(averages + i),
+                             _mm512_mul_pd(_mm512_loadu_pd(average_deltas + i),
+                                           average_multiplier)));
+    }
+    for (; i < count; ++i)
+    {
+        double old_regret = regrets[i];
+        double factor = old_regret >= 0.0 ? positive_factor : negative_factor;
+        double regret = old_regret * factor + deltas[i];
+        regrets[i] = clamp_regret && regret < 0.0 ? 0.0 : regret;
+        averages[i] += average_deltas[i] * average_scale;
+    }
+}
+#endif
+
+#if defined(__aarch64__) || defined(__ARM_NEON)
+static void neon_apply_weighted(double *regrets, double *averages,
+                                const double *deltas,
+                                const double *average_deltas, size_t count,
+                                double positive_factor, double negative_factor,
+                                double average_scale, int clamp_regret)
+{
+    size_t i = 0u;
+    float64x2_t zero = vdupq_n_f64(0.0);
+    float64x2_t positive = vdupq_n_f64(positive_factor);
+    float64x2_t negative = vdupq_n_f64(negative_factor);
+    float64x2_t average_multiplier = vdupq_n_f64(average_scale);
+
+    for (; i + 2u <= count; i += 2u)
+    {
+        float64x2_t old_regret = vld1q_f64(regrets + i);
+        uint64x2_t mask = vcgeq_f64(old_regret, zero);
+        float64x2_t factor = vbslq_f64(mask, positive, negative);
+        float64x2_t regret = vaddq_f64(
+            vmulq_f64(old_regret, factor), vld1q_f64(deltas + i));
+        if (clamp_regret)
+            regret = vmaxq_f64(regret, zero);
+        vst1q_f64(regrets + i, regret);
+        vst1q_f64(averages + i,
+                  vaddq_f64(vld1q_f64(averages + i),
+                            vmulq_f64(vld1q_f64(average_deltas + i),
+                                      average_multiplier)));
+    }
+    for (; i < count; ++i)
+    {
+        double old_regret = regrets[i];
+        double factor = old_regret >= 0.0 ? positive_factor : negative_factor;
+        double regret = old_regret * factor + deltas[i];
+        regrets[i] = clamp_regret && regret < 0.0 ? 0.0 : regret;
+        averages[i] += average_deltas[i] * average_scale;
+    }
+}
+#endif
+
+int pe_compute_simd_apply_weighted(double *regrets, double *averages,
+                                  const double *deltas,
+                                  const double *average_deltas, size_t count,
+                                  double positive_factor,
+                                  double negative_factor,
+                                  double average_scale, int clamp_regret)
+{
+    if (!regrets || !averages || !deltas || !average_deltas || count == 0u ||
+        !isfinite(positive_factor) || !isfinite(negative_factor) ||
+        !isfinite(average_scale))
+        return 0;
+
+    switch (simd_runtime_capability())
+    {
+        case SIMD_AVX512:
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX512F__)
+            avx512_apply_weighted(regrets, averages, deltas, average_deltas,
+                                  count, positive_factor, negative_factor,
+                                  average_scale, clamp_regret);
+            return 1;
+#endif
+            break;
+        case SIMD_AVX2:
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
+            avx2_apply_weighted(regrets, averages, deltas, average_deltas,
+                                count, positive_factor, negative_factor,
+                                average_scale, clamp_regret);
+            return 1;
+#endif
+            break;
+        case SIMD_NEON:
+#if defined(__aarch64__) || defined(__ARM_NEON)
+            neon_apply_weighted(regrets, averages, deltas, average_deltas,
+                                count, positive_factor, negative_factor,
+                                average_scale, clamp_regret);
+            return 1;
+#endif
+            break;
+        case SIMD_NONE:
+        case SIMD_SSE2:
+        default:
+            break;
+    }
+    return 0;
+}
+
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
 static PE_COMPUTE_TARGET_AVX2 void avx2_regret_match(
     const float *regrets, float *strategies, size_t count, float positive)
 {
