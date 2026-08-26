@@ -304,6 +304,30 @@ int pe_work_socket_recv_work_unit(pe_work_socket_t socket,
     return rc;
 }
 
+int pe_work_socket_send_result(pe_work_socket_t socket,
+                               const pe_work_result_t *result)
+{
+    uint8_t *buffer;
+    size_t capacity;
+    size_t frame_size;
+    int rc;
+
+    if (pe_work_result_validate(result) != 0 ||
+        result->delta_size > SIZE_MAX - PE_WORK_PROTOCOL_HEADER_SIZE -
+                              PE_WORK_PROTOCOL_RESULT_FIXED_SIZE)
+        return -1;
+    capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+               PE_WORK_PROTOCOL_RESULT_FIXED_SIZE + result->delta_size;
+    buffer = (uint8_t *)malloc(capacity);
+    if (!buffer)
+        return -1;
+    rc = pe_work_frame_encode_result(result, buffer, capacity, &frame_size);
+    if (rc == 0)
+        rc = pe_work_socket_send_frame(socket, buffer, frame_size);
+    free(buffer);
+    return rc;
+}
+
 int pe_work_frame_encode(pe_work_message_type_t type,
                          const uint8_t *payload,
                          size_t payload_size,

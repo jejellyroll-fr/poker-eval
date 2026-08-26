@@ -1,0 +1,36 @@
+/*
+ * pe_work_executor.h - one-shot worker execution boundary
+ */
+
+#ifndef POKER_EVAL_PE_WORK_EXECUTOR_H
+#define POKER_EVAL_PE_WORK_EXECUTOR_H
+
+#include <poker_eval/solver/pe_work_protocol.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef int (*pe_work_execute_fn)(const pe_work_unit_t *unit,
+                                  pe_compute_kind_t backend,
+                                  pe_work_result_t *out_result,
+                                  void *user_data);
+
+/** Select the fastest usable local backend from a runtime descriptor. */
+pe_compute_kind_t pe_work_worker_backend(
+    const pe_runtime_capabilities_t *runtime);
+
+/**
+ * Receive one UNIT, execute it through the callback and send one RESULT.
+ * The callback owns any temporary delta storage until it returns.
+ */
+int pe_work_worker_run_once(pe_work_socket_t socket,
+                            const pe_runtime_capabilities_t *runtime,
+                            pe_work_execute_fn execute,
+                            void *user_data);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POKER_EVAL_PE_WORK_EXECUTOR_H */

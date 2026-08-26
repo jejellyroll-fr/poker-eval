@@ -80,6 +80,8 @@ int pe_work_socket_send_work_unit(pe_work_socket_t socket,
                                   const pe_work_unit_t *unit);
 int pe_work_socket_recv_work_unit(pe_work_socket_t socket,
                                   pe_work_unit_t *out);
+int pe_work_socket_send_result(pe_work_socket_t socket,
+                               const pe_work_result_t *result);
 
 /**
  * Return the complete frame size, or zero when the payload is invalid or the
