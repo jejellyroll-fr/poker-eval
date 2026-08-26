@@ -98,6 +98,8 @@ add_library(poker_solver
     solver/adapters/compute_gpu_updates.c
     solver/adapters/compute_cuda.c
     solver/adapters/compute_opencl.c
+    solver/adapters/compute_hip.c
+    solver/adapters/compute_metal.c
     solver/adapters/evaluator_equity.c
     solver/adapters/evaluator_gpu.c
     solver/adapters/monker_classes.c
@@ -148,6 +150,20 @@ if(TARGET poker_opencl AND TARGET poker_gpu_unified)
     target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_OPENCL_AVAILABLE=1)
     target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_OPENCL_COMPILED=1)
     target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
+endif()
+
+# HIP and Metal carry regret kernels only; neither has a batched terminal
+# evaluator yet, so they do not depend on poker_gpu_unified.
+if(TARGET poker_hip_regret)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_HIP_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_HIP_COMPILED=1)
+    target_link_libraries(poker_solver PRIVATE poker_hip_regret)
+endif()
+
+if(TARGET poker_metal_regret)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_METAL_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_METAL_COMPILED=1)
+    target_link_libraries(poker_solver PRIVATE poker_metal_regret)
 endif()
 
 install(TARGETS poker_solver

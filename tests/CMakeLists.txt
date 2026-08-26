@@ -843,6 +843,11 @@ add_poker_test(test_compute_cuda)
 set_tests_properties(test_compute_cuda PROPERTIES LABELS "solver;solver-v3;gpu03")
 add_poker_test(test_compute_opencl)
 set_tests_properties(test_compute_opencl PROPERTIES LABELS "solver;solver-v3;gpu04")
+
+add_poker_test(test_compute_regret_gpu)
+set_tests_properties(test_compute_regret_gpu PROPERTIES
+    LABELS "solver;solver-v3;gpu;parity"
+    SKIP_RETURN_CODE 77)
 add_poker_test(test_solver_gpu_parity)
 set_tests_properties(test_solver_gpu_parity PROPERTIES
     LABELS "solver;solver-v3;gpu05"

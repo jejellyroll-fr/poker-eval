@@ -309,6 +309,63 @@ here instead of silently skipping it.")
                 DESTINATION include/poker_eval/gpu)
     endif()
 
+    # ------------------------------------------------------------------ #
+    # HIP / ROCm (GPU-02)
+    #
+    # The kernels are the CUDA ones: hip/kernels_regret_hip.hip.cpp includes
+    # common/pe_regret_kernels.inc, exactly as the CUDA translation unit does.
+    # Only the regret primitives exist here -- there is no HIP batched
+    # terminal evaluator -- so this target is small and independent.
+    # ------------------------------------------------------------------ #
+    find_package(hip QUIET)
+    if(hip_FOUND)
+        message(STATUS "ROCm/HIP found, building the HIP regret kernels")
+        set_source_files_properties(hip/kernels_regret_hip.hip.cpp
+                                    PROPERTIES LANGUAGE HIP)
+        add_library(poker_hip_regret STATIC hip/kernels_regret_hip.hip.cpp)
+        target_include_directories(poker_hip_regret PUBLIC
+            ${CMAKE_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(poker_hip_regret PUBLIC hip::device)
+        install(TARGETS poker_hip_regret
+                LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+        install(FILES ${CMAKE_SOURCE_DIR}/include/poker_eval/gpu/pe_regret_hip.h
+                DESTINATION include/poker_eval/gpu)
+    else()
+        message(STATUS "ROCm/HIP not found - the HIP backend will NOT be built")
+    endif()
+
+    # ------------------------------------------------------------------ #
+    # Metal (GPU-03)
+    #
+    # Apple only. All the Objective-C is in one file behind a C ABI; the
+    # shading-language source is compiled at context creation, so no Metal
+    # toolchain is needed at build time.
+    # ------------------------------------------------------------------ #
+    if(APPLE)
+        find_library(METAL_FRAMEWORK Metal)
+        find_library(FOUNDATION_FRAMEWORK Foundation)
+        if(METAL_FRAMEWORK AND FOUNDATION_FRAMEWORK)
+            message(STATUS "Metal found, building the Metal regret kernels")
+            add_library(poker_metal_regret STATIC metal/pe_regret_metal.m)
+            target_include_directories(poker_metal_regret PUBLIC
+                ${CMAKE_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/metal)
+            # ARC owns the Objective-C objects; the C struct holds them through
+            # CFBridgingRetain, which is why the bridge compiles under -fobjc-arc.
+            target_compile_options(poker_metal_regret PRIVATE -fobjc-arc)
+            target_link_libraries(poker_metal_regret PUBLIC
+                ${METAL_FRAMEWORK} ${FOUNDATION_FRAMEWORK})
+            install(TARGETS poker_metal_regret
+                    LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+            install(FILES
+                ${CMAKE_SOURCE_DIR}/include/poker_eval/gpu/pe_regret_metal.h
+                DESTINATION include/poker_eval/gpu)
+        else()
+            message(STATUS "Metal framework not found - the Metal backend will NOT be built")
+        endif()
+    endif()
+
     set(GPU_ACCELERATION_AVAILABLE ${GPU_LIBRARIES} PARENT_SCOPE)
 else()
     set(GPU_ACCELERATION_AVAILABLE "" PARENT_SCOPE)
