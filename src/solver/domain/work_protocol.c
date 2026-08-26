@@ -98,3 +98,45 @@ int pe_work_frame_decode(const uint8_t *frame,
     *out_payload_size = (size_t)encoded_size;
     return 0;
 }
+
+int pe_work_frame_encode_work_unit(const pe_work_unit_t *unit,
+                                   uint8_t *out,
+                                   size_t capacity,
+                                   size_t *out_size)
+{
+    size_t descriptor_size;
+    size_t payload_size;
+    size_t frame_size;
+
+    if (!unit || !out || !out_size)
+        return -1;
+    descriptor_size = pe_work_unit_to_string(unit, NULL, 0u);
+    if (descriptor_size == 0u || descriptor_size == SIZE_MAX)
+        return -1;
+    payload_size = descriptor_size + 1u;
+    frame_size = pe_work_frame_size(payload_size);
+    if (frame_size == 0u || capacity < frame_size)
+        return -1;
+    if (pe_work_unit_to_string(unit, (char *)(out + PE_WORK_PROTOCOL_HEADER_SIZE),
+                               payload_size) != descriptor_size)
+        return -1;
+    return pe_work_frame_encode(PE_WORK_MESSAGE_UNIT,
+                                out + PE_WORK_PROTOCOL_HEADER_SIZE,
+                                payload_size, out, capacity, out_size);
+}
+
+int pe_work_frame_decode_work_unit(const uint8_t *frame,
+                                   size_t frame_size,
+                                   pe_work_unit_t *out)
+{
+    pe_work_message_type_t type;
+    const uint8_t *payload;
+    size_t payload_size;
+
+    if (!out || pe_work_frame_decode(frame, frame_size, &type, &payload,
+                                     &payload_size) != 0 ||
+        type != PE_WORK_MESSAGE_UNIT || payload_size == 0u ||
+        payload[payload_size - 1u] != '\0')
+        return -1;
+    return pe_work_unit_from_string((const char *)payload, out);
+}

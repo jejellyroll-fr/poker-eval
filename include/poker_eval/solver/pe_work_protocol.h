@@ -5,6 +5,8 @@
 #ifndef POKER_EVAL_PE_WORK_PROTOCOL_H
 #define POKER_EVAL_PE_WORK_PROTOCOL_H
 
+#include <poker_eval/solver/pe_work_unit.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -49,6 +51,17 @@ int pe_work_frame_decode(const uint8_t *frame,
                          pe_work_message_type_t *out_type,
                          const uint8_t **out_payload,
                          size_t *out_payload_size);
+
+/** Encode a WorkUnit descriptor as a NUL-terminated UNIT frame payload. */
+int pe_work_frame_encode_work_unit(const pe_work_unit_t *unit,
+                                   uint8_t *out,
+                                   size_t capacity,
+                                   size_t *out_size);
+
+/** Decode a UNIT frame into an initialized or empty WorkUnit destination. */
+int pe_work_frame_decode_work_unit(const uint8_t *frame,
+                                   size_t frame_size,
+                                   pe_work_unit_t *out);
 
 #ifdef __cplusplus
 }

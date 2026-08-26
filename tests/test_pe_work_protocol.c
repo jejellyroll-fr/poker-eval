@@ -5,6 +5,37 @@
 #include <stdint.h>
 #include <string.h>
 
+static void test_work_unit_frame(void)
+{
+    pe_work_unit_t source;
+    pe_work_unit_t decoded;
+    uint8_t boards[] = {1u, 2u, 3u, 4u};
+    double regrets[] = {1.0, -0.0};
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE +
+                  PE_WORK_UNIT_DESCRIPTOR_MAX + 1u];
+    size_t frame_size;
+
+    pe_work_unit_init(&source);
+    pe_work_unit_init(&decoded);
+    source.public_state = 0x1234u;
+    source.player = 1u;
+    source.iteration_end = 4u;
+    source.boards = boards;
+    source.board_count = 2u;
+    source.board_width = 2u;
+    source.regret_snapshot = regrets;
+    source.regret_count = 2u;
+    assert(pe_work_frame_encode_work_unit(&source, frame, sizeof(frame),
+                                          &frame_size) == 0);
+    assert(pe_work_frame_decode_work_unit(frame, frame_size, &decoded) == 0);
+    assert(decoded.public_state == source.public_state);
+    assert(decoded.player == source.player);
+    assert(decoded.board_count == source.board_count);
+    assert(memcmp(decoded.boards, boards, sizeof(boards)) == 0);
+    assert(memcmp(decoded.regret_snapshot, regrets, sizeof(regrets)) == 0);
+    pe_work_unit_destroy(&decoded);
+}
+
 static void test_round_trip(void)
 {
     const uint8_t payload[] = {0x00, 0x01, 0x7f, 0x80, 0xff};
@@ -62,5 +93,6 @@ int main(void)
 {
     test_round_trip();
     test_rejects_invalid_frames();
+    test_work_unit_frame();
     return 0;
 }
