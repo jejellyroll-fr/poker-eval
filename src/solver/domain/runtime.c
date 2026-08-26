@@ -4,6 +4,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -11,6 +12,16 @@
 #else
 #include <unistd.h>
 #endif
+
+static int gpu_parity_gate_disabled(void)
+{
+    const char *value = getenv("PE_GPU_SKIP_PARITY");
+
+    return value != NULL &&
+           (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
+            strcmp(value, "TRUE") == 0 || strcmp(value, "yes") == 0 ||
+            strcmp(value, "YES") == 0);
+}
 
 static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
 {
@@ -211,6 +222,22 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
             set_backend(info, kind, name, compiled, 0, 0, 0u, 0,
                         "device/context available; CPU/GPU parity validation failed");
             return;
+        }
+        if (kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL)
+        {
+            if (gpu_parity_gate_disabled())
+            {
+                if (ops->destroy)
+                    ops->destroy(backend);
+                set_backend(info, kind, name, compiled, 0, 1, 0u, 0,
+                            "GPU parity passed; gate disabled by PE_GPU_SKIP_PARITY");
+                return;
+            }
+            /* Runtime probing is the production opener.  The validation
+             * above exercises strategy, update and terminal paths against
+             * cpu_ref before either GPU capability becomes visible. */
+            pe_gpu_terminal_eval_gate_open();
+            pe_gpu_regret_update_gate_open();
         }
         capabilities = ops->capabilities ? ops->capabilities(backend) : 0u;
         if (ops->destroy)
