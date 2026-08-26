@@ -447,7 +447,9 @@ seuil de lancement propre à chaque machine reste une étape ultérieure de
 profiling. Le probe runtime renseigne désormais automatiquement
 `terminal_elements_per_s` avec un micro-benchmark Hold'em borné ; les
 opérations non supportées conservent un débit nul (« inconnu »), et cette
-mesure ne peut pas ouvrir seule la porte de parité.
+mesure ne peut pas ouvrir seule la porte de parité. Ces trois débits sont
+également inclus dans la ligne de statut `pe_runtime`, afin que la décision
+`AUTO` soit observable dans les logs et dans le diagnostic distribué.
 
 ---
 

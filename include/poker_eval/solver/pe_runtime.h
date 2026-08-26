@@ -64,7 +64,7 @@ pe_compute_kind_t pe_runtime_recommended_backend(
 /** Return a stable user-facing name for the selected SIMD capability. */
 const char *pe_runtime_simd_name(simd_capability_t capability);
 
-/** Render a compact backend status line for logs and CLI output. */
+/** Render a backend status line with availability, reason, and measured rates. */
 int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
                               char *out, size_t capacity);
 

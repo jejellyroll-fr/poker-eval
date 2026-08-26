@@ -25,7 +25,8 @@ int main(void)
         return 3;
     if (pe_runtime_backend_status(&runtime.backends[PE_COMPUTE_CPU_REF],
                                   status, sizeof(status)) < 0 ||
-        strstr(status, "available") == NULL)
+        strstr(status, "available") == NULL ||
+        strstr(status, "terminal=") == NULL)
         return 4;
     if (pe_runtime_simd_name(runtime.simd) == NULL ||
         pe_runtime_simd_name(runtime.simd)[0] == '\0')

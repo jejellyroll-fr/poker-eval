@@ -530,11 +530,14 @@ int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
     if (!backend || !out || capacity == 0u)
         return -1;
     written = snprintf(out, capacity,
-                       "%s: %s%s%s (%s)",
+                       "%s: %s%s%s (strategy=%.3f/s update=%.3f/s terminal=%.3f/s; %s)",
                        backend->name,
                        backend->runtime_available ? "available" : "unavailable",
                        backend->validated ? ", validated" : "",
                        backend->compiled ? "" : ", not compiled",
+                       backend->strategy_elements_per_s,
+                       backend->update_elements_per_s,
+                       backend->terminal_elements_per_s,
                        backend->reason);
     return written < 0 ? -1 : written;
 }
