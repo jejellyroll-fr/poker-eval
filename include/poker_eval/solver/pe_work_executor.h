@@ -51,6 +51,16 @@ int pe_work_worker_serve(pe_work_socket_t socket,
                          size_t unit_count,
                          size_t *processed);
 
+/**
+ * Announce and serve multiple units until an explicit SHUTDOWN frame arrives.
+ * The connection remains open between units; the caller closes it afterwards.
+ */
+int pe_work_worker_serve_forever(pe_work_socket_t socket,
+                                 const pe_runtime_capabilities_t *runtime,
+                                 pe_work_execute_fn execute,
+                                 void *user_data,
+                                 size_t *processed);
+
 #ifdef __cplusplus
 }
 #endif

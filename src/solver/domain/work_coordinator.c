@@ -125,6 +125,34 @@ int pe_work_coordinator_accept_tcp(pe_work_coordinator_t *coordinator,
     return 0;
 }
 
+int pe_work_coordinator_accept_tcp_batch(
+    pe_work_coordinator_t *coordinator,
+    pe_work_socket_t listener,
+    uint32_t first_worker_id,
+    pe_work_worker_channel_t *out_channels,
+    size_t capacity,
+    size_t *out_count)
+{
+    size_t i;
+
+    if (out_count)
+        *out_count = 0u;
+    if (!coordinator || listener == PE_WORK_SOCKET_INVALID ||
+        !out_channels || capacity == 0u || first_worker_id == 0u ||
+        capacity > (size_t)UINT32_MAX - (size_t)first_worker_id + 1u)
+        return -1;
+    for (i = 0u; i < capacity; ++i)
+    {
+        if (pe_work_coordinator_accept_tcp(
+                coordinator, listener, first_worker_id + (uint32_t)i,
+                &out_channels[i]) != 0)
+            return -1;
+    }
+    if (out_count)
+        *out_count = capacity;
+    return 0;
+}
+
 int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id)
 {
@@ -335,4 +363,18 @@ int pe_work_coordinator_collect_results(
     }
     free(frame);
     return rc;
+}
+
+int pe_work_coordinator_shutdown(
+    const pe_work_worker_channel_t *channels, size_t channel_count)
+{
+    size_t i;
+
+    if (!channels && channel_count != 0u)
+        return -1;
+    for (i = 0u; i < channel_count; ++i)
+        if (channels[i].socket == PE_WORK_SOCKET_INVALID ||
+            pe_work_socket_send_shutdown(channels[i].socket) != 0)
+            return -1;
+    return 0;
 }

@@ -6,6 +6,7 @@
 
 #if !defined(_WIN32)
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -133,9 +134,72 @@ static void test_batch_worker(void)
 #endif
 }
 
+static void test_persistent_worker(void)
+{
+#if defined(_WIN32)
+    return;
+#else
+    pe_runtime_capabilities_t runtime;
+    pe_runtime_capabilities_t announced = {0};
+    pe_work_unit_t units[2];
+    pe_work_result_t result;
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE +
+                  PE_WORK_PROTOCOL_RESULT_FIXED_SIZE];
+    size_t frame_size;
+    size_t processed = 0u;
+    int sockets[2];
+    pid_t child;
+    int status;
+    size_t i;
+
+    assert(pe_runtime_probe(&runtime) == 0);
+    runtime.backends[PE_COMPUTE_CPU_REF].compiled = 1;
+    runtime.backends[PE_COMPUTE_CPU_REF].runtime_available = 1;
+    runtime.backends[PE_COMPUTE_CPU_REF].validated = 1;
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        int rc;
+        pe_work_socket_close((pe_work_socket_t)sockets[0]);
+        rc = pe_work_worker_serve_forever((pe_work_socket_t)sockets[1],
+                                          &runtime, execute_batch_unit, NULL,
+                                          &processed);
+        pe_work_socket_close((pe_work_socket_t)sockets[1]);
+        _exit(rc == 0 && processed == 2u ? 0 : 1);
+    }
+
+    pe_work_socket_close((pe_work_socket_t)sockets[1]);
+    assert(pe_work_socket_recv_capabilities((pe_work_socket_t)sockets[0],
+                                             &announced) == 0);
+    assert(announced.backends[PE_COMPUTE_CPU_REF].validated == 1);
+    for (i = 0u; i < 2u; ++i) {
+        pe_work_unit_init(&units[i]);
+        units[i].public_state = i + 20u;
+        units[i].iteration_end = 2u;
+        assert(pe_work_socket_send_work_unit((pe_work_socket_t)sockets[0],
+                                              &units[i]) == 0);
+    }
+    for (i = 0u; i < 2u; ++i) {
+        assert(pe_work_socket_recv_frame((pe_work_socket_t)sockets[0], frame,
+                                         sizeof(frame), &frame_size) == 0);
+        assert(pe_work_frame_decode_result(frame, frame_size, &result) == 0);
+        assert(result.public_state == i + 20u);
+        assert(result.backend == PE_COMPUTE_CPU_REF);
+    }
+    assert(pe_work_socket_send_shutdown((pe_work_socket_t)sockets[0]) == 0);
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    for (i = 0u; i < 2u; ++i)
+        pe_work_unit_destroy(&units[i]);
+    pe_work_socket_close((pe_work_socket_t)sockets[0]);
+#endif
+}
+
 int main(void)
 {
     test_one_shot_worker();
     test_batch_worker();
+    test_persistent_worker();
     return 0;
 }

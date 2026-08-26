@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 static double backend_rate(const pe_runtime_backend_info_t *backend)
 {
@@ -130,5 +131,81 @@ int pe_work_worker_serve(pe_work_socket_t socket,
     rc = pe_work_worker_run_batch(socket, runtime, execute, user_data,
                                   unit_count, processed);
     (void)pe_work_socket_close(socket);
+    return rc;
+}
+
+int pe_work_worker_serve_forever(pe_work_socket_t socket,
+                                 const pe_runtime_capabilities_t *runtime,
+                                 pe_work_execute_fn execute,
+                                 void *user_data,
+                                 size_t *processed)
+{
+    uint8_t *frame;
+    size_t frame_capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                            PE_WORK_PROTOCOL_MAX_PAYLOAD;
+    size_t count = 0u;
+    int rc = 0;
+
+    if (processed)
+        *processed = 0u;
+    if (socket == PE_WORK_SOCKET_INVALID || !runtime || !execute ||
+        pe_work_worker_backend(runtime) == PE_COMPUTE_AUTO)
+        return -1;
+    if (pe_work_worker_announce(socket, runtime) != 0)
+        return -1;
+    frame = (uint8_t *)malloc(frame_capacity);
+    if (!frame)
+        return -1;
+    for (;;)
+    {
+        pe_work_message_type_t type;
+        const uint8_t *payload;
+        size_t payload_size;
+        size_t frame_size;
+        pe_work_unit_t unit;
+        pe_work_result_t result = {0};
+        pe_compute_kind_t backend;
+
+        if (pe_work_socket_recv_frame(socket, frame, frame_capacity,
+                                      &frame_size) != 0 ||
+            pe_work_frame_decode(frame, frame_size, &type, &payload,
+                                 &payload_size) != 0)
+        {
+            rc = -1;
+            break;
+        }
+        if (type == PE_WORK_MESSAGE_SHUTDOWN)
+            break;
+        if (type != PE_WORK_MESSAGE_UNIT)
+        {
+            rc = -1;
+            break;
+        }
+        pe_work_unit_init(&unit);
+        if (pe_work_frame_decode_work_unit(frame, frame_size, &unit) != 0)
+        {
+            pe_work_unit_destroy(&unit);
+            rc = -1;
+            break;
+        }
+        backend = pe_work_worker_backend(runtime);
+        result.public_state = unit.public_state;
+        result.iteration_begin = unit.iteration_begin;
+        result.iteration_end = unit.iteration_end;
+        result.backend = backend;
+        rc = execute(&unit, backend, &result, user_data);
+        if (rc == 0 && pe_work_result_validate(&result) != 0)
+            rc = -1;
+        if (rc == 0)
+            rc = pe_work_socket_send_result(socket, &result);
+        pe_work_result_release(&result);
+        pe_work_unit_destroy(&unit);
+        if (rc != 0)
+            break;
+        ++count;
+    }
+    free(frame);
+    if (processed)
+        *processed = count;
     return rc;
 }

@@ -76,7 +76,7 @@ static int socket_write_all(pe_work_socket_t socket,
 static int valid_type(pe_work_message_type_t type)
 {
     return type >= PE_WORK_MESSAGE_CAPABILITIES &&
-           type <= PE_WORK_MESSAGE_RESULT;
+           type <= PE_WORK_MESSAGE_SHUTDOWN;
 }
 
 static void put_u64_be(uint8_t *out, uint64_t value)
@@ -449,6 +449,17 @@ int pe_work_socket_send_result(pe_work_socket_t socket,
         rc = pe_work_socket_send_frame(socket, buffer, frame_size);
     free(buffer);
     return rc;
+}
+
+int pe_work_socket_send_shutdown(pe_work_socket_t socket)
+{
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE];
+    size_t frame_size;
+
+    if (pe_work_frame_encode(PE_WORK_MESSAGE_SHUTDOWN, NULL, 0u,
+                             frame, sizeof(frame), &frame_size) != 0)
+        return -1;
+    return pe_work_socket_send_frame(socket, frame, frame_size);
 }
 
 int pe_work_frame_encode(pe_work_message_type_t type,

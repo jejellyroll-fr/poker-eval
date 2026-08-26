@@ -64,6 +64,15 @@ int pe_work_coordinator_accept_tcp(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id,
                                    pe_work_worker_channel_t *out_channel);
 
+/** Accept a bounded set of persistent worker connections. */
+int pe_work_coordinator_accept_tcp_batch(
+    pe_work_coordinator_t *coordinator,
+    pe_work_socket_t listener,
+    uint32_t first_worker_id,
+    pe_work_worker_channel_t *out_channels,
+    size_t capacity,
+    size_t *out_count);
+
 /** Remove a worker; returns -1 when the id is not registered. */
 int pe_work_coordinator_unregister(pe_work_coordinator_t *coordinator,
                                    uint32_t worker_id);
@@ -103,6 +112,10 @@ int pe_work_coordinator_collect_results(
     const pe_work_worker_channel_t *channels,
     size_t channel_count,
     pe_work_reducer_t *reducer);
+
+/** Send SHUTDOWN to all supplied persistent worker channels. */
+int pe_work_coordinator_shutdown(
+    const pe_work_worker_channel_t *channels, size_t channel_count);
 
 #ifdef __cplusplus
 }

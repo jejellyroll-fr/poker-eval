@@ -28,7 +28,8 @@ typedef enum pe_work_message_type_t
 {
     PE_WORK_MESSAGE_CAPABILITIES = 1,
     PE_WORK_MESSAGE_UNIT = 2,
-    PE_WORK_MESSAGE_RESULT = 3
+    PE_WORK_MESSAGE_RESULT = 3,
+    PE_WORK_MESSAGE_SHUTDOWN = 4
 } pe_work_message_type_t;
 
 typedef struct pe_work_result_t
@@ -92,6 +93,9 @@ int pe_work_socket_recv_work_unit(pe_work_socket_t socket,
                                   pe_work_unit_t *out);
 int pe_work_socket_send_result(pe_work_socket_t socket,
                                const pe_work_result_t *result);
+
+/** Ask a persistent worker session to stop cleanly after its queued work. */
+int pe_work_socket_send_shutdown(pe_work_socket_t socket);
 
 /**
  * Return the complete frame size, or zero when the payload is invalid or the
