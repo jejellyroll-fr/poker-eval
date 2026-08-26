@@ -459,7 +459,10 @@ sous-arbre à un worker incapable d'évaluer ses feuilles.
 Le seuil `terminal_min_batch_size` est maintenant transporté dans le
 descripteur runtime et appliqué par `pe_runtime_recommended_backend_for_batch`.
 Les descripteurs V1 historiques sans ce champ restent acceptés et conservent
-un seuil inconnu (`0`).
+un seuil inconnu (`0`). Sur un backend GPU présent et paritaire, le probe
+calibre automatiquement ce seuil sur les tailles 1/8/32/128/256 contre
+`CPU_REF`, avec une marge de 5 % pour éviter les décisions instables dues au
+bruit de mesure.
 
 ---
 

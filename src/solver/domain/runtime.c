@@ -133,6 +133,45 @@ static double measure_terminal_rate(const pe_compute_ops_t *ops, void *backend,
            (double)elapsed;
 }
 
+static size_t calibrate_terminal_min_batch(const pe_compute_ops_t *gpu_ops,
+                                           void *gpu_backend,
+                                           const pe_compute_config_t *gpu_config)
+{
+    static const size_t batch_sizes[] = {1u, 8u, 32u, 128u, 256u};
+    const pe_compute_ops_t *cpu_ops = pe_compute_cpu_ref_ops();
+    pe_compute_config_t cpu_config;
+    void *cpu_backend = NULL;
+    size_t i;
+    size_t threshold = 0u;
+
+    if (gpu_ops == NULL || gpu_backend == NULL || gpu_config == NULL ||
+        cpu_ops == NULL || cpu_ops->create == NULL ||
+        gpu_ops->terminal_eval_batch == NULL)
+        return 0u;
+    cpu_config = *gpu_config;
+    cpu_config.cpu_threads = 1;
+    cpu_config.deterministic = 1;
+    if (cpu_ops->create(&cpu_backend, &cpu_config) != 0 || cpu_backend == NULL)
+        return 0u;
+    for (i = 0u; i < sizeof(batch_sizes) / sizeof(batch_sizes[0]); ++i)
+    {
+        double cpu_rate = measure_terminal_rate(cpu_ops, cpu_backend,
+                                                batch_sizes[i]);
+        double gpu_rate = measure_terminal_rate(gpu_ops, gpu_backend,
+                                                batch_sizes[i]);
+        /* Keep a small margin so timer noise does not make AUTO oscillate
+         * around the crossover point from one probe to the next. */
+        if (cpu_rate > 0.0 && gpu_rate > cpu_rate * 1.05)
+        {
+            threshold = batch_sizes[i];
+            break;
+        }
+    }
+    if (cpu_ops->destroy)
+        cpu_ops->destroy(cpu_backend);
+    return threshold;
+}
+
 static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
 {
     const pe_compute_ops_t *cpu_ops = pe_compute_cpu_ref_ops();
@@ -314,6 +353,7 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
     int created;
     uint64_t capabilities = 0u;
     double terminal_rate = 0.0;
+    size_t terminal_min_batch_size = 0u;
     const char *name = ops && ops->name ? ops->name : "unknown";
 
     memset(&config, 0, sizeof(config));
@@ -353,6 +393,10 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
         capabilities = ops->capabilities ? ops->capabilities(backend) : 0u;
         terminal_rate = measure_terminal_rate(ops, backend,
                                               config.terminal_batch_size);
+        if ((kind == PE_COMPUTE_CUDA || kind == PE_COMPUTE_OPENCL) &&
+            (capabilities & PE_CAP_GPU_TERMINAL_EVAL))
+            terminal_min_batch_size = calibrate_terminal_min_batch(
+                ops, backend, &config);
         if (ops->destroy)
             ops->destroy(backend);
         /* A GPU context can be created even when the adapter is still
@@ -370,6 +414,7 @@ static void probe_adapter(pe_runtime_backend_info_t *info,
             set_backend(info, kind, name, compiled, 1, 1, capabilities, 1,
                         "ready");
             info->terminal_elements_per_s = terminal_rate;
+            info->terminal_min_batch_size = terminal_min_batch_size;
         }
     }
     else
