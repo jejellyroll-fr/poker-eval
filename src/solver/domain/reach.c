@@ -107,40 +107,58 @@ void pe_vec_axpy(pe_vec_t *dst, double a, const pe_vec_t *src)
 }
 
 /*
- * Neumaier summation.
- *
- * The plain Kahan form assumes the running total dominates the term being
- * added and loses the compensation when it does not. A reach vector mixes a
- * few large weights with a long tail of small ones — exactly that case — so
- * the branch below picks up the lost part from whichever side was smaller.
+ * Branchless Neumaier accumulation. Four independent lanes shorten the
+ * dependency chain and give the compiler room to vectorise the hot input
+ * loads. The boolean-to-double selection compiles to a compare plus select on
+ * the supported compilers; both correction expressions are evaluated so the
+ * loop contains no unpredictable branch.
  */
+static inline void pe_neumaier_add(double x, double *sum, double *correction)
+{
+    double t = *sum + x;
+    double sum_correction = (*sum - t) + x;
+    double x_correction = (x - t) + *sum;
+    double sum_is_larger = fabs(*sum) >= fabs(x) ? 1.0 : 0.0;
+
+    *correction += sum_is_larger * sum_correction +
+                   (1.0 - sum_is_larger) * x_correction;
+    *sum = t;
+}
+
+#define PE_VEC_SUM_LANES 4u
+
 double pe_vec_sum(const pe_vec_t *v)
 {
+    double sums[PE_VEC_SUM_LANES] = {0.0, 0.0, 0.0, 0.0};
+    double corrections[PE_VEC_SUM_LANES] = {0.0, 0.0, 0.0, 0.0};
     double sum = 0.0;
-    double c = 0.0;
+    double correction = 0.0;
     size_t i;
+    size_t lane;
 
     if (v == NULL || v->v == NULL)
         return 0.0;
 
     for (i = 0; i < v->n; ++i)
+        pe_neumaier_add(v->v[i], &sums[i % PE_VEC_SUM_LANES],
+                        &corrections[i % PE_VEC_SUM_LANES]);
+
+    for (lane = 0u; lane < PE_VEC_SUM_LANES; ++lane)
     {
-        double x = v->v[i];
-        double t = sum + x;
-        if (fabs(sum) >= fabs(x))
-            c += (sum - t) + x;
-        else
-            c += (x - t) + sum;
-        sum = t;
+        pe_neumaier_add(sums[lane], &sum, &correction);
+        pe_neumaier_add(corrections[lane], &sum, &correction);
     }
-    return sum + c;
+    return sum + correction;
 }
 
 double pe_vec_dot(const pe_vec_t *a, const pe_vec_t *b)
 {
+    double sums[PE_VEC_SUM_LANES] = {0.0, 0.0, 0.0, 0.0};
+    double corrections[PE_VEC_SUM_LANES] = {0.0, 0.0, 0.0, 0.0};
     double sum = 0.0;
-    double c = 0.0;
+    double correction = 0.0;
     size_t i;
+    size_t lane;
 
     if (a == NULL || b == NULL || a->v == NULL || b->v == NULL)
         return 0.0;
@@ -148,14 +166,13 @@ double pe_vec_dot(const pe_vec_t *a, const pe_vec_t *b)
         return 0.0;
 
     for (i = 0; i < a->n; ++i)
+        pe_neumaier_add(a->v[i] * b->v[i], &sums[i % PE_VEC_SUM_LANES],
+                        &corrections[i % PE_VEC_SUM_LANES]);
+
+    for (lane = 0u; lane < PE_VEC_SUM_LANES; ++lane)
     {
-        double x = a->v[i] * b->v[i];
-        double t = sum + x;
-        if (fabs(sum) >= fabs(x))
-            c += (sum - t) + x;
-        else
-            c += (x - t) + sum;
-        sum = t;
+        pe_neumaier_add(sums[lane], &sum, &correction);
+        pe_neumaier_add(corrections[lane], &sum, &correction);
     }
-    return sum + c;
+    return sum + correction;
 }
