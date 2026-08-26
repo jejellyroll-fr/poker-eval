@@ -18,6 +18,8 @@
 #include <osbs/bmutex.h>
 #include <osbs/bproc.h>
 
+#include "pe_tree_editor_model.h"
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <errno.h>
@@ -187,6 +189,20 @@ struct _app_t
     Tabs *tabs;
     Panel *pages;
 
+    /* Monker-style tree builder.  The editor is deliberately separate from
+     * the loaded MKR model: it owns a small, deterministic topology model and
+     * emits the JSON tree format consumed by the solver tools. */
+    pe_tree_editor_t tree_editor;
+    int tree_editor_ready;
+    TextView *tree_editor_view;
+    TextView *tree_editor_status;
+    Combo *tree_editor_node_combo;
+    Combo *tree_editor_action_combo;
+    Combo *tree_editor_remove_action_combo;
+    Combo *tree_editor_street_combo;
+    Edit *tree_editor_size_edit;
+    Label *tree_editor_selection_label;
+
     /* Background Solve Task */
     Mutex *solve_mutex;
     Proc *solve_proc;
@@ -296,6 +312,8 @@ static void update_action_history(App *app);
 static void update_action_history(App *app);
 static void mkr_populate_grid(App *app);
 static void trim_text(char *text);
+static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header,
+                     pe_monker_combo_layout_t *layout);
 
 /* Helpers */
 static int parse_ui_u64(const char *text, uint64_t *value)
@@ -522,6 +540,407 @@ static void status(App *app, const char *format, ...)
     va_end(args);
     textview_clear(app->status);
     textview_writef(app->status, buffer);
+    if (app->tree_editor_status)
+    {
+        textview_clear(app->tree_editor_status);
+        textview_writef(app->tree_editor_status, buffer);
+    }
+}
+
+static int tree_editor_selected_node(const App *app)
+{
+    const char *text;
+    int node = -1;
+    if (!app || !app->tree_editor_node_combo ||
+        combo_count(app->tree_editor_node_combo) == 0u)
+        return -1;
+    text = combo_get_text(app->tree_editor_node_combo,
+                          combo_get_selected(app->tree_editor_node_combo));
+    if (text)
+        (void)sscanf(text, "[%d]", &node);
+    return node;
+}
+
+static mpf_tree_action_type_t tree_editor_selected_action(const App *app)
+{
+    uint32_t selected = app && app->tree_editor_action_combo
+        ? combo_get_selected(app->tree_editor_action_combo) : 0u;
+    return selected <= (uint32_t)MPF_TREE_ACTION_CHANCE
+        ? (mpf_tree_action_type_t)selected : MPF_TREE_ACTION_FOLD;
+}
+
+static void tree_editor_refresh(App *app, int selected_node)
+{
+    char tree_text[32768];
+    char label[256];
+    if (!app || !app->tree_editor_ready)
+        return;
+    combo_clear(app->tree_editor_node_combo);
+    for (int node = 0; node < app->tree_editor.node_count; ++node)
+    {
+        const pe_tree_editor_node_t *entry = &app->tree_editor.nodes[node];
+        if (pe_tree_editor_reachable(&app->tree_editor, node))
+        {
+            snprintf(label, sizeof(label), "[%d] %s | %s%s", node, entry->id,
+                     pe_tree_editor_node_type_name(entry->type),
+                     entry->type == MPF_TREE_NODE_PLAYER ? " | P" : "");
+            if (entry->type == MPF_TREE_NODE_PLAYER)
+                snprintf(label + strlen(label), sizeof(label) - strlen(label),
+                         "%d", entry->acting_player + 1);
+            combo_add_elem(app->tree_editor_node_combo, label, NULL);
+        }
+    }
+    if (selected_node >= 0)
+    {
+        for (uint32_t item = 0u; item < combo_count(app->tree_editor_node_combo); ++item)
+        {
+            const char *item_text = combo_get_text(app->tree_editor_node_combo, item);
+            int item_node = -1;
+            if (item_text)
+                (void)sscanf(item_text, "[%d]", &item_node);
+            if (item_node == selected_node)
+            {
+                combo_selected(app->tree_editor_node_combo, item);
+                break;
+            }
+        }
+    }
+    if (combo_count(app->tree_editor_node_combo) > 0u &&
+        combo_get_selected(app->tree_editor_node_combo) >= combo_count(app->tree_editor_node_combo))
+        combo_selected(app->tree_editor_node_combo, 0u);
+    combo_clear(app->tree_editor_remove_action_combo);
+    {
+        int node = tree_editor_selected_node(app);
+        if (node >= 0 && node < app->tree_editor.node_count)
+        {
+            const pe_tree_editor_node_t *entry = &app->tree_editor.nodes[node];
+            for (int action = 0; action < entry->action_count; ++action)
+            {
+                char action_text[128];
+                snprintf(action_text, sizeof(action_text), "%d: %s", action + 1,
+                         pe_tree_editor_action_name(entry->actions[action].type));
+                combo_add_elem(app->tree_editor_remove_action_combo, action_text, NULL);
+            }
+        }
+    }
+    (void)pe_tree_editor_render(&app->tree_editor, tree_text, sizeof(tree_text));
+    textview_clear(app->tree_editor_view);
+    textview_printf(app->tree_editor_view, "%s", tree_text);
+    {
+        int node = tree_editor_selected_node(app);
+        if (node >= 0 && node < app->tree_editor.node_count)
+        {
+            const pe_tree_editor_node_t *entry = &app->tree_editor.nodes[node];
+            snprintf(label, sizeof(label), "Selected node %d | %s | %s | actions %d",
+                     node, entry->id, pe_tree_editor_node_type_name(entry->type),
+                     entry->action_count);
+        }
+        else
+        {
+            snprintf(label, sizeof(label), "No node selected");
+        }
+        label_text(app->tree_editor_selection_label, label);
+    }
+}
+
+static int tree_editor_import_tree(App *app, const mpf_tree_def_t *tree)
+{
+    if (!app || !tree || !app->tree_editor_ready ||
+        !pe_tree_editor_import(&app->tree_editor, tree))
+        return 0;
+    tree_editor_refresh(app, tree->root_index);
+    return 1;
+}
+
+static void i_on_tree_editor_new(App *app, Event *event)
+{
+    uint32_t street = app && app->tree_editor_street_combo
+        ? combo_get_selected(app->tree_editor_street_combo) : 0u;
+    if (app)
+    {
+        pe_tree_editor_init(&app->tree_editor, (int)selected_players(app),
+                            (mpf_street_t)street);
+        app->tree_editor_ready = 1;
+        edit_text(app->tree_edit, "poker_eval_tree.json");
+        tree_editor_refresh(app, app->tree_editor.root_index);
+        status(app, "TREE BUILDER READY\nNew %s tree | %u players\n\n"
+               "Select a node, choose an action and press Add action.\n"
+               "Raise sizes are pot multiples (0.5 = half pot, 1.0 = pot).",
+               street_name((int)street), selected_players(app));
+    }
+    unref(event);
+}
+
+static void i_on_tree_editor_node_select(App *app, Event *event)
+{
+    if (app && app->tree_editor_ready)
+        tree_editor_refresh(app, tree_editor_selected_node(app));
+    unref(event);
+}
+
+static void i_on_tree_editor_add(App *app, Event *event)
+{
+    int node = tree_editor_selected_node(app);
+    int child = -1;
+    double size = 0.0;
+    mpf_tree_action_type_t type = tree_editor_selected_action(app);
+    const char *size_text = app && app->tree_editor_size_edit
+        ? edit_get_text(app->tree_editor_size_edit) : NULL;
+    if (type == MPF_TREE_ACTION_RAISE &&
+        (!size_text || !*size_text || parse_ui_target(size_text, &size) != 0 || size <= 0.0))
+    {
+        status(app, "TREE BUILDER\nRaise size must be a positive pot multiple.");
+        unref(event);
+        return;
+    }
+    if (!pe_tree_editor_add_action(&app->tree_editor, node, type, size, &child))
+    {
+        status(app, "TREE BUILDER\nCould not add this action. Player nodes accept up to %d actions; chance and terminal nodes are not editable.",
+               PE_TREE_EDITOR_MAX_ACTIONS);
+        unref(event);
+        return;
+    }
+    tree_editor_refresh(app, child);
+    status(app, "TREE BUILDER\nAdded %s from node %d -> node %d.\n"
+           "Child player nodes start with Fold and Call / Check.",
+           pe_tree_editor_action_name(type), node, child);
+    unref(event);
+}
+
+static void i_on_tree_editor_remove(App *app, Event *event)
+{
+    int node = tree_editor_selected_node(app);
+    uint32_t action = app && app->tree_editor_remove_action_combo
+        ? combo_get_selected(app->tree_editor_remove_action_combo) : 0u;
+    if (!pe_tree_editor_remove_action(&app->tree_editor, node, (int)action))
+    {
+        status(app, "TREE BUILDER\nA player node must keep at least one action.");
+        unref(event);
+        return;
+    }
+    tree_editor_refresh(app, node);
+    status(app, "TREE BUILDER\nRemoved action %u from node %d.\n"
+           "The detached child remains in the edit history but is no longer reachable from the root.",
+           action + 1u, node);
+    unref(event);
+}
+
+static int tree_editor_save_path(App *app, char *path, size_t capacity)
+{
+    const char *configured = app && app->tree_edit ? edit_get_text(app->tree_edit) : NULL;
+    size_t length;
+    if (!path || capacity == 0u)
+        return 0;
+    if (!configured || !*configured || strcmp(configured, "/path/to/spot.tree") == 0)
+        configured = "poker_eval_tree.json";
+    length = strlen(configured);
+    if (length >= capacity)
+        return 0;
+    snprintf(path, capacity, "%s", configured);
+    if (length < 5u || strcmp(configured + length - 5u, ".json") != 0)
+    {
+        if (length + 5u >= capacity)
+            return 0;
+        snprintf(path + length, capacity - length, ".json");
+    }
+    edit_text(app->tree_edit, path);
+    return 1;
+}
+
+static void i_on_tree_editor_save(App *app, Event *event)
+{
+    char path[2048];
+    char error[256] = {0};
+    if (!app->tree_editor_ready || !pe_tree_editor_validate(&app->tree_editor,
+                                                             error, sizeof(error)))
+    {
+        status(app, "TREE BUILDER BLOCKED\nTree validation failed: %s",
+               error[0] ? error : "invalid tree");
+        unref(event);
+        return;
+    }
+    if (!tree_editor_save_path(app, path, sizeof(path)) ||
+        !pe_tree_editor_write_json(&app->tree_editor, path, error, sizeof(error)))
+    {
+        status(app, "TREE BUILDER ERROR\n%s", error[0] ? error : "could not save JSON tree");
+        unref(event);
+        return;
+    }
+    status(app, "TREE SAVED\n%s\n\nJSON CFR format is ready for the mpf-* tools.", path);
+    unref(event);
+}
+
+static void i_on_tree_editor_load(App *app, Event *event)
+{
+    const char *path = app && app->tree_edit ? edit_get_text(app->tree_edit) : NULL;
+    mpf_tree_def_t *tree = NULL;
+    mpf_tree_error_t json_error = {0};
+    pe_monker_status_t monker_status;
+    if (!path || !*path)
+    {
+        status(app, "TREE BUILDER\nChoose a JSON or Monker .tree path in Setup first.");
+        unref(event);
+        return;
+    }
+    tree = mpf_tree_load_json_file(path, &json_error);
+    if (!tree)
+    {
+        monker_status = pe_monker_tree_load(path, &tree);
+        if (monker_status != PE_MONKER_OK || !tree)
+        {
+            status(app, "TREE BUILDER ERROR\n%s", json_error.message[0]
+                   ? json_error.message : pe_monker_status_string(monker_status));
+            unref(event);
+            return;
+        }
+    }
+    if (!tree_editor_import_tree(app, tree))
+        status(app, "TREE BUILDER ERROR\nTree has more than %d nodes or could not be imported.",
+               PE_TREE_EDITOR_MAX_NODES);
+    else
+        status(app, "TREE BUILDER\nImported %d nodes from %s.\n"
+               "The builder edits topology and bet sizes; keep external ranges in Setup before solving.",
+               tree->node_count, path);
+    mpf_tree_free(tree);
+    unref(event);
+}
+
+static void i_on_tree_editor_setup(App *app, Event *event)
+{
+    char path[2048];
+    char error[256] = {0};
+    if (!app->tree_editor_ready || !pe_tree_editor_validate(&app->tree_editor,
+                                                             error, sizeof(error)))
+    {
+        status(app, "TREE BUILDER BLOCKED\nTree validation failed: %s",
+               error[0] ? error : "invalid tree");
+        unref(event);
+        return;
+    }
+    if (!tree_editor_save_path(app, path, sizeof(path)) ||
+        !pe_tree_editor_write_json(&app->tree_editor, path, error, sizeof(error)))
+    {
+        status(app, "TREE BUILDER ERROR\n%s", error[0] ? error : "save the tree before using it in Setup");
+        unref(event);
+        return;
+    }
+    tabs_selected(app->tabs, 0u);
+    panel_visible_layout(app->pages, 0u);
+    panel_update(app->pages);
+    status(app, "TREE BUILDER\nSaved and selected in Setup: %s\n"
+           "Use Load and inspect tree to refresh the setup context.", path);
+    unref(event);
+}
+
+static Panel *i_tree_editor_panel(App *app)
+{
+    Panel *panel = panel_create();
+    Layout *root = layout_create(2, 1);
+    Layout *left = layout_create(1, 2);
+    Layout *right = layout_create(2, 12);
+    Label *title = label_create();
+    Label *node_label = label_create();
+    Label *action_label = label_create();
+    Label *size_label = label_create();
+    Label *remove_label = label_create();
+    Label *street_label = label_create();
+    Button *new_tree = button_push();
+    Button *load_tree = button_push();
+    Button *add_action = button_push();
+    Button *remove_action = button_push();
+    Button *save_tree = button_push();
+    Button *use_setup = button_push();
+
+    app->tree_editor_view = textview_create();
+    app->tree_editor_status = textview_create();
+    app->tree_editor_node_combo = combo_create();
+    app->tree_editor_action_combo = combo_create();
+    app->tree_editor_remove_action_combo = combo_create();
+    app->tree_editor_street_combo = combo_create();
+    app->tree_editor_size_edit = edit_create();
+    app->tree_editor_selection_label = label_create();
+    textview_editable(app->tree_editor_view, FALSE);
+    textview_wrap(app->tree_editor_view, FALSE);
+    textview_editable(app->tree_editor_status, FALSE);
+    textview_wrap(app->tree_editor_status, TRUE);
+    textview_printf(app->tree_editor_status,
+                    "Create a tree, select a node and add actions.\n");
+    label_text(title, "TREE BUILDER | Monker-style topology editor");
+    label_text(node_label, "NODE");
+    label_text(action_label, "ACTION");
+    label_text(size_label, "RAISE SIZE (pot multiple)");
+    label_text(remove_label, "REMOVE ACTION");
+    label_text(street_label, "NEW TREE STREET");
+    label_text(app->tree_editor_selection_label, "No tree created");
+    combo_add_elem(app->tree_editor_action_combo, "Fold", NULL);
+    combo_add_elem(app->tree_editor_action_combo, "Call / Check", NULL);
+    combo_add_elem(app->tree_editor_action_combo, "Raise", NULL);
+    combo_add_elem(app->tree_editor_action_combo, "Chance", NULL);
+    combo_add_elem(app->tree_editor_street_combo, "Preflop", NULL);
+    combo_add_elem(app->tree_editor_street_combo, "Flop", NULL);
+    combo_add_elem(app->tree_editor_street_combo, "Turn", NULL);
+    combo_add_elem(app->tree_editor_street_combo, "River", NULL);
+    combo_selected(app->tree_editor_action_combo, 2u);
+    combo_selected(app->tree_editor_street_combo, 0u);
+    edit_text(app->tree_editor_size_edit, "0.5");
+    button_text(new_tree, "New tree");
+    button_text(load_tree, "Import current");
+    button_text(add_action, "Add action");
+    button_text(remove_action, "Remove action");
+    button_text(save_tree, "Save JSON");
+    button_text(use_setup, "Use in Setup");
+    button_OnClick(new_tree, listener(app, i_on_tree_editor_new, App));
+    button_OnClick(load_tree, listener(app, i_on_tree_editor_load, App));
+    button_OnClick(add_action, listener(app, i_on_tree_editor_add, App));
+    button_OnClick(remove_action, listener(app, i_on_tree_editor_remove, App));
+    button_OnClick(save_tree, listener(app, i_on_tree_editor_save, App));
+    button_OnClick(use_setup, listener(app, i_on_tree_editor_setup, App));
+    combo_OnSelect(app->tree_editor_node_combo,
+                   listener(app, i_on_tree_editor_node_select, App));
+    layout_label(left, title, 0, 0);
+    layout_textview(left, app->tree_editor_view, 0, 1);
+    layout_vsize(left, 1, 680.0f);
+    layout_label(right, street_label, 0, 0);
+    layout_combo(right, app->tree_editor_street_combo, 1, 0);
+    layout_label(right, node_label, 0, 1);
+    layout_combo(right, app->tree_editor_node_combo, 1, 1);
+    layout_label(right, action_label, 0, 2);
+    layout_combo(right, app->tree_editor_action_combo, 1, 2);
+    layout_label(right, size_label, 0, 3);
+    layout_edit(right, app->tree_editor_size_edit, 1, 3);
+    layout_label(right, remove_label, 0, 4);
+    layout_combo(right, app->tree_editor_remove_action_combo, 1, 4);
+    layout_button(right, new_tree, 0, 5);
+    layout_button(right, load_tree, 1, 5);
+    layout_button(right, add_action, 0, 6);
+    layout_button(right, remove_action, 1, 6);
+    layout_button(right, save_tree, 0, 7);
+    layout_button(right, use_setup, 1, 7);
+    layout_label(right, app->tree_editor_selection_label, 0, 8);
+    layout_textview(right, app->tree_editor_status, 0, 9);
+    layout_hsize(right, 0, 190.0f);
+    layout_hsize(right, 1, 270.0f);
+    layout_hmargin(right, 0, 8.0f);
+    layout_vmargin(right, 0, 8.0f);
+    layout_vmargin(right, 3, 12.0f);
+    layout_vmargin(right, 4, 8.0f);
+    layout_vmargin(right, 5, 8.0f);
+    layout_vmargin(right, 6, 8.0f);
+    layout_vmargin(right, 7, 12.0f);
+    layout_vsize(right, 9, 180.0f);
+    layout_layout(root, left, 0, 0);
+    layout_layout(root, right, 1, 0);
+    layout_hsize(root, 0, 760.0f);
+    layout_hsize(root, 1, 470.0f);
+    layout_hmargin(root, 0, 12.0f);
+    layout_margin(root, 12.0f);
+    panel_layout(panel, root);
+    pe_tree_editor_init(&app->tree_editor, (int)selected_players(app),
+                        MPF_STREET_PREFLOP);
+    app->tree_editor_ready = 1;
+    edit_text(app->tree_edit, "poker_eval_tree.json");
+    tree_editor_refresh(app, app->tree_editor.root_index);
+    return panel;
 }
 
 static const char *mkr_strategy_entry(const pe_monker_mkr_t *archive)
@@ -1995,6 +2414,49 @@ static void update_result_view(App *app, const char *output, int running)
         view_update(app->strategy_grid_view);
 }
 
+static int tree_path_is_json(const char *path)
+{
+    size_t length;
+    if (!path)
+        return 0;
+    length = strlen(path);
+    return (length >= 5u && strcmp(path + length - 5u, ".json") == 0) ||
+           (length >= 10u && strcmp(path + length - 10u, ".tree.json") == 0);
+}
+
+static int infer_json_tree_header(const mpf_tree_def_t *tree,
+                                  pe_monker_tree_header_t *header,
+                                  pe_monker_combo_layout_t *layout,
+                                  enum_game_t game)
+{
+    int players = 2;
+    int street = MPF_STREET_PREFLOP;
+    int first_to_act = 0;
+    if (!tree || !header || !layout || tree->root_index < 0 ||
+        tree->root_index >= tree->node_count)
+        return 0;
+    for (int node = 0; node < tree->node_count; ++node)
+    {
+        const mpf_tree_node_t *entry = &tree->nodes[node];
+        if (entry->acting_player >= 0 && entry->acting_player + 1 > players)
+            players = entry->acting_player + 1;
+        if (entry->has_snapshot && entry->snapshot.has_num_players &&
+            entry->snapshot.num_players >= 2 && entry->snapshot.num_players <= 8)
+            players = entry->snapshot.num_players;
+    }
+    street = tree->nodes[tree->root_index].street;
+    first_to_act = tree->nodes[tree->root_index].acting_player;
+    memset(header, 0, sizeof(*header));
+    header->player_count = (uint32_t)(players >= 2 && players <= 8 ? players : 2);
+    header->street = street >= MPF_STREET_PREFLOP && street <= MPF_STREET_RIVER
+        ? street : MPF_STREET_PREFLOP;
+    header->first_to_act = first_to_act >= 0 ? first_to_act : 0;
+    layout->game = game;
+    layout->hole_cards = hole_cards_from_game(game);
+    layout->combo_count = 0u;
+    return 1;
+}
+
 static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header,
                      pe_monker_combo_layout_t *layout)
 {
@@ -2007,13 +2469,29 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
      * earlier imported .mkr model selected after the tree has changed. */
     mkr_model_clear(app);
     memset(&ranges, 0, sizeof(ranges));
-    tree_status = pe_monker_tree_read_header(path, header);
-    if (tree_status != PE_MONKER_OK)
+    if (tree_path_is_json(path))
     {
-        status(app, "TREE ERROR\n%s", pe_monker_status_string(tree_status));
-        return -1;
+        mpf_tree_error_t json_error = {0};
+        tree = mpf_tree_load_json_file(path, &json_error);
+        if (!tree || !infer_json_tree_header(tree, header, layout, selected_game(app)))
+        {
+            status(app, "TREE ERROR\n%s", json_error.message[0]
+                   ? json_error.message : "JSON tree could not be decoded");
+            mpf_tree_free(tree);
+            return -1;
+        }
+        tree_status = PE_MONKER_OK;
     }
-    tree_status = pe_monker_tree_load(path, &tree);
+    else
+    {
+        tree_status = pe_monker_tree_read_header(path, header);
+        if (tree_status != PE_MONKER_OK)
+        {
+            status(app, "TREE ERROR\n%s", pe_monker_status_string(tree_status));
+            return -1;
+        }
+        tree_status = pe_monker_tree_load(path, &tree);
+    }
     if (tree_status != PE_MONKER_OK || !tree)
     {
         status(app, "TREE ERROR\nTopology could not be decoded: %s",
@@ -2024,6 +2502,8 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
     app->tree_player_count = header->player_count >= 2u &&
                              header->player_count <= 6u
         ? header->player_count : 0u;
+    if (app->tree_editor_ready)
+        (void)tree_editor_import_tree(app, tree);
     if (pe_monker_tree_read_ranges(path, &ranges) == PE_MONKER_OK &&
         ranges.combo_count > 0u &&
         pe_monker_combo_layout_from_count(ranges.combo_count, layout) == PE_MONKER_OK)
@@ -4487,8 +4967,10 @@ static App *i_create(void)
     Layout *layout = layout_create(1, 2);
     Panel *setup;
     Panel *result;
+    Panel *editor;
     Layout *setup_layout = layout_create(1, 1);
     Layout *result_layout = layout_create(1, 1);
+    Layout *editor_layout = layout_create(1, 1);
     Tabs *tabs = tabs_create((gui_pos_t)ekTABS_TOP);
     Panel *pages = panel_create();
 
@@ -4501,16 +4983,20 @@ static App *i_create(void)
 
     setup = i_setup_panel(app);
     result = i_result_panel(app);
+    editor = i_tree_editor_panel(app);
 
     app->tabs = tabs;
     app->pages = pages;
     tabs_add_elem(tabs, "SETUP", NULL);
     tabs_add_elem(tabs, "RESULTS", NULL);
+    tabs_add_elem(tabs, "TREE BUILDER", NULL);
     tabs_OnSelect(tabs, listener(app, i_on_tab, App));
     layout_panel(setup_layout, setup, 0, 0);
     layout_panel(result_layout, result, 0, 0);
+    layout_panel(editor_layout, editor, 0, 0);
     panel_layout(pages, setup_layout);
     panel_layout(pages, result_layout);
+    panel_layout(pages, editor_layout);
     panel_visible_layout(pages, 0u);
     app->solve_mutex = bmutex_create();
     layout_tabs(layout, tabs, 0, 0);

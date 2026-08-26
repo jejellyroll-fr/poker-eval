@@ -309,6 +309,7 @@ set(TEST_SOURCES
     test_cache_demo.c
     simple_alignment_test.c
     test_mpf_tree_parser.c
+    test_tree_editor_model.c
 
     # Betting API tests
     test_betting_api.c
@@ -571,6 +572,11 @@ foreach(test_source ${TEST_SOURCES})
     string(REPLACE ".c" "" test_name ${test_source})
     add_poker_test(${test_name})
 endforeach()
+
+if(TARGET test_tree_editor_model)
+    target_sources(test_tree_editor_model PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/pe_tree_editor_model.c)
+endif()
 
 # Quick smoke tests for ctest -L fast
 get_property(_all_tests DIRECTORY PROPERTY TESTS)

@@ -125,7 +125,9 @@ if(PE_NAPPGUI_ROOT AND EXISTS "${PE_NAPPGUI_ROOT}/CMakeLists.txt")
         set(PE_NAPPGUI_LIBS osapp gui osgui draw2d geom2d core osbs sewer)
     endif()
     if(PE_NAPPGUI_LIBS)
-        add_executable(poker-eval-studio poker_eval_studio.c)
+        add_executable(poker-eval-studio
+            poker_eval_studio.c
+            pe_tree_editor_model.c)
         target_include_directories(poker-eval-studio PRIVATE
             ${TOOLS_COMMON_INCLUDES}
             ${PE_NAPPGUI_ROOT}/src)
