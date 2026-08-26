@@ -30,6 +30,15 @@ typedef struct
     double average_value;
 } pe_update_target_t;
 
+typedef struct
+{
+    const pe_update_group_t *group;
+    double *regrets;
+    double *average;
+    size_t regret_length;
+    size_t average_length;
+} pe_soa_target_t;
+
 static uint64_t cpu_par_capabilities(void *self)
 {
     (void)self;
@@ -245,8 +254,123 @@ static int cpu_par_apply_update_batch(void *self,
     pe_update_target_t *targets = NULL;
     size_t i;
 
-    if (!backend || !batch || (batch->count != 0u && !batch->items))
+    if (!backend || !batch || (batch->count != 0u && !batch->items) ||
+        (batch->soa.group_count != 0u &&
+         (batch->soa.groups == NULL || batch->soa.deltas == NULL ||
+          batch->soa.average_deltas == NULL)))
         return -1;
+
+    if (batch->soa.group_count != 0u)
+    {
+        pe_soa_target_t *groups;
+        size_t group_index;
+        int failed = 0;
+
+        if (backend->config.storage == NULL ||
+            backend->config.storage_self == NULL ||
+            !backend->config.storage->shape ||
+            !backend->config.storage->values ||
+            !pe_storage_serves(backend->config.storage, PE_VALUES_REGRET) ||
+            !pe_storage_serves(backend->config.storage, PE_VALUES_AVERAGE) ||
+            batch->soa.group_count > SIZE_MAX / sizeof(*groups))
+            return -1;
+        groups = (pe_soa_target_t *)calloc(batch->soa.group_count,
+                                           sizeof(*groups));
+        if (groups == NULL)
+            return -1;
+
+        /* Resolve each infoset once. The expensive update math is performed
+           by the parallel loop below, not by a serial validation pass. */
+        for (group_index = 0u; group_index < batch->soa.group_count;
+             ++group_index)
+        {
+            const pe_update_group_t *group = &batch->soa.groups[group_index];
+            uint16_t actions;
+            uint16_t combos;
+            size_t values;
+            if (group->actions == 0u || group->combos == 0u ||
+                group->offset > batch->soa.value_count ||
+                (size_t)group->actions > SIZE_MAX / (size_t)group->combos)
+            {
+                failed = 1;
+                break;
+            }
+            values = (size_t)group->actions * (size_t)group->combos;
+            if (values > batch->soa.value_count - group->offset ||
+                backend->config.storage->shape(
+                    backend->config.storage_self, group->infoset,
+                    &actions, &combos, NULL) != 0 ||
+                actions != group->actions || combos != group->combos)
+            {
+                failed = 1;
+                break;
+            }
+            groups[group_index].group = group;
+            groups[group_index].regrets = backend->config.storage->values(
+                backend->config.storage_self, group->infoset,
+                PE_VALUES_REGRET, &groups[group_index].regret_length);
+            groups[group_index].average = backend->config.storage->values(
+                backend->config.storage_self, group->infoset,
+                PE_VALUES_AVERAGE, &groups[group_index].average_length);
+            if (groups[group_index].regrets == NULL ||
+                groups[group_index].average == NULL ||
+                groups[group_index].regret_length < values ||
+                groups[group_index].average_length < values)
+            {
+                failed = 1;
+                break;
+            }
+        }
+        if (failed)
+        {
+            free(groups);
+            return -1;
+        }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#endif
+        for (group_index = 0u; group_index < batch->soa.group_count;
+             ++group_index)
+        {
+            const pe_update_group_t *group = groups[group_index].group;
+            size_t value_index;
+            for (value_index = 0u;
+                 value_index < (size_t)group->actions * group->combos;
+                 ++value_index)
+            {
+                pe_update_t update = {
+                    group->infoset,
+                    (uint16_t)(value_index / group->combos),
+                    (uint16_t)(value_index % group->combos),
+                    batch->soa.deltas[group->offset + value_index],
+                    batch->soa.average_deltas[group->offset + value_index]
+                };
+                size_t slot = pe_storage_slot_at(
+                    group->combos, update.action, update.combo);
+                double new_regret;
+                double new_average;
+                if (slot >= groups[group_index].regret_length ||
+                    slot >= groups[group_index].average_length ||
+                    cpu_par_update_values(
+                        &backend->config, batch, &update,
+                        groups[group_index].regrets[slot],
+                        groups[group_index].average[slot],
+                        &new_regret, &new_average) != 0)
+                {
+#ifdef _OPENMP
+#pragma omp atomic write
+#endif
+                    failed = 1;
+                    continue;
+                }
+                groups[group_index].regrets[slot] = new_regret;
+                groups[group_index].average[slot] = new_average;
+            }
+        }
+        free(groups);
+        return failed ? -1 : 0;
+    }
     if (backend->config.storage != NULL && batch->count != 0u)
     {
         if (batch->count > SIZE_MAX / sizeof(*targets))

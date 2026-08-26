@@ -17,6 +17,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Long enough for the widest existing trace line with room to spare. */
 #define PE_TELEMETRY_MESSAGE_MAX 512
@@ -51,6 +52,28 @@ void pe_telemetry_emitf(const pe_telemetry_ops_t *ops,
     event.category = (category != NULL) ? category : "solver";
     event.message = message;
     event.iteration = iteration;
+    memset(&event.counters, 0, sizeof(event.counters));
 
+    pe_telemetry_emit(ops, &event);
+}
+
+void pe_telemetry_emit_counters(const pe_telemetry_ops_t *ops,
+                                pe_log_level_t level,
+                                const char *category,
+                                uint64_t iteration,
+                                const pe_telemetry_counters_t *counters,
+                                const char *message)
+{
+    pe_telemetry_event_t event;
+
+    if (!pe_telemetry_wants(ops, level))
+        return;
+    memset(&event, 0, sizeof(event));
+    event.level = level;
+    event.category = category != NULL ? category : "solver";
+    event.message = message != NULL ? message : "compute counters\n";
+    event.iteration = iteration;
+    if (counters != NULL)
+        event.counters = *counters;
     pe_telemetry_emit(ops, &event);
 }

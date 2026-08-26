@@ -13,6 +13,7 @@
 #include <poker_eval/solver/pe_batch.h>
 #include <poker_eval/solver/pe_game_rules.h>
 #include <poker_eval/solver/pe_vector.h>
+#include <poker_eval/solver/pe_telemetry.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -75,6 +76,9 @@ struct pe_traversal_ctx_t
     pe_reach_vec_t reach[PE_TRAVERSAL_MAX_PLAYERS];
     size_t visited_nodes;
     size_t terminal_nodes;
+    pe_telemetry_counters_t counters;
+    /* Private, thread-local scratch arena owned by the full vector lane. */
+    void *arena;
     uint64_t iteration;
     int initialized;
 };

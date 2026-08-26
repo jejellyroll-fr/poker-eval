@@ -126,6 +126,8 @@ static void test_toy_tree(void)
     pe_traversal_ctx_t ctx;
     pe_update_batch_t batch = {0};
     const pe_traversal_ops_t *ops = pe_traversal_full_vector_ops();
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    void *storage = NULL;
 
     memset(&game, 0, sizeof(game));
     game.root = &TOY_ROOT;
@@ -144,6 +146,15 @@ static void test_toy_tree(void)
     CHECK(pe_traversal_ctx_init(&ctx, &game) == 0, "context init failed");
     if (!ctx.initialized)
         return;
+    CHECK(storage_ops != NULL && storage_ops->create(&storage, 1u) == 0,
+          "storage init failed");
+    if (storage == NULL)
+    {
+        pe_traversal_ctx_destroy(&ctx);
+        return;
+    }
+    CHECK(pe_traversal_ctx_set_storage(&ctx, storage_ops, storage) == 0,
+          "storage injection failed");
 
     terminal_calls = 0;
     CHECK(ops->begin_iteration(&ctx, 7u) == 0, "begin failed");
@@ -153,13 +164,19 @@ static void test_toy_tree(void)
     CHECK(ctx.terminal_nodes == 2u, "visited %zu terminals, expected 2",
           ctx.terminal_nodes);
     CHECK(terminal_calls == 2, "terminal callback called %d times", terminal_calls);
-    CHECK(batch.count == 0u, "VEC-02 emitted updates before VEC-03");
+    CHECK(batch.count == 0u && batch.soa.group_count == 1u &&
+              batch.soa.value_count == 6u,
+          "vector traversal did not emit one SoA infoset group");
+    CHECK(ctx.counters.vec_allocs == 0u,
+          "small traversal escaped the reusable vector arena (%llu allocs)",
+          (unsigned long long)ctx.counters.vec_allocs);
     CHECK(ops->end_iteration(&ctx, 7u) == 0, "end failed");
     CHECK(ops->end_iteration(&ctx, 8u) != 0,
           "end accepted a mismatched iteration");
 
     pe_update_batch_destroy(&batch);
     pe_traversal_ctx_destroy(&ctx);
+    storage_ops->destroy(storage);
 }
 
 int main(void)

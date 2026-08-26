@@ -26,6 +26,35 @@ typedef struct
     double average_delta;
 } pe_update_t;
 
+/*
+ * Dense update representation used by the vector traversal.  All values for
+ * one infoset are contiguous in action-major order, so the infoset id and
+ * shape are paid once instead of once per (action, combo) pair.
+ *
+ * The values deliberately remain doubles for this first tranche.  HOT-05 can
+ * add an optional FP32 storage path without changing the numerical contract
+ * of this batch representation.
+ */
+typedef struct
+{
+    pe_infoset_id_t infoset;
+    uint16_t actions;
+    uint16_t combos;
+    uint32_t offset;
+} pe_update_group_t;
+
+typedef struct
+{
+    pe_update_group_t *groups;
+    size_t group_count;
+    size_t group_capacity;
+    double *deltas;
+    double *average_deltas;
+    size_t value_count;
+    size_t value_capacity;
+    uint64_t iteration;
+} pe_update_soa_t;
+
 typedef struct
 {
     pe_update_t *items;
@@ -34,6 +63,9 @@ typedef struct
     /* Iteration at which this batch is applied. Zero means no algorithm
        discounting is requested; solver-driven batches always set it. */
     uint64_t iteration;
+    uint64_t merge_comparisons;
+    /* Optional vector form. Legacy producers continue to use items/count. */
+    pe_update_soa_t soa;
 } pe_update_batch_t;
 
 /* A batch together with the stable logical thread id that produced it. The
@@ -50,6 +82,28 @@ void pe_update_batch_destroy(pe_update_batch_t *batch);
 
 /** Append one update, growing the batch as needed. */
 int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update);
+
+/** Reset the SoA payload while retaining its allocations. */
+void pe_update_soa_clear(pe_update_soa_t *soa);
+
+/** Release all allocations owned by an SoA payload. */
+void pe_update_soa_destroy(pe_update_soa_t *soa);
+
+/**
+ * Start (or find) one infoset group and return writable contiguous value
+ * spans. New spans are zeroed; callers may accumulate into them. Reusing an
+ * existing group is what keeps one storage resolution safe for repeated
+ * visits to the same infoset during a traversal.
+ */
+int pe_update_batch_soa_begin_group(pe_update_batch_t *batch,
+                                    pe_infoset_id_t infoset,
+                                    uint16_t actions,
+                                    uint16_t combos,
+                                    double **out_deltas,
+                                    double **out_average_deltas);
+
+/** Number of scalar values represented by the vector payload. */
+size_t pe_update_soa_value_count(const pe_update_soa_t *soa);
 
 /**
  * Merge source into destination, reducing duplicate slots by summing both
@@ -69,6 +123,11 @@ int pe_update_batch_merge(pe_update_batch_t *destination,
 int pe_update_batch_reduce(const pe_update_batch_source_t *sources,
                            size_t source_count,
                            pe_update_batch_t *out_reduced);
+
+/* Named entry point for callers whose inputs are known to be SoA-backed. */
+int pe_update_soa_reduce(const pe_update_batch_source_t *sources,
+                         size_t source_count,
+                         pe_update_batch_t *out_reduced);
 
 #ifdef __cplusplus
 }

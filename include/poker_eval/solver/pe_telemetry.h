@@ -49,6 +49,17 @@ typedef enum {
     PE_LOG_LEVEL_COUNT
 } pe_log_level_t;
 
+/* Per-iteration measurements that explain compute cost without tying the
+   telemetry port to a particular backend or output format. */
+typedef struct
+{
+    uint64_t updates_emitted;
+    uint64_t updates_after_reduce;
+    uint64_t batch_peak_bytes;
+    uint64_t vec_allocs;
+    uint64_t merge_comparisons;
+} pe_telemetry_counters_t;
+
 /* ------------------------------------------------------------------ *
  * Events
  * ------------------------------------------------------------------ */
@@ -67,6 +78,9 @@ typedef struct {
 
     /* Iteration the event belongs to, or 0 when it is not iteration-scoped. */
     uint64_t iteration;
+
+    /* Zero when an event is not a compute iteration measurement. */
+    pe_telemetry_counters_t counters;
 } pe_telemetry_event_t;
 
 /* ------------------------------------------------------------------ *
@@ -141,6 +155,14 @@ void pe_telemetry_emitf(const pe_telemetry_ops_t *ops,
                         const char *category,
                         uint64_t iteration,
                         const char *fmt, ...);
+
+/** Emit a preformatted event carrying per-iteration compute counters. */
+void pe_telemetry_emit_counters(const pe_telemetry_ops_t *ops,
+                                pe_log_level_t level,
+                                const char *category,
+                                uint64_t iteration,
+                                const pe_telemetry_counters_t *counters,
+                                const char *message);
 
 /* ------------------------------------------------------------------ *
  * Adapter: null

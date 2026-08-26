@@ -16,6 +16,193 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PE_VECTOR_ARENA_INITIAL_CAPACITY 65536u
+
+typedef struct
+{
+    unsigned char *memory;
+    size_t capacity;
+    size_t used;
+} pe_vector_arena_block_t;
+
+typedef struct
+{
+    pe_vector_arena_block_t *blocks;
+    size_t block_count;
+    size_t block_capacity;
+    size_t current_block;
+} pe_vector_arena_t;
+
+typedef struct
+{
+    size_t block_index;
+    size_t used;
+} pe_vector_arena_mark_t;
+
+static pe_vector_arena_t *vector_arena_create(void)
+{
+    pe_vector_arena_t *arena = (pe_vector_arena_t *)calloc(1u, sizeof(*arena));
+    if (arena != NULL)
+        arena->current_block = SIZE_MAX;
+    return arena;
+}
+
+static void vector_arena_destroy(pe_vector_arena_t *arena)
+{
+    size_t block_index;
+
+    if (arena == NULL)
+        return;
+    for (block_index = 0u; block_index < arena->block_count; ++block_index)
+        free(arena->blocks[block_index].memory);
+    free(arena->blocks);
+    free(arena);
+}
+
+static void *vector_arena_alloc(pe_vector_arena_t *arena, size_t bytes,
+                                int *out_new_block)
+{
+    size_t block_index;
+    size_t aligned_used;
+
+    if (arena == NULL || bytes == 0u || out_new_block == NULL)
+        return NULL;
+    *out_new_block = 0;
+    block_index = arena->current_block;
+    if (block_index != SIZE_MAX && block_index < arena->block_count)
+    {
+        pe_vector_arena_block_t *block = &arena->blocks[block_index];
+        if (block->used <= SIZE_MAX - 7u)
+        {
+            aligned_used = (block->used + 7u) & ~(size_t)7u;
+            if (aligned_used <= block->capacity &&
+                bytes <= block->capacity - aligned_used)
+            {
+                void *result = block->memory + aligned_used;
+                block->used = aligned_used + bytes;
+                return result;
+            }
+        }
+    }
+
+    /* A child may have used a later block before releasing back to its
+       parent's mark. Reuse such a reset block before growing the arena; this
+       is what keeps repeated sibling visits allocation-free. */
+    if (block_index != SIZE_MAX)
+        for (block_index += 1u; block_index < arena->block_count;
+             ++block_index)
+            if (arena->blocks[block_index].used == 0u &&
+                arena->blocks[block_index].capacity >= bytes)
+            {
+                arena->blocks[block_index].used = bytes;
+                arena->current_block = block_index;
+                return arena->blocks[block_index].memory;
+            }
+
+    {
+        size_t capacity = PE_VECTOR_ARENA_INITIAL_CAPACITY;
+        size_t previous_capacity = 0u;
+        pe_vector_arena_block_t *grown;
+        unsigned char *memory;
+
+        if (arena->block_count != 0u)
+            previous_capacity = arena->blocks[arena->block_count - 1u].capacity;
+        if (previous_capacity > capacity)
+            capacity = previous_capacity;
+        while (capacity < bytes)
+        {
+            if (capacity > SIZE_MAX / 2u)
+            {
+                capacity = bytes;
+                break;
+            }
+            capacity *= 2u;
+        }
+        if (arena->block_count == arena->block_capacity)
+        {
+            size_t new_capacity;
+            if (arena->block_capacity > SIZE_MAX / 2u)
+                new_capacity = arena->block_count + 1u;
+            else
+                new_capacity = arena->block_capacity != 0u
+                    ? arena->block_capacity * 2u : 4u;
+            if (new_capacity < arena->block_count + 1u ||
+                new_capacity > SIZE_MAX / sizeof(*grown))
+                new_capacity = arena->block_count + 1u;
+            grown = (pe_vector_arena_block_t *)realloc(
+                arena->blocks, new_capacity * sizeof(*grown));
+            if (grown == NULL)
+                return NULL;
+            arena->blocks = grown;
+            arena->block_capacity = new_capacity;
+        }
+        memory = (unsigned char *)malloc(capacity);
+        if (memory == NULL)
+            return NULL;
+        block_index = arena->block_count++;
+        arena->blocks[block_index].memory = memory;
+        arena->blocks[block_index].capacity = capacity;
+        arena->blocks[block_index].used = bytes;
+        arena->current_block = block_index;
+        *out_new_block = 1;
+        return memory;
+    }
+}
+
+static pe_vector_arena_mark_t vector_arena_mark(
+    const pe_vector_arena_t *arena)
+{
+    pe_vector_arena_mark_t mark = {SIZE_MAX, 0u};
+    if (arena != NULL && arena->current_block != SIZE_MAX &&
+        arena->current_block < arena->block_count)
+    {
+        mark.block_index = arena->current_block;
+        mark.used = arena->blocks[arena->current_block].used;
+    }
+    return mark;
+}
+
+static void vector_arena_release(pe_vector_arena_t *arena,
+                                 pe_vector_arena_mark_t mark)
+{
+    size_t block_index;
+
+    if (arena == NULL)
+        return;
+    if (mark.block_index == SIZE_MAX)
+    {
+        for (block_index = 0u; block_index < arena->block_count; ++block_index)
+            arena->blocks[block_index].used = 0u;
+        arena->current_block = SIZE_MAX;
+        return;
+    }
+    if (mark.block_index >= arena->block_count)
+        return;
+    arena->blocks[mark.block_index].used = mark.used;
+    for (block_index = mark.block_index + 1u;
+         block_index < arena->block_count; ++block_index)
+        arena->blocks[block_index].used = 0u;
+    arena->current_block = mark.block_index;
+}
+
+static int vector_arena_owns(const pe_vector_arena_t *arena,
+                             const double *memory)
+{
+    size_t block_index;
+    uintptr_t address;
+
+    if (arena == NULL || memory == NULL)
+        return 0;
+    address = (uintptr_t)memory;
+    for (block_index = 0u; block_index < arena->block_count; ++block_index)
+    {
+        uintptr_t begin = (uintptr_t)arena->blocks[block_index].memory;
+        if (address >= begin && address - begin < arena->blocks[block_index].capacity)
+            return 1;
+    }
+    return 0;
+}
+
 static int vector_valid(const pe_vector_game_t *game)
 {
     return game && game->root && game->player_count > 0 &&
@@ -23,6 +210,62 @@ static int vector_valid(const pe_vector_game_t *game)
            game->combo_count > 0 && game->is_terminal &&
            game->acting_player && game->action_count && game->apply_action;
 }
+
+static pe_solver_status_t vector_alloc(pe_traversal_ctx_t *ctx,
+                                       pe_vec_t *out, size_t count)
+{
+    pe_vector_arena_t *arena;
+    size_t bytes;
+    int new_block = 0;
+
+    if (out == NULL || count == 0u || count > SIZE_MAX / sizeof(double))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    arena = ctx != NULL ? (pe_vector_arena_t *)ctx->arena : NULL;
+    bytes = count * sizeof(double);
+    if (arena != NULL)
+    {
+        double *memory = (double *)vector_arena_alloc(
+            arena, bytes, &new_block);
+        if (memory != NULL)
+        {
+            *out = pe_vec_wrap(memory, count);
+            memset(memory, 0, bytes);
+            if (ctx != NULL && new_block)
+                ctx->counters.vec_allocs++;
+            return PE_SOLVER_OK;
+        }
+    }
+    if (pe_vec_alloc(out, count) != PE_SOLVER_OK)
+        return PE_SOLVER_ERR_OUT_OF_MEMORY;
+    if (ctx != NULL)
+        ctx->counters.vec_allocs++;
+    return PE_SOLVER_OK;
+}
+
+static void vector_free(pe_traversal_ctx_t *ctx, pe_vec_t *vector)
+{
+    pe_vector_arena_t *arena;
+
+    if (vector == NULL)
+        return;
+    arena = ctx != NULL ? (pe_vector_arena_t *)ctx->arena : NULL;
+    if (vector_arena_owns(arena, vector->v))
+    {
+        vector->v = NULL;
+        vector->n = 0u;
+        return;
+    }
+    pe_vec_free(vector);
+}
+
+/* Existing cleanup calls below all operate on vectors belonging to `ctx`.
+   Heap vectors remain supported through vector_free's fallback. */
+#define pe_vec_free(vector) vector_free(ctx, (vector))
+
+static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
+                        const pe_reach_vec_t *reach,
+                        pe_value_vec_t *out_values,
+                        pe_update_batch_t *out_batch);
 
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game)
@@ -33,9 +276,10 @@ int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
         return -1;
     memset(ctx, 0, sizeof(*ctx));
     ctx->game = game;
+    ctx->arena = vector_arena_create();
     for (p = 0; p < game->player_count; ++p)
     {
-        if (pe_vec_alloc(&ctx->reach[p], game->combo_count) != PE_SOLVER_OK)
+        if (vector_alloc(ctx, &ctx->reach[p], game->combo_count) != PE_SOLVER_OK)
         {
             pe_traversal_ctx_destroy(ctx);
             return -1;
@@ -66,10 +310,11 @@ void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx)
         return;
     for (p = 0; p < PE_TRAVERSAL_MAX_PLAYERS; ++p)
         pe_vec_free(&ctx->reach[p]);
+    vector_arena_destroy((pe_vector_arena_t *)ctx->arena);
     memset(ctx, 0, sizeof(*ctx));
 }
 
-static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
+static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                         const pe_reach_vec_t *reach,
                         pe_value_vec_t *out_values,
                         pe_update_batch_t *out_batch)
@@ -127,7 +372,7 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
             }
             total_weight += weight;
             for (uint8_t p = 0u; p < game->player_count; ++p)
-                if (pe_vec_alloc(&child_values[(size_t)outcome *
+                if (vector_alloc(ctx, &child_values[(size_t)outcome *
                                                 game->player_count + p],
                                  game->combo_count) != PE_SOLVER_OK)
                 {
@@ -258,7 +503,7 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
 
         for (p = 0u; p < game->player_count; ++p)
         {
-            if (pe_vec_alloc(&child_reach[p], game->combo_count) != PE_SOLVER_OK)
+            if (vector_alloc(ctx, &child_reach[p], game->combo_count) != PE_SOLVER_OK)
             {
                 while (p > 0u)
                     pe_vec_free(&child_reach[--p]);
@@ -272,7 +517,7 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
         child = game->apply_action(state, action, game->user);
         for (p = 0u; p < game->player_count; ++p)
         {
-            if (pe_vec_alloc(&child_values[(size_t)action * game->player_count + p],
+            if (vector_alloc(ctx, &child_values[(size_t)action * game->player_count + p],
                              game->combo_count) != PE_SOLVER_OK)
             {
                 for (uint8_t q = 0u; q < game->player_count; ++q)
@@ -317,36 +562,66 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
 
     if (out_batch != NULL && ctx->storage != NULL)
     {
+        double *opponent_reach;
+        double *deltas;
+        double *average_deltas;
+
+        /* The opponent product is independent of the action.  Computing it
+           once per combo removes a player-count loop from the action loop. */
+        opponent_reach = (double *)malloc(
+            (size_t)game->combo_count * sizeof(*opponent_reach));
+        if (opponent_reach == NULL)
+        {
+            for (uint16_t a = 0u; a < actions; ++a)
+                for (uint8_t q = 0u; q < game->player_count; ++q)
+                    pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
+            free(strategies);
+            free(child_values);
+            return -1;
+        }
+        for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+        {
+            opponent_reach[combo] = 1.0;
+            for (p = 0u; p < game->player_count; ++p)
+                if (p != (uint8_t)player)
+                    opponent_reach[combo] *= reach[p].v[combo];
+        }
+        if (pe_update_batch_soa_begin_group(
+                out_batch, infoset, actions, game->combo_count,
+                &deltas, &average_deltas) != 0)
+        {
+            free(opponent_reach);
+            for (uint16_t a = 0u; a < actions; ++a)
+                for (uint8_t q = 0u; q < game->player_count; ++q)
+                    pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
+            free(strategies);
+            free(child_values);
+            return -1;
+        }
+        ctx->counters.updates_emitted +=
+            (uint64_t)actions * (uint64_t)game->combo_count;
+        {
+            uint64_t bytes = (uint64_t)out_batch->soa.group_count *
+                (uint64_t)sizeof(pe_update_group_t) +
+                (uint64_t)out_batch->soa.value_count * 2u *
+                (uint64_t)sizeof(double);
+            if (bytes > ctx->counters.batch_peak_bytes)
+                ctx->counters.batch_peak_bytes = bytes;
+        }
         for (uint16_t action = 0u; action < actions; ++action)
         {
             pe_value_vec_t *action_values = &child_values[
                 (size_t)action * game->player_count + player];
             for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
             {
-                double opponent_reach = 1.0;
-                for (p = 0u; p < game->player_count; ++p)
-                    if (p != (uint8_t)player)
-                        opponent_reach *= reach[p].v[combo];
-                pe_update_t update = {
-                    infoset,
-                    action,
-                    combo,
-                    opponent_reach * (action_values->v[combo] -
-                                      out_values[player].v[combo]),
-                    reach[player].v[combo] * strategies[
-                        (size_t)action * game->combo_count + combo]
-                };
-                if (pe_update_batch_push(out_batch, update) != 0)
-                {
-                    for (uint16_t a = 0u; a < actions; ++a)
-                        for (uint8_t q = 0u; q < game->player_count; ++q)
-                            pe_vec_free(&child_values[(size_t)a * game->player_count + q]);
-                    free(strategies);
-                    free(child_values);
-                    return -1;
-                }
+                size_t slot = (size_t)action * game->combo_count + combo;
+                deltas[slot] += opponent_reach[combo] *
+                    (action_values->v[combo] - out_values[player].v[combo]);
+                average_deltas[slot] += reach[player].v[combo] *
+                    strategies[slot];
             }
         }
+        free(opponent_reach);
     }
 
     for (uint16_t action = 0u; action < actions; ++action)
@@ -357,6 +632,19 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
     return 0;
 }
 
+static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
+                        const pe_reach_vec_t *reach,
+                        pe_value_vec_t *out_values,
+                        pe_update_batch_t *out_batch)
+{
+    pe_vector_arena_t *arena = ctx != NULL
+        ? (pe_vector_arena_t *)ctx->arena : NULL;
+    pe_vector_arena_mark_t mark = vector_arena_mark(arena);
+    int rc = vector_visit_impl(ctx, state, reach, out_values, out_batch);
+    vector_arena_release(arena, mark);
+    return rc;
+}
+
 static int vector_begin(pe_traversal_ctx_t *ctx, uint64_t iteration)
 {
     unsigned p;
@@ -365,12 +653,14 @@ static int vector_begin(pe_traversal_ctx_t *ctx, uint64_t iteration)
     ctx->iteration = iteration;
     ctx->visited_nodes = 0;
     ctx->terminal_nodes = 0;
+    memset(&ctx->counters, 0, sizeof(ctx->counters));
     for (p = 0; p < ctx->game->player_count; ++p)
         pe_vec_fill(&ctx->reach[p], 1.0);
     return 0;
 }
 
-static int vector_run(pe_traversal_ctx_t *ctx, pe_update_batch_t *out_batch)
+static int vector_run_impl(pe_traversal_ctx_t *ctx,
+                           pe_update_batch_t *out_batch)
 {
     pe_value_vec_t values[PE_TRAVERSAL_MAX_PLAYERS] = {{0}};
     uint8_t p;
@@ -380,7 +670,7 @@ static int vector_run(pe_traversal_ctx_t *ctx, pe_update_batch_t *out_batch)
     if (out_batch)
         pe_update_batch_clear(out_batch);
     for (p = 0u; p < ctx->game->player_count; ++p)
-        if (pe_vec_alloc(&values[p], ctx->game->combo_count) != PE_SOLVER_OK)
+        if (vector_alloc(ctx, &values[p], ctx->game->combo_count) != PE_SOLVER_OK)
         {
             while (p > 0u)
                 pe_vec_free(&values[--p]);
@@ -389,6 +679,16 @@ static int vector_run(pe_traversal_ctx_t *ctx, pe_update_batch_t *out_batch)
     int rc = vector_visit(ctx, ctx->game->root, ctx->reach, values, out_batch);
     for (p = 0u; p < ctx->game->player_count; ++p)
         pe_vec_free(&values[p]);
+    return rc;
+}
+
+static int vector_run(pe_traversal_ctx_t *ctx, pe_update_batch_t *out_batch)
+{
+    pe_vector_arena_t *arena = ctx != NULL
+        ? (pe_vector_arena_t *)ctx->arena : NULL;
+    pe_vector_arena_mark_t mark = vector_arena_mark(arena);
+    int rc = vector_run_impl(ctx, out_batch);
+    vector_arena_release(arena, mark);
     return rc;
 }
 

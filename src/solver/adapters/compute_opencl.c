@@ -105,8 +105,10 @@ static int compute_opencl_apply_update_batch(void *self,
                                              const pe_update_batch_t *batch)
 {
     pe_compute_opencl_t *backend = (pe_compute_opencl_t *)self;
+#if defined(PE_COMPUTE_OPENCL_AVAILABLE)
     pe_gpu_update_pack_t pack;
     pe_regret_opencl_update_batch_t gpu_batch;
+#endif
 
     if (backend == NULL || batch == NULL)
         return -1;

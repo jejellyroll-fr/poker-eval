@@ -168,12 +168,88 @@ static void test_reduction_ignores_arrival_order(void)
     pe_update_batch_destroy(&shuffled);
 }
 
+static void test_soa_group_layout(void)
+{
+    pe_update_batch_t batch = {0};
+    double *deltas = NULL;
+    double *averages = NULL;
+
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, 17u, 3u, 2u, &deltas, &averages) == 0,
+          "SoA group allocation failed");
+    if (deltas != NULL && averages != NULL)
+    {
+        size_t i;
+        for (i = 0u; i < 6u; ++i)
+        {
+            deltas[i] = (double)i;
+            averages[i] = (double)(i + 10u);
+        }
+        CHECK(batch.soa.group_count == 1u &&
+                  batch.soa.groups[0].infoset == 17u &&
+                  batch.soa.groups[0].actions == 3u &&
+                  batch.soa.groups[0].combos == 2u &&
+                  batch.soa.groups[0].offset == 0u &&
+                  pe_update_soa_value_count(&batch.soa) == 6u &&
+                  batch.soa.deltas[5u] == 5.0 &&
+                  batch.soa.average_deltas[5u] == 15.0,
+              "SoA group was not contiguous or action-major");
+    }
+    pe_update_batch_clear(&batch);
+    CHECK(batch.soa.group_count == 0u && batch.soa.value_count == 0u,
+          "SoA clear did not retain a reusable empty payload");
+    pe_update_batch_destroy(&batch);
+}
+
+static void test_soa_reduction(void)
+{
+    pe_update_batch_t left = {0};
+    pe_update_batch_t right = {0};
+    pe_update_batch_t reduced = {0};
+    pe_update_batch_source_t sources[2];
+    double *left_deltas;
+    double *left_average;
+    double *right_deltas;
+    double *right_average;
+
+    CHECK(pe_update_batch_soa_begin_group(
+              &left, 9u, 2u, 2u, &left_deltas, &left_average) == 0 &&
+              pe_update_batch_soa_begin_group(
+                  &right, 9u, 2u, 2u, &right_deltas, &right_average) == 0,
+          "SoA reduction setup failed");
+    if (left_deltas == NULL || right_deltas == NULL)
+        goto cleanup;
+    for (size_t i = 0u; i < 4u; ++i)
+    {
+        left_deltas[i] = 1.0;
+        left_average[i] = 2.0;
+        right_deltas[i] = 3.0;
+        right_average[i] = 4.0;
+    }
+    left.iteration = 3u;
+    right.iteration = 3u;
+    sources[0] = (pe_update_batch_source_t){4u, &left};
+    sources[1] = (pe_update_batch_source_t){1u, &right};
+    CHECK(pe_update_batch_reduce(sources, 2u, &reduced) == 0 &&
+              reduced.soa.group_count == 1u && reduced.soa.value_count == 4u &&
+              reduced.soa.deltas[0] == 4.0 &&
+              reduced.soa.average_deltas[3] == 6.0,
+          "SoA reduction did not combine equal infosets");
+
+cleanup:
+    pe_update_batch_destroy(&left);
+    pe_update_batch_destroy(&right);
+    pe_update_batch_destroy(&reduced);
+}
+
 int main(void)
 {
     test_large_batch_round_trip();
     test_merge_reduces_same_slot();
     test_reduction_preserves_iteration_metadata();
     test_reduction_ignores_arrival_order();
+    test_soa_group_layout();
+    test_soa_reduction();
     if (failures != 0)
         return 1;
     puts("test_pe_batch: all tests passed");

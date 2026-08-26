@@ -170,6 +170,69 @@ static void test_regret_and_average_modes(void)
     storage_ops->destroy(storage);
 }
 
+static void test_soa_update_reaches_storage(void)
+{
+    const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    pe_compute_config_t cfg = {
+        .cpu_threads = 1,
+        .deterministic = 1,
+        .storage = storage_ops,
+        .averaging_mode = PE_AVG_UNIFORM
+    };
+    pe_update_batch_t batch = {0};
+    void *storage = NULL;
+    void *backend = NULL;
+    pe_infoset_id_t id;
+    double *deltas;
+    double *averages;
+    const double *regrets;
+    const double *average;
+    size_t length;
+
+    CHECK(storage_ops->create(&storage, 1u) == 0 && storage,
+          "SoA storage creation failed");
+    if (!storage)
+        return;
+    cfg.storage_self = storage;
+    id = storage_ops->resolve(storage, 0x50Au, 2u, 3u, PE_STREET_UNKNOWN);
+    CHECK(id != PE_INFOSET_ID_INVALID, "SoA infoset resolution failed");
+    CHECK(pe_update_batch_soa_begin_group(
+              &batch, id, 2u, 3u, &deltas, &averages) == 0,
+          "SoA group creation failed");
+    if (deltas == NULL || averages == NULL)
+        goto cleanup;
+    for (size_t i = 0u; i < 6u; ++i)
+    {
+        deltas[i] = (double)i + 0.5;
+        averages[i] = (double)i + 10.5;
+    }
+    batch.iteration = 1u;
+    CHECK(ops->create(&backend, &cfg) == 0 && backend,
+          "SoA reference backend creation failed");
+    if (!backend)
+        goto cleanup;
+    CHECK(ops->apply_update_batch(backend, &batch) == 0,
+          "SoA reference update failed");
+    regrets = storage_ops->values_const(storage, id, PE_VALUES_REGRET,
+                                        &length);
+    average = storage_ops->values_const(storage, id, PE_VALUES_AVERAGE,
+                                        &length);
+    CHECK(regrets != NULL && average != NULL && length == 6u,
+          "SoA storage output is incomplete");
+    if (regrets != NULL && average != NULL)
+        for (size_t i = 0u; i < 6u; ++i)
+            CHECK(fabs(regrets[i] - deltas[i]) < 1e-12 &&
+                      fabs(average[i] - averages[i]) < 1e-12,
+                  "SoA value %zu was not applied", i);
+
+cleanup:
+    if (backend)
+        ops->destroy(backend);
+    pe_update_batch_destroy(&batch);
+    storage_ops->destroy(storage);
+}
+
 static void test_exponential_policy(void)
 {
     const pe_compute_ops_t *ops = pe_compute_cpu_ref_ops();
@@ -263,6 +326,7 @@ int main(void)
 {
     test_reference_contract();
     test_regret_and_average_modes();
+    test_soa_update_reaches_storage();
     test_exponential_policy();
     test_invalid_parallel_config();
     test_terminal_batch();

@@ -35,6 +35,13 @@ jobs:
         cd build
         make -j"$(nproc)"
 
+    - name: Compute benchmark regression guard
+      run: |
+        cmake --build build --target bench_pe_compute --parallel
+        ./build/bin/bench_pe_compute --backend cpu_ref --csv > build/pe_compute.csv
+        bash scripts/check_pe_compute_benchmark.sh \
+          benchmarks/baseline/pe_compute.csv build/pe_compute.csv
+
     - name: Run Core Regression Tests
       run: |
         cd build
@@ -245,3 +252,68 @@ jobs:
       with:
         name: benchmark-report
         path: build/benchmark_report.md
+
+  test-native-multiarch:
+    name: Native Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-14]
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure native test build
+      run: |
+        cmake -S . -B build-native \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DENABLE_NATIVE_ARCH=OFF
+
+    - name: Build native test build
+      run: cmake --build build-native --parallel
+
+    - name: Run native test suite
+      run: ctest --test-dir build-native --output-on-failure --timeout 300
+
+  test-portable-dispatch:
+    name: Portable Build & SIMD Dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure portable build
+      run: |
+        cmake -S . -B build-portable \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DENABLE_NATIVE_ARCH=OFF
+
+    - name: Build portable build
+      run: cmake --build build-portable --parallel
+
+    - name: Verify no ISA flag leaked into global compile flags
+      run: |
+        set -eu
+        if rg -n -- '-mavx2|-mavx512f|-march=native' build-portable/compile_commands.json; then
+          echo "An ISA-specific flag leaked into the portable build" >&2
+          exit 1
+        fi
+
+    - name: Test runtime dispatch and runtime probing
+      run: |
+        ctest --test-dir build-portable --output-on-failure \
+          -R '^(test_simd_operations|test_pe_runtime)$'

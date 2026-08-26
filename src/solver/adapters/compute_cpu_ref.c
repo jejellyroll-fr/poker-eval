@@ -104,6 +104,78 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
     return 0;
 }
 
+static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
+                             const pe_update_batch_t *batch)
+{
+    size_t group_index;
+
+    if (backend->config.storage == NULL || backend->config.storage_self == NULL)
+        return 0;
+    if (!backend->config.storage->shape || !backend->config.storage->values ||
+        !pe_storage_serves(backend->config.storage, PE_VALUES_REGRET) ||
+        !pe_storage_serves(backend->config.storage, PE_VALUES_AVERAGE))
+        return -1;
+
+    for (group_index = 0u; group_index < batch->soa.group_count; ++group_index)
+    {
+        const pe_update_group_t *group = &batch->soa.groups[group_index];
+        uint16_t actions;
+        uint16_t combos;
+        size_t regret_length;
+        size_t average_length;
+        double *regrets;
+        double *average;
+        size_t value_index;
+
+        if (group->actions == 0u || group->combos == 0u ||
+            group->offset > batch->soa.value_count ||
+            (size_t)group->actions > SIZE_MAX / (size_t)group->combos ||
+            (size_t)group->actions * (size_t)group->combos >
+                batch->soa.value_count - group->offset)
+            return -1;
+        if (backend->config.storage->shape(
+                backend->config.storage_self, group->infoset,
+                &actions, &combos, NULL) != 0 || actions != group->actions ||
+            combos != group->combos)
+            return -1;
+        regrets = backend->config.storage->values(
+            backend->config.storage_self, group->infoset,
+            PE_VALUES_REGRET, &regret_length);
+        average = backend->config.storage->values(
+            backend->config.storage_self, group->infoset,
+            PE_VALUES_AVERAGE, &average_length);
+        if (regrets == NULL || average == NULL ||
+            regret_length < (size_t)actions * combos ||
+            average_length < (size_t)actions * combos)
+            return -1;
+
+        for (value_index = 0u;
+             value_index < (size_t)actions * (size_t)combos; ++value_index)
+        {
+            pe_update_t update = {
+                group->infoset,
+                (uint16_t)(value_index / combos),
+                (uint16_t)(value_index % combos),
+                batch->soa.deltas[group->offset + value_index],
+                batch->soa.average_deltas[group->offset + value_index]
+            };
+            double new_regret;
+            double new_average;
+            size_t slot = pe_storage_slot_at(combos, update.action,
+                                              update.combo);
+            if (!isfinite(update.delta) || !isfinite(update.average_delta) ||
+                slot >= regret_length || slot >= average_length ||
+                cpu_ref_update_values(&backend->config, batch, &update,
+                                      regrets[slot], average[slot],
+                                      &new_regret, &new_average) != 0)
+                return -1;
+            regrets[slot] = new_regret;
+            average[slot] = new_average;
+        }
+    }
+    return 0;
+}
+
 static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
                                   pe_strategy_batch_t *out)
 {
@@ -202,8 +274,13 @@ static int cpu_ref_apply_update_batch(void *self,
     size_t index;
 
     if (backend == NULL || batch == NULL ||
-        (batch->count != 0u && batch->items == NULL))
+        (batch->count != 0u && batch->items == NULL) ||
+        (batch->soa.group_count != 0u &&
+         (batch->soa.groups == NULL || batch->soa.deltas == NULL ||
+          batch->soa.average_deltas == NULL)))
         return -1;
+    if (batch->soa.group_count != 0u)
+        return cpu_ref_apply_soa(backend, batch);
     for (index = 0u; index < batch->count; ++index) {
         const pe_update_t *update = &batch->items[index];
         if (!isfinite(update->delta) || !isfinite(update->average_delta))

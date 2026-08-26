@@ -10,6 +10,7 @@ message(STATUS "Building performance benchmarks")
 
 # Benchmark executables
 set(BENCHMARK_PROGRAMS
+    bench_pe_compute
     ofc_simd_benchmark
     benchmark_canonical_vs_legacy
     benchmark_iterator_perf

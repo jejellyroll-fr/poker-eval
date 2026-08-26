@@ -97,6 +97,7 @@ The wrapper retains the methods used by fpdb: `poker_eval`, `best`,
 | Guide | Description |
 |-------|-------------|
 | [Performance Guide](docs/optimization/guides/PERFORMANCE_GUIDE.md) | Benchmarking and profiling the range parser |
+| [Compute Micro-benchmarks](docs/project/COMPUTE_BENCHMARKS.md) | Reproducible compute-kernel CSV baseline and CI regression guard |
 | [SIMD Vectorisation](docs/optimization/guides/SIMD_USAGE_GUIDE.md) | SSE/AVX hand evaluation for parallel throughput |
 | [Multithreading](docs/optimization/guides/MULTITHREADING_USAGE_GUIDE.md) | Thread-safe equity calculation with work partitioning |
 
