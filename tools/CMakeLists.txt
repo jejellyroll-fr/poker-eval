@@ -128,6 +128,10 @@ if(PE_NAPPGUI_ROOT AND EXISTS "${PE_NAPPGUI_ROOT}/CMakeLists.txt")
         add_executable(poker-eval-studio
             poker_eval_studio.c
             pe_tree_editor_model.c)
+        # Studio launches the command-line runners for Solve.  Make the
+        # native target self-contained so building only poker-eval-studio
+        # also places both runners beside it.
+        add_dependencies(poker-eval-studio pe-preflop-solve pe-vector-sim)
         target_include_directories(poker-eval-studio PRIVATE
             ${TOOLS_COMMON_INCLUDES}
             ${PE_NAPPGUI_ROOT}/src)

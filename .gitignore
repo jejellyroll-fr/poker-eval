@@ -55,6 +55,7 @@ dkms.conf
 *.dwo
 build_test/
 build/
+build-studio/
 build-coverage/
 build-omp/
 Testing/

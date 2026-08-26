@@ -114,6 +114,45 @@ static void usage(const char *program)
             program);
 }
 
+static int tree_path_is_json(const char *path)
+{
+    size_t length;
+    if (!path)
+        return 0;
+    length = strlen(path);
+    return length >= 5u && strcmp(path + length - 5u, ".json") == 0;
+}
+
+static int infer_json_tree_header(const mpf_tree_def_t *tree,
+                                  pe_monker_tree_header_t *header)
+{
+    int players = 2;
+    int street;
+    int first_to_act;
+    if (!tree || !header || !tree->nodes || tree->root_index < 0 ||
+        tree->root_index >= tree->node_count)
+        return 0;
+    for (int node = 0; node < tree->node_count; ++node)
+    {
+        const mpf_tree_node_t *entry = &tree->nodes[node];
+        if (entry->acting_player >= 0 && entry->acting_player + 1 > players)
+            players = entry->acting_player + 1;
+        if (entry->has_snapshot && entry->snapshot.has_num_players &&
+            entry->snapshot.num_players >= 2 && entry->snapshot.num_players <= 8)
+            players = entry->snapshot.num_players;
+    }
+    street = tree->nodes[tree->root_index].street;
+    first_to_act = tree->nodes[tree->root_index].acting_player;
+    if (street < MPF_STREET_PREFLOP || street > MPF_STREET_RIVER ||
+        players < 2 || players > 8)
+        return 0;
+    memset(header, 0, sizeof(*header));
+    header->player_count = (uint32_t)players;
+    header->street = street;
+    header->first_to_act = first_to_act >= 0 ? first_to_act : 0;
+    return 1;
+}
+
 static int parse_double(const char *text, double *out)
 {
     char *end;
@@ -447,26 +486,42 @@ static int monker_cli_load(const cli_options_t *options,
 
     if (options->tree_path)
     {
-        tree_status = pe_monker_tree_read_header(options->tree_path,
-                                                 &out->header);
-        if (tree_status != PE_MONKER_OK)
+        if (tree_path_is_json(options->tree_path))
         {
-            fprintf(stderr, "Monker .tree header error: %s\n",
-                    pe_monker_status_string(tree_status));
-            goto fail;
+            mpf_tree_error_t json_error = {0};
+            out->tree = mpf_tree_load_json_file(options->tree_path,
+                                                &json_error);
+            if (!out->tree || !infer_json_tree_header(out->tree, &out->header))
+            {
+                fprintf(stderr, "tree JSON load error: %s\n",
+                        json_error.message[0] ? json_error.message
+                                              : "invalid JSON tree header");
+                goto fail;
+            }
+        }
+        else
+        {
+            tree_status = pe_monker_tree_read_header(options->tree_path,
+                                                     &out->header);
+            if (tree_status != PE_MONKER_OK)
+            {
+                fprintf(stderr, "Monker .tree header error: %s\n",
+                        pe_monker_status_string(tree_status));
+                goto fail;
+            }
+            tree_status = pe_monker_tree_load(options->tree_path, &out->tree);
+            if (tree_status != PE_MONKER_OK || !out->tree)
+            {
+                fprintf(stderr, "Monker .tree load error: %s\n",
+                        pe_monker_status_string(tree_status));
+                goto fail;
+            }
         }
         if (out->header.player_count != options->player_count)
         {
             fprintf(stderr,
-                    "Monker .tree has %u players, CLI requested %u\n",
+                    "Tree has %u players, CLI requested %u\n",
                     out->header.player_count, options->player_count);
-            goto fail;
-        }
-        tree_status = pe_monker_tree_load(options->tree_path, &out->tree);
-        if (tree_status != PE_MONKER_OK || !out->tree)
-        {
-            fprintf(stderr, "Monker .tree load error: %s\n",
-                    pe_monker_status_string(tree_status));
             goto fail;
         }
         out->tree_loaded = 1;

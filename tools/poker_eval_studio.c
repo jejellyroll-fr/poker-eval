@@ -202,6 +202,8 @@ struct _app_t
     Combo *tree_editor_street_combo;
     Edit *tree_editor_size_edit;
     Label *tree_editor_selection_label;
+    View *tree_editor_canvas;
+    int tree_editor_refreshing;
 
     /* Background Solve Task */
     Mutex *solve_mutex;
@@ -538,8 +540,13 @@ static void status(App *app, const char *format, ...)
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
-    textview_clear(app->status);
-    textview_writef(app->status, buffer);
+    if (!app)
+        return;
+    if (app->status)
+    {
+        textview_clear(app->status);
+        textview_writef(app->status, buffer);
+    }
     if (app->tree_editor_status)
     {
         textview_clear(app->tree_editor_status);
@@ -550,12 +557,15 @@ static void status(App *app, const char *format, ...)
 static int tree_editor_selected_node(const App *app)
 {
     const char *text;
+    uint32_t selected;
     int node = -1;
     if (!app || !app->tree_editor_node_combo ||
         combo_count(app->tree_editor_node_combo) == 0u)
         return -1;
-    text = combo_get_text(app->tree_editor_node_combo,
-                          combo_get_selected(app->tree_editor_node_combo));
+    selected = combo_get_selected(app->tree_editor_node_combo);
+    if (selected >= combo_count(app->tree_editor_node_combo))
+        return -1;
+    text = combo_get_text(app->tree_editor_node_combo, selected);
     if (text)
         (void)sscanf(text, "[%d]", &node);
     return node;
@@ -564,6 +574,7 @@ static int tree_editor_selected_node(const App *app)
 static mpf_tree_action_type_t tree_editor_selected_action(const App *app)
 {
     uint32_t selected = app && app->tree_editor_action_combo
+        && combo_count(app->tree_editor_action_combo) > 0u
         ? combo_get_selected(app->tree_editor_action_combo) : 0u;
     return selected <= (uint32_t)MPF_TREE_ACTION_CHANCE
         ? (mpf_tree_action_type_t)selected : MPF_TREE_ACTION_FOLD;
@@ -573,8 +584,12 @@ static void tree_editor_refresh(App *app, int selected_node)
 {
     char tree_text[32768];
     char label[256];
-    if (!app || !app->tree_editor_ready)
+    if (!app || !app->tree_editor_ready || app->tree_editor_refreshing)
         return;
+    /* combo_clear/combo_selected can synchronously emit OnSelect on some
+     * NAppGUI backends.  Keep refresh transactional so a UI refresh cannot
+     * recursively refresh itself and overflow the stack. */
+    app->tree_editor_refreshing = 1;
     combo_clear(app->tree_editor_node_combo);
     for (int node = 0; node < app->tree_editor.node_count; ++node)
     {
@@ -641,6 +656,184 @@ static void tree_editor_refresh(App *app, int selected_node)
         }
         label_text(app->tree_editor_selection_label, label);
     }
+    if (app->tree_editor_canvas)
+        view_update(app->tree_editor_canvas);
+    app->tree_editor_refreshing = 0;
+}
+
+static int tree_editor_layout_nodes(const pe_tree_editor_t *editor,
+                                    int depth[PE_TREE_EDITOR_MAX_NODES],
+                                    int order[PE_TREE_EDITOR_MAX_NODES],
+                                    int *max_depth, int *max_rows)
+{
+    int queue[PE_TREE_EDITOR_MAX_NODES];
+    int rows[PE_TREE_EDITOR_MAX_NODES] = {0};
+    int head = 0;
+    int tail = 0;
+    if (!editor || !depth || !order || !max_depth || !max_rows ||
+        editor->root_index < 0 || editor->root_index >= editor->node_count)
+        return 0;
+    for (int i = 0; i < PE_TREE_EDITOR_MAX_NODES; ++i)
+    {
+        depth[i] = -1;
+        order[i] = -1;
+    }
+    depth[editor->root_index] = 0;
+    queue[tail++] = editor->root_index;
+    *max_depth = 0;
+    *max_rows = 1;
+    while (head < tail)
+    {
+        int node_index = queue[head++];
+        const pe_tree_editor_node_t *node = &editor->nodes[node_index];
+        int node_depth = depth[node_index];
+        order[node_index] = rows[node_depth]++;
+        if (node_depth > *max_depth)
+            *max_depth = node_depth;
+        if (rows[node_depth] > *max_rows)
+            *max_rows = rows[node_depth];
+        for (int action = 0; action < node->action_count; ++action)
+        {
+            int next = node->actions[action].next_index;
+            if (next >= 0 && next < editor->node_count && depth[next] < 0 &&
+                tail < PE_TREE_EDITOR_MAX_NODES)
+            {
+                depth[next] = node_depth + 1;
+                queue[tail++] = next;
+            }
+        }
+    }
+    return tail;
+}
+
+static void i_on_draw_tree_editor(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    int depth[PE_TREE_EDITOR_MAX_NODES];
+    int order[PE_TREE_EDITOR_MAX_NODES];
+    int max_depth = 0;
+    int max_rows = 1;
+    real32_t width = params->width;
+    real32_t height = params->height;
+    real32_t box_w = 112.0f;
+    real32_t box_h = 32.0f;
+    real32_t col_gap;
+    real32_t row_gap;
+    int selected = tree_editor_selected_node(app);
+
+    draw_fill_color(ctx, color_rgb(18, 22, 27));
+    draw_rect(ctx, ekFILL, 0, 0, width, height);
+    if (!app || !app->tree_editor_ready ||
+        tree_editor_layout_nodes(&app->tree_editor, depth, order,
+                                 &max_depth, &max_rows) <= 0)
+    {
+        if (app && app->regular_font)
+            draw_font(ctx, app->regular_font);
+        draw_text_color(ctx, color_rgb(150, 160, 170));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, "Create or import a tree to see its action map.",
+                  width * 0.5f, height * 0.5f);
+        return;
+    }
+
+    col_gap = max_depth > 0
+        ? (width - 32.0f - box_w) / (real32_t)max_depth - box_w
+        : 0.0f;
+    if (col_gap < 10.0f)
+        col_gap = 10.0f;
+    row_gap = max_rows > 1
+        ? (height - 52.0f - box_h) / (real32_t)(max_rows - 1)
+        : 0.0f;
+    if (row_gap < 12.0f)
+        row_gap = 12.0f;
+
+    /* Draw connectors first, so node cards sit above the action lines. */
+    draw_line_width(ctx, 1.0f);
+    for (int node_index = 0; node_index < app->tree_editor.node_count; ++node_index)
+    {
+        const pe_tree_editor_node_t *node = &app->tree_editor.nodes[node_index];
+        real32_t x0, y0;
+        if (depth[node_index] < 0)
+            continue;
+        x0 = 16.0f + (real32_t)depth[node_index] * (box_w + col_gap);
+        y0 = 26.0f + (real32_t)order[node_index] * row_gap;
+        for (int action = 0; action < node->action_count; ++action)
+        {
+            int next = node->actions[action].next_index;
+            char action_label[64];
+            real32_t x1, y1;
+            if (next < 0 || next >= app->tree_editor.node_count || depth[next] < 0)
+                continue;
+            x1 = 16.0f + (real32_t)depth[next] * (box_w + col_gap);
+            y1 = 26.0f + (real32_t)order[next] * row_gap;
+            draw_line_color(ctx, color_rgb(95, 105, 115));
+            draw_line(ctx, x0 + box_w, y0 + box_h * 0.5f, x1, y1 + box_h * 0.5f);
+            if (node->actions[action].type == MPF_TREE_ACTION_RAISE &&
+                node->actions[action].size_index >= 0 &&
+                node->actions[action].size_index < node->bet_size_count)
+                snprintf(action_label, sizeof(action_label), "%.2gx pot",
+                         node->bet_sizes[node->actions[action].size_index]);
+            else
+                snprintf(action_label, sizeof(action_label), "%s",
+                         pe_tree_editor_action_name(node->actions[action].type));
+            if (app->regular_font)
+                draw_font(ctx, app->regular_font);
+            draw_text_color(ctx, color_rgb(180, 190, 200));
+            draw_text_align(ctx, ekCENTER, ekCENTER);
+            draw_text(ctx, action_label, (x0 + box_w + x1) * 0.5f,
+                      (y0 + y1 + box_h) * 0.5f - 8.0f);
+        }
+    }
+
+    for (int node_index = 0; node_index < app->tree_editor.node_count; ++node_index)
+    {
+        const pe_tree_editor_node_t *node = &app->tree_editor.nodes[node_index];
+        real32_t x, y;
+        char node_label[96];
+        if (depth[node_index] < 0)
+            continue;
+        x = 16.0f + (real32_t)depth[node_index] * (box_w + col_gap);
+        y = 26.0f + (real32_t)order[node_index] * row_gap;
+        if (node_index == selected)
+        {
+            draw_fill_color(ctx, color_rgb(37, 99, 235));
+            draw_line_color(ctx, color_rgb(147, 197, 253));
+            draw_line_width(ctx, 2.0f);
+        }
+        else if (node->type == MPF_TREE_NODE_PLAYER)
+        {
+            draw_fill_color(ctx, color_rgb(30, 73, 115));
+            draw_line_color(ctx, color_rgb(76, 150, 210));
+            draw_line_width(ctx, 1.0f);
+        }
+        else if (node->type == MPF_TREE_NODE_CHANCE)
+        {
+            draw_fill_color(ctx, color_rgb(112, 77, 24));
+            draw_line_color(ctx, color_rgb(235, 180, 70));
+            draw_line_width(ctx, 1.0f);
+        }
+        else
+        {
+            draw_fill_color(ctx, color_rgb(55, 62, 70));
+            draw_line_color(ctx, color_rgb(120, 130, 140));
+            draw_line_width(ctx, 1.0f);
+        }
+        draw_rndrect(ctx, ekFILL, x, y, box_w, box_h, 5.0f);
+        draw_rndrect(ctx, ekSTROKE, x, y, box_w, box_h, 5.0f);
+        snprintf(node_label, sizeof(node_label), "%s  %s%s", node->id,
+                 pe_tree_editor_node_type_name(node->type),
+                 node->type == MPF_TREE_NODE_PLAYER ? " P" : "");
+        if (node->type == MPF_TREE_NODE_PLAYER)
+            snprintf(node_label + strlen(node_label),
+                     sizeof(node_label) - strlen(node_label), "%d",
+                     node->acting_player + 1);
+        if (app->regular_font)
+            draw_font(ctx, app->regular_font);
+        draw_text_color(ctx, color_rgb(245, 247, 250));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, node_label, x + box_w * 0.5f, y + box_h * 0.5f);
+    }
 }
 
 static int tree_editor_import_tree(App *app, const mpf_tree_def_t *tree)
@@ -673,7 +866,7 @@ static void i_on_tree_editor_new(App *app, Event *event)
 
 static void i_on_tree_editor_node_select(App *app, Event *event)
 {
-    if (app && app->tree_editor_ready)
+    if (app && app->tree_editor_ready && !app->tree_editor_refreshing)
         tree_editor_refresh(app, tree_editor_selected_node(app));
     unref(event);
 }
@@ -686,6 +879,12 @@ static void i_on_tree_editor_add(App *app, Event *event)
     mpf_tree_action_type_t type = tree_editor_selected_action(app);
     const char *size_text = app && app->tree_editor_size_edit
         ? edit_get_text(app->tree_editor_size_edit) : NULL;
+    if (!app || !app->tree_editor_ready)
+    {
+        status(app, "TREE BUILDER\nCreate or import a tree before adding an action.");
+        unref(event);
+        return;
+    }
     if (type == MPF_TREE_ACTION_RAISE &&
         (!size_text || !*size_text || parse_ui_target(size_text, &size) != 0 || size <= 0.0))
     {
@@ -712,7 +911,8 @@ static void i_on_tree_editor_remove(App *app, Event *event)
     int node = tree_editor_selected_node(app);
     uint32_t action = app && app->tree_editor_remove_action_combo
         ? combo_get_selected(app->tree_editor_remove_action_combo) : 0u;
-    if (!pe_tree_editor_remove_action(&app->tree_editor, node, (int)action))
+    if (!app || !app->tree_editor_ready ||
+        !pe_tree_editor_remove_action(&app->tree_editor, node, (int)action))
     {
         status(app, "TREE BUILDER\nA player node must keep at least one action.");
         unref(event);
@@ -773,35 +973,24 @@ static void i_on_tree_editor_save(App *app, Event *event)
 static void i_on_tree_editor_load(App *app, Event *event)
 {
     const char *path = app && app->tree_edit ? edit_get_text(app->tree_edit) : NULL;
-    mpf_tree_def_t *tree = NULL;
-    mpf_tree_error_t json_error = {0};
-    pe_monker_status_t monker_status;
+    pe_monker_tree_header_t header;
+    pe_monker_combo_layout_t layout;
     if (!path || !*path)
     {
         status(app, "TREE BUILDER\nChoose a JSON or Monker .tree path in Setup first.");
         unref(event);
         return;
     }
-    tree = mpf_tree_load_json_file(path, &json_error);
-    if (!tree)
+    if (read_tree(app, path, &header, &layout) != 0)
     {
-        monker_status = pe_monker_tree_load(path, &tree);
-        if (monker_status != PE_MONKER_OK || !tree)
-        {
-            status(app, "TREE BUILDER ERROR\n%s", json_error.message[0]
-                   ? json_error.message : pe_monker_status_string(monker_status));
-            unref(event);
-            return;
-        }
+        /* read_tree owns the format detection and reports whether the path
+         * was missing, malformed JSON, or an invalid Monker tree. */
+        unref(event);
+        return;
     }
-    if (!tree_editor_import_tree(app, tree))
-        status(app, "TREE BUILDER ERROR\nTree has more than %d nodes or could not be imported.",
-               PE_TREE_EDITOR_MAX_NODES);
-    else
-        status(app, "TREE BUILDER\nImported %d nodes from %s.\n"
-               "The builder edits topology and bet sizes; keep external ranges in Setup before solving.",
-               tree->node_count, path);
-    mpf_tree_free(tree);
+    status(app, "TREE BUILDER\nImported current tree from %s.\n"
+           "The builder edits topology and bet sizes; keep external ranges in Setup before solving.",
+           path);
     unref(event);
 }
 
@@ -836,7 +1025,7 @@ static Panel *i_tree_editor_panel(App *app)
 {
     Panel *panel = panel_create();
     Layout *root = layout_create(2, 1);
-    Layout *left = layout_create(1, 2);
+    Layout *left = layout_create(1, 3);
     Layout *right = layout_create(2, 12);
     Label *title = label_create();
     Label *node_label = label_create();
@@ -852,6 +1041,7 @@ static Panel *i_tree_editor_panel(App *app)
     Button *use_setup = button_push();
 
     app->tree_editor_view = textview_create();
+    app->tree_editor_canvas = view_create();
     app->tree_editor_status = textview_create();
     app->tree_editor_node_combo = combo_create();
     app->tree_editor_action_combo = combo_create();
@@ -897,9 +1087,14 @@ static Panel *i_tree_editor_panel(App *app)
     button_OnClick(use_setup, listener(app, i_on_tree_editor_setup, App));
     combo_OnSelect(app->tree_editor_node_combo,
                    listener(app, i_on_tree_editor_node_select, App));
+    view_size(app->tree_editor_canvas, s2df(760.0f, 350.0f));
+    view_OnDraw(app->tree_editor_canvas,
+                listener(app, i_on_draw_tree_editor, App));
     layout_label(left, title, 0, 0);
-    layout_textview(left, app->tree_editor_view, 0, 1);
-    layout_vsize(left, 1, 680.0f);
+    layout_view(left, app->tree_editor_canvas, 0, 1);
+    layout_textview(left, app->tree_editor_view, 0, 2);
+    layout_vsize(left, 1, 350.0f);
+    layout_vsize(left, 2, 300.0f);
     layout_label(right, street_label, 0, 0);
     layout_combo(right, app->tree_editor_street_combo, 1, 0);
     layout_label(right, node_label, 0, 1);
@@ -2693,16 +2888,28 @@ static const char *resolve_runner(const char *configured, const char *name)
         return name;
     if (executable_directory(executable_dir, sizeof(executable_dir)))
     {
-        (void)snprintf(local_path, sizeof(local_path),
-                       "%s/../../build/tools/%s", executable_dir, name);
-        if (PE_ACCESS(local_path, PE_X_OK) == 0)
-            return local_path;
-        (void)snprintf(local_path, sizeof(local_path), "%s/%s",
-                       executable_dir, name);
-        if (PE_ACCESS(local_path, PE_X_OK) == 0)
-            return local_path;
+        const char *relative_candidates[] = {
+            "%s/%s",
+            "%s/../%s",
+            "%s/../../build/tools/%s",
+            "%s/../../build-studio/tools/%s",
+            "%s/../../../build/tools/%s",
+            "%s/../../../build-studio/tools/%s"
+        };
+        for (size_t candidate = 0u;
+             candidate < sizeof(relative_candidates) / sizeof(relative_candidates[0]);
+             ++candidate)
+        {
+            (void)snprintf(local_path, sizeof(local_path), relative_candidates[candidate],
+                           executable_dir, name);
+            if (PE_ACCESS(local_path, PE_X_OK) == 0)
+                return local_path;
+        }
     }
-    snprintf(local_path, sizeof(local_path), "build/tools/%s", name);
+    (void)snprintf(local_path, sizeof(local_path), "build/tools/%s", name);
+    if (PE_ACCESS(local_path, PE_X_OK) == 0)
+        return local_path;
+    (void)snprintf(local_path, sizeof(local_path), "build-studio/tools/%s", name);
     return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : NULL;
 }
 
@@ -4293,16 +4500,26 @@ static void i_on_solve(App *app, Event *event)
         unref(event);
         return;
     }
-    if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
-        quote_argument(board_text, board, sizeof(board)) != 0 ||
-        quote_argument((runner_path && *runner_path &&
-                        strcmp(runner_path, "pe-preflop-solve") != 0)
-                           ? runner_path : "pe-vector-sim",
-                       runner, sizeof(runner)) != 0)
     {
-        status(app, "SOLVE ERROR\nPath is too long.");
-        unref(event);
-        return;
+        const char *configured_runner = usable_optional_path(runner_path) &&
+            strcmp(runner_path, "pe-preflop-solve") != 0
+            ? runner_path : "pe-vector-sim";
+        const char *resolved_runner = resolve_runner(configured_runner,
+                                                     "pe-vector-sim");
+        if (!resolved_runner)
+        {
+            status(app, "SOLVE ERROR\nCould not find pe-vector-sim next to Studio, in build/tools or in build-studio/tools.\nBuild the solver tools before starting a postflop run.");
+            unref(event);
+            return;
+        }
+        if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
+            quote_argument(board_text, board, sizeof(board)) != 0 ||
+            quote_argument(resolved_runner, runner, sizeof(runner)) != 0)
+        {
+            status(app, "SOLVE ERROR\nPath is too long.");
+            unref(event);
+            return;
+        }
     }
     used = (size_t)snprintf(command, sizeof(command),
                             "%s --game %s --board %s --players %u --tree %s",

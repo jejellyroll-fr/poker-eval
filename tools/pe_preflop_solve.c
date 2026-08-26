@@ -94,6 +94,45 @@ static int report_rank_index(char rank)
     return found ? (int)(found - ranks) : -1;
 }
 
+static int tree_path_is_json(const char *path)
+{
+    size_t length;
+    if (!path)
+        return 0;
+    length = strlen(path);
+    return length >= 5u && strcmp(path + length - 5u, ".json") == 0;
+}
+
+static int infer_json_tree_header(const mpf_tree_def_t *tree,
+                                  pe_monker_tree_header_t *header)
+{
+    int players = 2;
+    int street;
+    int first_to_act;
+    if (!tree || !header || !tree->nodes || tree->root_index < 0 ||
+        tree->root_index >= tree->node_count)
+        return 0;
+    for (int node = 0; node < tree->node_count; ++node)
+    {
+        const mpf_tree_node_t *entry = &tree->nodes[node];
+        if (entry->acting_player >= 0 && entry->acting_player + 1 > players)
+            players = entry->acting_player + 1;
+        if (entry->has_snapshot && entry->snapshot.has_num_players &&
+            entry->snapshot.num_players >= 2 && entry->snapshot.num_players <= 8)
+            players = entry->snapshot.num_players;
+    }
+    street = tree->nodes[tree->root_index].street;
+    first_to_act = tree->nodes[tree->root_index].acting_player;
+    if (street < MPF_STREET_PREFLOP || street > MPF_STREET_RIVER ||
+        players < 2 || players > 8)
+        return 0;
+    memset(header, 0, sizeof(*header));
+    header->player_count = (uint32_t)players;
+    header->street = (uint32_t)street;
+    header->first_to_act = first_to_act >= 0 ? first_to_act : 0;
+    return 1;
+}
+
 static void report_tree_action_label(const mpf_tree_node_t *node, int index,
                                      char *out, size_t capacity)
 {
@@ -801,15 +840,31 @@ int main(int argc, char **argv)
     memset(&tree_header, 0, sizeof(tree_header));
     if (options.tree)
     {
-        pe_monker_status_t tree_status = pe_monker_tree_read_header(
-            options.tree, &tree_header);
-        if (tree_status == PE_MONKER_OK)
-            tree_status = pe_monker_tree_load(options.tree, &tree);
-        if (tree_status != PE_MONKER_OK || !tree)
+        if (tree_path_is_json(options.tree))
         {
-            fprintf(stderr, "could not load Monker tree %s: %s\n",
-                    options.tree, pe_monker_status_string(tree_status));
-            goto fail;
+            mpf_tree_error_t json_error = {0};
+            tree = mpf_tree_load_json_file(options.tree, &json_error);
+            if (!tree || !infer_json_tree_header(tree, &tree_header))
+            {
+                fprintf(stderr, "could not load tree JSON %s: %s\n",
+                        options.tree,
+                        json_error.message[0] ? json_error.message
+                                              : "invalid JSON tree header");
+                goto fail;
+            }
+        }
+        else
+        {
+            pe_monker_status_t tree_status = pe_monker_tree_read_header(
+                options.tree, &tree_header);
+            if (tree_status == PE_MONKER_OK)
+                tree_status = pe_monker_tree_load(options.tree, &tree);
+            if (tree_status != PE_MONKER_OK || !tree)
+            {
+                fprintf(stderr, "could not load Monker tree %s: %s\n",
+                        options.tree, pe_monker_status_string(tree_status));
+                goto fail;
+            }
         }
         if (tree_header.street != 0 ||
             tree_header.player_count != (uint32_t)options.players)

@@ -265,6 +265,9 @@ int pe_tree_editor_add_action(pe_tree_editor_t *editor, int node_index,
                               int *out_child_index)
 {
     pe_tree_editor_node_t *node;
+    int original_node_count;
+    int original_action_count;
+    int original_bet_size_count;
     int child = -1;
     int size_index = -1;
     int child_player;
@@ -275,6 +278,9 @@ int pe_tree_editor_add_action(pe_tree_editor_t *editor, int node_index,
     if (node->type != MPF_TREE_NODE_PLAYER ||
         node->action_count >= PE_TREE_EDITOR_MAX_ACTIONS)
         return 0;
+    original_node_count = editor->node_count;
+    original_action_count = node->action_count;
+    original_bet_size_count = node->bet_size_count;
     if (type == MPF_TREE_ACTION_RAISE)
     {
         if (bet_size <= 0.0)
@@ -294,7 +300,7 @@ int pe_tree_editor_add_action(pe_tree_editor_t *editor, int node_index,
         if (!append_node(editor, MPF_TREE_NODE_PLAYER, node->street,
                          child_player, &child) ||
             !add_default_terminal_actions(editor, child))
-            return 0;
+            goto rollback;
     }
     else if (type == MPF_TREE_ACTION_CHANCE)
     {
@@ -310,18 +316,24 @@ int pe_tree_editor_add_action(pe_tree_editor_t *editor, int node_index,
                 !append_raw_action(&editor->nodes[child], MPF_TREE_ACTION_CHANCE,
                                    -1, 1.0, next_node) ||
                 !add_default_terminal_actions(editor, next_node))
-                return 0;
+                goto rollback;
         }
     }
     else if (!append_node(editor, MPF_TREE_NODE_TERMINAL, node->street, -1, &child))
     {
-        return 0;
+        goto rollback;
     }
     if (!append_raw_action(node, type, size_index, 1.0, child))
-        return 0;
+        goto rollback;
     if (out_child_index)
         *out_child_index = child;
     return 1;
+
+rollback:
+    editor->node_count = original_node_count;
+    node->action_count = original_action_count;
+    node->bet_size_count = original_bet_size_count;
+    return 0;
 }
 
 int pe_tree_editor_remove_action(pe_tree_editor_t *editor, int node_index,
@@ -331,7 +343,8 @@ int pe_tree_editor_remove_action(pe_tree_editor_t *editor, int node_index,
     if (!editor || node_index < 0 || node_index >= editor->node_count)
         return 0;
     node = &editor->nodes[node_index];
-    if (action_index < 0 || action_index >= node->action_count ||
+    if (node->type != MPF_TREE_NODE_PLAYER ||
+        action_index < 0 || action_index >= node->action_count ||
         (node->type == MPF_TREE_NODE_PLAYER && node->action_count <= 1))
         return 0;
     memmove(&node->actions[action_index], &node->actions[action_index + 1],
@@ -581,7 +594,9 @@ static int render_walk(const pe_tree_editor_t *editor, int node_index,
         const pe_tree_editor_action_t *entry = &node->actions[action];
         if (*used < capacity)
         {
-            int written = entry->type == MPF_TREE_ACTION_RAISE
+            int written = entry->type == MPF_TREE_ACTION_RAISE &&
+                          entry->size_index >= 0 &&
+                          entry->size_index < node->bet_size_count
                 ? snprintf(buffer + *used, capacity - *used, "%*s- %s %.3gx pot -> node %d\n",
                            depth * 3 + 2, "", pe_tree_editor_action_name(entry->type),
                            node->bet_sizes[entry->size_index], entry->next_index)
