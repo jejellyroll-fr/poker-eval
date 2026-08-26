@@ -76,6 +76,19 @@ int main(void)
     memset(&synthetic, 0, sizeof(synthetic));
     if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_AUTO)
         return 8;
+    synthetic.backends[PE_COMPUTE_CPU_REF].kind = PE_COMPUTE_CPU_REF;
+    synthetic.backends[PE_COMPUTE_CPU_REF].runtime_available = 1;
+    synthetic.backends[PE_COMPUTE_CPU_REF].validated = 1;
+    synthetic.backends[PE_COMPUTE_CPU_REF].terminal_elements_per_s = 10.0;
+    synthetic.backends[PE_COMPUTE_CUDA].kind = PE_COMPUTE_CUDA;
+    synthetic.backends[PE_COMPUTE_CUDA].compiled = 1;
+    synthetic.backends[PE_COMPUTE_CUDA].runtime_available = 1;
+    synthetic.backends[PE_COMPUTE_CUDA].validated = 1;
+    synthetic.backends[PE_COMPUTE_CUDA].capabilities =
+        PE_CAP_GPU_TERMINAL_EVAL;
+    synthetic.backends[PE_COMPUTE_CUDA].terminal_elements_per_s = 100.0;
+    if (pe_runtime_recommended_backend(&synthetic) != PE_COMPUTE_CUDA)
+        return 12;
     printf("runtime: cpus=%u openmp=%d simd_machine=%s simd_compiled=%s simd=%s\n",
            runtime.logical_cpus, runtime.openmp_available,
            pe_runtime_simd_name(runtime.simd_machine),

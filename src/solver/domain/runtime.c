@@ -24,6 +24,20 @@ static int gpu_parity_gate_disabled(void)
             strcmp(value, "YES") == 0);
 }
 
+static double runtime_backend_rate(const pe_runtime_backend_info_t *backend)
+{
+    double rate;
+
+    if (!backend)
+        return 0.0;
+    rate = backend->terminal_elements_per_s;
+    if (!(rate > 0.0) || !isfinite(rate))
+        rate = backend->update_elements_per_s;
+    if (!(rate > 0.0) || !isfinite(rate))
+        rate = backend->strategy_elements_per_s;
+    return rate > 0.0 && isfinite(rate) ? rate : 0.0;
+}
+
 static int validate_gpu_backend(const pe_compute_ops_t *gpu_ops)
 {
     const pe_compute_ops_t *cpu_ops = pe_compute_cpu_ref_ops();
@@ -353,6 +367,9 @@ pe_compute_kind_t pe_runtime_recommended_backend(
 {
     const pe_runtime_backend_info_t *parallel;
     const pe_runtime_backend_info_t *reference;
+    pe_compute_kind_t best;
+    double best_rate;
+    size_t i;
 
     if (!runtime)
         return PE_COMPUTE_AUTO;
@@ -360,13 +377,45 @@ pe_compute_kind_t pe_runtime_recommended_backend(
     parallel = &runtime->backends[PE_COMPUTE_CPU_PAR];
     if (runtime->openmp_available && parallel->runtime_available &&
         parallel->validated)
-        return PE_COMPUTE_CPU_PAR;
+    {
+        best = PE_COMPUTE_CPU_PAR;
+        best_rate = runtime_backend_rate(parallel);
+    }
+    else
+    {
+        best = PE_COMPUTE_AUTO;
+        best_rate = 0.0;
+    }
 
     reference = &runtime->backends[PE_COMPUTE_CPU_REF];
-    if (reference->runtime_available && reference->validated)
-        return PE_COMPUTE_CPU_REF;
+    if (reference->runtime_available && reference->validated &&
+        best == PE_COMPUTE_AUTO)
+    {
+        best = PE_COMPUTE_CPU_REF;
+        best_rate = runtime_backend_rate(reference);
+    }
 
-    return PE_COMPUTE_AUTO;
+    /* GPU selection is permitted only after parity validation and only when
+     * an advertised measured rate beats the best CPU candidate. */
+    for (i = 1u; i < PE_COMPUTE_COUNT; ++i)
+    {
+        const pe_runtime_backend_info_t *candidate = &runtime->backends[i];
+        double rate;
+        if ((candidate->kind != PE_COMPUTE_CUDA &&
+             candidate->kind != PE_COMPUTE_OPENCL) ||
+            !candidate->compiled || !candidate->runtime_available ||
+            !candidate->validated ||
+            !(candidate->capabilities & PE_CAP_GPU_TERMINAL_EVAL))
+            continue;
+        rate = runtime_backend_rate(candidate);
+        if (best != PE_COMPUTE_AUTO && best_rate > 0.0 && rate > best_rate)
+        {
+            best = candidate->kind;
+            best_rate = rate;
+        }
+    }
+
+    return best;
 }
 
 const char *pe_runtime_simd_name(simd_capability_t capability)

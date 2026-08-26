@@ -439,6 +439,13 @@ routeur choisit le CPU. Le seuil est exposé en télémétrie.
 **DoD** — Un solve à petites itérations n'est plus ralenti par la sélection
 `AUTO` d'un GPU. Le seuil mesuré apparaît dans la sortie de `pe_runtime`.
 
+Le resolver `pe_runtime_recommended_backend()` respecte désormais la règle de
+sécurité : un GPU n'est candidat que si sa parité est validée, si
+`GPU_TERMINAL_EVAL` est annoncé et si son débit mesuré dépasse le meilleur CPU.
+En cas de débit absent ou à égalité, le CPU reste sélectionné. La mesure d'un
+seuil de lancement propre à chaque machine reste une étape ultérieure de
+profiling.
+
 ---
 
 # L4 — Exécution distribuée
