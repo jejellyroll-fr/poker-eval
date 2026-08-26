@@ -66,6 +66,7 @@ add_library(poker_solver
     solver/domain/work_scheduler.c
     solver/domain/work_protocol.c
     solver/domain/work_coordinator.c
+    solver/domain/work_reducer.c
     solver/domain/storage_v2.c
     solver/domain/range.c
     solver/domain/reach.c

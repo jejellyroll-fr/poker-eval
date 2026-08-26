@@ -124,6 +124,23 @@ static double get_double_be(const uint8_t *in)
     return value;
 }
 
+int pe_work_result_validate(const pe_work_result_t *result)
+{
+    if (!result || result->backend <= PE_COMPUTE_AUTO ||
+        result->backend >= PE_COMPUTE_COUNT ||
+        (result->constraints_satisfied != 0 &&
+         result->constraints_satisfied != 1) ||
+        result->iteration_end < result->iteration_begin ||
+        !isfinite(result->exploitability) ||
+        !isfinite(result->worst_margin) ||
+        !isfinite(result->mean_margin) ||
+        result->delta_size > PE_WORK_PROTOCOL_MAX_PAYLOAD -
+                             PE_WORK_PROTOCOL_RESULT_FIXED_SIZE ||
+        (result->delta_size != 0u && !result->delta))
+        return -1;
+    return 0;
+}
+
 size_t pe_work_frame_size(size_t payload_size)
 {
     if (payload_size > PE_WORK_PROTOCOL_MAX_PAYLOAD ||
@@ -319,16 +336,7 @@ int pe_work_frame_encode_result(const pe_work_result_t *result,
     size_t frame_size;
     uint8_t *payload;
 
-    if (!result || !out || !out_size ||
-        result->backend <= PE_COMPUTE_AUTO ||
-        result->backend >= PE_COMPUTE_COUNT ||
-        (result->constraints_satisfied != 0 &&
-         result->constraints_satisfied != 1) ||
-        result->iteration_end < result->iteration_begin ||
-        !isfinite(result->exploitability) ||
-        !isfinite(result->worst_margin) ||
-        !isfinite(result->mean_margin) ||
-        (result->delta_size != 0u && !result->delta))
+    if (!out || !out_size || pe_work_result_validate(result) != 0)
         return -1;
     if (result->delta_size > PE_WORK_PROTOCOL_MAX_PAYLOAD -
                              PE_WORK_PROTOCOL_RESULT_FIXED_SIZE)
@@ -396,9 +404,7 @@ int pe_work_frame_decode_result(const uint8_t *frame,
     out->mean_margin = get_double_be(payload + 64u);
     out->delta = payload + PE_WORK_PROTOCOL_RESULT_FIXED_SIZE;
     out->delta_size = (size_t)delta_size;
-    if (out->iteration_end < out->iteration_begin ||
-        !isfinite(out->exploitability) || !isfinite(out->worst_margin) ||
-        !isfinite(out->mean_margin))
+    if (pe_work_result_validate(out) != 0)
         return -1;
     return 0;
 }

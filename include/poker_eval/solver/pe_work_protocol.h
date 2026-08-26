@@ -48,6 +48,9 @@ typedef struct pe_work_result_t
     size_t delta_size;
 } pe_work_result_t;
 
+/** Validate a result independently of its frame representation. */
+int pe_work_result_validate(const pe_work_result_t *result);
+
 /** Initialize/tear down the platform socket runtime (no-op on POSIX). */
 int pe_work_transport_init(void);
 void pe_work_transport_cleanup(void);
