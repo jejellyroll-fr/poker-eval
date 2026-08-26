@@ -24,6 +24,15 @@
 #include <arm_neon.h>
 #endif
 
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#define PE_RUNTIME_X86_SIMD 1
+#define PE_TARGET_AVX2 __attribute__((target("avx2")))
+#define PE_TARGET_AVX512 __attribute__((target("avx512f")))
+#else
+#define PE_TARGET_AVX2
+#define PE_TARGET_AVX512
+#endif
+
 /* Lookup tables for SIMD evaluation */
 static int simd_pc32_tbl[8192];
 static int simd_straight_tbl[8192];
@@ -127,7 +136,7 @@ simd_capability_t simd_compiled_capability(void)
 {
 #if defined(__aarch64__) || defined(__ARM_NEON)
     return SIMD_NEON;
-#elif defined(__AVX512F__) && defined(__AVX2__)
+#elif defined(PE_RUNTIME_X86_SIMD) || (defined(__AVX512F__) && defined(__AVX2__))
     return SIMD_AVX512;
 #elif defined(__AVX2__)
     return SIMD_AVX2;
@@ -212,7 +221,7 @@ void simd_extract_results_to_array(const simd_result_batch_t* batch, HandVal* re
     memcpy(results, batch->results, batch->batch_size * sizeof(HandVal));
 }
 
-#ifdef __AVX2__
+#if defined(PE_RUNTIME_X86_SIMD) || defined(__AVX2__)
 /* Helper to convert StdDeck_CardMask to modern mask_t */
 static inline mask_t simd_stddeck_to_mask(StdDeck_CardMask sd) {
     mask_t m = 0;
@@ -299,7 +308,7 @@ static inline HandVal simd_eval_5c_nfs_from_masks(uint32_t A1, uint32_t M1, uint
 }
 
 /* Vertical AVX2 Evaluator for batch of 5-card hands */
-static void simd_eval_5c_vertical_avx2(const simd_card_batch_t* batch, int start_idx, int count, HandVal* results) {
+static PE_TARGET_AVX2 void simd_eval_5c_vertical_avx2(const simd_card_batch_t* batch, int start_idx, int count, HandVal* results) {
     __m256i vS0 = _mm256_loadu_si256((const __m256i*)&batch->spades[start_idx]);
     __m256i vS1 = _mm256_loadu_si256((const __m256i*)&batch->clubs[start_idx]);
     __m256i vS2 = _mm256_loadu_si256((const __m256i*)&batch->diamonds[start_idx]);
@@ -400,7 +409,7 @@ static void simd_eval_5c_vertical_avx2(const simd_card_batch_t* batch, int start
 }
 
 /* Horizontal AVX2 Evaluator for a single 7-card hand */
-static inline HandVal simd_eval_7c_horizontal_avx2(mask_t mask) {
+static PE_TARGET_AVX2 inline HandVal simd_eval_7c_horizontal_avx2(mask_t mask) {
     int n = mask_popcount(mask);
     if (n == 5) {
         /* 5-card optimization: direct scalar eval */
@@ -524,7 +533,7 @@ static inline HandVal simd_eval_7c_horizontal_avx2(mask_t mask) {
 }
 
 /* AVX2 helper for rotating ranks (Ace to low) */
-static inline __m256i avx2_rotate_ranks(__m256i ranks) {
+static PE_TARGET_AVX2 inline __m256i avx2_rotate_ranks(__m256i ranks) {
     /* Lowball_ROTATE_RANKS: ((ranks & ~ACE) << 1) | ((ranks >> ACE) & 1) */
     /* Ace is bit 12 (StdDeck_Rank_ACE) */
     const __m256i ace_mask = _mm256_set1_epi32(1 << StdDeck_Rank_ACE);
@@ -540,7 +549,7 @@ static inline __m256i avx2_rotate_ranks(__m256i ranks) {
 }
 
 /* AVX2 implementation - processes batch using Horizontal SIMD for each hand */
-int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch_t* results) {
+PE_TARGET_AVX2 int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch_t* results) {
     int i;
     results->batch_size = batch->batch_size;
 
@@ -575,9 +584,9 @@ int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch
 }
 #endif
 
-#ifdef __AVX512F__
+#if defined(PE_RUNTIME_X86_SIMD) || defined(__AVX512F__)
 /* AVX-512 helper for rotating ranks */
-static inline __m512i avx512_rotate_ranks(__m512i ranks) {
+static PE_TARGET_AVX512 inline __m512i avx512_rotate_ranks(__m512i ranks) {
     const __m512i ace_mask = _mm512_set1_epi32(1 << StdDeck_Rank_ACE);
     const __m512i one = _mm512_set1_epi32(1);
 
@@ -591,7 +600,7 @@ static inline __m512i avx512_rotate_ranks(__m512i ranks) {
 }
 
 /* AVX-512 implementation - processes 8 hands at once */
-int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_batch_t* results) {
+PE_TARGET_AVX512 int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_batch_t* results) {
     int i;
     __m512i spades_vec, clubs_vec, diamonds_vec, hearts_vec;
     __m512i ranks_or;
