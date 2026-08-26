@@ -1,6 +1,7 @@
 #include <poker_eval/solver/pe_work_coordinator.h>
 
 #include <assert.h>
+#include <stddef.h>
 
 #if !defined(_WIN32)
 #include <sys/socket.h>
@@ -121,10 +122,86 @@ static void test_dispatch_channels(void)
 #endif
 }
 
+static void test_collect_results(void)
+{
+#if defined(_WIN32)
+    return;
+#else
+    pe_runtime_capabilities_t cpu = {0};
+    pe_runtime_capabilities_t gpu = {0};
+    pe_work_coordinator_t coordinator;
+    pe_work_worker_channel_t channels[2];
+    pe_work_worker_assignment_t assignments[2];
+    pe_work_reducer_t reducer;
+    pe_work_unit_t units[4];
+    pe_work_unit_t received;
+    pe_work_result_t result;
+    uint8_t delta = 7u;
+    int cpu_sockets[2];
+    int gpu_sockets[2];
+    size_t i;
+    int count;
+
+    mark_backend(&cpu, PE_COMPUTE_CPU_REF, 1.0);
+    mark_backend(&gpu, PE_COMPUTE_CUDA, 3.0);
+    pe_work_coordinator_init(&coordinator);
+    assert(pe_work_coordinator_register(&coordinator, 11u, &cpu) == 0);
+    assert(pe_work_coordinator_register(&coordinator, 22u, &gpu) == 0);
+    for (i = 0u; i < 4u; ++i) {
+        pe_work_unit_init(&units[i]);
+        units[i].public_state = i + 1u;
+        units[i].iteration_end = 1u;
+    }
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, cpu_sockets) == 0);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, gpu_sockets) == 0);
+    channels[0].worker_id = 11u;
+    channels[0].socket = (pe_work_socket_t)cpu_sockets[0];
+    channels[1].worker_id = 22u;
+    channels[1].socket = (pe_work_socket_t)gpu_sockets[0];
+    count = pe_work_coordinator_dispatch(&coordinator, units, 4u,
+                                         channels, 2u, assignments, 2u);
+    assert(count == 2);
+    pe_work_reducer_init(&reducer);
+    for (i = 0u; i < 2u; ++i) {
+        pe_work_socket_t worker_socket = i == 0u
+            ? (pe_work_socket_t)cpu_sockets[1]
+            : (pe_work_socket_t)gpu_sockets[1];
+        size_t j;
+        for (j = 0u; j < assignments[i].unit_count; ++j) {
+            pe_work_unit_init(&received);
+            assert(pe_work_socket_recv_work_unit(worker_socket, &received) == 0);
+            result = (pe_work_result_t){0};
+            result.public_state = received.public_state;
+            result.iteration_begin = received.iteration_begin;
+            result.iteration_end = received.iteration_end;
+            result.backend = assignments[i].backend;
+            result.exploitability = 1.0;
+            result.delta = &delta;
+            result.delta_size = 1u;
+            assert(pe_work_socket_send_result(worker_socket, &result) == 0);
+            pe_work_unit_destroy(&received);
+        }
+    }
+    assert(pe_work_coordinator_collect_results(
+               units, 4u, assignments, 2u, channels, 2u, &reducer) == 0);
+    assert(pe_work_reducer_count(&reducer) == 4u);
+    pe_work_reducer_sort(&reducer);
+    assert(pe_work_reducer_get(&reducer, 0u)->result.public_state == 1u);
+    pe_work_reducer_destroy(&reducer);
+    for (i = 0u; i < 4u; ++i)
+        pe_work_unit_destroy(&units[i]);
+    pe_work_socket_close((pe_work_socket_t)cpu_sockets[0]);
+    pe_work_socket_close((pe_work_socket_t)cpu_sockets[1]);
+    pe_work_socket_close((pe_work_socket_t)gpu_sockets[0]);
+    pe_work_socket_close((pe_work_socket_t)gpu_sockets[1]);
+#endif
+}
+
 int main(void)
 {
     test_heterogeneous_schedule();
     test_registry_and_filters();
     test_dispatch_channels();
+    test_collect_results();
     return 0;
 }

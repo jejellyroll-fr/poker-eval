@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 typedef struct worker_candidate_t
 {
@@ -233,4 +234,58 @@ int pe_work_coordinator_dispatch(
         out[i] = assignments[i];
     }
     return assignment_count;
+}
+
+int pe_work_coordinator_collect_results(
+    const pe_work_unit_t *units,
+    size_t unit_count,
+    const pe_work_worker_assignment_t *assignments,
+    size_t assignment_count,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
+    pe_work_reducer_t *reducer)
+{
+    uint8_t *frame;
+    size_t frame_capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                            PE_WORK_PROTOCOL_MAX_PAYLOAD;
+    size_t i;
+    int rc = 0;
+
+    if (!units || !assignments || !channels || !reducer ||
+        unit_count == 0u || assignment_count == 0u || channel_count == 0u)
+        return -1;
+    frame = (uint8_t *)malloc(frame_capacity);
+    if (!frame)
+        return -1;
+    for (i = 0u; i < assignment_count && rc == 0; ++i) {
+        const pe_work_worker_assignment_t *assignment = &assignments[i];
+        size_t channel_index;
+        size_t j;
+        if (assignment->first_unit > unit_count ||
+            assignment->unit_count > unit_count - assignment->first_unit)
+            rc = -1;
+        channel_index = 0u;
+        while (rc == 0 && channel_index < channel_count &&
+               channels[channel_index].worker_id != assignment->worker_id)
+            ++channel_index;
+        if (rc == 0 && channel_index == channel_count)
+            rc = -1;
+        for (j = 0u; rc == 0 && j < assignment->unit_count; ++j) {
+            pe_work_result_t result;
+            size_t frame_size;
+            const pe_work_unit_t *unit = &units[assignment->first_unit + j];
+            if (pe_work_socket_recv_frame(channels[channel_index].socket, frame,
+                                          frame_capacity, &frame_size) != 0 ||
+                pe_work_frame_decode_result(frame, frame_size, &result) != 0 ||
+                result.public_state != unit->public_state ||
+                result.iteration_begin != unit->iteration_begin ||
+                result.iteration_end != unit->iteration_end ||
+                result.backend != assignment->backend ||
+                pe_work_reducer_accept(reducer, assignment->worker_id,
+                                       &result) != 0)
+                rc = -1;
+        }
+    }
+    free(frame);
+    return rc;
 }

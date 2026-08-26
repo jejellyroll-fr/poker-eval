@@ -7,6 +7,7 @@
 
 #include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/solver/pe_work_protocol.h>
+#include <poker_eval/solver/pe_work_reducer.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -77,6 +78,19 @@ int pe_work_coordinator_dispatch(
     size_t channel_count,
     pe_work_worker_assignment_t *out,
     size_t capacity);
+
+/**
+ * Collect one RESULT per dispatched WorkUnit and append it to `reducer`.
+ * Results are checked against the original unit metadata before acceptance.
+ */
+int pe_work_coordinator_collect_results(
+    const pe_work_unit_t *units,
+    size_t unit_count,
+    const pe_work_worker_assignment_t *assignments,
+    size_t assignment_count,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
+    pe_work_reducer_t *reducer);
 
 #ifdef __cplusplus
 }
