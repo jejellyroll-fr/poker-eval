@@ -104,6 +104,25 @@ static void test_socket_transport(void)
 #endif
 }
 
+static void test_capabilities_frame(void)
+{
+    pe_runtime_capabilities_t source;
+    pe_runtime_capabilities_t decoded;
+    uint8_t frame[PE_WORK_PROTOCOL_HEADER_SIZE +
+                  PE_RUNTIME_DESCRIPTOR_MAX + 1u];
+    size_t frame_size;
+
+    assert(pe_runtime_probe(&source) == 0);
+    assert(pe_work_frame_encode_capabilities(&source, frame, sizeof(frame),
+                                             &frame_size) == 0);
+    assert(pe_work_frame_decode_capabilities(frame, frame_size, &decoded) == 0);
+    assert(decoded.logical_cpus == source.logical_cpus);
+    assert(decoded.openmp_available == source.openmp_available);
+    assert(decoded.simd == source.simd);
+    assert(decoded.backends[PE_COMPUTE_CPU_REF].capabilities ==
+           source.backends[PE_COMPUTE_CPU_REF].capabilities);
+}
+
 static void test_round_trip(void)
 {
     const uint8_t payload[] = {0x00, 0x01, 0x7f, 0x80, 0xff};
@@ -165,6 +184,7 @@ int main(void)
     test_work_unit_frame();
     test_result_frame();
     test_socket_transport();
+    test_capabilities_frame();
     pe_work_transport_cleanup();
     return 0;
 }

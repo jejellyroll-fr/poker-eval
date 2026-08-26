@@ -7,6 +7,7 @@
 
 #include <poker_eval/solver/pe_work_unit.h>
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_runtime.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -113,6 +114,19 @@ int pe_work_frame_encode_result(const pe_work_result_t *result,
 int pe_work_frame_decode_result(const uint8_t *frame,
                                 size_t frame_size,
                                 pe_work_result_t *out);
+
+/** Encode a runtime capability descriptor as a NUL-terminated frame. */
+int pe_work_frame_encode_capabilities(
+    const pe_runtime_capabilities_t *runtime,
+    uint8_t *out,
+    size_t capacity,
+    size_t *out_size);
+
+/** Decode a CAPABILITIES frame into a runtime descriptor. */
+int pe_work_frame_decode_capabilities(
+    const uint8_t *frame,
+    size_t frame_size,
+    pe_runtime_capabilities_t *out);
 
 #ifdef __cplusplus
 }
