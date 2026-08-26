@@ -250,3 +250,92 @@ int pe_compute_simd_apply_uniform(double *regrets, double *averages,
     }
     return 0;
 }
+
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
+static PE_COMPUTE_TARGET_AVX2 void avx2_regret_match(
+    const float *regrets, float *strategies, size_t count, float positive)
+{
+    size_t i = 0u;
+    __m256 denominator = _mm256_set1_ps(positive);
+    __m256 zero = _mm256_setzero_ps();
+
+    for (; i + 8u <= count; i += 8u)
+    {
+        __m256 regret = _mm256_max_ps(_mm256_loadu_ps(regrets + i), zero);
+        _mm256_storeu_ps(strategies + i, _mm256_div_ps(regret, denominator));
+    }
+    for (; i < count; ++i)
+        strategies[i] = regrets[i] > 0.0f ? regrets[i] / positive : 0.0f;
+}
+#endif
+
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX512F__)
+static PE_COMPUTE_TARGET_AVX512 void avx512_regret_match(
+    const float *regrets, float *strategies, size_t count, float positive)
+{
+    size_t i = 0u;
+    __m512 denominator = _mm512_set1_ps(positive);
+    __m512 zero = _mm512_setzero_ps();
+
+    for (; i + 16u <= count; i += 16u)
+    {
+        __m512 regret = _mm512_max_ps(_mm512_loadu_ps(regrets + i), zero);
+        _mm512_storeu_ps(strategies + i, _mm512_div_ps(regret, denominator));
+    }
+    for (; i < count; ++i)
+        strategies[i] = regrets[i] > 0.0f ? regrets[i] / positive : 0.0f;
+}
+#endif
+
+#if defined(__aarch64__)
+static void neon_regret_match(const float *regrets, float *strategies,
+                              size_t count, float positive)
+{
+    size_t i = 0u;
+    float32x4_t denominator = vdupq_n_f32(positive);
+    float32x4_t zero = vdupq_n_f32(0.0f);
+
+    for (; i + 4u <= count; i += 4u)
+    {
+        float32x4_t regret = vmaxq_f32(vld1q_f32(regrets + i), zero);
+        vst1q_f32(strategies + i, vdivq_f32(regret, denominator));
+    }
+    for (; i < count; ++i)
+        strategies[i] = regrets[i] > 0.0f ? regrets[i] / positive : 0.0f;
+}
+#endif
+
+int pe_compute_simd_regret_match(const float *regrets, float *strategies,
+                                 size_t count, float positive)
+{
+    if (!regrets || !strategies || count == 0u ||
+        !isfinite(positive) || positive <= 0.0f)
+        return 0;
+
+    switch (simd_runtime_capability())
+    {
+        case SIMD_AVX512:
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX512F__)
+            avx512_regret_match(regrets, strategies, count, positive);
+            return 1;
+#endif
+            break;
+        case SIMD_AVX2:
+#if defined(PE_COMPUTE_X86_MULTIVERSION) || defined(__AVX2__)
+            avx2_regret_match(regrets, strategies, count, positive);
+            return 1;
+#endif
+            break;
+        case SIMD_NEON:
+#if defined(__aarch64__)
+            neon_regret_match(regrets, strategies, count, positive);
+            return 1;
+#endif
+            break;
+        case SIMD_NONE:
+        case SIMD_SSE2:
+        default:
+            break;
+    }
+    return 0;
+}

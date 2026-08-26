@@ -178,6 +178,14 @@ static void cpu_par_strategy_one(const pe_compute_config_t *config,
     }
 
     positive = pe_compute_simd_positive_sum(in->regrets + begin, actions);
+    if (positive > 0.0f && pe_compute_simd_regret_match(
+            in->regrets + begin, out->strategies + begin, actions, positive))
+    {
+        for (uint32_t slot = begin + actions;
+             slot < in->offsets[infoset + 1u]; ++slot)
+            out->strategies[slot] = 0.0f;
+        return;
+    }
     for (action = 0u; action < actions; ++action)
     {
         float regret = in->regrets[begin + action];
@@ -215,6 +223,9 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
         (!isfinite(backend->config.exponential_lambda) ||
          backend->config.exponential_lambda <= 0.0))
         return -1;
+
+    /* Initialise runtime SIMD tables before worker threads enter the kernel. */
+    (void)pe_compute_simd_enabled();
 
     /* Validate all metadata before entering the parallel region so an invalid
        batch cannot leave a partially written output. */

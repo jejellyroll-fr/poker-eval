@@ -296,6 +296,14 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
         positive = pe_compute_simd_positive_sum(in->regrets + begin, actions);
         if (!isfinite(positive))
             return -1;
+        if (positive > 0.0f && pe_compute_simd_regret_match(
+                in->regrets + begin, out->strategies + begin, actions,
+                positive))
+        {
+            for (uint32_t slot = begin + actions; slot < end; ++slot)
+                out->strategies[slot] = 0.0f;
+            continue;
+        }
         for (action = 0u; action < actions; ++action)
         {
             float regret = in->regrets[begin + action];

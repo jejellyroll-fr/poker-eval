@@ -8,6 +8,11 @@
  * still own input validation and the scalar remainder. */
 float pe_compute_simd_positive_sum(const float *values, size_t count);
 
+/* Apply regret matching in-place for one contiguous action span. Returns 1
+ * when an ISA-specific implementation handled the span, 0 otherwise. */
+int pe_compute_simd_regret_match(const float *regrets, float *strategies,
+                                 size_t count, float positive);
+
 /* True only when the SIMD kernel is both compiled and enabled at runtime. */
 int pe_compute_simd_enabled(void);
 

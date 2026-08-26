@@ -17,8 +17,9 @@ the scalar evaluator otherwise.
 `simd_compiled`, and `simd`. This lets frontends distinguish a capable host
 from a binary that was intentionally built without a particular kernel.
 
-The same dispatch is used by the hot compute kernels: positive regret sums and
-uniform SoA regret/average updates use the selected ISA. DCFR and weighted
+The same dispatch is used by the hot compute kernels: positive regret sums,
+regret matching, and uniform SoA regret/average updates use the selected ISA.
+DCFR and weighted
 averaging retain their scalar path because their per-update transformations
 need additional parameters and must preserve the reference semantics.
 
