@@ -310,6 +310,7 @@ set(TEST_SOURCES
     simple_alignment_test.c
     test_mpf_tree_parser.c
     test_tree_editor_model.c
+    test_pe_analysis_model.c
 
     # Betting API tests
     test_betting_api.c
@@ -576,6 +577,15 @@ endforeach()
 if(TARGET test_tree_editor_model)
     target_sources(test_tree_editor_model PRIVATE
         ${CMAKE_SOURCE_DIR}/tools/pe_tree_editor_model.c)
+endif()
+
+# The Studio's analysis model is GUI-free on purpose so that it can be tested
+# here; the panel is a shell over it.
+if(TARGET test_pe_analysis_model)
+    target_sources(test_pe_analysis_model PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/pe_analysis_model.c)
+    target_include_directories(test_pe_analysis_model PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools)
 endif()
 
 # Quick smoke tests for ctest -L fast

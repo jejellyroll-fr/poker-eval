@@ -19,6 +19,7 @@
 #include <osbs/bproc.h>
 
 #include "pe_tree_editor_model.h"
+#include "pe_analysis_model.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -188,6 +189,20 @@ struct _app_t
     Button *stop_button;
     Tabs *tabs;
     Panel *pages;
+
+    /* ANALYSIS tab. The computation lives in pe_analysis_model.c so that it
+       can be tested without a window; these are only the widgets. */
+    Combo *analysis_game_combo;
+    Combo *analysis_players_combo;
+    Edit *analysis_range_edit[PE_ANALYSIS_MAX_PLAYERS];
+    Edit *analysis_board_edit;
+    Edit *analysis_dead_edit;
+    Edit *analysis_iterations_edit;
+    TextView *analysis_equity_view;
+    TextView *analysis_breakdown_view;
+    Edit *analysis_stacks_edit;
+    Edit *analysis_payouts_edit;
+    TextView *analysis_icm_view;
 
     /* Monker-style tree builder.  The editor is deliberately separate from
      * the loaded MKR model: it owns a small, deterministic topology model and
@@ -5198,6 +5213,346 @@ static Panel *i_result_panel(App *app)
     return panel;
 }
 
+
+/* ------------------------------------------------------------------ *
+ * ANALYSIS tab
+ *
+ * Two calculators that answer questions the solver cannot: what a range is
+ * worth against another one right now, what a range actually hit on a board,
+ * and what a tournament stack is worth in money rather than chips.
+ *
+ * Nothing here computes. Every button reads the fields, calls into
+ * pe_analysis_model.c and renders whatever comes back -- including the
+ * refusal, because these inputs are typed by hand and a blank result is
+ * indistinguishable from a wrong one.
+ * ------------------------------------------------------------------ */
+
+static enum_game_t i_analysis_game(const App *app)
+{
+    switch (combo_get_selected(app->analysis_game_combo))
+    {
+    case 1:  return game_omaha;
+    case 2:  return game_omaha8;
+    case 3:  return game_holdem8;
+    case 4:  return game_7stud;
+    case 0:
+    default: return game_holdem;
+    }
+}
+
+static int i_analysis_player_count(const App *app)
+{
+    uint32_t index = combo_get_selected(app->analysis_players_combo);
+    int count = (int)index + 2;
+    if (count < 2)
+        count = 2;
+    if (count > PE_ANALYSIS_MAX_PLAYERS)
+        count = PE_ANALYSIS_MAX_PLAYERS;
+    return count;
+}
+
+static void i_on_analysis_players(App *app, Event *event)
+{
+    int count = i_analysis_player_count(app);
+    int player;
+    unref(event);
+    /* Ranges past the player count stay visible but are clearly inert, which
+       is less surprising than widgets appearing and disappearing. */
+    for (player = 0; player < PE_ANALYSIS_MAX_PLAYERS; ++player)
+        edit_editable(app->analysis_range_edit[player], player < count);
+}
+
+static void i_on_analysis_equity(App *app, Event *event)
+{
+    pe_analysis_equity_request_t request;
+    pe_analysis_equity_report_t report;
+    const char *iterations_text;
+    int player;
+
+    unref(event);
+    memset(&request, 0, sizeof(request));
+    request.game = i_analysis_game(app);
+    request.player_count = i_analysis_player_count(app);
+    for (player = 0; player < request.player_count; ++player)
+        request.ranges[player] = edit_get_text(app->analysis_range_edit[player]);
+    request.board = edit_get_text(app->analysis_board_edit);
+    request.dead = edit_get_text(app->analysis_dead_edit);
+    iterations_text = edit_get_text(app->analysis_iterations_edit);
+    request.iterations = iterations_text != NULL ? atol(iterations_text) : 0;
+
+    textview_clear(app->analysis_equity_view);
+    if (pe_analysis_equity(&request, &report) != 0)
+    {
+        textview_printf(app->analysis_equity_view, "Cannot compute: %s\n",
+                        report.error);
+        return;
+    }
+    textview_printf(app->analysis_equity_view,
+                    "%-4s %9s %9s %9s %9s\n", "", "EQUITY", "WIN", "TIE",
+                    "COMBOS");
+    for (player = 0; player < report.player_count; ++player)
+        textview_printf(app->analysis_equity_view,
+                        "P%-3d %8.2f%% %8.2f%% %8.2f%% %9zu\n",
+                        player + 1,
+                        report.equity[player] * 100.0,
+                        report.win[player] * 100.0,
+                        report.tie[player] * 100.0,
+                        report.combos[player]);
+    /* "samples" from the engine counts matchups after card removal, not board
+       draws; saying so stops a correct answer from looking under-sampled. */
+    textview_printf(app->analysis_equity_view,
+                    "\n%ld matchups evaluated (%s)\n", report.samples,
+                    report.exact ? "exact enumeration"
+                                 : "engine heuristic");
+}
+
+static void i_on_analysis_breakdown(App *app, Event *event)
+{
+    pe_analysis_breakdown_t report;
+    int i;
+
+    unref(event);
+    textview_clear(app->analysis_breakdown_view);
+    if (pe_analysis_breakdown(i_analysis_game(app),
+                              edit_get_text(app->analysis_range_edit[0]),
+                              edit_get_text(app->analysis_board_edit),
+                              edit_get_text(app->analysis_dead_edit),
+                              &report) != 0)
+    {
+        textview_printf(app->analysis_breakdown_view, "Cannot classify: %s\n",
+                        report.error);
+        return;
+    }
+    textview_printf(app->analysis_breakdown_view,
+                    "Player 1 range on this board: %zu combos live",
+                    report.live_combos);
+    if (report.blocked_combos != 0u)
+        textview_printf(app->analysis_breakdown_view, ", %zu blocked",
+                        report.blocked_combos);
+    textview_printf(app->analysis_breakdown_view, "\n\n");
+    for (i = 0; i < PE_HAND_CLASS_COUNT; ++i)
+    {
+        char bar[27];
+        int filled = (int)(report.share[i] * 25.0 + 0.5);
+        int c;
+        if (report.weight[i] <= 0.0)
+            continue;
+        for (c = 0; c < 25; ++c)
+            bar[c] = c < filled ? '#' : '.';
+        bar[25] = '\0';
+        textview_printf(app->analysis_breakdown_view, "%-15s %6.2f%%  %s\n",
+                        pe_hand_class_name((pe_hand_class_t)i),
+                        report.share[i] * 100.0, bar);
+    }
+}
+
+static void i_on_analysis_icm(App *app, Event *event)
+{
+    pe_analysis_icm_request_t request;
+    pe_analysis_icm_report_t report;
+    int i;
+
+    unref(event);
+    request.stacks = edit_get_text(app->analysis_stacks_edit);
+    request.payouts = edit_get_text(app->analysis_payouts_edit);
+    textview_clear(app->analysis_icm_view);
+    if (pe_analysis_icm(&request, &report) != 0)
+    {
+        textview_printf(app->analysis_icm_view, "Cannot compute: %s\n",
+                        report.error);
+        return;
+    }
+    textview_printf(app->analysis_icm_view,
+                    "Prize pool %.2f over %d paid place%s\n\n",
+                    report.prize_pool, report.payout_count,
+                    report.payout_count == 1 ? "" : "s");
+    textview_printf(app->analysis_icm_view, "%-4s %10s %9s %9s %10s\n",
+                    "", "STACK", "CHIPS", "ICM", "EV");
+    for (i = 0; i < report.player_count; ++i)
+        textview_printf(app->analysis_icm_view,
+                        "P%-3d %10.0f %8.2f%% %8.2f%% %10.2f\n", i + 1,
+                        report.stacks[i], report.chip_share[i] * 100.0,
+                        report.equity[i] * 100.0, report.ev[i]);
+    /* The gap between the two percentages is the whole reason ICM exists;
+       naming it saves the reader from having to subtract. */
+    textview_printf(app->analysis_icm_view,
+                    "\nCHIPS is the raw stack share, ICM the share of the prize\n"
+                    "pool. A leader is always worth less than their chips, a\n"
+                    "short stack more: that gap is what ICM pressure means.\n");
+}
+
+static Panel *i_analysis_panel(App *app)
+{
+    Panel *panel = panel_create();
+    Layout *root = layout_create(2, 1);
+    Layout *left = layout_create(2, 14);
+    Layout *right = layout_create(1, 6);
+    Label *title = label_create();
+    Label *game_label = label_create();
+    Label *players_label = label_create();
+    Label *board_label = label_create();
+    Label *dead_label = label_create();
+    Label *iterations_label = label_create();
+    Label *icm_title = label_create();
+    Label *stacks_label = label_create();
+    Label *payouts_label = label_create();
+    Label *equity_title = label_create();
+    Label *breakdown_title = label_create();
+    Label *icm_result_title = label_create();
+    Button *equity_button = button_push();
+    Button *breakdown_button = button_push();
+    Button *icm_button = button_push();
+    int player;
+
+    app->analysis_game_combo = combo_create();
+    app->analysis_players_combo = combo_create();
+    app->analysis_board_edit = edit_create();
+    app->analysis_dead_edit = edit_create();
+    app->analysis_iterations_edit = edit_create();
+    app->analysis_equity_view = textview_create();
+    app->analysis_breakdown_view = textview_create();
+    app->analysis_stacks_edit = edit_create();
+    app->analysis_payouts_edit = edit_create();
+    app->analysis_icm_view = textview_create();
+
+    label_text(title, "ANALYSIS | equity, made-hand breakdown and ICM");
+    label_text(game_label, "GAME");
+    label_text(players_label, "PLAYERS");
+    label_text(board_label, "BOARD (e.g. AhKd7s)");
+    label_text(dead_label, "DEAD CARDS");
+    label_text(iterations_label, "MONTE CARLO ITERATIONS");
+    label_text(icm_title, "ICM | tournament chips to money");
+    label_text(stacks_label, "STACKS (comma separated)");
+    label_text(payouts_label, "PAYOUTS (largest first)");
+    label_text(equity_title, "EQUITY");
+    label_text(breakdown_title, "WHAT THE RANGE HIT (player 1)");
+    label_text(icm_result_title, "ICM");
+
+    combo_add_elem(app->analysis_game_combo, "Hold'em", NULL);
+    combo_add_elem(app->analysis_game_combo, "Omaha", NULL);
+    combo_add_elem(app->analysis_game_combo, "Omaha Hi/Lo", NULL);
+    combo_add_elem(app->analysis_game_combo, "Hold'em Hi/Lo", NULL);
+    combo_add_elem(app->analysis_game_combo, "7-card Stud", NULL);
+    combo_selected(app->analysis_game_combo, 0u);
+    for (player = 2; player <= PE_ANALYSIS_MAX_PLAYERS; ++player)
+    {
+        char text[16];
+        snprintf(text, sizeof(text), "%d players", player);
+        combo_add_elem(app->analysis_players_combo, text, NULL);
+    }
+    combo_selected(app->analysis_players_combo, 0u);
+    combo_OnSelect(app->analysis_players_combo,
+                   listener(app, i_on_analysis_players, App));
+
+    layout_label(left, title, 0, 0);
+    layout_label(left, game_label, 0, 1);
+    layout_combo(left, app->analysis_game_combo, 1, 1);
+    layout_label(left, players_label, 0, 2);
+    layout_combo(left, app->analysis_players_combo, 1, 2);
+    for (player = 0; player < PE_ANALYSIS_MAX_PLAYERS; ++player)
+    {
+        Label *range_label = label_create();
+        char caption[24];
+        snprintf(caption, sizeof(caption), "RANGE P%d", player + 1);
+        label_text(range_label, caption);
+        app->analysis_range_edit[player] = edit_create();
+        edit_text(app->analysis_range_edit[player],
+                  player == 0 ? "AA,KK,QQ,AKs" : "22+,ATs+,AJo+");
+        edit_editable(app->analysis_range_edit[player], player < 2);
+        layout_label(left, range_label, 0, 3 + (uint32_t)player);
+        layout_edit(left, app->analysis_range_edit[player], 1,
+                    3 + (uint32_t)player);
+    }
+    layout_label(left, board_label, 0, 9);
+    layout_edit(left, app->analysis_board_edit, 1, 9);
+    layout_label(left, dead_label, 0, 10);
+    layout_edit(left, app->analysis_dead_edit, 1, 10);
+    layout_label(left, iterations_label, 0, 11);
+    layout_edit(left, app->analysis_iterations_edit, 1, 11);
+    layout_button(left, equity_button, 0, 12);
+    layout_button(left, breakdown_button, 1, 12);
+
+    {
+        Layout *icm_block = layout_create(2, 4);
+        layout_label(icm_block, icm_title, 0, 0);
+        layout_label(icm_block, stacks_label, 0, 1);
+        layout_edit(icm_block, app->analysis_stacks_edit, 1, 1);
+        layout_label(icm_block, payouts_label, 0, 2);
+        layout_edit(icm_block, app->analysis_payouts_edit, 1, 2);
+        layout_button(icm_block, icm_button, 1, 3);
+        layout_hsize(icm_block, 0, 190.0f);
+        layout_hsize(icm_block, 1, 260.0f);
+        layout_hmargin(icm_block, 0, 8.0f);
+        layout_vmargin(icm_block, 0, 8.0f);
+        layout_vmargin(icm_block, 1, 6.0f);
+        layout_vmargin(icm_block, 2, 6.0f);
+        layout_layout(left, icm_block, 0, 13);
+    }
+
+    button_text(equity_button, "Compute equity");
+    button_text(breakdown_button, "What did it hit?");
+    button_text(icm_button, "Compute ICM");
+    button_OnClick(equity_button, listener(app, i_on_analysis_equity, App));
+    button_OnClick(breakdown_button,
+                   listener(app, i_on_analysis_breakdown, App));
+    button_OnClick(icm_button, listener(app, i_on_analysis_icm, App));
+
+    edit_text(app->analysis_board_edit, "");
+    edit_phtext(app->analysis_board_edit, "empty = preflop");
+    edit_text(app->analysis_dead_edit, "");
+    edit_phtext(app->analysis_dead_edit, "cards removed from the deck");
+    edit_text(app->analysis_iterations_edit, "200000");
+    edit_text(app->analysis_stacks_edit, "5000, 3000, 2000");
+    edit_text(app->analysis_payouts_edit, "500, 300, 200");
+
+    textview_editable(app->analysis_equity_view, FALSE);
+    textview_editable(app->analysis_breakdown_view, FALSE);
+    textview_editable(app->analysis_icm_view, FALSE);
+    textview_wrap(app->analysis_equity_view, FALSE);
+    textview_wrap(app->analysis_breakdown_view, FALSE);
+    textview_wrap(app->analysis_icm_view, FALSE);
+    textview_printf(app->analysis_equity_view,
+                    "Fill the ranges and press Compute equity.\n");
+    textview_printf(app->analysis_breakdown_view,
+                    "Give a board of 3 cards or more, then press "
+                    "What did it hit?\n");
+    textview_printf(app->analysis_icm_view,
+                    "Give stacks and a payout ladder, then press "
+                    "Compute ICM.\n");
+
+    layout_hsize(left, 0, 190.0f);
+    layout_hsize(left, 1, 260.0f);
+    layout_hmargin(left, 0, 8.0f);
+    {
+        uint32_t row;
+        for (row = 0u; row < 13u; ++row)
+            layout_vmargin(left, row, 6.0f);
+    }
+
+    layout_label(right, equity_title, 0, 0);
+    layout_textview(right, app->analysis_equity_view, 0, 1);
+    layout_label(right, breakdown_title, 0, 2);
+    layout_textview(right, app->analysis_breakdown_view, 0, 3);
+    layout_label(right, icm_result_title, 0, 4);
+    layout_textview(right, app->analysis_icm_view, 0, 5);
+    layout_hsize(right, 0, 760.0f);
+    layout_vsize(right, 1, 150.0f);
+    layout_vsize(right, 3, 230.0f);
+    layout_vsize(right, 5, 200.0f);
+    layout_vmargin(right, 0, 4.0f);
+    layout_vmargin(right, 1, 10.0f);
+    layout_vmargin(right, 2, 4.0f);
+    layout_vmargin(right, 3, 10.0f);
+    layout_vmargin(right, 4, 4.0f);
+
+    layout_layout(root, left, 0, 0);
+    layout_layout(root, right, 1, 0);
+    layout_hmargin(root, 0, 16.0f);
+    layout_margin(root, 12.0f);
+    panel_layout(panel, root);
+    return panel;
+}
+
 static App *i_create(void)
 {
     App *app = heap_new0(App);
@@ -5206,9 +5561,11 @@ static App *i_create(void)
     Panel *setup;
     Panel *result;
     Panel *editor;
+    Panel *analysis;
     Layout *setup_layout = layout_create(1, 1);
     Layout *result_layout = layout_create(1, 1);
     Layout *editor_layout = layout_create(1, 1);
+    Layout *analysis_layout = layout_create(1, 1);
     Tabs *tabs = tabs_create((gui_pos_t)ekTABS_TOP);
     Panel *pages = panel_create();
 
@@ -5222,19 +5579,23 @@ static App *i_create(void)
     setup = i_setup_panel(app);
     result = i_result_panel(app);
     editor = i_tree_editor_panel(app);
+    analysis = i_analysis_panel(app);
 
     app->tabs = tabs;
     app->pages = pages;
     tabs_add_elem(tabs, "SETUP", NULL);
     tabs_add_elem(tabs, "RESULTS", NULL);
     tabs_add_elem(tabs, "TREE BUILDER", NULL);
+    tabs_add_elem(tabs, "ANALYSIS", NULL);
     tabs_OnSelect(tabs, listener(app, i_on_tab, App));
     layout_panel(setup_layout, setup, 0, 0);
     layout_panel(result_layout, result, 0, 0);
     layout_panel(editor_layout, editor, 0, 0);
+    layout_panel(analysis_layout, analysis, 0, 0);
     panel_layout(pages, setup_layout);
     panel_layout(pages, result_layout);
     panel_layout(pages, editor_layout);
+    panel_layout(pages, analysis_layout);
     panel_visible_layout(pages, 0u);
     app->solve_mutex = bmutex_create();
     layout_tabs(layout, tabs, 0, 0);

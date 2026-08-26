@@ -127,7 +127,8 @@ if(PE_NAPPGUI_ROOT AND EXISTS "${PE_NAPPGUI_ROOT}/CMakeLists.txt")
     if(PE_NAPPGUI_LIBS)
         add_executable(poker-eval-studio
             poker_eval_studio.c
-            pe_tree_editor_model.c)
+            pe_tree_editor_model.c
+            pe_analysis_model.c)
         # Studio launches the command-line runners for Solve.  Make the
         # native target self-contained so building only poker-eval-studio
         # also places both runners beside it.
