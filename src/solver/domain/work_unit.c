@@ -36,7 +36,8 @@ int pe_work_unit_validate(const pe_work_unit_t *unit)
         (unit->ranges_size != 0u && unit->ranges == NULL) ||
         (unit->regret_count != 0u && unit->regret_snapshot == NULL))
         return -1;
-    if (unit->board_count > SIZE_MAX / (size_t)unit->board_width)
+    if (unit->board_width != 0u &&
+        unit->board_count > SIZE_MAX / (size_t)unit->board_width)
         return -1;
     for (i = 0u; i < unit->regret_count; ++i)
         if (!isfinite(unit->regret_snapshot[i]))

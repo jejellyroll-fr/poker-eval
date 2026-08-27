@@ -654,7 +654,7 @@ static int cpu_par_apply_update_batch(void *self,
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(backend->threads)
 #endif
-    for (i = 0u; i < batch->count; ++i)
+    for (i = 0; i < (int)batch->count; ++i)
     {
         if (targets != NULL)
         {

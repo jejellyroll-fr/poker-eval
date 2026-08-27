@@ -2,8 +2,14 @@
 
 #include <poker_eval/core/enumdefs.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
+
+static int finite_nonnegative(double value)
+{
+    return value >= 0.0 && value <= DBL_MAX;
+}
 
 static StdDeck_CardMask to_std(mask_t mask)
 {
@@ -53,8 +59,8 @@ int pe_variant_terminal_fixed(
     int rc;
 
     if (!hands || !out_values || player_count < 2u ||
-        player_count > PE_VARIANT_TERMINAL_MAX_PLAYERS || !isfinite(pot) ||
-        pot < 0.0 || pe_variant_profile(game, &profile) != 0 ||
+        player_count > PE_VARIANT_TERMINAL_MAX_PLAYERS ||
+        !finite_nonnegative(pot) || pe_variant_profile(game, &profile) != 0 ||
         !valid_cards(hands, player_count, board, &profile))
         return -1;
     if (profile.deck == UNIVERSAL_DECK_JOKER)

@@ -292,8 +292,9 @@ void cfr_storage_destroy(cfr_storage_t *s)
 #ifdef PE_LEGACY_CFR_OPENMP
     if (s->cap <= (size_t)INT_MAX)
     {
+        int i;
 #pragma omp parallel for schedule(static) num_threads(s->num_threads)
-        for (int i = 0; i < (int)s->cap; ++i)
+        for (i = 0; i < (int)s->cap; ++i)
             if (s->tab[i].used)
             {
                 free(s->tab[i].regret);
@@ -864,8 +865,9 @@ void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
 #ifdef PE_LEGACY_CFR_OPENMP
     if (s->cap <= (size_t)INT_MAX)
     {
+        int i;
 #pragma omp parallel for schedule(static) num_threads(s->num_threads)
-        for (int i = 0; i < (int)s->cap; ++i)
+        for (i = 0; i < (int)s->cap; ++i)
         {
             entry_t *e = &s->tab[i];
             if (!e->used || !e->regret)

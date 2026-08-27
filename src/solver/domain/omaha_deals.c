@@ -1,11 +1,17 @@
 #include <poker_eval/solver/pe_omaha_deals.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
 #include <poker_eval/solver/pe_combinations.h>
 
 #define PE_OMAHA_MAX_PLAYERS 8u
+
+static int finite_nonnegative(double value)
+{
+    return value >= 0.0 && value <= DBL_MAX;
+}
 
 static int valid_hole_count(uint8_t hole_cards)
 {
@@ -80,8 +86,8 @@ static int valid_inputs(mask_t board, const pe_omaha_range_t *ranges,
             const pe_omaha_combo_t *entry = &ranges[player].combos[combo];
             if (!mask_is_valid(entry->cards) ||
                 mask_popcount(entry->cards) != hole_cards ||
-                (entry->cards & board) != 0 || !isfinite(entry->weight) ||
-                entry->weight < 0.0)
+                (entry->cards & board) != 0 ||
+                !finite_nonnegative(entry->weight))
                 return 0;
         }
     }

@@ -2,8 +2,14 @@
 
 #include <poker_eval/solver/pe_preflop_deal_sampler.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
+
+static int finite_positive(double value)
+{
+    return value > 0.0 && value <= DBL_MAX;
+}
 
 static int valid_variant(pe_preflop_variant_t variant, uint8_t hole_cards)
 {
@@ -125,18 +131,18 @@ int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
             mask_t cards = range_cards(sampler, player, i);
             double weight = range_weight(sampler, player, i);
             if (!mask_is_valid(cards) || mask_popcount(cards) != sampler->hole_cards ||
-                mask_intersects(cards, used) || !isfinite(weight) || weight <= 0.0)
+                mask_intersects(cards, used) || !finite_positive(weight))
                 continue;
             total += weight;
         }
-        if (!(total > 0.0) || !isfinite(total)) return -1;
+        if (!finite_positive(total)) return -1;
         draw = pe_rng_uniform01(rng) * total;
         for (size_t i = 0u; i < count; ++i)
         {
             mask_t cards = range_cards(sampler, player, i);
             double weight = range_weight(sampler, player, i);
             if (!mask_is_valid(cards) || mask_popcount(cards) != sampler->hole_cards ||
-                mask_intersects(cards, used) || !isfinite(weight) || weight <= 0.0)
+                mask_intersects(cards, used) || !finite_positive(weight))
                 continue;
             last_legal = i;
             cumulative += weight;
@@ -157,5 +163,5 @@ int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
     out->proposal_probability = proposal;
     out->importance_ratio = sampler->reference_weight_sum > 0.0
         ? (target / sampler->reference_weight_sum) / proposal : 1.0;
-    return isfinite(out->importance_ratio) && out->importance_ratio > 0.0 ? 0 : -1;
+    return finite_positive(out->importance_ratio) ? 0 : -1;
 }
