@@ -365,7 +365,7 @@ static uint64_t hr_infoset_key(const void *s)
                 (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
     }
     /* FEAT-13 (#190/#192): combined strength buckets + texture merging (mode 7).
-     * MonkerSolver "Strength Buckets + Texture Filter" pairing: strength bucket
+     * Compatible "Strength Buckets + Texture Filter" pairing: strength bucket
      * at <<48, texture at tex_hi (<<56) and tex_lo (<<44). */
     if (st->bucket_mode == 7 && st->strength_table && st->texture_level > 0)
     {

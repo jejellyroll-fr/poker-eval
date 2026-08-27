@@ -1,5 +1,5 @@
 /*
- * test_monker_mkr.c - MKR-04: MonkerSolver .mkr entry table
+ * test_monker_mkr.c - MKR-04: .mkr entry table
  */
 
 #include <poker_eval/solver/pe_monker.h>

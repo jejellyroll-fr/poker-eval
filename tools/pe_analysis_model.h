@@ -14,6 +14,7 @@
 #define POKER_EVAL_PE_ANALYSIS_MODEL_H
 
 #include <poker_eval/equity.h>
+#include <poker_eval/economics/fgs.h>
 #include <poker_eval/economics/icm.h>
 
 #include <stddef.h>
@@ -28,6 +29,13 @@ extern "C" {
 /* ------------------------------------------------------------------ *
  * Equity
  * ------------------------------------------------------------------ */
+
+typedef enum
+{
+    PE_ANALYSIS_TOURNAMENT_ICM = 0,
+    PE_ANALYSIS_TOURNAMENT_CHIP_EV,
+    PE_ANALYSIS_TOURNAMENT_FGS
+} pe_analysis_tournament_mode_t;
 
 typedef struct
 {
@@ -119,6 +127,10 @@ typedef struct
 {
     const char *stacks;   /* "5000, 3000, 2000" */
     const char *payouts;  /* "500, 300, 200"    */
+    pe_analysis_tournament_mode_t mode; /* zero keeps the historical ICM default */
+    int fgs_depth;         /* future hands; used by FGS */
+    const char *fgs_pot;   /* chips contested by each future hand */
+    const char *fgs_win_probabilities; /* weights, e.g. "40, 35, 25" */
 } pe_analysis_icm_request_t;
 
 typedef struct
@@ -128,17 +140,50 @@ typedef struct
     double stacks[ICM_MAX_PLAYERS];
     double chip_share[ICM_MAX_PLAYERS];  /* stack / total, for comparison */
     double equity[ICM_MAX_PLAYERS];      /* ICM share of the prize pool   */
-    double ev[ICM_MAX_PLAYERS];          /* ICM equity in currency        */
+    double ev[ICM_MAX_PLAYERS];          /* selected mode EV in currency  */
     double prize_pool;
+    pe_analysis_tournament_mode_t mode;
+    int fgs_depth;
+    size_t fgs_leaf_count;
     char error[PE_ANALYSIS_ERROR_MAX];
 } pe_analysis_icm_report_t;
 
 /**
- * Malmuth-Harville ICM over the given stacks and payout ladder.
+ * Calculate ChipEV, Malmuth-Harville ICM, or deterministic FGS over the
+ * given stacks and payout ladder. FGS uses the supplied per-player next-hand
+ * win weights and an even-contribution transition tree.
  * @return 0 on success; -1 with `error` filled otherwise.
  */
 int pe_analysis_icm(const pe_analysis_icm_request_t *request,
                     pe_analysis_icm_report_t *out);
+
+typedef struct
+{
+    const char *stacks;
+    const char *payouts;
+    int hero_index;             /* zero based */
+    int opponent_index;         /* zero based */
+    double win_probability;     /* 0..1 */
+    double chips_at_risk;
+    double chips_to_win;
+} pe_analysis_icm_decision_request_t;
+
+typedef struct
+{
+    double current_ev;
+    double win_ev;
+    double lose_ev;
+    double decision_ev;
+    double delta_vs_fold;
+    double effective_win;
+    double effective_loss;
+    char error[PE_ANALYSIS_ERROR_MAX];
+} pe_analysis_icm_decision_report_t;
+
+/* Evaluate a binary tournament decision with exact ICM at both endpoints. */
+int pe_analysis_icm_decision(
+    const pe_analysis_icm_decision_request_t *request,
+    pe_analysis_icm_decision_report_t *out);
 
 /** Parse a comma or space separated list of non-negative numbers. */
 int pe_analysis_parse_numbers(const char *text, double *out, int capacity,

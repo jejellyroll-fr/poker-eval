@@ -1,5 +1,5 @@
 /*
- * monker_tree_reader.c - MonkerSolver .tree header reader (MKR-01)
+ * monker_tree_reader.c - .tree header reader (MKR-01)
  */
 
 #include <poker_eval/solver/pe_monker.h>
@@ -53,10 +53,9 @@ static int read_bytes(FILE *file, unsigned char *out, size_t count)
 }
 
 /*
- * MonkerSolver writes its .tree files with java.io.DataOutputStream, which is
- * big-endian for every type it emits, on every platform. The byte order is a
- * property of the format, not of the machine that wrote the file, so these
- * decoders are fixed big-endian rather than host-order.
+ * The .tree format uses java.io.DataOutputStream-compatible big-endian fields.
+ * The byte order is a property of the format, not of the host machine, so
+ * these decoders are fixed big-endian rather than host-order.
  */
 static int64_t decode_i64(const unsigned char *bytes)
 {
@@ -342,8 +341,8 @@ static int decode_action_code(unsigned code, mpf_tree_action_type_t *out_type)
  * Bet sizes carried by an action code.
  *
  * Only three families are evidenced. Codes at or above 40000 encode a pot
- * percentage, confirmed both by MonkerSolver's own CustomActions/example.txt
- * (a "75%" sizing writes 40075) and by the codes present in the shipped trees
+ * percentage, covered by the serialized action definitions
+ * (a "75%" sizing writes 40075) and by the codes present in compatible trees
  * (40050, 40075, 40100). Code 5 is the minimum raise, from the same file
  * ("min" writes 5). Code 3 is all-in: the GG all-in-or-fold tree contains no
  * action code other than 0, 1 and 3, and by construction offers nothing but

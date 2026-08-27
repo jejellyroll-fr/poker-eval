@@ -27,7 +27,7 @@
  * literature intends (the original EHS2 bucketing of Gilpin & Sandholm).
  *
  * This is the per-hand strength abstraction; combine it with
- * board_texture.h's texture id to realize MonkerSolver's "Strength Buckets +
+ * board_texture.h's texture id to realize the compatible "Strength Buckets +
  * Texture Filter" node abstraction for PLO/Hold'em multi-street trees.
  */
 

@@ -116,6 +116,15 @@ static void test_equity_refusals(void)
     request.board = "AhAsAd";
     CHECK(pe_analysis_equity(&request, &report) != 0,
           "a fully blocked range was accepted");
+
+    /* Both ranges parse, but the only two hands share Ac. This must be
+       rejected before the evaluator emits per-matchup failures. */
+    request.board = "";
+    request.ranges[0] = "AcAd";
+    request.ranges[1] = "AcKd";
+    CHECK(pe_analysis_equity(&request, &report) != 0 &&
+              strstr(report.error, "compatible matchups") != NULL,
+          "fully conflicting ranges were accepted: %s", report.error);
 }
 
 /* On a paired board with a flush possible, the classes a range falls into are
@@ -187,6 +196,7 @@ static void test_icm_invariants(void)
     double total = 0.0;
     int i;
 
+    memset(&request, 0, sizeof(request));
     request.stacks = "5000, 3000, 2000";
     request.payouts = "500, 300, 200";
     CHECK(pe_analysis_icm(&request, &report) == 0,
@@ -216,6 +226,33 @@ static void test_icm_invariants(void)
     CHECK(fabs(report.ev[0] - report.prize_pool / 3.0) < 1.0e-6,
           "equal stacks: EV is %.4f, expected %.4f",
           report.ev[0], report.prize_pool / 3.0);
+
+    memset(&request, 0, sizeof(request));
+    request.stacks = "5000, 3000, 2000";
+    request.payouts = "500, 300, 200";
+    request.mode = PE_ANALYSIS_TOURNAMENT_CHIP_EV;
+    CHECK(pe_analysis_icm(&request, &report) == 0,
+          "ChipEV was refused: %s", report.error);
+    CHECK(fabs(report.equity[0] - 0.5) < 1.0e-9 &&
+              fabs(report.ev[0] - 500.0) < 1.0e-9,
+          "ChipEV did not preserve raw stack share");
+
+    memset(&request, 0, sizeof(request));
+    request.stacks = "5000, 3000, 2000";
+    request.payouts = "500, 300, 200";
+    request.mode = PE_ANALYSIS_TOURNAMENT_FGS;
+    request.fgs_depth = 1;
+    request.fgs_pot = "100";
+    request.fgs_win_probabilities = "50, 30, 20";
+    CHECK(pe_analysis_icm(&request, &report) == 0,
+          "FGS was refused: %s", report.error);
+    CHECK(report.fgs_leaf_count == 3u,
+          "FGS produced %zu leaves instead of 3", report.fgs_leaf_count);
+    total = 0.0;
+    for (i = 0; i < report.player_count; ++i)
+        total += report.equity[i];
+    CHECK(fabs(total - 1.0) < 1.0e-9,
+          "FGS equity sums to %.9f, not 1", total);
 }
 
 static void test_icm_refusals(void)
@@ -223,6 +260,7 @@ static void test_icm_refusals(void)
     pe_analysis_icm_request_t request;
     pe_analysis_icm_report_t report;
 
+    memset(&request, 0, sizeof(request));
     request.stacks = "1000";
     request.payouts = "100";
     CHECK(pe_analysis_icm(&request, &report) != 0,
@@ -251,6 +289,29 @@ static void test_icm_refusals(void)
           "a negative stack was accepted");
 }
 
+static void test_icm_decision(void)
+{
+    pe_analysis_icm_decision_request_t request;
+    pe_analysis_icm_decision_report_t report;
+
+    memset(&request, 0, sizeof(request));
+    request.stacks = "5000, 3000, 2000";
+    request.payouts = "500, 300, 200";
+    request.hero_index = 0;
+    request.opponent_index = 1;
+    request.win_probability = 0.60;
+    request.chips_at_risk = 500.0;
+    request.chips_to_win = 500.0;
+    CHECK(pe_analysis_icm_decision(&request, &report) == 0,
+          "ICM decision was refused: %s", report.error);
+    CHECK(fabs(report.effective_win - 500.0) < 1.0e-9 &&
+              fabs(report.effective_loss - 500.0) < 1.0e-9,
+          "ICM decision did not clamp/transfer the requested chips");
+    CHECK(fabs(report.decision_ev -
+               (0.60 * report.win_ev + 0.40 * report.lose_ev)) < 1.0e-9,
+          "ICM decision EV was not probability weighted");
+}
+
 int main(void)
 {
     test_known_preflop_matchup();
@@ -260,6 +321,7 @@ int main(void)
     test_breakdown_refusals();
     test_icm_invariants();
     test_icm_refusals();
+    test_icm_decision();
     if (failures != 0)
         return 1;
     puts("test_pe_analysis_model: all tests passed");

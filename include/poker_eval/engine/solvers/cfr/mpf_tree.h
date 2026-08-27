@@ -107,7 +107,7 @@ typedef struct mpf_tree_action_t
     double lock_freq;
 } mpf_tree_action_t;
 
-/* FEAT-12: opponent model loaded from a .json profile (MonkerSolver-style).
+    /* FEAT-12: opponent model loaded from a .json profile (compatible style).
    Keys are node ids; each entry maps action labels (e.g. "RAISE_50",
    "RAISE_100", "CALL") or action indices to target frequencies. */
 typedef struct mpf_tree_action_lock_t
@@ -238,7 +238,7 @@ void mpf_tree_free(mpf_tree_def_t *tree);
 
 /* FEAT-12: Opponent Models & Multi-Action Nodelock.
  *
- * Parse a MonkerSolver-style opponent model JSON into a structured form that
+ * Parse a compatible opponent model JSON into a structured form that
  * can be applied to a tree. The model maps node ids to per-action frequency
  * locks (e.g. {"RAISE_50": 0.3, "RAISE_100": 0.2, "CALL": 0.5}).
  *

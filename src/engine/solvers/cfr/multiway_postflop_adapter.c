@@ -960,7 +960,7 @@ static double mpf_compute_stpr(const mpf_state_t *st)
 }
 
 /* True when a remaining stack of `remaining` chips is small enough to trigger
- * MonkerSolver-style effective all-in: remaining <= threshold% * pot. */
+ * Compatible effective all-in: remaining <= threshold% * pot. */
 static int mpf_is_effective_all_in(const mpf_state_t *st, double remaining)
 {
     if (!st->is_pot_limit)

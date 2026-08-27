@@ -297,7 +297,7 @@ struct cfr_config_t {
     uint32_t keep_ev_mask;           /* 0 = retain every street */
 
     /* Postflop abstraction (FEAT-13): street-by-street node abstraction in the
-     * style of MonkerSolver. strength_buckets_per_street is the target number
+     * style of the compatible solver. strength_buckets_per_street is the target number
      * of strength buckets (the EHS/EHS2 k-means count from strength_bucketing.h)
      * used per street; texture_filter_level selects how aggressively boards are
      * merged by texture (Perfect / Large / Medium / Small / None, see

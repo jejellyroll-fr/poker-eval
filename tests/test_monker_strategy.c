@@ -1,5 +1,5 @@
 /*
- * test_monker_strategy.c - a saved MonkerSolver strategy, indexed by hand
+ * test_monker_strategy.c - a saved strategy, indexed by hand
  *
  * The import joins four things that were each tested on their own: the tree,
  * the stored slots, the slot-to-node binding, and the hand-class numbering.
@@ -205,7 +205,7 @@ static int write_tree(const char *path)
  *
  * Every class gets 200/56 except class 0, which gets 0/0 so the
  * "no strategy stored" path is exercised, and class 1, which gets 129/128 —
- * summing to 257, the independent-rounding case MonkerSolver produces.
+ * summing to 257, the independent-rounding case required by the format.
  */
 static unsigned char *build_strategy(size_t *out_size)
 {
@@ -251,7 +251,7 @@ static int put_u32(FILE *f, uint32_t v)
     return fwrite(b, 1u, 4u, f) == 4u ? 0 : -1;
 }
 
-/* UTF-16BE with a BOM, which is how MonkerSolver names its entries. */
+/* UTF-16BE with a BOM, as used for serialized entry names. */
 static int put_name(FILE *f, const char *name)
 {
     unsigned char bom[2] = {0xFEu, 0xFFu};

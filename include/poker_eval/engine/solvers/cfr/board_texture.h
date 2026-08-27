@@ -4,7 +4,7 @@
  * Copyright (C) 2026 poker-eval contributors
  *
  * Issue #149 asks for a board-texture abstraction layer that mirrors
- * MonkerSolver's node abstraction settings: a Strength Buckets count paired
+ * Compatible node abstraction settings: a Strength Buckets count paired
  * with a Texture Filter level (Perfect / Large / Medium / Small / None). This
  * header defines the texture half of that pair.
  *
@@ -40,7 +40,7 @@ extern "C" {
 #endif
 
 /* ------------------------------------------------------------------ *
- * Texture filter levels (MonkerSolver-style node abstraction)
+ * Texture filter levels (compatible node abstraction)
  * ------------------------------------------------------------------ */
 
 typedef enum pe_texture_filter_level_e

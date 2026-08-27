@@ -195,7 +195,7 @@ static uint64_t sd_infoset_key(const void *s)
     /* FEAT-13 (#190): combined strength buckets + texture merging (mode 7).
      * Both abstractions are applied at once: the hand is bucketed by EHS/EHS2
      * (bits 48..55) and the board is merged by texture (tex_hi at <<56,
-     * tex_lo at <<44). This is the MonkerSolver "Strength Buckets + Texture
+     * tex_lo at <<44). This is the compatible "Strength Buckets + Texture
      * Filter" pairing and gives the largest state-space reduction. */
     if (st->bucket_mode == 7 && st->strength_table && st->texture_level > 0)
     {

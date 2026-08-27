@@ -1,5 +1,5 @@
 /*
- * pe_monker_strategy.h - a MonkerSolver saved strategy, indexed by hand
+ * pe_monker_strategy.h - a saved strategy indexed by hand
  *
  * The pieces are all in place separately: a .tree gives the topology, a .mkr
  * gives one array per decision node, pe_monker_mkr_bind_strategy says which
@@ -9,7 +9,7 @@
  * cards?" — has an answer.
  *
  * The frequencies are bytes over 256. They are renormalised on the way out,
- * because MonkerSolver rounds each action to a byte independently and a hand's
+ * because the format rounds each action to a byte independently and a hand's
  * bytes therefore sum to 256 or, once in three thousand times, to 257.
  *
  * What this does not do is measure anything. Turning an imported strategy into

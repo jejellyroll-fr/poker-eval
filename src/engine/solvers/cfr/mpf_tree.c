@@ -1188,7 +1188,7 @@ int mpf_tree_normalize_lock(const double *locked,
 /* FEAT-12: Opponent Models & Multi-Action Nodelock. */
 
 /* Produce a canonical label for action `i` of `node`, matching the
- * MonkerSolver-style labels used in opponent model JSON (e.g. "RAISE_50"). */
+ * Compatible labels used in opponent model JSON (e.g. "RAISE_50"). */
 static void mpf_action_label(const mpf_tree_node_t *node, int i, char *buf, size_t cap)
 {
     const mpf_tree_action_t *a = &node->actions[i];
@@ -1204,7 +1204,7 @@ static void mpf_action_label(const mpf_tree_node_t *node, int i, char *buf, size
     {
         int sz = a->size_index;
         double pct = (sz >= 0 && sz < node->bet_size_count) ? node->bet_sizes[sz] : 0.0;
-        /* Emit MonkerSolver-style labels: a fractional pot size becomes
+        /* Emit compatible labels: a fractional pot size becomes
            RAISE_<pct*100> (e.g. 0.5 -> RAISE_50, 1.0 -> RAISE_100). A bare
            integer size index (no bet size) falls back to RAISE_<idx>. */
         if (pct > 0.0)

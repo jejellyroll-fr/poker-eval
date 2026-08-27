@@ -56,7 +56,7 @@ typedef struct {
      *   not owned by the state; NULL falls back to mode 3).
      * bucket_mode == 6 : board-texture merging via pe_board_texture_id, keyed on
      *   texture_level (pe_texture_filter_level_t, 0 = disabled).
-     * bucket_mode == 7 : both combined (MonkerSolver Strength+Texture pairing). */
+     * bucket_mode == 7 : both combined (strength + texture pairing). */
     pe_strength_table_t *strength_table;
     int texture_level;
     /* FEAT-13 (#192): turn board (4 cards) when solved multi-street, so

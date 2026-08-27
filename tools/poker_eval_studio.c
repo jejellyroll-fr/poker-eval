@@ -20,6 +20,7 @@
 #include <osbs/bproc.h>
 
 #include "pe_tree_editor_model.h"
+#include "pe_tree_outline.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -63,6 +64,7 @@
 #define STRATEGY_TABLE_ACTIONS 4u
 #define MAX_DECISION_STEPS 64u
 #define MAX_PLAYERS_DISPLAY 6u
+#define MAX_SETUP_PLAYERS 8u
 
 typedef struct _app_t App;
 
@@ -137,6 +139,8 @@ struct _app_t
     TableView *strategy_table;
     View *poker_table_view;
     View *board_matrix_view;
+    View *setup_table_view;
+    View *setup_board_matrix_view;
     View *strategy_grid_view;
     View *hand_preview_view;
     TextView *action_history_view;
@@ -155,6 +159,18 @@ struct _app_t
     Label *cards_caption;
     Label *card_labels[4];
     Label *board_label;
+
+    /* SETUP hand state.  The game/player/board widgets above remain the
+     * canonical solver inputs; these widgets only expose the live table
+     * context that was previously missing from the setup screen. */
+    Combo *setup_street_combo;
+    Combo *setup_hero_combo;
+    Edit *setup_pot_edit;
+    Edit *setup_blinds_edit;
+    Edit *setup_stack_edit[MAX_SETUP_PLAYERS];
+    Combo *setup_action_combo[MAX_SETUP_PLAYERS];
+    Layout *setup_players_layout;
+    Label *setup_table_context;
 
     /* Left Stats Box Labels */
     Label *lbl_status_val;
@@ -200,9 +216,64 @@ struct _app_t
     Edit *analysis_iterations_edit;
     TextView *analysis_equity_view;
     TextView *analysis_breakdown_view;
+    Combo *icm_game_combo;
+    Combo *icm_mode_combo;
+    Tabs *icm_tabs;
+    Panel *icm_pages;
+    Layout *icm_spot_layout;
+    Combo *icm_spot_game_combo;
+    Combo *icm_spot_players_combo;
+    Combo *icm_spot_street_combo;
+    Combo *icm_spot_hero_combo;
+    Edit *icm_spot_board_edit;
+    Edit *icm_spot_pot_edit;
+    Edit *icm_spot_blinds_edit;
+    Edit *icm_spot_stack_edit[MAX_SETUP_PLAYERS];
+    Combo *icm_spot_action_combo[MAX_SETUP_PLAYERS];
+    View *icm_spot_table_view;
+    View *icm_spot_board_matrix_view;
+    Label *icm_spot_context;
     Edit *analysis_stacks_edit;
     Edit *analysis_payouts_edit;
+    Edit *icm_fgs_pot_edit;
+    Edit *icm_fgs_depth_edit;
+    Edit *icm_fgs_win_edit;
+    Edit *icm_hero_edit;
+    Edit *icm_opponent_edit;
+    Edit *icm_decision_win_edit;
+    Edit *icm_risk_edit;
+    Edit *icm_gain_edit;
     TextView *analysis_icm_view;
+    View *icm_matrix_view;
+    Label *icm_matrix_hint;
+    Edit *icm_matrix_opponent_range_edit;
+    Edit *icm_matrix_iterations_edit;
+    Edit *icm_matrix_raise_edit;
+    Mutex *icm_matrix_mutex;
+    int icm_matrix_running;
+    int icm_matrix_cancel_requested;
+    uint32_t icm_matrix_done;
+    uint32_t icm_matrix_total;
+    uint32_t icm_matrix_failed;
+    uint32_t icm_matrix_count;
+    enum_game_t icm_matrix_game;
+    int icm_matrix_hero;
+    int icm_matrix_opponent;
+    int icm_matrix_active_opponents;
+    int icm_matrix_has_bet;
+    double icm_matrix_pot;
+    double icm_matrix_hero_stack;
+    double icm_matrix_opponent_stack;
+    double icm_matrix_to_call;
+    char icm_matrix_board[128];
+    char icm_matrix_opponent_range[512];
+    char icm_matrix_stacks[512];
+    char icm_matrix_payouts[512];
+    long icm_matrix_iterations;
+    double icm_matrix_raise_multiple;
+    int icm_matrix_ready;
+    double icm_matrix_equity[13][13];
+    int8_t icm_matrix_action[13][13];
 
     /* Monker-style tree builder.  The editor is deliberately separate from
      * the loaded MKR model: it owns a small, deterministic topology model and
@@ -210,6 +281,7 @@ struct _app_t
     pe_tree_editor_t tree_editor;
     int tree_editor_ready;
     TextView *tree_editor_view;
+    TextView *tree_editor_info;
     TextView *tree_editor_status;
     Combo *tree_editor_node_combo;
     Combo *tree_editor_action_combo;
@@ -218,7 +290,14 @@ struct _app_t
     Edit *tree_editor_size_edit;
     Label *tree_editor_selection_label;
     View *tree_editor_canvas;
+    View *tree_editor_poker_view;
+    Button *tree_editor_collapse_all;
+    Button *tree_editor_expand_all;
+    Button *tree_editor_collapse_node;
+    Button *tree_editor_expand_node;
     int tree_editor_refreshing;
+    int tree_outline_ready;
+    pe_tree_outline_t tree_outline;
 
     /* Background Solve Task */
     Mutex *solve_mutex;
@@ -328,6 +407,25 @@ static void update_responses_for_active_step(App *app);
 static void update_action_history(App *app);
 static void update_action_history(App *app);
 static void mkr_populate_grid(App *app);
+static void i_on_analysis_icm(App *app, Event *event);
+static void i_on_compute_icm_matrix(App *app, Event *event);
+static void i_on_icm_matrix_input_change(App *app, Event *event);
+static int i_icm_matrix_supported(const App *app);
+static uint32_t i_icm_matrix_main(App *app);
+static void i_icm_matrix_update(App *app);
+static void i_icm_matrix_end(App *app, const uint32_t result);
+static void i_on_icm_spot_state_change(App *app, Event *event);
+static void i_on_icm_spot_players_select(App *app, Event *event);
+static void i_on_icm_spot_street_select(App *app, Event *event);
+static void i_on_draw_icm_spot_table(App *app, Event *event);
+static void i_on_click_icm_spot_table(App *app, Event *event);
+static void i_on_draw_icm_spot_board(App *app, Event *event);
+static void i_on_click_icm_spot_board(App *app, Event *event);
+static uint32_t icm_spot_players(const App *app);
+static int icm_spot_street(const App *app);
+static const char *icm_spot_action(const App *app, uint32_t player);
+static void icm_spot_update_context(App *app);
+static void sync_icm_from_spot(App *app);
 static void trim_text(char *text);
 static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header,
                      pe_monker_combo_layout_t *layout);
@@ -391,6 +489,7 @@ static const char *street_name(int street)
 static const char *game_name(enum_game_t game)
 {
     if (game == game_holdem) return "holdem";
+    if (game == game_sdholdem) return "shortdeck";
     if (game == game_omaha) return "plo4";
     if (game == game_omaha5) return "plo5";
     if (game == game_omaha6) return "plo6";
@@ -400,30 +499,33 @@ static const char *game_name(enum_game_t game)
 static uint32_t game_index(enum_game_t game)
 {
     if (game == game_holdem) return 0u;
-    if (game == game_omaha) return 1u;
-    if (game == game_omaha5) return 2u;
-    return 3u;
+    if (game == game_sdholdem) return 1u;
+    if (game == game_omaha) return 2u;
+    if (game == game_omaha5) return 3u;
+    return 4u;
 }
 
 static enum_game_t game_from_index(uint32_t index)
 {
-    static const enum_game_t games[] = {game_holdem, game_omaha,
-                                        game_omaha5, game_omaha6};
+    static const enum_game_t games[] = {game_holdem, game_sdholdem,
+                                        game_omaha, game_omaha5, game_omaha6};
     return index < sizeof(games) / sizeof(games[0]) ? games[index] : game_holdem;
 }
 
 static uint8_t hole_cards_from_game(enum_game_t game)
 {
-    return game == game_holdem ? 2u : game == game_omaha ? 4u :
+    return game == game_holdem || game == game_sdholdem ? 2u : game == game_omaha ? 4u :
            game == game_omaha5 ? 5u : game == game_omaha6 ? 6u : 0u;
 }
 
 static void infer_game_from_path(App *app, const char *path)
 {
     if (!app || !path || !app->game_combo) return;
-    if (strstr(path, "plo6") != NULL) combo_selected(app->game_combo, 3u);
-    else if (strstr(path, "plo5") != NULL) combo_selected(app->game_combo, 2u);
-    else if (strstr(path, "plo") != NULL) combo_selected(app->game_combo, 1u);
+    if (strstr(path, "plo6") != NULL) combo_selected(app->game_combo, 4u);
+    else if (strstr(path, "plo5") != NULL) combo_selected(app->game_combo, 3u);
+    else if (strstr(path, "plo") != NULL) combo_selected(app->game_combo, 2u);
+    else if (strstr(path, "short") != NULL || strstr(path, "sixplus") != NULL)
+        combo_selected(app->game_combo, 1u);
     else if (strstr(path, "holdem") != NULL || strstr(path, "hold'em") != NULL)
         combo_selected(app->game_combo, 0u);
 }
@@ -597,14 +699,30 @@ static mpf_tree_action_type_t tree_editor_selected_action(const App *app)
 
 static void tree_editor_refresh(App *app, int selected_node)
 {
-    char tree_text[32768];
     char label[256];
+    int outline_row;
     if (!app || !app->tree_editor_ready || app->tree_editor_refreshing)
         return;
     /* combo_clear/combo_selected can synchronously emit OnSelect on some
      * NAppGUI backends.  Keep refresh transactional so a UI refresh cannot
      * recursively refresh itself and overflow the stack. */
     app->tree_editor_refreshing = 1;
+    if (!app->tree_outline_ready)
+    {
+        pe_tree_outline_config_t config =
+            pe_tree_outline_default_config(app->tree_editor.player_count);
+        pe_tree_outline_init(&app->tree_outline, &config);
+        app->tree_outline_ready = 1;
+    }
+    else
+    {
+        app->tree_outline.config.player_count = app->tree_editor.player_count;
+        if (app->tree_outline.config.player_count < 1)
+            app->tree_outline.config.player_count = 1;
+        if (app->tree_outline.config.player_count > PE_TREE_OUTLINE_MAX_SEATS)
+            app->tree_outline.config.player_count = PE_TREE_OUTLINE_MAX_SEATS;
+    }
+    (void)pe_tree_outline_build(&app->tree_outline, &app->tree_editor);
     combo_clear(app->tree_editor_node_combo);
     for (int node = 0; node < app->tree_editor.node_count; ++node)
     {
@@ -653,9 +771,6 @@ static void tree_editor_refresh(App *app, int selected_node)
             }
         }
     }
-    (void)pe_tree_editor_render(&app->tree_editor, tree_text, sizeof(tree_text));
-    textview_clear(app->tree_editor_view);
-    textview_printf(app->tree_editor_view, "%s", tree_text);
     {
         int node = tree_editor_selected_node(app);
         if (node >= 0 && node < app->tree_editor.node_count)
@@ -670,6 +785,37 @@ static void tree_editor_refresh(App *app, int selected_node)
             snprintf(label, sizeof(label), "No node selected");
         }
         label_text(app->tree_editor_selection_label, label);
+    }
+    outline_row = pe_tree_outline_row_of_node(&app->tree_outline,
+                                               tree_editor_selected_node(app));
+    if (app->tree_editor_info)
+    {
+        textview_clear(app->tree_editor_info);
+        if (outline_row >= 0)
+        {
+            const pe_tree_outline_row_t *entry =
+                &app->tree_outline.rows[outline_row];
+            textview_printf(app->tree_editor_info,
+                            "Path: %s\nStreet: %s | acting: %s\n"
+                            "Pot: %.2f | SPR: %.2f | To call: %.2f\n",
+                            entry->path_key[0] ? entry->path_key : "(root)",
+                            street_name(entry->street),
+                            entry->acting_player >= 0 ? "player" : "terminal",
+                            entry->chips.pot, entry->chips.spr,
+                            entry->chips.to_call);
+            for (int seat = 0; seat < app->tree_outline.config.player_count; ++seat)
+                textview_printf(app->tree_editor_info,
+                                "P%d: %.2f behind | %.2f committed%s\n",
+                                seat + 1, entry->chips.stacks[seat],
+                                entry->chips.committed[seat],
+                                entry->chips.all_in ? " | all-in" : "");
+        }
+        else
+        {
+            textview_printf(app->tree_editor_info,
+                            "Selected node is hidden behind a collapsed ancestor.\n"
+                            "Use Expand all or select an open branch.\n");
+        }
     }
     if (app->tree_editor_canvas)
         view_update(app->tree_editor_canvas);
@@ -755,6 +901,195 @@ static pe_tree_canvas_metrics_t tree_editor_metrics(real32_t width,
     if (m.row_gap < 12.0f)
         m.row_gap = 12.0f;
     return m;
+}
+
+static int tree_editor_outline_row_at(const App *app, real32_t x,
+                                      real32_t y)
+{
+    int row;
+    if (!app || y < 38.0f)
+        return -1;
+    row = (int)((y - 38.0f) / 30.0f);
+    if (row < 0 || row >= app->tree_outline.row_count)
+        return -1;
+    (void)x;
+    return row;
+}
+
+static color_t tree_editor_outline_color(const pe_tree_outline_row_t *row)
+{
+    if (!row)
+        return color_rgb(65, 72, 80);
+    if (row->revisit)
+        return color_rgb(105, 75, 30);
+    if (row->type == MPF_TREE_NODE_PLAYER)
+        return color_rgb(32, 91, 145);
+    if (row->type == MPF_TREE_NODE_CHANCE)
+        return color_rgb(130, 85, 25);
+    return color_rgb(65, 70, 78);
+}
+
+static void i_on_draw_tree_outline(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    int selected = tree_editor_selected_node(app);
+    real32_t width = params->width;
+    real32_t height = params->height;
+
+    draw_fill_color(ctx, color_rgb(246, 246, 246));
+    draw_rect(ctx, ekFILL, 0, 0, width, height);
+    if (!app || !app->tree_editor_ready || !app->tree_outline_ready ||
+        app->tree_outline.row_count == 0)
+    {
+        draw_fill_color(ctx, color_rgb(246, 246, 246));
+        draw_rect(ctx, ekFILL, 0, 0, width, height);
+        if (app && app->regular_font)
+            draw_font(ctx, app->regular_font);
+        draw_text_color(ctx, color_rgb(80, 80, 80));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, "Create or import a tree", width * 0.5f,
+                  height * 0.5f);
+        return;
+    }
+
+    draw_fill_color(ctx, color_rgb(226, 226, 226));
+    draw_rect(ctx, ekFILL, 0, 0, width, 34.0f);
+    if (app->bold_font)
+        draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(45, 45, 45));
+    draw_text_align(ctx, ekLEFT, ekCENTER);
+    draw_text(ctx, "ACTION TREE", 14.0f, 17.0f);
+    if (app->regular_font)
+        draw_font(ctx, app->regular_font);
+    draw_text_color(ctx, color_rgb(100, 100, 100));
+    draw_text_align(ctx, ekRIGHT, ekCENTER);
+    draw_text(ctx, "click a row to select  |  click arrow to fold",
+              width - 14.0f, 17.0f);
+
+    for (int index = 0; index < app->tree_outline.row_count; ++index)
+    {
+        const pe_tree_outline_row_t *row = &app->tree_outline.rows[index];
+        const pe_tree_editor_node_t *node =
+            &app->tree_editor.nodes[row->node_index];
+        real32_t y = 38.0f + (real32_t)index * 30.0f;
+        real32_t x = 12.0f + (real32_t)row->depth * 25.0f;
+        real32_t box_x = x + 18.0f;
+        char label[192];
+        char chip_text[96];
+        char initial[2];
+        color_t fill = tree_editor_outline_color(row);
+
+        if (y + 28.0f < 34.0f || y > height)
+            continue;
+        if (row->node_index == selected)
+        {
+            draw_fill_color(ctx, color_rgb(211, 228, 245));
+            draw_rect(ctx, ekFILL, 0, y - 2.0f, width, 30.0f);
+        }
+        if (row->parent_row >= 0)
+        {
+            draw_line_color(ctx, color_rgb(190, 190, 190));
+            draw_line_width(ctx, 1.0f);
+            draw_line(ctx, x - 8.0f, y + 13.0f, x + 12.0f, y + 13.0f);
+        }
+        if (row->child_count > 0)
+        {
+            draw_text_color(ctx, color_rgb(100, 100, 100));
+            draw_text_align(ctx, ekCENTER, ekCENTER);
+            draw_text(ctx, row->expanded ? "[-]" : "[+]", x, y + 13.0f);
+        }
+        initial[0] = row->type == MPF_TREE_NODE_PLAYER ? 'P' :
+                    row->type == MPF_TREE_NODE_CHANCE ? 'C' :
+                    row->label[0] == 'F' ? 'F' :
+                    row->label[0] == 'C' ? 'C' :
+                    row->label[0] == 'R' ? 'R' : 'T';
+        initial[1] = '\0';
+        draw_fill_color(ctx, fill);
+        draw_rndrect(ctx, ekFILL, box_x, y + 2.0f, 25.0f, 25.0f, 3.0f);
+        draw_text_color(ctx, color_rgb(255, 255, 255));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, initial, box_x + 12.5f, y + 14.5f);
+
+        if (row->label[0] != '\0')
+            snprintf(label, sizeof(label), "%s  %s", row->label, node->id);
+        else
+            snprintf(label, sizeof(label), "Root  %s", node->id);
+        if (row->type == MPF_TREE_NODE_PLAYER)
+            snprintf(label + strlen(label), sizeof(label) - strlen(label),
+                     "  P%d", row->acting_player + 1);
+        else if (row->revisit)
+            snprintf(label + strlen(label), sizeof(label) - strlen(label),
+                     "  (already shown)");
+        snprintf(chip_text, sizeof(chip_text), "pot %.2f  SPR %.2f",
+                 row->chips.pot, row->chips.spr);
+        draw_text_color(ctx, color_rgb(35, 35, 35));
+        draw_text_align(ctx, ekLEFT, ekCENTER);
+        draw_text(ctx, label, box_x + 34.0f, y + 10.0f);
+        draw_text_color(ctx, color_rgb(105, 105, 105));
+        draw_text(ctx, chip_text, box_x + 34.0f, y + 22.0f);
+    }
+}
+
+static void i_on_click_tree_outline(App *app, Event *event)
+{
+    const EvMouse *mouse = event_params(event, EvMouse);
+    int row;
+    if (!app || !app->tree_editor_ready || !app->tree_outline_ready)
+        return;
+    row = tree_editor_outline_row_at(app, mouse->x, mouse->y);
+    if (row < 0)
+        return;
+    if (mouse->x < 55.0f + (real32_t)app->tree_outline.rows[row].depth * 25.0f &&
+        app->tree_outline.rows[row].child_count > 0)
+    {
+        (void)pe_tree_outline_toggle(&app->tree_outline, row);
+        tree_editor_refresh(app, -1);
+    }
+    else
+    {
+        tree_editor_refresh(app, app->tree_outline.rows[row].node_index);
+    }
+}
+
+static void i_on_draw_tree_poker(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    real32_t width = params->width;
+    real32_t height = params->height;
+    int node = tree_editor_selected_node(app);
+    int row = app && app->tree_outline_ready
+        ? pe_tree_outline_row_of_node(&app->tree_outline, node) : -1;
+    double pot = row >= 0 ? app->tree_outline.rows[row].chips.pot : 1.5;
+    double stack0 = row >= 0 ? app->tree_outline.rows[row].chips.stacks[0] : 100.0;
+    double stack1 = row >= 0 ? app->tree_outline.rows[row].chips.stacks[1] : 100.0;
+    char text[64];
+
+    draw_fill_color(ctx, color_rgb(239, 239, 239));
+    draw_rect(ctx, ekFILL, 0, 0, width, height);
+    draw_fill_color(ctx, color_rgb(66, 28, 30));
+    draw_rndrect(ctx, ekFILL, 18.0f, 20.0f, width - 36.0f, height - 40.0f,
+                 34.0f);
+    draw_fill_color(ctx, color_rgb(26, 129, 37));
+    draw_rndrect(ctx, ekFILL, 32.0f, 32.0f, width - 64.0f, height - 64.0f,
+                 26.0f);
+    draw_line_color(ctx, color_rgb(74, 170, 80));
+    draw_line_width(ctx, 1.0f);
+    draw_rndrect(ctx, ekSTROKE, 32.0f, 32.0f, width - 64.0f, height - 64.0f,
+                 26.0f);
+    if (app && app->bold_font)
+        draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(255, 255, 255));
+    draw_text_align(ctx, ekCENTER, ekCENTER);
+    snprintf(text, sizeof(text), "POT %.2f", pot);
+    draw_text(ctx, text, width * 0.5f, height * 0.5f);
+    if (app && app->regular_font)
+        draw_font(ctx, app->regular_font);
+    snprintf(text, sizeof(text), "P1  %.2f", stack0);
+    draw_text(ctx, text, width * 0.5f, 54.0f);
+    snprintf(text, sizeof(text), "P2  %.2f", stack1);
+    draw_text(ctx, text, width * 0.5f, height - 54.0f);
 }
 
 static real32_t tree_editor_node_x(const pe_tree_canvas_metrics_t *m, int depth)
@@ -894,6 +1229,7 @@ static int tree_editor_import_tree(App *app, const mpf_tree_def_t *tree)
     if (!app || !tree || !app->tree_editor_ready ||
         !pe_tree_editor_import(&app->tree_editor, tree))
         return 0;
+    app->tree_outline_ready = 0;
     tree_editor_refresh(app, tree->root_index);
     return 1;
 }
@@ -1035,6 +1371,7 @@ static void i_on_tree_editor_new(App *app, Event *event)
         pe_tree_editor_init(&app->tree_editor, (int)selected_players(app),
                             (mpf_street_t)street);
         app->tree_editor_ready = 1;
+        app->tree_outline_ready = 0;
         edit_text(app->tree_edit, "poker_eval_tree.json");
         tree_editor_refresh(app, app->tree_editor.root_index);
         status(app, "TREE BUILDER READY\nNew %s tree | %u players\n\n"
@@ -1048,7 +1385,76 @@ static void i_on_tree_editor_new(App *app, Event *event)
 static void i_on_tree_editor_node_select(App *app, Event *event)
 {
     if (app && app->tree_editor_ready && !app->tree_editor_refreshing)
-        tree_editor_refresh(app, tree_editor_selected_node(app));
+    {
+        int node = tree_editor_selected_node(app);
+        if (app->tree_outline_ready &&
+            pe_tree_outline_row_of_node(&app->tree_outline, node) < 0)
+            (void)pe_tree_outline_reveal(&app->tree_outline,
+                                         &app->tree_editor, node);
+        tree_editor_refresh(app, node);
+    }
+    unref(event);
+}
+
+static void i_on_tree_editor_collapse_node(App *app, Event *event)
+{
+    int node = tree_editor_selected_node(app);
+    int row;
+    if (!app || !app->tree_editor_ready || !app->tree_outline_ready)
+    {
+        status(app, "TREE BUILDER\nCreate a tree before folding a node.");
+        unref(event);
+        return;
+    }
+    row = pe_tree_outline_row_of_node(&app->tree_outline, node);
+    if (row < 0 || !pe_tree_outline_set_expanded(&app->tree_outline, row, 0))
+    {
+        status(app, "TREE BUILDER\nThe selected node is a leaf or is hidden.");
+        unref(event);
+        return;
+    }
+    tree_editor_refresh(app, node);
+    unref(event);
+}
+
+static void i_on_tree_editor_expand_node(App *app, Event *event)
+{
+    int node = tree_editor_selected_node(app);
+    int row;
+    if (!app || !app->tree_editor_ready || !app->tree_outline_ready)
+    {
+        status(app, "TREE BUILDER\nCreate a tree before expanding a node.");
+        unref(event);
+        return;
+    }
+    row = pe_tree_outline_row_of_node(&app->tree_outline, node);
+    if (row < 0 || !pe_tree_outline_set_expanded(&app->tree_outline, row, 1))
+    {
+        status(app, "TREE BUILDER\nThe selected node is a leaf or is hidden.");
+        unref(event);
+        return;
+    }
+    tree_editor_refresh(app, node);
+    unref(event);
+}
+
+static void i_on_tree_editor_collapse_all(App *app, Event *event)
+{
+    if (app && app->tree_editor_ready && app->tree_outline_ready)
+    {
+        pe_tree_outline_collapse_all(&app->tree_outline, &app->tree_editor);
+        tree_editor_refresh(app, -1);
+    }
+    unref(event);
+}
+
+static void i_on_tree_editor_expand_all(App *app, Event *event)
+{
+    if (app && app->tree_editor_ready && app->tree_outline_ready)
+    {
+        pe_tree_outline_expand_all(&app->tree_outline);
+        tree_editor_refresh(app, -1);
+    }
     unref(event);
 }
 
@@ -1206,8 +1612,9 @@ static Panel *i_tree_editor_panel(App *app)
 {
     Panel *panel = panel_create();
     Layout *root = layout_create(2, 1);
-    Layout *left = layout_create(1, 3);
-    Layout *right = layout_create(2, 12);
+    Layout *left = layout_create(1, 2);
+    Layout *right = layout_create(1, 2);
+    Layout *right_controls = layout_create(2, 15);
     Label *title = label_create();
     Label *node_label = label_create();
     Label *action_label = label_create();
@@ -1227,12 +1634,22 @@ static Panel *i_tree_editor_panel(App *app)
     Button *quick_75 = button_push();
     Button *quick_pot = button_push();
     Button *quick_over = button_push();
+    Button *collapse_node = button_push();
+    Button *expand_node = button_push();
+    Button *collapse_all = button_push();
+    Button *expand_all = button_push();
     Label *quick_label = label_create();
 
     app->tree_editor_view = textview_create();
     app->tree_editor_canvas = view_create();
+    app->tree_editor_poker_view = view_create();
     view_OnClick(app->tree_editor_canvas,
-                 listener(app, i_on_click_tree_editor, App));
+                 listener(app, i_on_click_tree_outline, App));
+    view_OnDraw(app->tree_editor_canvas,
+                listener(app, i_on_draw_tree_outline, App));
+    view_OnDraw(app->tree_editor_poker_view,
+                listener(app, i_on_draw_tree_poker, App));
+    app->tree_editor_info = textview_create();
     app->tree_editor_status = textview_create();
     app->tree_editor_node_combo = combo_create();
     app->tree_editor_action_combo = combo_create();
@@ -1242,6 +1659,8 @@ static Panel *i_tree_editor_panel(App *app)
     app->tree_editor_selection_label = label_create();
     textview_editable(app->tree_editor_view, FALSE);
     textview_wrap(app->tree_editor_view, FALSE);
+    textview_editable(app->tree_editor_info, FALSE);
+    textview_wrap(app->tree_editor_info, TRUE);
     textview_editable(app->tree_editor_status, FALSE);
     textview_wrap(app->tree_editor_status, TRUE);
     textview_printf(app->tree_editor_status,
@@ -1270,12 +1689,24 @@ static Panel *i_tree_editor_panel(App *app)
     button_text(remove_action, "Remove action");
     button_text(save_tree, "Save JSON");
     button_text(use_setup, "Use in Setup");
+    button_text(collapse_node, "Collapse node");
+    button_text(expand_node, "Expand node");
+    button_text(collapse_all, "Collapse all");
+    button_text(expand_all, "Expand all");
     button_OnClick(new_tree, listener(app, i_on_tree_editor_new, App));
     button_OnClick(load_tree, listener(app, i_on_tree_editor_load, App));
     button_OnClick(add_action, listener(app, i_on_tree_editor_add, App));
     button_OnClick(remove_action, listener(app, i_on_tree_editor_remove, App));
     button_OnClick(save_tree, listener(app, i_on_tree_editor_save, App));
     button_OnClick(use_setup, listener(app, i_on_tree_editor_setup, App));
+    button_OnClick(collapse_node, listener(app, i_on_tree_editor_collapse_node, App));
+    button_OnClick(expand_node, listener(app, i_on_tree_editor_expand_node, App));
+    button_OnClick(collapse_all, listener(app, i_on_tree_editor_collapse_all, App));
+    button_OnClick(expand_all, listener(app, i_on_tree_editor_expand_all, App));
+    app->tree_editor_collapse_node = collapse_node;
+    app->tree_editor_expand_node = expand_node;
+    app->tree_editor_collapse_all = collapse_all;
+    app->tree_editor_expand_all = expand_all;
     label_text(quick_label, "QUICK ACTIONS (add to selected node)");
     button_text(quick_fold, "Fold");
     button_text(quick_call, "Call / Check");
@@ -1294,29 +1725,28 @@ static Panel *i_tree_editor_panel(App *app)
     combo_OnSelect(app->tree_editor_node_combo,
                    listener(app, i_on_tree_editor_node_select, App));
     view_size(app->tree_editor_canvas, s2df(760.0f, 350.0f));
-    view_OnDraw(app->tree_editor_canvas,
-                listener(app, i_on_draw_tree_editor, App));
+    view_size(app->tree_editor_poker_view, s2df(470.0f, 260.0f));
     layout_label(left, title, 0, 0);
     layout_view(left, app->tree_editor_canvas, 0, 1);
-    layout_textview(left, app->tree_editor_view, 0, 2);
     layout_vsize(left, 1, 350.0f);
-    layout_vsize(left, 2, 300.0f);
-    layout_label(right, street_label, 0, 0);
-    layout_combo(right, app->tree_editor_street_combo, 1, 0);
-    layout_label(right, node_label, 0, 1);
-    layout_combo(right, app->tree_editor_node_combo, 1, 1);
-    layout_label(right, action_label, 0, 2);
-    layout_combo(right, app->tree_editor_action_combo, 1, 2);
-    layout_label(right, size_label, 0, 3);
-    layout_edit(right, app->tree_editor_size_edit, 1, 3);
-    layout_label(right, remove_label, 0, 4);
-    layout_combo(right, app->tree_editor_remove_action_combo, 1, 4);
-    layout_button(right, new_tree, 0, 5);
-    layout_button(right, load_tree, 1, 5);
-    layout_button(right, add_action, 0, 6);
-    layout_button(right, remove_action, 1, 6);
-    layout_button(right, save_tree, 0, 7);
-    layout_button(right, use_setup, 1, 7);
+    layout_view(right, app->tree_editor_poker_view, 0, 0);
+    layout_vsize(right, 0, 270.0f);
+    layout_label(right_controls, street_label, 0, 0);
+    layout_combo(right_controls, app->tree_editor_street_combo, 1, 0);
+    layout_label(right_controls, node_label, 0, 1);
+    layout_combo(right_controls, app->tree_editor_node_combo, 1, 1);
+    layout_label(right_controls, action_label, 0, 2);
+    layout_combo(right_controls, app->tree_editor_action_combo, 1, 2);
+    layout_label(right_controls, size_label, 0, 3);
+    layout_edit(right_controls, app->tree_editor_size_edit, 1, 3);
+    layout_label(right_controls, remove_label, 0, 4);
+    layout_combo(right_controls, app->tree_editor_remove_action_combo, 1, 4);
+    layout_button(right_controls, new_tree, 0, 5);
+    layout_button(right_controls, load_tree, 1, 5);
+    layout_button(right_controls, add_action, 0, 6);
+    layout_button(right_controls, remove_action, 1, 6);
+    layout_button(right_controls, save_tree, 0, 7);
+    layout_button(right_controls, use_setup, 1, 7);
     {
         /* One row of standard sizes, the way a betting tree is actually
            built. The size field above stays for anything non-standard. */
@@ -1336,23 +1766,31 @@ static Panel *i_tree_editor_panel(App *app)
         layout_hmargin(quick, 1, 4.0f);
         layout_hmargin(quick, 2, 4.0f);
         layout_vmargin(quick, 0, 4.0f);
-        layout_label(right, quick_label, 0, 8);
-        layout_layout(right, quick, 0, 9);
+        layout_label(right_controls, quick_label, 0, 8);
+        layout_layout(right_controls, quick, 0, 9);
     }
-    layout_label(right, app->tree_editor_selection_label, 0, 10);
-    layout_textview(right, app->tree_editor_status, 0, 11);
-    layout_hsize(right, 0, 190.0f);
-    layout_hsize(right, 1, 270.0f);
-    layout_hmargin(right, 0, 8.0f);
-    layout_vmargin(right, 0, 8.0f);
-    layout_vmargin(right, 3, 12.0f);
-    layout_vmargin(right, 4, 8.0f);
-    layout_vmargin(right, 5, 8.0f);
-    layout_vmargin(right, 6, 8.0f);
-    layout_vmargin(right, 7, 12.0f);
-    layout_vmargin(right, 8, 4.0f);
-    layout_vmargin(right, 9, 10.0f);
-    layout_vsize(right, 11, 180.0f);
+    layout_button(right_controls, collapse_node, 0, 10);
+    layout_button(right_controls, expand_node, 1, 10);
+    layout_button(right_controls, collapse_all, 0, 11);
+    layout_button(right_controls, expand_all, 1, 11);
+    layout_label(right_controls, app->tree_editor_selection_label, 0, 12);
+    layout_textview(right_controls, app->tree_editor_info, 0, 13);
+    layout_textview(right_controls, app->tree_editor_status, 0, 14);
+    layout_hsize(right_controls, 0, 190.0f);
+    layout_hsize(right_controls, 1, 270.0f);
+    layout_hmargin(right_controls, 0, 8.0f);
+    layout_vmargin(right_controls, 0, 8.0f);
+    layout_vmargin(right_controls, 3, 12.0f);
+    layout_vmargin(right_controls, 4, 8.0f);
+    layout_vmargin(right_controls, 5, 8.0f);
+    layout_vmargin(right_controls, 6, 8.0f);
+    layout_vmargin(right_controls, 7, 12.0f);
+    layout_vmargin(right_controls, 8, 4.0f);
+    layout_vmargin(right_controls, 9, 10.0f);
+    layout_vsize(right_controls, 13, 108.0f);
+    layout_vsize(right_controls, 14, 140.0f);
+    layout_layout(right, right_controls, 0, 1);
+    layout_vsize(right, 1, 670.0f);
     layout_layout(root, left, 0, 0);
     layout_layout(root, right, 1, 0);
     layout_hsize(root, 0, 760.0f);
@@ -1426,6 +1864,261 @@ static void format_monker_hand(const int cards[4], char out[16])
     out[used] = '\0';
 }
 
+static int strategy_matrix_rank_count(const App *app)
+{
+    enum_game_t game = selected_game(app);
+    return game == game_holdem ? 13 : game == game_sdholdem ? 9 : 0;
+}
+
+static int strategy_matrix_rank_index(char rank, const char *ranks)
+{
+    const char *found = ranks ? strchr(ranks, rank) : NULL;
+    return found ? (int)(found - ranks) : -1;
+}
+
+static int strategy_matrix_position(const char *hand, const char *ranks,
+                                    int *row, int *column)
+{
+    int first;
+    int second;
+    char rank_a;
+    char rank_b;
+    if (!hand || strlen(hand) < 4u || !row || !column)
+        return 0;
+    rank_a = (char)toupper((unsigned char)hand[0]);
+    rank_b = (char)toupper((unsigned char)hand[2]);
+    first = strategy_matrix_rank_index(rank_a, ranks);
+    second = strategy_matrix_rank_index(rank_b, ranks);
+    if (first < 0 || second < 0)
+        return 0;
+    if (first == second)
+    {
+        *row = first;
+        *column = second;
+    }
+    else if (first < second)
+    {
+        *row = first;
+        *column = second;
+    }
+    else
+    {
+        *row = second;
+        *column = first;
+    }
+    /* Rows above the diagonal are suited; rows below are offsuit.  Concrete
+     * cards are normalized to the same class regardless of input order. */
+    return 1;
+}
+
+static const StrategyTableRow *strategy_source_row(const App *app,
+                                                    const MonkerHandEntry *entry)
+{
+    if (!app || !entry)
+        return NULL;
+    for (uint32_t index = 0u; index < app->strategy_row_count; ++index)
+    {
+        const StrategyTableRow *source = &app->strategy_rows[index];
+        int source_node = atoi(source->node);
+        int source_player = source->player[0] == 'P'
+            ? atoi(source->player + 1) - 1 : atoi(source->player);
+        if (strcmp(source->hand, entry->hand) == 0 &&
+            source_node == entry->node && source_player == entry->player)
+            return source;
+    }
+    return NULL;
+}
+
+static int strategy_action_kind(const char *name)
+{
+    char normalized[128];
+    size_t length;
+    if (!name)
+        return 2;
+    snprintf(normalized, sizeof(normalized), "%s", name);
+    for (length = 0u; normalized[length] != '\0'; ++length)
+        normalized[length] = (char)toupper((unsigned char)normalized[length]);
+    if (strstr(normalized, "ALL IN") || strstr(normalized, "ALL-IN") ||
+        strstr(normalized, "ALLIN"))
+        return 4;
+    if (strstr(normalized, "FOLD"))
+        return 0;
+    if (strstr(normalized, "CHECK"))
+        return 1;
+    if (strstr(normalized, "CALL"))
+        return 2;
+    if (strstr(normalized, "RAISE") || strstr(normalized, "BET"))
+        return 3;
+    return 2;
+}
+
+static color_t strategy_action_color(int action)
+{
+    switch (action)
+    {
+    case 0: return color_rgb(126, 42, 50);  /* fold */
+    case 1: return color_rgb(45, 92, 111);  /* check */
+    case 2: return color_rgb(30, 105, 72);  /* call */
+    case 3: return color_rgb(35, 83, 142);  /* raise */
+    case 4: return color_rgb(105, 57, 135);  /* all-in */
+    default: return color_rgb(45, 51, 59);
+    }
+}
+
+static const char *strategy_action_name(int action)
+{
+    static const char *names[] = {"FOLD", "CHECK", "CALL", "RAISE", "ALL-IN"};
+    return action >= 0 && action < 5 ? names[action] : "ACTION";
+}
+
+static void draw_strategy_action_legend(App *app, DCtx *ctx,
+                                        real32_t x, real32_t y)
+{
+    if (app && app->bold_font)
+        draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(220, 226, 232));
+    draw_text_align(ctx, ekLEFT, ekCENTER);
+    draw_text(ctx, "ACTION COLOR", x, y);
+    if (app && app->regular_font)
+        draw_font(ctx, app->regular_font);
+    for (int action = 0; action < 5; ++action)
+    {
+        real32_t item_y = y + 27.0f + (real32_t)action * 31.0f;
+        draw_fill_color(ctx, strategy_action_color(action));
+        draw_rndrect(ctx, ekFILL, x, item_y - 8.0f, 14.0f, 16.0f, 3.0f);
+        draw_text_color(ctx, color_rgb(205, 213, 220));
+        draw_text(ctx, strategy_action_name(action), x + 23.0f, item_y);
+    }
+}
+
+static void draw_strategy_action_matrix(App *app, DCtx *ctx,
+                                        real32_t width, real32_t height)
+{
+    const char *ranks = strategy_matrix_rank_count(app) == 9
+        ? "AKQJT9876" : "AKQJT98765432";
+    int count = (int)strlen(ranks);
+    double values[13][13][5] = {{{0.0}}};
+    int left = 42;
+    int top = 50;
+    real32_t cell = (width - (real32_t)left - 270.0f) / (real32_t)count;
+    real32_t by_height = (height - (real32_t)top - 8.0f) / (real32_t)count;
+    int active_node = -1;
+    int has_values = 0;
+
+    if (app->active_step_index >= 0 &&
+        app->active_step_index < (int)app->decision_step_count)
+        active_node = app->decision_steps[app->active_step_index].node_index;
+    if (cell > by_height)
+        cell = by_height;
+    if (cell < 18.0f)
+        cell = 18.0f;
+
+    for (uint32_t entry_index = 0u; entry_index < app->monker_hand_count;
+         ++entry_index)
+    {
+        const MonkerHandEntry *entry = &app->monker_hands[entry_index];
+        int row;
+        int column;
+        if (active_node >= 0 && entry->node >= 0 && entry->node != active_node)
+            continue;
+        if (!strategy_matrix_position(entry->hand, ranks, &row, &column))
+            continue;
+        if (app->mkr_loaded && app->mkr_tree && app->mkr_selected_node >= 0 &&
+            app->mkr_selected_node < app->mkr_tree->node_count)
+        {
+            const mpf_tree_node_t *node = &app->mkr_tree->nodes[app->mkr_selected_node];
+            for (uint32_t action = 0u; action < (uint32_t)node->action_count &&
+                 action < STRATEGY_TABLE_ACTIONS; ++action)
+            {
+                char action_label[96];
+                tree_action_label(node, (int)action, action_label,
+                                  sizeof(action_label));
+                values[row][column][strategy_action_kind(action_label)] +=
+                    entry->freqs[action];
+                has_values = 1;
+            }
+        }
+        else
+        {
+            const StrategyTableRow *source = strategy_source_row(app, entry);
+            if (!source)
+                continue;
+            for (uint32_t action = 0u; action < source->action_count &&
+                 action < STRATEGY_TABLE_ACTIONS; ++action)
+            {
+                values[row][column][strategy_action_kind(source->actions[action])] +=
+                    entry->freqs[action];
+                has_values = 1;
+            }
+        }
+    }
+
+    if (app->bold_font)
+        draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(225, 230, 235));
+    draw_text_align(ctx, ekLEFT, ekCENTER);
+    draw_text(ctx, "ACTION MATRIX | ACTIVE SPOT", 12.0f, 18.0f);
+    if (app->regular_font)
+        draw_font(ctx, app->regular_font);
+    draw_text_color(ctx, color_rgb(150, 160, 170));
+    draw_text(ctx, count == 9 ? "SHORT DECK NL" : "NLH",
+              width - 12.0f, 18.0f);
+    draw_strategy_action_legend(app, ctx, left + cell * (real32_t)count + 28.0f, 65.0f);
+
+    for (int row = 0; row < count; ++row)
+    {
+        for (int column = 0; column < count; ++column)
+        {
+            int primary = -1;
+            double total = 0.0;
+            real32_t x = (real32_t)left + (real32_t)column * cell;
+            real32_t y = (real32_t)top + (real32_t)row * cell;
+            char hand[8];
+            for (int action = 0; action < 5; ++action)
+            {
+                total += values[row][column][action];
+                if (primary < 0 || values[row][column][action] >
+                    values[row][column][primary])
+                    primary = action;
+            }
+            if (total <= 0.0)
+                primary = -1;
+            draw_fill_color(ctx, primary >= 0 ? strategy_action_color(primary) :
+                            color_rgb(39, 45, 53));
+            draw_rndrect(ctx, ekFILL, x + 1.0f, y + 1.0f,
+                         cell - 2.0f, cell - 2.0f, 2.0f);
+            snprintf(hand, sizeof(hand), "%c%c%s", ranks[row], ranks[column],
+                     row == column ? "" : row < column ? "s" : "o");
+            if (app->regular_font)
+                draw_font(ctx, app->regular_font);
+            draw_text_color(ctx, color_rgb(235, 240, 244));
+            draw_text_align(ctx, ekCENTER, ekCENTER);
+            draw_text(ctx, hand, x + cell * 0.5f, y + cell * 0.38f);
+            if (total > 0.0)
+            {
+                char percentage[24];
+                snprintf(percentage, sizeof(percentage), "%.0f%%", total * 100.0);
+                draw_text_color(ctx, color_rgb(190, 205, 215));
+                draw_text(ctx, percentage, x + cell * 0.5f,
+                          y + cell * 0.70f);
+            }
+        }
+        draw_text_color(ctx, color_rgb(170, 180, 190));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, (char[2]){ranks[row], '\0'}, left - 16.0f,
+                  top + ((real32_t)row + 0.5f) * cell);
+        draw_text(ctx, (char[2]){ranks[row], '\0'},
+                  left + ((real32_t)row + 0.5f) * cell, top - 17.0f);
+    }
+    if (!has_values)
+    {
+        draw_text_color(ctx, color_rgb(150, 160, 170));
+        draw_text_align(ctx, ekLEFT, ekCENTER);
+        draw_text(ctx, "No strategy result for the selected spot yet.",
+                  left + cell * (real32_t)count + 28.0f, 280.0f);
+    }
+}
+
 /* =========================================================================
  * 4-Color Card Graphics Drawing Functions
  * ========================================================================= */
@@ -1493,6 +2186,922 @@ static void draw_hand_badges(DCtx *ctx, const char *hand,
         cur_x += card_w + gap;
         p += 2;
     }
+}
+
+static void i_on_draw_icm_spot_table(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    real32_t width = params->width;
+    real32_t height = params->height;
+    uint32_t players = icm_spot_players(app);
+    uint32_t hero = app->icm_spot_hero_combo
+        ? combo_get_selected(app->icm_spot_hero_combo) : 0u;
+    real32_t cx = width * 0.5f;
+    real32_t cy = height * 0.5f + 2.0f;
+    real32_t rx = width * 0.36f;
+    real32_t ry = height * 0.31f;
+    const char *board = app->icm_spot_board_edit
+        ? edit_get_text(app->icm_spot_board_edit) : "";
+    int cards = card_count(board);
+    char pot[96];
+    char street[64];
+
+    if (players < 2u) players = 2u;
+    if (players > MAX_SETUP_PLAYERS) players = MAX_SETUP_PLAYERS;
+    draw_fill_color(ctx, color_rgb(15, 19, 23));
+    draw_rect(ctx, ekFILL, 0, 0, width, height);
+    draw_fill_color(ctx, color_rgb(72, 31, 34));
+    draw_ellipse(ctx, ekFILL, cx, cy, rx + 14.0f, ry + 12.0f);
+    draw_fill_color(ctx, color_rgb(20, 113, 48));
+    draw_ellipse(ctx, ekFILL, cx, cy, rx, ry);
+    draw_line_color(ctx, color_rgb(78, 165, 76));
+    draw_line_width(ctx, 1.0f);
+    draw_ellipse(ctx, ekSTROKE, cx, cy, rx - 5.0f, ry - 5.0f);
+
+    snprintf(pot, sizeof(pot), "POT %s", app->icm_spot_pot_edit
+             ? edit_get_text(app->icm_spot_pot_edit) : "1.50");
+    snprintf(street, sizeof(street), "%s", street_name(icm_spot_street(app)));
+    if (app->bold_font) draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(245, 245, 245));
+    draw_text_align(ctx, ekCENTER, ekCENTER);
+    draw_text(ctx, pot, cx, cy - 13.0f);
+    if (app->regular_font) draw_font(ctx, app->regular_font);
+    draw_text_color(ctx, color_rgb(183, 198, 187));
+    draw_text(ctx, street, cx, cy + 3.0f);
+    if (cards > 0 && cards <= 5)
+    {
+        real32_t card_w = width > 400.0f ? 28.0f : 22.0f;
+        real32_t card_h = width > 400.0f ? 34.0f : 28.0f;
+        real32_t gap = 4.0f;
+        real32_t start_x = cx - ((real32_t)cards * card_w +
+                                 (real32_t)(cards - 1) * gap) * 0.5f;
+        draw_hand_badges(ctx, board, start_x, cy + 14.0f,
+                         card_w, card_h, gap, app->card_font);
+    }
+    for (uint32_t player = 0u; player < players; ++player)
+    {
+        double angle = 2.0 * 3.1415926535 * (double)player / (double)players -
+                       1.57079632679;
+        real32_t sx = cx + (real32_t)(cos(angle) * (rx + 2.0f));
+        real32_t sy = cy + (real32_t)(sin(angle) * (ry + 2.0f));
+        real32_t seat_w = players > 6u ? 74.0f : 84.0f;
+        real32_t seat_h = 37.0f;
+        real32_t left = sx - seat_w * 0.5f;
+        real32_t top = sy - seat_h * 0.5f;
+        char seat[96];
+        const char *stack = app->icm_spot_stack_edit[player]
+            ? edit_get_text(app->icm_spot_stack_edit[player]) : "100";
+        const char *action = icm_spot_action(app, player);
+        int is_hero = player == hero;
+        draw_fill_color(ctx, is_hero ? color_rgb(29, 91, 138)
+                                     : color_rgb(39, 47, 56));
+        draw_rndrect(ctx, ekFILL, left, top, seat_w, seat_h, 6.0f);
+        draw_line_color(ctx, is_hero ? color_rgb(52, 157, 218)
+                                     : color_rgb(91, 105, 119));
+        draw_line_width(ctx, is_hero ? 2.0f : 1.0f);
+        draw_rndrect(ctx, ekSTROKE, left, top, seat_w, seat_h, 6.0f);
+        snprintf(seat, sizeof(seat), "P%u  %s  |  %s", player + 1u,
+                 stack && *stack ? stack : "0", action && *action ? action : "-");
+        if (app->card_font) draw_font(ctx, app->card_font);
+        draw_text_color(ctx, is_hero ? color_rgb(255, 255, 255)
+                                     : color_rgb(215, 222, 228));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, seat, sx, sy);
+        if (player == 0u)
+        {
+            draw_fill_color(ctx, color_rgb(229, 231, 235));
+            draw_circle(ctx, ekFILL, left + seat_w - 2.0f, top + 2.0f, 6.0f);
+            draw_text_color(ctx, color_rgb(20, 25, 30));
+            draw_text(ctx, "D", left + seat_w - 2.0f, top + 2.0f);
+        }
+    }
+}
+
+static void i_on_click_icm_spot_table(App *app, Event *event)
+{
+    const EvMouse *mouse = event_params(event, EvMouse);
+    S2Df size;
+    uint32_t players = icm_spot_players(app);
+    real32_t cx;
+    real32_t cy;
+    real32_t rx;
+    real32_t ry;
+    int nearest = -1;
+    real32_t nearest_distance = 1000000.0f;
+    if (players < 2u) players = 2u;
+    if (players > MAX_SETUP_PLAYERS) players = MAX_SETUP_PLAYERS;
+    view_get_size(app->icm_spot_table_view, &size);
+    cx = size.width * 0.5f;
+    cy = size.height * 0.5f + 2.0f;
+    rx = size.width * 0.36f;
+    ry = size.height * 0.31f;
+    for (uint32_t player = 0u; player < players; ++player)
+    {
+        double angle = 2.0 * 3.1415926535 * (double)player / (double)players -
+                       1.57079632679;
+        real32_t sx = cx + (real32_t)(cos(angle) * (rx + 2.0f));
+        real32_t sy = cy + (real32_t)(sin(angle) * (ry + 2.0f));
+        real32_t dx = mouse->x - sx;
+        real32_t dy = mouse->y - sy;
+        real32_t distance = dx * dx + dy * dy;
+        if (distance < nearest_distance)
+        {
+            nearest = (int)player;
+            nearest_distance = distance;
+        }
+    }
+    if (nearest >= 0 && nearest_distance < 52.0f * 52.0f &&
+        app->icm_spot_hero_combo)
+    {
+        combo_selected(app->icm_spot_hero_combo, (uint32_t)nearest);
+        icm_spot_update_context(app);
+        i_on_icm_spot_state_change(app, NULL);
+    }
+    unref(event);
+}
+
+static void i_on_draw_icm_spot_board(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    real32_t width = params->width;
+    real32_t height = params->height;
+    static const char ranks[] = "AKQJT98765432";
+    static const char suits[] = "shdc";
+    const char *board_text = app->icm_spot_board_edit
+        ? edit_get_text(app->icm_spot_board_edit) : "";
+    real32_t pad_x = 4.0f;
+    real32_t pad_y = 3.0f;
+    real32_t card_w = (width - pad_x * 2.0f - 12.0f * 2.0f) / 13.0f;
+    real32_t card_h = (height - pad_y * 2.0f - 3.0f * 2.0f) / 4.0f;
+    draw_fill_color(ctx, color_rgb(22, 26, 31));
+    draw_rndrect(ctx, ekFILL, 0, 0, width, height, 4.0f);
+    for (int s = 0; s < 4; ++s)
+    {
+        for (int r = 0; r < 13; ++r)
+        {
+            char card[3] = {ranks[r], suits[s], '\0'};
+            real32_t x = pad_x + (real32_t)r * (card_w + 2.0f);
+            real32_t y = pad_y + (real32_t)s * (card_h + 2.0f);
+            int selected = board_text && strstr(board_text, card) != NULL;
+            draw_fill_color(ctx, selected ? suit_color(suits[s])
+                                          : suit_color_dim(suits[s]));
+            draw_rndrect(ctx, ekFILL, x, y, card_w, card_h, 2.0f);
+            if (selected)
+            {
+                draw_line_color(ctx, color_rgb(255, 255, 255));
+                draw_line_width(ctx, 1.5f);
+                draw_rndrect(ctx, ekSTROKE, x, y, card_w, card_h, 2.0f);
+            }
+            if (app->card_font) draw_font(ctx, app->card_font);
+            draw_text_color(ctx, color_rgb(255, 255, 255));
+            draw_text_align(ctx, ekCENTER, ekCENTER);
+            card[1] = '\0';
+            draw_text(ctx, card, x + card_w * 0.5f, y + card_h * 0.5f);
+        }
+    }
+}
+
+static void i_on_click_icm_spot_board(App *app, Event *event)
+{
+    const EvMouse *p = event_params(event, EvMouse);
+    static const char ranks[] = "AKQJT98765432";
+    static const char suits[] = "shdc";
+    real32_t width = 328.0f;
+    real32_t height = 86.0f;
+    real32_t pad_x = 4.0f;
+    real32_t pad_y = 3.0f;
+    real32_t card_w = (width - pad_x * 2.0f - 12.0f * 2.0f) / 13.0f;
+    real32_t card_h = (height - pad_y * 2.0f - 3.0f * 2.0f) / 4.0f;
+    int r = (int)((p->x - pad_x) / (card_w + 2.0f));
+    int s = (int)((p->y - pad_y) / (card_h + 2.0f));
+    int max_cards = street_cards(icm_spot_street(app));
+    if (r >= 0 && r < 13 && s >= 0 && s < 4 && app->icm_spot_board_edit)
+    {
+        char card[3] = {ranks[r], suits[s], '\0'};
+        char current[128] = "";
+        char next[128] = "";
+        const char *text = edit_get_text(app->icm_spot_board_edit);
+        if (text && *text && strncmp(text, "No board", 8) != 0)
+            snprintf(current, sizeof(current), "%s", text);
+        if (strstr(current, card) != NULL)
+        {
+            char *found = strstr(current, card);
+            memmove(found, found + 2, strlen(found + 2) + 1);
+            snprintf(next, sizeof(next), "%s", current);
+        }
+        else if (max_cards > 0 && card_count(current) < max_cards)
+            snprintf(next, sizeof(next), "%s%s", current, card);
+        else
+            snprintf(next, sizeof(next), "%s", current);
+        trim_text(next);
+        edit_text(app->icm_spot_board_edit, next);
+        view_update(app->icm_spot_board_matrix_view);
+        i_on_icm_spot_state_change(app, NULL);
+    }
+    unref(event);
+}
+
+static void i_on_icm_spot_state_change(App *app, Event *event)
+{
+    unref(event);
+    icm_spot_update_context(app);
+    if (app)
+        app->icm_matrix_ready = 0;
+    i_on_icm_matrix_input_change(app, NULL);
+    if (app && app->icm_tabs && tabs_get_selected(app->icm_tabs) == 1u)
+    {
+        sync_icm_from_spot(app);
+        i_on_analysis_icm(app, NULL);
+    }
+}
+
+static void i_on_icm_spot_players_select(App *app, Event *event)
+{
+    uint32_t players = icm_spot_players(app);
+    if (players < 2u) players = 2u;
+    if (players > MAX_SETUP_PLAYERS) players = MAX_SETUP_PLAYERS;
+    if (app->icm_spot_hero_combo &&
+        combo_get_selected(app->icm_spot_hero_combo) >= players)
+        combo_selected(app->icm_spot_hero_combo, players - 1u);
+    i_on_icm_spot_state_change(app, event);
+}
+
+static void i_on_icm_spot_street_select(App *app, Event *event)
+{
+    int street = icm_spot_street(app);
+    int expected = street_cards(street);
+    const char *board = app->icm_spot_board_edit
+        ? edit_get_text(app->icm_spot_board_edit) : "";
+    if (street == 0)
+        edit_text(app->icm_spot_board_edit, "");
+    else if (card_count(board) != expected)
+        edit_text(app->icm_spot_board_edit, "");
+    i_on_icm_spot_state_change(app, event);
+}
+
+static Panel *i_icm_spot_panel(App *app)
+{
+    Panel *panel = panel_create();
+    Layout *root = layout_create(1, 9);
+    Layout *game_controls = layout_create(4, 1);
+    Layout *spot_controls = layout_create(2, 3);
+    Layout *hero_controls = layout_create(2, 1);
+    Layout *player_controls = layout_create(6, 5);
+    Label *title = label_create();
+    Label *game_label = label_create();
+    Label *players_label = label_create();
+    Label *street_label = label_create();
+    Label *pot_label = label_create();
+    Label *blinds_label = label_create();
+    Label *hero_label = label_create();
+    Label *board_label = label_create();
+    Label *players_caption = label_create();
+    Label *stack_header = label_create();
+    Label *action_header = label_create();
+    Label *stack_header_right = label_create();
+    Label *action_header_right = label_create();
+
+    app->icm_spot_game_combo = combo_create();
+    app->icm_spot_players_combo = combo_create();
+    app->icm_spot_street_combo = combo_create();
+    app->icm_spot_hero_combo = combo_create();
+    app->icm_spot_board_edit = edit_create();
+    app->icm_spot_pot_edit = edit_create();
+    app->icm_spot_blinds_edit = edit_create();
+    app->icm_spot_table_view = view_create();
+    app->icm_spot_board_matrix_view = view_create();
+    app->icm_spot_context = label_create();
+
+    label_text(title, "ICM SPOT SETUP | TABLE STATE");
+    label_text(game_label, "GAME");
+    label_text(players_label, "PLAYERS");
+    label_text(street_label, "STREET");
+    label_text(pot_label, "POT");
+    label_text(blinds_label, "BLINDS");
+    label_text(hero_label, "HERO / ACTING PLAYER");
+    label_text(board_label, "BOARD | click cards to set the current flop/turn/river");
+    label_text(players_caption, "PLAYERS | stack and action in progress");
+    label_text(stack_header, "STACK");
+    label_text(action_header, "ACTION");
+    label_text(stack_header_right, "STACK");
+    label_text(action_header_right, "ACTION");
+
+    combo_add_elem(app->icm_spot_game_combo, "Hold'em", NULL);
+    combo_add_elem(app->icm_spot_game_combo, "Short Deck NL", NULL);
+    combo_add_elem(app->icm_spot_game_combo, "PLO4", NULL);
+    combo_add_elem(app->icm_spot_game_combo, "Stud", NULL);
+    combo_add_elem(app->icm_spot_game_combo, "Draw", NULL);
+    combo_selected(app->icm_spot_game_combo, 0u);
+    for (uint32_t count = 2u; count <= 8u; ++count)
+    {
+        char text[16];
+        snprintf(text, sizeof(text), "%u", count);
+        combo_add_elem(app->icm_spot_players_combo, text, NULL);
+    }
+    combo_selected(app->icm_spot_players_combo, 0u);
+    combo_add_elem(app->icm_spot_street_combo, "Preflop", NULL);
+    combo_add_elem(app->icm_spot_street_combo, "Flop", NULL);
+    combo_add_elem(app->icm_spot_street_combo, "Turn", NULL);
+    combo_add_elem(app->icm_spot_street_combo, "River", NULL);
+    combo_selected(app->icm_spot_street_combo, 0u);
+    for (uint32_t player = 0u; player < MAX_SETUP_PLAYERS; ++player)
+    {
+        char text[32];
+        snprintf(text, sizeof(text), "Player %u", player + 1u);
+        combo_add_elem(app->icm_spot_hero_combo, text, NULL);
+        app->icm_spot_stack_edit[player] = edit_create();
+        app->icm_spot_action_combo[player] = combo_create();
+        combo_add_elem(app->icm_spot_action_combo[player], "Fold", NULL);
+        combo_add_elem(app->icm_spot_action_combo[player], "Check", NULL);
+        combo_add_elem(app->icm_spot_action_combo[player], "Call", NULL);
+        combo_add_elem(app->icm_spot_action_combo[player], "Bet", NULL);
+        combo_add_elem(app->icm_spot_action_combo[player], "Raise", NULL);
+        combo_add_elem(app->icm_spot_action_combo[player], "All-in", NULL);
+        combo_selected(app->icm_spot_action_combo[player], 1u);
+        edit_text(app->icm_spot_stack_edit[player], "100");
+    }
+    combo_selected(app->icm_spot_hero_combo, 0u);
+    edit_text(app->icm_spot_board_edit, "");
+    edit_text(app->icm_spot_pot_edit, "1.50");
+    edit_text(app->icm_spot_blinds_edit, "0.5 / 1");
+
+    combo_OnSelect(app->icm_spot_game_combo,
+                   listener(app, i_on_icm_spot_state_change, App));
+    combo_OnSelect(app->icm_spot_players_combo,
+                   listener(app, i_on_icm_spot_players_select, App));
+    combo_OnSelect(app->icm_spot_street_combo,
+                   listener(app, i_on_icm_spot_street_select, App));
+    combo_OnSelect(app->icm_spot_hero_combo,
+                   listener(app, i_on_icm_spot_state_change, App));
+    edit_OnChange(app->icm_spot_board_edit,
+                  listener(app, i_on_icm_spot_state_change, App));
+    edit_OnChange(app->icm_spot_pot_edit,
+                  listener(app, i_on_icm_spot_state_change, App));
+    edit_OnChange(app->icm_spot_blinds_edit,
+                  listener(app, i_on_icm_spot_state_change, App));
+    for (uint32_t player = 0u; player < MAX_SETUP_PLAYERS; ++player)
+    {
+        edit_OnChange(app->icm_spot_stack_edit[player],
+                      listener(app, i_on_icm_spot_state_change, App));
+        combo_OnSelect(app->icm_spot_action_combo[player],
+                       listener(app, i_on_icm_spot_state_change, App));
+    }
+    view_size(app->icm_spot_table_view, s2df(650.0f, 215.0f));
+    view_OnDraw(app->icm_spot_table_view,
+                listener(app, i_on_draw_icm_spot_table, App));
+    view_OnClick(app->icm_spot_table_view,
+                 listener(app, i_on_click_icm_spot_table, App));
+    view_size(app->icm_spot_board_matrix_view, s2df(328.0f, 86.0f));
+    view_OnDraw(app->icm_spot_board_matrix_view,
+                listener(app, i_on_draw_icm_spot_board, App));
+    view_OnClick(app->icm_spot_board_matrix_view,
+                 listener(app, i_on_click_icm_spot_board, App));
+
+    layout_label(game_controls, game_label, 0, 0);
+    layout_combo(game_controls, app->icm_spot_game_combo, 1, 0);
+    layout_label(game_controls, players_label, 2, 0);
+    layout_combo(game_controls, app->icm_spot_players_combo, 3, 0);
+    layout_hsize(game_controls, 0, 110.0f);
+    layout_hsize(game_controls, 1, 300.0f);
+    layout_hsize(game_controls, 2, 80.0f);
+    layout_hsize(game_controls, 3, 130.0f);
+    layout_hmargin(game_controls, 0, 6.0f);
+    layout_hmargin(game_controls, 1, 12.0f);
+    layout_hmargin(game_controls, 2, 6.0f);
+    layout_label(spot_controls, street_label, 0, 0);
+    layout_combo(spot_controls, app->icm_spot_street_combo, 1, 0);
+    layout_label(spot_controls, pot_label, 0, 1);
+    layout_edit(spot_controls, app->icm_spot_pot_edit, 1, 1);
+    layout_label(spot_controls, blinds_label, 0, 2);
+    layout_edit(spot_controls, app->icm_spot_blinds_edit, 1, 2);
+    layout_hsize(spot_controls, 0, 170.0f);
+    layout_hsize(spot_controls, 1, 250.0f);
+    layout_label(hero_controls, hero_label, 0, 0);
+    layout_combo(hero_controls, app->icm_spot_hero_combo, 1, 0);
+    layout_hsize(hero_controls, 0, 170.0f);
+    layout_hsize(hero_controls, 1, 250.0f);
+    layout_label(player_controls, players_caption, 0, 0);
+    layout_label(player_controls, stack_header, 1, 0);
+    layout_label(player_controls, action_header, 2, 0);
+    layout_label(player_controls, label_create(), 3, 0);
+    layout_label(player_controls, stack_header_right, 4, 0);
+    layout_label(player_controls, action_header_right, 5, 0);
+    for (uint32_t player = 0u; player < MAX_SETUP_PLAYERS; ++player)
+    {
+        Label *label = label_create();
+        char text[16];
+        uint32_t column = player < 4u ? 0u : 3u;
+        uint32_t row = player % 4u + 1u;
+        snprintf(text, sizeof(text), "P%u", player + 1u);
+        label_text(label, text);
+        layout_label(player_controls, label, column, row);
+        layout_edit(player_controls, app->icm_spot_stack_edit[player], column + 1u, row);
+        layout_combo(player_controls, app->icm_spot_action_combo[player], column + 2u, row);
+    }
+    layout_hsize(player_controls, 0, 42.0f);
+    layout_hsize(player_controls, 1, 72.0f);
+    layout_hsize(player_controls, 2, 150.0f);
+    layout_hsize(player_controls, 3, 42.0f);
+    layout_hsize(player_controls, 4, 72.0f);
+    layout_hsize(player_controls, 5, 150.0f);
+    layout_hmargin(player_controls, 0, 5.0f);
+    layout_hmargin(player_controls, 1, 5.0f);
+    layout_hmargin(player_controls, 3, 5.0f);
+    layout_hmargin(player_controls, 4, 5.0f);
+
+    layout_label(root, title, 0, 0);
+    layout_layout(root, game_controls, 0, 1);
+    layout_view(root, app->icm_spot_table_view, 0, 2);
+    layout_label(root, app->icm_spot_context, 0, 3);
+    layout_layout(root, spot_controls, 0, 4);
+    layout_layout(root, hero_controls, 0, 5);
+    layout_label(root, board_label, 0, 6);
+    layout_view(root, app->icm_spot_board_matrix_view, 0, 7);
+    layout_layout(root, player_controls, 0, 8);
+    layout_hsize(root, 0, 650.0f);
+    layout_vsize(root, 2, 185.0f);
+    layout_vsize(root, 7, 86.0f);
+    layout_vsize(root, 8, 132.0f);
+    layout_margin(root, 10.0f);
+    panel_layout(panel, root);
+    icm_spot_update_context(app);
+    return panel;
+}
+
+static int setup_street(const App *app)
+{
+    return app && app->setup_street_combo
+        ? (int)combo_get_selected(app->setup_street_combo) : 0;
+}
+
+static const char *setup_action(const App *app, uint32_t player)
+{
+    if (!app || player >= MAX_SETUP_PLAYERS || !app->setup_action_combo[player])
+        return "Fold";
+    return combo_get_text(app->setup_action_combo[player],
+                          combo_get_selected(app->setup_action_combo[player]));
+}
+
+static void setup_update_context(App *app)
+{
+    char context[512];
+    const char *board;
+    uint32_t players;
+    int street;
+
+    if (!app)
+        return;
+    board = app->board_edit ? edit_get_text(app->board_edit) : "";
+    players = icm_spot_players(app);
+    if (players < 2u)
+        players = 2u;
+    if (players > MAX_SETUP_PLAYERS)
+        players = MAX_SETUP_PLAYERS;
+    street = setup_street(app);
+    snprintf(context, sizeof(context),
+             "%s | %u players | pot %s | board %s | Hero P%u",
+             street_name(street), players,
+             app->setup_pot_edit ? edit_get_text(app->setup_pot_edit) : "1.5",
+             board && *board ? board : "empty",
+             app->setup_hero_combo ? combo_get_selected(app->setup_hero_combo) + 1u : 1u);
+    if (app->setup_table_context)
+        label_text(app->setup_table_context, context);
+    if (app->setup_table_view)
+        view_update(app->setup_table_view);
+    if (app->setup_board_matrix_view)
+        view_update(app->setup_board_matrix_view);
+}
+
+static enum_game_t icm_spot_game(const App *app)
+{
+    static const enum_game_t games[] = {
+        game_holdem, game_sdholdem, game_omaha, game_7stud, game_5draw
+    };
+    uint32_t index = app && app->icm_spot_game_combo
+        ? combo_get_selected(app->icm_spot_game_combo) : 0u;
+    return index < sizeof(games) / sizeof(games[0]) ? games[index] : game_holdem;
+}
+
+static uint32_t icm_spot_players(const App *app)
+{
+    return app && app->icm_spot_players_combo
+        ? combo_get_selected(app->icm_spot_players_combo) + 2u : 2u;
+}
+
+static int icm_spot_street(const App *app)
+{
+    return app && app->icm_spot_street_combo
+        ? (int)combo_get_selected(app->icm_spot_street_combo) : 0;
+}
+
+static const char *icm_spot_action(const App *app, uint32_t player)
+{
+    if (!app || player >= MAX_SETUP_PLAYERS ||
+        !app->icm_spot_action_combo[player])
+        return "Check";
+    return combo_get_text(app->icm_spot_action_combo[player],
+                          combo_get_selected(app->icm_spot_action_combo[player]));
+}
+
+static void icm_spot_update_context(App *app)
+{
+    char context[512];
+    const char *board;
+    uint32_t players;
+    if (!app)
+        return;
+    board = app->icm_spot_board_edit
+        ? edit_get_text(app->icm_spot_board_edit) : "";
+    players = icm_spot_players(app);
+    if (players < 2u) players = 2u;
+    if (players > MAX_SETUP_PLAYERS) players = MAX_SETUP_PLAYERS;
+    snprintf(context, sizeof(context), "%s | %u players | pot %s | board %s | Hero P%u",
+             street_name(icm_spot_street(app)), players,
+             app->icm_spot_pot_edit ? edit_get_text(app->icm_spot_pot_edit) : "1.50",
+             board && *board ? board : "empty",
+             app->icm_spot_hero_combo
+                 ? combo_get_selected(app->icm_spot_hero_combo) + 1u : 1u);
+    if (app->icm_spot_context)
+        label_text(app->icm_spot_context, context);
+    if (app->icm_spot_table_view)
+        view_update(app->icm_spot_table_view);
+    if (app->icm_spot_board_matrix_view)
+        view_update(app->icm_spot_board_matrix_view);
+}
+
+static uint32_t icm_game_index_for_spot(enum_game_t game)
+{
+    if (game == game_sdholdem)
+        return 1u;
+    if (game == game_omaha || game == game_omaha5 || game == game_omaha6)
+        return 2u;
+    if (game == game_7stud)
+        return 3u;
+    if (game == game_5draw)
+        return 4u;
+    return 0u;
+}
+
+static void sync_icm_from_spot(App *app)
+{
+    char stacks[512];
+    char number[64];
+    const char *hero_stack_text;
+    const char *pot_text;
+    const char *hero_action;
+    uint32_t players;
+    uint32_t hero;
+    uint32_t opponent;
+    size_t used = 0u;
+    double hero_stack = 0.0;
+    double pot = 0.0;
+
+    if (!app || !app->icm_game_combo || !app->analysis_stacks_edit ||
+        !app->icm_spot_stack_edit[0] || !app->icm_spot_pot_edit)
+        return;
+
+    /* The spot controls are canonical.  Keep all eight visible seats in the
+     * calculator state so changing P7/P8 cannot silently rewrite or discard
+     * the spot.  The ICM engine itself accepts more seats than the equity
+     * analysis surface, while the action matrix remains heads-up by design. */
+    players = icm_spot_players(app);
+    if (players < 2u)
+        players = 2u;
+    if (players > PE_ANALYSIS_MAX_PLAYERS)
+        players = PE_ANALYSIS_MAX_PLAYERS;
+    combo_selected(app->icm_game_combo,
+                   icm_game_index_for_spot(icm_spot_game(app)));
+    stacks[0] = '\0';
+    for (uint32_t player = 0u; player < players; ++player)
+    {
+        const char *stack = edit_get_text(app->icm_spot_stack_edit[player]);
+        double parsed;
+        if (!stack || !*stack || parse_ui_target(stack, &parsed) != 0)
+            stack = "0";
+        if (player != 0u && used + 2u < sizeof(stacks))
+            used += (size_t)snprintf(stacks + used, sizeof(stacks) - used, ", ");
+        if (used < sizeof(stacks))
+            used += (size_t)snprintf(stacks + used, sizeof(stacks) - used,
+                                     "%s", stack);
+    }
+    edit_text(app->analysis_stacks_edit, stacks);
+
+    /* The calculator starts with a three-place example ladder.  A two-seat
+     * spot cannot pay a third place, so keep the user's ladder when it is
+     * already compatible and trim only the incompatible tail. */
+    if (app->analysis_payouts_edit)
+    {
+        double payouts[PE_ANALYSIS_MAX_PLAYERS];
+        char error[PE_ANALYSIS_ERROR_MAX];
+        int payout_count = 0;
+        if (pe_analysis_parse_numbers(edit_get_text(app->analysis_payouts_edit),
+                                      payouts, PE_ANALYSIS_MAX_PLAYERS,
+                                      &payout_count, error, sizeof(error)) == 0 &&
+            payout_count > (int)players)
+        {
+            char normalized[256];
+            size_t payout_used = 0u;
+            normalized[0] = '\0';
+            for (int payout = 0; payout < (int)players; ++payout)
+            {
+                if (payout != 0 && payout_used + 2u < sizeof(normalized))
+                    payout_used += (size_t)snprintf(normalized + payout_used,
+                                                    sizeof(normalized) - payout_used,
+                                                    ", ");
+                if (payout_used < sizeof(normalized))
+                    payout_used += (size_t)snprintf(normalized + payout_used,
+                                                    sizeof(normalized) - payout_used,
+                                                    "%.2f", payouts[payout]);
+            }
+            edit_text(app->analysis_payouts_edit, normalized);
+        }
+    }
+
+    /* FGS needs one win weight per active seat.  Spot setup has no separate
+     * future-hand weighting control, therefore use equal weights whenever the
+     * calculator still contains a ladder for another table size. */
+    if (app->icm_fgs_win_edit)
+    {
+        double weights[PE_ANALYSIS_MAX_PLAYERS];
+        char error[PE_ANALYSIS_ERROR_MAX];
+        int weight_count = 0;
+        if (pe_analysis_parse_numbers(edit_get_text(app->icm_fgs_win_edit),
+                                      weights, PE_ANALYSIS_MAX_PLAYERS,
+                                      &weight_count, error, sizeof(error)) == 0 &&
+            weight_count != (int)players)
+        {
+            char normalized[256];
+            size_t weight_used = 0u;
+            double weight = 100.0 / (double)players;
+            normalized[0] = '\0';
+            for (int player = 0; player < (int)players; ++player)
+            {
+                if (player != 0 && weight_used + 2u < sizeof(normalized))
+                    weight_used += (size_t)snprintf(normalized + weight_used,
+                                                    sizeof(normalized) - weight_used,
+                                                    ", ");
+                if (weight_used < sizeof(normalized))
+                    weight_used += (size_t)snprintf(normalized + weight_used,
+                                                    sizeof(normalized) - weight_used,
+                                                    "%.2f", weight);
+            }
+            edit_text(app->icm_fgs_win_edit, normalized);
+        }
+    }
+
+    hero = app->icm_spot_hero_combo
+        ? combo_get_selected(app->icm_spot_hero_combo) : 0u;
+    if (hero >= players)
+        hero = 0u;
+    opponent = hero == 0u ? 1u : 0u;
+    snprintf(number, sizeof(number), "%u", hero + 1u);
+    if (app->icm_hero_edit)
+        edit_text(app->icm_hero_edit, number);
+    snprintf(number, sizeof(number), "%u", opponent + 1u);
+    if (app->icm_opponent_edit)
+        edit_text(app->icm_opponent_edit, number);
+
+    hero_stack_text = edit_get_text(app->icm_spot_stack_edit[hero]);
+    pot_text = edit_get_text(app->icm_spot_pot_edit);
+    if (hero_stack_text)
+        (void)parse_ui_target(hero_stack_text, &hero_stack);
+    if (pot_text)
+        (void)parse_ui_target(pot_text, &pot);
+    hero_action = icm_spot_action(app, hero);
+    if (hero_action && (strstr(hero_action, "All") || strstr(hero_action, "all")))
+        snprintf(number, sizeof(number), "%.2f", hero_stack);
+    else
+        snprintf(number, sizeof(number), "0.00");
+    if (app->icm_risk_edit)
+        edit_text(app->icm_risk_edit, number);
+    snprintf(number, sizeof(number), "%.2f", pot);
+    if (app->icm_gain_edit)
+        edit_text(app->icm_gain_edit, number);
+    edit_text(app->icm_fgs_pot_edit, number);
+}
+
+static void setup_refresh_player_rows(App *app)
+{
+    uint32_t players;
+    if (!app || !app->setup_players_layout)
+        return;
+    players = icm_spot_players(app);
+    if (players < 2u)
+        players = 2u;
+    if (players > MAX_SETUP_PLAYERS)
+        players = MAX_SETUP_PLAYERS;
+    if (app->setup_hero_combo && combo_get_selected(app->setup_hero_combo) >= players)
+        combo_selected(app->setup_hero_combo, players - 1u);
+    setup_update_context(app);
+    sync_icm_from_spot(app);
+    if (app)
+        app->icm_matrix_ready = 0;
+    i_on_icm_matrix_input_change(app, NULL);
+    if (app && app->icm_tabs && tabs_get_selected(app->icm_tabs) == 1u)
+        i_on_analysis_icm(app, NULL);
+    if (app && app->strategy_grid_view)
+        view_update(app->strategy_grid_view);
+}
+
+static void i_on_setup_state_change(App *app, Event *event)
+{
+    uint32_t selected = app && app->icm_tabs
+        ? tabs_get_selected(app->icm_tabs) : 0u;
+    unref(event);
+    setup_update_context(app);
+}
+
+static void i_on_setup_players_select(App *app, Event *event)
+{
+    setup_refresh_player_rows(app);
+    sync_icm_from_spot(app);
+    i_on_icm_matrix_input_change(app, NULL);
+    if (app && app->icm_tabs && tabs_get_selected(app->icm_tabs) == 1u)
+        i_on_analysis_icm(app, NULL);
+    unref(event);
+}
+
+static void i_on_setup_street_select(App *app, Event *event)
+{
+    int street = setup_street(app);
+    int expected = street_cards(street);
+    const char *board = app->board_edit ? edit_get_text(app->board_edit) : "";
+    int current = card_count(board);
+
+    /* A street switch is an explicit setup action.  Keep a valid board when
+     * it already matches the requested street; otherwise clear it so an
+     * old flop can never accidentally be solved as a river. */
+    if (street == 0)
+        edit_text(app->board_edit, "");
+    else if (current != expected)
+        edit_text(app->board_edit, "");
+    setup_update_context(app);
+    i_on_icm_matrix_input_change(app, NULL);
+    if (app->status)
+    {
+        if (street == 0)
+            status(app, "SETUP\nPreflop selected. The board is dealt automatically through the tree.");
+        else
+            status(app, "SETUP\n%s selected. Choose exactly %d board cards below or type them in BOARD.",
+                   street_name(street), expected);
+    }
+    unref(event);
+}
+
+static void i_on_icm_tab(App *app, Event *event)
+{
+    uint32_t selected = app && app->icm_tabs
+        ? tabs_get_selected(app->icm_tabs) : 0u;
+    unref(event);
+    if (app && app->icm_pages && app->icm_tabs)
+    {
+        panel_visible_layout(app->icm_pages, selected);
+        panel_update(app->icm_pages);
+        if (selected == 1u)
+        {
+            sync_icm_from_spot(app);
+            i_on_analysis_icm(app, NULL);
+        }
+    }
+}
+
+static void i_on_draw_setup_table(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    real32_t width = params->width;
+    real32_t height = params->height;
+    uint32_t players = selected_players(app);
+    uint32_t hero = app->setup_hero_combo
+        ? combo_get_selected(app->setup_hero_combo) : 0u;
+    real32_t cx = width * 0.5f;
+    real32_t cy = height * 0.5f + 2.0f;
+    real32_t rx = width * 0.36f;
+    real32_t ry = height * 0.31f;
+    const char *board = app->board_edit ? edit_get_text(app->board_edit) : "";
+    int cards = card_count(board);
+    char pot[96];
+    char street[64];
+
+    if (players < 2u) players = 2u;
+    if (players > MAX_SETUP_PLAYERS) players = MAX_SETUP_PLAYERS;
+    draw_fill_color(ctx, color_rgb(15, 19, 23));
+    draw_rect(ctx, ekFILL, 0, 0, width, height);
+
+    /* Keep the same dark burgundy rim / green felt language as Results and
+     * Tree Builder, with a genuine ellipse instead of a rounded rectangle. */
+    draw_fill_color(ctx, color_rgb(72, 31, 34));
+    draw_ellipse(ctx, ekFILL, cx, cy, rx + 14.0f, ry + 12.0f);
+    draw_fill_color(ctx, color_rgb(20, 113, 48));
+    draw_ellipse(ctx, ekFILL, cx, cy, rx, ry);
+    draw_line_color(ctx, color_rgb(78, 165, 76));
+    draw_line_width(ctx, 1.0f);
+    draw_ellipse(ctx, ekSTROKE, cx, cy, rx - 5.0f, ry - 5.0f);
+
+    snprintf(pot, sizeof(pot), "POT %s", app->setup_pot_edit
+             ? edit_get_text(app->setup_pot_edit) : "1.50");
+    snprintf(street, sizeof(street), "%s", street_name(setup_street(app)));
+    if (app->bold_font) draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(245, 245, 245));
+    draw_text_align(ctx, ekCENTER, ekCENTER);
+    draw_text(ctx, pot, cx, cy - 13.0f);
+    if (app->regular_font) draw_font(ctx, app->regular_font);
+    draw_text_color(ctx, color_rgb(183, 198, 187));
+    draw_text(ctx, street, cx, cy + 3.0f);
+    if (cards > 0 && cards <= 5)
+    {
+        real32_t card_w = width > 400.0f ? 28.0f : 22.0f;
+        real32_t card_h = width > 400.0f ? 34.0f : 28.0f;
+        real32_t gap = 4.0f;
+        real32_t start_x = cx - ((real32_t)cards * card_w +
+                                 (real32_t)(cards - 1) * gap) * 0.5f;
+        draw_hand_badges(ctx, board, start_x, cy + 14.0f,
+                         card_w, card_h, gap, app->card_font);
+    }
+
+    for (uint32_t player = 0u; player < players; ++player)
+    {
+        double angle = 2.0 * 3.1415926535 * (double)player / (double)players -
+                       1.57079632679;
+        real32_t sx = cx + (real32_t)(cos(angle) * (rx + 2.0f));
+        real32_t sy = cy + (real32_t)(sin(angle) * (ry + 2.0f));
+        real32_t seat_w = players > 6u ? 74.0f : 84.0f;
+        real32_t seat_h = 37.0f;
+        real32_t left = sx - seat_w * 0.5f;
+        real32_t top = sy - seat_h * 0.5f;
+        char seat[96];
+        const char *stack = app->setup_stack_edit[player]
+            ? edit_get_text(app->setup_stack_edit[player]) : "100";
+        const char *action = setup_action(app, player);
+        int is_hero = player == hero;
+
+        draw_fill_color(ctx, is_hero ? color_rgb(29, 91, 138)
+                                     : color_rgb(39, 47, 56));
+        draw_rndrect(ctx, ekFILL, left, top, seat_w, seat_h, 6.0f);
+        draw_line_color(ctx, is_hero ? color_rgb(52, 157, 218)
+                                     : color_rgb(91, 105, 119));
+        draw_line_width(ctx, is_hero ? 2.0f : 1.0f);
+        draw_rndrect(ctx, ekSTROKE, left, top, seat_w, seat_h, 6.0f);
+        snprintf(seat, sizeof(seat), "P%u  %s  |  %s", player + 1u,
+                 stack && *stack ? stack : "0", action && *action ? action : "-");
+        if (app->card_font) draw_font(ctx, app->card_font);
+        draw_text_color(ctx, is_hero ? color_rgb(255, 255, 255)
+                                     : color_rgb(215, 222, 228));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, seat, sx, sy);
+        if (player == 0u)
+        {
+            draw_fill_color(ctx, color_rgb(229, 231, 235));
+            draw_circle(ctx, ekFILL, left + seat_w - 2.0f, top + 2.0f, 6.0f);
+            draw_text_color(ctx, color_rgb(20, 25, 30));
+            draw_text(ctx, "D", left + seat_w - 2.0f, top + 2.0f);
+        }
+    }
+}
+
+static void i_on_click_setup_table(App *app, Event *event)
+{
+    const EvMouse *mouse = event_params(event, EvMouse);
+    S2Df size;
+    uint32_t players = selected_players(app);
+    real32_t cx;
+    real32_t cy;
+    real32_t rx;
+    real32_t ry;
+    int nearest = -1;
+    real32_t nearest_distance = 1000000.0f;
+
+    if (players < 2u) players = 2u;
+    if (players > MAX_SETUP_PLAYERS) players = MAX_SETUP_PLAYERS;
+    view_get_size(app->setup_table_view, &size);
+    cx = size.width * 0.5f;
+    cy = size.height * 0.5f + 2.0f;
+    rx = size.width * 0.36f;
+    ry = size.height * 0.31f;
+    for (uint32_t player = 0u; player < players; ++player)
+    {
+        double angle = 2.0 * 3.1415926535 * (double)player / (double)players -
+                       1.57079632679;
+        real32_t sx = cx + (real32_t)(cos(angle) * (rx + 2.0f));
+        real32_t sy = cy + (real32_t)(sin(angle) * (ry + 2.0f));
+        real32_t dx = mouse->x - sx;
+        real32_t dy = mouse->y - sy;
+        real32_t distance = dx * dx + dy * dy;
+        if (distance < nearest_distance)
+        {
+            nearest = (int)player;
+            nearest_distance = distance;
+        }
+    }
+    if (nearest >= 0 && nearest_distance < 52.0f * 52.0f && app->setup_hero_combo)
+    {
+        combo_selected(app->setup_hero_combo, (uint32_t)nearest);
+        setup_update_context(app);
+        status(app, "SETUP\nHero selected: Player %d. Edit its current action below.", nearest + 1);
+    }
+    unref(event);
 }
 
 static void render_card_preview(App *app, const char *hand)
@@ -1622,6 +3231,7 @@ static void i_on_click_board_matrix(App *app, Event *event)
     real32_t card_h = (height - pad_y * 2.0f - 3.0f * 2.0f) / 4.0f;
     int r = (int)((p->x - pad_x) / (card_w + 2.0f));
     int s = (int)((p->y - pad_y) / (card_h + 2.0f));
+    int max_cards = 5;
 
     if (r >= 0 && r < 13 && s >= 0 && s < 4 && app->board_edit)
     {
@@ -1647,7 +3257,9 @@ static void i_on_click_board_matrix(App *app, Event *event)
         else
         {
             /* Add card */
-            if (strlen(current_board) < 10)
+            if (app->setup_street_combo)
+                max_cards = street_cards(setup_street(app));
+            if (max_cards > 0 && card_count(current_board) < max_cards)
                 snprintf(new_board, sizeof(new_board), "%s%s", current_board, card_str);
             else
                 snprintf(new_board, sizeof(new_board), "%s", current_board);
@@ -1827,6 +3439,10 @@ static void i_on_click_poker_table(App *app, Event *event)
 /* =========================================================================
  * Monker Multi-Column Action Strategy Grid
  * ========================================================================= */
+static int strategy_matrix_rank_count(const App *app);
+static void draw_strategy_action_matrix(App *app, DCtx *ctx,
+                                        real32_t width, real32_t height);
+
 static void i_on_draw_strategy_grid(App *app, Event *event)
 {
     const EvDraw *params = event_params(event, EvDraw);
@@ -1843,6 +3459,12 @@ static void i_on_draw_strategy_grid(App *app, Event *event)
 
     draw_fill_color(ctx, color_rgb(18, 22, 26));
     draw_rect(ctx, ekFILL, 0, 0, width, height);
+
+    if (strategy_matrix_rank_count(app) > 0)
+    {
+        draw_strategy_action_matrix(app, ctx, width, height);
+        return;
+    }
 
     if (app->active_step_index >= 0 && app->active_step_index < (int)app->decision_step_count)
     {
@@ -2942,6 +4564,8 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
     combo_selected(app->game_combo, game_index(layout->game));
     if (header->player_count >= 2u && header->player_count <= 8u)
         combo_selected(app->players_combo, header->player_count - 2u);
+    if (app->setup_street_combo)
+        combo_selected(app->setup_street_combo, (uint32_t)header->street);
     if (header->street == 0)
     {
         edit_text(app->board_edit, "");
@@ -2960,6 +4584,8 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
     label_text(app->board_label, header->street == 0
                ? "BOARD / RUNOUT: automatic through river"
                : "BOARD / RUNOUT: enter the cards for this street");
+    setup_refresh_player_rows(app);
+    setup_update_context(app);
     populate_decision_steps_from_tree(app, tree);
     update_result_view(app, "", 0);
     update_strategy_view(app, "");
@@ -4404,6 +6030,15 @@ static void i_on_tab(App *app, Event *event)
     {
         panel_visible_layout(app->pages, tabs_get_selected(app->tabs));
         panel_update(app->pages);
+        /* The ICM page has its own spot/calculator tabs.  Refresh the
+         * calculator as soon as the top-level page becomes visible so a
+         * spot edited in another page is never shown as stale defaults. */
+        if (tabs_get_selected(app->tabs) == 4u && app->icm_tabs &&
+            tabs_get_selected(app->icm_tabs) == 1u)
+        {
+            sync_icm_from_spot(app);
+            i_on_analysis_icm(app, NULL);
+        }
     }
     unref(event);
 }
@@ -4490,6 +6125,15 @@ static void i_on_solve(App *app, Event *event)
 
     if (!tree_path || !*tree_path || read_tree(app, tree_path, &header, &layout) != 0)
     {
+        unref(event);
+        return;
+    }
+    if (layout.game == game_sdholdem)
+    {
+        status(app,
+               "SOLVE BLOCKED\n"
+               "Short Deck is available for spot setup, ICM and result-matrix display,\n"
+               "but the installed solver drivers currently support Hold'em and PLO only.");
         unref(event);
         return;
     }
@@ -4784,6 +6428,8 @@ static void i_on_solve(App *app, Event *event)
 static Panel *i_setup_panel(App *app)
 {
     Panel *panel = panel_create();
+    Panel *form_panel = panel_create();
+    Layout *root = layout_create(1, 1);
     Layout *layout = layout_create(2, 30);
     Label *title = label_create();
     Label *game_label = label_create();
@@ -4840,7 +6486,7 @@ static Panel *i_setup_panel(App *app)
     app->setup_run_progress = label_create();
     app->setup_run_metrics = label_create();
     app->setup_progress_bar = progress_create();
-    label_text(title, "SPOT SETUP");
+    label_text(title, "SOLVER SETUP | tree, ranges and run");
     label_text(game_label, "GAME");
     label_text(players_label, "PLAYERS");
     label_text(tree_label, ".TREE");
@@ -4863,10 +6509,11 @@ static Panel *i_setup_panel(App *app)
     label_text(interval_label, "CONVERGENCE CHECK EVERY");
     label_text(condition_label, "STOP CONDITION");
     combo_add_elem(app->game_combo, "Hold'em", NULL);
+    combo_add_elem(app->game_combo, "Short Deck NL", NULL);
     combo_add_elem(app->game_combo, "PLO4", NULL);
     combo_add_elem(app->game_combo, "PLO5", NULL);
     combo_add_elem(app->game_combo, "PLO6", NULL);
-    combo_selected(app->game_combo, 1u);
+    combo_selected(app->game_combo, 2u);
     for (uint32_t players = 2u; players <= 8u; ++players)
     {
         char text[16];
@@ -4947,6 +6594,12 @@ static Panel *i_setup_panel(App *app)
     button_OnClick(load, listener(app, i_on_load, App));
     button_OnClick(solve, listener(app, i_on_solve, App));
     button_OnClick(stop, listener(app, i_on_stop, App));
+    combo_OnSelect(app->players_combo,
+                   listener(app, i_on_setup_players_select, App));
+    combo_OnSelect(app->game_combo,
+                   listener(app, i_on_setup_state_change, App));
+    edit_OnChange(app->board_edit,
+                  listener(app, i_on_setup_state_change, App));
     layout_label(layout, title, 0, 0);
     layout_label(layout, game_label, 0, 1);
     layout_combo(layout, app->game_combo, 0, 2);
@@ -5000,6 +6653,7 @@ static Panel *i_setup_panel(App *app)
     layout_label(layout, app->setup_run_progress, 1, 28);
     layout_progress(layout, app->setup_progress_bar, 0, 29);
     layout_label(layout, app->setup_run_metrics, 1, 29);
+
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
@@ -5018,7 +6672,10 @@ static Panel *i_setup_panel(App *app)
     layout_vmargin(layout, 22, 8);
     layout_vmargin(layout, 24, 8);
     layout_vmargin(layout, 26, 8);
-    panel_layout(panel, layout);
+    panel_layout(form_panel, layout);
+    layout_panel(root, form_panel, 0, 0);
+    layout_margin(root, 10.0f);
+    panel_layout(panel, root);
     return panel;
 }
 
@@ -5565,11 +7222,22 @@ static void i_on_analysis_icm(App *app, Event *event)
 {
     pe_analysis_icm_request_t request;
     pe_analysis_icm_report_t report;
+    const char *mode_name;
     int i;
 
     unref(event);
+    memset(&request, 0, sizeof(request));
     request.stacks = edit_get_text(app->analysis_stacks_edit);
     request.payouts = edit_get_text(app->analysis_payouts_edit);
+    request.mode = app->icm_mode_combo != NULL
+        ? (pe_analysis_tournament_mode_t)combo_get_selected(app->icm_mode_combo)
+        : PE_ANALYSIS_TOURNAMENT_ICM;
+    request.fgs_depth = app->icm_fgs_depth_edit != NULL
+        ? atoi(edit_get_text(app->icm_fgs_depth_edit)) : 0;
+    request.fgs_pot = app->icm_fgs_pot_edit != NULL
+        ? edit_get_text(app->icm_fgs_pot_edit) : NULL;
+    request.fgs_win_probabilities = app->icm_fgs_win_edit != NULL
+        ? edit_get_text(app->icm_fgs_win_edit) : NULL;
     textview_clear(app->analysis_icm_view);
     if (pe_analysis_icm(&request, &report) != 0)
     {
@@ -5577,23 +7245,708 @@ static void i_on_analysis_icm(App *app, Event *event)
                         report.error);
         return;
     }
+    mode_name = report.mode == PE_ANALYSIS_TOURNAMENT_CHIP_EV ? "ChipEV" :
+                report.mode == PE_ANALYSIS_TOURNAMENT_FGS ? "FGS" : "ICM";
     textview_printf(app->analysis_icm_view,
-                    "Prize pool %.2f over %d paid place%s\n\n",
+                    "Mode %s | prize pool %.2f over %d paid place%s\n\n",
+                    mode_name,
                     report.prize_pool, report.payout_count,
                     report.payout_count == 1 ? "" : "s");
     textview_printf(app->analysis_icm_view, "%-4s %10s %9s %9s %10s\n",
-                    "", "STACK", "CHIPS", "ICM", "EV");
+                    "", "STACK", "CHIPS", mode_name, "EV");
     for (i = 0; i < report.player_count; ++i)
         textview_printf(app->analysis_icm_view,
                         "P%-3d %10.0f %8.2f%% %8.2f%% %10.2f\n", i + 1,
                         report.stacks[i], report.chip_share[i] * 100.0,
                         report.equity[i] * 100.0, report.ev[i]);
-    /* The gap between the two percentages is the whole reason ICM exists;
-       naming it saves the reader from having to subtract. */
+    if (report.mode == PE_ANALYSIS_TOURNAMENT_FGS)
+        textview_printf(app->analysis_icm_view,
+                        "\nFGS simulated %d future hand%s (%zu terminal scenarios).\n",
+                        report.fgs_depth, report.fgs_depth == 1 ? "" : "s",
+                        report.fgs_leaf_count);
+    else if (report.mode == PE_ANALYSIS_TOURNAMENT_ICM)
+        textview_printf(app->analysis_icm_view,
+                        "\nCHIPS is the raw stack share; ICM is the share of the\n"
+                        "prize pool after stack pressure.\n");
+    else
+        textview_printf(app->analysis_icm_view,
+                        "\nChipEV keeps the prize pool proportional to chips;\n"
+                        "no tournament pressure is applied.\n");
+}
+
+static void i_on_icm_mode_select(App *app, Event *event)
+{
+    int fgs = combo_get_selected(app->icm_mode_combo) ==
+              PE_ANALYSIS_TOURNAMENT_FGS;
+    unref(event);
+    edit_editable(app->icm_fgs_pot_edit, fgs ? TRUE : FALSE);
+    edit_editable(app->icm_fgs_depth_edit, fgs ? TRUE : FALSE);
+    edit_editable(app->icm_fgs_win_edit, fgs ? TRUE : FALSE);
+    if (app->icm_matrix_view)
+    {
+        app->icm_matrix_ready = 0;
+        if (combo_get_selected(app->icm_mode_combo) !=
+            PE_ANALYSIS_TOURNAMENT_ICM)
+            label_text(app->icm_matrix_hint,
+                       "Action grid is available only with the ICM model.");
+        else if (i_icm_matrix_supported(app))
+            label_text(app->icm_matrix_hint,
+                       "Square matrix available for NLH and Short Deck NL only.");
+        view_update(app->icm_matrix_view);
+    }
+}
+
+static void i_on_icm_decision(App *app, Event *event)
+{
+    pe_analysis_icm_decision_request_t request;
+    pe_analysis_icm_decision_report_t report;
+    double win_percent;
+
+    unref(event);
+    memset(&request, 0, sizeof(request));
+    request.stacks = edit_get_text(app->analysis_stacks_edit);
+    request.payouts = edit_get_text(app->analysis_payouts_edit);
+    request.hero_index = atoi(edit_get_text(app->icm_hero_edit)) - 1;
+    request.opponent_index = atoi(edit_get_text(app->icm_opponent_edit)) - 1;
+    win_percent = atof(edit_get_text(app->icm_decision_win_edit));
+    request.win_probability = win_percent / 100.0;
+    request.chips_at_risk = atof(edit_get_text(app->icm_risk_edit));
+    request.chips_to_win = atof(edit_get_text(app->icm_gain_edit));
+    textview_clear(app->analysis_icm_view);
+    if (pe_analysis_icm_decision(&request, &report) != 0)
+    {
+        textview_printf(app->analysis_icm_view,
+                        "Cannot evaluate decision: %s\n", report.error);
+        return;
+    }
     textview_printf(app->analysis_icm_view,
-                    "\nCHIPS is the raw stack share, ICM the share of the prize\n"
-                    "pool. A leader is always worth less than their chips, a\n"
-                    "short stack more: that gap is what ICM pressure means.\n");
+                    "ICM DECISION | P%d vs P%d | win %.2f%%\n\n"
+                    "Fold / current EV       %10.2f\n"
+                    "Win outcome EV           %10.2f\n"
+                    "Lose outcome EV          %10.2f\n"
+                    "Decision EV               %10.2f\n"
+                    "Delta vs fold             %+10.2f\n\n"
+                    "Effective transfer: +%.2f / -%.2f chips\n",
+                    request.hero_index + 1, request.opponent_index + 1,
+                    win_percent, report.current_ev, report.win_ev,
+                    report.lose_ev, report.decision_ev, report.delta_vs_fold,
+                    report.effective_win, report.effective_loss);
+}
+
+static int i_icm_matrix_supported(const App *app)
+{
+    uint32_t game;
+    if (!app || !app->icm_game_combo)
+        return 0;
+    if (app->icm_mode_combo &&
+        combo_get_selected(app->icm_mode_combo) != PE_ANALYSIS_TOURNAMENT_ICM)
+        return 0;
+    game = combo_get_selected(app->icm_game_combo);
+    return game == 0u || game == 1u;
+}
+
+static void i_on_icm_game_select(App *app, Event *event)
+{
+    if (app)
+        app->icm_matrix_ready = 0;
+    if (app && app->icm_matrix_hint)
+    {
+        if (app->icm_mode_combo &&
+            combo_get_selected(app->icm_mode_combo) !=
+            PE_ANALYSIS_TOURNAMENT_ICM)
+            label_text(app->icm_matrix_hint,
+                       "Action grid is available only with the ICM model.");
+        else
+            label_text(app->icm_matrix_hint,
+                       i_icm_matrix_supported(app)
+                           ? "Square matrix available for NLH and Short Deck NL only."
+                           : "No square matrix for PLO, Stud or Draw; use the ICM table.");
+    }
+    if (app && app->icm_matrix_view)
+        view_update(app->icm_matrix_view);
+    unref(event);
+}
+
+static int icm_spot_action_is_fold(const App *app, uint32_t player)
+{
+    return strategy_action_kind(setup_action(app, player)) == 0;
+}
+
+static double icm_spot_edit_number(Edit *edit)
+{
+    double value = 0.0;
+    if (edit)
+        (void)parse_ui_target(edit_get_text(edit), &value);
+    return value >= 0.0 && isfinite(value) ? value : 0.0;
+}
+
+static int icm_matrix_decision_delta(const char *stacks, const char *payouts,
+                                     double equity, int hero, int opponent,
+                                     double risk, double gain,
+                                     double *delta)
+{
+    pe_analysis_icm_decision_request_t request;
+    pe_analysis_icm_decision_report_t report;
+
+    if (!delta || !stacks || !payouts)
+        return -1;
+    memset(&request, 0, sizeof(request));
+    request.stacks = stacks;
+    request.payouts = payouts;
+    request.hero_index = hero;
+    request.opponent_index = opponent;
+    request.win_probability = equity;
+    request.chips_at_risk = risk;
+    request.chips_to_win = gain;
+    if (pe_analysis_icm_decision(&request, &report) != 0)
+        return -1;
+    *delta = report.delta_vs_fold;
+    return 0;
+}
+
+static void i_on_compute_icm_matrix(App *app, Event *event)
+{
+    const char *ranks;
+    const char *opponent_range;
+    const char *board;
+    int count;
+    int hero;
+    int opponent = -1;
+    int opponent_action = -1;
+    int active_opponents = 0;
+    int failed = 0;
+    uint32_t players;
+    double pot;
+    double hero_stack;
+    double to_call = 0.0;
+    double opponent_stack = 0.0;
+    int has_bet = 0;
+
+    unref(event);
+    if (!app || !app->icm_matrix_view)
+        return;
+    if (app->icm_mode_combo &&
+        combo_get_selected(app->icm_mode_combo) != PE_ANALYSIS_TOURNAMENT_ICM)
+    {
+        app->icm_matrix_ready = 0;
+        if (app->icm_matrix_hint)
+            label_text(app->icm_matrix_hint,
+                       "Action grid is available only with the ICM model.");
+        view_update(app->icm_matrix_view);
+        return;
+    }
+    if (!i_icm_matrix_supported(app))
+    {
+        app->icm_matrix_ready = 0;
+        if (app->icm_matrix_hint)
+            label_text(app->icm_matrix_hint,
+                       "No action grid for PLO, Stud or Draw; use the ICM table.");
+        view_update(app->icm_matrix_view);
+        return;
+    }
+
+    players = selected_players(app);
+    if (players < 2u)
+        players = 2u;
+    if (players > PE_ANALYSIS_MAX_PLAYERS)
+        players = PE_ANALYSIS_MAX_PLAYERS;
+    hero = app->icm_spot_hero_combo
+        ? (int)combo_get_selected(app->icm_spot_hero_combo) : 0;
+    if (hero < 0 || hero >= (int)players)
+        hero = 0;
+
+    pot = icm_spot_edit_number(app->setup_pot_edit);
+    hero_stack = icm_spot_edit_number(app->setup_stack_edit[hero]);
+    for (uint32_t player = 0u; player < players; ++player)
+    {
+        int action;
+        if ((int)player == hero)
+            continue;
+        action = strategy_action_kind(setup_action(app, player));
+        if (action == 0)
+            continue;
+        if (opponent < 0 ||
+            ((action == 3 || action == 4) &&
+             opponent_action != 3 && opponent_action != 4))
+        {
+            opponent = (int)player;
+            opponent_stack = icm_spot_edit_number(app->setup_stack_edit[player]);
+            opponent_action = action;
+        }
+        ++active_opponents;
+        if (action == 3 || action == 4)
+            has_bet = 1;
+    }
+    if (opponent < 0)
+    {
+        /* A fully folded table has no matchup to evaluate. */
+        app->icm_matrix_ready = 0;
+        if (app->icm_matrix_hint)
+            label_text(app->icm_matrix_hint,
+                       "No active opponent in the spot; action grid unavailable.");
+        view_update(app->icm_matrix_view);
+        return;
+    }
+
+    /* Spot setup does not currently ask for bet sizes.  Use the visible pot
+     * as the current pot and a half-pot wager as the deterministic default;
+     * the all-in amount always comes from the hero stack. */
+    if (has_bet)
+        to_call = pot * 0.5;
+    if (to_call < 0.0 || !isfinite(to_call))
+        to_call = 0.0;
+    ranks = combo_get_selected(app->icm_game_combo) == 1u
+        ? "AKQJT9876" : "AKQJT98765432";
+    count = (int)strlen(ranks);
+    opponent_range = app->icm_matrix_opponent_range_edit
+        ? edit_get_text(app->icm_matrix_opponent_range_edit) : "100%";
+    if (!opponent_range || !*opponent_range)
+        opponent_range = "100%";
+    board = app->board_edit ? edit_get_text(app->board_edit) : "";
+    if (!board || strstr(board, "No board") != NULL)
+        board = "";
+
+    for (int row = 0; row < count; ++row)
+    {
+        for (int column = 0; column < count; ++column)
+        {
+            char hand[8];
+            pe_analysis_equity_request_t request;
+            pe_analysis_equity_report_t report;
+            int range_player = 1;
+            double scores[5] = {-1.0e100, -1.0e100, -1.0e100,
+                                -1.0e100, -1.0e100};
+            double best_score;
+            int primary = -1;
+            double call_risk;
+            double raise_risk;
+            double raise_gain;
+            double allin_gain;
+
+            snprintf(hand, sizeof(hand), "%c%c%s", ranks[row], ranks[column],
+                     row == column ? "" : row < column ? "s" : "o");
+            memset(&request, 0, sizeof(request));
+            request.game = combo_get_selected(app->icm_game_combo) == 1u
+                ? game_sdholdem : game_holdem;
+            request.player_count = active_opponents + 1;
+            request.ranges[0] = hand;
+            for (uint32_t player = 0u; player < players && range_player < PE_ANALYSIS_MAX_PLAYERS;
+                 ++player)
+            {
+                if ((int)player == hero || icm_spot_action_is_fold(app, player))
+                    continue;
+                request.ranges[range_player++] = opponent_range;
+            }
+            request.board = board;
+            request.monte_carlo = 1;
+            request.iterations = 1500;
+            if (pe_analysis_equity(&request, &report) != 0)
+            {
+                app->icm_matrix_equity[row][column] = 0.0;
+                app->icm_matrix_action[row][column] = -1;
+                ++failed;
+                continue;
+            }
+            app->icm_matrix_equity[row][column] = report.equity[0];
+
+            /* Fold is the zero-delta baseline.  Check is legal when no
+             * opponent has bet; otherwise call/raise/all-in are compared by
+             * their ICM decision EV against the first live opponent. */
+            scores[0] = 0.0;
+            if (!has_bet)
+                scores[1] = 0.0;
+            if (has_bet && hero_stack >= to_call &&
+                icm_matrix_decision_delta(edit_get_text(app->analysis_stacks_edit),
+                                          edit_get_text(app->analysis_payouts_edit),
+                                          report.equity[0], hero, opponent,
+                                          to_call, pot, &scores[2]) != 0)
+                ++failed;
+            call_risk = has_bet ? to_call : 0.0;
+            raise_risk = call_risk + pot * 0.5;
+            if (raise_risk > hero_stack)
+                raise_risk = hero_stack;
+            raise_gain = pot + raise_risk;
+            allin_gain = pot + opponent_stack;
+            if (hero_stack > to_call && raise_risk > to_call &&
+                icm_matrix_decision_delta(edit_get_text(app->analysis_stacks_edit),
+                                          edit_get_text(app->analysis_payouts_edit),
+                                          report.equity[0], hero, opponent,
+                                          raise_risk, raise_gain, &scores[3]) != 0)
+                ++failed;
+            if (hero_stack > 0.0 &&
+                icm_matrix_decision_delta(edit_get_text(app->analysis_stacks_edit),
+                                          edit_get_text(app->analysis_payouts_edit),
+                                          report.equity[0], hero, opponent,
+                                          hero_stack, allin_gain, &scores[4]) != 0)
+                ++failed;
+            best_score = scores[0];
+            primary = 0;
+            for (int action = 1; action < 5; ++action)
+            {
+                if (scores[action] > best_score + 1.0e-9)
+                {
+                    best_score = scores[action];
+                    primary = action;
+                }
+            }
+            app->icm_matrix_action[row][column] = (int8_t)primary;
+        }
+    }
+    /* Keep usable cells visible when one malformed/blocked class fails.  A
+     * single bad matchup should not hide the other 168 (or 80) decisions. */
+    app->icm_matrix_ready = failed < count * count;
+    if (app->icm_matrix_hint)
+    {
+        char message[160];
+        snprintf(message, sizeof(message),
+                 "Action grid: %d/%d hands evaluated%s | MC 1500 / hand | %d active opponent%s.",
+                 count * count - failed, count * count,
+                 failed != 0 ? " (some cells skipped)" : "",
+                 active_opponents,
+                 active_opponents == 1 ? "" : "s");
+        label_text(app->icm_matrix_hint, message);
+    }
+    view_update(app->icm_matrix_view);
+}
+
+static void i_on_icm_matrix_input_change(App *app, Event *event)
+{
+    if (app && app->icm_matrix_mutex)
+    {
+        int running;
+        bmutex_lock(app->icm_matrix_mutex);
+        running = app->icm_matrix_running;
+        if (running)
+            app->icm_matrix_cancel_requested = 1;
+        bmutex_unlock(app->icm_matrix_mutex);
+        app->icm_matrix_ready = 0;
+        if (app->icm_matrix_hint)
+            label_text(app->icm_matrix_hint, running
+                       ? "Inputs changed. Stopping the current grid evaluation..."
+                       : "Inputs changed. Click Evaluate all hands to refresh the action grid.");
+        if (app->icm_matrix_view)
+            view_update(app->icm_matrix_view);
+    }
+    unref(event);
+}
+
+static void i_on_draw_icm_matrix(App *app, Event *event)
+{
+    const EvDraw *params = event_params(event, EvDraw);
+    DCtx *ctx = params->ctx;
+    real32_t width = params->width;
+    real32_t height = params->height;
+    uint32_t game = app && app->icm_game_combo
+        ? combo_get_selected(app->icm_game_combo) : 0u;
+    const char *ranks = game == 1u ? "AKQJT9876" : "AKQJT98765432";
+    int count = (int)strlen(ranks);
+    real32_t left = 42.0f;
+    real32_t top = 42.0f;
+    real32_t legend_width = 170.0f;
+    real32_t usable_width = width - left - legend_width;
+    real32_t usable_height = height - top - 12.0f;
+    real32_t cell = usable_width / (real32_t)count;
+    real32_t by_height = usable_height / (real32_t)count;
+    char text[16];
+
+    if (by_height < cell)
+        cell = by_height;
+    draw_fill_color(ctx, color_rgb(18, 22, 27));
+    draw_rect(ctx, ekFILL, 0, 0, width, height);
+    if (!i_icm_matrix_supported(app))
+    {
+        if (app && app->bold_font)
+            draw_font(ctx, app->bold_font);
+        draw_text_color(ctx, color_rgb(225, 230, 235));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, app && app->icm_mode_combo &&
+                  combo_get_selected(app->icm_mode_combo) !=
+                  PE_ANALYSIS_TOURNAMENT_ICM
+                  ? "Action grid requires ICM model"
+                  : "No square matrix for this game", width * 0.5f,
+                  height * 0.5f - 10.0f);
+        if (app && app->regular_font)
+            draw_font(ctx, app->regular_font);
+        draw_text_color(ctx, color_rgb(150, 160, 170));
+        draw_text(ctx, app && app->icm_mode_combo &&
+                  combo_get_selected(app->icm_mode_combo) !=
+                  PE_ANALYSIS_TOURNAMENT_ICM
+                  ? "Select ICM to classify Fold / Check / Call / Raise / All-in."
+                  : "Use the ICM result table for PLO, Stud and Draw.",
+                  width * 0.5f, height * 0.5f + 14.0f);
+        return;
+    }
+
+    if (app && app->bold_font)
+        draw_font(ctx, app->bold_font);
+    draw_text_color(ctx, color_rgb(225, 230, 235));
+    draw_text_align(ctx, ekLEFT, ekCENTER);
+    draw_text(ctx, "ACTION MATRIX  |  ICM + EQUITY", 12.0f, 16.0f);
+    if (app && app->regular_font)
+        draw_font(ctx, app->regular_font);
+    draw_text_color(ctx, color_rgb(150, 160, 170));
+    draw_text_align(ctx, ekRIGHT, ekCENTER);
+    draw_text(ctx, game == 1u ? "SHORT DECK NL" : "NLH", width - 12.0f,
+              16.0f);
+
+    if (!app || !app->icm_matrix_ready)
+    {
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text_color(ctx, color_rgb(150, 160, 170));
+        draw_text(ctx, "Click Evaluate all hands", width * 0.5f,
+                  height * 0.5f - 10.0f);
+        draw_text(ctx, "Each cell is evaluated against the configured spot",
+                  width * 0.5f, height * 0.5f + 14.0f);
+        return;
+    }
+
+    /* The legend uses the same semantic colors as Results and Tree Builder:
+     * the color is the highest ICM decision EV for that starting-hand class. */
+    if (app->bold_font)
+        draw_font(ctx, app->bold_font);
+    draw_text_align(ctx, ekLEFT, ekCENTER);
+    draw_text_color(ctx, color_rgb(220, 226, 232));
+    draw_text(ctx, "BEST ACTION", left + cell * (real32_t)count + 14.0f, 58.0f);
+    if (app->regular_font)
+        draw_font(ctx, app->regular_font);
+    for (int action = 0; action < 5; ++action)
+    {
+        real32_t legend_x = left + cell * (real32_t)count + 14.0f;
+        real32_t legend_y = 84.0f + (real32_t)action * 28.0f;
+        draw_fill_color(ctx, strategy_action_color(action));
+        draw_rndrect(ctx, ekFILL, legend_x, legend_y - 8.0f,
+                     14.0f, 16.0f, 3.0f);
+        draw_text_color(ctx, color_rgb(205, 213, 220));
+        draw_text_align(ctx, ekLEFT, ekCENTER);
+        draw_text(ctx, strategy_action_name(action), legend_x + 23.0f,
+                  legend_y);
+    }
+
+    for (int row = 0; row < count; ++row)
+    {
+        char rank_label[2] = {ranks[row], '\0'};
+        for (int col = 0; col < count; ++col)
+        {
+            real32_t x = left + (real32_t)col * cell;
+            real32_t y = top + (real32_t)row * cell;
+            int action = app->icm_matrix_action[row][col];
+            color_t fill = action >= 0 ? strategy_action_color(action) :
+                           color_rgb(39, 45, 53);
+            draw_fill_color(ctx, fill);
+            draw_rndrect(ctx, ekFILL, x + 1.0f, y + 1.0f,
+                         cell - 2.0f, cell - 2.0f, 2.0f);
+            snprintf(text, sizeof(text), "%c%c%s", ranks[row], ranks[col],
+                     row == col ? "" : row < col ? "s" : "o");
+            draw_text_color(ctx, color_rgb(225, 230, 235));
+            draw_text_align(ctx, ekCENTER, ekCENTER);
+            draw_text(ctx, text, x + cell * 0.5f, y + cell * 0.38f);
+            snprintf(text, sizeof(text), "%.0f%%",
+                     app->icm_matrix_equity[row][col] * 100.0);
+            draw_text_color(ctx, color_rgb(205, 215, 222));
+            draw_text(ctx, text, x + cell * 0.5f, y + cell * 0.70f);
+            if (action >= 0)
+            {
+                const char *marker = action == 0 ? "F" :
+                                     action == 1 ? "Ck" :
+                                     action == 2 ? "C" :
+                                     action == 3 ? "R" : "AI";
+                draw_text_color(ctx, color_rgb(245, 248, 250));
+                draw_text_align(ctx, ekRIGHT, ekTOP);
+                draw_text(ctx, marker, x + cell - 4.0f, y + 3.0f);
+            }
+        }
+        draw_text_color(ctx, color_rgb(170, 180, 190));
+        draw_text_align(ctx, ekCENTER, ekCENTER);
+        draw_text(ctx, rank_label, left - 17.0f,
+                  top + ((real32_t)row + 0.5f) * cell);
+        draw_text(ctx, rank_label,
+                  left + ((real32_t)row + 0.5f) * cell,
+                  top - 17.0f);
+    }
+}
+
+static Panel *i_icm_panel(App *app)
+{
+    Panel *panel = panel_create();
+    Layout *root = layout_create(2, 1);
+    Layout *outer = layout_create(1, 2);
+    Layout *spot_page_layout = layout_create(1, 1);
+    Layout *calculator_page_layout = layout_create(1, 1);
+    Layout *controls = layout_create(2, 12);
+    Layout *results = layout_create(2, 4);
+    Panel *spot_panel = i_icm_spot_panel(app);
+    Panel *calculator_panel = panel_create();
+    Label *title = label_create();
+    Label *game_label = label_create();
+    Label *mode_label = label_create();
+    Label *stacks_label = label_create();
+    Label *payouts_label = label_create();
+    Label *fgs_pot_label = label_create();
+    Label *fgs_depth_label = label_create();
+    Label *fgs_win_label = label_create();
+    Label *matrix_range_label = label_create();
+    Label *matrix_iterations_label = label_create();
+    Label *matrix_raise_label = label_create();
+    Label *compute_label = label_create();
+    Label *result_label = label_create();
+    Button *compute = button_push();
+    Button *matrix_compute = button_push();
+
+    app->icm_game_combo = combo_create();
+    app->icm_mode_combo = combo_create();
+    app->analysis_stacks_edit = edit_create();
+    app->analysis_payouts_edit = edit_create();
+    app->icm_fgs_pot_edit = edit_create();
+    app->icm_fgs_depth_edit = edit_create();
+    app->icm_fgs_win_edit = edit_create();
+    app->analysis_icm_view = textview_create();
+    app->icm_matrix_view = view_create();
+    app->icm_matrix_hint = label_create();
+    app->icm_matrix_opponent_range_edit = edit_create();
+    app->icm_matrix_iterations_edit = edit_create();
+    app->icm_matrix_raise_edit = edit_create();
+    app->icm_tabs = tabs_create(ekGUI_POS_TOP);
+    app->icm_pages = panel_create();
+
+    label_text(title, "ICM | tournament chips to money");
+    label_text(game_label, "GAME FORMAT");
+    label_text(mode_label, "MODEL");
+    label_text(stacks_label, "STACKS (comma separated)");
+    label_text(payouts_label, "PAYOUTS (largest first)");
+    label_text(fgs_pot_label, "FGS POT (chips / hand)");
+    label_text(fgs_depth_label, "FGS DEPTH (hands)");
+    label_text(fgs_win_label, "FGS WIN WEIGHTS");
+    label_text(matrix_range_label, "OPPONENT RANGE (ACTION GRID)");
+    label_text(matrix_iterations_label, "EQUITY SAMPLES / CLASS");
+    label_text(matrix_raise_label, "RAISE SIZE (pot multiple)");
+    label_text(compute_label, "ICM CALCULATION");
+    label_text(result_label, "ICM RESULT");
+    label_text(app->icm_matrix_hint,
+               "Square matrix available for NLH and Short Deck NL only.");
+    combo_add_elem(app->icm_game_combo, "NLH", NULL);
+    combo_add_elem(app->icm_game_combo, "Short Deck NL", NULL);
+    combo_add_elem(app->icm_game_combo, "PLO", NULL);
+    combo_add_elem(app->icm_game_combo, "Stud", NULL);
+    combo_add_elem(app->icm_game_combo, "Draw", NULL);
+    combo_selected(app->icm_game_combo, 0u);
+    combo_OnSelect(app->icm_game_combo,
+                   listener(app, i_on_icm_game_select, App));
+    combo_add_elem(app->icm_mode_combo, "ICM", NULL);
+    combo_add_elem(app->icm_mode_combo, "ChipEV", NULL);
+    combo_add_elem(app->icm_mode_combo, "FGS", NULL);
+    combo_selected(app->icm_mode_combo, PE_ANALYSIS_TOURNAMENT_ICM);
+    combo_OnSelect(app->icm_mode_combo,
+                   listener(app, i_on_icm_mode_select, App));
+    edit_text(app->analysis_stacks_edit, "5000, 3000, 2000");
+    edit_text(app->analysis_payouts_edit, "500, 300, 200");
+    edit_text(app->icm_fgs_pot_edit, "100");
+    edit_text(app->icm_fgs_depth_edit, "2");
+    edit_text(app->icm_fgs_win_edit, "50, 30, 20");
+    edit_text(app->icm_matrix_opponent_range_edit, "100%");
+    edit_text(app->icm_matrix_iterations_edit, "300");
+    edit_text(app->icm_matrix_raise_edit, "0.5");
+    i_on_icm_mode_select(app, NULL);
+    button_text(compute, "Calculate ICM");
+    button_OnClick(compute, listener(app, i_on_analysis_icm, App));
+    button_text(matrix_compute, "Evaluate all hands");
+    button_OnClick(matrix_compute,
+                   listener(app, i_on_compute_icm_matrix, App));
+    edit_OnChange(app->analysis_stacks_edit,
+                  listener(app, i_on_icm_matrix_input_change, App));
+    edit_OnChange(app->analysis_payouts_edit,
+                  listener(app, i_on_icm_matrix_input_change, App));
+    edit_OnChange(app->icm_matrix_opponent_range_edit,
+                  listener(app, i_on_icm_matrix_input_change, App));
+    edit_OnChange(app->icm_matrix_iterations_edit,
+                  listener(app, i_on_icm_matrix_input_change, App));
+    edit_OnChange(app->icm_matrix_raise_edit,
+                  listener(app, i_on_icm_matrix_input_change, App));
+    textview_editable(app->analysis_icm_view, FALSE);
+    textview_wrap(app->analysis_icm_view, FALSE);
+    textview_printf(app->analysis_icm_view,
+                    "Enter stacks and a payout ladder, then calculate ICM.\n");
+    view_OnDraw(app->icm_matrix_view,
+                listener(app, i_on_draw_icm_matrix, App));
+    view_size(app->icm_matrix_view, s2df(720.0f, 540.0f));
+
+    layout_label(controls, title, 0, 0);
+    layout_label(controls, game_label, 0, 1);
+    layout_combo(controls, app->icm_game_combo, 1, 1);
+    layout_label(controls, mode_label, 0, 2);
+    layout_combo(controls, app->icm_mode_combo, 1, 2);
+    layout_label(controls, stacks_label, 0, 3);
+    layout_edit(controls, app->analysis_stacks_edit, 1, 3);
+    layout_label(controls, payouts_label, 0, 4);
+    layout_edit(controls, app->analysis_payouts_edit, 1, 4);
+    layout_label(controls, fgs_pot_label, 0, 5);
+    layout_edit(controls, app->icm_fgs_pot_edit, 1, 5);
+    layout_label(controls, fgs_depth_label, 0, 6);
+    layout_edit(controls, app->icm_fgs_depth_edit, 1, 6);
+    layout_label(controls, fgs_win_label, 0, 7);
+    layout_edit(controls, app->icm_fgs_win_edit, 1, 7);
+    layout_label(controls, matrix_range_label, 0, 8);
+    layout_edit(controls, app->icm_matrix_opponent_range_edit, 1, 8);
+    layout_label(controls, matrix_iterations_label, 0, 9);
+    layout_edit(controls, app->icm_matrix_iterations_edit, 1, 9);
+    layout_label(controls, matrix_raise_label, 0, 10);
+    layout_edit(controls, app->icm_matrix_raise_edit, 1, 10);
+    layout_label(controls, compute_label, 0, 11);
+    layout_button(controls, compute, 1, 11);
+    layout_hsize(controls, 0, 190.0f);
+    layout_hsize(controls, 1, 300.0f);
+    layout_hmargin(controls, 0, 8.0f);
+    layout_vmargin(controls, 0, 10.0f);
+    layout_vmargin(controls, 1, 8.0f);
+    layout_vmargin(controls, 2, 8.0f);
+    layout_vmargin(controls, 3, 8.0f);
+    layout_vmargin(controls, 4, 8.0f);
+    layout_vmargin(controls, 5, 8.0f);
+    layout_vmargin(controls, 6, 8.0f);
+    layout_vmargin(controls, 7, 12.0f);
+    layout_vmargin(controls, 8, 8.0f);
+    layout_vmargin(controls, 9, 8.0f);
+    layout_vmargin(controls, 10, 8.0f);
+
+    layout_label(results, result_label, 0, 0);
+    layout_textview(results, app->analysis_icm_view, 0, 1);
+    layout_label(results, app->icm_matrix_hint, 0, 2);
+    layout_button(results, matrix_compute, 1, 2);
+    layout_view(results, app->icm_matrix_view, 0, 3);
+    layout_hsize(results, 0, 720.0f);
+    layout_hsize(results, 1, 160.0f);
+    layout_vsize(results, 1, 180.0f);
+    layout_vsize(results, 3, 540.0f);
+    layout_vmargin(results, 0, 6.0f);
+    layout_vmargin(results, 1, 12.0f);
+    layout_vmargin(results, 2, 6.0f);
+
+    layout_layout(root, controls, 0, 0);
+    layout_layout(root, results, 1, 0);
+    layout_valign(root, 0, 0, ekTOP);
+    layout_valign(root, 1, 0, ekTOP);
+    layout_hsize(root, 0, 510.0f);
+    layout_hsize(root, 1, 720.0f);
+    layout_hmargin(root, 0, 16.0f);
+    layout_margin(root, 12.0f);
+    /* ICM has two deliberately separate workflows.  SPOT SETUP owns the
+     * hand/table state that used to be incorrectly shown in SETUP; the
+     * calculator page owns tournament chips, payouts and ICM/FGS results. */
+    panel_layout(calculator_panel, root);
+    tabs_add_elem(app->icm_tabs, "SPOT SETUP", NULL);
+    tabs_add_elem(app->icm_tabs, "ICM CALCULATOR", NULL);
+    tabs_selected(app->icm_tabs, 0u);
+    tabs_OnSelect(app->icm_tabs, listener(app, i_on_icm_tab, App));
+    layout_panel(spot_page_layout, spot_panel, 0, 0);
+    layout_panel(calculator_page_layout, calculator_panel, 0, 0);
+    layout_tabs(outer, app->icm_tabs, 0, 0);
+    layout_panel(outer, app->icm_pages, 0, 1);
+    layout_vsize(outer, 1, 780.0f);
+    layout_margin(outer, 10.0f);
+    panel_layout(app->icm_pages, spot_page_layout);
+    panel_layout(app->icm_pages, calculator_page_layout);
+    panel_visible_layout(app->icm_pages, 0u);
+    panel_layout(panel, outer);
+    return panel;
 }
 
 static Panel *i_analysis_panel(App *app)
@@ -5757,7 +8110,6 @@ static Panel *i_analysis_panel(App *app)
     layout_vmargin(right, 0, 4.0f);
     layout_vmargin(right, 1, 10.0f);
     layout_vmargin(right, 2, 4.0f);
-    layout_vmargin(right, 3, 10.0f);
     layout_vmargin(right, 4, 4.0f);
 
     layout_layout(root, left, 0, 0);
@@ -5777,10 +8129,12 @@ static App *i_create(void)
     Panel *result;
     Panel *editor;
     Panel *analysis;
+    Panel *icm;
     Layout *setup_layout = layout_create(1, 1);
     Layout *result_layout = layout_create(1, 1);
     Layout *editor_layout = layout_create(1, 1);
     Layout *analysis_layout = layout_create(1, 1);
+    Layout *icm_layout = layout_create(1, 1);
     Tabs *tabs = tabs_create((gui_pos_t)ekTABS_TOP);
     Panel *pages = panel_create();
 
@@ -5795,6 +8149,7 @@ static App *i_create(void)
     result = i_result_panel(app);
     editor = i_tree_editor_panel(app);
     analysis = i_analysis_panel(app);
+    icm = i_icm_panel(app);
 
     app->tabs = tabs;
     app->pages = pages;
@@ -5802,17 +8157,21 @@ static App *i_create(void)
     tabs_add_elem(tabs, "RESULTS", NULL);
     tabs_add_elem(tabs, "TREE BUILDER", NULL);
     tabs_add_elem(tabs, "ANALYSIS", NULL);
+    tabs_add_elem(tabs, "ICM", NULL);
     tabs_OnSelect(tabs, listener(app, i_on_tab, App));
     layout_panel(setup_layout, setup, 0, 0);
     layout_panel(result_layout, result, 0, 0);
     layout_panel(editor_layout, editor, 0, 0);
     layout_panel(analysis_layout, analysis, 0, 0);
+    layout_panel(icm_layout, icm, 0, 0);
     panel_layout(pages, setup_layout);
     panel_layout(pages, result_layout);
     panel_layout(pages, editor_layout);
     panel_layout(pages, analysis_layout);
+    panel_layout(pages, icm_layout);
     panel_visible_layout(pages, 0u);
     app->solve_mutex = bmutex_create();
+    app->icm_matrix_mutex = bmutex_create();
     layout_tabs(layout, tabs, 0, 0);
     layout_panel(layout, pages, 0, 1);
     layout_vsize(layout, 1, 780);
@@ -5822,7 +8181,10 @@ static App *i_create(void)
     window_panel(app->window, root);
     window_title(app->window, "poker-eval Studio");
     window_origin(app->window, v2df(100, 60));
-    window_client_size(app->window, s2df(1440, 920));
+    /* SETUP contains the table, board matrix and up to eight seat rows.  The
+     * previous 1440x920 default was shorter than that layout and macOS could
+     * receive negative control origins while switching pages. */
+    window_client_size(app->window, s2df(1660, 1200));
     window_OnClose(app->window, listener(app, i_on_close, App));
     window_show(app->window);
     return app;
@@ -5830,6 +8192,7 @@ static App *i_create(void)
 
 static void i_on_close(App *app, Event *event)
 {
+    int icm_running = 0;
     bmutex_lock(app->solve_mutex);
     if (app->solve_running)
     {
@@ -5839,6 +8202,20 @@ static void i_on_close(App *app, Event *event)
         return;
     }
     bmutex_unlock(app->solve_mutex);
+    if (app->icm_matrix_mutex)
+    {
+        bmutex_lock(app->icm_matrix_mutex);
+        icm_running = app->icm_matrix_running;
+        if (icm_running)
+            app->icm_matrix_cancel_requested = 1;
+        bmutex_unlock(app->icm_matrix_mutex);
+        if (icm_running)
+        {
+            status(app, "ICM action grid is still evaluating; close again when it finishes.");
+            unref(event);
+            return;
+        }
+    }
     osapp_finish();
     unref(app);
     unref(event);
@@ -5849,13 +8226,69 @@ static void i_destroy(App **app)
     if (*app)
     {
         mkr_model_clear(*app);
+        /* The native draw listeners retain their View while the OS control
+         * is alive.  Detach them before destroying the window tree so the
+         * callback -> View reference cannot outlive the component layout. */
+        if ((*app)->board_matrix_view)
+        {
+            view_OnDraw((*app)->board_matrix_view, NULL);
+            view_OnClick((*app)->board_matrix_view, NULL);
+        }
+        if ((*app)->setup_board_matrix_view)
+        {
+            view_OnDraw((*app)->setup_board_matrix_view, NULL);
+            view_OnClick((*app)->setup_board_matrix_view, NULL);
+        }
+        if ((*app)->setup_table_view)
+        {
+            view_OnDraw((*app)->setup_table_view, NULL);
+            view_OnClick((*app)->setup_table_view, NULL);
+        }
+        if ((*app)->poker_table_view)
+        {
+            view_OnDraw((*app)->poker_table_view, NULL);
+            view_OnClick((*app)->poker_table_view, NULL);
+        }
+        if ((*app)->strategy_grid_view)
+        {
+            view_OnDraw((*app)->strategy_grid_view, NULL);
+            view_OnClick((*app)->strategy_grid_view, NULL);
+            view_OnWheel((*app)->strategy_grid_view, NULL);
+        }
+        if ((*app)->hand_preview_view)
+            view_OnDraw((*app)->hand_preview_view, NULL);
+        if ((*app)->tree_editor_canvas)
+        {
+            view_OnDraw((*app)->tree_editor_canvas, NULL);
+            view_OnClick((*app)->tree_editor_canvas, NULL);
+        }
+        if ((*app)->tree_editor_poker_view)
+            view_OnDraw((*app)->tree_editor_poker_view, NULL);
+        if ((*app)->icm_matrix_view)
+            view_OnDraw((*app)->icm_matrix_view, NULL);
+        if ((*app)->icm_spot_board_matrix_view)
+        {
+            view_OnDraw((*app)->icm_spot_board_matrix_view, NULL);
+            view_OnClick((*app)->icm_spot_board_matrix_view, NULL);
+        }
+        if ((*app)->icm_spot_table_view)
+        {
+            view_OnDraw((*app)->icm_spot_table_view, NULL);
+            view_OnClick((*app)->icm_spot_table_view, NULL);
+        }
+        /*
+         * Components own references to the fonts used by their labels and
+         * text views.  Tear down the window tree first so those references
+         * are released before destroying the application-owned fonts.
+         */
+        window_destroy(&(*app)->window);
         if ((*app)->card_font) font_destroy(&(*app)->card_font);
         if ((*app)->card_font_lg) font_destroy(&(*app)->card_font_lg);
         if ((*app)->header_font) font_destroy(&(*app)->header_font);
         if ((*app)->regular_font) font_destroy(&(*app)->regular_font);
         if ((*app)->bold_font) font_destroy(&(*app)->bold_font);
         bmutex_close(&(*app)->solve_mutex);
-        window_destroy(&(*app)->window);
+        bmutex_close(&(*app)->icm_matrix_mutex);
         heap_delete(app, App);
     }
 }

@@ -1,17 +1,15 @@
 /*
- * test_monker_classes.c - MonkerSolver's four-card hand-class numbering
+ * test_monker_classes.c - Four-card hand-class numbering
  *
- * The expected values here are not a guess about what the numbering ought to
- * be. They come from the table c.bJ builds at run time in monkersolver.jar
- * 2.1.9, dumped through reflection and compared entry by entry — all 270725
- * of them, which is why a checksum over the whole table is the main assertion
- * rather than a handful of spot values.
+ * The expected values exercise the complete deterministic table, which is why
+ * a checksum over the whole table is the main assertion rather than a handful
+ * of spot values.
  *
  * The checksum matters because several wrong numberings look right from a
  * distance. A rank-major deck also yields a bijection onto 16432 classes, and
  * so does sorting the canonical forms instead of minting indices in order of
- * first appearance. Both disagree with MonkerSolver, and both would pass any
- * test that only counted classes.
+ * first appearance. Both disagree with the format's required ordering, and
+ * both would pass any test that only counted classes.
  */
 
 #include <poker_eval/solver/pe_monker_classes.h>
@@ -85,7 +83,7 @@ int main(void)
             uint32_t got = 0xFFFFFFFFu;
             CHECK(pe_monker_class_of(classes, cases[i].cards, &got) ==
                       PE_MONKER_OK && got == cases[i].expect,
-                  "%s is class %u, MonkerSolver says %u",
+                  "%s is class %u, format expects %u",
                   cases[i].name, got, cases[i].expect);
         }
     }
@@ -143,8 +141,8 @@ int main(void)
 
     /*
      * The whole table. Every four-card hand is looked up and folded into an
-     * FNV-1a hash in colexicographic order; the constant is what the real
-     * MonkerSolver table hashes to. Spot values can survive a numbering that
+     * FNV-1a hash in colexicographic order; the constant is the expected hash.
+     * Spot values can survive a numbering that
      * is wrong nearly everywhere — this cannot.
      */
     by_colex = (uint16_t *)calloc(270725u, sizeof(*by_colex));
@@ -190,7 +188,7 @@ int main(void)
           "the enumeration produced %u classes, expected %u",
           seen_max + 1u, PE_MONKER_CLASS_COUNT);
     CHECK(hash == 0x328313139b869cd5ULL,
-          "the table hashes to 0x%016llx; MonkerSolver's hashes to "
+          "the table hashes to 0x%016llx; expected hash is "
           "0x328313139b869cd5", (unsigned long long)hash);
 
 done:
@@ -201,6 +199,6 @@ done:
         fprintf(stderr, "test_monker_classes: %d failure(s)\n", failures);
         return 1;
     }
-    printf("test_monker_classes: 16432 classes, table matches MonkerSolver\n");
+    printf("test_monker_classes: 16432 classes, table matches format\n");
     return 0;
 }

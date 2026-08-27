@@ -62,6 +62,35 @@ static int convert_ranges(const pe_range_t **ranges, int num_players, PlayerRang
     return 1;
 }
 
+/* The legacy enumerators use the return value 1000 + evaluator_error for a
+ * bad concrete matchup. In particular, Omaha returns 4 when a pocket does
+ * not contain 4..6 cards. Validate the public range representation first so
+ * callers receive a normal API error instead of a stream of misleading
+ * per-matchup diagnostics. */
+static int validate_range_pocket_sizes(enum_game_t game_variant,
+                                       const pe_range_t **ranges,
+                                       int num_players)
+{
+    enum_gameparams_t *params = enumGameParams(game_variant);
+    int player;
+
+    if (params == NULL)
+        return 0;
+    for (player = 0; player < num_players; ++player)
+    {
+        size_t combo;
+        if (ranges[player] == NULL)
+            return 0;
+        for (combo = 0u; combo < ranges[player]->count; ++combo)
+        {
+            int cards = StdDeck_numCards(ranges[player]->combos[combo].hand);
+            if (cards < params->minpocket || cards > params->maxpocket)
+                return 0;
+        }
+    }
+    return 1;
+}
+
 /*
  * Work budget for the automatic method selection below, in evaluated
  * showdowns. Comparable to a default Monte Carlo run, so choosing exhaustive
@@ -413,6 +442,11 @@ static pe_status_t pe_equity_legacy_fallback(
         return PE_STATUS_ERROR;
     }
 
+    if (!validate_range_pocket_sizes(game_variant, ranges, num_players)) {
+        free_conversion_buffers(&conv_buffers);
+        return PE_STATUS_ERROR;
+    }
+
     int iter = opts ? (int)opts->iterations : PE_EQUITY_DEFAULT_ITERATIONS;
     if (iter <= 0) iter = PE_EQUITY_DEFAULT_ITERATIONS;
 
@@ -464,7 +498,7 @@ static pe_status_t pe_equity_legacy_fallback(
         &agg_res
     );
 
-    if (ret < 0) {
+    if (ret <= 0) {
         enumResultFree(&agg_res);
         free_conversion_buffers(&conv_buffers);
         return PE_STATUS_ERROR;

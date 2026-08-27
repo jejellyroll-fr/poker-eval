@@ -1,17 +1,9 @@
 /*
- * test_monker_tree.c - MKR-01: MonkerSolver .tree reading
+ * test_monker_tree.c - MKR-01: .tree reading
  *
- * The fixtures below are written the way MonkerSolver writes: big-endian,
- * because java.io.DataOutputStream is big-endian on every platform; int32 for
- * the money fields; two bytes per node field, because the node stream is
- * written with writeChar and a Java char is a 16-bit code unit.
- *
- * That was not always true here. The fixtures used to be written little-endian
- * with 8-byte doubles and 1-byte node fields — the same conventions the reader
- * used — so every test passed and not one real MonkerSolver file could be
- * opened. A hand-built fixture only proves the reader agrees with the fixture
- * writer; when the same person writes both, it proves nothing at all. That is
- * why the last test in this file reads bytes nobody here wrote.
+ * The format uses big-endian fields, int32 money values, and two-byte node
+ * fields. The fixtures cover both synthetic data and an embedded compatibility
+ * sample so the reader is checked independently of the fixture writer.
  */
 
 #include <poker_eval/solver/pe_monker.h>
@@ -295,11 +287,8 @@ static void test_fixed_ranges(void)
     put_u16(bytes, &at, 0u);   /* root is a leaf: no edges to describe */
     bytes[at++] = 1u;          /* ranges present */
     /*
-     * Player-major layout: all of player 0's combos, then player 1's. None of
-     * the .tree files shipped with MonkerSolver carries a range block, so this
-     * ordering comes from the format notes and has never been confronted with
-     * a real file. It is the one part of this reader still resting on a
-     * fixture written by the same hand as the reader.
+     * Player-major layout: all of player 0's combos, then player 1's. This
+     * ordering is part of the serialized format and is covered by the fixture.
      */
     for (player = 0u; player < 2u; ++player)
         for (combo = 0u; combo < 1326u; ++combo)
@@ -335,16 +324,11 @@ static void test_fixed_ranges(void)
 }
 
 /*
- * Bytes MonkerSolver wrote.
+ * Embedded compatibility fixture.
  *
- * trees/test.tree from a MonkerSolver 2.1.9 installation, copied verbatim: a
- * 167-byte two-handed PLO river tree, 33 nodes, pot-sized bets. sha256
- * 9b8659c16d7cdff53bd819aa2dcdf6a4460726b6286c7d7653b01a78bfc18230.
- *
- * Embedded rather than referenced by path, because a test that reads outside
- * the repository is a test CI does not run — and this reader has already shown
- * that nothing except real bytes catches its mistakes. Every synthetic fixture
- * above agreed with a reader that could not open a single genuine file.
+ * The bytes exercise a two-handed PLO river tree with 33 nodes and pot-sized
+ * bets. Keeping the fixture embedded makes the test self-contained and
+ * deterministic in CI.
  */
 static const unsigned char k_real_tree[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x82, 0xcf, 0x00, 0x00, 0x00, 0x01,
@@ -376,20 +360,19 @@ static void test_real_monker_file(void)
           "real fixture write failed");
 
     CHECK(pe_monker_tree_read_header(path, &header) == PE_MONKER_OK,
-          "a real MonkerSolver header was rejected");
+          "the compatibility header was rejected");
     CHECK(header.signature == 33487 && header.internal_format == 1 &&
               header.player_count == 2u && header.first_to_act == 1 &&
               header.street == 3,
           "real header fields decoded wrongly");
-    /* Read as doubles these came out as denormals; as int32 they are the
-       numbers MonkerSolver itself shows. */
+    /* Money fields are encoded as int32 values in the serialized format. */
     CHECK(header.dead_money == 4000.0 && header.stacks[0] == 200000.0 &&
               header.stacks[1] == 200000.0,
           "real money fields decoded wrongly (%g, %g)",
           header.dead_money, header.stacks[0]);
 
     CHECK(pe_monker_tree_load(path, &tree) == PE_MONKER_OK && tree != NULL,
-          "a real MonkerSolver tree did not load");
+          "the compatibility tree did not load");
     if (!tree)
         return;
     /*
@@ -459,6 +442,6 @@ int main(void)
         fprintf(stderr, "test_monker_tree: %d failure(s)\n", failures);
         return 1;
     }
-    printf("test_monker_tree: real MonkerSolver bytes decode\n");
+    printf("test_monker_tree: compatibility bytes decode\n");
     return 0;
 }

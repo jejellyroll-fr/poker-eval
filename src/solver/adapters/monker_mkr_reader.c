@@ -1,5 +1,5 @@
 /*
- * monker_mkr_reader.c - read the entry table of a MonkerSolver .mkr archive
+ * monker_mkr_reader.c - read the entry table of a .mkr archive
  */
 
 #include <poker_eval/solver/pe_monker.h>
@@ -1209,7 +1209,7 @@ static pe_monker_mkr_status_t java_read_value(java_reader_t *reader,
     case JAVA_TC_REFERENCE:
         /* A back-reference to an earlier *value*. Class descriptors are
            resolved (see java_read_classdesc); values are not retained, and no
-           MonkerSolver entry read here contains one. */
+           entry read here contains one. */
         return PE_MONKER_MKR_ERR_UNSUPPORTED;
     default:
         return PE_MONKER_MKR_ERR_UNSUPPORTED;
@@ -1247,7 +1247,7 @@ static pe_monker_mkr_status_t java_values_push(java_value_t **items,
 /*
  * A serialization stream is a *sequence* of values, not a single one, and
  * anything written with writeInt rather than writeObject arrives as block
- * data between them. MonkerSolver's stored strategies open with exactly that:
+ * data between them. Stored strategy entries use exactly that shape:
  * a four-byte block holding the bucket count, then one value per slot. Reading
  * only the first value rejected every one of them.
  *
@@ -1829,4 +1829,3 @@ pe_monker_mkr_status_t pe_monker_mkr_strategy_class_count(
     *out_class_count = classes;
     return PE_MONKER_MKR_OK;
 }
-

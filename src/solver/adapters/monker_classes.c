@@ -1,5 +1,5 @@
 /*
- * monker_classes.c - MonkerSolver's four-card hand-class numbering
+ * monker_classes.c - Four-card hand-class numbering
  */
 
 #include <poker_eval/solver/pe_monker_classes.h>

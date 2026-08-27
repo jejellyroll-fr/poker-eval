@@ -1,5 +1,5 @@
 /*
- * monker_strategy.c - join a saved MonkerSolver strategy to its tree
+ * monker_strategy.c - join a saved strategy to its tree
  */
 
 #include <poker_eval/solver/pe_monker_strategy.h>
@@ -162,7 +162,7 @@ pe_monker_status_t pe_monker_strategy_probs(
     *out_action_count = (uint16_t)actions;
     if (total > 0.0)
     {
-        /* Renormalise rather than divide by 256: MonkerSolver rounds each
+        /* Renormalise rather than divide by 256: the format rounds each
            action independently, so a hand's bytes sum to 256 or sometimes
            257, and dividing by a constant would leave the probabilities
            slightly off one. */

@@ -1,9 +1,8 @@
 /*
- * pe_monker_classes.h - MonkerSolver's hand-class index for four-card games
+ * pe_monker_classes.h - Four-card hand-class index
  *
- * A stored strategy is indexed by hand class, and this is the numbering it
- * uses. Read off c.bJ in monkersolver.jar 2.1.9 and confirmed against the
- * table that class builds at run time — all 270725 entries, not a sample.
+ * A stored strategy is indexed by hand class. This interface exposes the
+ * deterministic numbering used by the compatible four-card strategy format.
  *
  * Three things define it, and getting any of them wrong yields a numbering
  * that is also a bijection onto 16432 classes and is not this one:

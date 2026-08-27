@@ -30,6 +30,133 @@ static void set_error(char *error, size_t size, const char *fmt, ...)
     va_end(args);
 }
 
+int pe_analysis_icm_decision(
+    const pe_analysis_icm_decision_request_t *request,
+    pe_analysis_icm_decision_report_t *out)
+{
+    pe_analysis_icm_request_t base_request;
+    pe_analysis_icm_report_t base;
+    icm_input_t input;
+    icm_result_t win_result;
+    icm_result_t lose_result;
+    double payouts[ICM_MAX_PLAYERS];
+    double win_stacks[ICM_MAX_PLAYERS];
+    double lose_stacks[ICM_MAX_PLAYERS];
+    double effective_win;
+    double effective_loss;
+    int payout_count = 0;
+    int i;
+
+    if (request == NULL || out == NULL)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    memset(&base_request, 0, sizeof(base_request));
+    base_request.stacks = request->stacks;
+    base_request.payouts = request->payouts;
+    base_request.mode = PE_ANALYSIS_TOURNAMENT_ICM;
+    if (pe_analysis_icm(&base_request, &base) != 0)
+    {
+        set_error(out->error, sizeof(out->error), "%s", base.error);
+        return -1;
+    }
+    if (request->hero_index < 0 || request->hero_index >= base.player_count ||
+        request->opponent_index < 0 ||
+        request->opponent_index >= base.player_count ||
+        request->hero_index == request->opponent_index)
+    {
+        set_error(out->error, sizeof(out->error),
+                  "hero and opponent must be two different player seats");
+        return -1;
+    }
+    if (!isfinite(request->win_probability) ||
+        request->win_probability < 0.0 || request->win_probability > 1.0 ||
+        !isfinite(request->chips_at_risk) || request->chips_at_risk < 0.0 ||
+        !isfinite(request->chips_to_win) || request->chips_to_win < 0.0)
+    {
+        set_error(out->error, sizeof(out->error),
+                  "probability and chip amounts must be finite and non-negative");
+        return -1;
+    }
+    if (pe_analysis_parse_numbers(request->payouts, payouts, ICM_MAX_PLAYERS,
+                                  &payout_count, out->error,
+                                  sizeof(out->error)) != 0)
+        return -1;
+    memset(&input, 0, sizeof(input));
+    input.num_players = base.player_count;
+    input.num_payouts = payout_count;
+    for (i = 0; i < base.player_count; ++i)
+    {
+        input.stacks[i] = base.stacks[i];
+        win_stacks[i] = base.stacks[i];
+        lose_stacks[i] = base.stacks[i];
+    }
+    for (i = 0; i < payout_count; ++i)
+        input.payouts[i] = payouts[i];
+
+    effective_win = request->chips_to_win <
+        win_stacks[request->opponent_index]
+        ? request->chips_to_win : win_stacks[request->opponent_index];
+    effective_loss = request->chips_at_risk <
+        lose_stacks[request->hero_index]
+        ? request->chips_at_risk : lose_stacks[request->hero_index];
+    win_stacks[request->hero_index] += effective_win;
+    win_stacks[request->opponent_index] -= effective_win;
+    lose_stacks[request->hero_index] -= effective_loss;
+    lose_stacks[request->opponent_index] += effective_loss;
+    memcpy(input.stacks, win_stacks, sizeof(input.stacks));
+    if (pe_icm_calculate(&input, &win_result) != 0)
+    {
+        set_error(out->error, sizeof(out->error),
+                  "ICM refused the win outcome");
+        return -1;
+    }
+    memcpy(input.stacks, lose_stacks, sizeof(input.stacks));
+    if (pe_icm_calculate(&input, &lose_result) != 0)
+    {
+        set_error(out->error, sizeof(out->error),
+                  "ICM refused the loss outcome");
+        return -1;
+    }
+    out->current_ev = base.ev[request->hero_index];
+    out->win_ev = win_result.icm_ev[request->hero_index];
+    out->lose_ev = lose_result.icm_ev[request->hero_index];
+    out->decision_ev = request->win_probability * out->win_ev +
+                       (1.0 - request->win_probability) * out->lose_ev;
+    out->delta_vs_fold = out->decision_ev - out->current_ev;
+    out->effective_win = effective_win;
+    out->effective_loss = effective_loss;
+    return 0;
+}
+
+/* A parsed range can still be unusable as a matchup: the ranges may be
+ * individually valid while every combination shares a card with another
+ * player's combination. Detect that before the low-level evaluator is called
+ * repeatedly for combinations that can never be played. */
+static int ranges_have_compatible_matchup(const pe_range_t *const ranges[],
+                                          int player_count,
+                                          int player,
+                                          StdDeck_CardMask used_cards)
+{
+    size_t combo;
+
+    if (player == player_count)
+        return 1;
+    for (combo = 0u; combo < ranges[player]->count; ++combo)
+    {
+        StdDeck_CardMask next_used;
+        if (ranges[player]->combos[combo].weight <= 0.0 ||
+            StdDeck_CardMask_ANY_SET(ranges[player]->combos[combo].hand,
+                                     used_cards))
+            continue;
+        StdDeck_CardMask_OR(next_used, used_cards,
+                            ranges[player]->combos[combo].hand);
+        if (ranges_have_compatible_matchup(ranges, player_count,
+                                           player + 1, next_used))
+            return 1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ *
  * Card text
  * ------------------------------------------------------------------ */
@@ -222,6 +349,20 @@ int pe_analysis_equity(const pe_analysis_equity_request_t *request,
         out->combos[player] = ranges[player]->count;
     }
 
+    {
+        StdDeck_CardMask no_cards;
+        StdDeck_CardMask_RESET(no_cards);
+        if (!ranges_have_compatible_matchup(
+                const_ranges,
+                request->player_count, 0, no_cards))
+        {
+            set_error(out->error, sizeof(out->error),
+                      "no compatible matchups remain after card-conflict "
+                      "filtering; check the player ranges");
+            goto cleanup;
+        }
+    }
+
     memset(&opts, 0, sizeof(opts));
     opts.is_monte_carlo = request->monte_carlo ? 1 : 0;
     opts.iterations = request->iterations > 0 ? request->iterations : 200000;
@@ -393,6 +534,7 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
 {
     icm_input_t input;
     icm_result_t result;
+    pe_analysis_tournament_mode_t mode;
     double payouts[ICM_MAX_PLAYERS];
     double total_chips = 0.0;
     int payout_count = 0;
@@ -404,6 +546,8 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
     memset(out, 0, sizeof(*out));
     memset(&input, 0, sizeof(input));
     memset(&result, 0, sizeof(result));
+    mode = request->mode <= PE_ANALYSIS_TOURNAMENT_FGS
+        ? request->mode : PE_ANALYSIS_TOURNAMENT_ICM;
 
     if (pe_analysis_parse_numbers(request->stacks, input.stacks,
                                   ICM_MAX_PLAYERS, &player_count,
@@ -463,13 +607,152 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
             return -1;
         }
 
-    input.num_players = player_count;
-    input.num_payouts = payout_count;
+    out->mode = mode;
+    out->fgs_depth = request->fgs_depth;
+    out->player_count = player_count;
+    out->payout_count = payout_count;
+    for (i = 0; i < player_count; ++i)
+        out->stacks[i] = input.stacks[i];
     for (i = 0; i < payout_count; ++i)
     {
         input.payouts[i] = payouts[i];
         out->prize_pool += payouts[i];
     }
+    if (!(out->prize_pool > 0.0) || !isfinite(out->prize_pool))
+    {
+        set_error(out->error, sizeof(out->error),
+                  "payouts must contain at least one positive value");
+        return -1;
+    }
+
+    for (i = 0; i < player_count; ++i)
+    {
+        out->chip_share[i] = input.stacks[i] / total_chips;
+        if (mode == PE_ANALYSIS_TOURNAMENT_CHIP_EV)
+        {
+            out->equity[i] = out->chip_share[i];
+            out->ev[i] = out->chip_share[i] * out->prize_pool;
+        }
+    }
+
+    if (mode == PE_ANALYSIS_TOURNAMENT_CHIP_EV)
+        return 0;
+
+    if (mode == PE_ANALYSIS_TOURNAMENT_FGS)
+    {
+        double pot_values[1];
+        double win_probability[ICM_MAX_PLAYERS];
+        int win_count = 0;
+        double win_sum = 0.0;
+        pe_fgs_scenario_input_t fgs_input;
+        pe_fgs_node_t *nodes = NULL;
+        pe_fgs_edge_t *edges = NULL;
+        pe_fgs_tree_t tree;
+        pe_fgs_result_t fgs_result;
+
+        if (request->fgs_depth < 0 ||
+            request->fgs_depth > PE_FGS_MAX_DEPTH)
+        {
+            set_error(out->error, sizeof(out->error),
+                      "FGS depth must be between 0 and %d",
+                      PE_FGS_MAX_DEPTH);
+            return -1;
+        }
+        if (pe_analysis_parse_numbers(request->fgs_pot, pot_values, 1,
+                                      &win_count, out->error,
+                                      sizeof(out->error)) != 0 ||
+            win_count != 1 || !(pot_values[0] >= 0.0) ||
+            !isfinite(pot_values[0]))
+        {
+            set_error(out->error, sizeof(out->error),
+                      "FGS pot must be one non-negative number");
+            return -1;
+        }
+        if (request->fgs_win_probabilities == NULL ||
+            request->fgs_win_probabilities[0] == '\0')
+        {
+            for (i = 0; i < player_count; ++i)
+                win_probability[i] = 1.0;
+        }
+        else
+        {
+            if (pe_analysis_parse_numbers(request->fgs_win_probabilities,
+                                          win_probability, ICM_MAX_PLAYERS,
+                                          &win_count, out->error,
+                                          sizeof(out->error)) != 0 ||
+                win_count != player_count)
+            {
+                set_error(out->error, sizeof(out->error),
+                          "FGS win weights need one value per player");
+                return -1;
+            }
+        }
+        for (i = 0; i < player_count; ++i)
+        {
+            if (!isfinite(win_probability[i]) || win_probability[i] < 0.0)
+            {
+                set_error(out->error, sizeof(out->error),
+                          "FGS win weights must be non-negative numbers");
+                return -1;
+            }
+            win_sum += win_probability[i];
+        }
+        if (!(win_sum > 0.0) || !isfinite(win_sum))
+        {
+            set_error(out->error, sizeof(out->error),
+                      "FGS needs at least one positive win weight");
+            return -1;
+        }
+
+        nodes = (pe_fgs_node_t *)calloc(4096u, sizeof(*nodes));
+        edges = (pe_fgs_edge_t *)calloc(16384u, sizeof(*edges));
+        if (nodes == NULL || edges == NULL)
+        {
+            free(nodes);
+            free(edges);
+            set_error(out->error, sizeof(out->error),
+                      "not enough memory for the FGS transition tree");
+            return -1;
+        }
+        memset(&fgs_input, 0, sizeof(fgs_input));
+        fgs_input.num_players = player_count;
+        fgs_input.num_payouts = payout_count;
+        fgs_input.pot = pot_values[0];
+        fgs_input.depth = request->fgs_depth;
+        for (i = 0; i < player_count; ++i)
+        {
+            fgs_input.stacks[i] = input.stacks[i];
+            fgs_input.win_probability[i] = win_probability[i];
+        }
+        for (i = 0; i < payout_count; ++i)
+            fgs_input.payouts[i] = payouts[i];
+        memset(&tree, 0, sizeof(tree));
+        memset(&fgs_result, 0, sizeof(fgs_result));
+        if (pe_fgs_generate_even_contribution(&fgs_input, nodes, 4096u,
+                                               edges, 16384u, &tree) != 0 ||
+            pe_fgs_calculate_tree(&tree, &fgs_result) != 0)
+        {
+            free(nodes);
+            free(edges);
+            set_error(out->error, sizeof(out->error),
+                      "FGS transition tree is invalid or exceeds its capacity");
+            return -1;
+        }
+        out->fgs_leaf_count = fgs_result.leaf_count;
+        for (i = 0; i < player_count; ++i)
+        {
+            out->ev[i] = fgs_result.ev[i];
+            out->equity[i] = out->prize_pool > 0.0
+                ? out->ev[i] / out->prize_pool : 0.0;
+        }
+        free(nodes);
+        free(edges);
+        return 0;
+    }
+
+    input.num_players = player_count;
+    input.num_payouts = payout_count;
+    /* ChipEV was returned above; only ICM reaches the Malmuth-Harville call. */
     if (pe_icm_calculate(&input, &result) != 0)
     {
         set_error(out->error, sizeof(out->error),
@@ -477,13 +760,8 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
         return -1;
     }
 
-    out->player_count = player_count;
-    out->payout_count = payout_count;
     for (i = 0; i < player_count; ++i)
     {
-        out->stacks[i] = input.stacks[i];
-        out->chip_share[i] = total_chips > 0.0
-            ? input.stacks[i] / total_chips : 0.0;
         out->equity[i] = result.equity[i];
         out->ev[i] = result.icm_ev[i];
     }

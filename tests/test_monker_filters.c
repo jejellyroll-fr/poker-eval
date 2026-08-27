@@ -1,5 +1,5 @@
 /*
- * test_monker_filters.c - MKR-06: MonkerSolver node-filter grammar
+ * test_monker_filters.c - MKR-06: node-filter grammar
  */
 
 #include <poker_eval/solver/pe_monker.h>

@@ -1,5 +1,5 @@
 /*
- * pe_monker.h - MonkerSolver .tree header reader (MKR-01)
+ * pe_monker.h - Compatible .tree header reader (MKR-01)
  */
 
 #ifndef POKER_EVAL_PE_MONKER_H
@@ -108,7 +108,7 @@ typedef struct
     double rakepercent;
     double rakecap;
     int32_t rakeflags;
-    /* MonkerSolver's build, as a packed integer: 20109 is 2.1.9. */
+    /* Producer build, as a packed integer: 20109 represents version 2.1.9. */
     int64_t version;
     /* Infosets the run covered. It is the product of the tree's decision
        nodes and the hand classes a strategy is indexed by, which makes it an
@@ -154,7 +154,7 @@ typedef struct
  * followed by its slots in stream order.
  *
  * bucket_count used to be an argument to the reader, which meant the caller
- * had to know MonkerSolver's abstraction before it could read anything. It is
+ * had to know the producer's abstraction before it could read anything. It is
  * in the file; it is read from there.
  */
 typedef struct
@@ -164,7 +164,7 @@ typedef struct
     uint32_t slot_count;
 } pe_monker_mkr_strategy_t;
 
-/** Read the fixed header at the beginning of a MonkerSolver .tree file. */
+/** Read the fixed header at the beginning of a compatible .tree file. */
 pe_monker_status_t pe_monker_tree_read_header(
     const char *path, pe_monker_tree_header_t *out);
 
@@ -187,7 +187,7 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
 
 void pe_monker_range_set_free(pe_monker_range_set_t *ranges);
 
-/** Read the central directory of a MonkerSolver .mkr ZIP container. */
+/** Read the central directory of a compatible .mkr ZIP container. */
 pe_monker_mkr_status_t pe_monker_mkr_read(const char *path,
                                           pe_monker_mkr_t *out);
 
@@ -216,14 +216,10 @@ pe_monker_mkr_status_t pe_monker_mkr_read_strategy(
  * parallel int array in the second. Within a half, slot i is the i-th node of
  * a preorder walk that visits children last to first.
  *
- * That order is read off a single archive — a 29-node tree reproducing the
- * file's 29-slot presence pattern exactly, 14 arrays against 14 decision
- * nodes. One exact match on a 29-position signature is strong, and it is
- * still one file. So this verifies rather than trusts: every slot holding an
- * array must land on a decision node and every absent slot on a terminal, and
- * the binding is refused when it does not. A mapping that is wrong and silent
- * hands every node some other node's strategy, and a solve built on it looks
- * entirely healthy.
+ * The binding validates the serialized slot pattern against the tree: every
+ * slot holding an array must land on a decision node and every absent slot on
+ * a terminal. A mismatch is rejected rather than silently assigning a
+ * strategy from another node.
  *
  * out_node_of_slot receives one node index per slot. Returns
  * PE_MONKER_MKR_ERR_BAD_ARCHIVE when the shape does not line up.
