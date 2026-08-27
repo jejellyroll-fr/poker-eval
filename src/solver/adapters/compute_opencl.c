@@ -58,7 +58,7 @@ static int compute_opencl_create(void **self, const pe_compute_config_t *cfg)
     gpu_cfg = gpu_eval_default_config();
     gpu_cfg.preferred_backend = GPU_BACKEND_OPENCL;
     gpu_cfg.max_batch_size = cfg->terminal_batch_size;
-    backend->context = gpu_eval_init(&gpu_cfg);
+    backend->context = gpu_eval_init_batched(&gpu_cfg);
     if (backend->context == NULL) {
         free(backend);
         return -1;

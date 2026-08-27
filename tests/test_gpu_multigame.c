@@ -447,7 +447,7 @@ int main(void) {
     config.verbose = 0;
     config.max_batch_size = LARGE_BATCH;
 
-    g_ctx = gpu_eval_init(&config);
+    g_ctx = gpu_eval_init_batched(&config);
     g_gpu_available = (g_ctx != NULL);
 
     if (!g_gpu_available) {

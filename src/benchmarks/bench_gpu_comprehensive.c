@@ -62,7 +62,7 @@ static void bench_single_gpu_throughput(gpu_backend_t backend) {
     cfg.enable_profiling = true;
     cfg.verbose = true;
 
-    gpu_eval_context_t* ctx = gpu_eval_init(&cfg);
+    gpu_eval_context_t* ctx = gpu_eval_init_batched(&cfg);
     if (!ctx) {
         printf("Failed to initialize GPU backend\n");
         return;
@@ -240,7 +240,7 @@ static void bench_cpu_vs_gpu(void) {
     gpu_eval_config_t cfg = gpu_eval_default_config();
     cfg.enable_profiling = true;
 
-    gpu_eval_context_t* ctx = gpu_eval_init(&cfg);
+    gpu_eval_context_t* ctx = gpu_eval_init_batched(&cfg);
     if (ctx) {
         double gpu_start = get_time_ms();
         gpu_eval_holdem_batch(ctx, hands, batch_size, gpu_values);

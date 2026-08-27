@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     config.enable_profiling = true;
     config.verbose = true;
 
-    gpu_eval_context_t* gpu_ctx = gpu_eval_init(&config);
+    gpu_eval_context_t* gpu_ctx = gpu_eval_init_batched(&config);
     if (!gpu_ctx) {
         fprintf(stderr, "ERROR: Failed to initialize GPU context\n");
         return 1;

@@ -48,7 +48,7 @@ gpu_eval_config_t gpu_eval_default_config(void) {
 
 /* ===== Initialization ===== */
 
-gpu_eval_context_t* gpu_eval_init(const gpu_eval_config_t* config) {
+gpu_eval_context_t* gpu_eval_init_batched(const gpu_eval_config_t* config) {
     gpu_eval_context_t* ctx = (gpu_eval_context_t*)calloc(1, sizeof(gpu_eval_context_t));
     if (!ctx) return NULL;
 

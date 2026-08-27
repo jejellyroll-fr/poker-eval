@@ -118,6 +118,14 @@ here instead of silently skipping it.")
         target_link_libraries(poker_gpu_combinatorics_cuda ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_cuda_batch ${CUDA_LIBRARIES} poker_core)
 
+        # These archives are linked into shared solver libraries on the
+        # install/CUDA jobs. Keep their objects position independent so the
+        # final shared link is valid on ELF platforms as well as macOS.
+        set_target_properties(poker_cuda poker_cuda_generic
+                              poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda
+                              poker_cuda_batch
+                              PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
         list(APPEND GPU_LIBRARIES poker_cuda poker_cuda_generic poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda poker_cuda_batch)
 
         add_definitions(-DHAVE_CUDA)
