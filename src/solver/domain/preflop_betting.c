@@ -70,7 +70,8 @@ static const void *apply_action(const void *state, uint16_t action, void *user)
         free(child);
         return NULL;
     }
-    memcpy(child->holes, source->holes, sizeof(child->holes));
+        for (int p = 0; p < PE_BETTING_MAX_PLAYERS; ++p)
+            child->holes[p] = source->holes[p];
     child->board = source->board;
     child->dead_cards = source->dead_cards;
     child->street = source->street;
@@ -128,7 +129,8 @@ static const void *sample_chance_child(const void *state, pe_rng_t *rng,
         }
         child->betting = snapshot.betting;
         child->is_chance = 0;
-        memcpy(child->holes, deal.holes, sizeof(child->holes));
+        for (int p = 0; p < PE_BETTING_MAX_PLAYERS; ++p)
+            child->holes[p] = deal.holes[p];
         child->board = snapshot.board;
         child->dead_cards = snapshot.dead_cards;
         child->street = snapshot.street;

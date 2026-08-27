@@ -312,7 +312,8 @@ int pe_caps_parse(const char *text, uint64_t *out_caps)
 
             if (len - 2 > sizeof(hex) - 1)
                 return token_index;
-            memcpy(hex, start + 2, len - 2);
+            for (size_t i = 0u; i < len - 2u; ++i)
+                hex[i] = start[2u + i];
             hex[len - 2] = '\0';
 
             value = strtoull(hex, &stop, 16);

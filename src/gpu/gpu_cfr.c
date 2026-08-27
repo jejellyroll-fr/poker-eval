@@ -219,14 +219,14 @@ int gpu_cfr_load_state(
     /* Copy to host storage */
     size_t matrix_size = storage->num_infosets * storage->max_actions;
 
-    memcpy(ctx->host_storage->regrets, storage->regrets,
-           matrix_size * sizeof(float));
-    memcpy(ctx->host_storage->avg_strategy, storage->avg_strategy,
-           matrix_size * sizeof(float));
-    memcpy(ctx->host_storage->action_counts, storage->action_counts,
-           storage->num_infosets * sizeof(uint8_t));
-    memcpy(ctx->host_storage->infoset_keys, storage->infoset_keys,
-           storage->num_infosets * sizeof(uint64_t));
+    for (size_t i = 0u; i < matrix_size; ++i) {
+        ctx->host_storage->regrets[i] = storage->regrets[i];
+        ctx->host_storage->avg_strategy[i] = storage->avg_strategy[i];
+    }
+    for (size_t i = 0u; i < storage->num_infosets; ++i) {
+        ctx->host_storage->action_counts[i] = storage->action_counts[i];
+        ctx->host_storage->infoset_keys[i] = storage->infoset_keys[i];
+    }
 
     return 0;
 }
@@ -242,16 +242,15 @@ int gpu_cfr_download_state(
     /* Copy from host storage */
     size_t matrix_size = ctx->host_storage->num_infosets * ctx->host_storage->max_actions;
 
-    memcpy(storage->regrets, ctx->host_storage->regrets,
-           matrix_size * sizeof(float));
-    memcpy(storage->avg_strategy, ctx->host_storage->avg_strategy,
-           matrix_size * sizeof(float));
-    memcpy(storage->curr_strategy, ctx->host_storage->curr_strategy,
-           matrix_size * sizeof(float));
-    memcpy(storage->action_counts, ctx->host_storage->action_counts,
-           storage->num_infosets * sizeof(uint8_t));
-    memcpy(storage->infoset_keys, ctx->host_storage->infoset_keys,
-           storage->num_infosets * sizeof(uint64_t));
+    for (size_t i = 0u; i < matrix_size; ++i) {
+        storage->regrets[i] = ctx->host_storage->regrets[i];
+        storage->avg_strategy[i] = ctx->host_storage->avg_strategy[i];
+        storage->curr_strategy[i] = ctx->host_storage->curr_strategy[i];
+    }
+    for (size_t i = 0u; i < storage->num_infosets; ++i) {
+        storage->action_counts[i] = ctx->host_storage->action_counts[i];
+        storage->infoset_keys[i] = ctx->host_storage->infoset_keys[i];
+    }
 
     return 0;
 }

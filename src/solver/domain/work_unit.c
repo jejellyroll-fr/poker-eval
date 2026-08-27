@@ -142,7 +142,8 @@ static int parse_number(const char *value, size_t length,
     if (length == 0u || length >= sizeof(text) || out == NULL ||
         value[0] == '-')
         return -1;
-    memcpy(text, value, length);
+    for (size_t i = 0u; i < length; ++i)
+        text[i] = value[i];
     text[length] = '\0';
     errno = 0;
     *out = strtoull(text, &end, base);

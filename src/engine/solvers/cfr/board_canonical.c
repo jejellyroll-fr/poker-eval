@@ -147,7 +147,8 @@ static int bc_best_perm(const bc_card_t *list, int n, int *out_perm,
             continue;
         if (!have || strcmp(enc, out_best) < 0)
         {
-            memcpy(out_best, enc, sizeof(enc));
+            for (size_t i = 0u; i < sizeof(enc); ++i)
+                out_best[i] = enc[i];
             best_pi = pi;
             have = 1;
         }
@@ -284,9 +285,11 @@ int pe_board_canonicalize_rank_orbit(
                 best_key[i] = key[i];
             best_mask = canonical;
             if (out_rank_perm)
-                memcpy(out_rank_perm, rank_permutations[p], 13 * sizeof(int));
+                for (size_t i = 0u; i < 13u; ++i)
+                    out_rank_perm[i] = rank_permutations[p][i];
             if (out_suit_perm)
-                memcpy(out_suit_perm, suit_perm, 4 * sizeof(int));
+                for (size_t i = 0u; i < 4u; ++i)
+                    out_suit_perm[i] = suit_perm[i];
             have_best = 1;
         }
     }

@@ -317,7 +317,8 @@ static char *copy_node_id(size_t index)
     out = (char *)malloc((size_t)length + 1u);
     if (!out)
         return NULL;
-    memcpy(out, buffer, (size_t)length + 1u);
+    for (int i = 0; i <= length; ++i)
+        out[i] = buffer[i];
     return out;
 }
 

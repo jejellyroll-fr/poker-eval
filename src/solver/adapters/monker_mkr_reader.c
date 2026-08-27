@@ -729,7 +729,8 @@ static pe_monker_mkr_status_t java_utf(java_reader_t *reader, char **out)
     result = (char *)malloc((size_t)length + 1u);
     if (result == NULL)
         return PE_MONKER_MKR_ERR_NO_MEMORY;
-    memcpy(result, data, length);
+    for (uint16_t i = 0u; i < length; ++i)
+        result[i] = (char)data[i];
     result[length] = '\0';
     *out = result;
     return PE_MONKER_MKR_OK;

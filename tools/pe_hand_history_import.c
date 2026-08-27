@@ -255,7 +255,8 @@ static void extract_board(const char *line, char *out, size_t out_size)
         size_t n = (size_t)(close - open - 1);
         if (n > out_size - used - 1u) n = out_size - used - 1u;
         if (used != 0u && n != 0u && used + 1u < out_size) out[used++] = ' ';
-        memcpy(out + used, open + 1, n);
+        for (size_t i = 0u; i < n; ++i)
+            out[used + i] = open[1 + i];
         used += n;
         out[used] = '\0';
         open = strchr(close + 1, '[');
@@ -368,16 +369,16 @@ int main(int argc, char **argv)
         }
         if (strstr(line, "Hand #") != NULL) {
             hh_extract_hand_id(line, hand_id, sizeof(hand_id));
-            strcpy(street, "preflop");
+            (void)snprintf(street, sizeof(street), "%s", "preflop");
             board[0] = '\0';
         } else if (strstr(line, "*** FLOP ***") != NULL) {
-            strcpy(street, "flop");
+            (void)snprintf(street, sizeof(street), "%s", "flop");
             extract_board(line, board, sizeof(board));
         } else if (strstr(line, "*** TURN ***") != NULL) {
-            strcpy(street, "turn");
+            (void)snprintf(street, sizeof(street), "%s", "turn");
             extract_board(line, board, sizeof(board));
         } else if (strstr(line, "*** RIVER ***") != NULL) {
-            strcpy(street, "river");
+            (void)snprintf(street, sizeof(street), "%s", "river");
             extract_board(line, board, sizeof(board));
         } else if (row_count < MAX_ROWS) {
             memset(&row, 0, sizeof(row));

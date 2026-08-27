@@ -416,10 +416,12 @@ static int reduce_soa(const pe_update_batch_source_t *sources,
             free(ordered);
             return -1;
         }
-        memcpy(deltas, ordered[at].soa->deltas + first->offset,
-               values * sizeof(*deltas));
-        memcpy(averages, ordered[at].soa->average_deltas + first->offset,
-               values * sizeof(*averages));
+        for (value_index = 0u; value_index < values; ++value_index) {
+            deltas[value_index] =
+                ordered[at].soa->deltas[first->offset + value_index];
+            averages[value_index] =
+                ordered[at].soa->average_deltas[first->offset + value_index];
+        }
         for (value_index = 0u; value_index < values; ++value_index)
         {
             if (!isfinite(deltas[value_index]) ||

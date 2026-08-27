@@ -194,7 +194,7 @@ static int skip_value(json_reader_t *reader, pe_hrc_import_error_t *error)
 
 static int parse_variant(const char *name, enum_game_t *out)
 {
-    char lower[32]; size_t n = strlen(name);
+    char lower[32]; size_t n = strnlen(name, sizeof(lower));
     if (n == 0 || n >= sizeof(lower)) return 0;
     for (size_t i = 0; i < n; ++i) lower[i] = (char)tolower((unsigned char)name[i]);
     lower[n] = '\0';

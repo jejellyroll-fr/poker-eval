@@ -1090,7 +1090,8 @@ int cfr_storage_export_delta(const cfr_storage_t *storage,
         free(collect.entries);
         return -1;
     }
-    memcpy(blob, CFR_DELTA_MAGIC, 8u);
+    for (i = 0u; i < 8u; ++i)
+        blob[i] = CFR_DELTA_MAGIC[i];
     cfr_delta_put_u32(blob + 8u, CFR_DELTA_VERSION);
     cfr_delta_put_u32(blob + 12u, (uint32_t)collect.count);
     cursor = blob + CFR_DELTA_HEADER_SIZE;

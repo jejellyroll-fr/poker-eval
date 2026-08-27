@@ -3,6 +3,8 @@
 #include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/core/time_compat.h>
 
+#include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -720,15 +722,34 @@ size_t pe_runtime_descriptor_to_string(
 
 static int runtime_descriptor_parse_int(const char *value, int *out)
 {
-    char extra;
-    return value != NULL && out != NULL && sscanf(value, "%d%c", out, &extra) == 1;
+    char *end;
+    long parsed;
+
+    if (value == NULL || out == NULL || value[0] == '\0')
+        return 0;
+    errno = 0;
+    parsed = strtol(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' ||
+        parsed < INT_MIN || parsed > INT_MAX)
+        return 0;
+    *out = (int)parsed;
+    return 1;
 }
 
 static int runtime_descriptor_parse_uint(const char *value, unsigned *out)
 {
-    char extra;
-    return value != NULL && out != NULL &&
-           sscanf(value, "%u%c", out, &extra) == 1;
+    char *end;
+    unsigned long parsed;
+
+    if (value == NULL || out == NULL || value[0] == '\0' || value[0] == '-')
+        return 0;
+    errno = 0;
+    parsed = strtoul(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' ||
+        parsed > UINT_MAX)
+        return 0;
+    *out = (unsigned)parsed;
+    return 1;
 }
 
 int pe_runtime_descriptor_from_string(
@@ -755,7 +776,8 @@ int pe_runtime_descriptor_from_string(
 
         if (length == 0u || length >= sizeof(token))
             return -1;
-        memcpy(token, cursor, length);
+        for (size_t i = 0u; i < length; ++i)
+            token[i] = cursor[i];
         token[length] = '\0';
         equals = strchr(token, '=');
         if (equals == NULL || equals == token)

@@ -229,8 +229,13 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--raises") == 0 && i + 1 < argc)
         {
             const char *source = argv[++i];
-            char *copy = (char *)malloc(strlen(source) + 1u);
-            if (copy) strcpy(copy, source);
+            size_t source_length = strnlen(source, 4096u);
+            char *copy = source_length < 4096u
+                ? (char *)malloc(source_length + 1u) : NULL;
+            if (copy) {
+                for (size_t j = 0u; j <= source_length; ++j)
+                    copy[j] = source[j];
+            }
             char *part = copy ? strtok(copy, ",") : NULL;
             while (part && ctx.raise_count < MAX_TREE_ACTIONS) { ctx.raise_sizes[ctx.raise_count++] = strtod(part, NULL); part = strtok(NULL, ","); }
             free(copy);

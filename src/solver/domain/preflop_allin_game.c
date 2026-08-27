@@ -403,7 +403,8 @@ static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
              betting->pot, betting->to_call, betting->current_bet,
              (int)betting->raises_made);
     {
-        size_t used = strlen(game->descs[game->desc_count].text);
+        size_t used = strnlen(game->descs[game->desc_count].text,
+                              PREFLOP_DESC_TEXT);
         for (uint16_t action = 0u; action < action_count && used + 2u < PREFLOP_DESC_TEXT; ++action)
         {
             int written = snprintf(game->descs[game->desc_count].text + used,

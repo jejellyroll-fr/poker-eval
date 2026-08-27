@@ -99,7 +99,7 @@ static int tree_path_is_json(const char *path)
     size_t length;
     if (!path)
         return 0;
-    length = strlen(path);
+    length = strnlen(path, 4096u);
     return length >= 5u && strcmp(path + length - 5u, ".json") == 0;
 }
 
@@ -376,7 +376,8 @@ static void print_strategy_report(const options_t *options,
                    action_ev(external, &state, a, view.actor, options->seed));
         putchar('\n');
         fflush(stdout);
-        if (strcmp(options->game, "holdem") == 0 && strlen(view.hand) >= 4u)
+        if (strcmp(options->game, "holdem") == 0 &&
+            strnlen(view.hand, sizeof(view.hand)) >= 4u)
         {
             int r0 = report_rank_index(view.hand[0]);
             int r1 = report_rank_index(view.hand[2]);
@@ -527,7 +528,7 @@ static int parse_raise_sizes(const char *text, options_t *options)
 {
     char buffer[512];
     char *token;
-    if (!text || !options || strlen(text) >= sizeof(buffer))
+    if (!text || !options || strnlen(text, sizeof(buffer)) >= sizeof(buffer))
         return -1;
     snprintf(buffer, sizeof(buffer), "%s", text);
     token = strtok(buffer, ",");
@@ -906,7 +907,8 @@ int main(int argc, char **argv)
     rules.tree_showdown = tree != NULL ? 1 : 0;
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
-    memcpy(rules.raise_sizes, options.raise_sizes, sizeof(rules.raise_sizes));
+    for (size_t i = 0u; i < sizeof(rules.raise_sizes) / sizeof(rules.raise_sizes[0]); ++i)
+        rules.raise_sizes[i] = options.raise_sizes[i];
     game = pe_preflop_allin_game_create(&rules, ranges);
     if (!game) {
         fprintf(stderr, "could not create preflop game\n");

@@ -170,7 +170,8 @@ static pe_monker_filter_status_t parse_atom(filter_parser_t *parser)
         int known;
         if (keyword == NULL)
             return PE_MONKER_FILTER_ERR_NO_MEMORY;
-        memcpy(keyword, parser->expression + keyword_start, keyword_length);
+        for (size_t i = 0u; i < keyword_length; ++i)
+            keyword[i] = parser->expression[keyword_start + i];
         keyword[keyword_length] = '\0';
         known = keyword_is_known(keyword);
         free(keyword);
@@ -178,11 +179,11 @@ static pe_monker_filter_status_t parse_atom(filter_parser_t *parser)
             return PE_MONKER_FILTER_ERR_UNKNOWN_KEYWORD;
     }
     value_start = parser->position;
-    if (keyword_length == strlen("prevstreet") &&
+    if (keyword_length == sizeof("prevstreet") - 1u &&
         strncmp(parser->expression + keyword_start, "prevstreet",
-                strlen("prevstreet")) == 0) {
+                sizeof("prevstreet") - 1u) == 0) {
         previous = 1u;
-        keyword_length = strlen("street");
+        keyword_length = sizeof("street") - 1u;
     }
     if (parser->position < parser->length) {
         character = parser->expression[parser->position];
@@ -226,10 +227,10 @@ static pe_monker_filter_status_t parse_atom(filter_parser_t *parser)
                 return PE_MONKER_FILTER_ERR_BAD_VALUE;
         }
     }
-    if (keyword_length == strlen("street") &&
+    if (keyword_length == sizeof("street") - 1u &&
         strncmp(parser->expression + keyword_start, "prevstreet",
-                strlen("prevstreet")) == 0)
-        return append_atom(parser, "street", strlen("street"), negated,
+                sizeof("prevstreet") - 1u) == 0)
+        return append_atom(parser, "street", sizeof("street") - 1u, negated,
                            previous, operator,
                            parser->expression + value_start, value_length);
     return append_atom(parser, parser->expression + keyword_start, keyword_length,

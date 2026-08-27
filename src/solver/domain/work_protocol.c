@@ -608,8 +608,10 @@ int pe_work_frame_encode_result(const pe_work_result_t *result,
     put_u64_be(payload + 80u, result->elapsed_ns);
     put_double_be(payload + 88u, result->units_per_s);
     if (result->delta_size != 0u)
-        memcpy(payload + PE_WORK_PROTOCOL_RESULT_FIXED_SIZE, result->delta,
-               result->delta_size);
+    {
+        for (size_t i = 0u; i < result->delta_size; ++i)
+            payload[PE_WORK_PROTOCOL_RESULT_FIXED_SIZE + i] = result->delta[i];
+    }
     return pe_work_frame_encode(PE_WORK_MESSAGE_RESULT, payload, payload_size,
                                 out, capacity, out_size);
 }

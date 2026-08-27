@@ -354,8 +354,8 @@ static int match_tokens(const ppt_term_t *term, unsigned token_index,
         if (used[card] != 0)
             continue;
         next_rank_variable = *rank_variable;
-        memcpy(next_suit_variables, suit_variables,
-               sizeof(next_suit_variables));
+        for (size_t i = 0u; i < sizeof(next_suit_variables) / sizeof(next_suit_variables[0]); ++i)
+            next_suit_variables[i] = suit_variables[i];
         if (!token_matches(&term->tokens[token_index], ranks[card], suits[card],
                            &next_rank_variable, next_suit_variables))
             continue;

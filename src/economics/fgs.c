@@ -19,8 +19,10 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
         memset(&input, 0, sizeof(input));
         input.num_players = tree->num_players;
         input.num_payouts = tree->num_payouts;
-        memcpy(input.stacks, node->stacks, sizeof(input.stacks));
-        memcpy(input.payouts, tree->payouts, sizeof(input.payouts));
+        for (int p = 0; p < ICM_MAX_PLAYERS; ++p) {
+            input.stacks[p] = node->stacks[p];
+            input.payouts[p] = tree->payouts[p];
+        }
         if (pe_icm_calculate(&input, &icm) != 0)
             return -1;
         for (int p = 0; p < tree->num_players; ++p)
@@ -105,8 +107,8 @@ static int fgs_generate_node(fgs_generator_t *gen, const double *stacks, int dep
         return -1;
     node_index = (int)gen->node_count++;
     memset(&gen->nodes[node_index], 0, sizeof(gen->nodes[node_index]));
-    memcpy(gen->nodes[node_index].stacks, stacks,
-           sizeof(gen->nodes[node_index].stacks));
+    for (i = 0; i < ICM_MAX_PLAYERS; ++i)
+        gen->nodes[node_index].stacks[i] = stacks[i];
 
     for (i = 0; i < gen->input->num_players; ++i) {
         if (stacks[i] > 0.0) {
@@ -213,6 +215,7 @@ int pe_fgs_generate_even_contribution(const pe_fgs_scenario_input_t *input,
     out_tree->root_index = 0;
     out_tree->num_players = input->num_players;
     out_tree->num_payouts = input->num_payouts;
-    memcpy(out_tree->payouts, input->payouts, sizeof(out_tree->payouts));
+    for (int p = 0; p < ICM_MAX_PLAYERS; ++p)
+        out_tree->payouts[p] = input->payouts[p];
     return 0;
 }

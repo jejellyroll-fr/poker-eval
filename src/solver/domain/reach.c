@@ -72,7 +72,8 @@ void pe_vec_copy(pe_vec_t *dst, const pe_vec_t *src)
        nothing happens rather than something partial. */
     if (dst->n != src->n)
         return;
-    memcpy(dst->v, src->v, dst->n * sizeof(double));
+    for (size_t i = 0u; i < dst->n; ++i)
+        dst->v[i] = src->v[i];
 }
 
 void pe_vec_scale(pe_vec_t *v, double s)

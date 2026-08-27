@@ -570,12 +570,12 @@ static int cpu_par_apply_update_batch(void *self,
             {
                 const pe_update_group_t *group = groups[group_index].group;
                 size_t values = (size_t)group->actions * group->combos;
-                memcpy(groups[group_index].regrets,
-                       scratch_regrets + group->offset,
-                       values * sizeof(*scratch_regrets));
-                memcpy(groups[group_index].average,
-                       scratch_average + group->offset,
-                       values * sizeof(*scratch_average));
+                for (size_t value_index = 0u; value_index < values; ++value_index) {
+                    groups[group_index].regrets[value_index] =
+                        scratch_regrets[group->offset + value_index];
+                    groups[group_index].average[value_index] =
+                        scratch_average[group->offset + value_index];
+                }
             }
         }
         free(scratch_regrets);
