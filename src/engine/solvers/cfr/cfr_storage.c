@@ -9,6 +9,7 @@
 #include <math.h>
 #include <errno.h>
 #include <stdint.h>
+#include <limits.h>
 
 #ifdef PE_LEGACY_CFR_OPENMP
 #include <omp.h>
@@ -289,15 +290,28 @@ void cfr_storage_destroy(cfr_storage_t *s)
     if (!s)
         return;
 #ifdef PE_LEGACY_CFR_OPENMP
+    if (s->cap <= (size_t)INT_MAX)
+    {
 #pragma omp parallel for schedule(static) num_threads(s->num_threads)
+        for (int i = 0; i < (int)s->cap; ++i)
+            if (s->tab[i].used)
+            {
+                free(s->tab[i].regret);
+                free(s->tab[i].avg);
+                free(s->tab[i].locked);
+            }
+    }
+    else
 #endif
-    for (size_t i = 0; i < s->cap; i++)
-        if (s->tab[i].used)
-        {
-            free(s->tab[i].regret);
-            free(s->tab[i].avg);
-            free(s->tab[i].locked);
-        }
+    {
+        for (size_t i = 0; i < s->cap; ++i)
+            if (s->tab[i].used)
+            {
+                free(s->tab[i].regret);
+                free(s->tab[i].avg);
+                free(s->tab[i].locked);
+            }
+    }
     free(s->tab);
     free(s);
 }
@@ -848,15 +862,29 @@ void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
         return;
 
 #ifdef PE_LEGACY_CFR_OPENMP
-#pragma omp parallel for schedule(static) num_threads(s->num_threads)
-#endif
-    for (size_t i = 0; i < s->cap; i++)
+    if (s->cap <= (size_t)INT_MAX)
     {
-        entry_t *e = &s->tab[i];
-        if (!e->used || !e->regret)
-            continue;
-        for (int a = 0; a < e->n; ++a)
-            e->regret[a] *= factor;
+#pragma omp parallel for schedule(static) num_threads(s->num_threads)
+        for (int i = 0; i < (int)s->cap; ++i)
+        {
+            entry_t *e = &s->tab[i];
+            if (!e->used || !e->regret)
+                continue;
+            for (int a = 0; a < e->n; ++a)
+                e->regret[a] *= factor;
+        }
+    }
+    else
+#endif
+    {
+        for (size_t i = 0; i < s->cap; ++i)
+        {
+            entry_t *e = &s->tab[i];
+            if (!e->used || !e->regret)
+                continue;
+            for (int a = 0; a < e->n; ++a)
+                e->regret[a] *= factor;
+        }
     }
 }
 
@@ -918,8 +946,7 @@ int cfr_storage_merge_scaled(cfr_storage_t *destination,
     ctx.regret_scale = regret_scale;
     ctx.average_scale = average_scale;
     ctx.failed = 0;
-    cfr_storage_iterate((cfr_storage_t *)source,
-                        cfr_storage_merge_callback, &ctx);
+    cfr_storage_iterate(source, cfr_storage_merge_callback, &ctx);
     return ctx.failed ? -1 : 0;
 }
 
@@ -1054,8 +1081,7 @@ int cfr_storage_export_delta(const cfr_storage_t *storage,
     }
     *out_blob = NULL;
     *out_size = 0u;
-    cfr_storage_iterate((cfr_storage_t *)storage,
-                        cfr_delta_collect_callback, &collect);
+    cfr_storage_iterate(storage, cfr_delta_collect_callback, &collect);
     if (collect.failed) {
         free(collect.entries);
         return -1;
@@ -1195,20 +1221,77 @@ fail:
     return -1;
 }
 
-void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
+static void cfr_storage_strategy_from_entry(const cfr_storage_t *s,
+                                             const entry_t *e,
+                                             double *probs)
+{
+    int i;
+    int n;
+    if (!s || !e || !probs || e->n <= 0)
+        return;
+    n = e->n;
+    if (e->locked)
+    {
+        for (i = 0; i < n; ++i)
+            probs[i] = e->locked[i];
+        return;
+    }
+    if (s->use_ecfr)
+    {
+        double max_pos = 0.0;
+        double sum = 0.0;
+        for (i = 0; i < n; ++i)
+            if (e->regret[i] > max_pos)
+                max_pos = e->regret[i];
+        if (max_pos > 0.0)
+        {
+            for (i = 0; i < n; ++i)
+            {
+                probs[i] = e->regret[i] > 0.0
+                    ? exp(s->ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                sum += probs[i];
+            }
+            if (sum > 0.0)
+            {
+                for (i = 0; i < n; ++i)
+                    probs[i] /= sum;
+                return;
+            }
+        }
+    }
+    else
+    {
+        double sum = 0.0;
+        for (i = 0; i < n; ++i)
+            if (e->regret[i] > 0.0)
+                sum += e->regret[i];
+        if (sum > 0.0)
+        {
+            for (i = 0; i < n; ++i)
+                probs[i] = e->regret[i] > 0.0 ? e->regret[i] / sum : 0.0;
+            return;
+        }
+    }
+    for (i = 0; i < n; ++i)
+        probs[i] = 1.0 / n;
+}
+
+void cfr_storage_iterate(const cfr_storage_t *s,
+                         cfr_iterate_callback fn,
+                         void *user)
 {
     if (!s || !fn || !s->tab)
         return;
     for (size_t i = 0; i < s->cap; i++)
         if (s->tab[i].used)
         {
-            entry_t *e = &s->tab[i];
-            double *avg = e->avg;
+            const entry_t *e = &s->tab[i];
+            const double *avg = e->avg;
             double *fallback = NULL;
             if (!avg) {
                 fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
                 if (!fallback) continue;
-                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                cfr_storage_strategy_from_entry(s, e, fallback);
                 avg = fallback;
             }
             fn(e->key, e->n, e->regret, avg, user);

@@ -752,6 +752,16 @@ static int runtime_descriptor_parse_uint(const char *value, unsigned *out)
     return 1;
 }
 
+static size_t runtime_bounded_length(const char *text, size_t capacity)
+{
+    size_t length = 0u;
+    if (text == NULL)
+        return 0u;
+    while (length < capacity && text[length] != '\0')
+        ++length;
+    return length;
+}
+
 static int runtime_descriptor_next_field(const char **cursor,
                                          char *field, size_t capacity,
                                          int *last)
@@ -765,7 +775,10 @@ static int runtime_descriptor_next_field(const char **cursor,
         return 0;
     separator = strchr(*cursor, ',');
     length = separator != NULL ? (size_t)(separator - *cursor) :
-                                  strlen(*cursor);
+                                  runtime_bounded_length(
+                                      *cursor, PE_RUNTIME_DESCRIPTOR_MAX);
+    if (separator == NULL && length == PE_RUNTIME_DESCRIPTOR_MAX)
+        return 0;
     if (length == 0u || length >= capacity)
         return 0;
     for (i = 0u; i < length; ++i)
@@ -926,14 +939,14 @@ int pe_runtime_descriptor_from_string(
         {
             char *index_end;
             unsigned long index = strtoul(token + 1, &index_end, 10);
-            int compiled;
-            int available;
-            int validated;
-            int devices;
-            unsigned long long capabilities;
-            double strategy_rate;
-            double update_rate;
-            double terminal_rate;
+            int compiled = 0;
+            int available = 0;
+            int validated = 0;
+            int devices = 0;
+            unsigned long long capabilities = 0ull;
+            double strategy_rate = 0.0;
+            double update_rate = 0.0;
+            double terminal_rate = 0.0;
             size_t terminal_min_batch_size = 0u;
             int has_terminal_min_batch_size = 0;
 

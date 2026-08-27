@@ -598,7 +598,7 @@ static int cpu_par_apply_update_batch(void *self,
             return -1;
     }
 
-    for (i = 0u; i < batch->count; ++i)
+    for (i = 0; i < (int)batch->count; ++i)
     {
         if (!isfinite(batch->items[i].delta) ||
             !isfinite(batch->items[i].average_delta))

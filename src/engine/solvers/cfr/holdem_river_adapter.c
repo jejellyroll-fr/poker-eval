@@ -177,7 +177,10 @@ static eval_t hr_eval_7c(const holdem_river_state_t *st, mask_t cards)
     size_t count = 0u;
     int card;
 
-    if (st && st->compute_ops && st->compute_self &&
+    if (st == NULL)
+        return 0;
+
+    if (st->compute_ops && st->compute_self &&
         st->compute_ops->terminal_eval_batch) {
         for (card = 0; card < MODERN_DECK_SIZE; ++card) {
             if (mask_is_set(cards, card)) {

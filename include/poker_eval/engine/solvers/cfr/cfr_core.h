@@ -638,7 +638,7 @@ int cfr_storage_apply_delta(cfr_storage_t *storage,
                             double scale);
 
 void cfr_storage_iterate(
-    cfr_storage_t* storage,
+    const cfr_storage_t* storage,
     cfr_iterate_callback callback,
     void* user_data
 );

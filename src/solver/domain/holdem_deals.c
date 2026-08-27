@@ -1,5 +1,6 @@
 #include <poker_eval/solver/pe_holdem_deals.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -8,6 +9,11 @@
 static int valid_combo(mask_t cards)
 {
     return mask_is_valid(cards) && mask_popcount(cards) == 2;
+}
+
+static int finite_nonnegative(double value)
+{
+    return value >= 0.0 && value <= DBL_MAX;
 }
 
 size_t pe_holdem_combo_count(mask_t dead_cards)
@@ -62,7 +68,7 @@ static int valid_inputs(mask_t board, const pe_holdem_range_t *ranges,
             const pe_holdem_combo_t *entry = &ranges[player].combos[combo];
             if (!valid_combo(entry->cards) ||
                 (entry->cards & board) != 0 ||
-                !isfinite(entry->weight) || entry->weight < 0.0)
+                !finite_nonnegative(entry->weight))
                 return 0;
         }
     }

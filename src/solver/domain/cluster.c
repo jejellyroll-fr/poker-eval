@@ -38,13 +38,27 @@ static int parse_u64_text(const char *text, uint64_t *out)
     return 1;
 }
 
+static size_t bounded_length(const char *text, size_t capacity)
+{
+    size_t length = 0u;
+    if (text == NULL)
+        return 0u;
+    while (length < capacity && text[length] != '\0')
+        ++length;
+    return length;
+}
+
 static int parse_manifest_field(const char *line, const char *name,
                                 unsigned *out)
 {
     size_t length;
     if (line == NULL || name == NULL || out == NULL)
         return 0;
-    length = strlen(name);
+    length = bounded_length(name, PE_SOLVER_CLUSTER_PATH_MAX);
+    if (length == PE_SOLVER_CLUSTER_PATH_MAX ||
+        bounded_length(line, PE_SOLVER_CLUSTER_PATH_MAX + 128u) ==
+            PE_SOLVER_CLUSTER_PATH_MAX + 128u)
+        return 0;
     return strncmp(line, name, length) == 0 && line[length] == '\t' &&
            parse_unsigned_text(line + length + 1u, out);
 }
@@ -55,7 +69,11 @@ static int parse_manifest_u64_field(const char *line, const char *name,
     size_t length;
     if (line == NULL || name == NULL || out == NULL)
         return 0;
-    length = strlen(name);
+    length = bounded_length(name, PE_SOLVER_CLUSTER_PATH_MAX);
+    if (length == PE_SOLVER_CLUSTER_PATH_MAX ||
+        bounded_length(line, PE_SOLVER_CLUSTER_PATH_MAX + 128u) ==
+            PE_SOLVER_CLUSTER_PATH_MAX + 128u)
+        return 0;
     return strncmp(line, name, length) == 0 && line[length] == '\t' &&
            parse_u64_text(line + length + 1u, out);
 }
@@ -94,8 +112,10 @@ static int parse_task_line(char *line, pe_solver_cluster_task_t *task)
     }
     if (fields[0][0] == '\0' || strcmp(fields[0], "task") != 0 ||
         fields[5][0] == '\0' || fields[6][0] == '\0' ||
-        strlen(fields[5]) >= PE_SOLVER_CLUSTER_MAX_STATUS ||
-        strlen(fields[6]) >= PE_SOLVER_CLUSTER_PATH_MAX ||
+        bounded_length(fields[5], PE_SOLVER_CLUSTER_MAX_STATUS) >=
+            PE_SOLVER_CLUSTER_MAX_STATUS ||
+        bounded_length(fields[6], PE_SOLVER_CLUSTER_PATH_MAX) >=
+            PE_SOLVER_CLUSTER_PATH_MAX ||
         !parse_unsigned_text(fields[1], &shard_id) ||
         !parse_u64_text(fields[2], &begin) ||
         !parse_u64_text(fields[3], &end) ||

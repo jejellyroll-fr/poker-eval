@@ -276,6 +276,7 @@ static int load_session_summary(const char *path, int *answered,
     char *data;
     const char *fields[] = {"\"answered\":", "\"best_answers\":",
                             "\"probability_loss\":"};
+    const size_t field_lengths[] = {11u, 15u, 18u};
     double parsed[3];
     if (!path || !answered || !best_answers || !probability_loss) return -1;
     file = fopen(path, "rb");
@@ -289,8 +290,8 @@ static int load_session_summary(const char *path, int *answered,
     for (size_t i = 0u; i < 3u; ++i) {
         const char *at = strstr(data, fields[i]); char *end = NULL;
         if (!at) { free(data); return -1; }
-        parsed[i] = strtod(at + strlen(fields[i]), &end);
-        if (end == at + strlen(fields[i])) { free(data); return -1; }
+        parsed[i] = strtod(at + field_lengths[i], &end);
+        if (end == at + field_lengths[i]) { free(data); return -1; }
     }
     *answered = parsed[0] < 0.0 ? 0 : (int)parsed[0];
     *best_answers = parsed[1] < 0.0 ? 0 : (int)parsed[1];
@@ -393,6 +394,16 @@ static int gui_game_index(enum_game_t game)
 static void copy_field(char *destination, size_t capacity, const char *source);
 static void range_matrix_sync_from_fields(app_t *app);
 
+static size_t gui_bounded_length(const char *text, size_t capacity)
+{
+    size_t length = 0u;
+    if (text == NULL)
+        return 0u;
+    while (length < capacity && text[length] != '\0')
+        ++length;
+    return length;
+}
+
 static void set_default_ranges_for_game(app_t *app)
 {
     static const char *oop[] = {"AsKs", "AsKsQd3c", "AsKsQd3c9h", "AsKsQd3c9h5h"};
@@ -451,7 +462,8 @@ static int card_token_count(const char *text)
     snprintf(copy, sizeof(copy), "%s", text);
     token = strtok(copy, " ,;\t\r\n");
     while (token) {
-        if (strlen(token) < 2u || strlen(token) > 3u)
+        size_t length = gui_bounded_length(token, 4u);
+        if (length < 2u || length > 3u)
             return -1;
         ++count;
         token = strtok(NULL, " ,;\t\r\n");
@@ -505,14 +517,15 @@ static int run_command_capture(const char *command, char *destination,
         destination[0] = '\0';
     while (fgets(output, sizeof(output), pipe))
     {
-        size_t length = strlen(output);
+        size_t length = gui_bounded_length(output, sizeof(output));
         if (capacity == 0u || used + 1u >= capacity)
             continue; /* keep draining so the child does not block */
         if (length >= capacity - used)
             length = capacity - used - 1u;
         if (length > 0u)
         {
-            memcpy(destination + used, output, length);
+            for (size_t i = 0u; i < length; ++i)
+                destination[used + i] = output[i];
             used += length;
             destination[used] = '\0';
         }
@@ -756,16 +769,21 @@ static int run_vector_sim(app_t *app)
             const char *player_range = starter_range_for_player(app, player);
             char quoted_range[4200];
             shell_quote(player_range, quoted_range, sizeof(quoted_range));
-            snprintf(command + strlen(command), sizeof(command) - strlen(command),
+            snprintf(command + gui_bounded_length(command, sizeof(command)),
+                     sizeof(command) - gui_bounded_length(command, sizeof(command)),
                      " --range%d %s", player, quoted_range);
         }
     if (app->tree_path[0])
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --tree %s", tree);
     if (app->mkr_path[0])
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --mkr %s", mkr);
-    snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
+    snprintf(command + gui_bounded_length(command, sizeof(command)),
+             sizeof(command) - gui_bounded_length(command, sizeof(command)),
+             " 2>&1");
     return launch_solver(app, command, "Solve complete", "Solver failed");
 }
 
@@ -774,7 +792,7 @@ static int is_preflop_request(const char *board)
     size_t length;
     if (!board || !*board)
         return 1;
-    length = strlen(board);
+    length = gui_bounded_length(board, 160u);
     if (length == 7u) {
         int equal = 1;
         for (size_t i = 0u; i < length; ++i)
@@ -831,10 +849,12 @@ static int run_preflop_solver(app_t *app)
     for (int player = 0; player < app->player_count; ++player) {
         shell_quote(starter_range_for_player(app, player), ranges[player],
                     sizeof(ranges[player]));
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --range%d %s", player, ranges[player]);
     }
-    snprintf(command + strlen(command), sizeof(command) - strlen(command),
+    snprintf(command + gui_bounded_length(command, sizeof(command)),
+             sizeof(command) - gui_bounded_length(command, sizeof(command)),
              " 2>&1");
     return launch_solver(app, command, "Preflop Lane B complete",
                          "Preflop Lane B failed");
@@ -894,22 +914,29 @@ static int run_legacy_cfr(app_t *app, const char *backend_name, int lane_b)
              board, app->player_count,
              app->iterations > 0 ? app->iterations : 1000);
     if (backend_name)
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --backend %s", backend_name);
     if (lane_b)
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --lane-b --sample-batch %d",
                  app->sample_batch_size > 0 ? app->sample_batch_size : 128);
     for (int player = 0; player < app->player_count && player < 8; ++player) {
         shell_quote(starter_range_for_player(app, player), ranges[player], sizeof(ranges[player]));
-        snprintf(command + strlen(command), sizeof(command) - strlen(command),
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --range%d %s", player, ranges[player]);
     }
     if (app->mkr_path[0]) {
         shell_quote(app->mkr_path, mkr, sizeof(mkr));
-        snprintf(command + strlen(command), sizeof(command) - strlen(command), " --mkr %s", mkr);
+        snprintf(command + gui_bounded_length(command, sizeof(command)),
+                 sizeof(command) - gui_bounded_length(command, sizeof(command)),
+                 " --mkr %s", mkr);
     }
-    snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
+    snprintf(command + gui_bounded_length(command, sizeof(command)),
+             sizeof(command) - gui_bounded_length(command, sizeof(command)),
+             " 2>&1");
     return launch_solver(app, command,
                          lane_b ? "AUTO V3 solve complete" :
                          backend_name ? "GPU CFR complete" : "Legacy CFR complete",
@@ -954,8 +981,8 @@ static int run_selected_solver(app_t *app)
 
 static int has_suffix(const char *path, const char *suffix)
 {
-    size_t path_length = path ? strlen(path) : 0u;
-    size_t suffix_length = suffix ? strlen(suffix) : 0u;
+    size_t path_length = gui_bounded_length(path, 4096u);
+    size_t suffix_length = gui_bounded_length(suffix, 256u);
     if (suffix_length > path_length)
         return 0;
     path += path_length - suffix_length;
@@ -1020,10 +1047,15 @@ static void append_text_input(app_t *app, const char *input)
     char *destination = focused_text(app, &capacity);
     if (!destination || !input)
         return;
-    size_t length = strlen(destination);
+    size_t length = gui_bounded_length(destination, capacity);
     size_t available = capacity > length + 1u ? capacity - length - 1u : 0u;
     if (available > 0u)
-        strncat(destination, input, available);
+    {
+        size_t input_length = gui_bounded_length(input, available);
+        for (size_t i = 0u; i < input_length; ++i)
+            destination[length + i] = input[i];
+        destination[length + input_length] = '\0';
+    }
 }
 
 static void remove_text_input(app_t *app)
@@ -1032,7 +1064,7 @@ static void remove_text_input(app_t *app)
     char *destination = focused_text(app, &capacity);
     (void)capacity;
     if (destination && *destination)
-        destination[strlen(destination) - 1u] = '\0';
+        destination[gui_bounded_length(destination, capacity) - 1u] = '\0';
 }
 
 typedef struct {
@@ -1214,7 +1246,7 @@ static int range_contains_combo(const char *range, int row, int column,
     snprintf(copy, sizeof(copy), "%s", range);
     token = strtok(copy, ",; 	\r\n");
     while (token) {
-        size_t length = strlen(token);
+        size_t length = gui_bounded_length(token, sizeof(copy));
         int first = rank_index(token[0]);
         int second = length >= 2u ? rank_index(token[1]) : -1;
         int is_suited = 0;
@@ -1270,8 +1302,9 @@ static void range_matrix_from_text(app_t *app, int player, const char *range)
         if (first >= 0 && second >= 0) {
             int row;
             int column;
-            int suited = strlen(token) >= 3u && token[2] == 's';
-            if (strlen(token) >= 4u) {
+            size_t token_length = gui_bounded_length(token, sizeof(copy));
+            int suited = token_length >= 3u && token[2] == 's';
+            if (token_length >= 4u) {
                 first = rank_index(token[0]);
                 second = rank_index(token[2]);
                 suited = token[1] == token[3];
