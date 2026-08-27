@@ -12,13 +12,26 @@ typedef struct {
     double *regrets;
     double *reach;
     double *action_value;
-    double public_reach[PE_HRC_MAX_NODES];
-    double public_strategy_mass[PE_HRC_MAX_NODES][PE_HRC_MAX_ACTIONS];
+    double *public_reach;
+    double (*public_strategy_mass)[PE_HRC_MAX_ACTIONS];
     int collect_public;
     pe_hrc_profile_t *profiles;
     size_t profile_count;
     size_t profile_capacity;
 } solve_context_t;
+
+static void solve_context_free(solve_context_t *ctx)
+{
+    if (!ctx)
+        return;
+    free(ctx->strategy);
+    free(ctx->regrets);
+    free(ctx->reach);
+    free(ctx->action_value);
+    free(ctx->profiles);
+    free(ctx->public_reach);
+    free(ctx->public_strategy_mass);
+}
 
 static size_t info_offset(const solve_context_t *ctx, int player, int node,
                           size_t combo, unsigned action)
@@ -250,9 +263,13 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     ctx.action_value = calloc(total_slots, sizeof(*ctx.action_value));
     ctx.profile_capacity = config->max_profiles;
     ctx.profiles = calloc(ctx.profile_capacity, sizeof(*ctx.profiles));
-    if (!ctx.strategy || !ctx.regrets || !ctx.reach || !ctx.action_value || !ctx.profiles) {
-        free(ctx.strategy); free(ctx.regrets); free(ctx.reach); free(ctx.action_value);
-        free(ctx.profiles);
+    ctx.public_reach = calloc(config->tree.node_count,
+                              sizeof(*ctx.public_reach));
+    ctx.public_strategy_mass = calloc(config->tree.node_count,
+                                      sizeof(*ctx.public_strategy_mass));
+    if (!ctx.strategy || !ctx.regrets || !ctx.reach || !ctx.action_value ||
+        !ctx.profiles || !ctx.public_reach || !ctx.public_strategy_mass) {
+        solve_context_free(&ctx);
         return PE_HRC_ERR_PROFILE_LIMIT;
     }
     memset(&current, 0, sizeof(current));
@@ -262,15 +279,13 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
         enumerate_profiles(&ctx, 0, empty, 1.0, &current);
     }
     if (ctx.profile_count == ctx.profile_capacity) {
-        free(ctx.strategy); free(ctx.regrets); free(ctx.reach); free(ctx.action_value);
-        free(ctx.profiles);
+        solve_context_free(&ctx);
         return PE_HRC_ERR_PROFILE_LIMIT;
     }
     for (size_t i = 0; i < ctx.profile_count; ++i)
         total_weight += ctx.profiles[i].weight;
     if (!(total_weight > 0.0) || !isfinite(total_weight)) {
-        free(ctx.strategy); free(ctx.regrets); free(ctx.reach); free(ctx.action_value);
-        free(ctx.profiles);
+        solve_context_free(&ctx);
         return PE_HRC_ERR_INVALID_RANGE;
     }
     for (size_t i = 0; i < ctx.profile_count; ++i)
@@ -287,8 +302,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
                 memset(values, 0, sizeof(values));
                 if (!evaluate_node(&ctx, config->tree.root_index, &ctx.profiles[i],
                                    path, 0, 1.0, values)) {
-                    free(ctx.strategy); free(ctx.regrets); free(ctx.reach); free(ctx.action_value);
-                    free(ctx.profiles);
+                    solve_context_free(&ctx);
                     return PE_HRC_ERR_CALLBACK;
                 }
                 for (int p = 0; p < config->tree.num_players; ++p)
@@ -301,8 +315,10 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
      * every training iteration. */
     memset(result->ev, 0, sizeof(result->ev));
     memset(ctx.reach, 0, total_slots * sizeof(*ctx.reach));
-    memset(ctx.public_reach, 0, sizeof(ctx.public_reach));
-    memset(ctx.public_strategy_mass, 0, sizeof(ctx.public_strategy_mass));
+    memset(ctx.public_reach, 0,
+           config->tree.node_count * sizeof(*ctx.public_reach));
+    memset(ctx.public_strategy_mass, 0,
+           config->tree.node_count * sizeof(*ctx.public_strategy_mass));
     ctx.collect_public = 1;
     for (size_t i = 0; i < ctx.profile_count; ++i) {
         double values[PE_HRC_MAX_PLAYERS];
@@ -310,8 +326,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
         memset(values, 0, sizeof(values));
         if (!evaluate_node(&ctx, config->tree.root_index, &ctx.profiles[i], path,
                            0, 1.0, values)) {
-            free(ctx.strategy); free(ctx.regrets); free(ctx.reach); free(ctx.action_value);
-            free(ctx.profiles);
+            solve_context_free(&ctx);
             return PE_HRC_ERR_CALLBACK;
         }
         for (int p = 0; p < config->tree.num_players; ++p)
@@ -336,6 +351,8 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     free(ctx.reach);
     free(ctx.action_value);
     free(ctx.profiles);
+    free(ctx.public_reach);
+    free(ctx.public_strategy_mass);
     return PE_HRC_OK;
 }
 

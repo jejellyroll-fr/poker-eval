@@ -32,7 +32,8 @@ pe_action_status_t pe_action_validate(const pe_action_t *action)
         action->kind == PE_ACTION_CALL || action->kind == PE_ACTION_ALL_IN ||
         action->kind == PE_ACTION_CHANCE || action->kind == PE_ACTION_TERMINAL)
     {
-        if (action->amount_kind != PE_AMOUNT_NONE || action->amount != 0.0)
+        if (action->amount_kind != PE_AMOUNT_NONE ||
+            action->amount > 0.0 || action->amount < 0.0)
             return PE_ACTION_ERR_AMBIGUOUS;
         return PE_ACTION_OK;
     }

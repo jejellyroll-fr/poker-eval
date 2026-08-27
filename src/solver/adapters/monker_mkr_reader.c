@@ -9,7 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef PE_HAVE_ZLIB
 #include <zlib.h>
+#endif
 
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
@@ -332,6 +334,10 @@ pe_monker_mkr_status_t pe_monker_mkr_entry_read(
     if (entry->method != 8u)
         return PE_MONKER_MKR_ERR_UNSUPPORTED;
 
+#ifndef PE_HAVE_ZLIB
+    (void)data_offset;
+    return PE_MONKER_MKR_ERR_UNSUPPORTED;
+#else
     result = (unsigned char *)malloc(entry->uncompressed_size == 0u
                                          ? 1u : entry->uncompressed_size);
     if (result == NULL)
@@ -360,6 +366,7 @@ pe_monker_mkr_status_t pe_monker_mkr_entry_read(
     *out_data = result;
     *out_size = entry->uncompressed_size;
     return PE_MONKER_MKR_OK;
+#endif
 }
 
 static pe_monker_mkr_status_t find_end_record(const unsigned char *data,
@@ -1352,6 +1359,13 @@ static pe_monker_mkr_status_t inflate_nested(unsigned char *data,
                                              unsigned char **out_data,
                                              size_t *out_size)
 {
+#ifndef PE_HAVE_ZLIB
+    (void)data;
+    (void)size;
+    (void)out_data;
+    (void)out_size;
+    return PE_MONKER_MKR_ERR_UNSUPPORTED;
+#else
     z_stream stream;
     unsigned char *result = NULL;
     size_t capacity = 4096u;
@@ -1423,6 +1437,7 @@ static pe_monker_mkr_status_t inflate_nested(unsigned char *data,
     *out_size = (size_t)stream.total_out;
     inflateEnd(&stream);
     return PE_MONKER_MKR_OK;
+#endif
 }
 
 static pe_monker_mkr_status_t find_entry(const pe_monker_mkr_t *archive,

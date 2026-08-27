@@ -266,9 +266,14 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 if (!isfinite(old_regret) || !isfinite(delta) ||
                     !isfinite(old_average) || !isfinite(average_delta))
                     goto done;
-                if (backend->config.regret_mode == PE_REGRET_PLUS &&
-                    signbit(old_regret + delta) && old_regret + delta == 0.0)
-                    fast_safe = 0;
+                {
+                    double summed_regret = old_regret + delta;
+                    if (backend->config.regret_mode == PE_REGRET_PLUS &&
+                        signbit(summed_regret) &&
+                        !(summed_regret > 0.0) &&
+                        !(summed_regret < 0.0))
+                        fast_safe = 0;
+                }
             }
             if (fast_safe && (weighted_update
                     ? pe_compute_simd_apply_weighted(

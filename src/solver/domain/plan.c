@@ -286,7 +286,9 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     "exploitability_interval must be positive when an exploitability "
                     "target is configured");
 
-    if (cfg->max_iterations == 0 && cfg->target_exploitability_mbb == 0.0)
+    if (cfg->max_iterations == 0 &&
+        !(cfg->target_exploitability_mbb > 0.0) &&
+        !(cfg->target_exploitability_mbb < 0.0))
         pe_diag_add(diag, PE_VALID_ERROR,
                     "at least one stop condition is required: max_iterations or "
                     "target_exploitability_mbb");

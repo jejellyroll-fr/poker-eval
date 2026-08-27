@@ -16,12 +16,19 @@
 
 #if defined(HAS_AVX2)
 #include <immintrin.h>
+#if defined(__GNUC__) || defined(__clang__)
+#define PE_CFR_TARGET_AVX2 __attribute__((target("avx2")))
+#else
+#define PE_CFR_TARGET_AVX2
+#endif
+#else
+#define PE_CFR_TARGET_AVX2
 #endif
 #if defined(HAS_NEON) && (defined(__aarch64__) || defined(__arm64__))
 #include <arm_neon.h>
 #endif
 
-static double cfr_sum_positive(const double *values, int count)
+static PE_CFR_TARGET_AVX2 double cfr_sum_positive(const double *values, int count)
 {
 #if defined(HAS_AVX2)
     __m256d sum = _mm256_setzero_pd();

@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct worker_candidate_t
 {
@@ -65,7 +66,7 @@ static pe_compute_kind_t worker_backend(
 void pe_work_coordinator_init(pe_work_coordinator_t *coordinator)
 {
     if (coordinator)
-        *coordinator = (pe_work_coordinator_t){0};
+        memset(coordinator, 0, sizeof(*coordinator));
 }
 
 int pe_work_coordinator_register(pe_work_coordinator_t *coordinator,

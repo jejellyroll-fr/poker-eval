@@ -11,7 +11,7 @@ static void regret_strategy(double regret[2], double strategy[2])
     strategy[1] = fmax(0.0, regret[1]) / sum;
 }
 
-static double profile_probability(int mask, const double villain_strategy[][2], int villains)
+static double profile_probability(int mask, double villain_strategy[][2], int villains)
 {
     double probability = 1.0;
     for (int i = 0; i < villains; ++i)
@@ -20,7 +20,7 @@ static double profile_probability(int mask, const double villain_strategy[][2], 
 }
 
 static double other_profile_probability(int mask, int excluded,
-                                        const double villain_strategy[][2], int villains)
+                                        double villain_strategy[][2], int villains)
 {
     double probability = 1.0;
     for (int i = 0; i < villains; ++i)

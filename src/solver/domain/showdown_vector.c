@@ -271,7 +271,7 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
         memcpy(card_prefix + (i + 1u) * PE_SHOWDOWN_DECK,
                card_prefix + i * PE_SHOWDOWN_DECK,
                PE_SHOWDOWN_DECK * sizeof(double));
-        if (weight == 0.0)
+        if (!(weight > 0.0) && !(weight < 0.0))
             continue;
         mask_card_count(entries[i].mask, cards, 2);
         for (card = 0; card < 2u; ++card)
@@ -398,7 +398,8 @@ static void multiway_visit(multiway_context_t *context, uint8_t player)
         mask_t previous_used;
         double previous_weight;
 
-        if ((mask & context->used) != 0 || reach == 0.0)
+        if ((mask & context->used) != 0 ||
+            (!(reach > 0.0) && !(reach < 0.0)))
             continue;
         previous_used = context->used;
         previous_weight = context->weight;

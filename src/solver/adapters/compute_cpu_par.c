@@ -432,7 +432,8 @@ static int cpu_par_apply_update_batch(void *self,
                         if (!isfinite(old_regret) || !isfinite(delta) ||
                             !isfinite(old_average) || !isfinite(average_delta) ||
                             (clamp && signbit(old_regret + delta) &&
-                             old_regret + delta == 0.0))
+                             !(old_regret + delta > 0.0) &&
+                             !(old_regret + delta < 0.0)))
                         {
                             fast_safe = 0;
                             break;

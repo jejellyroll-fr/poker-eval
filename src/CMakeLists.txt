@@ -20,8 +20,6 @@ add_subdirectory(ofc)
 # than through add_subdirectory: it is a single translation unit for now, and
 # CTR-01 is scoped to this file. It deliberately links nothing — the domain
 # depends on ports, never on the engine, the evaluator or a GPU backend.
-find_package(ZLIB REQUIRED)
-
 if(ENABLE_ZSTD)
     find_path(PE_ZSTD_INCLUDE_DIR zstd.h)
     find_library(PE_ZSTD_LIBRARY NAMES zstd libzstd)
@@ -128,7 +126,12 @@ target_include_directories(poker_solver PRIVATE
 # The range parser adapter needs the range engine. The edge is acyclic:
 # poker-eval-range reaches poker_core, poker_equity and poker_distributions,
 # and none of those links poker_solver.
-target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range poker_equity ZLIB::ZLIB)
+target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range poker_equity)
+
+if(POKER_EVAL_WITH_ZLIB)
+    target_compile_definitions(poker_solver PRIVATE PE_HAVE_ZLIB=1)
+    target_link_libraries(poker_solver PRIVATE ZLIB::ZLIB)
+endif()
 
 if(OpenMP_C_FOUND)
     target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)

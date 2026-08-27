@@ -530,6 +530,15 @@ endif()
 # undefined CMAKE_INSTALL_BINDIR turns that into the absolute /poker-eval-examples.
 include(GNUInstallDirs)
 
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+    set(POKER_EVAL_WITH_ZLIB ON)
+    message(STATUS "zlib found, enabling compressed .mkr archive support")
+else()
+    set(POKER_EVAL_WITH_ZLIB OFF)
+    message(STATUS "zlib not found, compressed .mkr archive support disabled")
+endif()
+
 # Modular sources (core/games/equity/utils/etc.)
 add_subdirectory(src)
 add_subdirectory(tools)
