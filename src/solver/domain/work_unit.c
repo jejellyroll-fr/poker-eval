@@ -129,7 +129,8 @@ size_t pe_work_unit_to_string(const pe_work_unit_t *unit,
 
 static int token_is(const char *token, size_t length, const char *expected)
 {
-    return strlen(expected) == length && memcmp(token, expected, length) == 0;
+    size_t expected_length = strnlen(expected, PE_WORK_UNIT_DESCRIPTOR_MAX);
+    return expected_length == length && memcmp(token, expected, length) == 0;
 }
 
 static int parse_number(const char *value, size_t length,
@@ -261,10 +262,11 @@ int pe_work_unit_from_string(const char *text, pe_work_unit_t *out)
     while (*cursor != '\0')
     {
         const char *end = strchr(cursor, ';');
+        size_t tail_length = strnlen(cursor, PE_WORK_UNIT_DESCRIPTOR_MAX);
         const char *equals = memchr(cursor, '=',
-                                    end == NULL ? strlen(cursor) :
+                                    end == NULL ? tail_length :
                                                    (size_t)(end - cursor));
-        size_t token_length = end == NULL ? strlen(cursor) :
+        size_t token_length = end == NULL ? tail_length :
                                            (size_t)(end - cursor);
         size_t key_length;
         const char *value;

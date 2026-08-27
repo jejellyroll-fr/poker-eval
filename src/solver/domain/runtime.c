@@ -747,7 +747,8 @@ int pe_runtime_descriptor_from_string(
     while (*cursor != '\0')
     {
         const char *end = strchr(cursor, ';');
-        size_t length = end != NULL ? (size_t)(end - cursor) : strlen(cursor);
+        size_t length = end != NULL ? (size_t)(end - cursor) :
+            strnlen(cursor, PE_RUNTIME_DESCRIPTOR_MAX);
         char token[512];
         char *equals;
         const char *value;

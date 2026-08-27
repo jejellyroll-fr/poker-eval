@@ -2,8 +2,6 @@
  * work_protocol.c - versioned binary framing for distributed work (DIST-03)
  */
 
-#include <poker_eval/solver/pe_work_protocol.h>
-
 #include <math.h>
 #include <limits.h>
 #include <stddef.h>
@@ -12,6 +10,9 @@
 #include <string.h>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
@@ -22,6 +23,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #endif
+
+#include <poker_eval/solver/pe_work_protocol.h>
 
 static const uint8_t pe_work_magic[4] = {'P', 'E', 'W', '1'};
 
@@ -117,17 +120,22 @@ static int valid_header(const uint8_t *header, size_t *out_payload_size)
 
 static void put_double_be(uint8_t *out, double value)
 {
-    uint64_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    put_u64_be(out, bits);
+    union {
+        double value;
+        uint64_t bits;
+    } converted;
+    converted.value = value;
+    put_u64_be(out, converted.bits);
 }
 
 static double get_double_be(const uint8_t *in)
 {
-    uint64_t bits = get_u64_be(in);
-    double value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
+    union {
+        double value;
+        uint64_t bits;
+    } converted;
+    converted.bits = get_u64_be(in);
+    return converted.value;
 }
 
 int pe_work_result_validate(const pe_work_result_t *result)

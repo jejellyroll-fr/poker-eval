@@ -86,10 +86,13 @@ static int load_session_summary(const char *path, int *answered,
     for (size_t i = 0u; i < 3u; ++i)
     {
         const char *at = strstr(data, fields[i]);
+        const size_t field_length = i == 0u ? sizeof("\"answered\":") - 1u
+            : i == 1u ? sizeof("\"best_answers\":") - 1u
+            : sizeof("\"probability_loss\":") - 1u;
         char *end = NULL;
         if (!at) { free(data); return -1; }
-        parsed[i] = strtod(at + strlen(fields[i]), &end);
-        if (end == at + strlen(fields[i])) { free(data); return -1; }
+        parsed[i] = strtod(at + field_length, &end);
+        if (end == at + field_length) { free(data); return -1; }
     }
     *answered = parsed[0] < 0.0 ? 0 : (int)parsed[0];
     *best_answers = parsed[1] < 0.0 ? 0 : (int)parsed[1];

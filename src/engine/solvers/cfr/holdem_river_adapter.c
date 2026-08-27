@@ -207,8 +207,10 @@ static void hr_apply_action(const void *s, int a, void *out)
 {
     const holdem_river_state_t *st = (const holdem_river_state_t *)s;
     holdem_river_state_t *ns = (holdem_river_state_t *)out;
-    *ns = *st;
     int trace = hr_should_trace();
+    if (st == NULL || ns == NULL)
+        return;
+    *ns = *st;
     if (trace)
     {
         hr_trace_state("before", a, st);

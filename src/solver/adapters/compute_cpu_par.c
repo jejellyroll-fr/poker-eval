@@ -89,11 +89,12 @@ static int cpu_par_update_values(const pe_compute_config_t *config,
                                  double *out_regret, double *out_average)
 {
     double regret = old_regret;
-    double average_delta = update->average_delta;
+    double average_delta;
 
     if (!config || !batch || !update || !out_regret || !out_average ||
         !isfinite(old_regret) || !isfinite(old_average))
         return -1;
+    average_delta = update->average_delta;
     if (config->regret_mode == PE_REGRET_DCFR) {
         pe_dcfr_params_t params = {
             config->dcfr_alpha, config->dcfr_beta, config->dcfr_gamma

@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PE_MONKER_PPT_MAX_EXPRESSION (1024u * 1024u)
+
 typedef struct
 {
     int rank;
@@ -414,7 +416,7 @@ pe_monker_ppt_status_t pe_monker_ppt_count(const char *expression,
     if (*expression == '\0')
         return PE_MONKER_PPT_ERR_EMPTY;
     parser.text = expression;
-    parser.length = strlen(expression);
+    parser.length = strnlen(expression, PE_MONKER_PPT_MAX_EXPRESSION);
     parser.position = 0u;
     status = parse_or(&parser, &root);
     if (status == PE_MONKER_PPT_OK && parser.position != parser.length)

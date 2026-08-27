@@ -788,7 +788,8 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
             return -1;
         child->betting = source->betting;
         child->is_chance = 0;
-        memcpy(child->holes, deal.holes, sizeof(child->holes));
+        for (int p = 0; p < game->rules.player_count; ++p)
+            child->holes[p] = deal.holes[p];
         child->board = MASK_EMPTY;
         child->dead_cards = MASK_EMPTY;
         for (int p = 0; p < game->rules.player_count; ++p)

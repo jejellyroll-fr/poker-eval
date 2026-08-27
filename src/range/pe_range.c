@@ -6,7 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
-#include <math.h>
+#include <float.h>
 
 /* --- Internal Helpers --- */
 
@@ -79,7 +79,8 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
         char *end = NULL;
         *weight_text++ = '\0';
         weight = strtod(weight_text, &end);
-        if (end == weight_text || *end != '\0' || !isfinite(weight) || weight < 0.0)
+        if (end == weight_text || *end != '\0' || weight < 0.0 ||
+            weight > DBL_MAX)
             return 0;
     }
 

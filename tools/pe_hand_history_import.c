@@ -16,6 +16,7 @@
 #define FIELD_SIZE 256
 #define BOARD_SIZE 128
 #define MAX_ROWS 65536
+#define HH_IMPORT_MAX_TEXT 2048u
 
 typedef struct {
     char hand_id[FIELD_SIZE];
@@ -45,9 +46,12 @@ static void trim(char *s)
         ++start;
     }
     if (start != s) {
-        memmove(s, start, strlen(start) + 1u);
+        char *destination = s;
+        while (*start != '\0')
+            *destination++ = *start++;
+        *destination = '\0';
     }
-    n = strlen(s);
+    n = strnlen(s, HH_IMPORT_MAX_TEXT);
     while (n > 0u && isspace((unsigned char)s[n - 1u])) {
         s[--n] = '\0';
     }
@@ -93,7 +97,7 @@ static int split_csv(char *line, char **fields, int max_fields)
 
 static void unquote(char *field)
 {
-    size_t length = strlen(field);
+    size_t length = strnlen(field, FIELD_SIZE);
     if (length >= 2u && field[0] == '"' && field[length - 1u] == '"') {
         memmove(field, field + 1, length - 2u);
         field[length - 2u] = '\0';
@@ -236,7 +240,7 @@ static void json_string(FILE *out, const char *s)
 
 static int starts_with(const char *s, const char *prefix)
 {
-    return strncmp(s, prefix, strlen(prefix)) == 0;
+    return strncmp(s, prefix, strnlen(prefix, 64u)) == 0;
 }
 
 static void extract_board(const char *line, char *out, size_t out_size)
@@ -270,9 +274,8 @@ static int parse_action(const char *line, action_row_t *row)
         const char *candidate = strstr(line, verbs[i]);
         if (candidate != NULL && (hit == NULL || candidate < hit)) {
             hit = candidate;
-            verb_len = strlen(verbs[i]);
-            strncpy(row->action, names[i], sizeof(row->action) - 1u);
-            row->action[sizeof(row->action) - 1u] = '\0';
+            verb_len = strnlen(verbs[i], sizeof(row->action));
+            (void)snprintf(row->action, sizeof(row->action), "%s", names[i]);
         }
     }
     if (hit == NULL) {
@@ -381,9 +384,9 @@ int main(int argc, char **argv)
             if (!parse_action(line, &row)) {
                 continue;
             }
-            strncpy(row.hand_id, hand_id, sizeof(row.hand_id) - 1u);
-            strncpy(row.street, street, sizeof(row.street) - 1u);
-            strncpy(row.board, board, sizeof(row.board) - 1u);
+            (void)snprintf(row.hand_id, sizeof(row.hand_id), "%s", hand_id);
+            (void)snprintf(row.street, sizeof(row.street), "%s", street);
+            (void)snprintf(row.board, sizeof(row.board), "%s", board);
             if (mapping_path != NULL) map_row(&row, mapping, mapping_count);
             rows[row_count++] = row;
         }

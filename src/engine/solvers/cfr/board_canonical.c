@@ -162,15 +162,18 @@ int pe_board_canonical_key(mask_t cards, int n, char *out_key, size_t out_size)
 {
     bc_card_t list[52];
     char best[1 + 2 * 52];
+    size_t best_length;
     int best_perm = 0;
 
     if (!out_key || bc_collect(cards, n, list, 52) != 0)
         return -1;
     if (bc_best_perm(list, n, &best_perm, best) != 0)
         return -1;
-    if (out_size < strlen(best) + 1)
+    best_length = strnlen(best, sizeof(best));
+    if (best_length >= sizeof(best) || out_size < best_length + 1u)
         return -1;
-    memcpy(out_key, best, strlen(best) + 1);
+    for (size_t i = 0u; i <= best_length; ++i)
+        out_key[i] = best[i];
     return 0;
 }
 
@@ -277,7 +280,8 @@ int pe_board_canonicalize_rank_orbit(
             return -1;
         if (!have_best || strcmp(key, best_key) < 0)
         {
-            memcpy(best_key, key, sizeof(best_key));
+            for (size_t i = 0u; i < sizeof(best_key); ++i)
+                best_key[i] = key[i];
             best_mask = canonical;
             if (out_rank_perm)
                 memcpy(out_rank_perm, rank_permutations[p], 13 * sizeof(int));

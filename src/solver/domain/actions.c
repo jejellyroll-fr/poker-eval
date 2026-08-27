@@ -1,10 +1,12 @@
 #include <poker_eval/solver/pe_actions.h>
 
-#include <math.h>
+#include <float.h>
 
 static int finite_nonnegative(double value)
 {
-    return isfinite(value) && value >= 0.0;
+    /* Avoid the MinGW isfinite macro selecting its float overload under
+     * -Wconversion; NaN fails both ordered comparisons. */
+    return value >= 0.0 && value <= DBL_MAX;
 }
 
 pe_action_t pe_action_invalid(void)

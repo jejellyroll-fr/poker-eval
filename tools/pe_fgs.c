@@ -10,7 +10,7 @@ static int parse_values(const char *text, double *values, int max_values)
     char buffer[2048];
     char *cursor;
     int count = 0;
-    if (!text || strlen(text) >= sizeof(buffer)) return -1;
+    if (!text || strnlen(text, sizeof(buffer)) >= sizeof(buffer)) return -1;
     snprintf(buffer, sizeof(buffer), "%s", text);
     cursor = buffer;
     while (cursor && count < max_values) {
@@ -66,7 +66,7 @@ int main(int argc, char **argv)
     double pot = 0.0;
     int depth = 0;
     int generate = 0;
-    icm_tournament_t base, scenarios[256];
+    static icm_tournament_t base, scenarios[256];
     icm_payout_structure_t payout = {0};
     icm_result_t result = {0};
     double probabilities[256];

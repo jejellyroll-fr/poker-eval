@@ -180,7 +180,7 @@ _findBestLowballHand(uint32 ss_orig, uint32 sc_orig, uint32 sd_orig, uint32 sh_o
             + LowHandVal_FOURTH_CARD_VALUE(out_quads[3]);
     }
     // Si aucun cas trouvé (devrait être impossible)
-    assert(!"No valid lowball hand found in _findBestLowballHand");
+    assert(0 && "No valid lowball hand found in _findBestLowballHand");
     return 0xFFFFFFFF;
 }
 
@@ -256,12 +256,12 @@ StdDeck_Lowball_EVAL(StdDeck_CardMask cards, int n_cards) {
     
     default:
       /* Should not reach here */
-      assert(!"Invalid number of ranks in eval_low");
+      assert(0 && "Invalid number of ranks in eval_low");
       return 0;
     };
   };
 
-  assert(!"Logic error in eval_low");
+  assert(0 && "Logic error in eval_low");
   return 0;
 }
 

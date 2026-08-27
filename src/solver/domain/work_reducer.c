@@ -57,10 +57,12 @@ int pe_work_reducer_accept(pe_work_reducer_t *reducer,
         if (records_overlap(&reducer->records[i].result, result))
             return -1;
     if (result->delta_size != 0u) {
+        size_t delta_index;
         delta_storage = (uint8_t *)malloc(result->delta_size);
         if (!delta_storage)
             return -1;
-        memcpy(delta_storage, result->delta, result->delta_size);
+        for (delta_index = 0u; delta_index < result->delta_size; ++delta_index)
+            delta_storage[delta_index] = result->delta[delta_index];
     }
     reducer->records[reducer->count].worker_id = worker_id;
     reducer->records[reducer->count].result = *result;

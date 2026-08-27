@@ -26,7 +26,11 @@ jobs:
             binary: build/tools/poker-eval-trainer-gui
           # Windows uses the project preset (Visual Studio generator, static
           # libs) and stages SDL2.dll next to the executable for the smoke.
-          - os: windows-latest
+          # The preset uses the Visual Studio 17 2022 generator. Keep this
+          # runner aligned with that generator instead of windows-latest,
+          # whose image can move to a newer Visual Studio before the preset
+          # is updated.
+          - os: windows-2022
             configure: cmake --preset windows-msvc
             build: >-
               cmake --build build/windows-msvc --target poker-eval-trainer-gui

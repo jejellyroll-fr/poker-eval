@@ -42,6 +42,13 @@ here instead of silently skipping it.")
         message(STATUS "CUDA found, building CUDA acceleration")
 
         set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -O3 -arch=sm_50)
+        if(UNIX)
+            # FindCUDA's legacy CUDA_ADD_LIBRARY path does not consistently
+            # propagate POSITION_INDEPENDENT_CODE to generated device objects.
+            # The solver is shared on Linux, so pass the host PIC flag through
+            # nvcc explicitly for those objects.
+            list(APPEND CUDA_NVCC_FLAGS -Xcompiler=-fPIC)
+        endif()
 
         cuda_add_library(poker_cuda STATIC
             cuda/eval_cuda_kernel.cu

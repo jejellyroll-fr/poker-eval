@@ -1364,7 +1364,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    pe_monker_tree_header_t monker_header;
+    pe_monker_tree_header_t monker_header = {0};
     int binary_tree = 0;
     mpf_tree_def_t *tree = NULL;
     if (!load_cli_tree(tree_path, &tree, &monker_header, &binary_tree))

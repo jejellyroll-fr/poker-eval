@@ -293,16 +293,21 @@ int pe_cfr_save_storage_zstd(cfr_storage_t *storage, const char *path, int level
         goto cleanup_read;
     }
     f = fopen(path, "wb");
-    if (!f || fwrite(&hdr, sizeof(hdr), 1u, f) != 1u ||
+    if (f == NULL)
+        goto cleanup_write;
+    if (fwrite(&hdr, sizeof(hdr), 1u, f) != 1u ||
         fwrite(compressed, 1u, compressed_size, f) != compressed_size)
         goto cleanup_write;
     result = 0;
 
 cleanup_write:
-    if (f && fclose(f) != 0)
-        result = -1;
+    if (f != NULL) {
+        if (fclose(f) != 0)
+            result = -1;
+        f = NULL;
+    }
 cleanup_read:
-    if (f)
+    if (f != NULL)
         fclose(f);
     free(compressed);
     free(raw);

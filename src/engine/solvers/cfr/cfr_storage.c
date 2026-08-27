@@ -977,17 +977,22 @@ static uint64_t cfr_delta_get_u64(const uint8_t *in)
 
 static void cfr_delta_put_double(uint8_t *out, double value)
 {
-    uint64_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    cfr_delta_put_u64(out, bits);
+    union {
+        double value;
+        uint64_t bits;
+    } converted;
+    converted.value = value;
+    cfr_delta_put_u64(out, converted.bits);
 }
 
 static double cfr_delta_get_double(const uint8_t *in)
 {
-    uint64_t bits = cfr_delta_get_u64(in);
-    double value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
+    union {
+        double value;
+        uint64_t bits;
+    } converted;
+    converted.bits = cfr_delta_get_u64(in);
+    return converted.value;
 }
 
 static int cfr_delta_entry_before(const void *left_ptr, const void *right_ptr)

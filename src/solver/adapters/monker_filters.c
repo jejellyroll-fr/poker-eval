@@ -9,6 +9,7 @@
 #include <string.h>
 
 #define PE_MONKER_FILTER_MAX_DEPTH 256u
+#define PE_MONKER_FILTER_MAX_EXPRESSION (1024u * 1024u)
 
 static const char *const filter_keywords[] = {
     "street", "player", "pot", "spr", "invested", "committed",
@@ -286,7 +287,7 @@ pe_monker_filter_status_t pe_monker_filter_parse(
     if (*expression == '\0')
         return PE_MONKER_FILTER_ERR_EMPTY;
     parser.expression = expression;
-    parser.length = strlen(expression);
+    parser.length = strnlen(expression, PE_MONKER_FILTER_MAX_EXPRESSION);
     parser.position = 0u;
     parser.depth = 0u;
     parser.max_depth = 0u;

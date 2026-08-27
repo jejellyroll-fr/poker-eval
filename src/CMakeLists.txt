@@ -133,7 +133,7 @@ if(POKER_EVAL_WITH_ZLIB)
     target_link_libraries(poker_solver PRIVATE ZLIB::ZLIB)
 endif()
 
-if(OpenMP_C_FOUND)
+if(POKER_EVAL_WITH_OPENMP)
     target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)
 endif()
 

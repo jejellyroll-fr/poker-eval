@@ -52,11 +52,12 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
                                  double *out_regret, double *out_average)
 {
     double regret = old_regret;
-    double average_delta = update->average_delta;
+    double average_delta;
 
     if (!config || !batch || !update || !out_regret || !out_average ||
         !isfinite(old_regret) || !isfinite(old_average))
         return -1;
+    average_delta = update->average_delta;
 
     if (config->regret_mode == PE_REGRET_DCFR) {
         pe_dcfr_params_t params = {
@@ -181,10 +182,15 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
            no change to become fail-before-write. */
         dest_regrets[group_index] = regrets;
         dest_average[group_index] = average;
-        memcpy(scratch_regrets + group->offset, regrets,
-               (size_t)actions * combos * sizeof(double));
-        memcpy(scratch_average + group->offset, average,
-               (size_t)actions * combos * sizeof(double));
+        {
+            size_t value_count = (size_t)actions * (size_t)combos;
+            size_t value_index;
+            for (value_index = 0u; value_index < value_count; ++value_index)
+            {
+                scratch_regrets[group->offset + value_index] = regrets[value_index];
+                scratch_average[group->offset + value_index] = average[value_index];
+            }
+        }
         regrets = scratch_regrets + group->offset;
         average = scratch_average + group->offset;
 

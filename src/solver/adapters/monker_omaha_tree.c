@@ -106,12 +106,15 @@ static int terminal_value(tree_walk_t *walk,
 static int tree_apply_action(const mpf_tree_node_t *node, int action,
                              pe_betting_state_t *state)
 {
-    const int player = node->acting_player;
+    int player;
     double need;
     double commitment = 0.0;
 
-    if (!node || !state || player < 0 || player >= state->player_count ||
+    if (!node || !state ||
         action < 0 || action >= node->action_count)
+        return -1;
+    player = node->acting_player;
+    if (player < 0 || player >= state->player_count)
         return -1;
     if (!state->active[player])
         return -1;

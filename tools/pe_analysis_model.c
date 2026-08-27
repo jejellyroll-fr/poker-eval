@@ -103,14 +103,16 @@ int pe_analysis_icm_decision(
     win_stacks[request->opponent_index] -= effective_win;
     lose_stacks[request->hero_index] -= effective_loss;
     lose_stacks[request->opponent_index] += effective_loss;
-    memcpy(input.stacks, win_stacks, sizeof(input.stacks));
+    for (int i = 0; i < ICM_MAX_PLAYERS; ++i)
+        input.stacks[i] = win_stacks[i];
     if (pe_icm_calculate(&input, &win_result) != 0)
     {
         set_error(out->error, sizeof(out->error),
                   "ICM refused the win outcome");
         return -1;
     }
-    memcpy(input.stacks, lose_stacks, sizeof(input.stacks));
+    for (int i = 0; i < ICM_MAX_PLAYERS; ++i)
+        input.stacks[i] = lose_stacks[i];
     if (pe_icm_calculate(&input, &lose_result) != 0)
     {
         set_error(out->error, sizeof(out->error),

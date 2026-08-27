@@ -1158,7 +1158,8 @@ static pe_monker_mkr_status_t java_read_array(java_reader_t *reader,
             if (status == PE_MONKER_MKR_OK)
                 out->value.ints.data[index] = (int32_t)java_be32(data);
         }
-    } else if (strlen(desc->name) >= 2u && desc->name[1] == '[') {
+    } else if (strnlen(desc->name, sizeof(desc->name)) >= 2u &&
+               desc->name[1] == '[') {
         out->kind = JAVA_VALUE_OBJECTS;
         out->value.objects.count = count;
         out->value.objects.items = count == 0u
@@ -1291,9 +1292,9 @@ static pe_monker_mkr_status_t parse_java_stream(const unsigned char *data,
             uint32_t length;
             reader.position += 1u;
             if (token == JAVA_TC_BLOCKDATA) {
-                unsigned char small;
-                status = java_u8(&reader, &small);
-                length = small;
+                unsigned char block_length;
+                status = java_u8(&reader, &block_length);
+                length = block_length;
             } else {
                 status = java_take(&reader, 4u, &raw);
                 length = (status == PE_MONKER_MKR_OK) ? java_be32(raw) : 0u;
@@ -1610,6 +1611,7 @@ void pe_monker_mkr_strategy_free(pe_monker_mkr_strategy_t *strategy)
 static pe_monker_mkr_status_t slot_from_value(const java_value_t *value,
                                               pe_monker_mkr_slot_t *out)
 {
+    uint32_t i;
     memset(out, 0, sizeof(*out));
     if (value->kind == JAVA_VALUE_NULL) {
         out->kind = PE_MONKER_SLOT_ABSENT;
@@ -1634,8 +1636,8 @@ static pe_monker_mkr_status_t slot_from_value(const java_value_t *value,
         out->ints = (int32_t *)malloc((size_t)out->count * sizeof(int32_t));
         if (out->ints == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        memcpy(out->ints, value->value.ints.data,
-               (size_t)out->count * sizeof(int32_t));
+        for (i = 0u; i < out->count; ++i)
+            out->ints[i] = value->value.ints.data[i];
         return PE_MONKER_MKR_OK;
     }
     return PE_MONKER_MKR_ERR_BAD_ARCHIVE;

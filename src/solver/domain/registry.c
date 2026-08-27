@@ -164,7 +164,7 @@ uint64_t pe_cap_from_name(const char *name)
     if (name == NULL)
         return 0;
 
-    len = strlen(name);
+    len = strnlen(name, 128u);
     if (len == 0)
         return 0;
 
@@ -326,7 +326,8 @@ int pe_caps_parse(const char *text, uint64_t *out_caps)
 
             if (len > sizeof(name) - 1)
                 return token_index;
-            memcpy(name, start, len);
+            for (size_t i = 0u; i < len; ++i)
+                name[i] = start[i];
             name[len] = '\0';
 
             bit = pe_cap_from_name(name);
@@ -449,7 +450,7 @@ pe_algorithm_preset_t pe_preset_from_name(const char *name)
     if (name == NULL)
         return PE_PRESET_COUNT;
 
-    len = strlen(name);
+    len = strnlen(name, 128u);
     if (len == 0)
         return PE_PRESET_COUNT;
 
@@ -517,7 +518,7 @@ pe_traversal_mode_t pe_traversal_from_name(const char *name)
 
     if (name == NULL || *name == '\0')
         return PE_TRAVERSAL_COUNT;
-    length = strlen(name);
+    length = strnlen(name, 128u);
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
         if (pe_name_equal_ci(names[i], name, length))
             return (pe_traversal_mode_t)i;
@@ -538,7 +539,7 @@ pe_regret_mode_t pe_regret_from_name(const char *name)
 
     if (name == NULL || *name == '\0')
         return PE_REGRET_COUNT;
-    length = strlen(name);
+    length = strnlen(name, 128u);
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
         if (pe_name_equal_ci(names[i], name, length))
             return (pe_regret_mode_t)i;
@@ -559,7 +560,7 @@ pe_policy_mode_t pe_policy_from_name(const char *name)
 
     if (name == NULL || *name == '\0')
         return PE_POLICY_COUNT;
-    length = strlen(name);
+    length = strnlen(name, 128u);
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
         if (pe_name_equal_ci(names[i], name, length))
             return (pe_policy_mode_t)i;
@@ -584,7 +585,7 @@ pe_averaging_mode_t pe_averaging_from_name(const char *name)
 
     if (name == NULL || *name == '\0')
         return PE_AVG_COUNT;
-    length = strlen(name);
+    length = strnlen(name, 128u);
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
         if (pe_name_equal_ci(names[i], name, length))
             return (pe_averaging_mode_t)i;
@@ -611,7 +612,7 @@ pe_precision_mode_t pe_precision_from_name(const char *name)
 
     if (name == NULL || *name == '\0')
         return PE_PREC_COUNT;
-    length = strlen(name);
+    length = strnlen(name, 128u);
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
         if (pe_name_equal_ci(names[i], name, length))
             return (pe_precision_mode_t)i;
@@ -634,7 +635,7 @@ pe_compute_kind_t pe_compute_kind_from_name(const char *name)
 
     if (name == NULL || *name == '\0')
         return PE_COMPUTE_COUNT;
-    length = strlen(name);
+    length = strnlen(name, 128u);
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
     {
         if (pe_name_equal_ci(names[i], name, length))

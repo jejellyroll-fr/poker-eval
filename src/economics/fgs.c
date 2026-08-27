@@ -138,7 +138,8 @@ static int fgs_generate_node(fgs_generator_t *gen, const double *stacks, int dep
             double moved = 0.0;
             int child;
             int j;
-            memcpy(child_stacks, stacks, sizeof(child_stacks));
+            for (j = 0; j < ICM_MAX_PLAYERS; ++j)
+                child_stacks[j] = stacks[j];
             for (j = 0; j < active_count; ++j) {
                 int loser = active_index[j];
                 double taken;

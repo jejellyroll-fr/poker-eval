@@ -618,7 +618,7 @@ pe_error_t pe_cfr_save(pe_cfr_handle_t cfr, const char* filepath) {
     size_t length;
     if (!cfr) return PE_ERROR_INVALID_HANDLE;
     if (!cfr->ready || !filepath) return PE_ERROR_INVALID_ARGUMENT;
-    length = strlen(filepath);
+    length = strnlen(filepath, 4096u);
     if ((length >= 5u && strcmp(filepath + length - 5u, ".zstd") == 0) ||
         (length >= 4u && strcmp(filepath + length - 4u, ".zst") == 0))
         return pe_cfr_save_storage_zstd(cfr->storage, filepath, 0) == 0
