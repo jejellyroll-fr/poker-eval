@@ -70,15 +70,15 @@ static void test_strip_trailing_colon(void)
     char player[64];
     /* Action-line prefixes lose their ':' (was kept, e.g. "PlayerB:"). */
     snprintf(player, sizeof(player), "%s", "PlayerB:");
-    hh_strip_trailing_colon(player);
+    hh_strip_trailing_colon(player, sizeof(player));
     assert(strcmp(player, "PlayerB") == 0);
     /* Names without a colon are untouched. */
     snprintf(player, sizeof(player), "%s", "Hero");
-    hh_strip_trailing_colon(player);
+    hh_strip_trailing_colon(player, sizeof(player));
     assert(strcmp(player, "Hero") == 0);
     /* Empty input stays empty. */
     player[0] = '\0';
-    hh_strip_trailing_colon(player);
+    hh_strip_trailing_colon(player, sizeof(player));
     assert(player[0] == '\0');
 }
 

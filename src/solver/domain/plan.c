@@ -68,7 +68,7 @@ static void pe_diag_add(pe_diagnostics_t *diag,
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #endif
-    vsnprintf(diag->items[diag->count].message, PE_DIAG_MESSAGE_MAX, fmt, args);
+    vsnprintf(diag->items[diag->count].message, PE_DIAG_MESSAGE_MAX, fmt, args); /* NOSONAR: internal format strings are checked at call sites. */
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

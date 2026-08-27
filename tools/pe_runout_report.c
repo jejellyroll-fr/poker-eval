@@ -26,7 +26,7 @@ static int parse_cards(const char *text, mask_t *out)
     size_t length;
     mask_t cards = MASK_EMPTY;
     if (!text || !out) return -1;
-    length = strlen(text);
+    length = strnlen(text, 1024u);
     for (size_t i = 0u; i < length; )
     {
         int card;

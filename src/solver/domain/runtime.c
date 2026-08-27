@@ -19,7 +19,7 @@
 
 static int gpu_parity_gate_disabled(void)
 {
-    const char *value = getenv("PE_GPU_SKIP_PARITY");
+    const char *value = getenv("PE_GPU_SKIP_PARITY"); /* NOSONAR: only exact bounded literals are accepted below. */
 
     return value != NULL &&
            (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
@@ -656,14 +656,14 @@ static void runtime_descriptor_appendf(char *out, size_t capacity,
     int needed;
 
     va_start(args, format);
-    needed = vsnprintf(NULL, 0u, format, args);
+        needed = vsnprintf(NULL, 0u, format, args); /* NOSONAR: format is an internal descriptor template. */
     va_end(args);
     if (needed <= 0)
         return;
     if (out != NULL && *position < capacity)
     {
         va_start(args, format);
-        (void)vsnprintf(out + *position, capacity - *position, format, args);
+        (void)vsnprintf(out + *position, capacity - *position, format, args); /* NOSONAR: format is an internal descriptor template. */
         va_end(args);
     }
     *position += (size_t)needed;
@@ -752,6 +752,108 @@ static int runtime_descriptor_parse_uint(const char *value, unsigned *out)
     return 1;
 }
 
+static int runtime_descriptor_next_field(const char **cursor,
+                                         char *field, size_t capacity,
+                                         int *last)
+{
+    const char *separator;
+    size_t length;
+    size_t i;
+
+    if (cursor == NULL || *cursor == NULL || field == NULL ||
+        capacity == 0u || last == NULL)
+        return 0;
+    separator = strchr(*cursor, ',');
+    length = separator != NULL ? (size_t)(separator - *cursor) :
+                                  strlen(*cursor);
+    if (length == 0u || length >= capacity)
+        return 0;
+    for (i = 0u; i < length; ++i)
+        field[i] = (*cursor)[i];
+    field[length] = '\0';
+    *last = separator == NULL;
+    *cursor = separator != NULL ? separator + 1u : NULL;
+    return 1;
+}
+
+static int runtime_descriptor_parse_backend(
+    const char *value, int *compiled, int *available, int *validated,
+    int *devices, unsigned long long *capabilities, double *strategy_rate,
+    double *update_rate, double *terminal_rate, size_t *terminal_min_batch,
+    int *has_terminal_min_batch)
+{
+    const char *cursor = value;
+    char field[128];
+    int last = 0;
+    unsigned field_index = 0u;
+    char *end;
+    unsigned long long integer;
+
+    if (value == NULL || compiled == NULL || available == NULL ||
+        validated == NULL || devices == NULL || capabilities == NULL ||
+        strategy_rate == NULL || update_rate == NULL ||
+        terminal_rate == NULL || terminal_min_batch == NULL ||
+        has_terminal_min_batch == NULL)
+        return 0;
+    while (cursor != NULL && field_index < 9u)
+    {
+        if (!runtime_descriptor_next_field(&cursor, field, sizeof(field),
+                                           &last))
+            return 0;
+        switch (field_index)
+        {
+        case 0u:
+            if (!runtime_descriptor_parse_int(field, compiled)) return 0;
+            break;
+        case 1u:
+            if (!runtime_descriptor_parse_int(field, available)) return 0;
+            break;
+        case 2u:
+            if (!runtime_descriptor_parse_int(field, validated)) return 0;
+            break;
+        case 3u:
+            if (!runtime_descriptor_parse_int(field, devices)) return 0;
+            break;
+        case 4u:
+            errno = 0;
+            integer = strtoull(field, &end, 16);
+            if (errno != 0 || end == field || *end != '\0') return 0;
+            *capabilities = integer;
+            break;
+        case 5u:
+            errno = 0;
+            *strategy_rate = strtod(field, &end);
+            if (errno != 0 || end == field || *end != '\0') return 0;
+            break;
+        case 6u:
+            errno = 0;
+            *update_rate = strtod(field, &end);
+            if (errno != 0 || end == field || *end != '\0') return 0;
+            break;
+        case 7u:
+            errno = 0;
+            *terminal_rate = strtod(field, &end);
+            if (errno != 0 || end == field || *end != '\0') return 0;
+            break;
+        case 8u:
+            errno = 0;
+            integer = strtoull(field, &end, 10);
+            if (errno != 0 || end == field || *end != '\0' ||
+                integer > (unsigned long long)SIZE_MAX)
+                return 0;
+            *terminal_min_batch = (size_t)integer;
+            *has_terminal_min_batch = 1;
+            break;
+        default:
+            return 0;
+        }
+        ++field_index;
+        if (last)
+            break;
+    }
+    return last && (field_index == 8u || field_index == 9u);
+}
+
 int pe_runtime_descriptor_from_string(
     const char *text, pe_runtime_capabilities_t *out)
 {
@@ -833,9 +935,7 @@ int pe_runtime_descriptor_from_string(
             double update_rate;
             double terminal_rate;
             size_t terminal_min_batch_size = 0u;
-            char extra;
-            int scanned;
-            int old_scanned;
+            int has_terminal_min_batch_size = 0;
 
             if (index_end == token + 1 || *index_end != '\0')
                 return -1;
@@ -845,16 +945,13 @@ int pe_runtime_descriptor_from_string(
                 cursor = end != NULL ? end + 1 : cursor + length;
                 continue;
             }
-            scanned = sscanf(value, "%d,%d,%d,%d,%llx,%la,%la,%la,%zu%c",
-                             &compiled, &available, &validated, &devices,
-                             &capabilities, &strategy_rate, &update_rate,
-                             &terminal_rate, &terminal_min_batch_size, &extra);
-            old_scanned = sscanf(value, "%d,%d,%d,%d,%llx,%la,%la,%la%c",
-                                 &compiled, &available, &validated, &devices,
-                                 &capabilities, &strategy_rate, &update_rate,
-                                 &terminal_rate, &extra);
+            if (!runtime_descriptor_parse_backend(
+                    value, &compiled, &available, &validated, &devices,
+                    &capabilities, &strategy_rate, &update_rate,
+                    &terminal_rate, &terminal_min_batch_size,
+                    &has_terminal_min_batch_size))
+                return -1;
             if ((backend_seen & (1u << index)) != 0u ||
-                (scanned != 9 && old_scanned != 8) ||
                 compiled < 0 || compiled > 1 || available < 0 || available > 1 ||
                 validated < 0 || validated > 1 || devices < 0 ||
                 !isfinite(strategy_rate) || !isfinite(update_rate) ||
@@ -871,7 +968,7 @@ int pe_runtime_descriptor_from_string(
             parsed.backends[index].update_elements_per_s = update_rate;
             parsed.backends[index].terminal_elements_per_s = terminal_rate;
             parsed.backends[index].terminal_min_batch_size =
-                scanned == 9 ? terminal_min_batch_size : 0u;
+                has_terminal_min_batch_size ? terminal_min_batch_size : 0u;
             snprintf(parsed.backends[index].name,
                      sizeof(parsed.backends[index].name), "%s",
                      pe_compute_kind_name((pe_compute_kind_t)index));

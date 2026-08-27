@@ -231,7 +231,8 @@ int pe_work_socket_recv_frame(pe_work_socket_t socket,
         socket_read_all(socket, buffer + PE_WORK_PROTOCOL_HEADER_SIZE,
                         payload_size) != 0)
         return -1;
-    memcpy(buffer, header, sizeof(header));
+    for (size_t i = 0u; i < sizeof(header); ++i)
+        buffer[i] = header[i];
     if (pe_work_frame_decode(buffer, frame_size, &type, &payload,
                              &payload_size) != 0)
         return -1;

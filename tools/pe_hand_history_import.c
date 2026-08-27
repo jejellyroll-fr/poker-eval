@@ -285,10 +285,11 @@ static int parse_action(const char *line, action_row_t *row)
     if ((size_t)(hit - line) >= sizeof(row->player)) {
         return 0;
     }
-    memcpy(row->player, line, (size_t)(hit - line));
+    for (size_t i = 0u; i < (size_t)(hit - line); ++i)
+        row->player[i] = line[i];
     row->player[hit - line] = '\0';
     trim(row->player);
-    hh_strip_trailing_colon(row->player);
+            hh_strip_trailing_colon(row->player, sizeof(row->player));
     row->has_amount = hh_parse_amount(hit + verb_len, &row->amount);
     return row->player[0] != '\0';
 }

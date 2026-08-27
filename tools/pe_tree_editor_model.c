@@ -47,15 +47,29 @@ static int buffer_appendf(pe_tree_editor_buffer_t *buffer, const char *format, .
         return 0;
     va_start(args, format);
     va_copy(copy, args);
-    length = vsnprintf(NULL, 0, format, copy);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
+    length = vsnprintf(NULL, 0, format, copy); /* NOSONAR: format is an internal tree serializer template. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     va_end(copy);
     if (length < 0 || !buffer_reserve(buffer, (size_t)length))
     {
         va_end(args);
         return 0;
     }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     (void)vsnprintf(buffer->data + buffer->length,
-                    buffer->capacity - buffer->length, format, args);
+                    buffer->capacity - buffer->length, format, args); /* NOSONAR: format is an internal tree serializer template. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     va_end(args);
     buffer->length += (size_t)length;
     return 1;

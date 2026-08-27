@@ -8,7 +8,7 @@ static int parse_values(const char *text, double *values, int max_values)
 {
     char buffer[2048], *cursor;
     int count = 0;
-    if (!text || strlen(text) >= sizeof(buffer)) return -1;
+    if (!text || strnlen(text, sizeof(buffer)) >= sizeof(buffer)) return -1;
     snprintf(buffer, sizeof(buffer), "%s", text);
     cursor = buffer;
     while (cursor && count < max_values) {

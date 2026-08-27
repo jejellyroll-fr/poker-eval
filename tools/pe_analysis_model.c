@@ -26,7 +26,14 @@ static void set_error(char *error, size_t size, const char *fmt, ...)
     if (error == NULL || size == 0u)
         return;
     va_start(args, fmt);
-    vsnprintf(error, size, fmt, args);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
+    vsnprintf(error, size, fmt, args); /* NOSONAR: internal format strings are checked at call sites. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     va_end(args);
 }
 

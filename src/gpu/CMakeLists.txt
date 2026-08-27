@@ -256,6 +256,15 @@ here instead of silently skipping it.")
             PUBLIC poker_core
             PRIVATE ${GPU_LIBRARIES})
 
+        # The shared CUDA regret primitive is intentionally C-like but is
+        # compiled as C++ by nvcc because it uses nothrow new/delete.  A C
+        # executable linking this archive does not automatically pull the C++
+        # runtime, which otherwise leaves operator new/delete unresolved on
+        # Linux CUDA builds.  Propagate the host C++ runtime with the archive.
+        if(CUDA_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(poker_gpu_unified PUBLIC stdc++)
+        endif()
+
         if(CUDA_FOUND)
             target_compile_definitions(poker_gpu_unified PRIVATE HAVE_CUDA)
             target_compile_definitions(poker_gpu_unified PRIVATE ENABLE_CUDA)

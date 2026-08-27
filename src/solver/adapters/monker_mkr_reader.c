@@ -326,7 +326,8 @@ pe_monker_mkr_status_t pe_monker_mkr_entry_read(
         if (result == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
         if (entry->uncompressed_size != 0u)
-            memcpy(result, file->data + data_offset, entry->uncompressed_size);
+            for (size_t i = 0u; i < entry->uncompressed_size; ++i)
+                result[i] = file->data[data_offset + i];
         *out_data = result;
         *out_size = entry->uncompressed_size;
         return PE_MONKER_MKR_OK;
@@ -441,8 +442,8 @@ pe_monker_mkr_status_t pe_monker_mkr_read(const char *path,
     unsigned char *data = NULL;
     size_t file_size = 0u;
     size_t eocd_offset;
-    size_t central_offset;
-    size_t central_size;
+    size_t central_offset = 0u;
+    size_t central_size = 0u;
     size_t position;
     uint16_t disk;
     uint16_t central_disk;
@@ -1033,7 +1034,11 @@ static pe_monker_mkr_status_t java_read_primitive(java_reader_t *reader,
         if (status != PE_MONKER_MKR_OK)
             return status;
         bits = java_be64(data);
-        memcpy(&out->value.real, &bits, sizeof(bits));
+        {
+            union { uint64_t bits; double real; } value_bits;
+            value_bits.bits = bits;
+            out->value.real = value_bits.real;
+        }
         out->kind = JAVA_VALUE_DOUBLE;
         return PE_MONKER_MKR_OK;
     }
@@ -1130,7 +1135,8 @@ static pe_monker_mkr_status_t java_read_array(java_reader_t *reader,
             return PE_MONKER_MKR_ERR_NO_MEMORY;
         status = java_take(reader, count, &data);
         if (status == PE_MONKER_MKR_OK && count != 0u)
-            memcpy(out->value.bytes.data, data, count);
+            for (uint32_t i = 0u; i < count; ++i)
+                out->value.bytes.data[i] = data[i];
     } else if (strcmp(desc->name, "[S") == 0) {
         out->kind = JAVA_VALUE_SHORTS;
         out->value.shorts.count = count;
@@ -1626,7 +1632,8 @@ static pe_monker_mkr_status_t slot_from_value(const java_value_t *value,
         out->bytes = (unsigned char *)malloc(out->count);
         if (out->bytes == NULL)
             return PE_MONKER_MKR_ERR_NO_MEMORY;
-        memcpy(out->bytes, value->value.bytes.data, out->count);
+        for (uint32_t i = 0u; i < out->count; ++i)
+            out->bytes[i] = value->value.bytes.data[i];
         return PE_MONKER_MKR_OK;
     }
     if (value->kind == JAVA_VALUE_INTS) {

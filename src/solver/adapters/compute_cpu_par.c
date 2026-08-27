@@ -7,6 +7,7 @@
 
 #include "compute_simd.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -204,12 +205,14 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
                                   pe_strategy_batch_t *out)
 {
     const pe_cpu_par_t *backend = (const pe_cpu_par_t *)self;
-    size_t infoset;
+    int infoset;
 
     if (!backend || !in || !out || (in->count != 0u &&
         (!in->offsets || !in->action_counts || !in->regrets)) ||
         (out->capacity != 0u && !out->strategies) ||
         out->capacity < (in->count != 0u ? in->offsets[in->count] : 0u))
+        return -1;
+    if (in->count > (size_t)INT_MAX)
         return -1;
     if (in->count == 0u)
     {
@@ -254,8 +257,8 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(backend->threads)
 #endif
-    for (infoset = 0u; infoset < in->count; ++infoset)
-        cpu_par_strategy_one(&backend->config, in, out, infoset);
+    for (infoset = 0; infoset < (int)in->count; ++infoset)
+        cpu_par_strategy_one(&backend->config, in, out, (size_t)infoset);
     out->count = in->count;
     return 0;
 }
@@ -265,9 +268,11 @@ static int cpu_par_apply_update_batch(void *self,
 {
     const pe_cpu_par_t *backend = (const pe_cpu_par_t *)self;
     pe_update_target_t *targets = NULL;
-    size_t i;
+    int i;
 
-    if (!backend || !batch || (batch->count != 0u && !batch->items) ||
+    if (!backend || !batch || batch->count > (size_t)INT_MAX ||
+        batch->soa.group_count > (size_t)INT_MAX ||
+        (batch->count != 0u && !batch->items) ||
         (batch->soa.group_count != 0u &&
          (batch->soa.groups == NULL || batch->soa.deltas == NULL ||
           batch->soa.average_deltas == NULL)))
@@ -276,7 +281,7 @@ static int cpu_par_apply_update_batch(void *self,
     if (batch->soa.group_count != 0u)
     {
         pe_soa_target_t *groups;
-        size_t group_index;
+        int group_index;
         int failed = 0;
 
         if (backend->config.storage == NULL ||
@@ -294,7 +299,7 @@ static int cpu_par_apply_update_batch(void *self,
 
         /* Resolve each infoset once. The expensive update math is performed
            by the parallel loop below, not by a serial validation pass. */
-        for (group_index = 0u; group_index < batch->soa.group_count;
+        for (group_index = 0; group_index < (int)batch->soa.group_count;
              ++group_index)
         {
             const pe_update_group_t *group = &batch->soa.groups[group_index];
@@ -410,8 +415,8 @@ static int cpu_par_apply_update_batch(void *self,
                without writing either. */
             if (fast_safe)
             {
-                for (group_index = 0u;
-                     group_index < batch->soa.group_count && fast_safe;
+                for (group_index = 0;
+                     group_index < (int)batch->soa.group_count && fast_safe;
                      ++group_index)
                 {
                     const pe_update_group_t *group =
@@ -481,7 +486,7 @@ static int cpu_par_apply_update_batch(void *self,
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(backend->threads)
 #endif
-        for (group_index = 0u; group_index < batch->soa.group_count;
+        for (group_index = 0; group_index < (int)batch->soa.group_count;
              ++group_index)
         {
             const pe_update_group_t *group = groups[group_index].group;
@@ -549,7 +554,7 @@ static int cpu_par_apply_update_batch(void *self,
                         &out_regrets[slot], &out_average[slot]) != 0)
                 {
 #ifdef _OPENMP
-#pragma omp atomic write
+#pragma omp critical(pe_cpu_par_failed)
 #endif
                     failed = 1;
                     break;
@@ -565,7 +570,7 @@ static int cpu_par_apply_update_batch(void *self,
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(backend->threads)
 #endif
-            for (group_index = 0u; group_index < batch->soa.group_count;
+            for (group_index = 0; group_index < (int)batch->soa.group_count;
                  ++group_index)
             {
                 const pe_update_group_t *group = groups[group_index].group;

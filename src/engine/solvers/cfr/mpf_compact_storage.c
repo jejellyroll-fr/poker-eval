@@ -145,7 +145,7 @@ static void pe_sol_write_cb(uint64_t key,
     }
     /* Guarantee the quantized row sums to PE_SOL_QMAX by adjusting the largest
      * bucket, eliminating systematic drift in the distribution. */
-    if (n > 0 && scaled_sum != (double)PE_SOL_QMAX)
+    if (n > 0 && fabs(scaled_sum - (double)PE_SOL_QMAX) > 0.0)
     {
         long diff = (long)PE_SOL_QMAX - (long)scaled_sum;
         int max_idx = 0;
@@ -188,7 +188,8 @@ int pe_cfr_save_storage(cfr_storage_t *storage, const char *path)
 
     pe_sol_header_t hdr;
     memset(&hdr, 0, sizeof(hdr));
-    memcpy(hdr.magic, PE_SOL_MAGIC, 8);
+    for (size_t i = 0u; i < sizeof(hdr.magic); ++i)
+        hdr.magic[i] = PE_SOL_MAGIC[i];
     hdr.version = PE_SOL_VERSION;
     hdr.flags = 0; /* 16-bit fixed-point quantization */
     hdr.infoset_count = (uint64_t)count;
@@ -262,7 +263,8 @@ int pe_cfr_save_storage_zstd(cfr_storage_t *storage, const char *path, int level
     raw = (unsigned char *)malloc(raw_size);
     if (!raw || fread(raw, 1u, raw_size, f) != raw_size)
         goto cleanup_read;
-    memcpy(&hdr, raw, sizeof(hdr));
+    for (size_t i = 0u; i < sizeof(hdr); ++i)
+        ((unsigned char *)&hdr)[i] = raw[i];
     if (memcmp(hdr.magic, PE_SOL_MAGIC, sizeof(hdr.magic)) != 0 ||
         hdr.version != PE_SOL_VERSION || hdr.flags != 0u)
     {
@@ -1093,7 +1095,8 @@ int pe_tree_save(const mpf_tree_def_t *tree, const char *path)
         char magic[8];
         uint32_t version;
     } hdr;
-    memcpy(hdr.magic, PE_TREE_MAGIC, 8);
+    for (size_t i = 0u; i < sizeof(hdr.magic); ++i)
+        hdr.magic[i] = PE_TREE_MAGIC[i];
     hdr.version = PE_TREE_VERSION;
     if (fwrite(&hdr, sizeof(hdr), 1, f) != 1)
     {

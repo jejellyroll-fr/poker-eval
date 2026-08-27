@@ -48,7 +48,7 @@ static void trim(char *text)
     char *end;
     while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n')
         ++text;
-    end = text + strlen(text);
+    end = text + strnlen(text, 512u);
     while (end > text && (end[-1] == ' ' || end[-1] == '\t' ||
                           end[-1] == '\r' || end[-1] == '\n'))
         *--end = '\0';

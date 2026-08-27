@@ -119,8 +119,9 @@ static int tree_path_is_json(const char *path)
     size_t length;
     if (!path)
         return 0;
-    length = strlen(path);
-    return length >= 5u && strcmp(path + length - 5u, ".json") == 0;
+    length = strnlen(path, 4096u);
+    return length < 4096u && length >= 5u &&
+           strcmp(path + length - 5u, ".json") == 0;
 }
 
 static int infer_json_tree_header(const mpf_tree_def_t *tree,
@@ -312,10 +313,11 @@ static int parse_exact_omaha_combo(const char *text, uint8_t hole_cards,
     if (!text || !out_combo || hole_cards < 5u || hole_cards > 6u)
         return -1;
     *out_combo = NULL;
-    length = strlen(text);
+    length = strnlen(text, sizeof(compact));
     if (length >= sizeof(compact))
         return -1;
-    memcpy(compact, text, length + 1u);
+    for (index = 0u; index <= length; ++index)
+        compact[index] = text[index];
     weight_text = strchr(compact, ':');
     if (weight_text)
     {
@@ -327,7 +329,7 @@ static int parse_exact_omaha_combo(const char *text, uint8_t hole_cards,
             return -1;
         compact[(size_t)(weight_text - compact)] = '\0';
     }
-    length = strlen(compact);
+    length = strnlen(compact, sizeof(compact));
     if (length != (size_t)hole_cards * 2u)
         return -1;
     for (index = 0u; index < (size_t)hole_cards; ++index)

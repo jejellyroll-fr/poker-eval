@@ -99,9 +99,9 @@ static int read_u64(FILE *file, uint64_t *out)
 
 static int write_double(FILE *file, double value)
 {
-    uint64_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    return write_u64(file, bits);
+    union { double real; uint64_t bits; } value_bits;
+    value_bits.real = value;
+    return write_u64(file, value_bits.bits);
 }
 
 static int read_double(FILE *file, double *out)
@@ -109,7 +109,11 @@ static int read_double(FILE *file, double *out)
     uint64_t bits;
     if (!out || read_u64(file, &bits) != 0)
         return -1;
-    memcpy(out, &bits, sizeof(*out));
+    {
+        union { uint64_t bits; double real; } value_bits;
+        value_bits.bits = bits;
+        *out = value_bits.real;
+    }
     return 0;
 }
 
@@ -232,8 +236,8 @@ static int apply_entries(const checkpoint_entry_t *entries, size_t count,
                                      (pe_value_array_t)which, NULL);
             if (!values)
                 return -1;
-            memcpy(values, entries[i].values[which],
-                   entries[i].slots * sizeof(double));
+            for (size_t slot = 0u; slot < entries[i].slots; ++slot)
+                values[slot] = entries[i].values[which][slot];
         }
     }
     return 0;
@@ -577,8 +581,8 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
                                      (pe_value_array_t)which, NULL);
             if (!values)
                 goto apply_fail;
-            memcpy(values, entries[i].values[which],
-                   entries[i].slots * sizeof(double));
+            for (size_t slot = 0u; slot < entries[i].slots; ++slot)
+                values[slot] = entries[i].values[which][slot];
         }
     }
     free_entries(entries, count);

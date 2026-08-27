@@ -117,7 +117,11 @@ size_t pe_work_unit_to_string(const pe_work_unit_t *unit,
         for (i = 0u; i < unit->regret_count; ++i)
         {
             uint64_t bits;
-            memcpy(&bits, &unit->regret_snapshot[i], sizeof(bits));
+            {
+                union { double real; uint64_t bits; } value_bits;
+                value_bits.real = unit->regret_snapshot[i];
+                bits = value_bits.bits;
+            }
             if (i != 0u)
                 append_char(out, capacity, &position, ',');
             append_u64_hex(out, capacity, &position, bits);
@@ -239,7 +243,11 @@ static int decode_regrets(const char *value, size_t length,
                 }
                 bits = (bits << 4) | (uint64_t)nibble;
             }
-            memcpy(&regrets[i], &bits, sizeof(bits));
+            {
+                union { uint64_t bits; double real; } value_bits;
+                value_bits.bits = bits;
+                regrets[i] = value_bits.real;
+            }
             start = end + 1u;
         }
     }

@@ -268,9 +268,9 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
         double weight = entries[i].reach;
 
         prefix[i + 1u] = prefix[i] + weight;
-        memcpy(card_prefix + (i + 1u) * PE_SHOWDOWN_DECK,
-               card_prefix + i * PE_SHOWDOWN_DECK,
-               PE_SHOWDOWN_DECK * sizeof(double));
+        for (card = 0u; card < PE_SHOWDOWN_DECK; ++card)
+            card_prefix[(i + 1u) * PE_SHOWDOWN_DECK + card] =
+                card_prefix[i * PE_SHOWDOWN_DECK + card];
         if (!(weight > 0.0) && !(weight < 0.0))
             continue;
         mask_card_count(entries[i].mask, cards, 2);

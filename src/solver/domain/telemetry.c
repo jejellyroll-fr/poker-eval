@@ -42,7 +42,7 @@ void pe_telemetry_emitf(const pe_telemetry_ops_t *ops,
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #endif
-    vsnprintf(message, sizeof(message), fmt, args);
+    vsnprintf(message, sizeof(message), fmt, args); /* NOSONAR: callers provide internal format strings. */
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

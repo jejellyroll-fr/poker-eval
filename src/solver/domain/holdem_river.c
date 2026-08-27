@@ -1,5 +1,6 @@
 #include <poker_eval/solver/pe_holdem_river.h>
 
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 
@@ -13,6 +14,11 @@ typedef struct
     uint8_t player_count;
     double *values;
 } range_showdown_ctx_t;
+
+static int finite_nonnegative(double value)
+{
+    return value >= 0.0 && value <= DBL_MAX;
+}
 
 static int range_showdown_callback(const mask_t *holes, uint8_t player_count,
                                    double weight, void *user)
@@ -87,9 +93,9 @@ int pe_holdem_river_terminal_values(
     uint8_t player;
     if (!valid_spec(spec, state, reach, out_values, player_count))
         return -1;
-    if (!isfinite(state->pot) || state->pot < 0.0 ||
-        !isfinite(state->invested[0]) || !isfinite(state->invested[1]) ||
-        state->invested[0] < 0.0 || state->invested[1] < 0.0)
+    if (!finite_nonnegative(state->pot) ||
+        !finite_nonnegative(state->invested[0]) ||
+        !finite_nonnegative(state->invested[1]))
         return -1;
     for (player = 0u; player < player_count; ++player)
     {
@@ -192,8 +198,8 @@ int pe_holdem_river_range_values(
     status = pe_holdem_deals_enumerate(
         board, ranges, player_count, range_showdown_callback,
         &callback_context, out_deal_count, out_weight_sum);
-    if (status != 0 || *out_weight_sum <= 0.0 ||
-        !isfinite(*out_weight_sum))
+    if (status != 0 || !finite_nonnegative(*out_weight_sum) ||
+        *out_weight_sum <= 0.0)
         return status != 0 ? status : -1;
     for (player = 0u; player < player_count; ++player)
         out_values[player] /= *out_weight_sum;

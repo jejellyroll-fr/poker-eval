@@ -436,9 +436,9 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
     for (player = 0; player < PE_PREFLOP_ALLIN_MAX_PLAYERS; ++player)
     {
         if (betting->active[player])
-            masks |= 1u << player;
+            masks |= UINT64_C(1) << player;
         if (betting->all_in[player])
-            masks |= 1u << (player + PE_PREFLOP_ALLIN_MAX_PLAYERS);
+            masks |= UINT64_C(1) << (player + PE_PREFLOP_ALLIN_MAX_PLAYERS);
     }
     hash = preflop_mix_u64(hash, masks);
     hash = preflop_mix_u64(hash, preflop_quantize(betting->pot));

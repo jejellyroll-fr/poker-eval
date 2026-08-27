@@ -1,11 +1,14 @@
 #include <poker_eval/solver/pe_betting_state.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
 static int finite_nonnegative(double value)
 {
-    return isfinite(value) && value >= 0.0;
+    /* Relational checks reject NaN and avoid MinGW's isfinite macro
+       narrowing a double expression under -Wfloat-conversion. */
+    return value >= 0.0 && value <= DBL_MAX;
 }
 
 static double epsilon_for(const pe_betting_rules_t *rules)

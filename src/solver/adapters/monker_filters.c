@@ -79,7 +79,8 @@ static pe_monker_filter_status_t append_atom(
     keyword_copy = (char *)malloc(keyword_length + 1u);
     if (keyword_copy == NULL)
         return PE_MONKER_FILTER_ERR_NO_MEMORY;
-    memcpy(keyword_copy, keyword, keyword_length);
+    for (size_t i = 0u; i < keyword_length; ++i)
+        keyword_copy[i] = keyword[i];
     keyword_copy[keyword_length] = '\0';
     if (value_length != 0u) {
         value_copy = (char *)malloc(value_length + 1u);
@@ -87,7 +88,8 @@ static pe_monker_filter_status_t append_atom(
             free(keyword_copy);
             return PE_MONKER_FILTER_ERR_NO_MEMORY;
         }
-        memcpy(value_copy, value, value_length);
+        for (size_t i = 0u; i < value_length; ++i)
+            value_copy[i] = value[i];
         value_copy[value_length] = '\0';
     }
     grown = (pe_monker_filter_atom_t *)realloc(

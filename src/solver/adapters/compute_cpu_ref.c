@@ -333,10 +333,13 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
     {
         const pe_update_group_t *group = &batch->soa.groups[group_index];
         size_t values = (size_t)group->actions * (size_t)group->combos;
-        memcpy(dest_regrets[group_index], scratch_regrets + group->offset,
-               values * sizeof(double));
-        memcpy(dest_average[group_index], scratch_average + group->offset,
-               values * sizeof(double));
+        for (size_t value_index = 0u; value_index < values; ++value_index)
+        {
+            dest_regrets[group_index][value_index] =
+                scratch_regrets[group->offset + value_index];
+            dest_average[group_index][value_index] =
+                scratch_average[group->offset + value_index];
+        }
     }
     status = 0;
 

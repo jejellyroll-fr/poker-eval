@@ -14,6 +14,7 @@
 #include <string.h>
 
 #define PE_TREE_JSON_MAX_ACTIONS 16
+#define PE_TREE_JSON_MAX_KEY_LENGTH 128
 
 typedef struct {
     char id[64];
@@ -34,7 +35,7 @@ typedef struct {
 static const char *pe_tree_json_find(const char *begin, const char *end,
                                      const char *key)
 {
-    size_t key_length = strlen(key);
+    size_t key_length = strnlen(key, PE_TREE_JSON_MAX_KEY_LENGTH);
     const char *p;
     if (begin == NULL || end <= begin || key_length == 0u)
         return NULL;

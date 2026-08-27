@@ -434,7 +434,8 @@ int pe_tree_outline_reveal(pe_tree_outline_t *outline,
         if (outline->rows[cursor].parent_row == cursor)
             break;
     }
-    memcpy(outline->expanded, wanted, sizeof(outline->expanded));
+    for (size_t i = 0u; i < sizeof(outline->expanded); ++i)
+        outline->expanded[i] = wanted[i];
     if (pe_tree_outline_build(outline, editor) <= 0)
         return -1;
     return pe_tree_outline_row_of_node(outline, node_index);

@@ -13,8 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define HH_MAX_LINE_LENGTH 2048u
-
 /*
  * Copy the hand id following '#' (PokerStars "Hand #123:") up to the first
  * whitespace or ':'; the trailing separator is not part of the id.
@@ -67,11 +65,11 @@ static int hh_parse_amount(const char *text, double *amount)
 }
 
 /* Strip trailing ':' separators, e.g. the "PlayerB:" prefix of action lines. */
-static void hh_strip_trailing_colon(char *s)
+static void hh_strip_trailing_colon(char *s, size_t capacity)
 {
     size_t len;
-    if (s == NULL) return;
-    len = strnlen(s, HH_MAX_LINE_LENGTH);
+    if (s == NULL || capacity == 0u) return;
+    len = strnlen(s, capacity);
     while (len > 0u && s[len - 1u] == ':') {
         s[--len] = '\0';
     }
