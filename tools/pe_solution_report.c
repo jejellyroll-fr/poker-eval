@@ -12,6 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32) && defined(_MSC_VER)
+#define strtok_r strtok_s
+#endif
+
 #define PE_REPORT_MAX_ACTIONS 256
 #define PE_REPORT_MAX_GROUPS 16384
 

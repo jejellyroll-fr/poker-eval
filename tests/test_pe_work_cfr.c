@@ -10,8 +10,34 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
+
+static int make_socket_pair(pe_work_socket_t sockets[2])
+{
+    pe_work_socket_t listener;
+    pe_work_socket_t client;
+    pe_work_socket_t server;
+    uint16_t port = 0u;
+
+    listener = pe_work_tcp_listen(0u, &port);
+    if (listener == PE_WORK_SOCKET_INVALID || port == 0u)
+        return -1;
+    client = pe_work_tcp_connect("127.0.0.1", port);
+    if (client == PE_WORK_SOCKET_INVALID)
+    {
+        (void)pe_work_socket_close(listener);
+        return -1;
+    }
+    server = pe_work_tcp_accept(listener);
+    (void)pe_work_socket_close(listener);
+    if (server == PE_WORK_SOCKET_INVALID)
+    {
+        (void)pe_work_socket_close(client);
+        return -1;
+    }
+    sockets[0] = client;
+    sockets[1] = server;
+    return 0;
+}
 
 static mask_t card(int rank, int suit)
 {
@@ -68,7 +94,7 @@ int main(void)
     cfr_storage_t *cuda_distributed = NULL;
     cfr_game_t mono_game;
     holdem_river_state_t mono_state;
-    int sockets[2];
+    pe_work_socket_t sockets[2];
     pe_work_socket_t listener;
     pe_work_socket_t client;
     uint16_t tcp_port;
@@ -91,6 +117,7 @@ int main(void)
 
     assert(context != NULL);
     assert(distributed != NULL && mono != NULL);
+    assert(pe_work_transport_init() == 0);
     assert(pe_runtime_probe(&runtime) == 0);
     runtime.backends[PE_COMPUTE_CPU_REF].compiled = 1;
     runtime.backends[PE_COMPUTE_CPU_REF].runtime_available = 1;
@@ -106,7 +133,7 @@ int main(void)
     execute_config.user_data = &game_context;
     make_unit(&unit);
     pe_work_reducer_init(&reducer);
-    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    assert(make_socket_pair(sockets) == 0);
     assert(pe_work_socket_send_work_unit((pe_work_socket_t)sockets[0],
                                          &unit) == 0);
     assert(pe_work_worker_run_once((pe_work_socket_t)sockets[1], &runtime,
@@ -154,7 +181,7 @@ int main(void)
             cuda_distributed = cfr_storage_create();
             assert(cuda_distributed != NULL);
             pe_work_reducer_init(&cuda_reducer);
-            assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+            assert(make_socket_pair(sockets) == 0);
             assert(pe_work_socket_send_work_unit((pe_work_socket_t)sockets[0],
                                                  &unit) == 0);
             assert(pe_work_worker_run_once((pe_work_socket_t)sockets[1],
@@ -183,7 +210,6 @@ int main(void)
 
     /* Exercise the production TCP lifecycle: capability announcement,
      * coordinator accept, dispatch, worker execution and result collection. */
-    assert(pe_work_transport_init() == 0);
     listener = pe_work_tcp_listen(0u, &tcp_port);
     assert(listener != PE_WORK_SOCKET_INVALID && tcp_port != 0u);
     client = pe_work_tcp_connect("127.0.0.1", tcp_port);

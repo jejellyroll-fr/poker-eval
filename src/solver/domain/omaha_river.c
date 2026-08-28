@@ -1,7 +1,12 @@
 #include <poker_eval/solver/pe_omaha_river.h>
 
-#include <math.h>
+#include <float.h>
 #include <string.h>
+
+static int finite_double(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/eval_omaha.h>
@@ -120,7 +125,7 @@ int pe_omaha_river_range_values(
         board, ranges, player_count, hole_cards, omaha_callback,
         &callback_context, out_deal_count, out_weight_sum);
     if (status != 0 || *out_weight_sum <= 0.0 ||
-        !isfinite(*out_weight_sum))
+        !finite_double(*out_weight_sum))
         return status != 0 ? status : -1;
     for (player = 0u; player < player_count; ++player)
         out_values[player] /= *out_weight_sum;

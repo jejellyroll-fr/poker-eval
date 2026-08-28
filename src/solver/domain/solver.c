@@ -33,11 +33,17 @@
 
 #include <stddef.h>
 #include <inttypes.h>
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define PE_SOLVER_DEFAULT_GPU_BATCH 256u
+
+static int finite_double(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
 
 typedef struct
 {
@@ -352,7 +358,7 @@ pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
     if (solver->config.target_exploitability_mbb > 0.0 &&
-        (!isfinite(solver->config.execution.big_blind) ||
+        (!finite_double(solver->config.execution.big_blind) ||
          solver->config.execution.big_blind <= 0.0))
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
@@ -724,7 +730,7 @@ static double sampled_action_probability(const void *state, uint64_t key,
         double total = 0.0;
 
         lambda = adapter->exponential_lambda;
-        if (!isfinite(lambda) || lambda <= 0.0)
+        if (!finite_double(lambda) || lambda <= 0.0)
             lambda = 1.0;
 
         /* The legacy exponential policy deliberately ignores non-positive
@@ -733,35 +739,37 @@ static double sampled_action_probability(const void *state, uint64_t key,
         if (adapter->regret == PE_REGRET_LEGACY_EXP)
         {
             for (uint16_t a = 0u; a < actions; ++a)
-                if (isfinite(regrets[a]) && regrets[a] > maximum)
+                if (finite_double(regrets[a]) && regrets[a] > maximum)
                     maximum = regrets[a];
             if (maximum > 0.0)
             {
                 for (uint16_t a = 0u; a < actions; ++a)
-                    if (isfinite(regrets[a]) && regrets[a] > 0.0)
+                    if (finite_double(regrets[a]) && regrets[a] > 0.0)
                         total += exp(lambda * (regrets[a] - maximum));
-                if (isfinite(total) && total > 0.0 &&
-                    isfinite(regrets[action]) && regrets[action] > 0.0)
+                if (finite_double(total) && total > 0.0 &&
+                    finite_double(regrets[action]) && regrets[action] > 0.0)
                     return exp(lambda * (regrets[action] - maximum)) / total;
-                if (isfinite(total) && total > 0.0)
+                if (finite_double(total) && total > 0.0)
                     return 0.0;
             }
             return 1.0 / (double)actions;
         }
 
         for (uint16_t a = 0u; a < actions; ++a)
-            if (isfinite(regrets[a]) && regrets[a] > maximum)
+            if (finite_double(regrets[a]) && regrets[a] > maximum)
                 maximum = regrets[a];
         for (uint16_t a = 0u; a < actions; ++a)
-            if (isfinite(regrets[a]))
+            if (finite_double(regrets[a]))
                 total += exp(lambda * (regrets[a] - maximum));
-        if (isfinite(total) && total > 0.0 && isfinite(regrets[action]))
+        if (finite_double(total) && total > 0.0 &&
+            finite_double(regrets[action]))
             return exp(lambda * (regrets[action] - maximum)) / total;
         return 1.0 / (double)actions;
     }
 
     for (uint16_t a = 0u; a < actions; ++a)
-        if (isfinite(regrets[a]) && regrets[a] > 0.0) positive += regrets[a];
+        if (finite_double(regrets[a]) && regrets[a] > 0.0)
+            positive += regrets[a];
     if (positive <= 0.0) return 1.0 / (double)actions;
     return regrets[action] > 0.0 ? regrets[action] / positive : 0.0;
 }
@@ -1269,7 +1277,7 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         for (uint16_t action = 0u; action < out->action_count; ++action)
         {
             size_t slot = pe_storage_slot_at(out->combo_count, action, combo);
-            if (!isfinite(average[slot]) || average[slot] < 0.0)
+            if (!finite_double(average[slot]) || average[slot] < 0.0)
                 return PE_SOLVER_ERR_EXECUTION;
             total += average[slot];
         }

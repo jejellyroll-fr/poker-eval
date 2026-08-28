@@ -1,7 +1,13 @@
 #include <poker_eval/solver/pe_pots.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
+
+static int finite_double(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
 
 static int nearly_equal(double a, double b)
 {
@@ -22,11 +28,12 @@ int pe_pot_slices_build(const pe_betting_state_t *state,
     uint8_t index;
     if (!state || !out_count || (capacity > 0u && !out) ||
         state->player_count == 0u || state->player_count > PE_BETTING_MAX_PLAYERS ||
-        !isfinite(state->pot) || state->pot < 0.0)
+        !finite_double(state->pot) || state->pot < 0.0)
         return -1;
     for (player = 0u; player < state->player_count; ++player)
     {
-        if (!isfinite(state->invested[player]) || state->invested[player] < 0.0)
+        if (!finite_double(state->invested[player]) ||
+            state->invested[player] < 0.0)
             return -1;
         invested_sum += state->invested[player];
         if (state->invested[player] <= 0.0)
@@ -121,7 +128,8 @@ int pe_pot_distribute(const pe_pot_slice_t *slices, uint8_t slice_count,
         uint8_t winners = winner_masks[slice] & slices[slice].eligible_mask;
         uint8_t winner_count = 0u;
         uint8_t player;
-        if (!isfinite(slices[slice].amount) || slices[slice].amount < 0.0)
+        if (!finite_double(slices[slice].amount) ||
+            slices[slice].amount < 0.0)
             return -1;
         for (player = 0u; player < player_count; ++player)
             if (winners & (uint8_t)(1u << player))

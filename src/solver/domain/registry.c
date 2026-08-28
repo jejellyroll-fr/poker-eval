@@ -164,7 +164,7 @@ uint64_t pe_cap_from_name(const char *name)
     if (name == NULL)
         return 0;
 
-    len = strnlen(name, 128u);
+    len = strnlen(name, 64u);
     if (len == 0)
         return 0;
 
