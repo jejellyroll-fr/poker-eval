@@ -37,8 +37,9 @@ static int get_actions(cfr_game_t *game, uint64_t key, int *out, int max,
     (void)user;
     if (max < 2)
         return 0;
-    out[0] = 0;
-    out[1] = 1;
+    /* Legacy action identifiers are values, not vector ordinals. */
+    out[0] = 3;
+    out[1] = 7;
     return 2;
 }
 
@@ -69,8 +70,8 @@ static double get_utility(cfr_game_t *game, uint64_t key, int player,
     state_t *state = (state_t *)(uintptr_t)key;
     (void)game;
     (void)user;
-    return player == 0 ? (state->action == 0 ? 1.0 : -1.0)
-                       : (state->action == 0 ? -1.0 : 1.0);
+    return player == 0 ? (state->action == 3 ? 1.0 : -1.0)
+                       : (state->action == 3 ? -1.0 : 1.0);
 }
 
 static void release_state(cfr_game_t *game, uint64_t key, void *user)
@@ -117,8 +118,8 @@ int main(void)
         pe_legacy_vector_adapter_destroy(&adapter);
         return 1;
     }
-    /* Action 0 strictly dominates in this game; the bridged solve must land
-     * on it, not merely complete. */
+    /* Legacy action 3 strictly dominates in this game; the bridged solve
+     * must map vector slot 0 back to it, not merely complete. */
     {
         pe_strategy_query_t query;
         pe_strategy_view_t view;

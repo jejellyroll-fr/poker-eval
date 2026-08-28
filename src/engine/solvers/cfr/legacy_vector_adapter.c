@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PE_LEGACY_VECTOR_MAX_ACTIONS 256
+
 static uint64_t legacy_key(const void *state)
 {
     return (uint64_t)(uintptr_t)state;
@@ -59,13 +61,34 @@ static uint16_t adapter_action_count(const void *state, void *user)
 {
     pe_legacy_vector_adapter_t *adapter =
         (pe_legacy_vector_adapter_t *)user;
-    int actions[256];
+    int actions[PE_LEGACY_VECTOR_MAX_ACTIONS];
     int count = adapter->legacy->get_actions(
-        adapter->legacy, legacy_key(state), actions, 256,
+        adapter->legacy, legacy_key(state), actions,
+        PE_LEGACY_VECTOR_MAX_ACTIONS,
         adapter->legacy->game_data);
-    if (count <= 0 || count > 65535)
+    if (count <= 0 || count > PE_LEGACY_VECTOR_MAX_ACTIONS)
         return 0u;
     return (uint16_t)count;
+}
+
+static int adapter_action_value(const pe_legacy_vector_adapter_t *adapter,
+                                uint64_t key, uint16_t ordinal,
+                                int *out_action)
+{
+    int actions[PE_LEGACY_VECTOR_MAX_ACTIONS];
+    int count;
+
+    if (!adapter || !adapter->legacy || !adapter->legacy->get_actions ||
+        !out_action)
+        return -1;
+    count = adapter->legacy->get_actions(
+        adapter->legacy, key, actions, PE_LEGACY_VECTOR_MAX_ACTIONS,
+        adapter->legacy->game_data);
+    if (count <= 0 || count > PE_LEGACY_VECTOR_MAX_ACTIONS ||
+        ordinal >= (uint16_t)count)
+        return -1;
+    *out_action = actions[ordinal];
+    return 0;
 }
 
 static uint64_t adapter_infoset_key(const void *state, void *user)
@@ -81,8 +104,14 @@ static const void *adapter_apply_action(const void *state, uint16_t action,
 {
     pe_legacy_vector_adapter_t *adapter =
         (pe_legacy_vector_adapter_t *)user;
-    uint64_t key = adapter->legacy->apply_action(
-        adapter->legacy, legacy_key(state), (int)action,
+    int legacy_action;
+    uint64_t key;
+
+    if (adapter_action_value(adapter, legacy_key(state), action,
+                             &legacy_action) != 0)
+        return NULL;
+    key = adapter->legacy->apply_action(
+        adapter->legacy, legacy_key(state), legacy_action,
         adapter->legacy->game_data);
     if (key == 0u || track_state(adapter, key) != 0)
         return NULL;

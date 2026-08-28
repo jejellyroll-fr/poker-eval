@@ -1,7 +1,13 @@
 #include <poker_eval/economics/push_fold.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
+
+static int finite_double(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
 
 static void regret_strategy(const double regret[2], double strategy[2])
 {
@@ -20,21 +26,27 @@ int pe_push_fold_solve(const pe_push_fold_input_t *input,
     double villain_regret[2] = {0.0, 0.0};
     double hero_sum[2] = {0.0, 0.0};
     double villain_sum[2] = {0.0, 0.0};
+    double effective_stack;
     int iterations;
-    if (!input || !result || input->pot_before_push < 0.0 ||
+    if (!input || !result || !finite_double(input->pot_before_push) ||
+        !finite_double(input->hero_stack) ||
+        !finite_double(input->villain_stack) ||
+        !finite_double(input->hero_equity_when_called) ||
+        input->pot_before_push < 0.0 ||
         input->hero_stack <= 0.0 || input->villain_stack <= 0.0 ||
         input->hero_equity_when_called < 0.0 ||
         input->hero_equity_when_called > 1.0)
         return -1;
     iterations = input->iterations > 0 ? input->iterations : 100000;
+    effective_stack = fmin(input->hero_stack, input->villain_stack);
     memset(result, 0, sizeof(*result));
     /* Rows: hero fold/push. Columns: villain fold/call. */
     payoff[0][0] = 0.0;
     payoff[0][1] = 0.0;
     payoff[1][0] = input->pot_before_push;
     payoff[1][1] = input->hero_equity_when_called *
-                   (input->pot_before_push + input->villain_stack) -
-                   (1.0 - input->hero_equity_when_called) * input->hero_stack;
+                   (input->pot_before_push + effective_stack) -
+                   (1.0 - input->hero_equity_when_called) * effective_stack;
     for (int iter = 0; iter < iterations; ++iter) {
         double hs[2], vs[2], hero_value[2], villain_value[2];
         double node_value = 0.0;
