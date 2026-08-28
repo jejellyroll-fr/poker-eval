@@ -34,6 +34,8 @@ jobs:
             configure: >-
               cmake --preset windows-msvc
               -DPE_SDL2_ROOT="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12"
+              -DPE_SDL2_INCLUDE_DIR="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12\include"
+              -DPE_SDL2_LIBRARY="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12\lib\x64\SDL2.lib"
             build: >-
               cmake --build build/windows-msvc --target poker-eval-trainer-gui
               --config Release
