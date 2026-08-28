@@ -71,11 +71,21 @@ target_link_libraries(pe-preflop-solve PRIVATE poker_eval_modular m)
 
 set(PE_SDL2_ROOT "" CACHE PATH
     "SDL2 installation root used by the portable desktop GUI")
+set(PE_SDL2_PREFIXES)
+if(PE_SDL2_ROOT)
+    list(APPEND PE_SDL2_PREFIXES "${PE_SDL2_ROOT}")
+endif()
+if(CMAKE_PREFIX_PATH)
+    list(APPEND PE_SDL2_PREFIXES ${CMAKE_PREFIX_PATH})
+endif()
+if(DEFINED ENV{CMAKE_PREFIX_PATH} AND NOT "$ENV{CMAKE_PREFIX_PATH}" STREQUAL "")
+    list(APPEND PE_SDL2_PREFIXES "$ENV{CMAKE_PREFIX_PATH}")
+endif()
 find_path(PE_SDL2_INCLUDE_DIR SDL2/SDL.h
-    HINTS ${PE_SDL2_ROOT} ${CMAKE_PREFIX_PATH}
+    HINTS ${PE_SDL2_PREFIXES}
     PATH_SUFFIXES include)
 find_library(PE_SDL2_LIBRARY NAMES SDL2
-    HINTS ${PE_SDL2_ROOT} ${CMAKE_PREFIX_PATH}
+    HINTS ${PE_SDL2_PREFIXES}
     PATH_SUFFIXES lib lib/x64 lib/x86)
 if(PE_SDL2_INCLUDE_DIR AND PE_SDL2_LIBRARY)
     add_executable(poker-eval-trainer-gui poker_eval_trainer_gui.c)
