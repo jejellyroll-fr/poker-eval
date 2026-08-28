@@ -604,12 +604,11 @@ static int execute_gui_solver(char *const argv[])
 {
     if (argv == NULL || argv[0] == NULL ||
         strchr(argv[0], '/') == NULL ||
-        !gui_solver_executable_allowed(argv[0]) || access(argv[0], X_OK) != 0)
+        !gui_solver_executable_allowed(argv[0]))
         return -1;
     /* The caller supplies an absolute path to one of the four bundled tools;
      * no shell or PATH lookup is involved. */
-    /* Flawfinder: ignore — this is the validated process boundary for the
-     * bundled solver tools; an in-process equivalent does not exist. */
+    /* Flawfinder: ignore */
     execv(argv[0], argv);
     return -1;
 }
