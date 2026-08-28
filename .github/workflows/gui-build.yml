@@ -33,9 +33,9 @@ jobs:
           - os: windows-2022
             configure: >-
               cmake --preset windows-msvc
-              -DPE_SDL2_ROOT="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12"
-              -DPE_SDL2_INCLUDE_DIR="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12\include"
-              -DPE_SDL2_LIBRARY="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12\lib\x64\SDL2.lib"
+              -DPE_SDL2_ROOT="$env:PE_SDL2_CI_ROOT"
+              -DPE_SDL2_INCLUDE_DIR="$env:PE_SDL2_CI_ROOT/include"
+              -DPE_SDL2_LIBRARY="$env:PE_SDL2_CI_ROOT/lib/x64/SDL2.lib"
             build: >-
               cmake --build build/windows-msvc --target poker-eval-trainer-gui
               --config Release
@@ -60,7 +60,9 @@ jobs:
           $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sdl2.zip"
           Expand-Archive "$env:RUNNER_TEMP\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\sdl2"
-          "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP\sdl2\SDL2-2.30.12" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $sdl2Root = (Join-Path $env:RUNNER_TEMP "sdl2\SDL2-2.30.12").Replace('\', '/')
+          "CMAKE_PREFIX_PATH=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_ROOT=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure
         run: ${{ matrix.configure }}
