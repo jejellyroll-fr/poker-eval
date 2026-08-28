@@ -1,4 +1,5 @@
 #include <poker_eval/engine/solvers/cfr/cfr_parallel.h>
+#include "../src/solver/domain/finite_double.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -84,7 +85,7 @@ int main(void)
 
     if (cfr_solve_parallel_batch(game_factory, NULL, NULL, storage,
                                  &config, &parallel, &exploitability) != 0 ||
-        !isfinite(exploitability) ||
+        !pe_finite_double(exploitability) ||
         cfr_storage_count_infosets(storage) == 0)
     {
         fprintf(stderr, "parallel CFR run failed\n");
