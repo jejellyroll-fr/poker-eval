@@ -39,6 +39,9 @@ int main(void)
     assert(result.profile_count == 1);
     assert(fabs(result.elimination_probability[0][1] - 1.0) < 1e-9);
     assert(fabs(result.pko.bounty_ev[0] - 25.0) < 1e-9);
+    input.max_profiles = 1;
+    assert(pe_pko_calculate_from_ranges(&input, &result) == 0);
+    assert(result.profile_count == 1);
     puts("PKO range/card-removal tests passed");
     return 0;
 }

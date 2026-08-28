@@ -2,10 +2,12 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "../solver/domain/finite_double.h"
 
@@ -307,7 +309,9 @@ static int parse_action(json_reader_t *reader, pe_hrc_import_t *out,
             if (!parse_number(reader, &parsed->amount, error)) { free(key); return 0; }
         } else if (strcmp(key, "child") == 0) {
             double child;
-            if (!parse_number(reader, &child, error) || child < 0.0 || child > (double)PE_HRC_MAX_NODES - 1.0) { free(key); return 0; }
+            if (!parse_number(reader, &child, error) || child < 0.0 ||
+                child > (double)PE_HRC_MAX_NODES - 1.0 ||
+                child != floor(child)) { free(key); return 0; }
             parsed->child_index = (int)child; have_child = 1;
         } else if (!skip_value(reader, error)) { free(key); return 0; }
         free(key);
@@ -333,7 +337,7 @@ static int parse_node(json_reader_t *reader, pe_hrc_import_t *out, int node,
             have_terminal = 1;
         } else if (strcmp(key, "player") == 0 || strcmp(key, "player_to_act") == 0) {
             double player;
-            if (!parse_number(reader, &player, error)) { free(key); return 0; }
+            if (!parse_number(reader, &player, error) || player != floor(player)) { free(key); return 0; }
             out->owned_nodes[node].player_to_act = (int)player;
         } else if (strcmp(key, "actions") == 0) {
             if (!take(reader, '[')) { free(key); return 0; }
@@ -407,7 +411,9 @@ static int parse_document(json_reader_t *reader, pe_hrc_import_t *out,
             free(name);
         } else if (strcmp(key, "root") == 0) {
             double root;
-            if (!parse_number(reader, &root, error)) { free(key); return 0; }
+            if (!parse_number(reader, &root, error) || root < 0.0 ||
+                root > (double)PE_HRC_MAX_NODES - 1.0 ||
+                root != floor(root)) { free(key); return 0; }
             out->config.tree.root_index = (int)root;
         } else if (strcmp(key, "players") == 0) {
             if (!parse_players(reader, out, error)) { free(key); return 0; }
@@ -420,11 +426,13 @@ static int parse_document(json_reader_t *reader, pe_hrc_import_t *out,
             if (!parse_number(reader, &out->pot_model.initial_pot, error)) { free(key); return 0; }
         } else if (strcmp(key, "iterations") == 0) {
             double value;
-            if (!parse_number(reader, &value, error) || value < 0.0) { free(key); return 0; }
+            if (!parse_number(reader, &value, error) || value < 0.0 ||
+                value > (double)UINT_MAX || value != floor(value)) { free(key); return 0; }
             out->config.iterations = (unsigned)value;
         } else if (strcmp(key, "max_profiles") == 0) {
             double value;
-            if (!parse_number(reader, &value, error) || value <= 0.0) { free(key); return 0; }
+            if (!parse_number(reader, &value, error) || value <= 0.0 ||
+                value > (double)SIZE_MAX || value != floor(value)) { free(key); return 0; }
             out->config.max_profiles = (size_t)value;
         } else if (strcmp(key, "payouts") == 0) {
             if (!parse_payouts(reader, out, error)) { free(key); return 0; }

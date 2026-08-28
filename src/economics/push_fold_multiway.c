@@ -33,14 +33,17 @@ static double other_profile_probability(int mask, int excluded,
 static double pushed_payoff(const pe_push_fold_multiway_input_t *input, int mask)
 {
     double called_stacks = 0.0;
+    double effective_risk;
     int profiles = 1 << input->num_villains;
     if (mask < 0 || mask >= profiles) return 0.0;
     if (mask == 0) return input->pot_before_push;
     for (int i = 0; i < input->num_villains; ++i)
-        if (mask & (1 << i)) called_stacks += input->villain_stacks[i];
+        if (mask & (1 << i))
+            called_stacks += fmin(input->hero_stack, input->villain_stacks[i]);
+    effective_risk = fmin(input->hero_stack, called_stacks);
     return input->hero_equity_by_call_mask[mask] *
                (input->pot_before_push + called_stacks) -
-           (1.0 - input->hero_equity_by_call_mask[mask]) * input->hero_stack;
+           (1.0 - input->hero_equity_by_call_mask[mask]) * effective_risk;
 }
 
 int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
@@ -51,7 +54,8 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
     double hero_sum[2] = {0.0, 0.0};
     double villain_sum[PE_PUSH_FOLD_MAX_VILLAINS][2] = {{0.0}};
     int iterations, profiles;
-    if (!input || !result || input->num_villains < 1 ||
+    if (!input || !result || !pe_finite_double(input->pot_before_push) ||
+        !pe_finite_double(input->hero_stack) || input->num_villains < 1 ||
         input->num_villains > PE_PUSH_FOLD_MAX_VILLAINS || input->pot_before_push < 0.0 ||
         input->hero_stack <= 0.0) return -1;
     iterations = input->iterations > 0 ? input->iterations : 100000;
@@ -78,9 +82,13 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
             node_value += hs[1] * profile_probability(mask, vs, input->num_villains) *
                           pushed_payoff(input, mask);
         hero_regret[0] += -node_value;
-        for (int mask = 0; mask < profiles; ++mask)
-            hero_regret[1] += profile_probability(mask, vs, input->num_villains) *
-                              pushed_payoff(input, mask) - node_value;
+        {
+            double push_value = 0.0;
+            for (int mask = 0; mask < profiles; ++mask)
+                push_value += profile_probability(mask, vs, input->num_villains) *
+                              pushed_payoff(input, mask);
+            hero_regret[1] += push_value - node_value;
+        }
         for (int villain = 0; villain < input->num_villains; ++villain) {
             for (int action = 0; action < 2; ++action) {
                 double hero_action_value = 0.0;

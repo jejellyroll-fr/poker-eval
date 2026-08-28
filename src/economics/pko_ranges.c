@@ -11,15 +11,20 @@ typedef struct {
     pe_pko_range_profile_t *profiles;
     size_t count;
     size_t capacity;
+    int overflow;
 } pko_enum_t;
 
 static void enumerate(pko_enum_t *state, int player, StdDeck_CardMask used,
                       double weight, pe_pko_range_profile_t *profile)
 {
     const pe_range_view_t *range;
-    if (state->count >= state->capacity)
+    if (state->overflow)
         return;
     if (player == state->input->base.icm.num_players) {
+        if (state->count >= state->capacity) {
+            state->overflow = 1;
+            return;
+        }
         profile->weight = weight;
         state->profiles[state->count++] = *profile;
         return;
@@ -36,7 +41,7 @@ static void enumerate(pko_enum_t *state, int player, StdDeck_CardMask used,
             StdDeck_CardMask_OR(next, used, combo->hand);
             enumerate(state, player + 1, next, weight * combo->weight, profile);
         }
-        if (state->count >= state->capacity)
+        if (state->overflow)
             return;
     }
 }
@@ -70,7 +75,7 @@ int pe_pko_calculate_from_ranges(const pe_pko_range_input_t *input,
         StdDeck_CardMask_RESET(empty);
         enumerate(&state, 0, empty, 1.0, &current);
     }
-    if (state.count == state.capacity) {
+    if (state.overflow) {
         free(state.profiles);
         return -1;
     }

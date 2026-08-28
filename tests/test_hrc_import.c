@@ -25,6 +25,34 @@ static int pko_outcome(const pe_pko_range_profile_t *profile, int players,
     return 0;
 }
 
+static int reject_fractional_value(const char *json, const char *needle,
+                                   const char *replacement,
+                                   pe_hrc_terminal_fn terminal_value)
+{
+    char mutated[2048];
+    pe_hrc_import_t imported;
+    pe_hrc_import_error_t error;
+    const char *at = strstr(json, needle);
+    size_t prefix;
+    size_t suffix;
+    size_t replacement_length = strlen(replacement);
+    if (!at || strlen(json) >= sizeof(mutated))
+        return 0;
+    prefix = (size_t)(at - json);
+    suffix = strlen(at + strlen(needle));
+    if (prefix + replacement_length + suffix >= sizeof(mutated))
+        return 0;
+    memcpy(mutated, json, prefix);
+    memcpy(mutated + prefix, replacement, replacement_length);
+    memcpy(mutated + prefix + replacement_length, at + strlen(needle), suffix + 1u);
+    if (pe_hrc_import_json(mutated, strlen(mutated), terminal_value, NULL,
+                           &imported, &error) == 0) {
+        pe_hrc_import_free(&imported);
+        return 0;
+    }
+    return 1;
+}
+
 int main(void)
 {
     const char *json =
@@ -66,6 +94,16 @@ int main(void)
        input is not NUL-terminated or ends in the middle of a number. */
     assert(pe_hrc_import_json(json, strlen(json) - 1u, zero_terminal, NULL,
                               &imported, &error) != 0);
+    assert(reject_fractional_value(json, "\"root\":0", "\"root\":0.5",
+                                   zero_terminal));
+    assert(reject_fractional_value(json, "\"iterations\":8", "\"iterations\":8.5",
+                                   zero_terminal));
+    assert(reject_fractional_value(json, "\"max_profiles\":8", "\"max_profiles\":8.5",
+                                   zero_terminal));
+    assert(reject_fractional_value(json, "\"player\":0", "\"player\":0.5",
+                                   zero_terminal));
+    assert(reject_fractional_value(json, "\"child\":1", "\"child\":1.5",
+                                   zero_terminal));
     puts("HRC/PKO JSON import and pot trace tests passed");
     return 0;
 }
