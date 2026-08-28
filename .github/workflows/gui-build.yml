@@ -81,7 +81,13 @@ jobs:
           if (-not $header) { throw "SDL2 header not found in $sdl2ArchiveRoot" }
           if (-not $library) { throw "SDL2 library not found in $sdl2ArchiveRoot" }
           if (-not $dll) { throw "SDL2 runtime not found in $sdl2ArchiveRoot" }
-          $sdl2Include = (Split-Path -Parent (Split-Path -Parent $header.FullName)).Replace('\', '/')
+          $includeDirectory = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "SDL2\SDL.h") } |
+            Select-Object -First 1
+          if (-not $includeDirectory) {
+            throw "SDL2 include directory not found for $($header.FullName)"
+          }
+          $sdl2Include = $includeDirectory.FullName.Replace('\', '/')
           $sdl2Library = $library.FullName.Replace('\', '/')
           $sdl2Dll = $dll.FullName.Replace('\', '/')
           $sdl2Root = (Split-Path -Parent $sdl2Include).Replace('\', '/')
