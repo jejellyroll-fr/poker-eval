@@ -31,7 +31,9 @@ jobs:
           # whose image can move to a newer Visual Studio before the preset
           # is updated.
           - os: windows-2022
-            configure: cmake --preset windows-msvc
+            configure: >-
+              cmake --preset windows-msvc
+              -DPE_SDL2_ROOT="$env:RUNNER_TEMP\sdl2\SDL2-2.30.12"
             build: >-
               cmake --build build/windows-msvc --target poker-eval-trainer-gui
               --config Release
