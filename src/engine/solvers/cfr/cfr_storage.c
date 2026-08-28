@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <limits.h>
 
+#include "../../../solver/domain/finite_double.h"
+
 #ifdef PE_LEGACY_CFR_OPENMP
 #include <omp.h>
 #endif
@@ -939,7 +941,7 @@ int cfr_storage_merge_scaled(cfr_storage_t *destination,
 {
     cfr_storage_merge_context_t ctx;
     if (!destination || !source || !source->tab ||
-        !isfinite(regret_scale) || !isfinite(average_scale))
+        !pe_finite_double(regret_scale) || !pe_finite_double(average_scale))
     {
         errno = EINVAL;
         return -1;
@@ -1158,7 +1160,7 @@ int cfr_storage_apply_delta(cfr_storage_t *storage,
     double *average = NULL;
 
     if (!storage || !blob || blob_size < CFR_DELTA_HEADER_SIZE ||
-        !isfinite(scale) || memcmp(blob, CFR_DELTA_MAGIC, 8u) != 0)
+        !pe_finite_double(scale) || memcmp(blob, CFR_DELTA_MAGIC, 8u) != 0)
         return -1;
     version = cfr_delta_get_u32(blob + 8u);
     count = cfr_delta_get_u32(blob + 12u);
@@ -1193,13 +1195,13 @@ int cfr_storage_apply_delta(cfr_storage_t *storage,
         for (action = 0u; action < n; ++action) {
             regret[action] = cfr_delta_get_double(blob + cursor);
             cursor += sizeof(double);
-            if (!isfinite(regret[action]))
+            if (!pe_finite_double(regret[action]))
                 goto fail;
         }
         for (action = 0u; action < n; ++action) {
             average[action] = cfr_delta_get_double(blob + cursor);
             cursor += sizeof(double);
-            if (!isfinite(average[action]))
+            if (!pe_finite_double(average[action]))
                 goto fail;
         }
         for (action = 0u; action < n; ++action) {

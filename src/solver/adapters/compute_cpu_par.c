@@ -6,6 +6,7 @@
 #include <poker_eval/solver/pe_regret_dcfr.h>
 
 #include "compute_simd.h"
+#include "../domain/finite_double.h"
 
 #include <limits.h>
 #include <math.h>
@@ -93,7 +94,7 @@ static int cpu_par_update_values(const pe_compute_config_t *config,
     double average_delta;
 
     if (!config || !batch || !update || !out_regret || !out_average ||
-        !isfinite(old_regret) || !isfinite(old_average))
+        !pe_finite_double(old_regret) || !pe_finite_double(old_average))
         return -1;
     average_delta = update->average_delta;
     if (config->regret_mode == PE_REGRET_DCFR) {
@@ -136,7 +137,7 @@ static int cpu_par_update_values(const pe_compute_config_t *config,
     default:
         break;
     }
-    if (!isfinite(regret) || !isfinite(old_average + average_delta))
+    if (!pe_finite_double(regret) || !pe_finite_double(old_average + average_delta))
         return -1;
     *out_regret = regret;
     *out_average = old_average + average_delta;
@@ -225,7 +226,7 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
     if (!out->offsets)
         out->offsets = in->offsets;
     if (backend->config.policy_mode == PE_POLICY_EXPONENTIAL &&
-        (!isfinite(backend->config.exponential_lambda) ||
+        (!pe_finite_double(backend->config.exponential_lambda) ||
          backend->config.exponential_lambda <= 0.0))
         return -1;
 
@@ -245,12 +246,12 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
             return -1;
         for (action = 0u; action < in->action_counts[infoset]; ++action)
         {
-            if (!isfinite(in->regrets[begin + action]))
+            if (!pe_finite_double(in->regrets[begin + action]))
                 return -1;
             if (in->regrets[begin + action] > 0.0f)
                 positive += in->regrets[begin + action];
         }
-        if (!isfinite(positive))
+        if (!pe_finite_double(positive))
             return -1;
     }
 
@@ -435,8 +436,8 @@ static int cpu_par_apply_update_batch(void *self,
                             group->offset + value_index];
                         double new_regret;
                         double new_average;
-                        if (!isfinite(old_regret) || !isfinite(delta) ||
-                            !isfinite(old_average) || !isfinite(average_delta) ||
+                        if (!pe_finite_double(old_regret) || !pe_finite_double(delta) ||
+                            !pe_finite_double(old_average) || !pe_finite_double(average_delta) ||
                             (clamp && signbit(old_regret + delta) &&
                              !(old_regret + delta > 0.0) &&
                              !(old_regret + delta < 0.0)))
@@ -451,7 +452,7 @@ static int cpu_par_apply_update_batch(void *self,
                             new_regret = 0.0;
                         new_average = old_average +
                             average_delta * average_scale;
-                        if (!isfinite(new_regret) || !isfinite(new_average))
+                        if (!pe_finite_double(new_regret) || !pe_finite_double(new_average))
                         {
                             fast_safe = 0;
                             break;
@@ -600,8 +601,8 @@ static int cpu_par_apply_update_batch(void *self,
 
     for (i = 0; i < (int)batch->count; ++i)
     {
-        if (!isfinite(batch->items[i].delta) ||
-            !isfinite(batch->items[i].average_delta))
+        if (!pe_finite_double(batch->items[i].delta) ||
+            !pe_finite_double(batch->items[i].average_delta))
             return -1;
 
         if (backend->config.storage != NULL && backend->config.storage_self != NULL)

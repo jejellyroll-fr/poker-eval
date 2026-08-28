@@ -8,6 +8,8 @@
 #include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/solver/pe_pots.h>
 
+#include "../domain/finite_double.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -144,14 +146,14 @@ static int tree_apply_action(const mpf_tree_node_t *node, int action,
                 increment = state->min_raise;
             else if (node->use_pot_sizing)
                 increment *= state->pot > 0.0 ? state->pot : state->to_call;
-            if (!isfinite(increment) || increment < 0.0)
+            if (!pe_finite_double(increment) || increment < 0.0)
                 return -1;
             commitment = need + increment;
         }
     }
     else
         return -1;
-    if (commitment < 0.0 || !isfinite(commitment))
+    if (commitment < 0.0 || !pe_finite_double(commitment))
         return -1;
     if (commitment > state->stack[player])
         commitment = state->stack[player];
@@ -266,7 +268,7 @@ int pe_monker_omaha_tree_values(
         spec->board, spec->ranges, spec->player_count, spec->hole_cards,
         tree_deal_callback, &walk, out_deal_count, out_weight_sum);
     if (status != 0 || walk.failed || *out_weight_sum <= 0.0 ||
-        !isfinite(*out_weight_sum))
+        !pe_finite_double(*out_weight_sum))
         return -1;
     for (player = 0u; player < spec->player_count; ++player)
         out_values[player] = walk.values[player] / *out_weight_sum;

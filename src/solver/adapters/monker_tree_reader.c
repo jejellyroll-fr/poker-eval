@@ -14,6 +14,8 @@
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/solver/pe_combinations.h>
 
+#include "../domain/finite_double.h"
+
 #define PE_MONKER_MAX_NODES 1000000u
 #define PE_MONKER_MAX_DEPTH 1024u
 
@@ -818,7 +820,7 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
                 (double)fixed / 2147483647.0;
             total += range->combos[index].weight;
         }
-        if (!(total > 0.0) || !isfinite(total))
+        if (!(total > 0.0) || !pe_finite_double(total))
         {
             free(bytes);
             pe_monker_range_set_free(out);

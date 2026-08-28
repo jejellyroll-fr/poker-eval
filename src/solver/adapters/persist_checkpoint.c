@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../domain/finite_double.h"
+
 #define PE_CHECKPOINT_VERSION 2u
 #define PE_CHECKPOINT_ENDIAN  0x01020304u
 #define PE_CHECKPOINT_MAX_ENTRIES 10000000u
@@ -325,7 +327,7 @@ static int checkpoint_load_legacy(FILE *file,
             unsigned which;
             for (which = PE_VALUES_REGRET; which <= PE_VALUES_LOCKED; ++which)
                 if ((entries[i].present & (uint8_t)(1u << which)) != 0u &&
-                    !isfinite(entries[i].values[which][slot]))
+                    !pe_finite_double(entries[i].values[which][slot]))
                     goto fail;
         }
     }
@@ -424,7 +426,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
             if (!values)
                 goto fail;
             for (slot = 0u; slot < slots; ++slot)
-                if (!isfinite(values[slot]) || write_double(file, values[slot]) != 0)
+                if (!pe_finite_double(values[slot]) || write_double(file, values[slot]) != 0)
                     goto fail;
         }
     }
@@ -531,7 +533,7 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
                 goto fail;
             for (slot = 0u; slot < entries[i].slots; ++slot)
                 if (read_double(file, &entries[i].values[which][slot]) != 0 ||
-                    !isfinite(entries[i].values[which][slot]))
+                    !pe_finite_double(entries[i].values[which][slot]))
                     goto fail;
         }
     }

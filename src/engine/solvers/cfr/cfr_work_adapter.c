@@ -4,6 +4,8 @@
 #include <poker_eval/engine/solvers/cfr/holdem_river_adapter.h>
 #include <poker_eval/core/modern_cardmask.h>
 
+#include "../../../solver/domain/finite_double.h"
+
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -104,7 +106,7 @@ int pe_cfr_work_execute(const pe_work_unit_t *unit,
         out_result->iterations = (uint64_t)iterations;
         out_result->infosets_trained =
             (uint64_t)cfr_storage_count_infosets(storage);
-        out_result->exploitability = isfinite(exploitability)
+        out_result->exploitability = pe_finite_double(exploitability)
             ? exploitability : 0.0;
         out_result->worst_margin = 0.0;
         out_result->mean_margin = 0.0;

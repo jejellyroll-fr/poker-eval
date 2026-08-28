@@ -1,4 +1,5 @@
 #include "compute_simd.h"
+#include "../domain/finite_double.h"
 
 #include <poker_eval/equity/simd_operations.h>
 
@@ -378,8 +379,8 @@ int pe_compute_simd_apply_weighted(double *regrets, double *averages,
                                   double average_scale, int clamp_regret)
 {
     if (!regrets || !averages || !deltas || !average_deltas || count == 0u ||
-        !isfinite(positive_factor) || !isfinite(negative_factor) ||
-        !isfinite(average_scale))
+        !pe_finite_double(positive_factor) || !pe_finite_double(negative_factor) ||
+        !pe_finite_double(average_scale))
         return 0;
 
     switch (simd_runtime_capability())
@@ -474,7 +475,7 @@ int pe_compute_simd_regret_match(const float *regrets, float *strategies,
                                  size_t count, float positive)
 {
     if (!regrets || !strategies || count == 0u ||
-        !isfinite(positive) || positive <= 0.0f)
+        !pe_finite_double(positive) || positive <= 0.0f)
         return 0;
 
     switch (simd_runtime_capability())

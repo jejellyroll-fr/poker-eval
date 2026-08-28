@@ -1,6 +1,7 @@
 /* compute_gpu_updates.c - common GPU-06 update packing and validation. */
 
 #include "compute_gpu_updates.h"
+#include "../domain/finite_double.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -151,7 +152,7 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
         const pe_update_t *update = &batch->items[i];
         size_t group;
 
-        if (!isfinite(update->delta) || !isfinite(update->average_delta))
+        if (!pe_finite_double(update->delta) || !pe_finite_double(update->average_delta))
             goto fail;
         if (pack_index_find(&group_index, (uint64_t)update->infoset) !=
             SIZE_MAX)
@@ -216,8 +217,8 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
                 (float)out->groups[i].regrets[j];
             out->averages[out->offsets[i] + j] =
                 (float)out->groups[i].averages[j];
-            if (!isfinite(out->regrets[out->offsets[i] + j]) ||
-                !isfinite(out->averages[out->offsets[i] + j]))
+            if (!pe_finite_double(out->regrets[out->offsets[i] + j]) ||
+                !pe_finite_double(out->averages[out->offsets[i] + j]))
                 goto fail;
         }
     }
@@ -242,7 +243,7 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
            another span. */
         group = pack_index_find(&group_index,
                                 (uint64_t)batch->items[i].infoset);
-        if (!isfinite(regret_delta) || !isfinite(average_delta) ||
+        if (!pe_finite_double(regret_delta) || !pe_finite_double(average_delta) ||
             group == SIZE_MAX ||
             pe_infoset_layout_slot_at(&out->layout, group, &batch->items[i],
                                       &slot) != 0)
@@ -252,8 +253,8 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
         {
             out->regret_deltas[prior] += regret_delta;
             out->average_deltas[prior] += average_delta;
-            if (!isfinite(out->regret_deltas[prior]) ||
-                !isfinite(out->average_deltas[prior]))
+            if (!pe_finite_double(out->regret_deltas[prior]) ||
+                !pe_finite_double(out->average_deltas[prior]))
                 goto fail;
         }
         else
@@ -291,8 +292,8 @@ int pe_gpu_update_pack_commit(pe_gpu_update_pack_t *pack)
                         (size_t)pack->combo_counts[i];
         for (j = 0u; j < length; ++j)
         {
-            if (!isfinite((double)pack->regrets[pack->offsets[i] + j]) ||
-                !isfinite((double)pack->averages[pack->offsets[i] + j]))
+            if (!pe_finite_double((double)pack->regrets[pack->offsets[i] + j]) ||
+                !pe_finite_double((double)pack->averages[pack->offsets[i] + j]))
                 return -1;
             pack->groups[i].regrets[j] =
                 (double)pack->regrets[pack->offsets[i] + j];

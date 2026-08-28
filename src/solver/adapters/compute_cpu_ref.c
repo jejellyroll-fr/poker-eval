@@ -8,6 +8,7 @@
 #include <poker_eval/games/eval_omaha.h>
 
 #include "compute_simd.h"
+#include "../domain/finite_double.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -55,7 +56,7 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
     double average_delta;
 
     if (!config || !batch || !update || !out_regret || !out_average ||
-        !isfinite(old_regret) || !isfinite(old_average))
+        !pe_finite_double(old_regret) || !pe_finite_double(old_average))
         return -1;
     average_delta = update->average_delta;
 
@@ -99,7 +100,7 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
     default:
         break;
     }
-    if (!isfinite(regret) || !isfinite(old_average + average_delta))
+    if (!pe_finite_double(regret) || !pe_finite_double(old_average + average_delta))
         return -1;
     *out_regret = regret;
     *out_average = old_average + average_delta;
@@ -269,8 +270,8 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 double old_average = average[check_index];
                 double average_delta =
                     batch->soa.average_deltas[group->offset + check_index];
-                if (!isfinite(old_regret) || !isfinite(delta) ||
-                    !isfinite(old_average) || !isfinite(average_delta))
+                if (!pe_finite_double(old_regret) || !pe_finite_double(delta) ||
+                    !pe_finite_double(old_average) || !pe_finite_double(average_delta))
                     goto done;
                 {
                     double summed_regret = old_regret + delta;
@@ -297,8 +298,8 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                           backend->config.regret_mode == PE_REGRET_PLUS)))
             {
                 for (check_index = 0u; check_index < values; ++check_index)
-                    if (!isfinite(regrets[check_index]) ||
-                        !isfinite(average[check_index]))
+                    if (!pe_finite_double(regrets[check_index]) ||
+                        !pe_finite_double(average[check_index]))
                         goto done;
                 continue;
             }
@@ -318,7 +319,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
             double new_average;
             size_t slot = pe_storage_slot_at(combos, update.action,
                                               update.combo);
-            if (!isfinite(update.delta) || !isfinite(update.average_delta) ||
+            if (!pe_finite_double(update.delta) || !pe_finite_double(update.average_delta) ||
                 slot >= regret_length || slot >= average_length ||
                 cpu_ref_update_values(&backend->config, batch, &update,
                                       regrets[slot], average[slot],
@@ -363,7 +364,7 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
         out->capacity < (in->count != 0u ? in->offsets[in->count] : 0u))
         return -1;
     if (backend->config.policy_mode == PE_POLICY_EXPONENTIAL &&
-        (!isfinite(backend->config.exponential_lambda) ||
+        (!pe_finite_double(backend->config.exponential_lambda) ||
          backend->config.exponential_lambda <= 0.0))
         return -1;
     if (in->count == 0u)
@@ -395,7 +396,7 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
             for (action = 0u; action < actions; ++action)
             {
                 float regret = in->regrets[begin + action];
-                if (!isfinite(regret))
+                if (!pe_finite_double(regret))
                     return -1;
                 if (regret > maximum)
                     maximum = regret;
@@ -405,11 +406,11 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
                 double weight = exp(backend->config.exponential_lambda *
                                     ((double)in->regrets[begin + action] -
                                      (double)maximum));
-                if (!isfinite(weight))
+                if (!pe_finite_double(weight))
                     return -1;
                 total += weight;
             }
-            if (!isfinite(total) || total <= 0.0)
+            if (!pe_finite_double(total) || total <= 0.0)
                 return -1;
             for (action = 0u; action < actions; ++action)
             {
@@ -423,10 +424,10 @@ static int cpu_ref_strategy_batch(void *self, const pe_infoset_batch_t *in,
             continue;
         }
         for (action = 0u; action < actions; ++action)
-            if (!isfinite(in->regrets[begin + action]))
+            if (!pe_finite_double(in->regrets[begin + action]))
                 return -1;
         positive = pe_compute_simd_positive_sum(in->regrets + begin, actions);
-        if (!isfinite(positive))
+        if (!pe_finite_double(positive))
             return -1;
         if (positive > 0.0f && pe_compute_simd_regret_match(
                 in->regrets + begin, out->strategies + begin, actions,
@@ -466,7 +467,7 @@ static int cpu_ref_apply_update_batch(void *self,
         return cpu_ref_apply_soa(backend, batch);
     for (index = 0u; index < batch->count; ++index) {
         const pe_update_t *update = &batch->items[index];
-        if (!isfinite(update->delta) || !isfinite(update->average_delta))
+        if (!pe_finite_double(update->delta) || !pe_finite_double(update->average_delta))
             return -1;
         if (backend->config.storage != NULL) {
             uint16_t actions;
