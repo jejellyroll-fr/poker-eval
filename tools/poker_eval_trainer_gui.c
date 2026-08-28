@@ -608,6 +608,8 @@ static int execute_gui_solver(char *const argv[])
         return -1;
     /* The caller supplies an absolute path to one of the four bundled tools;
      * no shell or PATH lookup is involved. */
+    /* Flawfinder: ignore — this is the validated process boundary for the
+     * bundled solver tools; an in-process equivalent does not exist. */
     execv(argv[0], argv);
     return -1;
 }
