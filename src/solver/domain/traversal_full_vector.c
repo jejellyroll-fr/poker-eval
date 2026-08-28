@@ -522,6 +522,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             if (vector_alloc(ctx, &child_values[(size_t)action * game->player_count + p],
                              game->combo_count) != PE_SOLVER_OK)
             {
+                if (child && game->release_state)
+                    game->release_state(child, game->user);
                 for (uint8_t q = 0u; q < game->player_count; ++q)
                     pe_vec_free(&child_reach[q]);
                 for (uint16_t a = 0u; a < action; ++a)
@@ -535,6 +537,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         rc = child ? vector_visit(ctx, child, child_reach,
                                   &child_values[(size_t)action * game->player_count],
                                   out_batch) : -1;
+        if (child && game->release_state)
+            game->release_state(child, game->user);
         for (p = 0u; p < game->player_count; ++p)
             pe_vec_free(&child_reach[p]);
         if (rc != 0)

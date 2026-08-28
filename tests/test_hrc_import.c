@@ -61,6 +61,11 @@ int main(void)
     assert(fabs(pko_result.elimination_probability[0][1] - 1.0) < 1e-9);
     assert(fabs(pko_result.pko.bounty_ev[0] - 25.0) < 1e-9);
     pe_hrc_import_free(&imported);
+
+    /* The parser must honor the caller-provided byte length even when the
+       input is not NUL-terminated or ends in the middle of a number. */
+    assert(pe_hrc_import_json(json, strlen(json) - 1u, zero_terminal, NULL,
+                              &imported, &error) != 0);
     puts("HRC/PKO JSON import and pot trace tests passed");
     return 0;
 }

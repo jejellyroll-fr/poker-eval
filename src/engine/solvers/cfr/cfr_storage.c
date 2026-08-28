@@ -425,6 +425,12 @@ int cfr_storage_has_entry(cfr_storage_t *s, uint64_t key)
     return find_entry(s, key) ? 1 : 0;
 }
 
+int cfr_storage_action_count(cfr_storage_t *s, uint64_t key)
+{
+    entry_t *entry = find_entry(s, key);
+    return entry ? entry->n : 0;
+}
+
 int cfr_storage_set_locked_strategy(cfr_storage_t *s, uint64_t infoset, const double *probs, int n)
 {
     if (!s || !probs || n <= 0)

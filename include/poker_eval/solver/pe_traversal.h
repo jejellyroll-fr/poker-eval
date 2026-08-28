@@ -66,6 +66,9 @@ typedef struct pe_vector_game_t
                            const pe_reach_vec_t *reach,
                            pe_value_vec_t *out_values, uint8_t player_count,
                            void *user);
+    /* Optional lifetime hook for a child returned by apply_action.  The
+       traversal calls it after the child has been fully consumed. */
+    void (*release_state)(const void *state, void *user);
 } pe_vector_game_t;
 
 struct pe_traversal_ctx_t

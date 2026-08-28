@@ -106,18 +106,43 @@ static int parse_string(json_reader_t *reader, char **out,
 static int parse_number(json_reader_t *reader, double *out,
                         pe_hrc_import_error_t *error)
 {
+    char stack_token[128];
+    char *token = stack_token;
     char *end;
-    const char *start;
+    size_t token_length = 0;
+    size_t remaining;
     double value;
     skip_space(reader);
-    start = reader->text + reader->position;
-    errno = 0;
-    value = strtod(start, &end);
-    if (end == start || errno == ERANGE || !pe_finite_double(value)) {
+    remaining = reader->length - reader->position;
+    while (token_length < remaining &&
+           !isspace((unsigned char)reader->text[reader->position + token_length]) &&
+           !strchr(",]}", reader->text[reader->position + token_length]))
+        ++token_length;
+    if (token_length == 0u) {
         set_error(reader, error, "expected finite JSON number");
         return 0;
     }
-    reader->position += (size_t)(end - start);
+    if (token_length >= sizeof(stack_token)) {
+        token = (char *)malloc(token_length + 1u);
+        if (!token) {
+            set_error(reader, error, "out of memory");
+            return 0;
+        }
+    }
+    memcpy(token, reader->text + reader->position, token_length);
+    token[token_length] = '\0';
+    errno = 0;
+    value = strtod(token, &end);
+    if (end != token + token_length || errno == ERANGE ||
+        !pe_finite_double(value)) {
+        if (token != stack_token)
+            free(token);
+        set_error(reader, error, "expected finite JSON number");
+        return 0;
+    }
+    reader->position += token_length;
+    if (token != stack_token)
+        free(token);
     *out = value;
     return 1;
 }
@@ -480,9 +505,10 @@ int pe_hrc_import_json_file(const char *path, pe_hrc_terminal_fn terminal_value,
     file = fopen(path, "rb"); if (!file) { if (error) snprintf(error->message, sizeof(error->message), "cannot open file"); return -1; }
     if (fseek(file, 0, SEEK_END) != 0) { fclose(file); if (error) snprintf(error->message, sizeof(error->message), "cannot seek file"); return -1; }
     size = ftell(file); if (size <= 0 || fseek(file, 0, SEEK_SET) != 0) { fclose(file); if (error) snprintf(error->message, sizeof(error->message), "invalid file size"); return -1; }
-    buffer = malloc((size_t)size); if (!buffer) { fclose(file); if (error) snprintf(error->message, sizeof(error->message), "out of memory"); return -1; }
+    buffer = malloc((size_t)size + 1u); if (!buffer) { fclose(file); if (error) snprintf(error->message, sizeof(error->message), "out of memory"); return -1; }
     read_size = fread(buffer, 1, (size_t)size, file); fclose(file);
     if (read_size != (size_t)size) { free(buffer); if (error) snprintf(error->message, sizeof(error->message), "cannot read file"); return -1; }
+    buffer[read_size] = '\0';
     result = pe_hrc_import_json(buffer, read_size, terminal_value, user_data, out, error);
     free(buffer); return result;
 }

@@ -166,6 +166,9 @@ double cfr_best_response_recursive_multiway(
 
 uint64_t cfr_traversal_storage_key(cfr_game_t *game, uint64_t state_key)
 {
+    if (game->get_infoset_key_with_user)
+        return game->get_infoset_key_with_user(
+            (const void *)(uintptr_t)state_key, game->infoset_user_data);
     if (game->get_infoset_key)
         return game->get_infoset_key((const void *)(uintptr_t)state_key);
     return state_key;

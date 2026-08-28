@@ -66,6 +66,16 @@ int main(void)
     assert(pe_hrc_result_combo_probability(&result, 0, 0, 1, 0) > 0.99);
     assert(fabs(result.ev[0] - 1.0) < 1e-6);
     pe_hrc_result_free(&result);
+
+    {
+        pe_hrc_node_t invalid_nodes[5] = {0};
+        memcpy(invalid_nodes, nodes, sizeof(nodes));
+        invalid_nodes[4].player_to_act = -1;
+        invalid_nodes[4].action_count = 0;
+        config.tree.nodes = invalid_nodes;
+        config.tree.node_count = 5;
+        assert(pe_hrc_validate(&config) == PE_HRC_ERR_INVALID_TREE);
+    }
     puts("HRC multiway range-tree tests passed");
     return 0;
 }

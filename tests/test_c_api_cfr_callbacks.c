@@ -39,6 +39,12 @@ static double utility(uint64_t state, int player, void *user)
     return state == 2u ? -1.0 : 1.0;
 }
 
+static uint64_t infoset_key(uint64_t state, void *user)
+{
+    (void)user;
+    return state == 1u ? 7u : state;
+}
+
 int main(void)
 {
     pe_handle_t root = pe_init(NULL);
@@ -54,12 +60,21 @@ int main(void)
     desc.get_actions = get_actions;
     desc.apply_action = apply_action;
     desc.get_utility = utility;
+    desc.get_infoset_key = infoset_key;
     solver = pe_cfr_create_callbacks(root, &desc, 10);
     if (!root || !solver || pe_cfr_solve(solver, 10) != PE_OK ||
-        pe_cfr_get_strategy(solver, 1u, strategy, 2) != 2 ||
+        pe_cfr_get_strategy(solver, 7u, strategy, 2) != 2 ||
         pe_cfr_get_exploitability(solver, &exploitability) != PE_OK)
     {
         fprintf(stderr, "callback C CFR façade regression failed\n");
+        pe_cfr_free(solver);
+        pe_free(root);
+        return 1;
+    }
+    if (pe_cfr_get_strategy(solver, 7u, strategy, 8) != 2 ||
+        pe_cfr_get_strategy(solver, 7u, strategy, 1) != -1)
+    {
+        fprintf(stderr, "callback C CFR action-capacity contract failed\n");
         pe_cfr_free(solver);
         pe_free(root);
         return 1;

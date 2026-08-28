@@ -253,6 +253,12 @@ struct cfr_game_t {
     /* Generic terminal utility override (ISSUE-14, #170).  NULL utility_fn keeps
      * the legacy linear get_utility evaluation with zero overhead. */
     pe_cfr_utility_config_t utility;
+
+    /* Context-aware variant for callback-backed games. It takes precedence
+     * over get_infoset_key when supplied. Appended to preserve the layout of
+     * legacy positional initializers. */
+    uint64_t (*get_infoset_key_with_user)(const void *state, void *user_data);
+    void *infoset_user_data;
 };
 
 /* CFR configuration */
@@ -460,6 +466,12 @@ void cfr_storage_get_avg_strategy(
 );
 
 int cfr_storage_has_entry(
+    cfr_storage_t* storage,
+    uint64_t key
+);
+
+/* Return the action count stored for an infoset, or 0 when it is absent. */
+int cfr_storage_action_count(
     cfr_storage_t* storage,
     uint64_t key
 );

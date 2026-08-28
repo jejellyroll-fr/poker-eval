@@ -50,6 +50,7 @@ typedef int (*pe_cfr_get_actions_fn)(uint64_t state, int *actions,
                                      int max_actions, void *user);
 typedef uint64_t (*pe_cfr_apply_action_fn)(uint64_t state, int action, void *user);
 typedef double (*pe_cfr_get_utility_fn)(uint64_t state, int player, void *user);
+typedef uint64_t (*pe_cfr_get_infoset_key_fn)(uint64_t state, void *user);
 typedef struct {
     uint64_t initial_state;
     int num_players;
@@ -59,6 +60,9 @@ typedef struct {
     pe_cfr_apply_action_fn apply_action;
     pe_cfr_get_utility_fn get_utility;
     void *user;
+    /* Optional information-set mapping.  When omitted, the state key is used
+       directly, which is only correct for games without hidden information. */
+    pe_cfr_get_infoset_key_fn get_infoset_key;
 } pe_cfr_game_desc_t;
 
 /** ICM calculator handle */
@@ -354,7 +358,8 @@ pe_error_t pe_cfr_solve(pe_cfr_handle_t cfr, int iterations);
  * @param infoset_key Information set key (hash)
  * @param strategy    Output strategy array
  * @param max_actions Maximum actions
- * @return Number of actions, or negative on error
+ * @return The information set's actual action count, or -1 when the
+ *         information set is unknown or max_actions is too small
  */
 int pe_cfr_get_strategy(pe_cfr_handle_t cfr,
                         uint64_t infoset_key,

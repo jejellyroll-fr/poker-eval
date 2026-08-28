@@ -27,6 +27,13 @@ int main(void)
     if (!check(editor.root_index == 0 && editor.node_count == 3,
                "new tree has a root and two terminal children"))
         return 1;
+    if (!check(!pe_tree_editor_add_action(&editor, editor.root_index,
+                                          MPF_TREE_ACTION_FOLD, 0.0, NULL),
+               "duplicate fold action is rejected"))
+        return 1;
+    if (!check(editor.nodes[editor.root_index].action_count == 2,
+               "duplicate fold did not mutate the root"))
+        return 1;
     if (!check(pe_tree_editor_add_action(&editor, editor.root_index,
                                          MPF_TREE_ACTION_RAISE, 0.75,
                                          &raise_child),

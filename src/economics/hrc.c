@@ -88,6 +88,13 @@ pe_hrc_status_t pe_hrc_validate(const pe_hrc_config_t *config)
     memset(color, 0, sizeof(color));
     if (!validate_node(&config->tree, config->tree.root_index, color))
         return PE_HRC_ERR_INVALID_TREE;
+    /* The solver allocates and initializes per-node storage by iterating the
+       whole supplied array, not just nodes reachable from root.  Validate
+       disconnected nodes as well so an unreachable malformed player node
+       cannot later index ranges[-1] or ranges[num_players]. */
+    for (size_t node = 0; node < config->tree.node_count; ++node)
+        if (color[node] == 0 && !validate_node(&config->tree, (int)node, color))
+            return PE_HRC_ERR_INVALID_TREE;
     for (int p = 0; p < config->tree.num_players; ++p) {
         if (!config->ranges[p].combos || config->ranges[p].count == 0)
             return PE_HRC_ERR_INVALID_RANGE;

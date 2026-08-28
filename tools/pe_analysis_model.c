@@ -275,6 +275,13 @@ int pe_analysis_parse_numbers(const char *text, double *out, int capacity,
             return -1;
         }
         out[count++] = value;
+        if (*end != '\0' && !isspace((unsigned char)*end) &&
+            *end != ',' && *end != ';')
+        {
+            set_error(error, error_size, "expected a separator after %g",
+                      value);
+            return -1;
+        }
         cursor = end;
     }
     *out_count = count;
@@ -496,12 +503,19 @@ int pe_analysis_breakdown(enum_game_t game, const char *range,
         set_error(out->error, sizeof(out->error), "the range is empty");
         return -1;
     }
-    if (pe_range_parse(game, range, blocked, NULL, &parsed) != PE_STATUS_OK ||
-        parsed == NULL)
+    /* Parse before applying the board/dead-card mask so blocked_combos
+       describes the user's submitted range rather than the already-filtered
+       live range. */
     {
-        set_error(out->error, sizeof(out->error),
-                  "the range could not be parsed: %s", range);
-        return -1;
+        StdDeck_CardMask no_cards;
+        StdDeck_CardMask_RESET(no_cards);
+        if (pe_range_parse(game, range, no_cards, NULL, &parsed) != PE_STATUS_OK ||
+            parsed == NULL)
+        {
+            set_error(out->error, sizeof(out->error),
+                      "the range could not be parsed: %s", range);
+            return -1;
+        }
     }
 
     for (i = 0u; i < parsed->count; ++i)

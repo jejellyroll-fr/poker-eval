@@ -293,6 +293,21 @@ int pe_tree_editor_add_action(pe_tree_editor_t *editor, int node_index,
     if (node->type != MPF_TREE_NODE_PLAYER ||
         node->action_count >= PE_TREE_EDITOR_MAX_ACTIONS)
         return 0;
+    /* A player node should have at most one branch for each action.  The
+       default editor tree already contains Fold and Call/Check, so accepting
+       another quick-click for either action creates an ambiguous duplicate
+       branch instead of extending the tree. */
+    for (int i = 0; i < node->action_count; ++i)
+    {
+        const pe_tree_editor_action_t *existing = &node->actions[i];
+        if (existing->type != type)
+            continue;
+        if (type != MPF_TREE_ACTION_RAISE ||
+            (existing->size_index >= 0 &&
+             existing->size_index < node->bet_size_count &&
+             fabs(node->bet_sizes[existing->size_index] - bet_size) < 1e-12))
+            return 0;
+    }
     original_node_count = editor->node_count;
     original_action_count = node->action_count;
     original_bet_size_count = node->bet_size_count;

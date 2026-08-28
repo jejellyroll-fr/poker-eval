@@ -2437,6 +2437,23 @@ static const void *py_solver_v3_store_state(py_solver_v3_context_t *ctx,
     return (const void *)state;
 }
 
+static void py_solver_v3_release_state(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    Py_ssize_t index;
+    if (!ctx || !ctx->states || !state || state == ctx->game.root)
+        return;
+    /* The vector-game contract releases one ownership acquired by each
+       apply_action call.  Remove one matching list entry, rather than
+       retaining every visit until capsule destruction. */
+    for (index = PyList_GET_SIZE(ctx->states) - 1; index >= 0; --index)
+        if ((const void *)PyList_GET_ITEM(ctx->states, index) == state) {
+            if (PySequence_DelItem(ctx->states, index) != 0)
+                PyErr_Clear();
+            return;
+        }
+}
+
 static int py_solver_v3_is_terminal(const void *state, void *user)
 {
     py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
@@ -2730,6 +2747,7 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
     ctx->game.infoset_key = py_solver_v3_infoset_key;
     ctx->game.apply_action = py_solver_v3_apply_action;
     ctx->game.terminal_values = py_solver_v3_terminal_values;
+    ctx->game.release_state = py_solver_v3_release_state;
     if (PyObject_HasAttrString(game_object, "strategy"))
         ctx->game.strategy = py_solver_v3_strategy_callback;
     config = pe_solver_config_default();

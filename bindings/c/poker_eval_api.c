@@ -37,6 +37,12 @@ struct pe_cfr_solver_t {
     int ready;
     uint64_t iteration;
     double exploitability;
+    struct {
+        uint64_t key;
+        int action_count;
+    } *action_counts;
+    size_t action_count_size;
+    size_t action_count_capacity;
 };
 
 struct pe_solver_api_t {
@@ -528,8 +534,37 @@ static int pe_cfr_cb_actions(cfr_game_t *game, uint64_t state, int *actions,
                              int max_actions, void *user)
 {
     pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    int count;
+    uint64_t key;
     (void)user;
-    return cfr->callbacks.get_actions(state, actions, max_actions, cfr->callbacks.user);
+    count = cfr->callbacks.get_actions(state, actions, max_actions,
+                                       cfr->callbacks.user);
+    if (count <= 0)
+        return count;
+    key = cfr->callbacks.get_infoset_key
+        ? cfr->callbacks.get_infoset_key(state, cfr->callbacks.user) : state;
+    for (size_t i = 0u; i < cfr->action_count_size; ++i)
+        if (cfr->action_counts[i].key == key) {
+            if (cfr->action_counts[i].action_count != count)
+                return -1;
+            return count;
+        }
+    if (cfr->action_count_size == cfr->action_count_capacity) {
+        size_t capacity = cfr->action_count_capacity == 0u
+            ? 32u : cfr->action_count_capacity * 2u;
+        void *grown = realloc(cfr->action_counts,
+                              capacity * sizeof(*cfr->action_counts));
+        if (!grown) {
+            set_error(cfr->parent, "could not retain CFR action-count metadata");
+            return -1;
+        }
+        cfr->action_counts = grown;
+        cfr->action_count_capacity = capacity;
+    }
+    cfr->action_counts[cfr->action_count_size].key = key;
+    cfr->action_counts[cfr->action_count_size].action_count = count;
+    ++cfr->action_count_size;
+    return count;
 }
 
 static uint64_t pe_cfr_cb_apply(cfr_game_t *game, uint64_t state, int action, void *user)
@@ -544,6 +579,14 @@ static double pe_cfr_cb_utility(cfr_game_t *game, uint64_t state, int player, vo
     pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
     (void)user;
     return cfr->callbacks.get_utility(state, player, cfr->callbacks.user);
+}
+
+static uint64_t pe_cfr_cb_infoset_key(const void *state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)user;
+    uint64_t key = (uint64_t)(uintptr_t)state;
+    return cfr && cfr->callbacks.get_infoset_key
+        ? cfr->callbacks.get_infoset_key(key, cfr->callbacks.user) : key;
 }
 
 pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
@@ -570,6 +613,8 @@ pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
     cfr->cfr_game.apply_action = pe_cfr_cb_apply;
     cfr->cfr_game.is_terminal = pe_cfr_cb_terminal;
     cfr->cfr_game.get_utility = pe_cfr_cb_utility;
+    cfr->cfr_game.get_infoset_key_with_user = pe_cfr_cb_infoset_key;
+    cfr->cfr_game.infoset_user_data = cfr;
     cfr->cfr_game.game_data = cfr;
     cfr->cfr_game.initial_state = (void *)(uintptr_t)game->initial_state;
     cfr->cfr_game.num_players = game->num_players;
@@ -586,6 +631,7 @@ pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
 void pe_cfr_free(pe_cfr_handle_t cfr) {
     if (cfr) {
         cfr_storage_destroy(cfr->storage);
+        free(cfr->action_counts);
         free(cfr);
     }
 }
@@ -609,9 +655,20 @@ int pe_cfr_get_strategy(pe_cfr_handle_t cfr,
                         uint64_t infoset_key,
                         double* strategy,
                         int max_actions) {
+    int action_count = 0;
     if (!cfr || !cfr->ready || !strategy || max_actions <= 0) return -1;
-    cfr_storage_get_avg_strategy(cfr->storage, infoset_key, max_actions, strategy);
-    return max_actions;
+    for (size_t i = 0u; i < cfr->action_count_size; ++i)
+        if (cfr->action_counts[i].key == infoset_key) {
+            action_count = cfr->action_counts[i].action_count;
+            break;
+        }
+    if (action_count == 0)
+        action_count = cfr_storage_action_count(cfr->storage, infoset_key);
+    if (action_count <= 0 || action_count > max_actions)
+        return -1;
+    cfr_storage_get_avg_strategy(cfr->storage, infoset_key, action_count,
+                                 strategy);
+    return action_count;
 }
 
 pe_error_t pe_cfr_save(pe_cfr_handle_t cfr, const char* filepath) {

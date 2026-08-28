@@ -127,6 +127,20 @@ static void test_equity_refusals(void)
           "fully conflicting ranges were accepted: %s", report.error);
 }
 
+static void test_number_separators(void)
+{
+    double values[2];
+    int count = 0;
+    char error[PE_ANALYSIS_ERROR_MAX];
+
+    CHECK(pe_analysis_parse_numbers("10, 20", values, 2, &count,
+                                   error, sizeof(error)) == 0 && count == 2,
+          "comma-separated numbers were not parsed");
+    CHECK(pe_analysis_parse_numbers("10.5.5", values, 2, &count,
+                                   error, sizeof(error)) != 0,
+          "adjacent numeric tokens without a separator were accepted");
+}
+
 /* On a paired board with a flush possible, the classes a range falls into are
    checkable by hand. AA on Ah7h2h: every combo holding Ah is a flush; the
    rest are trip aces. */
@@ -139,6 +153,8 @@ static void test_breakdown_classes(void)
     /* AA has 6 combos; the board takes Ah, leaving 3 (AsAd, AsAc, AdAc). */
     CHECK(report.live_combos == 3u,
           "%zu live combos, expected 3", report.live_combos);
+    CHECK(report.blocked_combos == 3u,
+          "%zu blocked combos, expected 3", report.blocked_combos);
     CHECK(fabs(report.share[PE_HAND_CLASS_TRIPS] - 1.0) < 1.0e-9,
           "AA on Ah7h2h should be all trips, trips share is %.4f",
           report.share[PE_HAND_CLASS_TRIPS]);
@@ -317,6 +333,7 @@ int main(void)
     test_known_preflop_matchup();
     test_drawing_dead_is_exact_zero();
     test_equity_refusals();
+    test_number_separators();
     test_breakdown_classes();
     test_breakdown_refusals();
     test_icm_invariants();
