@@ -914,7 +914,9 @@ int main(int argc, char **argv)
     int status;
     uint8_t player;
 
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    /* MSVC's UCRT rejects a zero-sized line buffer.  The CLI flushes its
+     * progress output explicitly, so unbuffered output is portable here. */
+    setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
     status = parse_args(argc, argv, &options, &game);

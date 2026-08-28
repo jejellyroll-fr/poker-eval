@@ -782,7 +782,9 @@ int main(int argc, char **argv)
     pe_monker_tree_header_t tree_header;
     simd_capability_t detected_simd = SIMD_NONE;
 
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    /* MSVC's UCRT rejects a zero-sized line buffer.  The CLI flushes its
+     * progress output explicitly, so unbuffered output is portable here. */
+    setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
     {
