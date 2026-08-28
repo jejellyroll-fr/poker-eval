@@ -129,7 +129,8 @@ static int parse_number(json_reader_t *reader, double *out,
             return 0;
         }
     }
-    memcpy(token, reader->text + reader->position, token_length);
+    for (size_t i = 0u; i < token_length; ++i)
+        token[i] = reader->text[reader->position + i];
     token[token_length] = '\0';
     errno = 0;
     value = strtod(token, &end);
