@@ -36,6 +36,7 @@ jobs:
               -DPE_SDL2_ROOT="$env:PE_SDL2_CI_ROOT"
               -DPE_SDL2_INCLUDE_DIR="$env:PE_SDL2_CI_ROOT/include"
               -DPE_SDL2_LIBRARY="$env:PE_SDL2_CI_ROOT/lib/x64/SDL2.lib"
+              -DCMAKE_C_FLAGS="/I$env:PE_SDL2_CI_ROOT/include"
             build: >-
               cmake --build build/windows-msvc --target poker-eval-trainer-gui
               --config Release
@@ -61,6 +62,12 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sdl2.zip"
           Expand-Archive "$env:RUNNER_TEMP\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\sdl2"
           $sdl2Root = (Join-Path $env:RUNNER_TEMP "sdl2\SDL2-2.30.12").Replace('\', '/')
+          if (-not (Test-Path "$sdl2Root/include/SDL2/SDL.h")) {
+            throw "SDL2 header not found under $sdl2Root"
+          }
+          if (-not (Test-Path "$sdl2Root/lib/x64/SDL2.lib")) {
+            throw "SDL2 library not found under $sdl2Root"
+          }
           "CMAKE_PREFIX_PATH=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
           "PE_SDL2_CI_ROOT=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
 
