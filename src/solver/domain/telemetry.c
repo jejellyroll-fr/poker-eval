@@ -13,6 +13,7 @@
  */
 
 #include <poker_eval/solver/pe_telemetry.h>
+#include <poker_eval/core/safe_format.h>
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -42,7 +43,7 @@ void pe_telemetry_emitf(const pe_telemetry_ops_t *ops,
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #endif
-    vsnprintf(message, sizeof(message), fmt, args); /* NOSONAR: callers provide internal format strings. */
+    (void)pe_safe_vformat(message, sizeof(message), fmt, args);
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

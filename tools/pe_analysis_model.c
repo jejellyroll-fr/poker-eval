@@ -11,6 +11,7 @@
 
 #include <poker_eval/core/eval.h>
 #include <poker_eval/range.h>
+#include <poker_eval/core/safe_format.h>
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -30,7 +31,7 @@ static void set_error(char *error, size_t size, const char *fmt, ...)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #endif
-    vsnprintf(error, size, fmt, args); /* NOSONAR: internal format strings are checked at call sites. */
+    (void)pe_safe_vformat(error, size, fmt, args);
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

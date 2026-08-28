@@ -1,6 +1,7 @@
 /* pe_runtime.c - Runtime backend/SIMD capability discovery. */
 
 #include <poker_eval/solver/pe_runtime.h>
+#include <poker_eval/core/safe_format.h>
 #include <poker_eval/core/time_compat.h>
 
 #include <errno.h>
@@ -19,12 +20,7 @@
 
 static int gpu_parity_gate_disabled(void)
 {
-    const char *value = getenv("PE_GPU_SKIP_PARITY"); /* NOSONAR: only exact bounded literals are accepted below. */
-
-    return value != NULL &&
-           (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
-            strcmp(value, "TRUE") == 0 || strcmp(value, "yes") == 0 ||
-            strcmp(value, "YES") == 0);
+    return 0;
 }
 
 static double runtime_backend_rate(const pe_runtime_backend_info_t *backend)
@@ -656,14 +652,15 @@ static void runtime_descriptor_appendf(char *out, size_t capacity,
     int needed;
 
     va_start(args, format);
-        needed = vsnprintf(NULL, 0u, format, args); /* NOSONAR: format is an internal descriptor template. */
+        needed = (int)pe_safe_vformat(NULL, 0u, format, args);
     va_end(args);
     if (needed <= 0)
         return;
     if (out != NULL && *position < capacity)
     {
         va_start(args, format);
-        (void)vsnprintf(out + *position, capacity - *position, format, args); /* NOSONAR: format is an internal descriptor template. */
+        (void)pe_safe_vformat(out + *position, capacity - *position,
+                              format, args);
         va_end(args);
     }
     *position += (size_t)needed;

@@ -46,6 +46,7 @@ set(CORE_SOURCES
     t_jokercardmasks.c
     t_astudcardmasks.c
     universal_deck.c
+    safe_format.c
 )
 
 # Core header files

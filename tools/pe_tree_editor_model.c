@@ -1,4 +1,5 @@
 #include "pe_tree_editor_model.h"
+#include <poker_eval/core/safe_format.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -51,7 +52,7 @@ static int buffer_appendf(pe_tree_editor_buffer_t *buffer, const char *format, .
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #endif
-    length = vsnprintf(NULL, 0, format, copy); /* NOSONAR: format is an internal tree serializer template. */
+    length = (int)pe_safe_vformat(NULL, 0u, format, copy);
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
@@ -65,8 +66,8 @@ static int buffer_appendf(pe_tree_editor_buffer_t *buffer, const char *format, .
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #endif
-    (void)vsnprintf(buffer->data + buffer->length,
-                    buffer->capacity - buffer->length, format, args); /* NOSONAR: format is an internal tree serializer template. */
+    (void)pe_safe_vformat(buffer->data + buffer->length,
+                          buffer->capacity - buffer->length, format, args);
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
