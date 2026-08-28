@@ -16,6 +16,8 @@
 
 #include <poker_eval/solver/pe_range.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,7 +60,7 @@ pe_solver_status_t pe_solver_range_prepare(pe_range_t *range)
     for (i = 0; i < range->count; ++i)
     {
         double w = range->combos[i].weight;
-        if (!(w >= 0.0) || !isfinite(w))
+        if (!(w >= 0.0) || !pe_finite_double(w))
             return PE_SOLVER_ERR_INVALID_CONFIG;
     }
 
@@ -97,7 +99,7 @@ pe_solver_status_t pe_solver_range_prepare(pe_range_t *range)
     for (i = 0; i < out; ++i)
         total += range->combos[i].weight;
 
-    if (!(total > 0.0) || !isfinite(total))
+    if (!(total > 0.0) || !pe_finite_double(total))
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
     for (i = 0; i < out; ++i)
@@ -135,7 +137,7 @@ int pe_solver_range_is_prepared(const pe_range_t *range, double tolerance)
     for (i = 0; i < range->count; ++i)
     {
         double w = range->combos[i].weight;
-        if (!(w > 0.0) || !isfinite(w))
+        if (!(w > 0.0) || !pe_finite_double(w))
             return 0;
         if (i > 0 && combo_cmp(&range->combos[i - 1], &range->combos[i]) >= 0)
             return 0;   /* unsorted, or a duplicate survived */

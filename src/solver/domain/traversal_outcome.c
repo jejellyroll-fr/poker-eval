@@ -2,6 +2,8 @@
 
 #include <poker_eval/solver/pe_outcome_traversal.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -11,7 +13,7 @@ static int outcome_valid(const pe_external_game_t *game, int player,
     return game && game->root && game->player_count > 0u &&
            game->player_count <= PE_TRAVERSAL_MAX_PLAYERS &&
            player >= 0 && player < (int)game->player_count &&
-           epsilon >= 0.0 && epsilon <= 1.0 && isfinite(epsilon) &&
+           epsilon >= 0.0 && epsilon <= 1.0 && pe_finite_double(epsilon) &&
            game->is_terminal && game->acting_player && game->action_count &&
            game->apply_action && game->terminal_value;
 }
@@ -27,12 +29,12 @@ static int outcome_probs(const pe_external_game_t *game, const void *state,
         double p = game->action_probability
             ? game->action_probability(state, key, a, game->user)
             : 1.0 / (double)actions;
-        if (!isfinite(p) || p < 0.0)
+        if (!pe_finite_double(p) || p < 0.0)
             return -1;
         out[a] = p;
         total += p;
     }
-    if (!(total > 0.0) || !isfinite(total))
+    if (!(total > 0.0) || !pe_finite_double(total))
         return -1;
     for (uint16_t a = 0u; a < actions; ++a)
         out[a] /= total;
@@ -64,7 +66,7 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
                              pe_update_batch_t *batch)
 {
     const pe_external_game_t *game = ctx->game;
-    if (!state || !isfinite(inverse_sampling))
+    if (!state || !pe_finite_double(inverse_sampling))
         return NAN;
     ctx->visited_nodes++;
     if (game->is_terminal(state, game->user))
@@ -80,7 +82,7 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
         memset(&sample, 0, sizeof(sample));
         child = game->sample_chance_child(state, &ctx->rng, &sample,
                                           game->user);
-        if (!child || sample.outcome < 0 || !isfinite(sample.importance_ratio) ||
+        if (!child || sample.outcome < 0 || !pe_finite_double(sample.importance_ratio) ||
             sample.importance_ratio <= 0.0)
             return NAN;
         ctx->sampled_chance_nodes++;
@@ -102,7 +104,7 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
             : game->sample_chance(state, &ctx->rng, &sample);
         if (sampled == 0)
         {
-            if (sample.outcome < 0 || !isfinite(sample.importance_ratio) ||
+            if (sample.outcome < 0 || !pe_finite_double(sample.importance_ratio) ||
                 sample.importance_ratio <= 0.0)
                 return NAN;
             child = game->apply_chance(state, sample.outcome, game->user);
@@ -139,7 +141,7 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
     value = outcome_visit(ctx, child,
                           inverse_sampling / sampling_probability, batch);
     if (game->release_state) game->release_state(child, game->user);
-    if (!isfinite(value))
+        if (!pe_finite_double(value))
         return NAN;
 
     if (actor == ctx->updating_player)
@@ -207,5 +209,5 @@ int pe_outcome_sampling_run(pe_outcome_sampling_ctx_t *ctx,
     ctx->sampled_chance_nodes = 0u;
     ctx->sampled_action_nodes = 0u;
     value = outcome_visit(ctx, ctx->game->root, 1.0, out_batch);
-    return isfinite(value) ? 0 : -1;
+    return pe_finite_double(value) ? 0 : -1;
 }

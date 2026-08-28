@@ -4,6 +4,8 @@
 
 #include <poker_eval/solver/pe_average.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 
 int pe_average_accumulate_vector(double *weighted, double *normalizer,
@@ -44,11 +46,11 @@ int pe_average_accumulate_importance_vector(
 {
     double corrected_weight;
 
-    if (!isfinite(sampling_probability) || sampling_probability <= 0.0 ||
-        sampling_probability > 1.0 || !isfinite(weight) || weight < 0.0)
+    if (!pe_finite_double(sampling_probability) || sampling_probability <= 0.0 ||
+        sampling_probability > 1.0 || !pe_finite_double(weight) || weight < 0.0)
         return -1;
     corrected_weight = weight / sampling_probability;
-    if (!isfinite(corrected_weight))
+    if (!pe_finite_double(corrected_weight))
         return -1;
     return pe_average_accumulate_vector(weighted, normalizer, strategy, reach,
                                         action_count, combo_count,
@@ -68,7 +70,7 @@ int pe_average_accumulate_delayed_linear_vector(
         return 0;
 
     weight = (double)(iteration - averaging_delay);
-    if (!isfinite(weight))
+    if (!pe_finite_double(weight))
         return -1;
     return pe_average_accumulate_vector(weighted, normalizer, strategy, reach,
                                         action_count, combo_count, weight);

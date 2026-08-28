@@ -4,11 +4,13 @@
 
 #include <poker_eval/solver/pe_regret_dcfr.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 
 static int valid_exponent(double exponent)
 {
-    return isfinite(exponent) && exponent >= 0.0;
+    return pe_finite_double(exponent) && exponent >= 0.0;
 }
 
 static double discount_factor(uint64_t iteration, double exponent)
@@ -42,18 +44,18 @@ int pe_dcfr_discount_regrets(double *regrets, size_t count,
 
     positive_factor = discount_factor(iteration, params->alpha);
     negative_factor = discount_factor(iteration, params->beta);
-    if (!isfinite(positive_factor) || !isfinite(negative_factor))
+    if (!pe_finite_double(positive_factor) || !pe_finite_double(negative_factor))
         return -1;
 
     for (i = 0; i < count; ++i)
-        if (!isfinite(regrets[i]))
+        if (!pe_finite_double(regrets[i]))
             return -1;
 
     for (i = 0; i < count; ++i)
     {
         double factor = regrets[i] >= 0.0 ? positive_factor : negative_factor;
         regrets[i] *= factor;
-        if (!isfinite(regrets[i]))
+        if (!pe_finite_double(regrets[i]))
             return -1;
     }
     return 0;
@@ -70,5 +72,5 @@ int pe_dcfr_average_weight(uint64_t iteration, double gamma,
     t = (double)iteration;
     ratio = t / (t + 1.0);
     *out_weight = pow(ratio, gamma);
-    return isfinite(*out_weight) ? 0 : -1;
+    return pe_finite_double(*out_weight) ? 0 : -1;
 }

@@ -1,5 +1,7 @@
 #include <poker_eval/solver/pe_external_best_response.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -22,11 +24,11 @@ static int sample_action(br_context_t *ctx, const void *state, uint16_t actions)
             ? ctx->game->action_probability(state,
                 ctx->game->infoset_key ? ctx->game->infoset_key(state, ctx->game->user) : 0u,
                 a, ctx->game->user) : 1.0 / (double)actions;
-        if (!isfinite(p) || p < 0.0) return -1;
+        if (!pe_finite_double(p) || p < 0.0) return -1;
         probabilities[a] = p;
         sum += p;
     }
-    if (!(sum > 0.0) || !isfinite(sum)) return -1;
+    if (!(sum > 0.0) || !pe_finite_double(sum)) return -1;
     target = pe_rng_uniform01(&ctx->rng) * sum;
     sum = 0.0;
     for (uint16_t a = 0u; a < actions; ++a)
@@ -116,7 +118,7 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
         for (uint16_t a = 0u; a < actions; ++a)
         {
             double value = br_action_value(ctx, state, a, depth);
-            if (!isfinite(value)) return NAN;
+            if (!pe_finite_double(value)) return NAN;
             if (value > best) best = value;
         }
         return best;
@@ -162,9 +164,9 @@ int pe_external_best_response_sampled(const pe_external_game_t *game,
     for (uint32_t i = 0u; i < samples; ++i)
     {
         double value = policy_rollout(&ctx, game->root, 0u);
-        if (isfinite(value)) { policy += value; ++out->policy_samples; }
+        if (pe_finite_double(value)) { policy += value; ++out->policy_samples; }
         value = br_rollout(&ctx, game->root, 0u);
-        if (isfinite(value)) { br += value; ++out->br_samples; }
+        if (pe_finite_double(value)) { br += value; ++out->br_samples; }
     }
     if (out->policy_samples == 0u || out->br_samples == 0u) return -1;
     out->policy_value = policy / (double)out->policy_samples;

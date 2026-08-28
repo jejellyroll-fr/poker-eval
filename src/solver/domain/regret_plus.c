@@ -4,6 +4,8 @@
 
 #include <poker_eval/solver/pe_regret.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 
 int pe_regret_plus_apply_delta(double *regrets, const double *delta,
@@ -17,13 +19,13 @@ int pe_regret_plus_apply_delta(double *regrets, const double *delta,
     /* Validate before mutating so a bad batch cannot leave a partially
        updated regret span. */
     for (i = 0; i < count; ++i)
-        if (!isfinite(regrets[i]) || !isfinite(delta[i]))
+        if (!pe_finite_double(regrets[i]) || !pe_finite_double(delta[i]))
             return -1;
 
     for (i = 0; i < count; ++i)
     {
         double updated = regrets[i] + delta[i];
-        if (!isfinite(updated))
+        if (!pe_finite_double(updated))
             return -1;
         regrets[i] = updated > 0.0 ? updated : 0.0;
     }

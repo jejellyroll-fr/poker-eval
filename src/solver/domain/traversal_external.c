@@ -2,6 +2,8 @@
 
 #include <poker_eval/solver/pe_external_traversal.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -27,12 +29,12 @@ static int external_probabilities(const pe_external_game_t *game,
         double p = game->action_probability
             ? game->action_probability(state, key, a, game->user)
             : 1.0 / (double)actions;
-        if (!isfinite(p) || p < 0.0)
+        if (!pe_finite_double(p) || p < 0.0)
             return -1;
         out[a] = p;
         sum += p;
     }
-    if (!(sum > 0.0) || !isfinite(sum))
+    if (!(sum > 0.0) || !pe_finite_double(sum))
         return -1;
     for (uint16_t a = 0u; a < actions; ++a)
         out[a] /= sum;
@@ -76,7 +78,7 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
         memset(&sample, 0, sizeof(sample));
         child = game->sample_chance_child(state, &ctx->rng, &sample,
                                           game->user);
-        if (!child || sample.outcome < 0 || !isfinite(sample.importance_ratio) ||
+        if (!child || sample.outcome < 0 || !pe_finite_double(sample.importance_ratio) ||
             sample.importance_ratio < 0.0)
             return NAN;
         ctx->sampled_chance_nodes++;
@@ -99,7 +101,7 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
             : game->sample_chance(state, &ctx->rng, &sample);
         if (sampled == 0)
         {
-            if (sample.outcome < 0 || !isfinite(sample.importance_ratio) ||
+            if (sample.outcome < 0 || !pe_finite_double(sample.importance_ratio) ||
                 sample.importance_ratio < 0.0)
                 return NAN;
             child = game->apply_chance(state, sample.outcome, game->user);
@@ -142,7 +144,7 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
             values[a] = external_visit(ctx, child, own_reach * probs[a],
                                        opponent_reach, batch);
             if (game->release_state) game->release_state(child, game->user);
-            if (!isfinite(values[a]))
+            if (!pe_finite_double(values[a]))
                 return NAN;
             node_value += probs[a] * values[a];
         }
@@ -211,5 +213,5 @@ int pe_external_sampling_run(pe_external_sampling_ctx_t *ctx,
     ctx->sampled_chance_nodes = 0u;
     value = external_visit(ctx, ctx->game->root, 1.0, 1.0, out_batch);
     (void)value;
-    return isfinite(value) ? 0 : -1;
+    return pe_finite_double(value) ? 0 : -1;
 }

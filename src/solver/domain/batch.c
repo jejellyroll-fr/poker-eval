@@ -4,6 +4,8 @@
 
 #include <poker_eval/solver/pe_batch.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -49,7 +51,7 @@ int pe_update_batch_push(pe_update_batch_t *batch, pe_update_t update)
     pe_update_t *grown;
     size_t capacity;
 
-    if (!batch || !isfinite(update.delta) || !isfinite(update.average_delta))
+    if (!batch || !pe_finite_double(update.delta) || !pe_finite_double(update.average_delta))
         return -1;
     if (batch->count == batch->capacity)
     {
@@ -424,8 +426,8 @@ static int reduce_soa(const pe_update_batch_source_t *sources,
         }
         for (value_index = 0u; value_index < values; ++value_index)
         {
-            if (!isfinite(deltas[value_index]) ||
-                !isfinite(averages[value_index]))
+            if (!pe_finite_double(deltas[value_index]) ||
+                !pe_finite_double(averages[value_index]))
             {
                 free(ordered);
                 return -1;
@@ -452,7 +454,7 @@ static int reduce_soa(const pe_update_batch_source_t *sources,
                     ordered[next].soa->deltas[group->offset + value_index];
                 double average = averages[value_index] +
                     ordered[next].soa->average_deltas[group->offset + value_index];
-                if (!isfinite(delta) || !isfinite(average))
+                if (!pe_finite_double(delta) || !pe_finite_double(average))
                 {
                     free(ordered);
                     return -1;
@@ -496,7 +498,7 @@ int pe_update_batch_merge(pe_update_batch_t *destination,
         pe_update_t update = source->items[i];
         int found = 0;
 
-        if (!isfinite(update.delta) || !isfinite(update.average_delta))
+        if (!pe_finite_double(update.delta) || !pe_finite_double(update.average_delta))
             return -1;
         for (j = 0u; j < destination->count; ++j)
         {
@@ -507,7 +509,7 @@ int pe_update_batch_merge(pe_update_batch_t *destination,
                 double delta = destination->items[j].delta + update.delta;
                 double average = destination->items[j].average_delta +
                                   update.average_delta;
-                if (!isfinite(delta) || !isfinite(average))
+                if (!pe_finite_double(delta) || !pe_finite_double(average))
                     return -1;
                 destination->items[j].delta = delta;
                 destination->items[j].average_delta = average;
@@ -577,8 +579,8 @@ int pe_update_batch_reduce(const pe_update_batch_source_t *sources,
             ordered[at].update = batch->items[update_index];
             ordered[at].thread_index = sources[source_index].thread_index;
             ordered[at].update_index = update_index;
-            if (!isfinite(ordered[at].update.delta) ||
-                !isfinite(ordered[at].update.average_delta))
+            if (!pe_finite_double(ordered[at].update.delta) ||
+                !pe_finite_double(ordered[at].update.average_delta))
             {
                 free(ordered);
                 return -1;
@@ -603,7 +605,7 @@ int pe_update_batch_reduce(const pe_update_batch_source_t *sources,
             double delta = reduced.delta + ordered[next].update.delta;
             double average = reduced.average_delta +
                               ordered[next].update.average_delta;
-            if (!isfinite(delta) || !isfinite(average))
+            if (!pe_finite_double(delta) || !pe_finite_double(average))
             {
                 free(ordered);
                 return -1;

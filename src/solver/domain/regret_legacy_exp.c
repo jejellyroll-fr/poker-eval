@@ -4,6 +4,8 @@
 
 #include <poker_eval/solver/pe_regret_legacy_exp.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <stddef.h>
 
@@ -16,7 +18,7 @@ int pe_regret_match_legacy_exp_vector(const double *regrets, double *strategy,
     uint16_t combo;
 
     if (!regrets || !strategy || action_count == 0u || combo_count == 0u ||
-        !isfinite(lambda) || lambda <= 0.0)
+        !pe_finite_double(lambda) || lambda <= 0.0)
         return -1;
 
     /* Validate first so a malformed span cannot leave a partially written
@@ -25,7 +27,7 @@ int pe_regret_match_legacy_exp_vector(const double *regrets, double *strategy,
     {
         for (combo = 0; combo < combo_count; ++combo)
         {
-            if (!isfinite(regrets[(size_t)action * combo_count + combo]))
+            if (!pe_finite_double(regrets[(size_t)action * combo_count + combo]))
                 return -1;
         }
     }
@@ -60,7 +62,7 @@ int pe_regret_match_legacy_exp_vector(const double *regrets, double *strategy,
                 }
             }
 
-            if (sum_weights > 0.0 && isfinite(sum_weights))
+        if (sum_weights > 0.0 && pe_finite_double(sum_weights))
             {
                 for (action = 0; action < action_count; ++action)
                 {

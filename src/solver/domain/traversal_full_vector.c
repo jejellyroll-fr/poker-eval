@@ -12,6 +12,8 @@
 #include <poker_eval/solver/pe_regret.h>
 #include <poker_eval/solver/pe_traversal.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -361,7 +363,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                 state, outcome, game->user);
             const void *child;
             int rc;
-            if (weight < 0.0 || !isfinite(weight))
+            if (weight < 0.0 || !pe_finite_double(weight))
             {
                 for (uint16_t o = 0u; o < outcome; ++o)
                     for (uint8_t p = 0u; p < game->player_count; ++p)
@@ -399,7 +401,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                 return -1;
             }
         }
-        if (!(total_weight > 0.0) || !isfinite(total_weight))
+        if (!(total_weight > 0.0) || !pe_finite_double(total_weight))
         {
             for (outcome = 0u; outcome < outcomes; ++outcome)
                 for (uint8_t p = 0u; p < game->player_count; ++p)

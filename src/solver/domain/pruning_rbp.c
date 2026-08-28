@@ -2,6 +2,8 @@
 
 #include <poker_eval/solver/pe_pruning.h>
 
+#include "finite_double.h"
+
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
@@ -27,7 +29,7 @@ static int rbp_create(void **self, const pe_pruning_config_t *config)
 {
     pe_rbp_t *ctx;
 
-    if (self == NULL || config == NULL || !isfinite(config->regret_threshold) ||
+    if (self == NULL || config == NULL || !pe_finite_double(config->regret_threshold) ||
         config->regret_threshold >= 0.0 || config->revisit_interval == 0u)
         return -1;
     ctx = (pe_rbp_t *)calloc(1u, sizeof(*ctx));
@@ -103,7 +105,7 @@ static int rbp_evaluate(void *self, const pe_pruning_span_t *span)
     {
         pe_rbp_entry_t *entry;
         double regret = span->cumulative_regrets[action];
-        if (!isfinite(regret))
+        if (!pe_finite_double(regret))
             return -1;
         if (regret > best_regret)
         {

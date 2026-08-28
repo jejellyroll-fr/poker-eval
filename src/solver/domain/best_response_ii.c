@@ -6,6 +6,8 @@
 #include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/solver/pe_traversal.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,7 +317,7 @@ static double br_chance_weight(const pe_vector_game_t *game,
     double weight = game->chance_outcome_weight
         ? game->chance_outcome_weight(state, outcome, game->user)
         : 1.0;
-    return weight > 0.0 && isfinite(weight) ? weight : 0.0;
+    return weight > 0.0 && pe_finite_double(weight) ? weight : 0.0;
 }
 
 static int br_chance_node(const pe_vector_game_t *game, const void *state,
@@ -333,7 +335,7 @@ static int br_chance_node(const pe_vector_game_t *game, const void *state,
     *total_weight = 0.0;
     for (outcome = 0; outcome < *outcomes; ++outcome)
         *total_weight += br_chance_weight(game, state, outcome);
-    return *total_weight > 0.0 && isfinite(*total_weight) ? 1 : -1;
+    return *total_weight > 0.0 && pe_finite_double(*total_weight) ? 1 : -1;
 }
 
 /* Return utility weighted by every non-BR player's reach. */
@@ -739,8 +741,8 @@ pe_solver_status_t pe_best_response_metrics_from_raw(
 {
     if (!out_metrics)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    if (!isfinite(raw_value) || raw_value < 0.0 ||
-        !isfinite(big_blind) || big_blind <= 0.0)
+    if (!pe_finite_double(raw_value) || raw_value < 0.0 ||
+        !pe_finite_double(big_blind) || big_blind <= 0.0)
         return PE_SOLVER_ERR_INVALID_CONFIG;
     memset(out_metrics, 0, sizeof(*out_metrics));
     out_metrics->exploitability_raw = raw_value;
@@ -780,17 +782,17 @@ pe_solver_status_t pe_best_response_metrics_from_multiway(
         return PE_SOLVER_ERR_NULL_ARGUMENT;
     if (pe_best_response_guarantee_for_game(num_players, is_zero_sum,
                                             &guarantee) != PE_SOLVER_OK ||
-        !isfinite(cce_gap) || cce_gap < 0.0 ||
-        !isfinite(utility_imbalance) || utility_imbalance < 0.0 ||
-        !isfinite(big_blind) || big_blind <= 0.0)
+        !pe_finite_double(cce_gap) || cce_gap < 0.0 ||
+        !pe_finite_double(utility_imbalance) || utility_imbalance < 0.0 ||
+        !pe_finite_double(big_blind) || big_blind <= 0.0)
         return PE_SOLVER_ERR_INVALID_CONFIG;
 
     for (player = 0; player < num_players; ++player)
     {
-        if (!isfinite(br_gaps[player]) || br_gaps[player] < 0.0)
+        if (!pe_finite_double(br_gaps[player]) || br_gaps[player] < 0.0)
             return PE_SOLVER_ERR_INVALID_CONFIG;
         total += br_gaps[player];
-        if (!isfinite(total))
+    if (!pe_finite_double(total))
             return PE_SOLVER_ERR_INVALID_CONFIG;
     }
 
@@ -812,8 +814,8 @@ pe_solver_status_t pe_best_response_target_reached(
 {
     if (!out_reached)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    if (!isfinite(measured_mbb) || measured_mbb < 0.0 ||
-        !isfinite(target_mbb) || target_mbb < 0.0)
+    if (!pe_finite_double(measured_mbb) || measured_mbb < 0.0 ||
+        !pe_finite_double(target_mbb) || target_mbb < 0.0)
         return PE_SOLVER_ERR_INVALID_CONFIG;
     *out_reached = target_mbb > 0.0 && measured_mbb <= target_mbb;
     return PE_SOLVER_OK;
