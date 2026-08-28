@@ -24,6 +24,8 @@
 #include <unistd.h>
 #endif
 
+#include <float.h>
+
 #include <poker_eval/solver/pe_work_protocol.h>
 
 static const uint8_t pe_work_magic[4] = {'P', 'E', 'W', '1'};
@@ -138,6 +140,11 @@ static double get_double_be(const uint8_t *in)
     return converted.value;
 }
 
+static int finite_double(double value)
+{
+    return value <= DBL_MAX && value >= -DBL_MAX;
+}
+
 int pe_work_result_validate(const pe_work_result_t *result)
 {
     if (!result || result->backend <= PE_COMPUTE_AUTO ||
@@ -145,10 +152,10 @@ int pe_work_result_validate(const pe_work_result_t *result)
         (result->constraints_satisfied != 0 &&
          result->constraints_satisfied != 1) ||
         result->iteration_end < result->iteration_begin ||
-        !isfinite(result->exploitability) ||
-        !isfinite(result->worst_margin) ||
-        !isfinite(result->mean_margin) ||
-        !isfinite(result->units_per_s) || result->units_per_s < 0.0 ||
+        !finite_double(result->exploitability) ||
+        !finite_double(result->worst_margin) ||
+        !finite_double(result->mean_margin) ||
+        !finite_double(result->units_per_s) || result->units_per_s < 0.0 ||
         result->delta_size > PE_WORK_PROTOCOL_MAX_PAYLOAD -
                              PE_WORK_PROTOCOL_RESULT_FIXED_SIZE ||
         (result->delta_size != 0u && !result->delta))

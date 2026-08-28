@@ -18,6 +18,19 @@
 
 static int failures;
 
+static const char *test_tmp_path(const char *name)
+{
+    static char path[512];
+    const char *directory = getenv("PE_TEST_TMPDIR");
+    int written;
+    if (!directory || !*directory)
+        directory = ".";
+    written = snprintf(path, sizeof(path), "%s/%s", directory, name);
+    if (written < 0 || (size_t)written >= sizeof(path))
+        return NULL;
+    return path;
+}
+
 #define CHECK(condition, ...)                                      \
     do                                                             \
     {                                                              \
@@ -73,11 +86,13 @@ static int write_path_fixture(const char *path,
 
 static void test_header_variants(void)
 {
-    const char *path = "/tmp/poker_eval_monker_header.tree";
+    const char *path = test_tmp_path("poker_eval_monker_header.tree");
     unsigned char bytes[256];
     size_t at = 0u;
     pe_monker_tree_header_t header;
 
+    if (!path)
+        return;
     put_i64(bytes, &at, 33487);
     put_i32(bytes, &at, 12);
     put_i32(bytes, &at, 3);
@@ -119,11 +134,13 @@ static void test_header_variants(void)
 
 static void test_rejections(void)
 {
-    const char *path = "/tmp/poker_eval_monker_header.tree";
+    const char *path = test_tmp_path("poker_eval_monker_header.tree");
     unsigned char bytes[32];
     size_t at = 0u;
     pe_monker_tree_header_t header;
 
+    if (!path)
+        return;
     put_i64(bytes, &at, 12345);
     put_i32(bytes, &at, 1);
     put_i32(bytes, &at, 2);
@@ -160,13 +177,15 @@ static void test_rejections(void)
 
 static void test_node_topology(void)
 {
-    const char *path = "/tmp/poker_eval_monker_nodes.tree";
+    const char *path = test_tmp_path("poker_eval_monker_nodes.tree");
     unsigned char bytes[256];
     size_t at = 0u;
     pe_monker_tree_header_t header;
     mpf_tree_def_t *tree = NULL;
     mpf_tree_error_t error;
 
+    if (!path)
+        return;
     put_i64(bytes, &at, 33487);
     put_i32(bytes, &at, 12);
     put_i32(bytes, &at, 2);
@@ -239,11 +258,13 @@ static void test_node_topology(void)
  */
 static void test_unverified_action_codes_are_refused(void)
 {
-    const char *path = "/tmp/poker_eval_monker_unknown.tree";
+    const char *path = test_tmp_path("poker_eval_monker_unknown.tree");
     unsigned char bytes[128];
     size_t at = 0u;
     mpf_tree_def_t *tree = NULL;
 
+    if (!path)
+        return;
     put_i64(bytes, &at, 33487);
     put_i32(bytes, &at, 12);
     put_i32(bytes, &at, 2);
@@ -266,14 +287,19 @@ static void test_unverified_action_codes_are_refused(void)
 
 static void test_fixed_ranges(void)
 {
-    const char *path = "/tmp/poker_eval_monker_ranges.tree";
+    const char *path = test_tmp_path("poker_eval_monker_ranges.tree");
     unsigned char *bytes = (unsigned char *)calloc(12000u, 1u);
     size_t at = 0u;
     pe_monker_range_set_t ranges;
     uint32_t player;
     uint32_t combo;
 
-    CHECK(bytes != NULL, "range fixture allocation failed");
+    CHECK(path != NULL && bytes != NULL, "range fixture allocation failed");
+    if (!path)
+    {
+        free(bytes);
+        return;
+    }
     if (!bytes)
         return;
     put_i64(bytes, &at, 33487);
@@ -349,15 +375,18 @@ static const unsigned char k_real_tree[] = {
 
 static void test_real_monker_file(void)
 {
-    const char *path = "/tmp/poker_eval_monker_real.tree";
+    const char *path = test_tmp_path("poker_eval_monker_real.tree");
     pe_monker_tree_header_t header;
     mpf_tree_def_t *tree = NULL;
     int pot_bets = 0;
     int all_ins = 0;
     int i;
 
-    CHECK(write_path_fixture(path, k_real_tree, sizeof(k_real_tree)) == 0,
+    CHECK(path != NULL &&
+              write_path_fixture(path, k_real_tree, sizeof(k_real_tree)) == 0,
           "real fixture write failed");
+    if (!path)
+        return;
 
     CHECK(pe_monker_tree_read_header(path, &header) == PE_MONKER_OK,
           "the compatibility header was rejected");
@@ -404,9 +433,9 @@ static void test_real_monker_file(void)
                 continue;
             }
             size = tree->nodes[i].bet_sizes[idx];
-            if (size == 1.0)
+            if (fabs(size - 1.0) < 1e-12)
                 pot_bets++;
-            else if (size == -1.0)
+            else if (fabs(size + 1.0) < 1e-12)
                 all_ins++;
             else
                 CHECK(0, "node %d decoded a size of %g, which this file "

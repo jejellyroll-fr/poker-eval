@@ -5,6 +5,7 @@
 #include <poker_eval/solver/pe_work_coordinator.h>
 
 #include <math.h>
+#include <float.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,14 +19,19 @@ typedef struct worker_candidate_t
     long double fraction;
 } worker_candidate_t;
 
+static int finite_double(double value)
+{
+    return value <= DBL_MAX && value >= -DBL_MAX;
+}
+
 static double effective_rate(const pe_runtime_backend_info_t *backend)
 {
     double rate = backend->update_elements_per_s;
-    if (!(rate > 0.0) || !isfinite(rate))
+    if (!(rate > 0.0) || !finite_double(rate))
         rate = backend->strategy_elements_per_s;
-    if (!(rate > 0.0) || !isfinite(rate))
+    if (!(rate > 0.0) || !finite_double(rate))
         rate = backend->terminal_elements_per_s;
-    if (!(rate > 0.0) || !isfinite(rate))
+    if (!(rate > 0.0) || !finite_double(rate))
         rate = 1.0;
     return rate;
 }

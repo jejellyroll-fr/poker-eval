@@ -11,6 +11,19 @@
 
 static int failures;
 
+static const char *test_tmp_path(const char *name)
+{
+    static char path[512];
+    const char *directory = getenv("PE_TEST_TMPDIR");
+    int written;
+    if (!directory || !*directory)
+        directory = ".";
+    written = snprintf(path, sizeof(path), "%s/%s", directory, name);
+    if (written < 0 || (size_t)written >= sizeof(path))
+        return NULL;
+    return path;
+}
+
 static int terminal_game(const void *state, void *user)
 {
     (void)state;
@@ -54,7 +67,7 @@ static const void *apply_game(const void *state, uint16_t action, void *user)
 
 int main(void)
 {
-    const char *path = "/tmp/poker_eval_checkpoint_v2_test.bin";
+    const char *path = test_tmp_path("poker_eval_checkpoint_v2_test.bin");
     const pe_storage_ops_t *ops = pe_storage_ram_ops();
     const pe_persist_ops_t *persist = pe_persist_checkpoint_ops();
     pe_solver_config_t config = pe_solver_config_default();
@@ -78,7 +91,10 @@ int main(void)
     config.problem.expected_infosets = 1u;
     config.problem.expected_actions = 2u;
     config.problem.expected_combos = 2u;
-    CHECK(ops != NULL && persist != NULL, "checkpoint dependencies unavailable");
+    CHECK(path != NULL && ops != NULL && persist != NULL,
+          "checkpoint dependencies unavailable");
+    if (!path)
+        return 1;
     CHECK(ops->create(&left, 1u) == 0 && ops->create(&right, 1u) == 0,
           "storage creation failed");
     if (!left || !right)

@@ -20,9 +20,15 @@
 #include <poker_eval/solver/pe_storage.h>
 
 #include <math.h>
+#include <float.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int finite_double(double value)
+{
+    return value <= DBL_MAX && value >= -DBL_MAX;
+}
 
 /* Small enough to be cheap for a toy game, large enough that a real solve is
    not rehashing from four. */
@@ -395,7 +401,7 @@ static void pe_fixed16_commit_one(pe_storage_t *s, pe_value_array_t which)
     for (size_t i = 0; i < n; ++i)
     {
         double v = fabs(s->staging[which][i]);
-        if (isfinite(v) && v > max_abs)
+        if (finite_double(v) && v > max_abs)
             max_abs = v;
     }
     prior = s->fixed_scales[which][id];

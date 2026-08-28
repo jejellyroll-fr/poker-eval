@@ -3,7 +3,21 @@
 #include <poker_eval/solver/pe_abstraction.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static const char *test_tmp_path(const char *name)
+{
+    static char path[512];
+    const char *directory = getenv("PE_TEST_TMPDIR");
+    int written;
+    if (!directory || !*directory)
+        directory = ".";
+    written = snprintf(path, sizeof(path), "%s/%s", directory, name);
+    if (written < 0 || (size_t)written >= sizeof(path))
+        return NULL;
+    return path;
+}
 
 static mask_t card(int rank, int suit)
 {
@@ -18,7 +32,7 @@ static mask_t hand(int r0, int s0, int r1, int s1)
 int main(void)
 {
     const pe_abstraction_ops_t *ops = pe_abstraction_ops();
-    const char *path = "/tmp/poker_eval_abs01.pe_sbk";
+    const char *path = test_tmp_path("poker_eval_abs01.pe_sbk");
     EvalConfig eval_cfg = eval_config_holdem();
     EvalContext *ctx = eval_context_create(&eval_cfg);
     pe_abstraction_config_t config = {0};
@@ -34,7 +48,7 @@ int main(void)
     };
     size_t i;
 
-    if (ops == NULL || ctx == NULL)
+    if (path == NULL || ops == NULL || ctx == NULL)
         return 1;
     config.strength.n_buckets = 4;
     config.strength.max_iterations = 10;
