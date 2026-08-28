@@ -93,7 +93,10 @@ if(PE_SDL2_INCLUDE_DIR AND PE_SDL2_LIBRARY)
         ${PE_SDL2_INCLUDE_DIR}
         ${TOOLS_COMMON_INCLUDES})
     target_compile_definitions(poker-eval-trainer-gui PRIVATE SDL_MAIN_HANDLED)
-    target_compile_options(poker-eval-trainer-gui PRIVATE -Wno-error -Wno-documentation-unknown-command)
+    if(NOT MSVC)
+        target_compile_options(poker-eval-trainer-gui PRIVATE
+            -Wno-error -Wno-documentation-unknown-command)
+    endif()
     target_link_libraries(poker-eval-trainer-gui PRIVATE
         poker_eval_modular ${PE_SDL2_LIBRARY})
     if(UNIX)
