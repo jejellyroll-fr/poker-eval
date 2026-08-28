@@ -585,6 +585,32 @@ static int command_to_argv(char *command, char **argv, size_t capacity)
     argv[count] = NULL;
     return (int)count;
 }
+
+static int gui_solver_executable_allowed(const char *path)
+{
+    const char *name;
+
+    if (path == NULL || path[0] == '\0')
+        return 0;
+    name = strrchr(path, '/');
+    name = name != NULL ? name + 1 : path;
+    return strcmp(name, "pe-vector-sim") == 0 ||
+           strcmp(name, "pe-preflop-solve") == 0 ||
+           strcmp(name, "pe-monker-validate") == 0 ||
+           strcmp(name, "mpf_run_with_metrics") == 0;
+}
+
+static int execute_gui_solver(char *const argv[])
+{
+    if (argv == NULL || argv[0] == NULL ||
+        strchr(argv[0], '/') == NULL ||
+        !gui_solver_executable_allowed(argv[0]) || access(argv[0], X_OK) != 0)
+        return -1;
+    /* The caller supplies an absolute path to one of the four bundled tools;
+     * no shell or PATH lookup is involved. */
+    execv(argv[0], argv);
+    return -1;
+}
 #endif
 
 /* Run an internally-built command without a shell and capture its output into
@@ -628,7 +654,7 @@ static int run_command_capture(const char *command, char *destination,
             dup2(pipe_fds[1], STDERR_FILENO) < 0)
             _exit(127);
         close(pipe_fds[1]);
-        execvp(argv[0], argv);
+        (void)execute_gui_solver(argv);
         _exit(127);
     }
     close(pipe_fds[1]);
