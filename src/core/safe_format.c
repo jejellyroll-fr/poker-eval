@@ -1,7 +1,6 @@
 #include <poker_eval/core/safe_format.h>
 
 #include <stdio.h>
-#include <string.h>
 
 typedef struct
 {
@@ -10,11 +9,14 @@ typedef struct
     size_t length;
 } pe_safe_writer_t;
 
+#define PE_SAFE_FORMAT_STRING_MAX 4096u
+
 static void writer_append(pe_safe_writer_t *writer, const char *text,
                           size_t length)
 {
     size_t original_length;
     size_t available;
+    size_t index;
 
     if (writer == NULL || text == NULL || length == 0u)
         return;
@@ -33,7 +35,8 @@ static void writer_append(pe_safe_writer_t *writer, const char *text,
     available = writer->capacity - 1u - writer->length;
     if (length > available)
         length = available;
-    memcpy(writer->out + writer->length, text, length);
+    for (index = 0u; index < length; ++index)
+        writer->out[writer->length + index] = text[index];
     writer->length += original_length;
     if (writer->length >= writer->capacity)
         writer->length = writer->capacity - 1u;
@@ -42,8 +45,14 @@ static void writer_append(pe_safe_writer_t *writer, const char *text,
 
 static void writer_append_text(pe_safe_writer_t *writer, const char *text)
 {
+    size_t length = 0u;
+
     if (text != NULL)
-        writer_append(writer, text, strlen(text));
+    {
+        while (length < PE_SAFE_FORMAT_STRING_MAX && text[length] != '\0')
+            ++length;
+        writer_append(writer, text, length);
+    }
 }
 
 static void writer_append_int(pe_safe_writer_t *writer, int value)
