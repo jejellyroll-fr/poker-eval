@@ -63,7 +63,6 @@ jobs:
           Expand-Archive "$env:RUNNER_TEMP\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\sdl2"
           $sdl2ArchiveRoot = Join-Path $env:RUNNER_TEMP "sdl2"
           $header = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL.h" |
-            Where-Object { $_.FullName -match "[\\/]SDL2[\\/]SDL\.h$" } |
             Select-Object -First 1
           $library = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.lib" |
             Where-Object { $_.FullName -match "[\\/]lib[\\/]x64[\\/]SDL2\.lib$" } |
