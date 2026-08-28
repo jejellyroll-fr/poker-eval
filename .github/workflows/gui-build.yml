@@ -34,9 +34,9 @@ jobs:
             configure: >-
               cmake --preset windows-msvc
               -DPE_SDL2_ROOT="$env:PE_SDL2_CI_ROOT"
-              -DPE_SDL2_INCLUDE_DIR="$env:PE_SDL2_CI_ROOT/include"
-              -DPE_SDL2_LIBRARY="$env:PE_SDL2_CI_ROOT/lib/x64/SDL2.lib"
-              -DCMAKE_C_FLAGS="/I$env:PE_SDL2_CI_ROOT/include"
+              -DPE_SDL2_INCLUDE_DIR="$env:PE_SDL2_CI_INCLUDE"
+              -DPE_SDL2_LIBRARY="$env:PE_SDL2_CI_LIBRARY"
+              -DCMAKE_C_FLAGS="/I$env:PE_SDL2_CI_INCLUDE"
             build: >-
               cmake --build build/windows-msvc --target poker-eval-trainer-gui
               --config Release
@@ -61,15 +61,36 @@ jobs:
           $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sdl2.zip"
           Expand-Archive "$env:RUNNER_TEMP\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\sdl2"
-          $sdl2Root = (Join-Path $env:RUNNER_TEMP "sdl2\SDL2-2.30.12").Replace('\', '/')
-          if (-not (Test-Path "$sdl2Root/include/SDL2/SDL.h")) {
-            throw "SDL2 header not found under $sdl2Root"
+          $sdl2ArchiveRoot = Join-Path $env:RUNNER_TEMP "sdl2"
+          $header = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL.h" |
+            Where-Object { $_.FullName -match "[\\/]SDL2[\\/]SDL\.h$" } |
+            Select-Object -First 1
+          $library = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.lib" |
+            Where-Object { $_.FullName -match "[\\/]lib[\\/]x64[\\/]SDL2\.lib$" } |
+            Select-Object -First 1
+          if (-not $library) {
+            $library = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.lib" |
+              Select-Object -First 1
           }
-          if (-not (Test-Path "$sdl2Root/lib/x64/SDL2.lib")) {
-            throw "SDL2 library not found under $sdl2Root"
+          $dll = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.dll" |
+            Where-Object { $_.FullName -match "[\\/]lib[\\/]x64[\\/]SDL2\.dll$" } |
+            Select-Object -First 1
+          if (-not $dll) {
+            $dll = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.dll" |
+              Select-Object -First 1
           }
+          if (-not $header) { throw "SDL2 header not found in $sdl2ArchiveRoot" }
+          if (-not $library) { throw "SDL2 library not found in $sdl2ArchiveRoot" }
+          if (-not $dll) { throw "SDL2 runtime not found in $sdl2ArchiveRoot" }
+          $sdl2Include = (Split-Path -Parent (Split-Path -Parent $header.FullName)).Replace('\', '/')
+          $sdl2Library = $library.FullName.Replace('\', '/')
+          $sdl2Dll = $dll.FullName.Replace('\', '/')
+          $sdl2Root = (Split-Path -Parent $sdl2Include).Replace('\', '/')
           "CMAKE_PREFIX_PATH=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
           "PE_SDL2_CI_ROOT=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_INCLUDE=$sdl2Include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_LIBRARY=$sdl2Library" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_DLL=$sdl2Dll" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure
         run: ${{ matrix.configure }}
@@ -84,7 +105,7 @@ jobs:
         shell: pwsh
         run: >
           Copy-Item
-          "$env:RUNNER_TEMP\sdl2\SDL2-2.30.12\lib\x64\SDL2.dll"
+          "$env:PE_SDL2_CI_DLL"
           -Destination "build\windows-msvc\tools\Release\"
 
       - name: Check binary
