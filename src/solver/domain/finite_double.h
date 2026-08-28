@@ -3,7 +3,6 @@
 
 #include <float.h>
 #include <stdint.h>
-#include <string.h>
 
 /* MinGW may resolve the C99 isfinite macro through a float overload even
    when the expression is double. Keep validation in the type being checked. */
@@ -14,10 +13,13 @@ static inline int pe_finite_double(double value)
 
 static inline int pe_signbit_double(double value)
 {
-    uint64_t bits;
+    union {
+        double value;
+        uint64_t bits;
+    } encoded;
 
-    memcpy(&bits, &value, sizeof(bits));
-    return (bits >> 63u) != 0u;
+    encoded.value = value;
+    return (encoded.bits >> 63u) != 0u;
 }
 
 #endif
