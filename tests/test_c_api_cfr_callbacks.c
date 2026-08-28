@@ -171,7 +171,7 @@ int main(void)
         char path[128];
         pe_cfr_handle_t empty_solver = pe_cfr_create_callbacks(root, &desc, 2);
         (void)snprintf(path, sizeof(path),
-                       "/tmp/poker_eval_api_cfr_load_%p.pe_sol",
+                       "poker_eval_api_cfr_load_%p.pe_sol",
                        (void *)empty_solver);
         if (!empty_solver ||
             pe_cfr_save(empty_solver, path) != PE_OK ||
