@@ -22,6 +22,7 @@
 
 #include <stdarg.h>
 #include <stddef.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -276,7 +277,8 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     pe_compute_kind_name(PE_COMPUTE_CPU_REF),
                     cfg->execution.cpu_threads);
 
-    if (!isfinite(cfg->target_exploitability_mbb) ||
+    if (!(cfg->target_exploitability_mbb <= DBL_MAX) ||
+        !(cfg->target_exploitability_mbb >= -DBL_MAX) ||
         cfg->target_exploitability_mbb < 0.0)
         pe_diag_add(diag, PE_VALID_ERROR,
                     "target_exploitability_mbb must be finite and non-negative, got %f",

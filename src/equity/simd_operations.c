@@ -602,8 +602,6 @@ static PE_TARGET_AVX512 inline __m512i avx512_rotate_ranks(__m512i ranks) {
 /* AVX-512 implementation - processes 8 hands at once */
 PE_TARGET_AVX512 int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_batch_t* results) {
     int i;
-    __m512i spades_vec, clubs_vec, diamonds_vec, hearts_vec;
-    __m512i ranks_or;
     
     results->batch_size = batch->batch_size;
     
@@ -612,18 +610,12 @@ PE_TARGET_AVX512 int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch
         int j, remaining = batch->batch_size - i;
         int process_count = (remaining < 8) ? remaining : 8;
         
-        /* Load 8 hands worth of data */
-        spades_vec = _mm512_loadu_si512((__m512i*)&batch->spades[i]);
-        clubs_vec = _mm512_loadu_si512((__m512i*)&batch->clubs[i]);
-        diamonds_vec = _mm512_loadu_si512((__m512i*)&batch->diamonds[i]);
-        hearts_vec = _mm512_loadu_si512((__m512i*)&batch->hearts[i]);
-        
-        /* Calculate ranks_or = spades | clubs | diamonds | hearts */
-        ranks_or = _mm512_or_si512(spades_vec, clubs_vec);
-        ranks_or = _mm512_or_si512(ranks_or, diamonds_vec);
-        ranks_or = _mm512_or_si512(ranks_or, hearts_vec);
-
-        /* For each hand in the batch, evaluate using cached scalar code */
+        /* The batch stores eight uint32_t lanes per suit.  An AVX-512
+         * register is sixteen lanes wide, so a 512-bit load would read past
+         * every suit array (and past the struct for hearts).  The scalar
+         * cached evaluator is the correctness path for this implementation;
+         * keep the per-hand reconstruction bounded until a genuine 16-lane
+         * layout is introduced. */
         for (j = 0; j < process_count; j++) {
             StdDeck_CardMask hand;
             hand.cards_n = 0;
@@ -634,7 +626,6 @@ PE_TARGET_AVX512 int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch
             hand.cards.diamonds = batch->diamonds[i+j];
             hand.cards.hearts = batch->hearts[i+j];
             
-            /* Cached standard evaluation */
             results->results[i+j] = StdDeck_StdRules_EVAL_N_Cached(hand, 7);
         }
     }
@@ -1000,7 +991,11 @@ int simd_eval_low27_multiple_hands(const StdDeck_CardMask* hands, int count, Low
 #if defined(__AVX2__)
         if (cap >= SIMD_AVX2) {
             int i;
-            for (i = 0; i < batch_size; i += 4) {
+            /* The AVX2 load contains eight uint32_t lanes.  Process the
+             * padded batch in matching groups; iterating by four would make
+             * the second load start at lane four and read past the fixed
+             * eight-lane suit arrays. */
+            for (i = 0; i < batch_size; i += 8) {
                 __m256i spades = _mm256_loadu_si256((const __m256i*)&batch.spades[i]);
                 __m256i clubs = _mm256_loadu_si256((const __m256i*)&batch.clubs[i]);
                 __m256i diamonds = _mm256_loadu_si256((const __m256i*)&batch.diamonds[i]);

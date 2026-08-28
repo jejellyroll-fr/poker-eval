@@ -5,6 +5,7 @@
 #include <poker_eval/core/time_compat.h>
 
 #include <errno.h>
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdarg.h>
@@ -23,6 +24,14 @@ static int gpu_parity_gate_disabled(void)
     return 0;
 }
 
+/* MinGW's isfinite macro may route a double through the float overload when
+ * strict conversion warnings are enabled.  Relational bounds reject NaN and
+ * infinities without narrowing the value. */
+static int finite_double(double value)
+{
+    return value <= DBL_MAX && value >= -DBL_MAX;
+}
+
 static double runtime_backend_rate(const pe_runtime_backend_info_t *backend)
 {
     double rate;
@@ -30,11 +39,11 @@ static double runtime_backend_rate(const pe_runtime_backend_info_t *backend)
     if (!backend)
         return 0.0;
     rate = backend->terminal_elements_per_s;
-    if (!(rate > 0.0) || !isfinite(rate))
+    if (!(rate > 0.0) || !finite_double(rate))
         rate = backend->update_elements_per_s;
-    if (!(rate > 0.0) || !isfinite(rate))
+    if (!(rate > 0.0) || !finite_double(rate))
         rate = backend->strategy_elements_per_s;
-    return rate > 0.0 && isfinite(rate) ? rate : 0.0;
+    return rate > 0.0 && finite_double(rate) ? rate : 0.0;
 }
 
 static uint64_t runtime_clock_ns(void)
@@ -635,8 +644,8 @@ int pe_runtime_backend_status(const pe_runtime_backend_info_t *backend,
     return written < 0 ? -1 : written;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-#define PE_RUNTIME_PRINTF_LIKE(a, b) __attribute__((format(printf, a, b)))
+#if defined(__GNUC__) && !defined(__clang__)
+#define PE_RUNTIME_PRINTF_LIKE(a, b) __attribute__((format(gnu_printf, a, b)))
 #else
 #define PE_RUNTIME_PRINTF_LIKE(a, b)
 #endif
@@ -694,9 +703,9 @@ size_t pe_runtime_descriptor_to_string(
             backend->runtime_available < 0 || backend->runtime_available > 1 ||
             backend->validated < 0 || backend->validated > 1 ||
             backend->device_count < 0 ||
-            !isfinite(backend->strategy_elements_per_s) ||
-            !isfinite(backend->update_elements_per_s) ||
-            !isfinite(backend->terminal_elements_per_s) ||
+            !finite_double(backend->strategy_elements_per_s) ||
+            !finite_double(backend->update_elements_per_s) ||
+            !finite_double(backend->terminal_elements_per_s) ||
             backend->strategy_elements_per_s < 0.0 ||
             backend->update_elements_per_s < 0.0 ||
             backend->terminal_elements_per_s < 0.0)
@@ -964,8 +973,8 @@ int pe_runtime_descriptor_from_string(
             if ((backend_seen & (1u << index)) != 0u ||
                 compiled < 0 || compiled > 1 || available < 0 || available > 1 ||
                 validated < 0 || validated > 1 || devices < 0 ||
-                !isfinite(strategy_rate) || !isfinite(update_rate) ||
-                !isfinite(terminal_rate) || strategy_rate < 0.0 ||
+                !finite_double(strategy_rate) || !finite_double(update_rate) ||
+                !finite_double(terminal_rate) || strategy_rate < 0.0 ||
                 update_rate < 0.0 || terminal_rate < 0.0)
                 return -1;
             parsed.backends[index].kind = (pe_compute_kind_t)index;
