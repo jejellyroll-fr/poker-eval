@@ -28,6 +28,8 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdlib.h>
+
+#include "../src/solver/domain/finite_double.h"
 #include <string.h>
 #include <time.h>
 
@@ -453,7 +455,7 @@ static int parse_ui_target(const char *text, double *value)
         return -1;
     errno = 0;
     parsed = strtod(text, &end);
-    if (errno != 0 || end == text || *end != '\0' || !isfinite(parsed) || parsed < 0.0)
+    if (errno != 0 || end == text || *end != '\0' || !pe_finite_double(parsed) || parsed < 0.0)
         return -1;
     *value = parsed;
     return 0;
@@ -7377,7 +7379,7 @@ static double icm_spot_edit_number(Edit *edit)
     double value = 0.0;
     if (edit)
         (void)parse_ui_target(edit_get_text(edit), &value);
-    return value >= 0.0 && isfinite(value) ? value : 0.0;
+    return value >= 0.0 && pe_finite_double(value) ? value : 0.0;
 }
 
 static int icm_matrix_decision_delta(const char *stacks, const char *payouts,
@@ -7493,7 +7495,7 @@ static void i_on_compute_icm_matrix(App *app, Event *event)
      * the all-in amount always comes from the hero stack. */
     if (has_bet)
         to_call = pot * 0.5;
-    if (to_call < 0.0 || !isfinite(to_call))
+    if (to_call < 0.0 || !pe_finite_double(to_call))
         to_call = 0.0;
     ranks = combo_get_selected(app->icm_game_combo) == 1u
         ? "AKQJT9876" : "AKQJT98765432";

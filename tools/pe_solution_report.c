@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../src/solver/domain/finite_double.h"
+
 #if defined(_WIN32) && defined(_MSC_VER)
 #define strtok_r strtok_s
 #endif
@@ -92,7 +94,7 @@ static int load_metadata(const char *path, metadata_row_t **out, size_t *count)
         if (n >= 5) snprintf(rows[used].flop, sizeof(rows[used].flop), "%s", fields[4]);
         if (n >= 6) snprintf(rows[used].runout, sizeof(rows[used].runout), "%s", fields[5]);
         rows[used].weight = strtod(fields[3], NULL);
-        if (!isfinite(rows[used].weight) || rows[used].weight < 0.0)
+        if (!pe_finite_double(rows[used].weight) || rows[used].weight < 0.0)
             rows[used].weight = 1.0;
         ++used;
     }

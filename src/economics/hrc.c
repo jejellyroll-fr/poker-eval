@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../solver/domain/finite_double.h"
+
 typedef struct {
     const pe_hrc_config_t *config;
     size_t max_range_combos;
@@ -91,7 +93,7 @@ pe_hrc_status_t pe_hrc_validate(const pe_hrc_config_t *config)
             return PE_HRC_ERR_INVALID_RANGE;
         for (size_t i = 0; i < config->ranges[p].count; ++i) {
             double w = config->ranges[p].combos[i].weight;
-            if (!(w >= 0.0) || !isfinite(w))
+            if (!(w >= 0.0) || !pe_finite_double(w))
                 return PE_HRC_ERR_INVALID_RANGE;
         }
         if (config->ranges[p].count > UINT16_MAX)
@@ -284,7 +286,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     }
     for (size_t i = 0; i < ctx.profile_count; ++i)
         total_weight += ctx.profiles[i].weight;
-    if (!(total_weight > 0.0) || !isfinite(total_weight)) {
+    if (!(total_weight > 0.0) || !pe_finite_double(total_weight)) {
         solve_context_free(&ctx);
         return PE_HRC_ERR_INVALID_RANGE;
     }

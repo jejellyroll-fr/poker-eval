@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../src/solver/domain/finite_double.h"
+
 static void set_error(char *error, size_t size, const char *fmt, ...)
 {
     va_list args;
@@ -76,10 +78,10 @@ int pe_analysis_icm_decision(
                   "hero and opponent must be two different player seats");
         return -1;
     }
-    if (!isfinite(request->win_probability) ||
+    if (!pe_finite_double(request->win_probability) ||
         request->win_probability < 0.0 || request->win_probability > 1.0 ||
-        !isfinite(request->chips_at_risk) || request->chips_at_risk < 0.0 ||
-        !isfinite(request->chips_to_win) || request->chips_to_win < 0.0)
+        !pe_finite_double(request->chips_at_risk) || request->chips_at_risk < 0.0 ||
+        !pe_finite_double(request->chips_to_win) || request->chips_to_win < 0.0)
     {
         set_error(out->error, sizeof(out->error),
                   "probability and chip amounts must be finite and non-negative");
@@ -257,7 +259,7 @@ int pe_analysis_parse_numbers(const char *text, double *out, int capacity,
         }
         errno = 0;
         value = strtod(cursor, &end);
-        if (end == cursor || errno != 0 || !isfinite(value))
+        if (end == cursor || errno != 0 || !pe_finite_double(value))
         {
             set_error(error, error_size, "'%s' is not a number", cursor);
             return -1;
@@ -628,7 +630,7 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
         input.payouts[i] = payouts[i];
         out->prize_pool += payouts[i];
     }
-    if (!(out->prize_pool > 0.0) || !isfinite(out->prize_pool))
+    if (!(out->prize_pool > 0.0) || !pe_finite_double(out->prize_pool))
     {
         set_error(out->error, sizeof(out->error),
                   "payouts must contain at least one positive value");
@@ -672,7 +674,7 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
                                       &win_count, out->error,
                                       sizeof(out->error)) != 0 ||
             win_count != 1 || !(pot_values[0] >= 0.0) ||
-            !isfinite(pot_values[0]))
+            !pe_finite_double(pot_values[0]))
         {
             set_error(out->error, sizeof(out->error),
                       "FGS pot must be one non-negative number");
@@ -699,7 +701,7 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
         }
         for (i = 0; i < player_count; ++i)
         {
-            if (!isfinite(win_probability[i]) || win_probability[i] < 0.0)
+            if (!pe_finite_double(win_probability[i]) || win_probability[i] < 0.0)
             {
                 set_error(out->error, sizeof(out->error),
                           "FGS win weights must be non-negative numbers");
@@ -707,7 +709,7 @@ int pe_analysis_icm(const pe_analysis_icm_request_t *request,
             }
             win_sum += win_probability[i];
         }
-        if (!(win_sum > 0.0) || !isfinite(win_sum))
+        if (!(win_sum > 0.0) || !pe_finite_double(win_sum))
         {
             set_error(out->error, sizeof(out->error),
                       "FGS needs at least one positive win weight");

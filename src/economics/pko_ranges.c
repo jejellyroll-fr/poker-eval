@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../solver/domain/finite_double.h"
+
 typedef struct {
     const pe_pko_range_input_t *input;
     pe_pko_range_profile_t *profiles;
@@ -74,7 +76,7 @@ int pe_pko_calculate_from_ranges(const pe_pko_range_input_t *input,
     }
     for (size_t i = 0; i < state.count; ++i)
         total_weight += state.profiles[i].weight;
-    if (!(total_weight > 0.0) || !isfinite(total_weight)) {
+    if (!(total_weight > 0.0) || !pe_finite_double(total_weight)) {
         free(state.profiles);
         return -1;
     }
@@ -90,7 +92,7 @@ int pe_pko_calculate_from_ranges(const pe_pko_range_input_t *input,
         for (int winner = 0; winner < players; ++winner) {
             for (int victim = 0; victim < players; ++victim) {
                 double value = probabilities[winner][victim];
-                if (!isfinite(value) || value < 0.0 || value > 1.0 ||
+                if (!pe_finite_double(value) || value < 0.0 || value > 1.0 ||
                     (winner == victim && value > 0.0)) {
                     free(state.profiles);
                     return -1;

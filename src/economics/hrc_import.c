@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../solver/domain/finite_double.h"
+
 typedef struct {
     const char *text;
     size_t length;
@@ -111,7 +113,7 @@ static int parse_number(json_reader_t *reader, double *out,
     start = reader->text + reader->position;
     errno = 0;
     value = strtod(start, &end);
-    if (end == start || errno == ERANGE || !isfinite(value)) {
+    if (end == start || errno == ERANGE || !pe_finite_double(value)) {
         set_error(reader, error, "expected finite JSON number");
         return 0;
     }
@@ -503,8 +505,8 @@ int pe_hrc_trace_pot(const pe_hrc_tree_t *tree, const pe_hrc_pot_model_t *model,
     memset(out, 0, sizeof(*out));
     out->total_pot = model->initial_pot;
     for (int p = 0; p < model->player_count; ++p) {
-        if (!isfinite(model->stacks[p]) || model->stacks[p] < 0.0 ||
-            !isfinite(model->antes[p]) || model->antes[p] < 0.0 ||
+        if (!pe_finite_double(model->stacks[p]) || model->stacks[p] < 0.0 ||
+            !pe_finite_double(model->antes[p]) || model->antes[p] < 0.0 ||
             model->antes[p] > model->stacks[p]) return -1;
         out->committed[p] = model->antes[p];
         out->total_pot += model->antes[p];
@@ -520,7 +522,7 @@ int pe_hrc_trace_pot(const pe_hrc_tree_t *tree, const pe_hrc_pot_model_t *model,
         player = node->player_to_act;
         if (player < 0 || player >= model->player_count) return -1;
         action = &node->actions[path[depth]];
-        if (action->amount < 0.0 || !isfinite(action->amount) ||
+        if (action->amount < 0.0 || !pe_finite_double(action->amount) ||
             out->committed[player] + action->amount > model->stacks[player] + 1e-9) return -1;
         out->committed[player] += action->amount;
         if (is_fold(action->label)) out->folded[player] = 1;
@@ -534,7 +536,7 @@ int pe_hrc_trace_pot(const pe_hrc_tree_t *tree, const pe_hrc_pot_model_t *model,
         double level = HUGE_VAL; int contributors = 0; uint8_t eligible = 0;
         for (int p = 0; p < model->player_count; ++p)
             if (levels[p] > previous + 1e-9 && levels[p] < level) level = levels[p];
-        if (!isfinite(level)) break;
+        if (!pe_finite_double(level)) break;
         for (int p = 0; p < model->player_count; ++p) {
             if (levels[p] + 1e-9 >= level) ++contributors;
             if (!out->folded[p] && levels[p] + 1e-9 >= level) eligible |= (uint8_t)(1u << p);

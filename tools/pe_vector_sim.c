@@ -28,6 +28,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../src/solver/domain/finite_double.h"
+
 #define PE_VECTOR_SIM_MAX_PLAYERS 8u
 
 typedef struct
@@ -162,7 +164,7 @@ static int parse_double(const char *text, double *out)
         return -1;
     errno = 0;
     value = strtod(text, &end);
-    if (errno != 0 || end == text || *end != '\0' || !isfinite(value) ||
+    if (errno != 0 || end == text || *end != '\0' || !pe_finite_double(value) ||
         value < 0.0)
         return -1;
     *out = value;
@@ -325,7 +327,7 @@ static int parse_exact_omaha_combo(const char *text, uint8_t hole_cards,
         errno = 0;
         weight = strtod(weight_text + 1, &end);
         if (errno != 0 || end == weight_text + 1 || *end != '\0' ||
-            !isfinite(weight) || weight < 0.0)
+            !pe_finite_double(weight) || weight < 0.0)
             return -1;
         compact[(size_t)(weight_text - compact)] = '\0';
     }

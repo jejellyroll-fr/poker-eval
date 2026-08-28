@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../src/solver/domain/finite_double.h"
+
 pe_tree_outline_config_t pe_tree_outline_default_config(int player_count)
 {
     pe_tree_outline_config_t config;
@@ -33,10 +35,10 @@ void pe_tree_outline_init(pe_tree_outline_t *outline,
     memset(outline, 0, sizeof(*outline));
     outline->config = config != NULL ? *config
                                      : pe_tree_outline_default_config(2);
-    if (!isfinite(outline->config.starting_stack) ||
+    if (!pe_finite_double(outline->config.starting_stack) ||
         outline->config.starting_stack < 0.0)
         outline->config.starting_stack = 100.0;
-    if (!isfinite(outline->config.starting_pot) ||
+    if (!pe_finite_double(outline->config.starting_pot) ||
         outline->config.starting_pot < 0.0)
         outline->config.starting_pot = 1.5;
     if (outline->config.player_count < 1)
@@ -128,7 +130,7 @@ static void chip_apply(pe_tree_chip_state_t *chips,
 {
     double to_call;
 
-    if (!isfinite(size) || size < 0.0)
+    if (!pe_finite_double(size) || size < 0.0)
         size = 0.0;
 
     if (seat >= 0 && seat < config->player_count)

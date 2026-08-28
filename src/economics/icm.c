@@ -2,6 +2,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "../solver/domain/finite_double.h"
+
 static void asymmetric_recurse(int depth,
                                const icm_asymmetric_input_t *input,
                                int *active,
@@ -36,12 +38,12 @@ int pe_icm_calculate_asymmetric(const icm_asymmetric_input_t *input,
         return -1;
     memset(result, 0, sizeof(*result));
     for (int player = 0; player < input->num_players; ++player) {
-        if (!(input->stacks[player] > 0.0) || !isfinite(input->stacks[player]))
+        if (!(input->stacks[player] > 0.0) || !pe_finite_double(input->stacks[player]))
             return -1;
         total += input->stacks[player];
         active[player] = 1;
         for (int position = 0; position < input->num_payouts; ++position)
-            if (!isfinite(input->payouts[player][position])) return -1;
+            if (!pe_finite_double(input->payouts[player][position])) return -1;
     }
     if (!(total > 0.0)) return -1;
     asymmetric_recurse(0, input, active, total, 1.0, result);

@@ -29,6 +29,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../src/solver/domain/finite_double.h"
+
 #define DEFAULT_ITERATIONS 10000u
 #define DEFAULT_SHOWDOWN_SAMPLES 128
 #define DEFAULT_STACK 100.0
@@ -196,7 +198,7 @@ static double rollout_value(const pe_external_game_t *external,
                                                external->infoset_key(state, external->user),
                                                action, external->user)
                 : 1.0 / (double)count;
-            if (probability > 0.0 && isfinite(probability))
+            if (probability > 0.0 && pe_finite_double(probability))
                 total += probability;
         }
         if (!(total > 0.0))
@@ -209,7 +211,7 @@ static double rollout_value(const pe_external_game_t *external,
                                                external->infoset_key(state, external->user),
                                                action, external->user)
                 : 1.0 / (double)count;
-            if (!(probability > 0.0) || !isfinite(probability))
+            if (!(probability > 0.0) || !pe_finite_double(probability))
                 probability = 0.0;
             draw -= probability;
             if (draw <= 0.0) { selected = action; break; }
@@ -490,7 +492,7 @@ static int parse_nonnegative_double(const char *text, double *out)
         return -1;
     errno = 0;
     value = strtod(text, &end);
-    if (errno || end == text || *end != '\0' || !isfinite(value) || value < 0.0)
+    if (errno || end == text || *end != '\0' || !pe_finite_double(value) || value < 0.0)
         return -1;
     *out = value;
     return 0;

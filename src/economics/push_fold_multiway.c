@@ -1,6 +1,8 @@
 #include <poker_eval/economics/push_fold_multiway.h>
 
 #include <math.h>
+
+#include "../solver/domain/finite_double.h"
 #include <string.h>
 
 static void regret_strategy(double regret[2], double strategy[2])
@@ -55,11 +57,11 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
     iterations = input->iterations > 0 ? input->iterations : 100000;
     profiles = 1 << input->num_villains;
     for (int i = 0; i < input->num_villains; ++i)
-        if (!(input->villain_stacks[i] > 0.0) || !isfinite(input->villain_stacks[i])) return -1;
+        if (!(input->villain_stacks[i] > 0.0) || !pe_finite_double(input->villain_stacks[i])) return -1;
     for (int mask = 0; mask < profiles; ++mask)
         if (input->hero_equity_by_call_mask[mask] < 0.0 ||
             input->hero_equity_by_call_mask[mask] > 1.0 ||
-            !isfinite(input->hero_equity_by_call_mask[mask])) return -1;
+            !pe_finite_double(input->hero_equity_by_call_mask[mask])) return -1;
     memset(result, 0, sizeof(*result));
     for (int iter = 0; iter < iterations; ++iter) {
         double hs[2], vs[PE_PUSH_FOLD_MAX_VILLAINS][2];

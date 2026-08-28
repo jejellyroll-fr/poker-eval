@@ -5,6 +5,8 @@
 #include <math.h>
 #include <string.h>
 
+#include "../solver/domain/finite_double.h"
+
 static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_probability,
                    int depth, pe_fgs_result_t *result, int *active)
 {
@@ -40,7 +42,7 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
         active[node_index] = 1;
         for (size_t i = 0; i < node->edge_count; ++i) {
             const pe_fgs_edge_t *edge = &tree->edges[node->first_edge + i];
-            if (!isfinite(edge->probability) || edge->probability < 0.0 ||
+            if (!pe_finite_double(edge->probability) || edge->probability < 0.0 ||
                 edge->probability > 1.0 || edge->child_index < 0 ||
                 (size_t)edge->child_index >= tree->node_count) {
                 active[node_index] = 0;
@@ -184,17 +186,17 @@ int pe_fgs_generate_even_contribution(const pe_fgs_scenario_input_t *input,
         input->depth < 0 || input->depth > PE_FGS_MAX_DEPTH)
         return -1;
     for (i = 0; i < input->num_players; ++i) {
-        if (!isfinite(input->stacks[i]) || input->stacks[i] < 0.0 ||
-            !isfinite(input->win_probability[i]) ||
+        if (!pe_finite_double(input->stacks[i]) || input->stacks[i] < 0.0 ||
+            !pe_finite_double(input->win_probability[i]) ||
             input->win_probability[i] < 0.0)
             return -1;
     }
     for (i = 0; i < input->num_payouts; ++i) {
-        if (!isfinite(input->payouts[i]) || input->payouts[i] < 0.0)
+        if (!pe_finite_double(input->payouts[i]) || input->payouts[i] < 0.0)
             return -1;
         payout_sum += input->payouts[i];
     }
-    if (!isfinite(input->pot) || input->pot < 0.0 || !(payout_sum > 0.0))
+    if (!pe_finite_double(input->pot) || input->pot < 0.0 || !(payout_sum > 0.0))
         return -1;
 
     memset(&gen, 0, sizeof(gen));
