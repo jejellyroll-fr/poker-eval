@@ -9,9 +9,11 @@
 #include <string.h>
 
 #ifndef _WIN32
+#include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+extern char **environ;
 #endif
 
 #include "pe_sol_format.h"
@@ -600,18 +602,6 @@ static int gui_solver_executable_allowed(const char *path)
            strcmp(name, "mpf_run_with_metrics") == 0;
 }
 
-static int execute_gui_solver(char *const argv[])
-{
-    if (argv == NULL || argv[0] == NULL ||
-        strchr(argv[0], '/') == NULL ||
-        !gui_solver_executable_allowed(argv[0]))
-        return -1;
-    /* The caller supplies an absolute path to one of the four bundled tools;
-     * no shell or PATH lookup is involved. */
-    /* Flawfinder: ignore */
-    execv(argv[0], argv);
-    return -1;
-}
 #endif
 
 /* Run an internally-built command without a shell and capture its output into
@@ -631,6 +621,8 @@ static int run_command_capture(const char *command, char *destination,
     int pipe_fds[2];
     pid_t child;
     size_t command_length;
+    int spawn_status;
+    posix_spawn_file_actions_t actions;
 
     command_length = gui_bounded_length(command, sizeof(command_copy));
     if (!command || command_length >= sizeof(command_copy))
@@ -639,26 +631,34 @@ static int run_command_capture(const char *command, char *destination,
         command_copy[i] = command[i];
     command_copy[command_length] = '\0';
     if (command_to_argv(command_copy, argv,
-                       sizeof(argv) / sizeof(argv[0])) < 1 || pipe(pipe_fds) != 0)
+                       sizeof(argv) / sizeof(argv[0])) < 1 ||
+        argv[0] == NULL || strchr(argv[0], '/') == NULL ||
+        !gui_solver_executable_allowed(argv[0]) || pipe(pipe_fds) != 0)
         return -1;
-    child = fork();
-    if (child < 0)
+    if (posix_spawn_file_actions_init(&actions) != 0)
     {
         close(pipe_fds[0]);
         close(pipe_fds[1]);
         return -1;
     }
-    if (child == 0)
+    if (posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDOUT_FILENO) != 0 ||
+        posix_spawn_file_actions_adddup2(&actions, pipe_fds[1], STDERR_FILENO) != 0 ||
+        posix_spawn_file_actions_addclose(&actions, pipe_fds[0]) != 0 ||
+        posix_spawn_file_actions_addclose(&actions, pipe_fds[1]) != 0)
     {
         close(pipe_fds[0]);
-        if (dup2(pipe_fds[1], STDOUT_FILENO) < 0 ||
-            dup2(pipe_fds[1], STDERR_FILENO) < 0)
-            _exit(127);
         close(pipe_fds[1]);
-        (void)execute_gui_solver(argv);
-        _exit(127);
+        posix_spawn_file_actions_destroy(&actions);
+        return -1;
     }
+    spawn_status = posix_spawn(&child, argv[0], &actions, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
     close(pipe_fds[1]);
+    if (spawn_status != 0)
+    {
+        close(pipe_fds[0]);
+        return -1;
+    }
     stream = fdopen(pipe_fds[0], "r");
     if (!stream)
     {
