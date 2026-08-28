@@ -1,5 +1,9 @@
 /* Cross-platform poker-eval trainer GUI: pure C + SDL2. */
+#ifdef _WIN32
+#include <SDL.h>
+#else
 #include <SDL2/SDL.h>
+#endif
 
 #include <ctype.h>
 #include <math.h>
