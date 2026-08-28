@@ -276,7 +276,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 {
                     double summed_regret = old_regret + delta;
                     if (backend->config.regret_mode == PE_REGRET_PLUS &&
-                        signbit(summed_regret) &&
+                        pe_signbit_double(summed_regret) &&
                         !(summed_regret > 0.0) &&
                         !(summed_regret < 0.0))
                         fast_safe = 0;

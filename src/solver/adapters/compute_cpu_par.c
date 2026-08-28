@@ -438,7 +438,7 @@ static int cpu_par_apply_update_batch(void *self,
                         double new_average;
                         if (!pe_finite_double(old_regret) || !pe_finite_double(delta) ||
                             !pe_finite_double(old_average) || !pe_finite_double(average_delta) ||
-                            (clamp && signbit(old_regret + delta) &&
+                            (clamp && pe_signbit_double(old_regret + delta) &&
                              !(old_regret + delta > 0.0) &&
                              !(old_regret + delta < 0.0)))
                         {
