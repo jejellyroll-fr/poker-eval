@@ -316,6 +316,16 @@ static double cfr_solve_exploitability(cfr_game_t *game, cfr_storage_t *storage)
             return 0.0;
         return result.total_exploitability;
     }
+    /* A context-aware infoset callback means that concrete histories may be
+     * intentionally merged.  The perfect-information BR would then choose a
+     * different action for each hidden history and overstate exploitability.
+     * Use the shared-action BR for the metric collected by cfr_solve. */
+    if (game->get_infoset_key_with_user)
+    {
+        double br0 = cfr_best_response_value_infoset(game, storage, 0, user_data);
+        double br1 = cfr_best_response_value_infoset(game, storage, 1, user_data);
+        return br0 + br1;
+    }
     return cfr_exploitability_perfect_info(game, storage, user_data);
 }
 
@@ -1056,6 +1066,9 @@ double cfr_best_response_value_multiway(
     int num_players = game->num_players > 0 ? game->num_players : 2;
     if (player < 0 || player >= num_players)
         return 0.0;
+
+    if (game->get_infoset_key_with_user)
+        return cfr_best_response_value_infoset(game, storage, player, user_data);
 
     uint64_t root_key = (uint64_t)(game->initial_state);
     if (!root_key && game->initial_state)

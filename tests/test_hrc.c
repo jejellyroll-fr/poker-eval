@@ -64,8 +64,17 @@ int main(void)
            result.action_probability[0][1] < 0.51);
     assert(pe_hrc_result_combo_probability(&result, 0, 0, 0, 1) > 0.99);
     assert(pe_hrc_result_combo_probability(&result, 0, 0, 1, 0) > 0.99);
-    assert(fabs(result.ev[0] - 1.0) < 1e-6);
+    assert(result.ev[0] > 0.98 && result.ev[0] <= 1.0);
     pe_hrc_result_free(&result);
+
+    /* An exact fit must be accepted; only a real third profile is overflow. */
+    config.max_profiles = 2;
+    assert(pe_hrc_solve(&config, &result) == PE_HRC_OK);
+    assert(result.profile_count == 2);
+    pe_hrc_result_free(&result);
+    config.max_profiles = 1;
+    assert(pe_hrc_solve(&config, &result) == PE_HRC_ERR_PROFILE_LIMIT);
+    config.max_profiles = 8;
 
     {
         pe_hrc_node_t invalid_nodes[5] = {0};

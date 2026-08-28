@@ -581,6 +581,42 @@ static double pe_cfr_cb_utility(cfr_game_t *game, uint64_t state, int player, vo
     return cfr->callbacks.get_utility(state, player, cfr->callbacks.user);
 }
 
+static int pe_cfr_cb_chance(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.is_chance
+        ? cfr->callbacks.is_chance(state, cfr->callbacks.user) : 0;
+}
+
+static int pe_cfr_cb_chance_outcomes(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_chance_outcomes
+        ? cfr->callbacks.get_chance_outcomes(state, cfr->callbacks.user) : 0;
+}
+
+static double pe_cfr_cb_chance_weight(cfr_game_t *game, uint64_t state,
+                                      int outcome, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_chance_weight
+        ? cfr->callbacks.get_chance_weight(state, outcome,
+                                           cfr->callbacks.user) : 1.0;
+}
+
+static uint64_t pe_cfr_cb_apply_chance(cfr_game_t *game, uint64_t state,
+                                       int outcome, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.apply_chance
+        ? cfr->callbacks.apply_chance(state, outcome,
+                                      cfr->callbacks.user) : 0u;
+}
+
 static uint64_t pe_cfr_cb_infoset_key(const void *state, void *user)
 {
     pe_cfr_handle_t cfr = (pe_cfr_handle_t)user;
@@ -613,11 +649,24 @@ pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
     cfr->cfr_game.apply_action = pe_cfr_cb_apply;
     cfr->cfr_game.is_terminal = pe_cfr_cb_terminal;
     cfr->cfr_game.get_utility = pe_cfr_cb_utility;
-    cfr->cfr_game.get_infoset_key_with_user = pe_cfr_cb_infoset_key;
+    /* Only install an infoset adapter when the caller requested a mapping.
+     * This lets the core retain its perfect-information semantics for the
+     * ordinary callback case while using the legal shared-action BR for
+     * explicitly merged histories. */
+    cfr->cfr_game.get_infoset_key_with_user = game->get_infoset_key
+        ? pe_cfr_cb_infoset_key : NULL;
     cfr->cfr_game.infoset_user_data = cfr;
     cfr->cfr_game.game_data = cfr;
     cfr->cfr_game.initial_state = (void *)(uintptr_t)game->initial_state;
     cfr->cfr_game.num_players = game->num_players;
+    if (game->is_chance)
+        cfr->cfr_game.is_chance = pe_cfr_cb_chance;
+    if (game->get_chance_outcomes)
+        cfr->cfr_game.get_chance_outcomes = pe_cfr_cb_chance_outcomes;
+    if (game->get_chance_weight)
+        cfr->cfr_game.get_chance_weight = pe_cfr_cb_chance_weight;
+    if (game->apply_chance)
+        cfr->cfr_game.apply_chance = pe_cfr_cb_apply_chance;
     cfr->storage = cfr_storage_create();
     if (!cfr->storage)
     {
@@ -684,9 +733,31 @@ pe_error_t pe_cfr_save(pe_cfr_handle_t cfr, const char* filepath) {
 }
 
 pe_error_t pe_cfr_load(pe_cfr_handle_t cfr, const char* filepath) {
+    cfr_storage_t *replacement;
+    cfr_storage_t *old;
+    int load_result;
     if (!cfr) return PE_ERROR_INVALID_HANDLE;
     if (!cfr->ready || !filepath) return PE_ERROR_INVALID_ARGUMENT;
-    return pe_cfr_load_storage(cfr->storage, filepath) == 0 ? PE_OK : PE_ERROR_IO_FAILED;
+    replacement = cfr_storage_create();
+    if (!replacement)
+        return PE_ERROR_OUT_OF_MEMORY;
+    /* The storage reader inspects the file header, so both the regular and
+     * zstd formats are handled without relying on a filename convention. */
+    load_result = pe_cfr_load_storage(replacement, filepath);
+    if (load_result != 0) {
+        cfr_storage_destroy(replacement);
+        return PE_ERROR_IO_FAILED;
+    }
+    old = cfr->storage;
+    cfr->storage = replacement;
+    cfr_storage_destroy(old);
+    free(cfr->action_counts);
+    cfr->action_counts = NULL;
+    cfr->action_count_size = 0u;
+    cfr->action_count_capacity = 0u;
+    cfr->iteration = 0u;
+    cfr->exploitability = 0.0;
+    return PE_OK;
 }
 
 pe_error_t pe_cfr_get_exploitability(pe_cfr_handle_t cfr, double* exploitability) {

@@ -11,6 +11,7 @@ typedef struct {
     size_t max_range_combos;
     size_t combo_stride;
     double *strategy;
+    double *strategy_sum;
     double *regrets;
     double *reach;
     double *action_value;
@@ -20,6 +21,8 @@ typedef struct {
     pe_hrc_profile_t *profiles;
     size_t profile_count;
     size_t profile_capacity;
+    int profile_overflow;
+    int collect_average;
 } solve_context_t;
 
 static void solve_context_free(solve_context_t *ctx)
@@ -27,6 +30,7 @@ static void solve_context_free(solve_context_t *ctx)
     if (!ctx)
         return;
     free(ctx->strategy);
+    free(ctx->strategy_sum);
     free(ctx->regrets);
     free(ctx->reach);
     free(ctx->action_value);
@@ -114,8 +118,10 @@ static void enumerate_profiles(solve_context_t *ctx, int player,
                                pe_hrc_profile_t *current)
 {
     const pe_range_view_t *range;
-    if (ctx->profile_count >= ctx->profile_capacity)
+    if (ctx->profile_count >= ctx->profile_capacity) {
+        ctx->profile_overflow = 1;
         return;
+    }
     if (player == ctx->config->tree.num_players) {
         current->weight = weight;
         ctx->profiles[ctx->profile_count++] = *current;
@@ -132,7 +138,7 @@ static void enumerate_profiles(solve_context_t *ctx, int player,
             StdDeck_CardMask_OR(next, used, combo->hand);
             enumerate_profiles(ctx, player + 1, next, weight * combo->weight, current);
         }
-        if (ctx->profile_count >= ctx->profile_capacity)
+        if (ctx->profile_overflow)
             return;
     }
 }
@@ -149,12 +155,12 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
         return ctx->config->terminal_value(&ctx->config->tree, node_index, profile,
                                            path, depth, out, ctx->config->user_data) == 0;
     {
+        size_t base = info_offset(ctx, node->player_to_act, node_index,
+                                  profile->combo_index[node->player_to_act], 0);
+        double *strategy = &ctx->strategy[base];
         double child_value[PE_HRC_MAX_PLAYERS];
         memset(out, 0, sizeof(double) * PE_HRC_MAX_PLAYERS);
         for (unsigned a = 0; a < node->action_count; ++a) {
-            double *strategy = info_strategy(ctx, node->player_to_act,
-                                              node_index,
-                                              profile->combo_index[node->player_to_act]);
             path[depth] = (uint16_t)a;
             if (!evaluate_node(ctx, node->actions[a].child_index, profile, path,
                                depth + 1, path_reach * strategy[a],
@@ -168,11 +174,11 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
                 if (ctx->collect_public) {
                     ctx->public_strategy_mass[node_index][a] += reach * strategy[a];
                 }
+                if (ctx->collect_average)
+                    ctx->strategy_sum[base + a] += reach * strategy[a];
             }
             for (int p = 0; p < ctx->config->tree.num_players; ++p)
-                out[p] += info_strategy(ctx, node->player_to_act, node_index,
-                                        profile->combo_index[node->player_to_act])[a] *
-                          child_value[p];
+                out[p] += strategy[a] * child_value[p];
         }
         ctx->reach[info_offset(ctx, node->player_to_act, node_index,
                                profile->combo_index[node->player_to_act], 0)] +=
@@ -267,6 +273,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
         config->max_profiles > SIZE_MAX / sizeof(*ctx.profiles))
         return PE_HRC_ERR_PROFILE_LIMIT;
     ctx.strategy = calloc(total_slots, sizeof(*ctx.strategy));
+    ctx.strategy_sum = calloc(total_slots, sizeof(*ctx.strategy_sum));
     ctx.regrets = calloc(total_slots, sizeof(*ctx.regrets));
     ctx.reach = calloc(total_slots, sizeof(*ctx.reach));
     ctx.action_value = calloc(total_slots, sizeof(*ctx.action_value));
@@ -276,7 +283,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
                               sizeof(*ctx.public_reach));
     ctx.public_strategy_mass = calloc(config->tree.node_count,
                                       sizeof(*ctx.public_strategy_mass));
-    if (!ctx.strategy || !ctx.regrets || !ctx.reach || !ctx.action_value ||
+    if (!ctx.strategy || !ctx.strategy_sum || !ctx.regrets || !ctx.reach || !ctx.action_value ||
         !ctx.profiles || !ctx.public_reach || !ctx.public_strategy_mass) {
         solve_context_free(&ctx);
         return PE_HRC_ERR_PROFILE_LIMIT;
@@ -287,7 +294,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
         StdDeck_CardMask_RESET(empty);
         enumerate_profiles(&ctx, 0, empty, 1.0, &current);
     }
-    if (ctx.profile_count == ctx.profile_capacity) {
+    if (ctx.profile_overflow) {
         solve_context_free(&ctx);
         return PE_HRC_ERR_PROFILE_LIMIT;
     }
@@ -300,6 +307,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     for (size_t i = 0; i < ctx.profile_count; ++i)
         ctx.profiles[i].weight /= total_weight;
     init_strategy(&ctx);
+    ctx.collect_average = 1;
     {
         unsigned iterations = config->iterations ? config->iterations : 1u;
         for (unsigned it = 0; it < iterations; ++it) {
@@ -319,6 +327,33 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
             }
             update_strategy(&ctx);
         }
+    }
+    ctx.collect_average = 0;
+    /* Report the iteration/reach-weighted average strategy rather than the
+     * last regret-matching policy. */
+    for (size_t n = 0; n < config->tree.node_count; ++n) {
+        const pe_hrc_node_t *node = &config->tree.nodes[n];
+        if (!node->terminal) {
+            int player = node->player_to_act;
+            for (size_t combo = 0; combo < config->ranges[player].count; ++combo) {
+                size_t base = info_offset(&ctx, player, (int)n, combo, 0);
+                double sum = 0.0;
+                for (unsigned a = 0; a < node->action_count; ++a)
+                    sum += ctx.strategy_sum[base + a];
+                if (sum > 0.0) {
+                    for (unsigned a = 0; a < node->action_count; ++a)
+                        ctx.strategy_sum[base + a] /= sum;
+                } else {
+                    for (unsigned a = 0; a < node->action_count; ++a)
+                        ctx.strategy_sum[base + a] = ctx.strategy[base + a];
+                }
+            }
+        }
+    }
+    {
+        double *current_strategy = ctx.strategy;
+        ctx.strategy = ctx.strategy_sum;
+        ctx.strategy_sum = current_strategy;
     }
     /* Re-evaluate EV under the final strategy, instead of returning the sum of
      * every training iteration. */
@@ -357,6 +392,7 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     result->profile_count = ctx.profile_count;
     result->iterations = config->iterations ? config->iterations : 1u;
     free(ctx.regrets);
+    free(ctx.strategy_sum);
     free(ctx.reach);
     free(ctx.action_value);
     free(ctx.profiles);

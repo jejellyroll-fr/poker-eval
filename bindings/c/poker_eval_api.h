@@ -51,6 +51,12 @@ typedef int (*pe_cfr_get_actions_fn)(uint64_t state, int *actions,
 typedef uint64_t (*pe_cfr_apply_action_fn)(uint64_t state, int action, void *user);
 typedef double (*pe_cfr_get_utility_fn)(uint64_t state, int player, void *user);
 typedef uint64_t (*pe_cfr_get_infoset_key_fn)(uint64_t state, void *user);
+typedef int (*pe_cfr_is_chance_fn)(uint64_t state, void *user);
+typedef int (*pe_cfr_get_chance_outcomes_fn)(uint64_t state, void *user);
+typedef double (*pe_cfr_get_chance_weight_fn)(uint64_t state, int outcome,
+                                              void *user);
+typedef uint64_t (*pe_cfr_apply_chance_fn)(uint64_t state, int outcome,
+                                           void *user);
 typedef struct {
     uint64_t initial_state;
     int num_players;
@@ -63,6 +69,13 @@ typedef struct {
     /* Optional information-set mapping.  When omitted, the state key is used
        directly, which is only correct for games without hidden information. */
     pe_cfr_get_infoset_key_fn get_infoset_key;
+    /* Optional chance-node callbacks.  When is_chance returns non-zero, the
+       solver enumerates get_chance_outcomes() outcomes through apply_chance().
+       Outcomes are uniform unless get_chance_weight() is supplied. */
+    pe_cfr_is_chance_fn is_chance;
+    pe_cfr_get_chance_outcomes_fn get_chance_outcomes;
+    pe_cfr_get_chance_weight_fn get_chance_weight;
+    pe_cfr_apply_chance_fn apply_chance;
 } pe_cfr_game_desc_t;
 
 /** ICM calculator handle */
