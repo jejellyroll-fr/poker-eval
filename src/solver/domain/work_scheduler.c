@@ -4,19 +4,25 @@
 
 #include <poker_eval/solver/pe_work_scheduler.h>
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
+
+static int finite_double(double value)
+{
+    return value <= DBL_MAX && value >= -DBL_MAX;
+}
 
 static double backend_rate(const pe_runtime_backend_info_t *backend)
 {
     if (backend->update_elements_per_s > 0.0 &&
-        isfinite(backend->update_elements_per_s))
+        finite_double(backend->update_elements_per_s))
         return backend->update_elements_per_s;
     if (backend->strategy_elements_per_s > 0.0 &&
-        isfinite(backend->strategy_elements_per_s))
+        finite_double(backend->strategy_elements_per_s))
         return backend->strategy_elements_per_s;
     if (backend->terminal_elements_per_s > 0.0 &&
-        isfinite(backend->terminal_elements_per_s))
+        finite_double(backend->terminal_elements_per_s))
         return backend->terminal_elements_per_s;
     return 0.0;
 }

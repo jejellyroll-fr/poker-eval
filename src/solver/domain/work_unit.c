@@ -3,12 +3,18 @@
 #include <poker_eval/solver/pe_work_unit.h>
 
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static const char k_hex[] = "0123456789abcdef";
+
+static int finite_double(double value)
+{
+    return value <= DBL_MAX && value >= -DBL_MAX;
+}
 
 void pe_work_unit_init(pe_work_unit_t *unit)
 {
@@ -40,7 +46,7 @@ int pe_work_unit_validate(const pe_work_unit_t *unit)
         unit->board_count > SIZE_MAX / (size_t)unit->board_width)
         return -1;
     for (i = 0u; i < unit->regret_count; ++i)
-        if (!isfinite(unit->regret_snapshot[i]))
+        if (!finite_double(unit->regret_snapshot[i]))
             return -1;
     return 0;
 }
