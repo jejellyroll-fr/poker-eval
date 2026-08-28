@@ -18,6 +18,7 @@
 #include <poker_eval/solver/pe_holdem_round.h>
 #include <poker_eval/solver/pe_range.h>
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -893,7 +894,7 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         rules->showdown_samples <= 0 ||
         !(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
         rules->big_blind < rules->small_blind ||
-        !isfinite(rules->ante) || rules->ante < 0.0 ||
+        !(rules->ante >= 0.0) || rules->ante > DBL_MAX ||
         rules->ante >= rules->big_blind ||
         rules->raise_count < 0 || rules->raise_count > PE_PREFLOP_ALLIN_MAX_RAISE_SIZES ||
         !(rules->min_raise > 0.0))

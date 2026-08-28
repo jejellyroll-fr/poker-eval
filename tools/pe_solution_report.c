@@ -340,14 +340,21 @@ int main(int argc, char **argv)
             ? pe_monker_key_decode_packed_board(key, packed_shift, packed_cards, &board)
             : pe_monker_key_decode_board(key, &board);
         if (status == PE_MONKER_KEY_OK)
-            printf("{\"schema\":\"pe-monker-key/v1\",\"key\":\"%s\","
-                   "\"decodable\":true,\"board_mask\":\"0x%016" PRIx64 "\","
-                   "\"status\":\"%s\"}\n", decode_key_text,
-                   (uint64_t)board, pe_monker_key_status_string(status));
+        {
+            fputs("{\"schema\":\"pe-monker-key/v1\",\"key\":\"", stdout);
+            fputs(decode_key_text, stdout);
+            printf("\",\"decodable\":true,\"board_mask\":\"0x%016" PRIx64
+                   "\",\"status\":\"%s\"}\n", (uint64_t)board,
+                   pe_monker_key_status_string(status));
+        }
         else
-            printf("{\"schema\":\"pe-monker-key/v1\",\"key\":\"%s\","
-               "\"decodable\":false,\"board_mask\":null,\"status\":\"%s\"}\n",
-               decode_key_text, pe_monker_key_status_string(status));
+        {
+            fputs("{\"schema\":\"pe-monker-key/v1\",\"key\":\"", stdout);
+            fputs(decode_key_text, stdout);
+            printf("\",\"decodable\":false,\"board_mask\":null,"
+                   "\"status\":\"%s\"}\n",
+                   pe_monker_key_status_string(status));
+        }
         return status == PE_MONKER_KEY_OK ? 0 : 1;
     }
     if ((!solution && (!monker_tree || !monker_mkr)) ||

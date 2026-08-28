@@ -2,8 +2,17 @@
 
 #include <poker_eval/solver/pe_cfr_external_adapter.h>
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
+
+/* MinGW's isfinite macro may route a double through the float overload when
+ * strict conversion warnings are enabled. Relational bounds reject NaN and
+ * both infinities without narrowing the value. */
+static int finite_double(double value)
+{
+    return value >= -DBL_MAX && value <= DBL_MAX;
+}
 
 static cfr_game_t *legacy(void *user)
 {
@@ -109,17 +118,17 @@ static int sample_chance(const void *state, pe_rng_t *rng,
             double weight = game->get_chance_weight
                 ? game->get_chance_weight(game, key_of(state), i,
                                           game->game_data) : 1.0;
-            if (!isfinite(weight) || weight <= 0.0) weight = 1.0;
+            if (!finite_double(weight) || weight <= 0.0) weight = 1.0;
             total += weight;
         }
-        if (!(total > 0.0) || !isfinite(total)) return -1;
+        if (!(total > 0.0) || !finite_double(total)) return -1;
         draw = pe_rng_uniform01(rng) * total;
         for (int i = 0; i < outcomes; ++i)
         {
             double weight = game->get_chance_weight
                 ? game->get_chance_weight(game, key_of(state), i,
                                           game->game_data) : 1.0;
-            if (!isfinite(weight) || weight <= 0.0) weight = 1.0;
+            if (!finite_double(weight) || weight <= 0.0) weight = 1.0;
             draw -= weight;
             if (draw < 0.0 || i + 1 == outcomes)
             {
@@ -136,11 +145,11 @@ static int sample_chance(const void *state, pe_rng_t *rng,
             ? game->get_chance_weight(game, key_of(state), i, game->game_data)
             : 1.0;
         /* Legacy CFR treats a missing/non-positive weight as uniform. */
-        if (!isfinite(weight) || weight <= 0.0) weight = 1.0;
+        if (!finite_double(weight) || weight <= 0.0) weight = 1.0;
         weights[i] = weight;
         total += weight;
     }
-    if (!(total > 0.0) || !isfinite(total)) return -1;
+    if (!(total > 0.0) || !finite_double(total)) return -1;
     draw = pe_rng_uniform01(rng) * total;
     for (int i = 0; i < outcomes; ++i)
     {

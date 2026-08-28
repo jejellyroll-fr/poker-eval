@@ -539,7 +539,8 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
         long footer_position = ftell(file);
         char footer[8];
         uint64_t checksum = 0u;
-        int trailing;
+        unsigned char trailing;
+        size_t trailing_count;
         if (footer_position < PE_CHECKPOINT_HEADER_BYTES ||
             read_bytes(file, footer, sizeof(footer)) != 0 ||
             read_u64(file, &stored_checksum) != 0 ||
@@ -548,8 +549,8 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
                              &checksum) != 0 ||
             checksum != stored_checksum || fseek(file, 0L, SEEK_END) != 0)
             goto fail;
-        trailing = fgetc(file);
-        if (trailing != EOF || ferror(file))
+        trailing_count = fread(&trailing, 1u, 1u, file);
+        if (trailing_count != 0u || ferror(file))
             goto fail;
     }
     if (fclose(file) != 0)

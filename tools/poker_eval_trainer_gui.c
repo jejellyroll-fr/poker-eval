@@ -8,6 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include "pe_sol_format.h"
 #include "poker_eval/solver/pe_monker.h"
 #include "poker_eval/solver/pe_runtime.h"
@@ -497,25 +503,150 @@ static const char *starter_range_for_player(const app_t *app, int player)
 
 enum { SOLVE_IDLE = 0, SOLVE_RUNNING = 1, SOLVE_DONE = 2 };
 
-/* Run a shell command and capture its output into destination. Returns the
- * process exit status, or -1 when the pipe cannot be opened. */
+/* Parse the small, internally-built command language used by the GUI. The
+ * parser understands the quoting emitted by shell_quote, but never invokes a
+ * shell, so paths and ranges remain data rather than executable input. */
+#ifndef _WIN32
+static int command_to_argv(char *command, char **argv, size_t capacity)
+{
+    char *read = command;
+    char *write = command;
+    char *token_start = NULL;
+    size_t count = 0u;
+    int in_single = 0;
+    int in_double = 0;
+    int escaped = 0;
+    int token = 0;
+
+    if (!command || !argv || capacity < 2u)
+        return -1;
+    while (*read)
+    {
+        char value = *read++;
+        if (escaped)
+        {
+            if (!token_start)
+                token_start = write;
+            *write++ = value;
+            escaped = 0;
+            token = 1;
+            continue;
+        }
+        if (!in_single && value == '\\')
+        {
+            if (!token_start)
+                token_start = write;
+            escaped = 1;
+            token = 1;
+            continue;
+        }
+        if (!in_double && value == '\'')
+        {
+            if (!token_start)
+                token_start = write;
+            in_single = !in_single;
+            token = 1;
+            continue;
+        }
+        if (!in_single && value == '"')
+        {
+            if (!token_start)
+                token_start = write;
+            in_double = !in_double;
+            token = 1;
+            continue;
+        }
+        if (!in_single && !in_double &&
+            (value == ' ' || value == '\t' || value == '\r' || value == '\n'))
+        {
+            if (token)
+            {
+                if (count + 1u >= capacity)
+                    return -1;
+                *write++ = '\0';
+                argv[count++] = token_start;
+                token_start = NULL;
+                token = 0;
+            }
+            continue;
+        }
+        *write++ = value;
+        token = 1;
+    }
+    if (escaped || in_single || in_double)
+        return -1;
+    if (token)
+    {
+        if (count + 1u >= capacity)
+            return -1;
+        *write++ = '\0';
+        argv[count++] = token_start;
+    }
+    argv[count] = NULL;
+    return (int)count;
+}
+#endif
+
+/* Run an internally-built command without a shell and capture its output into
+ * destination. Returns the process exit status, or -1 when it cannot start. */
 static int run_command_capture(const char *command, char *destination,
                                size_t capacity)
 {
     char output[4096];
-    FILE *pipe;
+    FILE *stream;
     size_t used = 0u;
     int exit_status;
 #ifdef _WIN32
-    pipe = _popen(command, "r");
+    stream = _popen(command, "r");
 #else
-    pipe = popen(command, "r");
-#endif
-    if (!pipe)
+    char command_copy[32768];
+    char *argv[64];
+    int pipe_fds[2];
+    pid_t child;
+    size_t command_length;
+
+    command_length = gui_bounded_length(command, sizeof(command_copy));
+    if (!command || command_length >= sizeof(command_copy))
         return -1;
+    for (size_t i = 0u; i < command_length; ++i)
+        command_copy[i] = command[i];
+    command_copy[command_length] = '\0';
+    if (command_to_argv(command_copy, argv,
+                       sizeof(argv) / sizeof(argv[0])) < 1 || pipe(pipe_fds) != 0)
+        return -1;
+    child = fork();
+    if (child < 0)
+    {
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return -1;
+    }
+    if (child == 0)
+    {
+        close(pipe_fds[0]);
+        if (dup2(pipe_fds[1], STDOUT_FILENO) < 0 ||
+            dup2(pipe_fds[1], STDERR_FILENO) < 0)
+            _exit(127);
+        close(pipe_fds[1]);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    close(pipe_fds[1]);
+    stream = fdopen(pipe_fds[0], "r");
+    if (!stream)
+    {
+        close(pipe_fds[0]);
+        (void)waitpid(child, NULL, 0);
+        return -1;
+    }
+#endif
+#ifdef _WIN32
+    if (!stream)
+        return -1;
+#endif
     if (capacity > 0u)
         destination[0] = '\0';
-    while (fgets(output, sizeof(output), pipe))
+    while (fgets(output, sizeof(output), stream))
     {
         size_t length = gui_bounded_length(output, sizeof(output));
         if (capacity == 0u || used + 1u >= capacity)
@@ -531,9 +662,16 @@ static int run_command_capture(const char *command, char *destination,
         }
     }
 #ifdef _WIN32
-    exit_status = _pclose(pipe);
+    exit_status = _pclose(stream);
 #else
-    exit_status = pclose(pipe);
+    if (fclose(stream) != 0 || waitpid(child, &exit_status, 0) < 0)
+        return -1;
+    if (WIFEXITED(exit_status))
+        exit_status = WEXITSTATUS(exit_status);
+    else if (WIFSIGNALED(exit_status))
+        exit_status = 128 + WTERMSIG(exit_status);
+    else
+        exit_status = -1;
 #endif
     return exit_status;
 }
@@ -713,7 +851,7 @@ static void start_tree_conversion(app_t *app)
     shell_quote(app->tree_path, tree, sizeof(tree));
     copy_field(app->tree_json_path, sizeof(app->tree_json_path), "pe_gui_tree.json");
     shell_quote(app->tree_json_path, output, sizeof(output));
-    snprintf(command, sizeof(command), "%s --tree %s --tree-json %s 2>&1",
+    snprintf(command, sizeof(command), "%s --tree %s --tree-json %s",
              quoted_executable, tree, output);
     app->tree_json_pending = 1;
     launch_solver(app, command, "Tree converted", "Tree conversion failed");
@@ -781,9 +919,6 @@ static int run_vector_sim(app_t *app)
         snprintf(command + gui_bounded_length(command, sizeof(command)),
                  sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --mkr %s", mkr);
-    snprintf(command + gui_bounded_length(command, sizeof(command)),
-             sizeof(command) - gui_bounded_length(command, sizeof(command)),
-             " 2>&1");
     return launch_solver(app, command, "Solve complete", "Solver failed");
 }
 
@@ -853,9 +988,6 @@ static int run_preflop_solver(app_t *app)
                  sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --range%d %s", player, ranges[player]);
     }
-    snprintf(command + gui_bounded_length(command, sizeof(command)),
-             sizeof(command) - gui_bounded_length(command, sizeof(command)),
-             " 2>&1");
     return launch_solver(app, command, "Preflop Lane B complete",
                          "Preflop Lane B failed");
 }
@@ -934,9 +1066,6 @@ static int run_legacy_cfr(app_t *app, const char *backend_name, int lane_b)
                  sizeof(command) - gui_bounded_length(command, sizeof(command)),
                  " --mkr %s", mkr);
     }
-    snprintf(command + gui_bounded_length(command, sizeof(command)),
-             sizeof(command) - gui_bounded_length(command, sizeof(command)),
-             " 2>&1");
     return launch_solver(app, command,
                          lane_b ? "AUTO V3 solve complete" :
                          backend_name ? "GPU CFR complete" : "Legacy CFR complete",
@@ -1345,7 +1474,8 @@ static void range_matrix_to_text(app_t *app, int player)
                            row < column ? 's' : 'o');
             if (length <= 0 || used + (size_t)length + 2u >= capacity) continue;
             if (used) out[used++] = ',';
-            memcpy(out + used, token, (size_t)length);
+            for (size_t offset = 0u; offset < (size_t)length; ++offset)
+                out[used + offset] = token[offset];
             used += (size_t)length;
             out[used] = '\0';
         }
@@ -2011,7 +2141,8 @@ int main(int argc, char **argv)
         {
             size_t length = (size_t)(slash - argv[0]);
             if (length >= sizeof(app.executable_dir)) length = sizeof(app.executable_dir) - 1u;
-            memcpy(app.executable_dir, argv[0], length);
+            for (size_t offset = 0u; offset < length; ++offset)
+                app.executable_dir[offset] = argv[0][offset];
             app.executable_dir[length] = '\0';
         }
     }
