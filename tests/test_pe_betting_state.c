@@ -57,6 +57,23 @@ static void test_bet_call_and_round_end(void)
               fabs(state.stack[1] - 75.0) < 1e-12 &&
               fabs(state.pot - 50.0) < 1e-12,
           "call closes a matched round");
+
+    {
+        pe_action_t raise = action(PE_ACTION_RAISE, PE_AMOUNT_CHIPS, 25.0);
+        setup(&state, &rules, 100.0, 100.0);
+        CHECK(pe_betting_apply_action(&state, &rules, &bet, &next) ==
+                  PE_BETTING_OK &&
+                  pe_betting_apply_action(&next, &rules, &raise, &state) ==
+                  PE_BETTING_OK && fabs(state.round_contrib[1] - 50.0) <
+                  1e-12,
+              "raise reaches the requested total contribution");
+        CHECK(pe_betting_apply_action(&state, &rules, &call, &next) ==
+                  PE_BETTING_OK && next.round_complete &&
+                  fabs(next.round_contrib[0] - 50.0) < 1e-12 &&
+                  fabs(next.stack[0] - 50.0) < 1e-12 &&
+                  fabs(next.pot - 100.0) < 1e-12,
+              "call charges only the outstanding contribution");
+    }
 }
 
 static void test_fold_terminal(void)
@@ -95,8 +112,17 @@ static void test_all_in_and_reopen_rule(void)
           "short all-in setup");
     CHECK(pe_betting_apply_action(&state, &rules, &all_in, &next) ==
               PE_BETTING_OK && next.all_in[0] &&
-              fabs(next.to_call - 35.0) < 1e-12 && next.round_complete,
-          "short all-in advances the call without reopening a one-player round");
+              fabs(next.to_call - 35.0) < 1e-12 && !next.round_complete &&
+              next.to_act == 1,
+          "unmatched all-in leaves the covering player a decision");
+    {
+        pe_action_t call = action(PE_ACTION_CALL, PE_AMOUNT_NONE, 0.0);
+        CHECK(pe_betting_apply_action(&next, &rules, &call, &state) ==
+                  PE_BETTING_OK && state.round_complete && state.to_act == -1 &&
+                  fabs(state.stack[1] - 90.0) < 1e-12 &&
+                  fabs(state.pot - 70.0) < 1e-12,
+              "covering player pays only the unmatched all-in amount");
+    }
 
     setup(&state, &rules, 60.0, 100.0);
     state.to_call = 25.0;

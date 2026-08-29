@@ -16,16 +16,6 @@ static double epsilon_for(const pe_betting_rules_t *rules)
     return rules->epsilon > 0.0 ? rules->epsilon : 1e-9;
 }
 
-static int eligible_count(const pe_betting_state_t *state)
-{
-    int count = 0;
-    uint8_t player;
-    for (player = 0u; player < state->player_count; ++player)
-        if (state->active[player] && !state->all_in[player])
-            count++;
-    return count;
-}
-
 static int active_count(const pe_betting_state_t *state)
 {
     int count = 0;
@@ -62,12 +52,6 @@ static void finish_if_ready(pe_betting_state_t *state)
         for (player = 0u; player < state->player_count; ++player)
             if (state->active[player])
                 state->winner = player;
-        state->to_act = -1;
-        return;
-    }
-    if (eligible_count(state) <= 1)
-    {
-        state->round_complete = 1;
         state->to_act = -1;
         return;
     }
@@ -275,7 +259,9 @@ pe_betting_status_t pe_betting_apply_action(
             (action->kind == PE_ACTION_CALL && state->to_call <= epsilon))
             commitment = 0.0;
         else if (action->kind == PE_ACTION_CALL)
-            commitment = state->to_call;
+            commitment = state->to_call > previous_contribution
+                             ? state->to_call - previous_contribution
+                             : 0.0;
         else
         {
             pe_action_status_t action_status = pe_action_commitment(
@@ -317,7 +303,6 @@ pe_betting_status_t pe_betting_apply_action(
                 }
             }
         }
-        (void)previous_contribution;
     }
     out->to_act = (int8_t)next_actor(out, player);
     finish_if_ready(out);

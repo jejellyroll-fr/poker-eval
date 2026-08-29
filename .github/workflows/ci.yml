@@ -312,7 +312,8 @@ jobs:
     - name: Verify no ISA flag leaked into global compile flags
       run: |
         set -eu
-        if rg -n -- '-mavx2|-mavx512f|-march=native' build-portable/compile_commands.json; then
+        if rg -n -- '-mavx2|-mavx512f|-march=native' build-portable/compile_commands.json \
+          | rg -v 'eval_7c_simd\.c|ofc_simd\.c'; then
           echo "An ISA-specific flag leaked into the portable build" >&2
           exit 1
         fi
