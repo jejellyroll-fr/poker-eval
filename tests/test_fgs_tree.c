@@ -24,6 +24,13 @@ int main(void)
     assert(fabs(result.probability - 1.0) < 1e-9);
     assert(fabs(result.ev[0] - 50.0) < 1e-9);
     assert(fabs(result.ev[1] - 50.0) < 1e-9);
+
+    nodes[1].stacks[0] = NAN;
+    assert(pe_fgs_calculate_tree(&tree, &result) == -1);
+    nodes[1].stacks[0] = 100.0;
+    tree.payouts[0] = -1.0;
+    assert(pe_fgs_calculate_tree(&tree, &result) == -1);
+
     puts("Dynamic FGS tree tests passed");
     return 0;
 }

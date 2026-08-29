@@ -21,8 +21,14 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
         memset(&input, 0, sizeof(input));
         input.num_players = tree->num_players;
         input.num_payouts = tree->num_payouts;
-        for (int p = 0; p < ICM_MAX_PLAYERS; ++p) {
+        for (int p = 0; p < tree->num_players; ++p) {
+            if (!pe_finite_double(node->stacks[p]) || node->stacks[p] < 0.0)
+                return -1;
             input.stacks[p] = node->stacks[p];
+        }
+        for (int p = 0; p < tree->num_payouts; ++p) {
+            if (!pe_finite_double(tree->payouts[p]) || tree->payouts[p] < 0.0)
+                return -1;
             input.payouts[p] = tree->payouts[p];
         }
         if (pe_icm_calculate(&input, &icm) != 0)

@@ -2429,6 +2429,47 @@ static PyObject *py_solver_v3_one_state_args(const void *state)
     return PyTuple_Pack(1, py_solver_v3_object(state));
 }
 
+static PyObject *py_solver_v3_reach_object(const pe_reach_vec_t *reach,
+                                            uint8_t players)
+{
+    PyObject *outer;
+    uint8_t player;
+
+    if (!reach) {
+        PyErr_SetString(PyExc_ValueError, "terminal_values received no reach vectors");
+        return NULL;
+    }
+    outer = PyList_New((Py_ssize_t)players);
+    if (!outer)
+        return NULL;
+    for (player = 0u; player < players; ++player) {
+        PyObject *values;
+        size_t combo;
+        if (reach[player].n > (size_t)PY_SSIZE_T_MAX) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "reach vector is too large for Python");
+            Py_DECREF(outer);
+            return NULL;
+        }
+        values = PyList_New((Py_ssize_t)reach[player].n);
+        if (!values) {
+            Py_DECREF(outer);
+            return NULL;
+        }
+        for (combo = 0u; combo < reach[player].n; ++combo) {
+            PyObject *value = PyFloat_FromDouble(reach[player].v[combo]);
+            if (!value) {
+                Py_DECREF(values);
+                Py_DECREF(outer);
+                return NULL;
+            }
+            PyList_SET_ITEM(values, (Py_ssize_t)combo, value);
+        }
+        PyList_SET_ITEM(outer, (Py_ssize_t)player, values);
+    }
+    return outer;
+}
+
 static const void *py_solver_v3_store_state(py_solver_v3_context_t *ctx,
                                              PyObject *state)
 {
@@ -2605,15 +2646,53 @@ static int py_solver_v3_terminal_values(const void *state,
                                         uint8_t players, void *user)
 {
     py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
-    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *reach_object = py_solver_v3_reach_object(reach, players);
+    PyObject *args;
     PyObject *result;
     PyObject *outer;
     uint8_t player;
-    (void)reach;
+    if (!reach_object)
+        return -1;
+    args = PyTuple_Pack(2, py_solver_v3_object(state), reach_object);
+    Py_DECREF(reach_object);
     if (!args)
         return -1;
     result = py_solver_v3_call(ctx, "terminal_values", args);
     Py_DECREF(args);
+    /* Keep the original one-argument callback usable while allowing new
+       callbacks to consume blocker/range reach. A TypeError is retried only
+       when it looks like Python rejected the callback arity; TypeErrors raised
+       by the callback body are preserved. */
+    if (!result && PyErr_ExceptionMatches(PyExc_TypeError)) {
+        PyObject *type = NULL;
+        PyObject *value = NULL;
+        PyObject *traceback = NULL;
+        PyObject *message = NULL;
+        const char *text = NULL;
+        int wrong_arity = 0;
+        PyErr_Fetch(&type, &value, &traceback);
+        message = PyObject_Str(value);
+        if (message)
+            text = PyUnicode_AsUTF8(message);
+        if (text && strstr(text, "argument") != NULL &&
+            (strstr(text, "given") != NULL ||
+             strstr(text, "required") != NULL ||
+             strstr(text, "exactly") != NULL))
+            wrong_arity = 1;
+        Py_XDECREF(message);
+        if (wrong_arity) {
+            Py_XDECREF(type);
+            Py_XDECREF(value);
+            Py_XDECREF(traceback);
+            args = py_solver_v3_one_state_args(state);
+            if (!args)
+                return -1;
+            result = py_solver_v3_call(ctx, "terminal_values", args);
+            Py_DECREF(args);
+        } else {
+            PyErr_Restore(type, value, traceback);
+        }
+    }
     if (!result)
         return -1;
     outer = PySequence_Fast(result,
@@ -2709,9 +2788,9 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
             &expected_infosets, &expected_actions))
         return NULL;
     if (players < 2 || players > (int)PE_SOLVER_MAX_PLAYERS || combos < 1 ||
-        expected_actions < 1u) {
+        combos > (int)UINT16_MAX || expected_actions < 1u) {
         PyErr_SetString(PyExc_ValueError,
-                        "players, combos and expected_actions are invalid");
+                        "players, combos and expected_actions are invalid; combos must fit uint16_t");
         return NULL;
     }
     if (!PyObject_HasAttrString(game_object, "is_terminal") ||
