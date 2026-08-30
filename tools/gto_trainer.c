@@ -52,7 +52,9 @@ static void usage(const char *program)
 
 static int valid_session_counter(double value)
 {
-    return value >= 0.0 && value <= (double)INT_MAX && value == floor(value);
+    double integral = floor(value);
+    return value >= 0.0 && value <= (double)INT_MAX &&
+           value - integral <= 0.0;
 }
 
 /* Read the small scalar summary without depending on a JSON library.  The

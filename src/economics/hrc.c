@@ -53,6 +53,17 @@ static double *info_strategy(solve_context_t *ctx, int player, int node,
     return &ctx->strategy[info_offset(ctx, player, node, combo, 0)];
 }
 
+static double counterfactual_reach(const solve_context_t *ctx,
+                                   const double *player_reach,
+                                   int acting_player)
+{
+    double reach = 1.0;
+    for (int player = 0; player < ctx->config->tree.num_players; ++player)
+        if (player != acting_player)
+            reach *= player_reach[player];
+    return reach;
+}
+
 static int validate_node(const pe_hrc_tree_t *tree, int index, int *color)
 {
     const pe_hrc_node_t *node;
@@ -160,6 +171,8 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
                                   profile->combo_index[node->player_to_act], 0);
         double *strategy = &ctx->strategy[base];
         double child_value[PE_HRC_MAX_PLAYERS];
+        const double cf_reach = counterfactual_reach(
+            ctx, player_reach, node->player_to_act);
         memset(out, 0, sizeof(double) * PE_HRC_MAX_PLAYERS);
         for (unsigned a = 0; a < node->action_count; ++a) {
             double child_player_reach[PE_HRC_MAX_PLAYERS];
@@ -173,18 +186,20 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
                                child_value))
                 return 0;
             {
-                double reach = path_reach * profile->weight;
+                double profile_cf_reach = cf_reach * profile->weight;
                 ctx->action_value[info_offset(ctx, node->player_to_act, node_index,
-                                              profile->combo_index[node->player_to_act], a)] += reach *
+                                              profile->combo_index[node->player_to_act], a)] +=
+                    profile_cf_reach *
                     child_value[node->player_to_act];
                 if (ctx->collect_public) {
-                    ctx->public_strategy_mass[node_index][a] += reach * strategy[a];
+                    ctx->public_strategy_mass[node_index][a] +=
+                        path_reach * profile->weight * strategy[a];
                 }
                 if (ctx->collect_average) {
-                    /* Average strategies use the acting player's realization
-                     * reach, not the opponents' reach through this branch. */
+                    /* Both regrets and average strategy use the acting
+                     * player's counterfactual reach: opponent reach only. */
                     ctx->strategy_sum[base + a] +=
-                        profile->weight * player_reach[node->player_to_act] * strategy[a];
+                        profile_cf_reach * strategy[a];
                 }
             }
             for (int p = 0; p < ctx->config->tree.num_players; ++p)
@@ -192,7 +207,7 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
         }
         ctx->reach[info_offset(ctx, node->player_to_act, node_index,
                                profile->combo_index[node->player_to_act], 0)] +=
-            profile->weight * path_reach;
+            profile->weight * cf_reach;
         if (ctx->collect_public)
             ctx->public_reach[node_index] += profile->weight * path_reach;
         return 1;
