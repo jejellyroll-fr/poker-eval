@@ -2601,6 +2601,90 @@ static const void *py_solver_v3_apply_action(const void *state,
     return stored;
 }
 
+static int py_solver_v3_is_chance(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    int value;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "is_chance", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    value = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return value;
+}
+
+static uint16_t py_solver_v3_chance_outcome_count(const void *state,
+                                                   void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    unsigned long value;
+    if (!args)
+        return 0u;
+    result = py_solver_v3_call(ctx, "chance_outcome_count", args);
+    Py_DECREF(args);
+    if (!result)
+        return 0u;
+    value = PyLong_AsUnsignedLong(result);
+    Py_DECREF(result);
+    if (PyErr_Occurred() || value == 0ul || value > (unsigned long)UINT16_MAX) {
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_ValueError,
+                            "chance_outcome_count must be in 1..65535");
+        return 0u;
+    }
+    return (uint16_t)value;
+}
+
+static double py_solver_v3_chance_outcome_weight(const void *state,
+                                                  uint16_t outcome,
+                                                  void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(OK)", py_solver_v3_object(state),
+                                   (unsigned long long)outcome);
+    PyObject *result;
+    double value;
+    if (!args)
+        return NAN;
+    result = py_solver_v3_call(ctx, "chance_outcome_weight", args);
+    Py_DECREF(args);
+    if (!result)
+        return NAN;
+    value = PyFloat_AsDouble(result);
+    Py_DECREF(result);
+    return value;
+}
+
+static const void *py_solver_v3_apply_chance(const void *state, int outcome,
+                                              void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(Oi)", py_solver_v3_object(state), outcome);
+    PyObject *result;
+    const void *stored;
+    if (!args)
+        return NULL;
+    result = py_solver_v3_call(ctx, "apply_chance", args);
+    Py_DECREF(args);
+    if (!result)
+        return NULL;
+    if (result == Py_None) {
+        PyErr_SetString(PyExc_ValueError, "apply_chance returned None");
+        Py_DECREF(result);
+        return NULL;
+    }
+    stored = py_solver_v3_store_state(ctx, result);
+    Py_DECREF(result);
+    return stored;
+}
+
 static int py_solver_v3_strategy_callback(const void *state, uint64_t key,
                                           uint16_t action, pe_value_vec_t *out,
                                           void *user)
@@ -2781,6 +2865,7 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
     pe_solver_config_t config;
     pe_solver_deps_t deps;
     PyObject *capsule;
+    int has_chance;
     (void)self;
     if (!PyArg_ParseTupleAndKeywords(
             args, kwargs, "OO|IIKdKKI", (char **)(void *)kwlist, &root, &game_object,
@@ -2801,6 +2886,19 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
         !PyObject_HasAttrString(game_object, "terminal_values")) {
         PyErr_SetString(PyExc_TypeError,
                         "game must implement the v3 callback methods");
+        return NULL;
+    }
+    has_chance = PyObject_HasAttrString(game_object, "is_chance") ||
+                 PyObject_HasAttrString(game_object, "chance_outcome_count") ||
+                 PyObject_HasAttrString(game_object, "chance_outcome_weight") ||
+                 PyObject_HasAttrString(game_object, "apply_chance");
+    if (has_chance &&
+        (!PyObject_HasAttrString(game_object, "is_chance") ||
+         !PyObject_HasAttrString(game_object, "chance_outcome_count") ||
+         !PyObject_HasAttrString(game_object, "chance_outcome_weight") ||
+         !PyObject_HasAttrString(game_object, "apply_chance"))) {
+        PyErr_SetString(PyExc_TypeError,
+                        "chance games must implement all chance callback methods");
         return NULL;
     }
     ctx = (py_solver_v3_context_t *)calloc(1u, sizeof(*ctx));
@@ -2827,6 +2925,12 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
     ctx->game.apply_action = py_solver_v3_apply_action;
     ctx->game.terminal_values = py_solver_v3_terminal_values;
     ctx->game.release_state = py_solver_v3_release_state;
+    if (has_chance) {
+        ctx->game.is_chance = py_solver_v3_is_chance;
+        ctx->game.chance_outcome_count = py_solver_v3_chance_outcome_count;
+        ctx->game.chance_outcome_weight = py_solver_v3_chance_outcome_weight;
+        ctx->game.apply_chance = py_solver_v3_apply_chance;
+    }
     if (PyObject_HasAttrString(game_object, "strategy"))
         ctx->game.strategy = py_solver_v3_strategy_callback;
     config = pe_solver_config_default();

@@ -346,7 +346,9 @@ static int parse_node(json_reader_t *reader, pe_hrc_import_t *out, int node,
             have_terminal = 1;
         } else if (strcmp(key, "player") == 0 || strcmp(key, "player_to_act") == 0) {
             double player;
-            if (!parse_number(reader, &player, error) || !double_is_exact_integer(player)) { free(key); return 0; }
+            if (!parse_number(reader, &player, error) ||
+                player < (double)INT_MIN || player > (double)INT_MAX ||
+                !double_is_exact_integer(player)) { free(key); return 0; }
             out->owned_nodes[node].player_to_act = (int)player;
         } else if (strcmp(key, "actions") == 0) {
             if (!take(reader, '[')) { free(key); return 0; }

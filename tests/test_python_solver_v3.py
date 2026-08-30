@@ -56,3 +56,26 @@ legacy_solver = pypokereval.solver_v3_create(
     ("root",), LegacyOneArgGame(), max_iterations=1, expected_infosets=1
 )
 pypokereval.solver_v3_run(legacy_solver)
+
+
+class ChanceGame(OneStepGame):
+    def is_terminal(self, state):
+        return state[0] == "terminal"
+
+    def is_chance(self, state):
+        return state[0] == "chance"
+
+    def chance_outcome_count(self, state):
+        return 2
+
+    def chance_outcome_weight(self, state, outcome):
+        return 0.75 if outcome == 0 else 0.25
+
+    def apply_chance(self, state, outcome):
+        return ("terminal", outcome)
+
+
+chance_solver = pypokereval.solver_v3_create(
+    ("chance",), ChanceGame(), max_iterations=1, expected_infosets=1
+)
+pypokereval.solver_v3_run(chance_solver)

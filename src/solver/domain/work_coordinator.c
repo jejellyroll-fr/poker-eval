@@ -153,7 +153,17 @@ int pe_work_coordinator_accept_tcp_batch(
         if (pe_work_coordinator_accept_tcp(
                 coordinator, listener, first_worker_id + (uint32_t)i,
                 &out_channels[i]) != 0)
+        {
+            size_t accepted;
+            for (accepted = 0u; accepted < i; ++accepted)
+            {
+                (void)pe_work_socket_close(out_channels[accepted].socket);
+                (void)pe_work_coordinator_unregister(
+                    coordinator, out_channels[accepted].worker_id);
+                out_channels[accepted] = (pe_work_worker_channel_t){0};
+            }
             return -1;
+        }
     }
     if (out_count)
         *out_count = capacity;

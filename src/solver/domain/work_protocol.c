@@ -58,6 +58,13 @@ static int socket_write_all(pe_work_socket_t socket,
                             const uint8_t *buffer, size_t size)
 {
     size_t offset = 0u;
+#if !defined(_WIN32) && defined(SO_NOSIGPIPE)
+    {
+        int no_sigpipe = 1;
+        (void)setsockopt((int)socket, SOL_SOCKET, SO_NOSIGPIPE,
+                         &no_sigpipe, (socklen_t)sizeof(no_sigpipe));
+    }
+#endif
     while (offset < size) {
         size_t remaining = size - offset;
         int requested = (remaining > (size_t)INT_MAX)
@@ -66,8 +73,12 @@ static int socket_write_all(pe_work_socket_t socket,
         int sent = send((SOCKET)socket, (const char *)(buffer + offset),
                         requested, 0);
 #else
+        int flags = 0;
+#if defined(MSG_NOSIGNAL)
+        flags |= MSG_NOSIGNAL;
+#endif
         ssize_t sent = send((int)socket, buffer + offset,
-                            (size_t)requested, 0);
+                            (size_t)requested, flags);
         if (sent < 0 && errno == EINTR)
             continue;
 #endif

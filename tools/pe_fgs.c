@@ -1,6 +1,7 @@
 #include <poker_eval/economics/fgs.h>
 #include <poker_eval/utils/icm_calculator.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +38,10 @@ static int load_scenarios(const char *path, icm_tournament_t *scenarios,
         int n = parse_values(line, values, players + 1);
         if (n <= 0) continue;
         if (n != players + 1) { fclose(file); return -1; }
+        if (!isfinite(values[0]) || values[0] < 0.0 || values[0] > 1.0) {
+            fclose(file);
+            return -1;
+        }
         icm_tournament_init(&scenarios[used]);
         scenarios[used].num_active_players = players;
         for (int p = 0; p < players; ++p) {
