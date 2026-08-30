@@ -50,7 +50,14 @@ static int load_scenarios(const char *path, icm_tournament_t *scenarios,
         icm_tournament_init(&scenarios[used]);
         scenarios[used].num_active_players = players;
         for (int p = 0; p < players; ++p) {
-            scenarios[used].players[p].chips = values[p + 1] < 0.0 ? 0u : (uint64_t)values[p + 1];
+            /* UINT64_MAX rounds to 2^64 as a double.  Use the exclusive
+               power-of-two bound so the conversion is always defined. */
+            const double uint64_limit = 18446744073709551616.0;
+            if (!(values[p + 1] >= 0.0 && values[p + 1] < uint64_limit)) {
+                fclose(file);
+                return -1;
+            }
+            scenarios[used].players[p].chips = (uint64_t)values[p + 1];
             scenarios[used].players[p].is_active = scenarios[used].players[p].chips > 0u;
         }
         probabilities[used++] = values[0];

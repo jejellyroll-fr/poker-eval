@@ -320,13 +320,22 @@ static const label_t *metadata_for(const app_t *app, uint64_t key)
 
 static void next_spot(app_t *app)
 {
-    size_t candidates[4096]; size_t count = 0u;
+    size_t selected = 0u; size_t eligible = 0u; int has_selected = 0;
     if (app->spot_count == 0u) return;
-    for (size_t i = 0; i < app->spot_count && count < 4096u; ++i) {
+    for (size_t i = 0; i < app->spot_count; ++i) {
         double best = 0.0; for (int action = 0; action < app->spots[i].actions; ++action) if (app->spots[i].probability[action] > best) best = app->spots[i].probability[action];
-        if (app->difficulty == 1 || best < 0.8) candidates[count++] = i;
+        if (app->difficulty == 1 || best < 0.8) {
+            ++eligible;
+            /* Reservoir sampling keeps one uniformly selected eligible spot
+               without imposing a fixed 4096-entry ceiling. */
+            app->random_state = app->random_state * 1664525u + 1013904223u;
+            if (!has_selected || (size_t)(app->random_state % eligible) == 0u) {
+                selected = i;
+                has_selected = 1;
+            }
+        }
     }
-    if (!count) return; app->random_state = app->random_state * 1664525u + 1013904223u; app->current = candidates[app->random_state % count]; app->has_current = 1; app->answered_current = 0; app->selected_action = -1; app->best_action = -1;
+    if (!has_selected) return; app->current = selected; app->has_current = 1; app->answered_current = 0; app->selected_action = -1; app->best_action = -1;
 }
 
 static void answer(app_t *app, int selected)
@@ -2134,11 +2143,36 @@ static void render(SDL_Renderer *renderer, const app_t *app)
     SDL_RenderPresent(renderer);
 }
 
+static int write_json_string(FILE *file, const char *value)
+{
+    const unsigned char *cursor = (const unsigned char *)(value ? value : "");
+    if (fputc('"', file) == EOF) return -1;
+    for (; *cursor; ++cursor) {
+        switch (*cursor) {
+        case '"': if (fputs("\\\"", file) == EOF) return -1; break;
+        case '\\': if (fputs("\\\\", file) == EOF) return -1; break;
+        case '\b': if (fputs("\\b", file) == EOF) return -1; break;
+        case '\f': if (fputs("\\f", file) == EOF) return -1; break;
+        case '\n': if (fputs("\\n", file) == EOF) return -1; break;
+        case '\r': if (fputs("\\r", file) == EOF) return -1; break;
+        case '\t': if (fputs("\\t", file) == EOF) return -1; break;
+        default:
+            if (*cursor < 0x20u) {
+                if (fprintf(file, "\\u%04x", (unsigned int)*cursor) < 0) return -1;
+            } else if (fputc(*cursor, file) == EOF) return -1;
+            break;
+        }
+    }
+    return fputc('"', file) == EOF ? -1 : 0;
+}
+
 static void save_session(const app_t *app)
 {
     const char *path = app->session_path[0] ? app->session_path : "trainer-session.json";
     FILE *file = fopen(path, "w"); if (!file) return;
-    fprintf(file, "{\"schema\":\"pe-trainer-session/v1\",\"solution\":\"%s\",\"answered\":%d,\"best_answers\":%d,\"probability_loss\":%.17g,\"difficulty\":%d,\"events\":[", app->solution_path, app->answered, app->score, app->probability_loss, app->difficulty);
+    fputs("{\"schema\":\"pe-trainer-session/v1\",\"solution\":", file);
+    if (write_json_string(file, app->solution_path) != 0) { fclose(file); return; }
+    fprintf(file, ",\"answered\":%d,\"best_answers\":%d,\"probability_loss\":%.17g,\"difficulty\":%d,\"events\":[", app->answered, app->score, app->probability_loss, app->difficulty);
     for (size_t i = 0; i < app->event_count; ++i) { if (i) fputc(',', file); fprintf(file, "{\"key\":\"0x%016llx\",\"selected\":%d,\"best\":%d}", (unsigned long long)app->events[i].key, app->events[i].selected, app->events[i].best); }
     fputs("]}\n", file); fclose(file);
 }
