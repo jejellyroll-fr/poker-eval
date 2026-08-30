@@ -22,6 +22,23 @@ int main(void)
     for (int i = 0; i < 2; ++i)
         assert(result.villain_call_frequency[i] >= 0.0 && result.villain_call_frequency[i] <= 1.0);
 
+    /* The callers are one coalition and may choose a correlated mask.  Two
+       single-caller losses make every push unprofitable, so the equilibrium
+       must not be the independent 50%/50% result. */
+    {
+        pe_push_fold_multiway_input_t coalition = {
+            .pot_before_push = 1.0,
+            .hero_stack = 1.0,
+            .villain_stacks = {1.0, 1.0},
+            .num_villains = 2,
+            .hero_equity_by_call_mask = {1.0, 0.0, 0.0, 1.0},
+            .iterations = 20000
+        };
+        pe_push_fold_multiway_result_t coalition_result = {0};
+        assert(pe_push_fold_multiway_solve(&coalition, &coalition_result) == 0);
+        assert(coalition_result.hero_push_frequency < 0.05);
+    }
+
     /* A caller cannot contribute more than the hero can match. */
     {
         pe_push_fold_multiway_input_t asymmetric = input;

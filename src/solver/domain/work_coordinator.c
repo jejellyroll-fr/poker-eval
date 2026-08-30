@@ -225,8 +225,8 @@ int pe_work_coordinator_schedule(
         total_rate += (long double)candidates[candidate_count].rate;
         ++candidate_count;
     }
-    if (candidate_count == 0u || candidate_count > capacity)
-        return candidate_count == 0u ? 0 : -1;
+    if (candidate_count == 0u)
+        return 0;
 
     for (i = 0u; i < candidate_count; ++i) {
         long double ideal = ((long double)total_units *
@@ -251,6 +251,15 @@ int pe_work_coordinator_schedule(
         ++candidates[best].units;
         candidates[best].fraction = -1.0L;
         ++assigned;
+    }
+
+    {
+        size_t nonempty = 0u;
+        for (i = 0u; i < candidate_count; ++i)
+            if (candidates[i].units != 0u)
+                ++nonempty;
+        if (nonempty > capacity)
+            return -1;
     }
 
     assigned = 0u;

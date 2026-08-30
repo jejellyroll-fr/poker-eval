@@ -4,6 +4,8 @@
 
 #include <poker_eval/solver/pe_traversal.h>
 
+#include "finite_double.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,7 +58,7 @@ static int action_weight_for_combo(const pe_vector_game_t *game,
     if (player == (uint8_t)acting)
     {
         *out_weight = strategy->v[combo];
-        return isfinite(*out_weight) && *out_weight >= 0.0 ? 0 : -1;
+        return pe_finite_double(*out_weight) && *out_weight >= 0.0 ? 0 : -1;
     }
     for (acting_combo = 0u; acting_combo < game->combo_count;
          ++acting_combo)
@@ -70,8 +72,8 @@ static int action_weight_for_combo(const pe_vector_game_t *game,
         if (!compatible)
             continue;
         reach_weight = reach[acting].v[acting_combo];
-        if (!isfinite(reach_weight) || reach_weight < 0.0 ||
-            !isfinite(strategy->v[acting_combo]) ||
+        if (!pe_finite_double(reach_weight) || reach_weight < 0.0 ||
+            !pe_finite_double(strategy->v[acting_combo]) ||
             strategy->v[acting_combo] < 0.0)
             return -1;
         compatible_reach += reach_weight;
@@ -79,7 +81,7 @@ static int action_weight_for_combo(const pe_vector_game_t *game,
     }
     *out_weight = compatible_reach > 0.0
         ? action_reach / compatible_reach : 0.0;
-    return isfinite(*out_weight) && *out_weight >= 0.0 ? 0 : -1;
+    return pe_finite_double(*out_weight) && *out_weight >= 0.0 ? 0 : -1;
 }
 
 static int visit_sampled(pe_chance_vector_ctx_t *ctx,
@@ -116,7 +118,8 @@ static int visit_sampled(pe_chance_vector_ctx_t *ctx,
         if (rc == 0)
         {
             if (sample.outcome < 0 || sample.importance_ratio < 0.0 ||
-                isnan(sample.importance_ratio) || !ctx->apply_chance)
+                !pe_finite_double(sample.importance_ratio) ||
+                !ctx->apply_chance)
                 return -1;
             child = ctx->apply_chance(state, sample.outcome, game->user);
             if (!child)

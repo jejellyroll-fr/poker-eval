@@ -68,6 +68,22 @@ static void test_registry_and_filters(void)
     assert(pe_work_coordinator_schedule(&coordinator, 1u, &assignment, 1u) == 0);
 }
 
+static void test_capacity_counts_nonempty_assignments(void)
+{
+    pe_runtime_capabilities_t runtime = {0};
+    pe_work_coordinator_t coordinator;
+    pe_work_worker_assignment_t assignment;
+
+    mark_backend(&runtime, PE_COMPUTE_CPU_REF, 1.0);
+    pe_work_coordinator_init(&coordinator);
+    assert(pe_work_coordinator_register(&coordinator, 11u, &runtime) == 0);
+    assert(pe_work_coordinator_register(&coordinator, 22u, &runtime) == 0);
+    /* One unit is assigned to one of the two workers; a one-entry output
+       buffer is therefore sufficient even though two workers are usable. */
+    assert(pe_work_coordinator_schedule(&coordinator, 1u, &assignment, 1u) == 1);
+    assert(assignment.unit_count == 1u);
+}
+
 static void test_capability_handshake(void)
 {
 #if defined(_WIN32)
@@ -308,6 +324,7 @@ int main(void)
 {
     test_heterogeneous_schedule();
     test_registry_and_filters();
+    test_capacity_counts_nonempty_assignments();
     test_capability_handshake();
     test_dispatch_channels();
     test_collect_results();
