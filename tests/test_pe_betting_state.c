@@ -150,11 +150,32 @@ static void test_all_in_and_reopen_rule(void)
           "full all-in raise reopens action and updates minimum");
 }
 
+static void test_short_stack_call_is_not_an_all_in_call(void)
+{
+    pe_betting_rules_t rules;
+    pe_betting_state_t state;
+    pe_action_t call = action(PE_ACTION_CALL, PE_AMOUNT_NONE, 0.0);
+
+    setup(&state, &rules, 5.0, 100.0);
+    state.to_call = 10.0;
+    state.current_bet = 10.0;
+    state.round_contrib[1] = 10.0;
+    state.invested[1] = 10.0;
+    state.pot = 10.0;
+    state.acted[1] = 1;
+    CHECK(pe_betting_state_validate(&state, &rules) == PE_BETTING_OK,
+          "short stack call setup");
+    CHECK(pe_betting_action_is_legal(&state, &rules, &call) ==
+              PE_BETTING_ERR_ILLEGAL_ACTION,
+          "ordinary call cannot exceed the remaining stack");
+}
+
 int main(void)
 {
     test_bet_call_and_round_end();
     test_fold_terminal();
     test_all_in_and_reopen_rule();
+    test_short_stack_call_is_not_an_all_in_call();
     if (failures)
         fprintf(stderr, "test_pe_betting_state: %d failure(s)\n", failures);
     else

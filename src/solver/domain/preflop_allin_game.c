@@ -163,7 +163,13 @@ static int preflop_call_is_allin(const pe_preflop_allin_game_t *game,
     (void)game;
     if (actor < 0)
         return 0;
-    return betting->stack[actor] <= betting->to_call + PREFLOP_EPSILON;
+    {
+        double contribution = betting->round_contrib[actor];
+        double outstanding = betting->to_call > contribution
+                                 ? betting->to_call - contribution
+                                 : 0.0;
+        return betting->stack[actor] <= outstanding + PREFLOP_EPSILON;
+    }
 }
 
 static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
@@ -244,7 +250,7 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
         memset(&raise, 0, sizeof(raise));
         raise.kind = PE_ACTION_RAISE;
         raise.amount_kind = PE_AMOUNT_CHIPS;
-        raise.amount = betting->to_call + game->rules.raise_sizes[index];
+        raise.amount = game->rules.raise_sizes[index];
         raise.size_index = index;
         if (pe_betting_action_is_legal(betting, &game->betting_rules, &raise) ==
             PE_BETTING_OK)
@@ -267,7 +273,11 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
     {
         double commitment = 0.0;
         int actor = betting->to_act;
-        if (pe_action_commitment(&candidates[i], betting->to_call,
+        double contribution = actor >= 0 ? betting->round_contrib[actor] : 0.0;
+        double outstanding = betting->to_call > contribution
+                                 ? betting->to_call - contribution
+                                 : 0.0;
+        if (pe_action_commitment(&candidates[i], outstanding,
                                  actor >= 0 ? betting->stack[actor] : 0.0,
                                  betting->pot, betting->min_raise,
                                  game->betting_rules.pot_limit,
@@ -1006,7 +1016,7 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
                               stacks_after, (uint8_t)rules->player_count,
                               rules->player_count > 2 ? 2 : 0,
                               posts[0] + posts[1],
-                              rules->big_blind - posts[rules->player_count > 2 ? 2 : 0]) != PE_BETTING_OK)
+                              rules->big_blind) != PE_BETTING_OK)
     {
         pe_preflop_allin_game_destroy(game);
         return NULL;

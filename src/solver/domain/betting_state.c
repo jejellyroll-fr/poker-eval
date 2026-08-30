@@ -189,6 +189,16 @@ pe_betting_status_t pe_betting_action_is_legal(
         return PE_BETTING_ERR_ILLEGAL_ACTION;
     if (action->kind == PE_ACTION_CALL && state->to_call <= epsilon)
         return PE_BETTING_OK;
+    if (action->kind == PE_ACTION_CALL)
+    {
+        double previous_contribution = state->round_contrib[state->to_act];
+        double outstanding = state->to_call > previous_contribution
+                                 ? state->to_call - previous_contribution
+                                 : 0.0;
+        return outstanding <= state->stack[state->to_act] + epsilon
+                   ? PE_BETTING_OK
+                   : PE_BETTING_ERR_ILLEGAL_ACTION;
+    }
     if (action->kind == PE_ACTION_BET && state->to_call > epsilon)
         return PE_BETTING_ERR_ILLEGAL_ACTION;
     if (action->kind == PE_ACTION_RAISE && state->to_call <= epsilon)
@@ -199,7 +209,7 @@ pe_betting_status_t pe_betting_action_is_legal(
     if (action->kind == PE_ACTION_CHANCE || action->kind == PE_ACTION_TERMINAL)
         return PE_BETTING_ERR_ILLEGAL_ACTION;
     if (action->kind == PE_ACTION_FOLD || action->kind == PE_ACTION_CHECK ||
-        action->kind == PE_ACTION_CALL || action->kind == PE_ACTION_ALL_IN)
+        action->kind == PE_ACTION_ALL_IN)
         return PE_BETTING_OK;
 
     {
