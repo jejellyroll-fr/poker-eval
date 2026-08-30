@@ -357,7 +357,7 @@ int pe_cfr_load_storage(cfr_storage_t *storage, const char *path)
         long end;
         FILE *decoded;
 
-        if (hdr.reserved == 0u || hdr.reserved > (uint64_t)SIZE_MAX ||
+        if (hdr.reserved > (uint64_t)SIZE_MAX ||
             fseek(f, 0L, SEEK_END) != 0)
         {
             fclose(f);
@@ -379,10 +379,11 @@ int pe_cfr_load_storage(cfr_storage_t *storage, const char *path)
             errno = EIO;
             return -1;
         }
-        compressed = (unsigned char *)malloc(compressed_size);
-        payload = (unsigned char *)malloc(payload_size);
+        compressed = (unsigned char *)malloc(compressed_size ? compressed_size : 1u);
+        payload = (unsigned char *)malloc(payload_size ? payload_size : 1u);
         if (!compressed || !payload ||
-            fread(compressed, 1u, compressed_size, f) != compressed_size)
+            (compressed_size > 0u &&
+             fread(compressed, 1u, compressed_size, f) != compressed_size))
         {
             free(compressed);
             free(payload);

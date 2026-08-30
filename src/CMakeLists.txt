@@ -10,16 +10,13 @@ add_subdirectory(games)
 add_subdirectory(distributions)
 add_subdirectory(range)
 add_subdirectory(equity)
-add_subdirectory(engine)
 add_subdirectory(economics)
 add_subdirectory(gpu)
 add_subdirectory(examples)
 add_subdirectory(ofc)
 
-# Solver module (architecture v3). The hexagon's domain is declared here rather
-# than through add_subdirectory: it is a single translation unit for now, and
-# CTR-01 is scoped to this file. It deliberately links nothing — the domain
-# depends on ports, never on the engine, the evaluator or a GPU backend.
+# Resolve the optional compression dependency before configuring the engine.
+# The engine target uses this result to expose zstd-backed .pe_sol snapshots.
 if(ENABLE_ZSTD)
     find_path(PE_ZSTD_INCLUDE_DIR zstd.h)
     find_library(PE_ZSTD_LIBRARY NAMES zstd libzstd)
@@ -34,6 +31,12 @@ else()
     set(POKER_EVAL_WITH_ZSTD OFF)
 endif()
 
+add_subdirectory(engine)
+
+# Solver module (architecture v3). The hexagon's domain is declared here rather
+# than through add_subdirectory: it is a single translation unit for now, and
+# CTR-01 is scoped to this file. It deliberately links nothing — the domain
+# depends on ports, never on the engine, the evaluator or a GPU backend.
 add_library(poker_solver
     solver/domain/actions.c
     solver/domain/betting_state.c

@@ -215,6 +215,25 @@ int main(void)
         {
             ASSERT_TRUE(errno == ENOTSUP, "zstd disabled must report ENOTSUP");
         }
+        if (zrc == 0)
+        {
+            char empty_path[512];
+            cfr_storage_t *empty = cfr_storage_create();
+            ASSERT_TRUE(empty != NULL, "empty storage allocation");
+            ASSERT_TRUE(make_tmp_path(empty_path, sizeof(empty_path), ".pe_sol.zst") == 0,
+                        "empty zstd tmp path");
+            ASSERT_TRUE(pe_cfr_save_storage_zstd(empty, empty_path, 3) == 0,
+                        "save empty zstd storage");
+            cfr_storage_t *empty_loaded = cfr_storage_create();
+            ASSERT_TRUE(empty_loaded != NULL, "empty zstd loaded allocation");
+            ASSERT_TRUE(pe_cfr_load_storage(empty_loaded, empty_path) == 0,
+                        "load empty zstd storage");
+            ASSERT_TRUE(cfr_storage_count_infosets(empty_loaded) == 0,
+                        "empty zstd infoset count");
+            cfr_storage_destroy(empty_loaded);
+            cfr_storage_destroy(empty);
+            remove(empty_path);
+        }
         remove(zstd_path);
     }
     cfr_storage_destroy(storage);
