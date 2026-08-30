@@ -146,6 +146,7 @@ static void enumerate_profiles(solve_context_t *ctx, int player,
 static int evaluate_node(solve_context_t *ctx, int node_index,
                          const pe_hrc_profile_t *profile,
                          uint16_t *path, size_t depth, double path_reach,
+                         const double *player_reach,
                          double *out)
 {
     const pe_hrc_node_t *node = &ctx->config->tree.nodes[node_index];
@@ -161,9 +162,13 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
         double child_value[PE_HRC_MAX_PLAYERS];
         memset(out, 0, sizeof(double) * PE_HRC_MAX_PLAYERS);
         for (unsigned a = 0; a < node->action_count; ++a) {
+            double child_player_reach[PE_HRC_MAX_PLAYERS];
             path[depth] = (uint16_t)a;
+            memcpy(child_player_reach, player_reach, sizeof(child_player_reach));
+            child_player_reach[node->player_to_act] *= strategy[a];
             if (!evaluate_node(ctx, node->actions[a].child_index, profile, path,
                                depth + 1, path_reach * strategy[a],
+                               child_player_reach,
                                child_value))
                 return 0;
             {
@@ -174,8 +179,12 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
                 if (ctx->collect_public) {
                     ctx->public_strategy_mass[node_index][a] += reach * strategy[a];
                 }
-                if (ctx->collect_average)
-                    ctx->strategy_sum[base + a] += reach * strategy[a];
+                if (ctx->collect_average) {
+                    /* Average strategies use the acting player's realization
+                     * reach, not the opponents' reach through this branch. */
+                    ctx->strategy_sum[base + a] +=
+                        profile->weight * player_reach[node->player_to_act] * strategy[a];
+                }
             }
             for (int p = 0; p < ctx->config->tree.num_players; ++p)
                 out[p] += strategy[a] * child_value[p];
@@ -316,9 +325,13 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
             for (size_t i = 0; i < ctx.profile_count; ++i) {
                 double values[PE_HRC_MAX_PLAYERS];
                 uint16_t path[PE_HRC_MAX_DEPTH];
+                double player_reach[PE_HRC_MAX_PLAYERS];
                 memset(values, 0, sizeof(values));
+                memset(player_reach, 0, sizeof(player_reach));
+                for (int p = 0; p < config->tree.num_players; ++p)
+                    player_reach[p] = 1.0;
                 if (!evaluate_node(&ctx, config->tree.root_index, &ctx.profiles[i],
-                                   path, 0, 1.0, values)) {
+                                   path, 0, 1.0, player_reach, values)) {
                     solve_context_free(&ctx);
                     return PE_HRC_ERR_CALLBACK;
                 }
@@ -367,9 +380,13 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     for (size_t i = 0; i < ctx.profile_count; ++i) {
         double values[PE_HRC_MAX_PLAYERS];
         uint16_t path[PE_HRC_MAX_DEPTH];
+        double player_reach[PE_HRC_MAX_PLAYERS];
         memset(values, 0, sizeof(values));
+        memset(player_reach, 0, sizeof(player_reach));
+        for (int p = 0; p < config->tree.num_players; ++p)
+            player_reach[p] = 1.0;
         if (!evaluate_node(&ctx, config->tree.root_index, &ctx.profiles[i], path,
-                           0, 1.0, values)) {
+                           0, 1.0, player_reach, values)) {
             solve_context_free(&ctx);
             return PE_HRC_ERR_CALLBACK;
         }

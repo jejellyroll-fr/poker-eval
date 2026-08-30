@@ -68,6 +68,7 @@ int main(void)
     pe_hrc_import_t imported;
     pe_hrc_import_error_t error;
     pe_hrc_pot_trace_t trace;
+    pe_hrc_pot_model_t invalid_model;
     pe_pko_range_input_t pko_input;
     pe_pko_range_result_t pko_result;
     uint16_t allin_path[] = {1};
@@ -83,6 +84,13 @@ int main(void)
     assert(fabs(trace.slices[1].amount - 99.0) < 1e-9);
     assert(trace.slices[0].eligible_mask == 3);
     assert(trace.slices[1].eligible_mask == 1);
+    invalid_model = imported.pot_model;
+    invalid_model.initial_pot = -1.0;
+    assert(pe_hrc_trace_pot(&imported.config.tree, &invalid_model,
+                            allin_path, 1, &trace) != 0);
+    invalid_model.initial_pot = NAN;
+    assert(pe_hrc_trace_pot(&imported.config.tree, &invalid_model,
+                            allin_path, 1, &trace) != 0);
     assert(pe_hrc_import_make_pko_input(&imported, 8, pko_outcome, NULL,
                                         &pko_input) == 0);
     assert(pe_pko_calculate_from_ranges(&pko_input, &pko_result) == 0);

@@ -202,9 +202,15 @@ pe_betting_status_t pe_betting_action_is_legal(
         action->kind == PE_ACTION_CALL || action->kind == PE_ACTION_ALL_IN)
         return PE_BETTING_OK;
 
-    action_status = pe_action_commitment(
-        action, state->to_call, state->stack[state->to_act], state->pot,
-        state->min_raise, rules->pot_limit, &commitment);
+    {
+        double previous_contribution = state->round_contrib[state->to_act];
+        double outstanding = state->to_call > previous_contribution
+                                 ? state->to_call - previous_contribution
+                                 : 0.0;
+        action_status = pe_action_commitment(
+            action, outstanding, state->stack[state->to_act], state->pot,
+            state->min_raise, rules->pot_limit, &commitment);
+    }
     return action_status == PE_ACTION_OK ? PE_BETTING_OK
                                          : PE_BETTING_ERR_ILLEGAL_ACTION;
 }
@@ -264,8 +270,11 @@ pe_betting_status_t pe_betting_apply_action(
                              : 0.0;
         else
         {
+            double outstanding = state->to_call > previous_contribution
+                                     ? state->to_call - previous_contribution
+                                     : 0.0;
             pe_action_status_t action_status = pe_action_commitment(
-                action, state->to_call, state->stack[player], state->pot,
+                action, outstanding, state->stack[player], state->pot,
                 state->min_raise, rules->pot_limit, &commitment);
             if (action_status != PE_ACTION_OK)
                 return PE_BETTING_ERR_ILLEGAL_ACTION;

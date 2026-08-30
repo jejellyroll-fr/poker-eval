@@ -73,6 +73,18 @@ static void test_bet_call_and_round_end(void)
                   fabs(next.stack[0] - 50.0) < 1e-12 &&
                   fabs(next.pot - 100.0) < 1e-12,
               "call charges only the outstanding contribution");
+
+        setup(&state, &rules, 100.0, 100.0);
+        CHECK(pe_betting_apply_action(&state, &rules, &bet, &next) ==
+                  PE_BETTING_OK &&
+                  pe_betting_apply_action(&next, &rules, &raise, &state) ==
+                  PE_BETTING_OK &&
+                  pe_betting_apply_action(&state, &rules, &raise, &next) ==
+                  PE_BETTING_OK && !next.all_in[0] &&
+                  fabs(next.round_contrib[0] - 75.0) < 1e-12 &&
+                  fabs(next.stack[0] - 25.0) < 1e-12 &&
+                  fabs(next.to_call - 75.0) < 1e-12,
+              "re-raise charges only the outstanding contribution");
     }
 }
 

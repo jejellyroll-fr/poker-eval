@@ -544,7 +544,8 @@ int pe_hrc_trace_pot(const pe_hrc_tree_t *tree, const pe_hrc_pot_model_t *model,
     int node_index;
     if (!tree || !model || !out || (path_length && !path) ||
         model->player_count != tree->num_players || model->player_count <= 0 ||
-        model->player_count > PE_HRC_MAX_PLAYERS)
+        model->player_count > PE_HRC_MAX_PLAYERS ||
+        !pe_finite_double(model->initial_pot) || model->initial_pot < 0.0)
         return -1;
     memset(out, 0, sizeof(*out));
     out->total_pot = model->initial_pot;
