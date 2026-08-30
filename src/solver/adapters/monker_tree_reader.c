@@ -18,6 +18,7 @@
 
 #define PE_MONKER_MAX_NODES 1000000u
 #define PE_MONKER_MAX_DEPTH 1024u
+#define PE_MONKER_MAX_HOLE_CARDS 6u
 
 pe_monker_status_t pe_monker_combo_layout_from_count(
     uint32_t combo_count, pe_monker_combo_layout_t *out)
@@ -803,7 +804,7 @@ pe_monker_status_t pe_monker_tree_read_ranges(const char *path,
         for (combo = 0u; combo < combo_count; ++combo)
         {
             int32_t fixed = decode_i32(bytes + offset);
-            unsigned cards[4];
+            unsigned cards[PE_MONKER_MAX_HOLE_CARDS];
             size_t index = (size_t)combo;
             offset += sizeof(int32_t);
             if (fixed < 0 ||

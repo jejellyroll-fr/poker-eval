@@ -2,6 +2,7 @@
 #include <poker_eval/engine/solvers/cfr/mpf_compact_storage.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +50,11 @@ static void usage(const char *program)
             program);
 }
 
+static int valid_session_counter(double value)
+{
+    return value >= 0.0 && value <= (double)INT_MAX && value == floor(value);
+}
+
 /* Read the small scalar summary without depending on a JSON library.  The
  * session writer owns the schema and emits these fields as JSON numbers, so a
  * bounded field lookup is sufficient and keeps the trainer portable. */
@@ -94,8 +100,14 @@ static int load_session_summary(const char *path, int *answered,
         parsed[i] = strtod(at + field_length, &end);
         if (end == at + field_length) { free(data); return -1; }
     }
-    *answered = parsed[0] < 0.0 ? 0 : (int)parsed[0];
-    *best_answers = parsed[1] < 0.0 ? 0 : (int)parsed[1];
+    if (!valid_session_counter(parsed[0]) ||
+        !valid_session_counter(parsed[1]))
+    {
+        free(data);
+        return -1;
+    }
+    *answered = (int)parsed[0];
+    *best_answers = (int)parsed[1];
     *probability_loss = parsed[2] >= 0.0 ? parsed[2] : 0.0;
     free(data);
     return 0;
