@@ -30,6 +30,16 @@ typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
                                                   int outcome,
                                                   void *user);
 
+/* Return non-zero when two private-combo entries can coexist in `state`.
+ * A missing callback means that the combo dimensions are independent and all
+ * entries are considered compatible. */
+typedef int (*pe_vector_combo_compatible_fn)(const void *state,
+                                             uint8_t player,
+                                             uint16_t player_combo,
+                                             uint8_t opponent,
+                                             uint16_t opponent_combo,
+                                             void *user);
+
 /*
  * The rules adapter used by the VEC-02 skeleton. States are borrowed and may
  * be static; apply_action returns another borrowed state. Later tickets will
@@ -61,7 +71,9 @@ typedef struct pe_vector_game_t
                     uint16_t action, pe_value_vec_t *out, void *user);
     const void *(*apply_action)(const void *state, uint16_t action, void *user);
 
-    /* Optional terminal callback. `out_values` has player_count vectors. */
+    /* Optional terminal callback. Each output vector is conditional on that
+       player's own combo; `reach` carries the current range of every player.
+       This lets a rules adapter apply blockers and evolving reaches once. */
     int (*terminal_values)(const void *state,
                            const pe_reach_vec_t *reach,
                            pe_value_vec_t *out_values, uint8_t player_count,
@@ -69,6 +81,10 @@ typedef struct pe_vector_game_t
     /* Optional lifetime hook for a child returned by apply_action.  The
        traversal calls it after the child has been fully consumed. */
     void (*release_state)(const void *state, void *user);
+    /* Optional private-combo compatibility callback used for counterfactual
+       opponent reach. It is deliberately separate from terminal_values so
+       the traversal can weight regrets without guessing from combo indexes. */
+    pe_vector_combo_compatible_fn combo_compatible;
 } pe_vector_game_t;
 
 struct pe_traversal_ctx_t

@@ -127,8 +127,14 @@ int pe_holdem_river_terminal_values(
                     if (reach[opponent].v[other] > 0.0)
                         weight_sum += reach[opponent].v[other];
                 }
+                /* A full-vector traversal can visit an action whose reach is
+                   exactly zero. That is a valid branch with zero
+                   counterfactual contribution, not a malformed showdown. */
                 if (weight_sum <= 0.0)
-                    return -1;
+                {
+                    out_values[player].v[combo] = 0.0;
+                    continue;
+                }
                 {
                     eval_t own_value = pe_eval_7c(
                         spec->context, own | spec->board);

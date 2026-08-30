@@ -251,6 +251,17 @@ static int game_terminal_values(const void *state,
         state, reach, out_values, player_count, adapter->base->user);
 }
 
+static int game_combo_compatible(const void *state, uint8_t player,
+                                 uint16_t player_combo,
+                                 uint8_t opponent, uint16_t opponent_combo,
+                                 void *user)
+{
+    pe_monker_strategy_game_t *adapter = strategy_game(user);
+    return adapter->base->combo_compatible(
+        state, player, player_combo, opponent, opponent_combo,
+        adapter->base->user);
+}
+
 static int game_strategy(const void *state, uint64_t infoset_key,
                          uint16_t action, pe_value_vec_t *out, void *user)
 {
@@ -315,6 +326,8 @@ pe_monker_status_t pe_monker_strategy_vector_game_init(
     adapter->game.infoset_key = game_infoset_key;
     adapter->game.apply_action = game_apply_action;
     adapter->game.terminal_values = game_terminal_values;
+    adapter->game.combo_compatible = base->combo_compatible
+        ? game_combo_compatible : NULL;
     if (base->is_chance)
     {
         adapter->game.is_chance = game_is_chance;

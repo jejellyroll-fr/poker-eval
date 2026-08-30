@@ -270,6 +270,21 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
                         pe_update_batch_t *out_batch,
                         double chance_reach);
 
+static int vector_combo_is_compatible(const pe_vector_game_t *game,
+                                      const void *state, uint8_t player,
+                                      uint16_t player_combo,
+                                      uint8_t opponent,
+                                      uint16_t opponent_combo)
+{
+    int compatible;
+
+    if (!game->combo_compatible)
+        return 1;
+    compatible = game->combo_compatible(state, player, player_combo,
+                                        opponent, opponent_combo, game->user);
+    return compatible < 0 ? -1 : compatible != 0;
+}
+
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game)
 {
@@ -573,8 +588,17 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             pe_value_vec_t *child = &child_values[
                 (size_t)action * game->player_count + p];
             for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
-                out_values[p].v[combo] += strategies[
-                    (size_t)action * game->combo_count + combo] * child->v[combo];
+            {
+                /* terminal_values returns a value conditional on the
+                   player's own combo. The acting player's strategy is
+                   already present in the reach passed to that callback; for
+                   every other player applying it again would use the same
+                   numeric combo as a false blocker mapping. */
+                double weight = p == (uint8_t)player
+                    ? strategies[(size_t)action * game->combo_count + combo]
+                    : 1.0;
+                out_values[p].v[combo] += weight * child->v[combo];
+            }
         }
     }
 
@@ -605,7 +629,32 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             opponent_reach[combo] = 1.0;
             for (p = 0u; p < game->player_count; ++p)
                 if (p != (uint8_t)player)
-                    opponent_reach[combo] *= reach[p].v[combo];
+                {
+                    double compatible_reach = 0.0;
+                    uint16_t opponent_combo;
+                    for (opponent_combo = 0u;
+                         opponent_combo < game->combo_count;
+                         ++opponent_combo)
+                    {
+                        int compatible = vector_combo_is_compatible(
+                            game, state, (uint8_t)player, combo, p,
+                            opponent_combo);
+                        if (compatible < 0)
+                        {
+                            pe_vec_free(&opponent);
+                            for (uint16_t a = 0u; a < actions; ++a)
+                                for (uint8_t q = 0u; q < game->player_count; ++q)
+                                    pe_vec_free(&child_values[(size_t)a *
+                                                               game->player_count + q]);
+                            free(strategies);
+                            free(child_values);
+                            return -1;
+                        }
+                        if (compatible)
+                            compatible_reach += reach[p].v[opponent_combo];
+                    }
+                    opponent_reach[combo] *= compatible_reach;
+                }
         }
         if (pe_update_batch_soa_begin_group(
                 out_batch, infoset, actions, game->combo_count,

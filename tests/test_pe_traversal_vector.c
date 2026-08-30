@@ -81,6 +81,15 @@ static const void *toy_apply_action(const void *state, uint16_t action,
     return action < 2u ? &TOY_LEAVES[action] : NULL;
 }
 
+static int toy_combo_compatible(const void *state, uint8_t player,
+                                uint16_t player_combo, uint8_t opponent,
+                                uint16_t opponent_combo, void *user)
+{
+    (void)state;
+    (void)user;
+    return player != opponent && player_combo != opponent_combo;
+}
+
 static int toy_terminal_values(const void *state, const pe_reach_vec_t *reach,
                                pe_value_vec_t *out_values,
                                uint8_t player_count, void *user)
@@ -140,6 +149,7 @@ static void test_toy_tree(void)
     game.strategy = toy_strategy;
     game.apply_action = toy_apply_action;
     game.terminal_values = toy_terminal_values;
+    game.combo_compatible = toy_combo_compatible;
 
     CHECK(ops != NULL && strcmp(ops->name, "full_vector") == 0,
           "full-vector ops are unavailable");
@@ -167,6 +177,13 @@ static void test_toy_tree(void)
     CHECK(batch.count == 0u && batch.soa.group_count == 1u &&
               batch.soa.value_count == 6u,
           "vector traversal did not emit one SoA infoset group");
+    CHECK(fabs(batch.soa.deltas[0] - 3.0) < 1e-12 &&
+              fabs(batch.soa.deltas[1] - 2.0) < 1e-12 &&
+              fabs(batch.soa.deltas[2] - 1.0) < 1e-12 &&
+              fabs(batch.soa.deltas[3] + 1.0) < 1e-12 &&
+              fabs(batch.soa.deltas[4] + 2.0) < 1e-12 &&
+              fabs(batch.soa.deltas[5] + 3.0) < 1e-12,
+          "counterfactual reach did not use compatible opponent combos");
     CHECK(ctx.counters.vec_allocs == 0u,
           "small traversal escaped the reusable vector arena (%llu allocs)",
           (unsigned long long)ctx.counters.vec_allocs);
