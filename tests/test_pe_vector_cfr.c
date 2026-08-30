@@ -329,6 +329,142 @@ static void test_sampled_chance_is_unbiased(void)
     pe_chance_vector_ctx_destroy(&second);
 }
 
+typedef struct
+{
+    int terminal;
+    int action;
+} sampled_action_state_t;
+
+static const sampled_action_state_t sampled_action_root = {0, -1};
+static const sampled_action_state_t sampled_action_leaves[] = {
+    {1, 0}, {1, 1}};
+
+static int sampled_action_is_terminal(const void *state, void *user)
+{
+    (void)user;
+    return ((const sampled_action_state_t *)state)->terminal;
+}
+
+static int sampled_action_sample_chance(const void *state, pe_rng_t *rng,
+                                        pe_chance_sample_t *out, void *user)
+{
+    (void)state;
+    (void)rng;
+    (void)out;
+    (void)user;
+    return 1;
+}
+
+static const void *sampled_action_apply_chance(const void *state, int outcome,
+                                               void *user)
+{
+    (void)state;
+    (void)outcome;
+    (void)user;
+    return NULL;
+}
+
+static int sampled_action_acting_player(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0;
+}
+
+static uint16_t sampled_action_count(const void *state, void *user)
+{
+    (void)user;
+    return ((const sampled_action_state_t *)state)->terminal ? 0u : 2u;
+}
+
+static int sampled_action_strategy(const void *state, uint64_t key,
+                                   uint16_t action, pe_value_vec_t *out,
+                                   void *user)
+{
+    static const double strategies[2][3] = {
+        {0.2, 0.8, 0.4},
+        {0.8, 0.2, 0.6}};
+    (void)state;
+    (void)key;
+    (void)user;
+    if (action >= 2u || out->n != 3u)
+        return -1;
+    memcpy(out->v, strategies[action], sizeof(strategies[action]));
+    return 0;
+}
+
+static const void *sampled_action_apply(const void *state, uint16_t action,
+                                         void *user)
+{
+    (void)state;
+    (void)user;
+    return action < 2u ? &sampled_action_leaves[action] : NULL;
+}
+
+static int sampled_action_compatible(const void *state, uint8_t player,
+                                     uint16_t player_combo, uint8_t opponent,
+                                     uint16_t opponent_combo, void *user)
+{
+    (void)state;
+    (void)user;
+    return player != opponent && player_combo != opponent_combo;
+}
+
+static int sampled_action_terminal_values(const void *state,
+                                          const pe_reach_vec_t *reach,
+                                          pe_value_vec_t *out_values,
+                                          uint8_t player_count, void *user)
+{
+    const sampled_action_state_t *leaf = state;
+    size_t combo;
+    (void)reach;
+    (void)user;
+    if (player_count != 2u)
+        return -1;
+    for (combo = 0u; combo < out_values[0].n; ++combo)
+    {
+        double value = leaf->action == 0 ? 2.0 : 4.0;
+        out_values[0].v[combo] = value;
+        out_values[1].v[combo] = value;
+    }
+    return 0;
+}
+
+static void test_sampled_action_uses_compatible_reach(void)
+{
+    pe_vector_game_t game;
+    pe_chance_vector_ctx_t ctx;
+    const pe_value_vec_t *values;
+
+    memset(&game, 0, sizeof(game));
+    game.root = &sampled_action_root;
+    game.player_count = 2u;
+    game.combo_count = 3u;
+    game.is_terminal = sampled_action_is_terminal;
+    game.acting_player = sampled_action_acting_player;
+    game.action_count = sampled_action_count;
+    game.strategy = sampled_action_strategy;
+    game.apply_action = sampled_action_apply;
+    game.terminal_values = sampled_action_terminal_values;
+    game.combo_compatible = sampled_action_compatible;
+    CHECK(pe_chance_vector_ctx_init(&ctx, &game,
+                                    sampled_action_sample_chance,
+                                    sampled_action_apply_chance, 23u) == 0,
+          "sampled action context init failed");
+    if (!ctx.initialized)
+        return;
+    CHECK(pe_chance_vector_run(&ctx) == 0, "sampled action run failed");
+    values = pe_chance_vector_values(&ctx, 0u);
+    CHECK(values != NULL && fabs(values->v[0] - 3.6) <= 1e-12,
+          "acting combo value is %.17g, expected 3.6",
+          values ? values->v[0] : -1.0);
+    values = pe_chance_vector_values(&ctx, 1u);
+    CHECK(values != NULL && fabs(values->v[0] - 2.8) <= 1e-12,
+          "compatible opponent value is %.17g, expected 2.8",
+          values ? values->v[0] : -1.0);
+    pe_chance_vector_ctx_destroy(&ctx);
+}
+
 int main(void)
 {
     test_per_combo_normalization();
@@ -338,6 +474,7 @@ int main(void)
     test_delayed_linear_average();
     test_importance_weighted_average();
     test_sampled_chance_is_unbiased();
+    test_sampled_action_uses_compatible_reach();
     if (failures != 0)
     {
         fprintf(stderr, "test_pe_vector_cfr: %d failure(s)\n", failures);

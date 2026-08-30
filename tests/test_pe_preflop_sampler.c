@@ -91,6 +91,39 @@ int main(void)
             return 1;
         }
     }
+
+    /* A legal first-player draw can block every hand in the next range.
+       The sampler must resample the complete deal and keep the valid branch
+       instead of failing the sample.  With no measured normalisation, the
+       returned weight must still correct the sequential proposal. */
+    {
+        pe_holdem_combo_t blocked[] = {
+            {cards((int[]){0, 1}, 2u), 1.0},
+            {cards((int[]){2, 3}, 2u), 2.0}};
+        pe_holdem_combo_t only_unblocked[] = {
+            {cards((int[]){0, 4}, 2u), 1.0}};
+        pe_holdem_range_t ranges[] = {
+            {blocked, 2u}, {only_unblocked, 1u}};
+        if (pe_preflop_deal_sampler_init_holdem(
+                &sampler, MASK_EMPTY, ranges, 2u) != 0)
+        {
+            fprintf(stderr, "test_pe_preflop_sampler: dead-end init failed\n");
+            return 1;
+        }
+        pe_rng_seed(&rng, 0xdeadbeefu);
+        for (int i = 0; i < 100; ++i)
+        {
+            pe_preflop_deal_sample_t sample;
+            if (pe_preflop_deal_sampler_sample(&sampler, &rng, &sample) != 0 ||
+                sample.holes[0] != blocked[1].cards ||
+                fabs(sample.importance_ratio - 3.0) > 1e-12)
+            {
+                fprintf(stderr,
+                        "test_pe_preflop_sampler: dead-end resampling failed\n");
+                return 1;
+            }
+        }
+    }
     puts("test_pe_preflop_sampler: Hold'em/PLO4/PLO5/PLO6 card removal passed");
     return 0;
 }

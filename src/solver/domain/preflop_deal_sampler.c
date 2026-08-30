@@ -102,12 +102,18 @@ static double range_weight(const pe_preflop_deal_sampler_t *sampler,
         return ((const pe_holdem_range_t *)sampler->ranges)[player]
             .combos[index].weight;
     return ((const pe_omaha_range_t *)sampler->ranges)[player]
-        .combos[index].weight;
+            .combos[index].weight;
 }
 
-int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
-                                   pe_rng_t *rng,
-                                   pe_preflop_deal_sample_t *out)
+#define PE_PREFLOP_SAMPLE_ATTEMPTS 4096u
+
+/* Draw from the card-removal proposal once.  A valid range prefix can still
+   have no continuation (for example, the first player's selected hand may
+   block the only hand in the next range).  The caller retries the complete
+   deal in that case instead of turning a recoverable draw into an error. */
+static int sample_sequential(const pe_preflop_deal_sampler_t *sampler,
+                             pe_rng_t *rng,
+                             pe_preflop_deal_sample_t *out)
 {
     mask_t used;
     double target = 1.0;
@@ -161,7 +167,37 @@ int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
     }
     out->target_weight = target;
     out->proposal_probability = proposal;
-    out->importance_ratio = sampler->reference_weight_sum > 0.0
-        ? (target / sampler->reference_weight_sum) / proposal : 1.0;
-    return finite_positive(out->importance_ratio) ? 0 : -1;
+    return finite_positive(target) && finite_positive(proposal) ? 0 : -1;
+}
+
+int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
+                                   pe_rng_t *rng,
+                                   pe_preflop_deal_sample_t *out)
+{
+    unsigned attempt;
+
+    if (!sampler || !sampler->ranges || !rng || !out ||
+        !valid_common(sampler->board, sampler->player_count) ||
+        !valid_variant(sampler->variant, sampler->hole_cards))
+        return -1;
+    for (attempt = 0u; attempt < PE_PREFLOP_SAMPLE_ATTEMPTS; ++attempt)
+    {
+        double ratio;
+        memset(out, 0, sizeof(*out));
+        if (sample_sequential(sampler, rng, out) != 0)
+            continue;
+        ratio = out->target_weight / out->proposal_probability;
+        if (sampler->reference_weight_sum > 0.0)
+            ratio /= sampler->reference_weight_sum;
+        if (finite_positive(ratio))
+        {
+            /* With no exact normalisation, this is the unbiased
+               importance weight for the unnormalised product range.  The
+               restart-on-dead-end factor is common to all complete deals. */
+            out->importance_ratio = ratio;
+            return 0;
+        }
+    }
+    memset(out, 0, sizeof(*out));
+    return -1;
 }

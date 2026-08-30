@@ -38,6 +38,50 @@ static void free_values(pe_value_vec_t *values, uint8_t player_count)
         pe_vec_free(&values[player]);
 }
 
+static int action_weight_for_combo(const pe_vector_game_t *game,
+                                   const void *state,
+                                   const pe_reach_vec_t *reach,
+                                   int acting, const pe_value_vec_t *strategy,
+                                   uint8_t player, uint16_t combo,
+                                   double *out_weight)
+{
+    double compatible_reach = 0.0;
+    double action_reach = 0.0;
+    uint16_t acting_combo;
+
+    if (!game || !reach || !strategy || !out_weight || acting < 0 ||
+        acting >= (int)game->player_count || player >= game->player_count ||
+        combo >= game->combo_count)
+        return -1;
+    if (player == (uint8_t)acting)
+    {
+        *out_weight = strategy->v[combo];
+        return isfinite(*out_weight) && *out_weight >= 0.0 ? 0 : -1;
+    }
+    for (acting_combo = 0u; acting_combo < game->combo_count;
+         ++acting_combo)
+    {
+        int compatible = game->combo_compatible
+            ? game->combo_compatible(state, (uint8_t)acting, acting_combo,
+                                     player, combo, game->user) : 1;
+        double reach_weight;
+        if (compatible < 0)
+            return -1;
+        if (!compatible)
+            continue;
+        reach_weight = reach[acting].v[acting_combo];
+        if (!isfinite(reach_weight) || reach_weight < 0.0 ||
+            !isfinite(strategy->v[acting_combo]) ||
+            strategy->v[acting_combo] < 0.0)
+            return -1;
+        compatible_reach += reach_weight;
+        action_reach += reach_weight * strategy->v[acting_combo];
+    }
+    *out_weight = compatible_reach > 0.0
+        ? action_reach / compatible_reach : 0.0;
+    return isfinite(*out_weight) && *out_weight >= 0.0 ? 0 : -1;
+}
+
 static int visit_sampled(pe_chance_vector_ctx_t *ctx,
                          const void *state,
                          const pe_reach_vec_t *reach,
@@ -169,10 +213,27 @@ static int visit_sampled(pe_chance_vector_ctx_t *ctx,
             }
             for (p = 0u; p < game->player_count; ++p)
             {
-                pe_vec_mul(&child_values[p], &strategy);
+                uint16_t combo;
+                for (combo = 0u; combo < game->combo_count; ++combo)
+                {
+                    double weight;
+                    if (action_weight_for_combo(game, state, reach, acting,
+                                                &strategy, p, combo,
+                                                &weight) != 0)
+                    {
+                        uint8_t q;
+                        for (q = 0u; q < game->player_count; ++q)
+                            pe_vec_free(&child_reach[q]);
+                        pe_vec_free(&strategy);
+                        free_values(child_values, game->player_count);
+                        return -1;
+                    }
+                    child_values[p].v[combo] *= weight;
+                }
                 pe_vec_axpy(&out_values[p], 1.0, &child_values[p]);
-                pe_vec_free(&child_reach[p]);
             }
+            for (p = 0u; p < game->player_count; ++p)
+                pe_vec_free(&child_reach[p]);
             pe_vec_free(&strategy);
             free_values(child_values, game->player_count);
         }

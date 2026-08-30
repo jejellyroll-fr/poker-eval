@@ -31,10 +31,11 @@ typedef struct
     uint8_t hole_cards;
     const void *ranges; /* borrowed pe_holdem_range_t[] or pe_omaha_range_t[] */
 
-    /* Exact normalisation of the product range distribution.  Zero selects
-       the sequential card-removal proposal as the reference distribution.
-       Call pe_preflop_deal_sampler_measure() when exact importance weights
-       are required and the range space is small enough to enumerate. */
+    /* Exact normalisation of the product range distribution.  When zero,
+       sampling still applies target/proposal importance weighting, but the
+       returned value is scaled for the unnormalised product range.  Call
+       pe_preflop_deal_sampler_measure() when a normalised weight is needed
+       and the range space is small enough to enumerate. */
     double reference_weight_sum;
 } pe_preflop_deal_sampler_t;
 
