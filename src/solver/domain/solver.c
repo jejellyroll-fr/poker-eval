@@ -686,6 +686,13 @@ static const void *sampled_apply_chance(const void *state, int outcome,
     return adapter->base->apply_chance(state, outcome, adapter->base->user);
 }
 
+static void sampled_release_state(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    if (adapter->base->release_state)
+        adapter->base->release_state(state, adapter->base->user);
+}
+
 static int sampled_chance_with_user(const void *state, pe_rng_t *rng,
                                     pe_chance_sample_t *out, void *user)
 {
@@ -954,6 +961,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     sampled_game.apply_action = sampled_apply_action;
     sampled_game.action_probability = sampled_action_probability;
     sampled_game.terminal_value = sampled_terminal_value;
+    sampled_game.release_state = sampled_release_state;
     sampled_game.sample_chance = game->sample_chance;
     sampled_game.sample_chance_with_user = game->sample_chance_with_user
         ? sampled_chance_with_user : NULL;

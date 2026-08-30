@@ -129,6 +129,10 @@ static void test_all_in_and_reopen_rule(void)
           "unmatched all-in leaves the covering player a decision");
     {
         pe_action_t call = action(PE_ACTION_CALL, PE_AMOUNT_NONE, 0.0);
+        pe_action_t raise = action(PE_ACTION_RAISE, PE_AMOUNT_CHIPS, 50.0);
+        CHECK(pe_betting_action_is_legal(&next, &rules, &raise) ==
+                  PE_BETTING_ERR_ILLEGAL_ACTION,
+              "short all-in does not reopen a raise for an acted player");
         CHECK(pe_betting_apply_action(&next, &rules, &call, &state) ==
                   PE_BETTING_OK && state.round_complete && state.to_act == -1 &&
                   fabs(state.stack[1] - 90.0) < 1e-12 &&

@@ -1,6 +1,7 @@
 #include <poker_eval/economics/fgs.h>
 #include <poker_eval/utils/icm_calculator.h>
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +39,11 @@ static int load_scenarios(const char *path, icm_tournament_t *scenarios,
         int n = parse_values(line, values, players + 1);
         if (n <= 0) continue;
         if (n != players + 1) { fclose(file); return -1; }
-        if (!isfinite(values[0]) || values[0] < 0.0 || values[0] > 1.0) {
+        /* The negated range also rejects NaN and DBL_MAX rejects infinity.
+           Avoid isfinite(double): MinGW expands it through a float-typed
+           branch under -Wconversion. */
+        if (!(values[0] >= 0.0 && values[0] <= 1.0 &&
+              values[0] <= DBL_MAX)) {
             fclose(file);
             return -1;
         }

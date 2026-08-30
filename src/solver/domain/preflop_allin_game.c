@@ -177,6 +177,10 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
                                   pe_action_t *out, uint16_t max_actions)
 {
     const pe_betting_state_t *betting = &state->betting;
+    int actor = betting->to_act;
+    double contribution = actor >= 0 ? betting->round_contrib[actor] : 0.0;
+    double outstanding = betting->to_call > contribution
+                             ? betting->to_call - contribution : 0.0;
     pe_action_t candidates[PREFLOP_MAX_ACTIONS];
     double commitments[PREFLOP_MAX_ACTIONS];
     uint16_t count = 0u;
@@ -196,7 +200,7 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
             pe_action_t candidate;
             if (tree_action_to_semantic(node, index, &candidate) != 0)
                 continue;
-            if (candidate.kind == PE_ACTION_CALL && betting->to_call <= PREFLOP_EPSILON)
+            if (candidate.kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
                 candidate.kind = PE_ACTION_CHECK;
             if (pe_betting_action_is_legal(betting, &game->betting_rules,
                                            &candidate) == PE_BETTING_OK)
@@ -212,7 +216,7 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
     if (betting->terminal || betting->round_complete || betting->to_act < 0)
         return 0u;
 
-    if (betting->to_call > PREFLOP_EPSILON)
+    if (outstanding > PREFLOP_EPSILON)
     {
         pe_action_t fold;
         memset(&fold, 0, sizeof(fold));
@@ -231,7 +235,7 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
             candidates[count++] = check;
     }
 
-    if (betting->to_call > PREFLOP_EPSILON)
+    if (outstanding > PREFLOP_EPSILON)
     {
         pe_action_t call;
         memset(&call, 0, sizeof(call));
@@ -489,8 +493,9 @@ static int preflop_evaluate_board(const pe_preflop_allin_game_t *game,
     return 0;
 }
 
-int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
-                                     const mask_t *holes, double *out_equity)
+static int preflop_showdown_equity_for_players(
+    const pe_preflop_allin_game_t *game, const mask_t *holes,
+    const uint8_t *eligible, double *out_equity)
 {
     pe_rng_t rng;
     uint64_t seed;
@@ -515,6 +520,13 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
             return -1;
         dead |= holes[player];
         seed = pe_rng_mix(seed ^ (uint64_t)holes[player]);
+    }
+    {
+        int eligible_count = 0;
+        for (int player = 0; player < players; ++player)
+            eligible_count += eligible[player] != 0u;
+        if (eligible_count == 0)
+            return -1;
     }
     pe_rng_seed(&rng, seed);
     for (int player = 0; player < players; ++player)
@@ -542,6 +554,8 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
         }
         for (player = 0; player < players; ++player)
         {
+            if (!eligible[player])
+                continue;
             if (preflop_evaluate_board(game, holes[player], board,
                                        &values[player]) != 0)
                 return -1;
@@ -549,16 +563,28 @@ int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
                 best = values[player];
         }
         for (player = 0; player < players; ++player)
-            if (values[player] == best)
+            if (eligible[player] && values[player] == best)
                 ++winners;
         if (winners > 0)
             for (player = 0; player < players; ++player)
-                if (values[player] == best)
+                if (eligible[player] && values[player] == best)
                     out_equity[player] += 1.0 / (double)winners;
     }
     for (int player = 0; player < players; ++player)
         out_equity[player] /= (double)game->rules.showdown_samples;
     return 0;
+}
+
+int pe_preflop_allin_showdown_equity(const pe_preflop_allin_game_t *game,
+                                     const mask_t *holes, double *out_equity)
+{
+    uint8_t eligible[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0u};
+    if (!game)
+        return -1;
+    for (int player = 0; player < game->rules.player_count; ++player)
+        eligible[player] = 1u;
+    return preflop_showdown_equity_for_players(game, holes, eligible,
+                                               out_equity);
 }
 
 static int preflop_has_actionable_player(const pe_betting_state_t *betting)
@@ -634,6 +660,63 @@ static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
     return payout[player] - betting->invested[player];
 }
 
+static double preflop_sampled_sidepot_value(
+    const pe_preflop_allin_game_t *game,
+    const pe_preflop_betting_state_t *state, int player)
+{
+    const pe_betting_state_t *betting = &state->betting;
+    double levels[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    double payout[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
+    int level_count = 0;
+    int players = betting->player_count;
+
+    for (int p = 0; p < players; ++p)
+        if (betting->invested[p] > PREFLOP_EPSILON)
+            levels[level_count++] = betting->invested[p];
+    for (int i = 0; i < level_count; ++i)
+        for (int j = i + 1; j < level_count; ++j)
+            if (levels[j] < levels[i]) {
+                double temp = levels[i]; levels[i] = levels[j]; levels[j] = temp;
+            }
+
+    int unique = 0;
+    for (int i = 0; i < level_count; ++i) {
+        double level = levels[i];
+        double previous = unique > 0 ? levels[unique - 1] : 0.0;
+        uint8_t eligible[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0u};
+        double equity[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
+        double layer;
+        double pot = 0.0;
+        int eligible_count = 0;
+        if (unique > 0 && level <= previous + PREFLOP_EPSILON)
+            continue;
+        levels[unique++] = level;
+        layer = level - previous;
+        for (int p = 0; p < players; ++p) {
+            if (betting->invested[p] + PREFLOP_EPSILON >= level)
+                pot += layer;
+            if (betting->active[p] &&
+                betting->invested[p] + PREFLOP_EPSILON >= level) {
+                eligible[p] = 1u;
+                ++eligible_count;
+            }
+        }
+        if (eligible_count == 1) {
+            for (int p = 0; p < players; ++p)
+                if (eligible[p])
+                    payout[p] += pot;
+        } else if (eligible_count > 1 &&
+                   preflop_showdown_equity_for_players(
+                       game, state->holes, eligible, equity) == 0) {
+            for (int p = 0; p < players; ++p)
+                payout[p] += pot * equity[p];
+        } else if (eligible_count > 1) {
+            return 0.0;
+        }
+    }
+    return payout[player] - betting->invested[player];
+}
+
 static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
                                         int player, void *user)
 {
@@ -659,10 +742,8 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
         return player == winner ? pot_total - contrib[player] : -contrib[player];
     }
     {
-        double equity[PE_PREFLOP_ALLIN_MAX_PLAYERS];
-        if (pe_preflop_allin_showdown_equity(game, state->holes, equity) != 0)
-            return 0.0;
-        return equity[player] * pot_total - contrib[player];
+        (void)pot_total;
+        return preflop_sampled_sidepot_value(game, state, player);
     }
 }
 
@@ -696,8 +777,13 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
                 pe_action_t candidate;
                 if (tree_action_to_semantic(node, i, &candidate) != 0)
                     continue;
+                int actor = source->betting.to_act;
+                double contribution = actor >= 0
+                    ? source->betting.round_contrib[actor] : 0.0;
+                double outstanding = source->betting.to_call > contribution
+                    ? source->betting.to_call - contribution : 0.0;
                 if (candidate.kind == PE_ACTION_CALL &&
-                    source->betting.to_call <= PREFLOP_EPSILON)
+                    outstanding <= PREFLOP_EPSILON)
                     candidate.kind = PE_ACTION_CHECK;
                 if (tree_action_matches(action, &candidate))
                 {
