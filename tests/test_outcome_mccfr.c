@@ -104,6 +104,15 @@ int main(void)
             pe_storage_destroy(storage);
             return 1;
         }
+        if (fabs(fabs(batch.items[0].delta) - 1.0) > 1e-12 ||
+            fabs(fabs(batch.items[1].delta) - 1.0) > 1e-12)
+        {
+            fprintf(stderr, "test_outcome_mccfr: regret estimator kept action probability\n");
+            pe_update_batch_destroy(&batch);
+            pe_outcome_sampling_ctx_destroy(&ctx);
+            pe_storage_destroy(storage);
+            return 1;
+        }
         regrets[0] += batch.items[0].delta;
         regrets[1] += batch.items[1].delta;
         if (fabs(batch.items[0].average_delta +

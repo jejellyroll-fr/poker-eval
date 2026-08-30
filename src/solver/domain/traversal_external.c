@@ -168,8 +168,11 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
     const void *child = game->apply_action(state, (uint16_t)action, game->user);
     if (!child)
         return NAN;
+    /* The opponent action was already sampled according to probs[action].
+     * Its sampling probability must not be folded into opponent_reach again:
+     * doing so squares the opponent policy in the counterfactual estimator. */
     double value = external_visit(ctx, child, own_reach,
-                                  opponent_reach * probs[action], batch);
+                                  opponent_reach, batch);
     if (game->release_state) game->release_state(child, game->user);
     return value;
 }

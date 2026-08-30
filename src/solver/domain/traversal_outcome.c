@@ -141,13 +141,16 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
     value = outcome_visit(ctx, child,
                           inverse_sampling / sampling_probability, batch);
     if (game->release_state) game->release_state(child, game->user);
-        if (!pe_finite_double(value))
+    if (!pe_finite_double(value))
         return NAN;
 
     if (actor == ctx->updating_player)
     {
         pe_infoset_id_t id;
+        double regret_weight = inverse_sampling / sampling_probability;
         if (!ctx->storage_ops || !ctx->storage_ops->resolve)
+            return NAN;
+        if (!pe_finite_double(regret_weight))
             return NAN;
         id = ctx->storage_ops->resolve(ctx->storage, key, actions, 1u,
                                        PE_STREET_UNKNOWN);
@@ -159,7 +162,10 @@ static double outcome_visit(pe_outcome_sampling_ctx_t *ctx,
             update.infoset = id;
             update.action = a;
             update.combo = 0u;
-            update.delta = inverse_sampling * value *
+            /* inverse_sampling stops before the current action.  Divide by
+             * its sampling probability so the sampled-action utility is an
+             * unbiased estimate instead of retaining an extra factor q. */
+            update.delta = regret_weight * value *
                            ((a == (uint16_t)selected ? 1.0 : 0.0) - target[a]);
             update.average_delta = inverse_sampling * target[a];
             if (pe_update_batch_push(batch, update) != 0)
