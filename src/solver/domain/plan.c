@@ -435,6 +435,29 @@ uint32_t pe_plan_value_arrays(const pe_execution_plan_t *plan)
     return n;
 }
 
+static int pe_u64_mul(uint64_t left, uint64_t right, uint64_t *out)
+{
+    if (right != 0u && left > UINT64_MAX / right)
+        return -1;
+    *out = left * right;
+    return 0;
+}
+
+static int pe_u64_add(uint64_t left, uint64_t right, uint64_t *out)
+{
+    if (left > UINT64_MAX - right)
+        return -1;
+    *out = left + right;
+    return 0;
+}
+
+static pe_valid_severity_t pe_estimate_overflow(pe_diagnostics_t *out_diag)
+{
+    pe_diag_add(out_diag, PE_VALID_ERROR,
+                "problem dimensions overflow the uint64 memory estimate");
+    return PE_VALID_ERROR;
+}
+
 pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
                                      const pe_problem_config_t *problem,
                                      uint64_t budget_bytes,
@@ -444,6 +467,9 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
     uint64_t slots;
     uint64_t per_slot;
     uint64_t arrays;
+    uint64_t term;
+    uint64_t storage_bytes;
+    uint64_t scratch_bytes;
 
     if (plan == NULL || problem == NULL || out == NULL)
         return PE_VALID_ERROR;
@@ -462,8 +488,10 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
         return PE_VALID_ERROR;
     }
 
-    slots = problem->expected_infosets * (uint64_t)problem->expected_actions
-            * (uint64_t)problem->expected_combos;
+    if (pe_u64_mul(problem->expected_infosets,
+                   (uint64_t)problem->expected_actions, &slots) != 0 ||
+        pe_u64_mul(slots, (uint64_t)problem->expected_combos, &slots) != 0)
+        return pe_estimate_overflow(out_diag);
     per_slot = pe_precision_bytes(plan->precision);
     arrays = pe_plan_value_arrays(plan);
 
@@ -477,25 +505,41 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
        a power of two, so it holds between 1.43 and 2.86 slots per infoset; 2
        is the midpoint and the error it carries is far below the slack a memory
        budget is set with. */
-    out->storage_bytes = slots * per_slot * arrays
-                         + problem->expected_infosets * PE_STORAGE_META_BYTES
-                         + problem->expected_infosets * 2u * sizeof(uint32_t);
+    if (pe_u64_mul(slots, per_slot, &storage_bytes) != 0 ||
+        pe_u64_mul(storage_bytes, arrays, &storage_bytes) != 0 ||
+        pe_u64_mul(problem->expected_infosets, PE_STORAGE_META_BYTES,
+                   &term) != 0 ||
+        pe_u64_add(storage_bytes, term, &storage_bytes) != 0 ||
+        pe_u64_mul(problem->expected_infosets,
+                   2u * sizeof(uint32_t), &term) != 0 ||
+        pe_u64_add(storage_bytes, term, &storage_bytes) != 0)
+        return pe_estimate_overflow(out_diag);
+    out->storage_bytes = storage_bytes;
 
     /* One scratch frame per recursion level, and one update batch. Small next
        to the storage on any real solve, and the reason it is reported
        separately is that it does not shrink with abstraction. */
-    out->scratch_bytes = (uint64_t)PE_ESTIMATE_SCRATCH_DEPTH
-                             * (uint64_t)problem->expected_actions * 3u * sizeof(double)
-                         + (uint64_t)problem->expected_actions
-                               * (uint64_t)problem->expected_combos * 2u * sizeof(double);
+    if (pe_u64_mul(PE_ESTIMATE_SCRATCH_DEPTH,
+                   (uint64_t)problem->expected_actions, &scratch_bytes) != 0 ||
+        pe_u64_mul(scratch_bytes, 3u * sizeof(double), &scratch_bytes) != 0 ||
+        pe_u64_mul((uint64_t)problem->expected_actions,
+                   (uint64_t)problem->expected_combos, &term) != 0 ||
+        pe_u64_mul(term, 2u * sizeof(double), &term) != 0 ||
+        pe_u64_add(scratch_bytes, term, &scratch_bytes) != 0)
+        return pe_estimate_overflow(out_diag);
+    out->scratch_bytes = scratch_bytes;
 
-    out->host_bytes = out->storage_bytes + out->scratch_bytes;
+    if (pe_u64_add(out->storage_bytes, out->scratch_bytes,
+                   &out->host_bytes) != 0)
+        return pe_estimate_overflow(out_diag);
 
     /* A device holds the value arrays and nothing else so far: the traversal
        runs on the host until GPU-4. */
     if (pe_compute_kind_is_gpu(plan->stages.traversal) ||
         pe_compute_kind_is_gpu(plan->stages.update))
-        out->device_bytes = slots * per_slot * arrays;
+        if (pe_u64_mul(slots, per_slot, &out->device_bytes) != 0 ||
+            pe_u64_mul(out->device_bytes, arrays, &out->device_bytes) != 0)
+            return pe_estimate_overflow(out_diag);
 
     out->budget_bytes = budget_bytes;
     out->within_budget = (budget_bytes == 0 || out->host_bytes <= budget_bytes);

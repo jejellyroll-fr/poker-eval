@@ -113,6 +113,13 @@ static void br_free_reach(pe_reach_vec_t *reach, uint8_t player_count)
         pe_vec_free(&reach[player]);
 }
 
+static void br_release_child(const pe_vector_game_t *game,
+                             const void *child)
+{
+    if (game->release_state && child)
+        game->release_state(child, game->user);
+}
+
 static int br_copy_reach(const pe_reach_vec_t *source,
                          pe_reach_vec_t *destination,
                          uint8_t player_count, uint16_t combo_count)
@@ -129,6 +136,33 @@ static int br_copy_reach(const pe_reach_vec_t *source,
         pe_vec_copy(&destination[player], &source[player]);
     }
     return 0;
+}
+
+static double br_compatible_reach(const pe_br_ctx_t *ctx,
+                                  const void *state,
+                                  const pe_reach_vec_t *reach,
+                                  uint8_t opponent,
+                                  size_t br_combo)
+{
+    const pe_vector_game_t *game = ctx->game;
+    double total = 0.0;
+    uint16_t opponent_combo;
+
+    /* Preserve the legacy scalar-vector contract when no blocker mapping is
+       supplied: one combo index represents one complete outcome.  Range-aware
+       games opt into aggregate compatible reach through the callback below. */
+    if (!game->combo_compatible)
+        return reach[opponent].v[br_combo];
+
+    for (opponent_combo = 0u; opponent_combo < ctx->combo_count;
+         ++opponent_combo)
+    {
+        if (game->combo_compatible(
+                state, ctx->br_player, (uint16_t)br_combo, opponent,
+                opponent_combo, game->user))
+            total += reach[opponent].v[opponent_combo];
+    }
+    return total;
 }
 
 static int br_validate(const pe_vector_game_t *game, uint8_t br_player,
@@ -258,9 +292,13 @@ static int policy_value(pe_policy_ctx_t *ctx, const void *state,
             double weight = br_chance_weight(game, state, outcome) /
                             total_weight;
             if (!child || policy_value(ctx, child, reach, child_values) != 0)
+            {
+                br_release_child(game, child);
                 return -1;
+            }
             for (p = 0u; p < game->player_count; ++p)
                 out_values[p] += weight * child_values[p];
+            br_release_child(game, child);
         }
         return 0;
     }
@@ -305,6 +343,7 @@ static int policy_value(pe_policy_ctx_t *ctx, const void *state,
                 out_values[p] += child_values[p];
         pe_vec_free(&strategy);
         br_free_reach(child_reach, game->player_count);
+        br_release_child(game, child);
         if (rc != 0)
             return -1;
     }
@@ -376,7 +415,8 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
             double weight = 1.0;
             for (player = 0; player < game->player_count; ++player)
                 if (player != (int)ctx->br_player)
-                    weight *= reach[player].v[combo];
+                    weight *= br_compatible_reach(ctx, state, reach,
+                                                  (uint8_t)player, combo);
             out->v[combo] = terminal[ctx->br_player].v[combo] * weight;
         }
         for (player = 0; player < game->player_count; ++player)
@@ -402,6 +442,7 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
                 pe_value_vec_t child_value = {0};
                 if (!child || br_value(ctx, child, reach, &child_value) != 0)
                 {
+                    br_release_child(game, child);
                     pe_vec_free(out);
                     pe_vec_free(&child_value);
                     return -1;
@@ -409,6 +450,7 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
                 pe_vec_axpy(out, br_chance_weight(game, state, action_count) /
                                   total_weight, &child_value);
                 pe_vec_free(&child_value);
+                br_release_child(game, child);
             }
             return 0;
         }
@@ -462,9 +504,17 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
                 pe_vec_mul(&child_reach[player], &strategy);
                 pe_vec_free(&strategy);
             }
-            rc = br_value(ctx,
-                          game->apply_action(state, action, game->user),
-                          child_reach, &child_value);
+            {
+                const void *child = game->apply_action(state, action,
+                                                       game->user);
+                if (!child)
+                    rc = -1;
+                else
+                {
+                    rc = br_value(ctx, child, child_reach, &child_value);
+                    br_release_child(game, child);
+                }
+            }
             br_free_reach(child_reach, game->player_count);
             if (rc != 0)
             {
@@ -509,7 +559,11 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
                                 total_weight;
                 if (!child || br_collect(ctx, child, reach,
                                          chance_reach * weight) != 0)
+                {
+                    br_release_child(game, child);
                     return -1;
+                }
+                br_release_child(game, child);
             }
             return 0;
         }
@@ -528,7 +582,10 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
         const void *child = game->apply_action(state, action, game->user);
         if (!child || br_copy_reach(reach, child_reach, game->player_count,
                                     ctx->combo_count) != 0)
+        {
+            br_release_child(game, child);
             return -1;
+        }
         if (player == (int)ctx->br_player)
         {
             pe_br_info_t *entry = br_find_info(ctx, key, action_count, 1);
@@ -537,6 +594,7 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
             {
                 br_free_reach(child_reach, game->player_count);
                 pe_vec_free(&action_value);
+                br_release_child(game, child);
                 return -1;
             }
             /* br_value may discover a descendant infoset and grow the hash
@@ -546,6 +604,7 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
             {
                 br_free_reach(child_reach, game->player_count);
                 pe_vec_free(&action_value);
+                br_release_child(game, child);
                 return -1;
             }
             entry->action_values[action] +=
@@ -560,6 +619,7 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
             {
                 pe_vec_free(&strategy);
                 br_free_reach(child_reach, game->player_count);
+                br_release_child(game, child);
                 return -1;
             }
             pe_vec_mul(&child_reach[player], &strategy);
@@ -568,9 +628,11 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
         if (br_collect(ctx, child, child_reach, chance_reach) != 0)
         {
             br_free_reach(child_reach, game->player_count);
+            br_release_child(game, child);
             return -1;
         }
         br_free_reach(child_reach, game->player_count);
+        br_release_child(game, child);
     }
     return 0;
 }

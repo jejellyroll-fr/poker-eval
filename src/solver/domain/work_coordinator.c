@@ -328,6 +328,94 @@ int pe_work_coordinator_dispatch(
     return assignment_count;
 }
 
+static int coordinator_channel_index(
+    const pe_work_worker_assignment_t *assignment,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
+    size_t *out_index)
+{
+    size_t i;
+
+    for (i = 0u; i < channel_count; ++i)
+        if (channels[i].worker_id == assignment->worker_id)
+        {
+            *out_index = i;
+            return 0;
+        }
+    return -1;
+}
+
+int pe_work_coordinator_dispatch_and_collect(
+    const pe_work_coordinator_t *coordinator,
+    const pe_work_unit_t *units,
+    size_t unit_count,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
+    pe_work_worker_assignment_t *out,
+    size_t capacity,
+    pe_work_reducer_t *reducer)
+{
+    uint8_t *frame;
+    size_t frame_capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
+                            PE_WORK_PROTOCOL_MAX_PAYLOAD;
+    int assignment_count;
+    size_t i;
+
+    if (!reducer || !units || unit_count == 0u || !channels ||
+        channel_count == 0u)
+        return -1;
+    assignment_count = pe_work_coordinator_schedule(
+        coordinator, unit_count, out, capacity);
+    if (assignment_count <= 0)
+        return assignment_count;
+
+    frame = (uint8_t *)malloc(frame_capacity);
+    if (!frame)
+        return -1;
+    for (i = 0u; i < (size_t)assignment_count; ++i)
+    {
+        const pe_work_worker_assignment_t *assignment = &out[i];
+        size_t channel_index;
+        size_t j;
+
+        if (coordinator_channel_index(assignment, channels, channel_count,
+                                      &channel_index) != 0)
+        {
+            free(frame);
+            return -1;
+        }
+        for (j = 0u; j < assignment->unit_count; ++j)
+        {
+            const pe_work_unit_t *unit = &units[assignment->first_unit + j];
+            pe_work_result_t result;
+            size_t frame_size;
+
+            if (pe_work_socket_send_work_unit(channels[channel_index].socket,
+                                              unit) != 0 ||
+                pe_work_socket_recv_frame(channels[channel_index].socket,
+                                          frame, frame_capacity,
+                                          &frame_size) != 0)
+            {
+                free(frame);
+                return -1;
+            }
+            if (pe_work_frame_decode_result(frame, frame_size, &result) != 0 ||
+                result.public_state != unit->public_state ||
+                result.iteration_begin != unit->iteration_begin ||
+                result.iteration_end != unit->iteration_end ||
+                result.backend != assignment->backend ||
+                pe_work_reducer_accept(reducer, assignment->worker_id,
+                                       &result) != 0)
+            {
+                free(frame);
+                return -1;
+            }
+        }
+    }
+    free(frame);
+    return assignment_count;
+}
+
 int pe_work_coordinator_collect_results(
     const pe_work_unit_t *units,
     size_t unit_count,

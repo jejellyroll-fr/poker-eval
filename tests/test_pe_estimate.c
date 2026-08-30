@@ -250,6 +250,30 @@ static void test_no_budget_means_no_refusal(void)
     pe_solver_destroy(solver);
 }
 
+static void test_overflow_is_refused(void)
+{
+    pe_solver_config_t cfg = sized(1u, 2u, 1u);
+    pe_solver_t *solver = pe_solver_create(&cfg, NULL);
+    pe_execution_plan_t plan;
+    pe_problem_config_t problem = {
+        UINT64_MAX, UINT16_MAX, UINT16_MAX
+    };
+    pe_diagnostics_t diagnostics;
+    pe_estimate_t estimate;
+
+    CHECK(solver != NULL, "overflow test solver creation failed");
+    if (solver != NULL)
+    {
+        CHECK(pe_solver_plan(solver, &plan) == PE_SOLVER_OK,
+              "overflow test plan resolution failed");
+        pe_diagnostics_clear(&diagnostics);
+        CHECK(pe_plan_estimate(&plan, &problem, 0u, &estimate,
+                               &diagnostics) == PE_VALID_ERROR,
+              "an overflowing estimate was accepted");
+        pe_solver_destroy(solver);
+    }
+}
+
 static void test_capabilities_are_introspectable(void)
 {
     pe_solver_config_t cfg = sized(1000, 3, 1);
@@ -373,6 +397,7 @@ int main(void)
     test_budget_refusal();
     test_budget_accepted_when_it_fits();
     test_no_budget_means_no_refusal();
+    test_overflow_is_refused();
     test_capabilities_are_introspectable();
     test_run_validates_before_dispatch();
     test_empty_problem_is_refused();

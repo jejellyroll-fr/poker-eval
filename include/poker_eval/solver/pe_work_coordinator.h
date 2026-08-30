@@ -101,6 +101,23 @@ int pe_work_coordinator_dispatch(
     size_t capacity);
 
 /**
+ * Schedule work and collect each result while dispatching the next unit.
+ *
+ * This is the safe entry point for persistent workers: it bounds in-flight
+ * protocol data to one unit per channel and cannot deadlock when result
+ * deltas are larger than the socket buffers.
+ */
+int pe_work_coordinator_dispatch_and_collect(
+    const pe_work_coordinator_t *coordinator,
+    const pe_work_unit_t *units,
+    size_t unit_count,
+    const pe_work_worker_channel_t *channels,
+    size_t channel_count,
+    pe_work_worker_assignment_t *out,
+    size_t capacity,
+    pe_work_reducer_t *reducer);
+
+/**
  * Collect one RESULT per dispatched WorkUnit and append it to `reducer`.
  * Results are checked against the original unit metadata before acceptance.
  */
