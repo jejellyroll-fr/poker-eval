@@ -506,6 +506,8 @@ static int preflop_showdown_equity_for_players(
     if (!game || !holes || !out_equity)
         return -1;
     players = game->rules.player_count;
+    if (players < 1 || players > PE_PREFLOP_ALLIN_MAX_PLAYERS)
+        return -1;
     seed = game->rules.showdown_seed;
     for (int player = 0; player < players; ++player)
     {
@@ -669,6 +671,9 @@ static double preflop_sampled_sidepot_value(
     double payout[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
     int level_count = 0;
     int players = betting->player_count;
+
+    if (players < 1 || players > PE_PREFLOP_ALLIN_MAX_PLAYERS)
+        return 0.0;
 
     for (int p = 0; p < players; ++p)
         if (betting->invested[p] > PREFLOP_EPSILON)
