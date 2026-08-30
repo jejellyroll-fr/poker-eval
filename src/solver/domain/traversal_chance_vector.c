@@ -75,7 +75,12 @@ static int visit_sampled(pe_chance_vector_ctx_t *ctx,
                 isnan(sample.importance_ratio) || !ctx->apply_chance)
                 return -1;
             child = ctx->apply_chance(state, sample.outcome, game->user);
-            if (!child || visit_sampled(ctx, child, reach, out_values) != 0)
+            if (!child)
+                return -1;
+            rc = visit_sampled(ctx, child, reach, out_values);
+            if (game->release_state)
+                game->release_state(child, game->user);
+            if (rc != 0)
                 return -1;
             pe_vec_scale(&out_values[0], sample.importance_ratio);
             for (player = 1u; player < game->player_count; ++player)
@@ -143,7 +148,18 @@ static int visit_sampled(pe_chance_vector_ctx_t *ctx,
             }
             pe_vec_mul(&child_reach[acting], &strategy);
             child = game->apply_action(state, action, game->user);
-            if (!child || visit_sampled(ctx, child, child_reach, child_values) != 0)
+            if (!child)
+            {
+                for (p = 0u; p < game->player_count; ++p)
+                    pe_vec_free(&child_reach[p]);
+                pe_vec_free(&strategy);
+                free_values(child_values, game->player_count);
+                return -1;
+            }
+            p = (uint8_t)(visit_sampled(ctx, child, child_reach, child_values) != 0);
+            if (game->release_state)
+                game->release_state(child, game->user);
+            if (p != 0u)
             {
                 for (p = 0u; p < game->player_count; ++p)
                     pe_vec_free(&child_reach[p]);

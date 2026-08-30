@@ -35,6 +35,21 @@ int main(void)
         assert(asymmetric_result.hero_push_frequency > 0.95);
     }
 
+    /* Two short callers still match only one hero contribution. */
+    {
+        pe_push_fold_multiway_input_t matched = {
+            .pot_before_push = 1.0,
+            .hero_stack = 100.0,
+            .villain_stacks = {10.0, 10.0},
+            .num_villains = 2,
+            .hero_equity_by_call_mask = {0.5, 0.5, 0.5, 0.5},
+            .iterations = 1
+        };
+        pe_push_fold_multiway_result_t matched_result = {0};
+        assert(pe_push_fold_multiway_solve(&matched, &matched_result) == 0);
+        assert(fabs(matched_result.hero_ev - 0.9375) < 1e-12);
+    }
+
     puts("Multiway push/fold tests passed");
     return 0;
 }

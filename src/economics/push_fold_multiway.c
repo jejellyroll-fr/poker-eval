@@ -33,14 +33,17 @@ static double other_profile_probability(int mask, int excluded,
 static double pushed_payoff(const pe_push_fold_multiway_input_t *input, int mask)
 {
     double called_stacks = 0.0;
-    double effective_risk;
+    double effective_risk = 0.0;
     int profiles = 1 << input->num_villains;
     if (mask < 0 || mask >= profiles) return 0.0;
     if (mask == 0) return input->pot_before_push;
     for (int i = 0; i < input->num_villains; ++i)
         if (mask & (1 << i))
-            called_stacks += fmin(input->hero_stack, input->villain_stacks[i]);
-    effective_risk = fmin(input->hero_stack, called_stacks);
+        {
+            double matched = fmin(input->hero_stack, input->villain_stacks[i]);
+            called_stacks += matched;
+            effective_risk = fmax(effective_risk, matched);
+        }
     return input->hero_equity_by_call_mask[mask] *
                (input->pot_before_push + called_stacks) -
            (1.0 - input->hero_equity_by_call_mask[mask]) * effective_risk;

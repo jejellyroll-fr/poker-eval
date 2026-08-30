@@ -267,7 +267,8 @@ static void vector_free(pe_traversal_ctx_t *ctx, pe_vec_t *vector)
 static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
                         const pe_reach_vec_t *reach,
                         pe_value_vec_t *out_values,
-                        pe_update_batch_t *out_batch);
+                        pe_update_batch_t *out_batch,
+                        double chance_reach);
 
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game)
@@ -319,7 +320,8 @@ void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx)
 static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                         const pe_reach_vec_t *reach,
                         pe_value_vec_t *out_values,
-                        pe_update_batch_t *out_batch)
+                        pe_update_batch_t *out_batch,
+                        double chance_reach)
 {
     const pe_vector_game_t *game = ctx->game;
     uint16_t actions;
@@ -345,6 +347,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         uint16_t outcomes;
         double total_weight = 0.0;
         pe_value_vec_t *child_values;
+        double *outcome_weights;
         uint16_t outcome;
 
         if (!game->chance_outcome_count || !game->apply_chance ||
@@ -355,24 +358,34 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             return -1;
         child_values = (pe_value_vec_t *)calloc(
             (size_t)outcomes * game->player_count, sizeof(*child_values));
-        if (!child_values)
+        outcome_weights = (double *)calloc(outcomes, sizeof(*outcome_weights));
+        if (!child_values || !outcome_weights)
+        {
+            free(child_values);
+            free(outcome_weights);
             return -1;
+        }
         for (outcome = 0u; outcome < outcomes; ++outcome)
         {
             double weight = game->chance_outcome_weight(
                 state, outcome, game->user);
-            const void *child;
-            int rc;
             if (weight < 0.0 || !pe_finite_double(weight))
             {
-                for (uint16_t o = 0u; o < outcome; ++o)
-                    for (uint8_t p = 0u; p < game->player_count; ++p)
-                        pe_vec_free(&child_values[(size_t)o *
-                                                  game->player_count + p]);
                 free(child_values);
+                free(outcome_weights);
                 return -1;
             }
+            outcome_weights[outcome] = weight;
             total_weight += weight;
+        }
+        if (!(total_weight > 0.0) || !pe_finite_double(total_weight))
+        {
+            free(child_values);
+            free(outcome_weights);
+            return -1;
+        }
+        for (outcome = 0u; outcome < outcomes; ++outcome)
+        {
             for (uint8_t p = 0u; p < game->player_count; ++p)
                 if (vector_alloc(ctx, &child_values[(size_t)outcome *
                                                 game->player_count + p],
@@ -383,14 +396,21 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                             pe_vec_free(&child_values[(size_t)o *
                                                       game->player_count + q]);
                     free(child_values);
+                    free(outcome_weights);
                     return -1;
                 }
-            child = game->apply_chance(state, outcome, game->user);
-            rc = child ? vector_visit(
-                              ctx, child, reach,
-                              &child_values[(size_t)outcome * game->player_count],
-                              out_batch)
-                       : -1;
+        }
+        for (outcome = 0u; outcome < outcomes; ++outcome)
+        {
+            const void *child = game->apply_chance(state, outcome, game->user);
+            double weight = outcome_weights[outcome] / total_weight;
+            int rc = child ? vector_visit(
+                                  ctx, child, reach,
+                                  &child_values[(size_t)outcome * game->player_count],
+                                  out_batch, chance_reach * weight)
+                           : -1;
+            if (child && game->release_state)
+                game->release_state(child, game->user);
             if (rc != 0)
             {
                 for (uint16_t o = 0u; o <= outcome; ++o)
@@ -398,24 +418,15 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                         pe_vec_free(&child_values[(size_t)o *
                                                   game->player_count + q]);
                 free(child_values);
+                free(outcome_weights);
                 return -1;
             }
-        }
-        if (!(total_weight > 0.0) || !pe_finite_double(total_weight))
-        {
-            for (outcome = 0u; outcome < outcomes; ++outcome)
-                for (uint8_t p = 0u; p < game->player_count; ++p)
-                    pe_vec_free(&child_values[(size_t)outcome *
-                                              game->player_count + p]);
-            free(child_values);
-            return -1;
         }
         for (uint8_t p = 0u; p < game->player_count; ++p)
             pe_vec_fill(&out_values[p], 0.0);
         for (outcome = 0u; outcome < outcomes; ++outcome)
         {
-            double weight = game->chance_outcome_weight(
-                state, outcome, game->user) / total_weight;
+            double weight = outcome_weights[outcome] / total_weight;
             for (uint8_t p = 0u; p < game->player_count; ++p)
             {
                 pe_value_vec_t *child = &child_values[
@@ -428,6 +439,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             for (uint8_t p = 0u; p < game->player_count; ++p)
                 pe_vec_free(&child_values[(size_t)outcome *
                                           game->player_count + p]);
+        free(outcome_weights);
         free(child_values);
         return 0;
     }
@@ -536,7 +548,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         }
         rc = child ? vector_visit(ctx, child, child_reach,
                                   &child_values[(size_t)action * game->player_count],
-                                  out_batch) : -1;
+                                  out_batch, chance_reach) : -1;
         if (child && game->release_state)
             game->release_state(child, game->user);
         for (p = 0u; p < game->player_count; ++p)
@@ -624,9 +636,9 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
             {
                 size_t slot = (size_t)action * game->combo_count + combo;
-                deltas[slot] += opponent_reach[combo] *
+                deltas[slot] += chance_reach * opponent_reach[combo] *
                     (action_values->v[combo] - out_values[player].v[combo]);
-                average_deltas[slot] += reach[player].v[combo] *
+                average_deltas[slot] += chance_reach * reach[player].v[combo] *
                     strategies[slot];
             }
         }
@@ -644,12 +656,14 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
 static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
                         const pe_reach_vec_t *reach,
                         pe_value_vec_t *out_values,
-                        pe_update_batch_t *out_batch)
+                        pe_update_batch_t *out_batch,
+                        double chance_reach)
 {
     pe_vector_arena_t *arena = ctx != NULL
         ? (pe_vector_arena_t *)ctx->arena : NULL;
     pe_vector_arena_mark_t mark = vector_arena_mark(arena);
-    int rc = vector_visit_impl(ctx, state, reach, out_values, out_batch);
+    int rc = vector_visit_impl(ctx, state, reach, out_values, out_batch,
+                               chance_reach);
     vector_arena_release(arena, mark);
     return rc;
 }
@@ -685,7 +699,8 @@ static int vector_run_impl(pe_traversal_ctx_t *ctx,
                 pe_vec_free(&values[--p]);
             return -1;
         }
-    int rc = vector_visit(ctx, ctx->game->root, ctx->reach, values, out_batch);
+    int rc = vector_visit(ctx, ctx->game->root, ctx->reach, values, out_batch,
+                          1.0);
     for (p = 0u; p < ctx->game->player_count; ++p)
         pe_vec_free(&values[p]);
     return rc;

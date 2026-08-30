@@ -164,7 +164,8 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
         for (unsigned a = 0; a < node->action_count; ++a) {
             double child_player_reach[PE_HRC_MAX_PLAYERS];
             path[depth] = (uint16_t)a;
-            memcpy(child_player_reach, player_reach, sizeof(child_player_reach));
+            for (int p = 0; p < ctx->config->tree.num_players; ++p)
+                child_player_reach[p] = player_reach[p];
             child_player_reach[node->player_to_act] *= strategy[a];
             if (!evaluate_node(ctx, node->actions[a].child_index, profile, path,
                                depth + 1, path_reach * strategy[a],
