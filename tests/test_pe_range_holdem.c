@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Minimal Test Harness */
 #define TEST_ASSERT(cond) do { \
@@ -141,6 +142,14 @@ static void test_omaha_weights_reject_non_finite(void) {
 
     status = pe_range_parse(game_omaha6, "AsKsQd3c9h8s7d:inf",
                             empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
+    TEST_ASSERT(range == NULL);
+
+    pe_parse_opts_t opts;
+    pe_range_opts_init(&opts);
+    opts.default_weight = NAN;
+    status = pe_range_parse(game_omaha5, "AsKsQd3c9h", empty_mask(),
+                            &opts, &range);
     TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
     TEST_ASSERT(range == NULL);
 }

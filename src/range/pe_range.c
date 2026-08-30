@@ -80,7 +80,8 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
         char *end = NULL;
         *weight_text++ = '\0';
         weight = strtod(weight_text, &end);
-        if (end == weight_text || *end != '\0' || !isfinite(weight) ||
+        if (end == weight_text || *end != '\0' ||
+            !isfinite((long double)weight) ||
             weight < 0.0 || weight > DBL_MAX)
             return 0;
     }
@@ -124,6 +125,10 @@ static pe_status_t parse_fixed_omaha_range(enum_game_t variant,
     char *token;
     size_t expected_cards = variant == game_omaha5 ? 5u : 6u;
     double default_weight = opts ? opts->default_weight : 1.0;
+
+    if (!isfinite((long double)default_weight) || default_weight < 0.0 ||
+        default_weight > DBL_MAX)
+        return PE_STATUS_PARSE_ERROR;
 
     copy = strdup(range_str);
     if (!copy)

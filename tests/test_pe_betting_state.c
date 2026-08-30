@@ -45,6 +45,7 @@ static void test_bet_call_and_round_end(void)
     pe_betting_state_t next;
     pe_action_t bet = action(PE_ACTION_BET, PE_AMOUNT_CHIPS, 25.0);
     pe_action_t call = action(PE_ACTION_CALL, PE_AMOUNT_NONE, 0.0);
+    pe_action_t check = action(PE_ACTION_CHECK, PE_AMOUNT_NONE, 0.0);
 
     setup(&state, &rules, 100.0, 100.0);
     CHECK(pe_betting_apply_action(&state, &rules, &bet, &next) ==
@@ -57,6 +58,17 @@ static void test_bet_call_and_round_end(void)
               fabs(state.stack[1] - 75.0) < 1e-12 &&
               fabs(state.pot - 50.0) < 1e-12,
           "call closes a matched round");
+
+    setup(&state, &rules, 100.0, 100.0);
+    state.to_act = 1;
+    state.to_call = 25.0;
+    state.current_bet = 25.0;
+    state.round_contrib[1] = 25.0;
+    state.invested[1] = 25.0;
+    state.pot = 25.0;
+    CHECK(pe_betting_action_is_legal(&state, &rules, &check) ==
+              PE_BETTING_OK,
+          "check is legal when the actor already matched the target");
 
     {
         pe_action_t raise = action(PE_ACTION_RAISE, PE_AMOUNT_CHIPS, 25.0);
