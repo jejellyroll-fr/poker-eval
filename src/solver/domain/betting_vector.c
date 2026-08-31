@@ -82,6 +82,26 @@ static int own_state(pe_betting_vector_game_t *game,
     return 0;
 }
 
+static void vector_release_state(const void *state, void *user)
+{
+    pe_betting_vector_game_t *game = (pe_betting_vector_game_t *)user;
+    size_t index;
+
+    if (!game || !state)
+        return;
+    for (index = 0u; index < game->owned_count; ++index)
+    {
+        if (game->owned_states[index] == state)
+        {
+            free(game->owned_states[index]);
+            game->owned_states[index] =
+                game->owned_states[game->owned_count - 1u];
+            --game->owned_count;
+            return;
+        }
+    }
+}
+
 static const void *vector_apply_action(const void *state, uint16_t action,
                                        void *user)
 {
@@ -138,6 +158,7 @@ pe_betting_status_t pe_betting_vector_game_init(
     out->vector.strategy = ops->strategy ? vector_strategy : NULL;
     out->vector.apply_action = vector_apply_action;
     out->vector.terminal_values = vector_terminal_values;
+    out->vector.release_state = vector_release_state;
     out->vector.combo_compatible = ops->combo_compatible
         ? vector_combo_compatible : NULL;
     return PE_BETTING_OK;

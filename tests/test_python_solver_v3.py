@@ -46,7 +46,7 @@ assert pypokereval.solver_v3_strategy(solver, 0) == [0.5, 0.5]
 assert game.reaches
 
 try:
-    pypokereval.solver_v3_create(("root",), game, combos=65536)
+    pypokereval.solver_v3_create(("root",), game, combos=65537)
 except ValueError:
     pass
 else:

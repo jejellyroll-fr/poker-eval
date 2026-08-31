@@ -3,6 +3,7 @@
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_storage.h>
 #include <poker_eval/solver/pe_traversal.h>
 
 #include <math.h>
@@ -148,6 +149,21 @@ int main(void)
     CHECK(pe_solver_load(solver, NULL) == PE_SOLVER_ERR_NULL_ARGUMENT,
           "load must reject a NULL source");
     pe_solver_destroy(solver);
+
+    {
+        pe_solver_config_t precision_config = pe_solver_config_default();
+        precision_config.execution.precision = PE_PREC_F32;
+        precision_config.problem.expected_infosets = 1u;
+        solver = pe_solver_create(&precision_config, NULL);
+        CHECK(solver != NULL, "precision-configured solver creation failed");
+        if (solver != NULL)
+        {
+            CHECK(pe_storage_precision(pe_solver_get_storage_instance(solver)) ==
+                      PE_PREC_F32,
+                  "default RAM storage must honor configured precision");
+            pe_solver_destroy(solver);
+        }
+    }
 
     {
         static int root;

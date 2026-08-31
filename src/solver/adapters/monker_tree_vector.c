@@ -55,6 +55,12 @@ static double vector_chance_weight(const void *state, uint16_t outcome,
     if (!node || node->type != MPF_TREE_NODE_CHANCE ||
         outcome >= (uint16_t)node->action_count)
         return 0.0;
+    /* JSON trees often omit the weight for a sole topological transition;
+       zero is the C default in that case, but a single transition has unit
+       probability. Preserve explicit non-zero weights and invalid negatives
+       for the traversal validator to reject. */
+    if (node->action_count == 1 && node->actions[outcome].weight == 0.0)
+        return 1.0;
     return node->actions[outcome].weight;
 }
 

@@ -17,6 +17,8 @@
 #include <poker_eval/solver/pe_storage.h>
 #include <poker_eval/solver/pe_storage_port.h>
 
+#include "storage_ram.h"
+
 #include <stddef.h>
 
 static int ram_create(void **self, size_t expected_infosets)
@@ -32,6 +34,12 @@ static int ram_create(void **self, size_t expected_infosets)
 
     *self = s;
     return 0;
+}
+
+pe_storage_t *pe_storage_ram_create_with_precision(
+    size_t expected_infosets, pe_precision_mode_t precision)
+{
+    return pe_storage_create_with_precision(expected_infosets, precision);
 }
 
 static void ram_destroy(void *self)

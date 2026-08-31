@@ -31,6 +31,8 @@
 #include <poker_eval/solver/pe_external_best_response.h>
 #include <poker_eval/solver/pe_outcome_traversal.h>
 
+#include "../adapters/storage_ram.h"
+
 #include <stddef.h>
 #include <inttypes.h>
 #include <float.h>
@@ -113,6 +115,8 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
 {
     pe_solver_t *solver;
     pe_telemetry_event_t event;
+    int using_default_storage;
+    int storage_rc;
 
     /* `deps` is optional by contract; the configuration is not. */
     if (cfg == NULL)
@@ -133,12 +137,24 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
     else
         memset(&solver->deps, 0, sizeof(solver->deps));
 
-    solver->storage = solver->deps.storage != NULL
-        ? solver->deps.storage : pe_storage_ram_ops();
+    using_default_storage = solver->deps.storage == NULL;
+    solver->storage = using_default_storage
+        ? pe_storage_ram_ops() : solver->deps.storage;
     if (solver->storage == NULL || solver->storage->create == NULL ||
-        solver->storage->destroy == NULL ||
-        solver->storage->create(&solver->storage_self,
-                                (size_t)solver->config.problem.expected_infosets) != 0)
+        solver->storage->destroy == NULL)
+        storage_rc = -1;
+    else if (using_default_storage)
+    {
+        solver->storage_self = pe_storage_ram_create_with_precision(
+            (size_t)solver->config.problem.expected_infosets,
+            solver->config.execution.precision);
+        storage_rc = solver->storage_self != NULL ? 0 : -1;
+    }
+    else
+        storage_rc = solver->storage->create(
+            &solver->storage_self,
+            (size_t)solver->config.problem.expected_infosets);
+    if (storage_rc != 0)
     {
         free(solver);
         return NULL;
@@ -1117,10 +1133,13 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     pe_external_game_t sampled_game;
     uint64_t iteration;
     int use_outcome = plan->traversal == PE_TRAVERSAL_OUTCOME_SAMPLING;
+    const int target_enabled =
+        solver->config.target_exploitability_mbb > 0.0;
     int target_reached = 0;
     int rc;
 
-    if (!game || !game->root || solver->config.max_iterations == 0u ||
+    if (!game || !game->root ||
+        (solver->config.max_iterations == 0u && !target_enabled) ||
         !game->is_terminal || !game->acting_player || !game->action_count ||
         !game->apply_action || !game->terminal_value ||
         ((game->sample_chance || game->sample_chance_with_user) &&
@@ -1231,7 +1250,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         if (heartbeat_interval == 0u)
             heartbeat_interval = 1u;
     for (iteration = solver->iteration + 1u;
-         iteration <= solver->config.max_iterations &&
+         (solver->config.max_iterations == 0u ||
+          iteration <= solver->config.max_iterations) &&
          solver->state == PE_SOLVER_STATE_RUNNING && !target_reached;
          ++iteration)
     {

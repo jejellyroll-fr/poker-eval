@@ -2874,8 +2874,8 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
 {
     PyObject *root;
     PyObject *game_object;
-    int players = 2;
-    int combos = 1;
+    unsigned int players = 2u;
+    unsigned int combos = 1u;
     unsigned long long max_iterations = 1000ull;
     double target = 0.0;
     unsigned long long interval = 0ull;
@@ -2896,8 +2896,8 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
             &players, &combos, &max_iterations, &target, &interval,
             &expected_infosets, &expected_actions))
         return NULL;
-    if (players < 2 || players > (int)PE_SOLVER_MAX_PLAYERS || combos < 1 ||
-        combos > (int)UINT16_MAX || expected_actions < 1u) {
+    if (players < 2u || players > PE_SOLVER_MAX_PLAYERS || combos == 0u ||
+        combos > UINT16_MAX || expected_actions < 1u) {
         PyErr_SetString(PyExc_ValueError,
                         "players, combos and expected_actions are invalid; combos must fit uint16_t");
         return NULL;

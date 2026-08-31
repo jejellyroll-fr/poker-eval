@@ -147,6 +147,29 @@ int main(void)
     }
     pe_solver_destroy(solver);
 
+    /* A target-only sampled solve uses zero as an unlimited iteration budget.
+       It must still execute and measure an iteration before checking the
+       target; the old <= loop completed without training. */
+    cfg = pe_solver_config_default();
+    cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
+    cfg.max_iterations = 0u;
+    cfg.target_exploitability_mbb = 1000000000.0;
+    cfg.exploitability_interval = 1u;
+    cfg.problem.expected_infosets = 4u;
+    cfg.problem.expected_actions = 2u;
+    cfg.problem.expected_combos = 1u;
+    cfg.seed = 0x2468u;
+    solver = pe_solver_create(&cfg, &deps);
+    if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
+        pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+        !progress.complete || progress.iteration != 1u)
+    {
+        fprintf(stderr, "test_pe_solver_sampled: unlimited target run failed\n");
+        pe_solver_destroy(solver);
+        return 1;
+    }
+    pe_solver_destroy(solver);
+
     cfg = pe_solver_config_default();
     cfg.algorithm.preset = PE_PRESET_EXTERNAL_DCFR;
     cfg.max_iterations = 4u;

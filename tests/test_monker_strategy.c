@@ -610,6 +610,55 @@ int main(void)
         pe_monker_tree_vector_destroy(&chance_game);
     }
 
+    /* A single chance transition with an omitted JSON weight is a valid
+     * topological step and therefore has unit probability. */
+    {
+        mpf_tree_def_t single_chance_tree = {0};
+        mpf_tree_node_t single_chance_nodes[2];
+        mpf_tree_action_t single_chance_action;
+        pe_monker_tree_vector_t single_chance_game = {0};
+        pe_traversal_ctx_t single_chance_traversal = {0};
+        pe_update_batch_t single_chance_batch = {0};
+        tree_terminal_probe_t single_chance_probe = {0};
+        const pe_traversal_ops_t *ops = pe_traversal_full_vector_ops();
+
+        memset(single_chance_nodes, 0, sizeof(single_chance_nodes));
+        memset(&single_chance_action, 0, sizeof(single_chance_action));
+        single_chance_tree.node_count = 2;
+        single_chance_tree.nodes = single_chance_nodes;
+        single_chance_tree.root_index = 0;
+        single_chance_nodes[0].type = MPF_TREE_NODE_CHANCE;
+        single_chance_nodes[0].actions = &single_chance_action;
+        single_chance_nodes[0].action_count = 1;
+        single_chance_action.type = MPF_TREE_ACTION_CHANCE;
+        single_chance_action.next_index = 1;
+        single_chance_nodes[1].type = MPF_TREE_NODE_TERMINAL;
+        CHECK(pe_monker_tree_vector_init(&single_chance_game,
+                                         &single_chance_tree, 2u, 1u,
+                                         tree_terminal_values,
+                                         &single_chance_probe) == 0,
+              "single chance tree adapter did not initialise");
+        CHECK(pe_traversal_ctx_init(&single_chance_traversal,
+                                    &single_chance_game.game) == 0,
+              "single chance traversal context did not initialise");
+        if (single_chance_traversal.initialized)
+        {
+            CHECK(ops->begin_iteration(&single_chance_traversal, 3u) == 0,
+                  "single chance traversal begin failed");
+            CHECK(ops->run_iteration(&single_chance_traversal,
+                                     &single_chance_batch) == 0,
+                  "single chance traversal failed");
+            CHECK(single_chance_traversal.visited_nodes == 2u &&
+                      single_chance_traversal.terminal_nodes == 1u,
+                  "single chance traversal visited %zu/%zu nodes, expected 2/1",
+                  single_chance_traversal.visited_nodes,
+                  single_chance_traversal.terminal_nodes);
+        }
+        pe_update_batch_destroy(&single_chance_batch);
+        pe_traversal_ctx_destroy(&single_chance_traversal);
+        pe_monker_tree_vector_destroy(&single_chance_game);
+    }
+
     /* A concrete PLO4 deal is now valued after the imported policy is
      * applied. The fixture folds 200/256 and reaches showdown 56/256; the
      * selected hand wins at showdown, so net EV is -200/256 + 56/256. */

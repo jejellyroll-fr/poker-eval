@@ -138,7 +138,8 @@ static void test_vector_adapter(void)
           "generic betting state traverses through vector lane");
     pe_update_batch_destroy(&batch);
     pe_traversal_ctx_destroy(&traversal);
-    CHECK(adapter.owned_count > 0u, "adapter allocated child states");
+    CHECK(adapter.owned_count == 0u,
+          "traversal must release child states immediately");
     br_config = pe_best_response_vector_config_default();
     br_config.max_iterations = 8u;
     CHECK(pe_exploitability_vector(&adapter.vector, &br_config,
