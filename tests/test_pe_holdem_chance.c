@@ -69,8 +69,8 @@ static void test_exact_river_chance(void)
               fabs(result.policy_value[0] + result.policy_value[1]) < 1e-9,
           "exact river chance produces finite zero-sum EV");
     }
-    CHECK(game.child_count >= (size_t)unseen,
-          "every river outcome was materialized");
+    CHECK(game.child_count == 0u,
+          "river children are released after the traversal");
     pe_holdem_chance_game_destroy(&game);
     eval_context_destroy(context);
 }

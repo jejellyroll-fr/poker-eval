@@ -123,6 +123,56 @@ static void test_unknown_infoset_is_refused(void)
     storage_ops->destroy(storage);
 }
 
+static void test_soa_updates_are_packed(void)
+{
+    const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
+    pe_compute_config_t config = {0};
+    pe_gpu_update_pack_t pack;
+    pe_update_batch_t batch = {0};
+    void *storage = NULL;
+    pe_infoset_id_t id;
+    double *deltas = NULL;
+    double *average_deltas = NULL;
+
+    CHECK(storage_ops->create(&storage, 1u) == 0,
+          "soa: storage creation failed");
+    if (storage == NULL)
+        return;
+    id = storage_ops->resolve(storage, 0x50u, 2u, 2u, PE_STREET_UNKNOWN);
+    config.storage = storage_ops;
+    config.storage_self = storage;
+    CHECK(id != PE_INFOSET_ID_INVALID &&
+              pe_update_batch_soa_begin_group(&batch, id, 2u, 2u,
+                                              &deltas, &average_deltas) == 0,
+          "soa: group creation failed");
+    if (deltas != NULL && average_deltas != NULL)
+    {
+        deltas[0] = 1.0;
+        deltas[1] = 2.0;
+        deltas[2] = 3.0;
+        deltas[3] = 4.0;
+        average_deltas[0] = 0.5;
+        average_deltas[1] = 1.5;
+        average_deltas[2] = 2.5;
+        average_deltas[3] = 3.5;
+    }
+    CHECK(batch.count == 0u && batch.soa.value_count == 4u,
+          "soa: vector payload was not created");
+    CHECK(pe_gpu_update_pack_build(&config, &batch, &pack) == 0,
+          "soa: GPU update pack build failed");
+    CHECK(pack.group_count == 1u && pack.total_slots == 4u &&
+              pack.count == 4u,
+          "soa: pack shape is wrong");
+    CHECK(pack.slots[0] == 0u && pack.slots[1] == 1u &&
+              pack.slots[2] == 2u && pack.slots[3] == 3u &&
+              pack.regret_deltas[3] == 4.0f &&
+              pack.average_deltas[3] == 3.5f,
+          "soa: vector values were not flattened");
+    pe_gpu_update_pack_destroy(&pack);
+    pe_update_batch_destroy(&batch);
+    storage_ops->destroy(storage);
+}
+
 int main(void)
 {
     const pe_storage_ops_t *storage_ops = pe_storage_ram_ops();
@@ -174,5 +224,6 @@ int main(void)
 
     test_interleaved_infosets();
     test_unknown_infoset_is_refused();
+    test_soa_updates_are_packed();
     return failures != 0;
 }

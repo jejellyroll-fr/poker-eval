@@ -115,7 +115,7 @@ static int compute_cuda_apply_update_batch(void *self,
 
     if (backend == NULL || batch == NULL)
         return -1;
-    if (batch->count == 0u)
+    if (batch->count == 0u && batch->soa.group_count == 0u)
         return 0;
     if (backend->regret_context == NULL ||
         pe_gpu_update_pack_build(&backend->config, batch, &pack) != 0)

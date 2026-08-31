@@ -112,7 +112,7 @@ static int compute_opencl_apply_update_batch(void *self,
 
     if (backend == NULL || batch == NULL)
         return -1;
-    if (batch->count == 0u)
+    if (batch->count == 0u && batch->soa.group_count == 0u)
         return 0;
 #if !defined(PE_COMPUTE_OPENCL_AVAILABLE)
     (void)batch;

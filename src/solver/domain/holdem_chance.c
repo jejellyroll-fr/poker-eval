@@ -82,6 +82,24 @@ static int own_child(pe_holdem_chance_game_t *game,
     return 0;
 }
 
+static void release_state(const void *state, void *user)
+{
+    pe_holdem_chance_game_t *game = (pe_holdem_chance_game_t *)user;
+    size_t index;
+
+    if (game == NULL || state == NULL)
+        return;
+    for (index = 0u; index < game->child_count; ++index)
+    {
+        if (game->children[index] == state)
+        {
+            free(game->children[index]);
+            game->children[index] = game->children[--game->child_count];
+            return;
+        }
+    }
+}
+
 static const void *apply_chance(const void *state, int outcome, void *user)
 {
     pe_holdem_chance_game_t *game = (pe_holdem_chance_game_t *)user;
@@ -200,6 +218,7 @@ int pe_holdem_chance_game_init(
     out->vector.infoset_key = infoset_key;
     out->vector.apply_action = apply_action_stub;
     out->vector.terminal_values = terminal_values;
+    out->vector.release_state = release_state;
     return 0;
 }
 
