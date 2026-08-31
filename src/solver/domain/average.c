@@ -19,7 +19,7 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
 
     if (!weighted || !normalizer || !strategy || !reach ||
         action_count == 0u || combo_count == 0u || weight < 0.0 ||
-        isnan(weight))
+        !pe_finite_double(weight))
         return -1;
 
     for (combo = 0; combo < combo_count; ++combo)

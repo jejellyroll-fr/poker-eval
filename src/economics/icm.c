@@ -41,6 +41,8 @@ int pe_icm_calculate_asymmetric(const icm_asymmetric_input_t *input,
         if (!(input->stacks[player] > 0.0) || !pe_finite_double(input->stacks[player]))
             return -1;
         total += input->stacks[player];
+        if (!pe_finite_double(total))
+            return -1;
         active[player] = 1;
         for (int position = 0; position < input->num_payouts; ++position)
             if (!pe_finite_double(input->payouts[player][position])) return -1;

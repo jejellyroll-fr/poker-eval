@@ -161,11 +161,11 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
                          double *out)
 {
     const pe_hrc_node_t *node = &ctx->config->tree.nodes[node_index];
-    if (depth >= PE_HRC_MAX_DEPTH)
-        return 0;
     if (node->terminal)
         return ctx->config->terminal_value(&ctx->config->tree, node_index, profile,
                                            path, depth, out, ctx->config->user_data) == 0;
+    if (depth >= PE_HRC_MAX_DEPTH)
+        return 0;
     {
         size_t base = info_offset(ctx, node->player_to_act, node_index,
                                   profile->combo_index[node->player_to_act], 0);
@@ -422,6 +422,8 @@ pe_hrc_status_t pe_hrc_solve(const pe_hrc_config_t *config,
     result->max_range_combos = ctx.max_range_combos;
     result->node_count = config->tree.node_count;
     result->num_players = config->tree.num_players;
+    for (size_t n = 0; n < config->tree.node_count; ++n)
+        result->action_count[n] = config->tree.nodes[n].action_count;
     for (int p = 0; p < config->tree.num_players; ++p)
         result->range_combo_count[p] = config->ranges[p].count;
     result->profile_count = ctx.profile_count;
@@ -444,7 +446,7 @@ double pe_hrc_result_combo_probability(const pe_hrc_result_t *result,
     if (!result || !result->combo_action_probability || player < 0 ||
         player >= result->num_players || node_index < 0 ||
         (size_t)node_index >= result->node_count || combo_index >= result->range_combo_count[player] ||
-        action < 0 || action >= PE_HRC_MAX_ACTIONS)
+        action < 0 || action >= (int)result->action_count[node_index])
         return -1.0;
     offset = (size_t)player * result->combo_stride +
              (size_t)node_index * result->max_range_combos * PE_HRC_MAX_ACTIONS +

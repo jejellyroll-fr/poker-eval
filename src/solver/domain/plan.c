@@ -20,6 +20,8 @@
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/core/safe_format.h>
 
+#include "finite_double.h"
+
 #include <stdarg.h>
 #include <stddef.h>
 #include <float.h>
@@ -250,7 +252,8 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
 {
     const pe_algorithm_config_t *a = &cfg->algorithm;
 
-    if (a->outcome_epsilon < 0.0 || a->outcome_epsilon > 1.0)
+    if (!pe_finite_double(a->outcome_epsilon) ||
+        a->outcome_epsilon < 0.0 || a->outcome_epsilon > 1.0)
         pe_diag_add(diag, PE_VALID_ERROR,
                     "outcome_epsilon must be a probability, got %f",
                     a->outcome_epsilon);

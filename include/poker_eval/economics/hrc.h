@@ -83,6 +83,7 @@ typedef struct {
     size_t combo_stride;
     size_t max_range_combos;
     size_t range_combo_count[PE_HRC_MAX_PLAYERS];
+    unsigned action_count[PE_HRC_MAX_NODES];
     size_t node_count;
     int num_players;
     size_t profile_count;
