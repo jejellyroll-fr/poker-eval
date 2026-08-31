@@ -68,10 +68,10 @@ static pe_solver_status_t validate_input(const mask_t *hero_masks,
         !opp_reach || !out_values)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
     if (hero_n == 0 || opp_n == 0 || !valid_values(out_values, hero_n) ||
-        pot < 0.0 || isnan(pot))
+        pot < 0.0 || !isfinite(pot))
         return PE_SOLVER_ERR_INVALID_CONFIG;
     for (i = 0; i < opp_n; ++i)
-        if (opp_reach[i] < 0.0 || isnan(opp_reach[i]))
+        if (opp_reach[i] < 0.0 || !isfinite(opp_reach[i]))
             return PE_SOLVER_ERR_INVALID_CONFIG;
     return PE_SOLVER_OK;
 }
@@ -432,7 +432,7 @@ static pe_solver_status_t validate_multiway(
             return PE_SOLVER_ERR_NULL_ARGUMENT;
         for (combo = 0; combo < players[player].combo_count; ++combo)
             if (players[player].reach[combo] < 0.0 ||
-                isnan(players[player].reach[combo]))
+                !isfinite(players[player].reach[combo]))
                 return PE_SOLVER_ERR_INVALID_CONFIG;
     }
     return PE_SOLVER_OK;
@@ -457,7 +457,7 @@ static pe_solver_status_t multiway_values(
     status = validate_multiway(players, player_count, out_values);
     if (status != PE_SOLVER_OK)
         return status;
-    if (fold_only && (fold_pot < 0.0 || isnan(fold_pot)))
+    if (fold_only && (fold_pot < 0.0 || !isfinite(fold_pot)))
         return PE_SOLVER_ERR_INVALID_CONFIG;
     if (!fold_only && (!sidepots || sidepot_count == 0))
         return PE_SOLVER_ERR_INVALID_CONFIG;
@@ -466,7 +466,7 @@ static pe_solver_status_t multiway_values(
         size_t pot_index;
         for (pot_index = 0; pot_index < sidepot_count; ++pot_index)
             if (sidepots[pot_index].amount < 0.0 ||
-                isnan(sidepots[pot_index].amount) ||
+                !isfinite(sidepots[pot_index].amount) ||
                 (sidepots[pot_index].eligible_players &
                  (uint8_t)((1u << player_count) - 1u)) == 0)
                 return PE_SOLVER_ERR_INVALID_CONFIG;

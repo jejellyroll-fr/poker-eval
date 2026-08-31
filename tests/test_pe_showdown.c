@@ -138,6 +138,17 @@ static void test_wide_hand_fallback_and_invalid_inputs(void)
                              reach, 2, MASK_EMPTY, 1.0, &values, NULL)
               == PE_SOLVER_ERR_NULL_ARGUMENT,
           "NULL hero masks accepted");
+    CHECK(pe_showdown_vector_pairwise(hero_masks, hero_strength, 1,
+                                      opp_masks, opp_strength, reach, 2,
+                                      MASK_EMPTY, INFINITY, &values)
+              == PE_SOLVER_ERR_INVALID_CONFIG,
+          "infinite pot accepted by pairwise showdown");
+    CHECK(pe_showdown_vector_pairwise(hero_masks, hero_strength, 1,
+                                      opp_masks, opp_strength,
+                                      (const double[]){INFINITY, 0.75}, 2,
+                                      MASK_EMPTY, 1.0, &values)
+              == PE_SOLVER_ERR_INVALID_CONFIG,
+          "infinite opponent reach accepted by pairwise showdown");
     pe_vec_free(&values);
 }
 
@@ -232,6 +243,22 @@ static void test_three_player_showdown_and_fold(void)
     if (!values[0].v || !values[1].v || !values[2].v || !fold_values[0].v ||
         !fold_values[1].v || !fold_values[2].v)
         goto cleanup;
+
+    CHECK(pe_showdown_multiway_vector(players, 3, dead, INFINITY, values,
+                                      &path) == PE_SOLVER_ERR_INVALID_CONFIG,
+          "infinite multiway pot accepted");
+    {
+        const pe_showdown_sidepot_t invalid_sidepot[] = {
+            {INFINITY, 0x07u}
+        };
+        CHECK(pe_showdown_multiway_sidepots(players, 3, dead,
+                                            invalid_sidepot, 1, values,
+                                            &path) == PE_SOLVER_ERR_INVALID_CONFIG,
+              "infinite side-pot amount accepted");
+    }
+    CHECK(pe_fold_multiway_vector(players, 3, 0, dead, INFINITY, fold_values,
+                                  &path) == PE_SOLVER_ERR_INVALID_CONFIG,
+          "infinite fold pot accepted");
 
     CHECK(pe_showdown_multiway_vector(players, 3, dead, 3.0, values, &path)
               == PE_SOLVER_OK, "multiway showdown failed");

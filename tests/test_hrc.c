@@ -74,6 +74,16 @@ int main(void)
     pe_hrc_result_free(&result);
     config.max_profiles = 1;
     assert(pe_hrc_solve(&config, &result) == PE_HRC_ERR_PROFILE_LIMIT);
+
+    /* A later range combo can be fully blocked without producing another
+     * profile. It must not consume capacity before the terminal case. */
+    StdDeck_CardMask_RESET(p1_combo.hand);
+    StdDeck_CardMask_OR(p1_combo.hand, StdDeck_MASK(11), StdDeck_MASK(24));
+    assert(pe_hrc_solve(&config, &result) == PE_HRC_OK);
+    assert(result.profile_count == 1);
+    pe_hrc_result_free(&result);
+    StdDeck_CardMask_RESET(p1_combo.hand);
+    StdDeck_CardMask_OR(p1_combo.hand, StdDeck_MASK(0), StdDeck_MASK(13));
     config.max_profiles = 8;
 
     {

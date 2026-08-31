@@ -129,11 +129,11 @@ static void enumerate_profiles(solve_context_t *ctx, int player,
                                pe_hrc_profile_t *current)
 {
     const pe_range_view_t *range;
-    if (ctx->profile_count >= ctx->profile_capacity) {
-        ctx->profile_overflow = 1;
-        return;
-    }
     if (player == ctx->config->tree.num_players) {
+        if (ctx->profile_count >= ctx->profile_capacity) {
+            ctx->profile_overflow = 1;
+            return;
+        }
         current->weight = weight;
         ctx->profiles[ctx->profile_count++] = *current;
         return;
@@ -196,10 +196,12 @@ static int evaluate_node(solve_context_t *ctx, int node_index,
                         path_reach * profile->weight * strategy[a];
                 }
                 if (ctx->collect_average) {
-                    /* Both regrets and average strategy use the acting
-                     * player's counterfactual reach: opponent reach only. */
+                    /* Average strategy uses the acting player's own
+                     * realization reach. Regret updates above use
+                     * counterfactual reach instead. */
                     ctx->strategy_sum[base + a] +=
-                        profile_cf_reach * strategy[a];
+                        profile->weight * player_reach[node->player_to_act] *
+                        strategy[a];
                 }
             }
             for (int p = 0; p < ctx->config->tree.num_players; ++p)
