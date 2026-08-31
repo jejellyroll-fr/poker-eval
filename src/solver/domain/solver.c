@@ -30,6 +30,7 @@
 #include <poker_eval/solver/pe_external_traversal.h>
 #include <poker_eval/solver/pe_external_best_response.h>
 #include <poker_eval/solver/pe_outcome_traversal.h>
+#include <poker_eval/core/pthread_compat.h>
 
 #include "../adapters/storage_ram.h"
 
@@ -95,6 +96,8 @@ struct pe_solver_t {
     int state;
     int checkpoint_loaded;
     uint64_t iteration;
+    pthread_mutex_t lifecycle_lock;
+    pthread_cond_t lifecycle_cond;
 };
 
 enum {
@@ -105,6 +108,57 @@ enum {
     PE_SOLVER_STATE_STOPPED,
     PE_SOLVER_STATE_COMPLETED
 };
+
+static pthread_mutex_t *pe_solver_lifecycle_lock(const pe_solver_t *solver)
+{
+    return (pthread_mutex_t *)(uintptr_t)&solver->lifecycle_lock;
+}
+
+static int pe_solver_state(const pe_solver_t *solver)
+{
+    int state;
+    pthread_mutex_lock(pe_solver_lifecycle_lock(solver));
+    state = solver->state;
+    pthread_mutex_unlock(pe_solver_lifecycle_lock(solver));
+    return state;
+}
+
+static uint64_t pe_solver_iteration(const pe_solver_t *solver)
+{
+    uint64_t iteration;
+    pthread_mutex_lock(pe_solver_lifecycle_lock(solver));
+    iteration = solver->iteration;
+    pthread_mutex_unlock(pe_solver_lifecycle_lock(solver));
+    return iteration;
+}
+
+static void pe_solver_set_state(pe_solver_t *solver, int state)
+{
+    pthread_mutex_lock(&solver->lifecycle_lock);
+    solver->state = state;
+    pthread_cond_broadcast(&solver->lifecycle_cond);
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+}
+
+static void pe_solver_set_iteration(pe_solver_t *solver, uint64_t iteration)
+{
+    pthread_mutex_lock(&solver->lifecycle_lock);
+    solver->iteration = iteration;
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+}
+
+/* The run call owns execution. A pause therefore keeps that call suspended at
+ * a safe iteration boundary until resume or stop wakes it. */
+static int pe_solver_wait_until_running(pe_solver_t *solver)
+{
+    int running;
+    pthread_mutex_lock(&solver->lifecycle_lock);
+    while (solver->state == PE_SOLVER_STATE_PAUSED)
+        pthread_cond_wait(&solver->lifecycle_cond, &solver->lifecycle_lock);
+    running = solver->state == PE_SOLVER_STATE_RUNNING;
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+    return running;
+}
 
 /* ------------------------------------------------------------------ *
  * Lifecycle
@@ -190,6 +244,23 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
         free(solver);
         return NULL;
     }
+    if (pthread_mutex_init(&solver->lifecycle_lock, NULL) != 0)
+    {
+        free(solver->strategy_cache->values);
+        free(solver->strategy_cache);
+        solver->storage->destroy(solver->storage_self);
+        free(solver);
+        return NULL;
+    }
+    if (pthread_cond_init(&solver->lifecycle_cond, NULL) != 0)
+    {
+        pthread_mutex_destroy(&solver->lifecycle_lock);
+        free(solver->strategy_cache->values);
+        free(solver->strategy_cache);
+        solver->storage->destroy(solver->storage_self);
+        free(solver);
+        return NULL;
+    }
     /* The compute adapters consume the same resolved pair once the execution
        driver is installed. Keep the dependency view coherent for accessors
        and for that next tranche. */
@@ -230,9 +301,9 @@ void pe_solver_destroy(pe_solver_t *solver)
     if (solver == NULL)
         return;
 
-    if (solver->state == PE_SOLVER_STATE_RUNNING ||
-        solver->state == PE_SOLVER_STATE_PAUSED)
-        solver->state = PE_SOLVER_STATE_STOPPED;
+    if (pe_solver_state(solver) == PE_SOLVER_STATE_RUNNING ||
+        pe_solver_state(solver) == PE_SOLVER_STATE_PAUSED)
+        pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
 
     /* Give a buffering adapter its chance before the pointer goes away. */
     pe_telemetry_flush(solver->deps.telemetry);
@@ -245,6 +316,8 @@ void pe_solver_destroy(pe_solver_t *solver)
         free(solver->strategy_cache);
     }
 
+    pthread_cond_destroy(&solver->lifecycle_cond);
+    pthread_mutex_destroy(&solver->lifecycle_lock);
     free(solver);
 }
 
@@ -727,12 +800,12 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         return PE_SOLVER_ERR_EXECUTION;
     }
 
-    solver->state = PE_SOLVER_STATE_RUNNING;
-    completed_iterations = solver->iteration;
+    pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
+    completed_iterations = pe_solver_iteration(solver);
     for (iteration = completed_iterations;
          (solver->config.max_iterations == 0u ||
           iteration < solver->config.max_iterations) && !target_reached &&
-         solver->state == PE_SOLVER_STATE_RUNNING;)
+         pe_solver_wait_until_running(solver);)
     {
         ++iteration;
         rc = ops->begin_iteration(&traversal, iteration);
@@ -749,7 +822,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             pe_update_batch_destroy(&batch);
             pe_traversal_ctx_destroy(&traversal);
             compute_ops->destroy(compute_self);
-            solver->state = PE_SOLVER_STATE_STOPPED;
+            pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
             return PE_SOLVER_ERR_EXECUTION;
         }
         {
@@ -761,7 +834,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 solver->deps.telemetry, PE_LOG_DEBUG, "compute", iteration,
                 &counters, "vector compute counters\n");
         }
-        solver->iteration = iteration;
+        pe_solver_set_iteration(solver, iteration);
 
         if ((solver->config.exploitability_interval > 0u &&
               iteration % solver->config.exploitability_interval == 0u) ||
@@ -782,7 +855,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 pe_update_batch_destroy(&batch);
                 pe_traversal_ctx_destroy(&traversal);
                 compute_ops->destroy(compute_self);
-                solver->state = PE_SOLVER_STATE_STOPPED;
+                pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
                 return PE_SOLVER_ERR_EXECUTION;
             }
             if (!measured_game.strategy)
@@ -827,7 +900,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 pe_update_batch_destroy(&batch);
                 pe_traversal_ctx_destroy(&traversal);
                 compute_ops->destroy(compute_self);
-                solver->state = PE_SOLVER_STATE_STOPPED;
+                pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
                 return PE_SOLVER_ERR_EXECUTION;
             }
             for (player = 0u;
@@ -845,7 +918,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 pe_update_batch_destroy(&batch);
                 pe_traversal_ctx_destroy(&traversal);
                 compute_ops->destroy(compute_self);
-                solver->state = PE_SOLVER_STATE_STOPPED;
+                pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
                 return PE_SOLVER_ERR_EXECUTION;
             }
             solver->metrics_available = 1;
@@ -857,15 +930,15 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         pe_solver_vector_emit_heartbeat(solver, iteration);
     }
 
-    if (solver->state == PE_SOLVER_STATE_STOPPED ||
-        solver->state == PE_SOLVER_STATE_PAUSED)
+    if (pe_solver_state(solver) == PE_SOLVER_STATE_STOPPED ||
+        pe_solver_state(solver) == PE_SOLVER_STATE_PAUSED)
     {
         if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)
         {
             pe_update_batch_destroy(&batch);
             pe_traversal_ctx_destroy(&traversal);
             compute_ops->destroy(compute_self);
-            solver->state = PE_SOLVER_STATE_STOPPED;
+            pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
             return PE_SOLVER_ERR_EXECUTION;
         }
         pe_update_batch_destroy(&batch);
@@ -879,13 +952,13 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         pe_update_batch_destroy(&batch);
         pe_traversal_ctx_destroy(&traversal);
         compute_ops->destroy(compute_self);
-        solver->state = PE_SOLVER_STATE_STOPPED;
+        pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
         return PE_SOLVER_ERR_EXECUTION;
     }
     pe_update_batch_destroy(&batch);
     pe_traversal_ctx_destroy(&traversal);
     compute_ops->destroy(compute_self);
-    solver->state = PE_SOLVER_STATE_COMPLETED;
+    pe_solver_set_state(solver, PE_SOLVER_STATE_COMPLETED);
     solver->checkpoint_loaded = 0;
     return PE_SOLVER_OK;
 }
@@ -1240,7 +1313,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         return PE_SOLVER_ERR_EXECUTION;
     }
 
-    solver->state = PE_SOLVER_STATE_RUNNING;
+    pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
     {
         uint64_t heartbeat_interval = solver->config.exploitability_interval;
         if (heartbeat_interval == 0u)
@@ -1249,10 +1322,10 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             heartbeat_interval /= 16u;
         if (heartbeat_interval == 0u)
             heartbeat_interval = 1u;
-    for (iteration = solver->iteration + 1u;
+    for (iteration = pe_solver_iteration(solver) + 1u;
          (solver->config.max_iterations == 0u ||
           iteration <= solver->config.max_iterations) &&
-         solver->state == PE_SOLVER_STATE_RUNNING && !target_reached;
+         !target_reached && pe_solver_wait_until_running(solver);
          ++iteration)
     {
         int updating_player = (int)((iteration - 1u) % game->player_count);
@@ -1341,12 +1414,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
             else pe_external_sampling_ctx_destroy(&external);
             compute_ops->destroy(compute_self);
-            solver->state = PE_SOLVER_STATE_STOPPED;
+            pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
             return PE_SOLVER_ERR_EXECUTION;
         }
         pe_solver_destroy_batch_array(sample_batches, samples);
         free(sources);
-        solver->iteration = iteration;
+        pe_solver_set_iteration(solver, iteration);
 
         if (solver->config.exploitability_interval > 0u &&
             (iteration % solver->config.exploitability_interval == 0u ||
@@ -1359,7 +1432,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
                 else pe_external_sampling_ctx_destroy(&external);
                 compute_ops->destroy(compute_self);
-                solver->state = PE_SOLVER_STATE_STOPPED;
+                pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
                 return PE_SOLVER_ERR_EXECUTION;
             }
         }
@@ -1370,8 +1443,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         }
     }
     }
-    if (solver->state == PE_SOLVER_STATE_STOPPED ||
-        solver->state == PE_SOLVER_STATE_PAUSED)
+    if (pe_solver_state(solver) == PE_SOLVER_STATE_STOPPED ||
+        pe_solver_state(solver) == PE_SOLVER_STATE_PAUSED)
     {
         if (compute_ops->sync && compute_ops->sync(compute_self) != 0)
         {
@@ -1379,7 +1452,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
             else pe_external_sampling_ctx_destroy(&external);
             compute_ops->destroy(compute_self);
-            solver->state = PE_SOLVER_STATE_STOPPED;
+            pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
             return PE_SOLVER_ERR_EXECUTION;
         }
         pe_update_batch_destroy(&aggregated_batch);
@@ -1394,7 +1467,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
         else pe_external_sampling_ctx_destroy(&external);
         compute_ops->destroy(compute_self);
-        solver->state = PE_SOLVER_STATE_STOPPED;
+        pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
         return PE_SOLVER_ERR_EXECUTION;
     }
 
@@ -1405,14 +1478,14 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     if (!solver->metrics_available)
     {
         if (pe_solver_sampled_measure_br(solver, &sampled_game,
-                                         solver->iteration,
+                                         pe_solver_iteration(solver),
                                          &target_reached) != PE_SOLVER_OK)
         {
             pe_update_batch_destroy(&aggregated_batch);
             if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
             else pe_external_sampling_ctx_destroy(&external);
             compute_ops->destroy(compute_self);
-            solver->state = PE_SOLVER_STATE_STOPPED;
+            pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
             return PE_SOLVER_ERR_EXECUTION;
         }
     }
@@ -1420,7 +1493,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
     else pe_external_sampling_ctx_destroy(&external);
     compute_ops->destroy(compute_self);
-    solver->state = PE_SOLVER_STATE_COMPLETED;
+    pe_solver_set_state(solver, PE_SOLVER_STATE_COMPLETED);
     return PE_SOLVER_OK;
 }
 
@@ -1441,7 +1514,7 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
        one-shot lifecycle transition: once dispatch was attempted, accepting
        another call would make a future backend allocate or append a second
        solve on the same instance without an explicit reset contract. */
-    if (solver->state != PE_SOLVER_STATE_CREATED)
+    if (pe_solver_state(solver) != PE_SOLVER_STATE_CREATED)
         return PE_SOLVER_ERR_INVALID_STATE;
 
     /* Do not dispatch an execution backend for a plan that cannot be
@@ -1451,9 +1524,9 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
     validation = pe_solver_validate(solver, NULL);
     if (validation != PE_SOLVER_OK)
         return validation;
-    solver->state = PE_SOLVER_STATE_VALIDATED;
+    pe_solver_set_state(solver, PE_SOLVER_STATE_VALIDATED);
     if (!solver->checkpoint_loaded)
-        solver->iteration = 0u;
+        pe_solver_set_iteration(solver, 0u);
 
     if (pe_solver_plan(solver, &plan) != PE_SOLVER_OK)
         return PE_SOLVER_ERR_INVALID_CONFIG;
@@ -1465,39 +1538,54 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
 
 pe_solver_status_t pe_solver_pause(pe_solver_t *solver)
 {
+    int status = PE_SOLVER_OK;
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    pthread_mutex_lock(&solver->lifecycle_lock);
     if (solver->state == PE_SOLVER_STATE_PAUSED)
-        return PE_SOLVER_OK;
-    if (solver->state != PE_SOLVER_STATE_RUNNING)
-        return PE_SOLVER_ERR_INVALID_STATE;
-    solver->state = PE_SOLVER_STATE_PAUSED;
-    return PE_SOLVER_OK;
+        status = PE_SOLVER_OK;
+    else if (solver->state == PE_SOLVER_STATE_RUNNING)
+        solver->state = PE_SOLVER_STATE_PAUSED;
+    else
+        status = PE_SOLVER_ERR_INVALID_STATE;
+    pthread_cond_broadcast(&solver->lifecycle_cond);
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+    return (pe_solver_status_t)status;
 }
 
 pe_solver_status_t pe_solver_resume(pe_solver_t *solver)
 {
+    int status = PE_SOLVER_OK;
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    pthread_mutex_lock(&solver->lifecycle_lock);
     if (solver->state == PE_SOLVER_STATE_RUNNING)
-        return PE_SOLVER_OK;
-    if (solver->state != PE_SOLVER_STATE_PAUSED)
-        return PE_SOLVER_ERR_INVALID_STATE;
-    solver->state = PE_SOLVER_STATE_RUNNING;
-    return PE_SOLVER_OK;
+        status = PE_SOLVER_OK;
+    else if (solver->state == PE_SOLVER_STATE_PAUSED)
+        solver->state = PE_SOLVER_STATE_RUNNING;
+    else
+        status = PE_SOLVER_ERR_INVALID_STATE;
+    pthread_cond_broadcast(&solver->lifecycle_cond);
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+    return (pe_solver_status_t)status;
 }
 
 pe_solver_status_t pe_solver_stop(pe_solver_t *solver)
 {
+    int status = PE_SOLVER_OK;
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    pthread_mutex_lock(&solver->lifecycle_lock);
     if (solver->state == PE_SOLVER_STATE_STOPPED)
-        return PE_SOLVER_OK;
-    if (solver->state != PE_SOLVER_STATE_RUNNING &&
-        solver->state != PE_SOLVER_STATE_PAUSED)
-        return PE_SOLVER_ERR_INVALID_STATE;
-    solver->state = PE_SOLVER_STATE_STOPPED;
-    return PE_SOLVER_OK;
+        status = PE_SOLVER_OK;
+    else if (solver->state == PE_SOLVER_STATE_RUNNING ||
+             solver->state == PE_SOLVER_STATE_PAUSED)
+        solver->state = PE_SOLVER_STATE_STOPPED;
+    else
+        status = PE_SOLVER_ERR_INVALID_STATE;
+    pthread_cond_broadcast(&solver->lifecycle_cond);
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+    return (pe_solver_status_t)status;
 }
 
 pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
@@ -1505,8 +1593,12 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
 {
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
+    pthread_mutex_lock(pe_solver_lifecycle_lock(solver));
     if (solver->state == PE_SOLVER_STATE_CREATED)
+    {
+        pthread_mutex_unlock(pe_solver_lifecycle_lock(solver));
         return PE_SOLVER_ERR_INVALID_STATE;
+    }
     memset(out, 0, sizeof(*out));
     out->iteration = solver->iteration;
     out->total_iterations = solver->config.max_iterations;
@@ -1516,6 +1608,7 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
     out->running = solver->state == PE_SOLVER_STATE_RUNNING;
     out->paused = solver->state == PE_SOLVER_STATE_PAUSED;
     out->complete = solver->state == PE_SOLVER_STATE_COMPLETED;
+    pthread_mutex_unlock(pe_solver_lifecycle_lock(solver));
     return PE_SOLVER_OK;
 }
 
@@ -1529,7 +1622,7 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
 {
     if (solver == NULL || query == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    if (solver->state != PE_SOLVER_STATE_COMPLETED)
+    if (pe_solver_state(solver) != PE_SOLVER_STATE_COMPLETED)
         return PE_SOLVER_ERR_INVALID_STATE;
     if (solver->storage == NULL || solver->storage->shape == NULL ||
         solver->storage->values_const == NULL ||
@@ -1611,13 +1704,16 @@ pe_solver_status_t pe_solver_save(const pe_solver_t *solver,
         return PE_SOLVER_ERR_NULL_ARGUMENT;
     if (solver->deps.persist == NULL || solver->deps.persist->save == NULL)
         return PE_SOLVER_ERR_EXECUTION;
-    if (solver->state != PE_SOLVER_STATE_COMPLETED &&
-        solver->state != PE_SOLVER_STATE_PAUSED &&
-        solver->state != PE_SOLVER_STATE_STOPPED)
-        return PE_SOLVER_ERR_INVALID_STATE;
+    {
+        int state = pe_solver_state(solver);
+        if (state != PE_SOLVER_STATE_COMPLETED &&
+            state != PE_SOLVER_STATE_PAUSED &&
+            state != PE_SOLVER_STATE_STOPPED)
+            return PE_SOLVER_ERR_INVALID_STATE;
+    }
     return solver->deps.persist->save(NULL, target, &solver->config,
                                       solver->storage, solver->storage_self,
-                                      solver->iteration) == 0
+                                      pe_solver_iteration(solver)) == 0
         ? PE_SOLVER_OK : PE_SOLVER_ERR_EXECUTION;
 }
 
@@ -1628,14 +1724,21 @@ pe_solver_status_t pe_solver_load(pe_solver_t *solver,
         return PE_SOLVER_ERR_NULL_ARGUMENT;
     if (solver->deps.persist == NULL || solver->deps.persist->load == NULL)
         return PE_SOLVER_ERR_EXECUTION;
-    if (solver->state != PE_SOLVER_STATE_CREATED &&
-        solver->state != PE_SOLVER_STATE_VALIDATED)
-        return PE_SOLVER_ERR_INVALID_STATE;
+    {
+        int state = pe_solver_state(solver);
+        if (state != PE_SOLVER_STATE_CREATED &&
+            state != PE_SOLVER_STATE_VALIDATED)
+            return PE_SOLVER_ERR_INVALID_STATE;
+    }
+    {
+        uint64_t loaded_iteration = 0u;
     if (solver->deps.persist->load(NULL, source, &solver->config,
                                    solver->storage, solver->storage_self,
-                                   &solver->iteration) != 0)
+                                   &loaded_iteration) != 0)
         return PE_SOLVER_ERR_EXECUTION;
-    solver->state = PE_SOLVER_STATE_CREATED;
+    pe_solver_set_iteration(solver, loaded_iteration);
+    pe_solver_set_state(solver, PE_SOLVER_STATE_CREATED);
     solver->checkpoint_loaded = 1;
+    }
     return PE_SOLVER_OK;
 }

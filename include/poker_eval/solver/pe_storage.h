@@ -90,8 +90,10 @@ typedef struct pe_storage_t pe_storage_t;
 pe_storage_t *pe_storage_create(size_t expected_infosets);
 
 /** Create storage with an explicit numeric representation. F64 preserves the
- * historical implementation; FIXED16 stores value arrays as int16_t with a
- * separately tracked scale for every infoset and value array. */
+ * historical implementation; F32 stores resident values as float and
+ * FIXED16 stores them as int16_t with a separately tracked scale for every
+ * infoset and value array. Both compact forms use stable decoded spans at the
+ * double-valued port boundary. */
 pe_storage_t *pe_storage_create_with_precision(size_t expected_infosets,
                                                pe_precision_mode_t precision);
 

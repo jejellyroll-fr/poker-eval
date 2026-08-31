@@ -51,11 +51,11 @@ struct pe_storage_t
     size_t meta_capacity;
 
     double *values[PE_VALUES_COUNT];
+    float *float_values[PE_VALUES_COUNT];
     int16_t *fixed_values[PE_VALUES_COUNT];
     float *fixed_scales[PE_VALUES_COUNT]; /* one scale per infoset */
-    double *staging[PE_VALUES_COUNT];     /* port-compatible decoded slab */
-    size_t staging_capacity[PE_VALUES_COUNT];
-    pe_infoset_id_t staging_id[PE_VALUES_COUNT];
+    double **staging_spans[PE_VALUES_COUNT]; /* one decoded span per infoset */
+    uint8_t *staging_dirty[PE_VALUES_COUNT];
     pe_precision_mode_t precision;
     size_t fixed16_rescales;
     uint64_t slot_count;     /* slots in use across every infoset */
@@ -103,9 +103,6 @@ pe_storage_t *pe_storage_create_with_precision(size_t expected_infosets,
         return NULL;
     }
     s->precision = precision;
-    for (int i = 0; i < PE_VALUES_COUNT; ++i)
-        s->staging_id[i] = PE_INFOSET_ID_INVALID;
-
     /* Size for the hint at the target load factor, so a caller who knows the
        count never rehashes. */
     slots = pe_round_up_pow2(expected_infosets * PE_STORAGE_MAX_LOAD_DEN
@@ -152,18 +149,25 @@ size_t pe_storage_fixed16_rescales(const pe_storage_t *s)
     return s ? s->fixed16_rescales : 0u;
 }
 
-/* The public storage port exposes double spans. Fixed16 uses a small decoded
- * staging slab for that compatibility boundary; the resident arrays remain
- * int16_t and the previous staging slab is committed before another storage
- * operation can invalidate it. */
-static void pe_fixed16_commit_one(pe_storage_t *s, pe_value_array_t which);
+/* The public storage port exposes double spans. F32 and Fixed16 use decoded
+ * staging spans for that compatibility boundary; the resident arrays remain
+ * compact, and every accessed infoset has its own stable span. */
+static void pe_low_precision_commit_one(pe_storage_t *s,
+                                        pe_value_array_t which,
+                                        pe_infoset_id_t id);
 
-static void pe_fixed16_commit_all(pe_storage_t *s)
+static void pe_low_precision_commit_all(pe_storage_t *s)
 {
-    if (!s || s->precision != PE_PREC_FIXED16)
+    if (!s || (s->precision != PE_PREC_F32 && s->precision != PE_PREC_FIXED16))
         return;
     for (int i = 0; i < PE_VALUES_COUNT; ++i)
-        pe_fixed16_commit_one(s, (pe_value_array_t)i);
+    {
+        if (!s->staging_dirty[i])
+            continue;
+        for (pe_infoset_id_t id = 0u; (size_t)id < s->count; ++id)
+            if (s->staging_dirty[i][id] != 0u)
+                pe_low_precision_commit_one(s, (pe_value_array_t)i, id);
+    }
 }
 
 void pe_storage_destroy(pe_storage_t *s)
@@ -171,13 +175,20 @@ void pe_storage_destroy(pe_storage_t *s)
     int i;
     if (!s)
         return;
-    pe_fixed16_commit_all(s);
+    pe_low_precision_commit_all(s);
     for (i = 0; i < PE_VALUES_COUNT; ++i)
     {
+        if (s->staging_spans[i])
+        {
+            for (size_t id = 0; id < s->count; ++id)
+                free(s->staging_spans[i][id]);
+            free(s->staging_spans[i]);
+        }
         free(s->values[i]);
+        free(s->float_values[i]);
         free(s->fixed_values[i]);
         free(s->fixed_scales[i]);
-        free(s->staging[i]);
+        free(s->staging_dirty[i]);
     }
     free(s->meta);
     free(s->slots);
@@ -249,11 +260,29 @@ static int pe_rehash(pe_storage_t *s)
 static int pe_grow_meta(pe_storage_t *s)
 {
     size_t cap = s->meta_capacity * 2u;
-    if (s->precision == PE_PREC_FIXED16)
+    if (s->precision == PE_PREC_F32 || s->precision == PE_PREC_FIXED16)
     {
         for (int i = 0; i < PE_VALUES_COUNT; ++i)
         {
-            if (s->fixed_scales[i])
+            if (s->staging_spans[i])
+            {
+                double **grown = (double **)realloc(s->staging_spans[i],
+                                                     cap * sizeof(double *));
+                if (!grown)
+                    return -1;
+                memset(grown + s->meta_capacity, 0,
+                       (cap - s->meta_capacity) * sizeof(double *));
+                s->staging_spans[i] = grown;
+            }
+            if (s->staging_dirty[i])
+            {
+                uint8_t *grown = (uint8_t *)realloc(s->staging_dirty[i], cap);
+                if (!grown)
+                    return -1;
+                memset(grown + s->meta_capacity, 0, cap - s->meta_capacity);
+                s->staging_dirty[i] = grown;
+            }
+            if (s->precision == PE_PREC_FIXED16 && s->fixed_scales[i])
             {
                 float *grown = (float *)realloc(s->fixed_scales[i],
                                                 cap * sizeof(float));
@@ -303,6 +332,19 @@ static int pe_grow_values(pe_storage_t *s, uint64_t needed)
                    (size_t)(cap - s->value_capacity) * sizeof(int16_t));
             s->fixed_values[i] = grown;
         }
+        else if (s->precision == PE_PREC_F32)
+        {
+            float *grown;
+            if (!s->float_values[i])
+                continue;
+            grown = (float *)realloc(s->float_values[i],
+                                     (size_t)cap * sizeof(float));
+            if (!grown)
+                return -1;
+            memset(grown + s->value_capacity, 0,
+                   (size_t)(cap - s->value_capacity) * sizeof(float));
+            s->float_values[i] = grown;
+        }
         else
         {
             double *grown;
@@ -326,7 +368,7 @@ static double *pe_ensure_array(pe_storage_t *s, pe_value_array_t which)
 {
     uint64_t cap;
 
-    if (s->precision == PE_PREC_FIXED16)
+    if (s->precision != PE_PREC_F64)
         return NULL;
     if (s->values[which])
         return s->values[which];
@@ -336,6 +378,23 @@ static double *pe_ensure_array(pe_storage_t *s, pe_value_array_t which)
     if (s->values[which])
         s->value_capacity = cap;
     return s->values[which];
+}
+
+static int pe_ensure_float_array(pe_storage_t *s, pe_value_array_t which)
+{
+    uint64_t cap;
+
+    if (!s || s->precision != PE_PREC_F32 ||
+        (int)which < 0 || which >= PE_VALUES_COUNT)
+        return -1;
+    if (s->float_values[which])
+        return 0;
+    cap = s->value_capacity ? s->value_capacity : 64u;
+    s->float_values[which] = (float *)calloc((size_t)cap, sizeof(float));
+    if (!s->float_values[which])
+        return -1;
+    s->value_capacity = cap;
+    return 0;
 }
 
 static int pe_ensure_fixed_array(pe_storage_t *s, pe_value_array_t which)
@@ -363,80 +422,119 @@ static int pe_ensure_fixed_array(pe_storage_t *s, pe_value_array_t which)
     return 0;
 }
 
-static int pe_ensure_staging(pe_storage_t *s, pe_value_array_t which, size_t n)
+static int pe_ensure_staging(pe_storage_t *s, pe_infoset_id_t id,
+                             pe_value_array_t which, size_t n)
 {
-    if (s->staging_capacity[which] < n)
+    if (!s->staging_spans[which])
     {
-        double *grown = (double *)realloc(s->staging[which], n * sizeof(double));
-        if (!grown)
+        s->staging_spans[which] = (double **)calloc(s->meta_capacity,
+                                                     sizeof(double *));
+        if (!s->staging_spans[which])
             return -1;
-        s->staging[which] = grown;
-        s->staging_capacity[which] = n;
+    }
+    if (!s->staging_dirty[which])
+    {
+        s->staging_dirty[which] = (uint8_t *)calloc(s->meta_capacity, 1u);
+        if (!s->staging_dirty[which])
+            return -1;
+    }
+    if (!s->staging_spans[which][id])
+    {
+        s->staging_spans[which][id] = (double *)calloc(n, sizeof(double));
+        if (!s->staging_spans[which][id])
+            return -1;
     }
     return 0;
 }
 
-static void pe_fixed16_commit_one(pe_storage_t *s, pe_value_array_t which)
+static void pe_low_precision_commit_one(pe_storage_t *s,
+                                        pe_value_array_t which,
+                                        pe_infoset_id_t id)
 {
-    pe_infoset_id_t id;
     const pe_infoset_meta_t *meta;
     size_t n;
-    double max_abs = 0.0;
-    double prior;
-    double scale;
 
-    if (!s || s->precision != PE_PREC_FIXED16 ||
-        (int)which < 0 || which >= PE_VALUES_COUNT)
-        return;
-    id = s->staging_id[which];
-    if (id == PE_INFOSET_ID_INVALID || !s->staging[which])
+    if (!s || (s->precision != PE_PREC_F32 && s->precision != PE_PREC_FIXED16) ||
+        (int)which < 0 || which >= PE_VALUES_COUNT || (size_t)id >= s->count ||
+        !s->staging_spans[which] || !s->staging_spans[which][id] ||
+        !s->staging_dirty[which] ||
+        s->staging_dirty[which][id] == 0u)
         return;
     meta = pe_storage_meta(s, id);
-    if (!meta || !s->fixed_values[which] || !s->fixed_scales[which])
-    {
-        s->staging_id[which] = PE_INFOSET_ID_INVALID;
+    if (!meta)
         return;
-    }
     n = pe_storage_slab_size(meta);
-    for (size_t i = 0; i < n; ++i)
+    if (s->precision == PE_PREC_F32)
     {
-        double v = fabs(s->staging[which][i]);
-        if (finite_double(v) && v > max_abs)
-            max_abs = v;
+        if (!s->float_values[which])
+            return;
+        for (size_t i = 0; i < n; ++i)
+            s->float_values[which][meta->value_offset + i] =
+                (float)s->staging_spans[which][id][i];
     }
-    prior = s->fixed_scales[which][id];
-    if (prior <= 0.0 || max_abs > prior * 32767.0 + 1e-12)
-        s->fixed16_rescales++;
-    scale = max_abs > 0.0 ? max_abs / 32767.0 : 1.0;
-    s->fixed_scales[which][id] = (float)scale;
-    for (size_t i = 0; i < n; ++i)
+    else
     {
-        double v = s->staging[which][i];
-        long q = lround(v / scale);
-        if (q > 32767) q = 32767;
-        if (q < -32767) q = -32767;
-        s->fixed_values[which][meta->value_offset + i] = (int16_t)q;
+        double max_abs = 0.0;
+        double prior;
+        double scale;
+        if (!s->fixed_values[which] || !s->fixed_scales[which])
+            return;
+        for (size_t i = 0; i < n; ++i)
+        {
+            double v = fabs(s->staging_spans[which][id][i]);
+            if (finite_double(v) && v > max_abs)
+                max_abs = v;
+        }
+        prior = s->fixed_scales[which][id];
+        if (prior <= 0.0 || max_abs > prior * 32767.0 + 1e-12)
+            s->fixed16_rescales++;
+        scale = max_abs > 0.0 ? max_abs / 32767.0 : 1.0;
+        s->fixed_scales[which][id] = (float)scale;
+        for (size_t i = 0; i < n; ++i)
+        {
+            double v = s->staging_spans[which][id][i];
+            long q = lround(v / scale);
+            if (q > 32767) q = 32767;
+            if (q < -32767) q = -32767;
+            s->fixed_values[which][meta->value_offset + i] = (int16_t)q;
+        }
     }
-    s->staging_id[which] = PE_INFOSET_ID_INVALID;
+    /* Keep the span marked after committing it. The caller may still hold
+       the decoded pointer and mutate it after a later accessor caused this
+       span to be flushed; retaining the mark makes the next flush capture
+       that mutation as well. */
 }
 
-static double *pe_fixed16_values(pe_storage_t *s, pe_infoset_id_t id,
-                                 pe_value_array_t which)
+static double *pe_low_precision_values(pe_storage_t *s, pe_infoset_id_t id,
+                                       pe_value_array_t which)
 {
     const pe_infoset_meta_t *meta = pe_storage_meta(s, id);
     size_t n;
-    if (!meta || pe_ensure_fixed_array(s, which) != 0)
+    if (!meta || (s->precision == PE_PREC_FIXED16 &&
+                  pe_ensure_fixed_array(s, which) != 0) ||
+        (s->precision == PE_PREC_F32 && pe_ensure_float_array(s, which) != 0))
         return NULL;
-    pe_fixed16_commit_all(s);
+    pe_low_precision_commit_all(s);
     n = pe_storage_slab_size(meta);
-    if (pe_ensure_staging(s, which, n) != 0)
+    /* Allocate an independent decoded span so another infoset cannot alias
+       it and later growth cannot invalidate a pointer already returned. */
+    if (pe_ensure_staging(s, id, which, n) != 0)
         return NULL;
-    float scale = s->fixed_scales[which][id];
-    if (scale <= 0.0f) scale = 1.0f;
     for (size_t i = 0; i < n; ++i)
-        s->staging[which][i] = (double)s->fixed_values[which][meta->value_offset + i] * scale;
-    s->staging_id[which] = id;
-    return s->staging[which];
+    {
+        if (s->precision == PE_PREC_F32)
+            s->staging_spans[which][id][i] =
+                (double)s->float_values[which][meta->value_offset + i];
+        else
+        {
+            float scale = s->fixed_scales[which][id];
+            if (scale <= 0.0f) scale = 1.0f;
+            s->staging_spans[which][id][i] =
+                (double)s->fixed_values[which][meta->value_offset + i] * scale;
+        }
+    }
+    s->staging_dirty[which][id] = 1u;
+    return s->staging_spans[which][id];
 }
 
 /* ------------------------------------------------------------------ *
@@ -457,7 +555,7 @@ pe_infoset_id_t pe_storage_resolve(pe_storage_t *s,
     if (!s || action_count == 0 || combo_count == 0)
         return PE_INFOSET_ID_INVALID;
 
-    pe_fixed16_commit_all(s);
+    pe_low_precision_commit_all(s);
 
     i = pe_probe(s, key);
     slot = s->slots[i];
@@ -555,8 +653,31 @@ size_t pe_storage_bytes(const pe_storage_t *s)
                 bytes += (size_t)s->value_capacity * sizeof(int16_t);
             if (s->fixed_scales[i])
                 bytes += s->meta_capacity * sizeof(float);
-            if (s->staging[i])
-                bytes += s->staging_capacity[i] * sizeof(double);
+            if (s->staging_spans[i])
+            {
+                bytes += s->meta_capacity * sizeof(double *);
+                for (size_t id = 0; id < s->count; ++id)
+                    if (s->staging_spans[i][id])
+                        bytes += pe_storage_slab_size(&s->meta[id]) *
+                                 sizeof(double);
+            }
+            if (s->staging_dirty[i])
+                bytes += s->meta_capacity * sizeof(uint8_t);
+        }
+        else if (s->precision == PE_PREC_F32)
+        {
+            if (s->float_values[i])
+                bytes += (size_t)s->value_capacity * sizeof(float);
+            if (s->staging_spans[i])
+            {
+                bytes += s->meta_capacity * sizeof(double *);
+                for (size_t id = 0; id < s->count; ++id)
+                    if (s->staging_spans[i][id])
+                        bytes += pe_storage_slab_size(&s->meta[id]) *
+                                 sizeof(double);
+            }
+            if (s->staging_dirty[i])
+                bytes += s->meta_capacity * sizeof(uint8_t);
         }
         else if (s->values[i])
             bytes += (size_t)s->value_capacity * sizeof(double);
@@ -575,8 +696,8 @@ double *pe_storage_values(pe_storage_t *s, pe_infoset_id_t id, pe_value_array_t 
     if (!s || (size_t)id >= s->count || (int)which < 0 || which >= PE_VALUES_COUNT)
         return NULL;
 
-    if (s->precision == PE_PREC_FIXED16)
-        return pe_fixed16_values(s, id, which);
+    if (s->precision == PE_PREC_F32 || s->precision == PE_PREC_FIXED16)
+        return pe_low_precision_values(s, id, which);
 
     base = pe_ensure_array(s, which);
     if (!base)
@@ -589,14 +710,14 @@ const double *pe_storage_values_const(const pe_storage_t *s, pe_infoset_id_t id,
 {
     if (!s || (size_t)id >= s->count || (int)which < 0 || which >= PE_VALUES_COUNT)
         return NULL;
-    if (s->precision == PE_PREC_FIXED16)
+    if (s->precision == PE_PREC_F32 || s->precision == PE_PREC_FIXED16)
     {
         /* The port's const accessor may materialize a decoded read span; the
            representation remains logically const even though its cache is
            populated. Convert through uintptr_t to keep strict cast-qual
            builds honest about the API boundary. */
         pe_storage_t *mut = (pe_storage_t *)(uintptr_t)s;
-        return pe_fixed16_values(mut, id, which);
+        return pe_low_precision_values(mut, id, which);
     }
     if (!s->values[which])
         return NULL;
