@@ -653,6 +653,141 @@ static void test_kuhn_two_player_parity(void)
     cfr_storage_destroy(adapter.storage);
 }
 
+typedef struct
+{
+    int terminal;
+    int player;
+    int action;
+} combo_state_t;
+
+static combo_state_t combo_root;
+static combo_state_t combo_terminals[2];
+
+static int combo_is_terminal(const void *state, void *user)
+{
+    (void)user;
+    return ((const combo_state_t *)state)->terminal;
+}
+
+static int combo_acting_player(const void *state, void *user)
+{
+    (void)user;
+    return ((const combo_state_t *)state)->player;
+}
+
+static uint16_t combo_action_count(const void *state, void *user)
+{
+    (void)user;
+    return ((const combo_state_t *)state)->terminal ? 0u : 2u;
+}
+
+static uint64_t combo_infoset(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 17u;
+}
+
+static const void *combo_apply_action(const void *state, uint16_t action,
+                                      void *user)
+{
+    (void)user;
+    return state == &combo_root && action < 2u ? &combo_terminals[action]
+                                                : NULL;
+}
+
+static int combo_strategy(const void *state, uint64_t infoset,
+                          uint16_t action, pe_value_vec_t *out, void *user)
+{
+    (void)state;
+    (void)infoset;
+    (void)user;
+    if (!out || out->n != 2u || action > 1u)
+        return -1;
+    out->v[0] = action == 0u ? 1.0 : 0.0;
+    out->v[1] = action == 1u ? 1.0 : 0.0;
+    return 0;
+}
+
+static int combo_terminal_values(const void *state,
+                                 const pe_reach_vec_t *reach,
+                                 pe_value_vec_t *out, uint8_t player_count,
+                                 void *user)
+{
+    const combo_state_t *terminal = (const combo_state_t *)state;
+    (void)reach;
+    (void)user;
+    if (!out || player_count != 2u)
+        return -1;
+    out[0].v[0] = terminal->action == 0 ? 1.0 : 0.0;
+    out[0].v[1] = terminal->action == 1 ? 1.0 : 0.0;
+    out[1].v[0] = -out[0].v[0];
+    out[1].v[1] = -out[0].v[1];
+    return 0;
+}
+
+static int combo_compatible(const void *state, uint8_t player,
+                            uint16_t player_combo, uint8_t opponent,
+                            uint16_t opponent_combo, void *user)
+{
+    (void)state;
+    (void)player;
+    (void)opponent;
+    (void)user;
+    return player_combo != opponent_combo;
+}
+
+static void init_combo_game(pe_vector_game_t *game, int acting_player)
+{
+    memset(&combo_root, 0, sizeof(combo_root));
+    memset(combo_terminals, 0, sizeof(combo_terminals));
+    combo_root.player = acting_player;
+    combo_terminals[0].terminal = combo_terminals[1].terminal = 1;
+    combo_terminals[0].action = 0;
+    combo_terminals[1].action = 1;
+    memset(game, 0, sizeof(*game));
+    game->root = &combo_root;
+    game->player_count = 2u;
+    game->combo_count = 2u;
+    game->is_terminal = combo_is_terminal;
+    game->acting_player = combo_acting_player;
+    game->action_count = combo_action_count;
+    game->infoset_key = combo_infoset;
+    game->strategy = combo_strategy;
+    game->apply_action = combo_apply_action;
+    game->terminal_values = combo_terminal_values;
+    game->combo_compatible = combo_compatible;
+}
+
+static void test_combo_specific_best_response_and_policy_reach(void)
+{
+    pe_vector_game_t game;
+    pe_best_response_vector_config_t config;
+    pe_best_response_vector_result_t br_result;
+    pe_exploitability_vector_result_t exploitability;
+
+    init_combo_game(&game, 0);
+    config = pe_best_response_vector_config_default();
+    config.max_iterations = 4u;
+    CHECK(pe_best_response_vector(&game, 0u, &config, &br_result) ==
+              PE_SOLVER_OK,
+          "combo-specific best response failed");
+    CHECK(fabs(br_result.value - 1.0) <= 1e-12,
+          "best response must choose the optimal action per combo: %.17g",
+          br_result.value);
+
+    /* A cross-combo compatibility map makes same-index reach weighting wrong:
+     * the policy's two deterministic actions leave no compatible opponent
+     * profile for either terminal payoff. */
+    init_combo_game(&game, 1);
+    CHECK(pe_exploitability_vector(&game, &config, &exploitability) ==
+              PE_SOLVER_OK,
+          "combo-compatible policy evaluation failed");
+    CHECK(fabs(exploitability.policy_value[0]) <= 1e-12,
+          "policy value must aggregate compatible reaches: %.17g",
+          exploitability.policy_value[0]);
+}
+
 static void test_exploitability_metrics(void)
 {
     pe_metrics_t metrics;
@@ -740,6 +875,7 @@ int main(void)
 {
     test_shared_infoset_and_convergence();
     test_kuhn_two_player_parity();
+    test_combo_specific_best_response_and_policy_reach();
     test_exploitability_metrics();
     test_multiway_guarantee_contract();
     test_exploitability_target();
