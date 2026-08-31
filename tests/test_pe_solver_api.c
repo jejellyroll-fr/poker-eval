@@ -5,6 +5,7 @@
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_traversal.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -278,6 +279,53 @@ int main(void)
                   "target metrics were not recorded (raw=%g mbb=%g)",
                   target_metrics.exploitability_raw,
                   target_metrics.exploitability_mbb_per_game);
+            pe_solver_destroy(solver);
+        }
+    }
+
+    {
+        static char measured_root;
+        pe_solver_config_t measured_config = pe_solver_config_default();
+        pe_solver_deps_t measured_deps = pe_solver_deps_default();
+        pe_vector_game_t measured_game;
+        pe_exploitability_vector_result_t direct = {0};
+        pe_best_response_vector_config_t br_config =
+            pe_best_response_vector_config_default();
+        pe_metrics_t measured_metrics;
+
+        memset(&measured_game, 0, sizeof(measured_game));
+        measured_game.root = &measured_root;
+        measured_game.user = &measured_root;
+        measured_game.player_count = 2u;
+        measured_game.combo_count = 1u;
+        measured_game.is_terminal = terminal_one_step;
+        measured_game.acting_player = acting_root;
+        measured_game.action_count = actions_one_step;
+        measured_game.infoset_key = key_one_step;
+        measured_game.apply_action = apply_one_step;
+        measured_game.terminal_values = values_one_step;
+        measured_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        measured_config.max_iterations = 2u;
+        measured_config.exploitability_interval = 1u;
+        measured_config.problem.expected_infosets = 1u;
+        measured_config.problem.expected_actions = 2u;
+        measured_config.problem.expected_combos = 1u;
+        measured_deps.vector_game = &measured_game;
+
+        CHECK(pe_exploitability_vector(&measured_game, &br_config, &direct) ==
+                  PE_SOLVER_OK,
+              "direct baseline exploitability failed");
+        solver = pe_solver_create(&measured_config, &measured_deps);
+        CHECK(solver != NULL, "metric solver creation failed");
+        if (solver != NULL)
+        {
+            CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
+                  "vector metric run failed");
+            CHECK(pe_solver_metrics(solver, &measured_metrics) == PE_SOLVER_OK,
+                  "vector metrics were not measured without a target");
+            CHECK(fabs(measured_metrics.exploitability_raw -
+                       direct.exploitability_raw) > 1e-12,
+                  "vector metrics still measured the uniform policy");
             pe_solver_destroy(solver);
         }
     }

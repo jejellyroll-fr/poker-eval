@@ -441,6 +441,180 @@ static void pe_solver_vector_emit_heartbeat(pe_solver_t *solver,
     pe_telemetry_flush(solver->deps.telemetry);
 }
 
+typedef struct
+{
+    const pe_vector_game_t *game;
+    const pe_storage_ops_t *storage;
+    void *storage_self;
+} pe_solver_vector_strategy_adapter_t;
+
+/* A vector game's strategy callback is optional because standalone BR
+ * callers may intentionally ask for the uniform policy.  A running solver is
+ * different: its exploitability checks must inspect the average strategy it
+ * has accumulated in storage. */
+static int pe_solver_vector_strategy_from_storage(
+    const void *state, uint64_t infoset_key, uint16_t action,
+    pe_value_vec_t *out, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    uint16_t action_count;
+    uint16_t combo_count;
+    pe_infoset_id_t id;
+    const double *average;
+    size_t length = 0u;
+    size_t combo;
+
+    if (!adapter || !adapter->game || !adapter->game->action_count ||
+        !out || !out->v)
+        return -1;
+    action_count = adapter->game->action_count(
+        state, adapter->game->user);
+    if (action_count == 0u || action >= action_count)
+        return -1;
+    for (combo = 0u; combo < out->n; ++combo)
+        out->v[combo] = 1.0 / (double)action_count;
+
+    if (!adapter->storage || !adapter->storage->find ||
+        !adapter->storage->shape || !adapter->storage->values_const)
+        return 0;
+    id = adapter->storage->find(adapter->storage_self, infoset_key);
+    if (id == PE_INFOSET_ID_INVALID)
+        return 0;
+    if (adapter->storage->shape(adapter->storage_self, id, &action_count,
+                                &combo_count, NULL) != 0 ||
+        action >= action_count || combo_count != out->n)
+        return -1;
+    average = adapter->storage->values_const(
+        adapter->storage_self, id, PE_VALUES_AVERAGE, &length);
+    if (!average || length < (size_t)action_count * combo_count)
+        return -1;
+    for (combo = 0u; combo < combo_count; ++combo)
+    {
+        double total = 0.0;
+        double value = average[pe_storage_slot_at(
+            combo_count, action, (uint16_t)combo)];
+        uint16_t candidate;
+        for (candidate = 0u; candidate < action_count; ++candidate)
+        {
+            double candidate_value = average[pe_storage_slot_at(
+                combo_count, candidate, (uint16_t)combo)];
+            if (!finite_double(candidate_value) || candidate_value < 0.0)
+                return -1;
+            total += candidate_value;
+        }
+        if (!finite_double(value) || value < 0.0)
+            return -1;
+        out->v[combo] = total > 0.0
+            ? value / total
+            : 1.0 / (double)action_count;
+    }
+    return 0;
+}
+
+static int pe_solver_vector_measure_is_chance(const void *state, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->is_chance(state, adapter->game->user);
+}
+
+static uint16_t pe_solver_vector_measure_chance_count(const void *state,
+                                                       void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->chance_outcome_count(state, adapter->game->user);
+}
+
+static double pe_solver_vector_measure_chance_weight(const void *state,
+                                                      uint16_t outcome,
+                                                      void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->chance_outcome_weight(
+        state, outcome, adapter->game->user);
+}
+
+static const void *pe_solver_vector_measure_apply_chance(const void *state,
+                                                          int outcome,
+                                                          void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->apply_chance(state, outcome, adapter->game->user);
+}
+
+static int pe_solver_vector_measure_is_terminal(const void *state, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->is_terminal(state, adapter->game->user);
+}
+
+static int pe_solver_vector_measure_acting_player(const void *state,
+                                                   void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->acting_player(state, adapter->game->user);
+}
+
+static uint16_t pe_solver_vector_measure_action_count(const void *state,
+                                                       void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->action_count(state, adapter->game->user);
+}
+
+static uint64_t pe_solver_vector_measure_infoset_key(const void *state,
+                                                      void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->infoset_key(state, adapter->game->user);
+}
+
+static const void *pe_solver_vector_measure_apply_action(const void *state,
+                                                          uint16_t action,
+                                                          void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->apply_action(state, action, adapter->game->user);
+}
+
+static int pe_solver_vector_measure_terminal_values(
+    const void *state, const pe_reach_vec_t *reach,
+    pe_value_vec_t *out_values, uint8_t players, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->terminal_values(
+        state, reach, out_values, players, adapter->game->user);
+}
+
+static void pe_solver_vector_measure_release_state(const void *state,
+                                                    void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    adapter->game->release_state(state, adapter->game->user);
+}
+
+static int pe_solver_vector_measure_combo_compatible(
+    const void *state, uint8_t player, uint16_t player_combo,
+    uint8_t opponent, uint16_t opponent_combo, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->combo_compatible(
+        state, player, player_combo, opponent, opponent_combo,
+        adapter->game->user);
+}
+
 static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                                                 const pe_execution_plan_t *plan)
 {
@@ -541,7 +715,8 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     completed_iterations = solver->iteration;
     for (iteration = completed_iterations;
          (solver->config.max_iterations == 0u ||
-          iteration < solver->config.max_iterations) && !target_reached;)
+          iteration < solver->config.max_iterations) && !target_reached &&
+         solver->state == PE_SOLVER_STATE_RUNNING;)
     {
         ++iteration;
         rc = ops->begin_iteration(&traversal, iteration);
@@ -572,20 +747,65 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
         }
         solver->iteration = iteration;
 
-        if (target_enabled &&
-            ((solver->config.exploitability_interval > 0u &&
+        if ((solver->config.exploitability_interval > 0u &&
               iteration % solver->config.exploitability_interval == 0u) ||
-             (solver->config.max_iterations > 0u &&
-              iteration == solver->config.max_iterations)))
+             (target_enabled && solver->config.max_iterations > 0u &&
+              iteration == solver->config.max_iterations))
         {
             pe_best_response_vector_config_t br_config =
                 pe_best_response_vector_config_default();
             pe_exploitability_vector_result_t result = {0};
+            pe_vector_game_t measured_game = *solver->deps.vector_game;
+            pe_solver_vector_strategy_adapter_t strategy_adapter;
             double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
             uint8_t player;
             int reached = 0;
 
-            if (pe_exploitability_vector(solver->deps.vector_game,
+            if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)
+            {
+                pe_update_batch_destroy(&batch);
+                pe_traversal_ctx_destroy(&traversal);
+                compute_ops->destroy(compute_self);
+                solver->state = PE_SOLVER_STATE_STOPPED;
+                return PE_SOLVER_ERR_EXECUTION;
+            }
+            if (!measured_game.strategy)
+            {
+                strategy_adapter.game = solver->deps.vector_game;
+                strategy_adapter.storage = solver->storage;
+                strategy_adapter.storage_self = solver->storage_self;
+                measured_game.is_chance = measured_game.is_chance
+                    ? pe_solver_vector_measure_is_chance : NULL;
+                measured_game.chance_outcome_count =
+                    measured_game.chance_outcome_count
+                    ? pe_solver_vector_measure_chance_count : NULL;
+                measured_game.chance_outcome_weight =
+                    measured_game.chance_outcome_weight
+                    ? pe_solver_vector_measure_chance_weight : NULL;
+                measured_game.apply_chance = measured_game.apply_chance
+                    ? pe_solver_vector_measure_apply_chance : NULL;
+                measured_game.is_terminal =
+                    pe_solver_vector_measure_is_terminal;
+                measured_game.acting_player =
+                    pe_solver_vector_measure_acting_player;
+                measured_game.action_count =
+                    pe_solver_vector_measure_action_count;
+                measured_game.infoset_key = measured_game.infoset_key
+                    ? pe_solver_vector_measure_infoset_key : NULL;
+                measured_game.strategy =
+                    pe_solver_vector_strategy_from_storage;
+                measured_game.apply_action =
+                    pe_solver_vector_measure_apply_action;
+                measured_game.terminal_values = measured_game.terminal_values
+                    ? pe_solver_vector_measure_terminal_values : NULL;
+                measured_game.release_state = measured_game.release_state
+                    ? pe_solver_vector_measure_release_state : NULL;
+                measured_game.combo_compatible =
+                    measured_game.combo_compatible
+                    ? pe_solver_vector_measure_combo_compatible : NULL;
+                measured_game.user = &strategy_adapter;
+            }
+            if (pe_exploitability_vector(&measured_game,
                                           &br_config, &result) != PE_SOLVER_OK)
             {
                 pe_update_batch_destroy(&batch);
@@ -598,13 +818,13 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                  player < solver->deps.vector_game->player_count; ++player)
                 gaps[player] = result.br_gap[player];
             if (pe_best_response_metrics_from_multiway(
-                    solver->deps.vector_game->player_count, 1, gaps, 0.0,
+                    measured_game.player_count, 1, gaps, 0.0,
                     0.0, solver->config.execution.big_blind,
                     &solver->metrics) != PE_SOLVER_OK ||
-                pe_best_response_target_reached(
+                (target_enabled && pe_best_response_target_reached(
                     solver->metrics.exploitability_mbb_per_game,
                     solver->config.target_exploitability_mbb,
-                    &reached) != PE_SOLVER_OK)
+                    &reached) != PE_SOLVER_OK))
             {
                 pe_update_batch_destroy(&batch);
                 pe_traversal_ctx_destroy(&traversal);
@@ -619,6 +839,23 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
            Publish the iteration heartbeat independently so frontends never
            confuse an expensive convergence check with a stalled solver. */
         pe_solver_vector_emit_heartbeat(solver, iteration);
+    }
+
+    if (solver->state == PE_SOLVER_STATE_STOPPED ||
+        solver->state == PE_SOLVER_STATE_PAUSED)
+    {
+        if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)
+        {
+            pe_update_batch_destroy(&batch);
+            pe_traversal_ctx_destroy(&traversal);
+            compute_ops->destroy(compute_self);
+            solver->state = PE_SOLVER_STATE_STOPPED;
+            return PE_SOLVER_ERR_EXECUTION;
+        }
+        pe_update_batch_destroy(&batch);
+        pe_traversal_ctx_destroy(&traversal);
+        compute_ops->destroy(compute_self);
+        return PE_SOLVER_OK;
     }
 
     if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)
@@ -1113,8 +1350,18 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         }
     }
     }
-    if (solver->state == PE_SOLVER_STATE_STOPPED)
+    if (solver->state == PE_SOLVER_STATE_STOPPED ||
+        solver->state == PE_SOLVER_STATE_PAUSED)
     {
+        if (compute_ops->sync && compute_ops->sync(compute_self) != 0)
+        {
+            pe_update_batch_destroy(&aggregated_batch);
+            if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
+            else pe_external_sampling_ctx_destroy(&external);
+            compute_ops->destroy(compute_self);
+            solver->state = PE_SOLVER_STATE_STOPPED;
+            return PE_SOLVER_ERR_EXECUTION;
+        }
         pe_update_batch_destroy(&aggregated_batch);
         if (use_outcome) pe_outcome_sampling_ctx_destroy(&outcome);
         else pe_external_sampling_ctx_destroy(&external);
