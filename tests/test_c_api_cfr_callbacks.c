@@ -218,6 +218,27 @@ int main(void)
         }
         pe_cfr_free(chance_solver);
 
+        chance_desc.get_chance_outcomes = NULL;
+        chance_solver = pe_cfr_create_callbacks(root, &chance_desc, 4);
+        if (chance_solver)
+        {
+            fprintf(stderr, "callback C CFR accepted incomplete chance callbacks\n");
+            pe_cfr_free(chance_solver);
+            pe_free(root);
+            return 1;
+        }
+        chance_desc.get_chance_outcomes = chance_get_outcomes;
+        chance_desc.apply_chance = NULL;
+        chance_solver = pe_cfr_create_callbacks(root, &chance_desc, 4);
+        if (chance_solver)
+        {
+            fprintf(stderr, "callback C CFR accepted missing chance transition\n");
+            pe_cfr_free(chance_solver);
+            pe_free(root);
+            return 1;
+        }
+        chance_desc.apply_chance = chance_apply;
+
         chance_desc.get_utility = hidden_chance_utility;
         chance_desc.get_infoset_key = hidden_infoset_key;
         chance_solver = pe_cfr_create_callbacks(root, &chance_desc, 4);

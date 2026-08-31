@@ -274,15 +274,32 @@ int main(void)
                   "solver save API failed");
             pe_solver_destroy(first);
         }
+        /* Execution policy and the later run target do not change the
+           persisted mathematical state and must remain resume-compatible. */
+        solver_config.execution.precision = PE_PREC_F32;
+        solver_config.execution.terminal_batch_size = 4u;
+        solver_config.max_iterations = 4u;
         resumed = pe_solver_create(&solver_config, &deps);
-        CHECK(resumed != NULL && pe_solver_load(resumed, &source) == PE_SOLVER_OK,
-              "solver load API failed");
+        CHECK(resumed != NULL, "solver resume creation failed");
         if (resumed)
         {
-            CHECK(pe_solver_run(resumed) == PE_SOLVER_OK &&
-                      pe_solver_progress(resumed, &progress) == PE_SOLVER_OK &&
-                      progress.complete && progress.iteration == 2u,
-                  "loaded solver did not resume to the configured iteration");
+            pe_solver_status_t load_status = pe_solver_load(resumed, &source);
+            pe_solver_status_t run_status = PE_SOLVER_ERR_INVALID_STATE;
+            pe_solver_status_t progress_status = PE_SOLVER_ERR_INVALID_STATE;
+            CHECK(load_status == PE_SOLVER_OK, "solver load API failed (%d)",
+                  (int)load_status);
+            if (load_status == PE_SOLVER_OK)
+            {
+                run_status = pe_solver_run(resumed);
+                progress_status = pe_solver_progress(resumed, &progress);
+            }
+            CHECK(run_status == PE_SOLVER_OK &&
+                      progress_status == PE_SOLVER_OK && progress.complete &&
+                      progress.iteration == 4u,
+                  "loaded solver did not resume to the later configured iteration "
+                  "(run=%d progress=%d iteration=%llu complete=%d)",
+                  (int)run_status, (int)progress_status,
+                  (unsigned long long)progress.iteration, progress.complete);
             pe_solver_destroy(resumed);
         }
     }

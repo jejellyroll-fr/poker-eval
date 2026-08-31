@@ -58,6 +58,40 @@ legacy_solver = pypokereval.solver_v3_create(
 pypokereval.solver_v3_run(legacy_solver)
 
 
+class CompatibleComboGame(OneStepGame):
+    def combo_compatible(self, state, player, player_combo, opponent,
+                         opponent_combo):
+        return player != opponent and player_combo != opponent_combo
+
+    def terminal_values(self, state, reach):
+        value = 1.0 if state[1] == 0 else -1.0
+        return [[value, value], [-value, -value]]
+
+
+compatible_game = CompatibleComboGame()
+compatible_solver = pypokereval.solver_v3_create(
+    ("root",), compatible_game, players=2, combos=2, max_iterations=1,
+    expected_infosets=1
+)
+pypokereval.solver_v3_run(compatible_solver)
+
+
+class IncompleteChanceGame(OneStepGame):
+    def is_chance(self, state):
+        return False
+
+    def chance_outcome_count(self, state):
+        return 1
+
+
+try:
+    pypokereval.solver_v3_create(("root",), IncompleteChanceGame())
+except TypeError:
+    pass
+else:
+    raise AssertionError("solver_v3_create must reject incomplete chance callbacks")
+
+
 class ChanceGame(OneStepGame):
     def is_terminal(self, state):
         return state[0] == "terminal"

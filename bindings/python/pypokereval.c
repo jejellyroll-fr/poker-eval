@@ -2601,6 +2601,30 @@ static const void *py_solver_v3_apply_action(const void *state,
     return stored;
 }
 
+static int py_solver_v3_combo_compatible(const void *state, uint8_t player,
+                                         uint16_t player_combo,
+                                         uint8_t opponent,
+                                         uint16_t opponent_combo, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(OKKKK)", py_solver_v3_object(state),
+                                   (unsigned long long)player,
+                                   (unsigned long long)player_combo,
+                                   (unsigned long long)opponent,
+                                   (unsigned long long)opponent_combo);
+    PyObject *result;
+    int value;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "combo_compatible", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    value = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return value;
+}
+
 static int py_solver_v3_is_chance(const void *state, void *user)
 {
     py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
@@ -2925,6 +2949,8 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
     ctx->game.apply_action = py_solver_v3_apply_action;
     ctx->game.terminal_values = py_solver_v3_terminal_values;
     ctx->game.release_state = py_solver_v3_release_state;
+    if (PyObject_HasAttrString(game_object, "combo_compatible"))
+        ctx->game.combo_compatible = py_solver_v3_combo_compatible;
     if (has_chance) {
         ctx->game.is_chance = py_solver_v3_is_chance;
         ctx->game.chance_outcome_count = py_solver_v3_chance_outcome_count;

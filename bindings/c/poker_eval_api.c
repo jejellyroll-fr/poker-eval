@@ -633,7 +633,9 @@ pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
     if (!handle || !game || max_iterations <= 0 || game->num_players < 2 ||
         game->num_players > CFR_MAX_PLAYERS || !game->is_terminal ||
         !game->current_player || !game->get_actions || !game->apply_action ||
-        !game->get_utility)
+        !game->get_utility ||
+        (game->is_chance &&
+         (!game->get_chance_outcomes || !game->apply_chance)))
         return NULL;
     cfr = (pe_cfr_handle_t)calloc(1, sizeof(*cfr));
     if (!cfr)

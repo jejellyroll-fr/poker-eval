@@ -163,6 +163,9 @@ static uint64_t hash_config(const pe_solver_config_t *config)
 {
     uint64_t hash = 1469598103934665603ull;
 #define HASH_FIELD(field) hash = hash_bytes(hash, &(field), sizeof(field))
+    /* Checkpoints contain mathematical solver state. Backend selection,
+       precision, batching, resource limits and the run limit are execution
+       policy, so they may change when a checkpoint is resumed. */
     HASH_FIELD(config->algorithm.preset);
     HASH_FIELD(config->algorithm.traversal);
     HASH_FIELD(config->algorithm.regret);
@@ -175,20 +178,10 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->algorithm.exponential_lambda);
     HASH_FIELD(config->algorithm.averaging_delay);
     HASH_FIELD(config->algorithm.outcome_epsilon);
-    HASH_FIELD(config->execution.backend);
-    HASH_FIELD(config->execution.stages);
-    HASH_FIELD(config->execution.precision);
-    HASH_FIELD(config->execution.cpu_threads);
-    HASH_FIELD(config->execution.deterministic);
-    HASH_FIELD(config->execution.sample_batch_size);
-    HASH_FIELD(config->execution.terminal_batch_size);
-    HASH_FIELD(config->execution.update_batch_size);
-    HASH_FIELD(config->execution.max_ram_bytes);
     HASH_FIELD(config->problem.expected_infosets);
     HASH_FIELD(config->problem.expected_actions);
     HASH_FIELD(config->problem.expected_combos);
     HASH_FIELD(config->seed);
-    HASH_FIELD(config->max_iterations);
     HASH_FIELD(config->target_exploitability_mbb);
     HASH_FIELD(config->exploitability_interval);
     HASH_FIELD(config->br_samples);
