@@ -40,15 +40,66 @@ static void set_error(char *error, size_t size, const char *fmt, ...)
     va_end(args);
 }
 
+static int analysis_icm_for_stacks(const double *stacks, int player_count,
+                                   const double *payouts, int payout_count,
+                                   int hero_index, double *hero_ev)
+{
+    icm_input_t input;
+    icm_result_t result;
+    int player_map[ICM_MAX_PLAYERS];
+    int active_players = 0;
+    int player;
+
+    if (!stacks || !payouts || !hero_ev || player_count < 1 ||
+        player_count > ICM_MAX_PLAYERS || payout_count < 1 ||
+        payout_count > player_count || hero_index < 0 ||
+        hero_index >= player_count)
+        return -1;
+    memset(&input, 0, sizeof(input));
+    for (player = 0; player < player_count; ++player)
+    {
+        if (!pe_finite_double(stacks[player]) || stacks[player] < 0.0)
+            return -1;
+        if (stacks[player] > 0.0)
+        {
+            player_map[active_players] = player;
+            input.stacks[active_players++] = stacks[player];
+        }
+    }
+    if (active_players == 0)
+        return -1;
+    input.num_players = active_players;
+    input.num_payouts = payout_count < active_players
+        ? payout_count : active_players;
+    for (player = 0; player < payout_count; ++player)
+    {
+        if (!pe_finite_double(payouts[player]) || payouts[player] < 0.0)
+            return -1;
+        if (player < input.num_payouts)
+            input.payouts[player] = payouts[player];
+    }
+    if (pe_icm_calculate(&input, &result) != 0)
+        return -1;
+    if (stacks[hero_index] <= 0.0)
+    {
+        *hero_ev = 0.0;
+        return 0;
+    }
+    for (player = 0; player < active_players; ++player)
+        if (player_map[player] == hero_index)
+        {
+            *hero_ev = result.icm_ev[player];
+            return pe_finite_double(*hero_ev) ? 0 : -1;
+        }
+    return -1;
+}
+
 int pe_analysis_icm_decision(
     const pe_analysis_icm_decision_request_t *request,
     pe_analysis_icm_decision_report_t *out)
 {
     pe_analysis_icm_request_t base_request;
     pe_analysis_icm_report_t base;
-    icm_input_t input;
-    icm_result_t win_result;
-    icm_result_t lose_result;
     double payouts[ICM_MAX_PLAYERS];
     double win_stacks[ICM_MAX_PLAYERS];
     double lose_stacks[ICM_MAX_PLAYERS];
@@ -91,17 +142,11 @@ int pe_analysis_icm_decision(
                                   &payout_count, out->error,
                                   sizeof(out->error)) != 0)
         return -1;
-    memset(&input, 0, sizeof(input));
-    input.num_players = base.player_count;
-    input.num_payouts = payout_count;
     for (i = 0; i < base.player_count; ++i)
     {
-        input.stacks[i] = base.stacks[i];
         win_stacks[i] = base.stacks[i];
         lose_stacks[i] = base.stacks[i];
     }
-    for (i = 0; i < payout_count; ++i)
-        input.payouts[i] = payouts[i];
 
     effective_win = request->chips_to_win <
         win_stacks[request->opponent_index]
@@ -113,25 +158,27 @@ int pe_analysis_icm_decision(
     win_stacks[request->opponent_index] -= effective_win;
     lose_stacks[request->hero_index] -= effective_loss;
     lose_stacks[request->opponent_index] += effective_loss;
-    for (int i = 0; i < ICM_MAX_PLAYERS; ++i)
-        input.stacks[i] = win_stacks[i];
-    if (pe_icm_calculate(&input, &win_result) != 0)
+    if (!pe_finite_double(win_stacks[request->hero_index]) ||
+        !pe_finite_double(win_stacks[request->opponent_index]) ||
+        !pe_finite_double(lose_stacks[request->hero_index]) ||
+        !pe_finite_double(lose_stacks[request->opponent_index]) ||
+        analysis_icm_for_stacks(win_stacks, base.player_count, payouts,
+                                payout_count, request->hero_index,
+                                &out->win_ev) != 0)
     {
         set_error(out->error, sizeof(out->error),
                   "ICM refused the win outcome");
         return -1;
     }
-    for (int i = 0; i < ICM_MAX_PLAYERS; ++i)
-        input.stacks[i] = lose_stacks[i];
-    if (pe_icm_calculate(&input, &lose_result) != 0)
+    if (analysis_icm_for_stacks(lose_stacks, base.player_count, payouts,
+                                payout_count, request->hero_index,
+                                &out->lose_ev) != 0)
     {
         set_error(out->error, sizeof(out->error),
                   "ICM refused the loss outcome");
         return -1;
     }
     out->current_ev = base.ev[request->hero_index];
-    out->win_ev = win_result.icm_ev[request->hero_index];
-    out->lose_ev = lose_result.icm_ev[request->hero_index];
     out->decision_ev = request->win_probability * out->win_ev +
                        (1.0 - request->win_probability) * out->lose_ev;
     out->delta_vs_fold = out->decision_ev - out->current_ev;

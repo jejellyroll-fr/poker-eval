@@ -326,6 +326,23 @@ static void test_icm_decision(void)
     CHECK(fabs(report.decision_ev -
                (0.60 * report.win_ev + 0.40 * report.lose_ev)) < 1.0e-9,
           "ICM decision EV was not probability weighted");
+
+    /* An all-in outcome legitimately busts either side.  The decision helper
+     * must compact zero-stack players before calling the positive-stack ICM
+     * core rather than rejecting the whole decision. */
+    request.stacks = "100, 100";
+    request.payouts = "150, 50";
+    request.hero_index = 0;
+    request.opponent_index = 1;
+    request.win_probability = 0.5;
+    request.chips_at_risk = 100.0;
+    request.chips_to_win = 100.0;
+    CHECK(pe_analysis_icm_decision(&request, &report) == 0,
+          "all-in ICM decision was refused: %s", report.error);
+    CHECK(fabs(report.win_ev - 150.0) < 1.0e-9 &&
+              fabs(report.lose_ev) < 1.0e-9,
+          "busted ICM outcome was not evaluated correctly: win %.17g, lose %.17g",
+          report.win_ev, report.lose_ev);
 }
 
 int main(void)
