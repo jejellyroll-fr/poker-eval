@@ -19,7 +19,9 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
         icm_input_t input;
         icm_result_t icm;
         int player_map[ICM_MAX_PLAYERS];
+        int eliminated_map[ICM_MAX_PLAYERS];
         int active_players = 0;
+        int eliminated_players = 0;
         memset(&input, 0, sizeof(input));
         for (int p = 0; p < tree->num_players; ++p) {
             if (!pe_finite_double(node->stacks[p]) || node->stacks[p] < 0.0)
@@ -28,6 +30,8 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
                 player_map[active_players] = p;
                 input.stacks[active_players++] = node->stacks[p];
             }
+            else
+                eliminated_map[eliminated_players++] = p;
         }
         if (active_players == 0)
             return -1;
@@ -44,6 +48,12 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
             return -1;
         for (int p = 0; p < active_players; ++p)
             result->ev[player_map[p]] += path_probability * icm.icm_ev[p];
+        for (int p = 0; p < eliminated_players; ++p) {
+            int payout_index = active_players + p;
+            if (payout_index < tree->num_payouts)
+                result->ev[eliminated_map[p]] +=
+                    path_probability * tree->payouts[payout_index];
+        }
         result->leaf_count++;
         result->probability += path_probability;
         return 0;

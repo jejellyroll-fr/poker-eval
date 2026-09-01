@@ -79,11 +79,33 @@ static void test_existing_pot_without_contributions(void)
           "existing pot was not distributed to the active winner");
 }
 
+static void test_large_distinct_levels(void)
+{
+    pe_betting_state_t state = {0};
+    pe_pot_slice_t slices[2] = {{0}};
+    uint8_t count = 0u;
+    const double base = 1000000000000.0;
+
+    state.player_count = 2u;
+    state.active[0] = state.active[1] = 1;
+    state.invested[0] = base;
+    state.invested[1] = base + 500.0;
+    state.pot = state.invested[0] + state.invested[1];
+    CHECK(pe_pot_slices_build(&state, slices, 2u, &count) == 0 &&
+              count == 2u,
+          "large distinct contribution levels were collapsed");
+    CHECK(fabs(slices[0].amount - 2.0 * base) < 1e-3 &&
+              fabs(slices[1].amount - 500.0) < 1e-9,
+          "large contribution levels produced wrong slices: %.17g %.17g",
+          slices[0].amount, slices[1].amount);
+}
+
 int main(void)
 {
     test_three_way_side_pots();
     test_folded_dead_money();
     test_existing_pot_without_contributions();
+    test_large_distinct_levels();
     if (failures)
         return 1;
     puts("test_pe_pots: multiway side-pot construction passed");

@@ -117,6 +117,7 @@ int main(void)
     assert(pe_fgs_calculate_tree(&tree, &result) == 0);
     assert(result.leaf_count == 2);
     assert(isfinite(result.ev[0]) && isfinite(result.ev[1]));
+    assert(fabs(result.ev[0] + result.ev[1] - 100.0) < 1e-9);
 
     /* Capacity exhaustion is reported, not truncated. */
     fill_hu_symmetric(&input, 2);

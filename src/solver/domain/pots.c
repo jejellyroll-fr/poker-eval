@@ -15,6 +15,11 @@ static int nearly_equal(double a, double b)
     return fabs(a - b) <= 1e-9 * scale;
 }
 
+static int levels_equal(double a, double b)
+{
+    return fabs(a - b) <= 1e-9;
+}
+
 int pe_pot_slices_build(const pe_betting_state_t *state,
                         pe_pot_slice_t *out, uint8_t capacity,
                         uint8_t *out_count)
@@ -39,7 +44,7 @@ int pe_pot_slices_build(const pe_betting_state_t *state,
         if (state->invested[player] <= 0.0)
             continue;
         for (index = 0u; index < level_count; ++index)
-            if (nearly_equal(levels[index], state->invested[player]))
+            if (levels_equal(levels[index], state->invested[player]))
                 break;
         if (index == level_count)
         {
