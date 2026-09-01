@@ -18,23 +18,32 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
     if (node->terminal) {
         icm_input_t input;
         icm_result_t icm;
+        int player_map[ICM_MAX_PLAYERS];
+        int active_players = 0;
         memset(&input, 0, sizeof(input));
-        input.num_players = tree->num_players;
-        input.num_payouts = tree->num_payouts;
         for (int p = 0; p < tree->num_players; ++p) {
             if (!pe_finite_double(node->stacks[p]) || node->stacks[p] < 0.0)
                 return -1;
-            input.stacks[p] = node->stacks[p];
+            if (node->stacks[p] > 0.0) {
+                player_map[active_players] = p;
+                input.stacks[active_players++] = node->stacks[p];
+            }
         }
+        if (active_players == 0)
+            return -1;
+        input.num_players = active_players;
+        input.num_payouts = tree->num_payouts < active_players
+            ? tree->num_payouts : active_players;
         for (int p = 0; p < tree->num_payouts; ++p) {
             if (!pe_finite_double(tree->payouts[p]) || tree->payouts[p] < 0.0)
                 return -1;
-            input.payouts[p] = tree->payouts[p];
+            if (p < input.num_payouts)
+                input.payouts[p] = tree->payouts[p];
         }
         if (pe_icm_calculate(&input, &icm) != 0)
             return -1;
-        for (int p = 0; p < tree->num_players; ++p)
-            result->ev[p] += path_probability * icm.icm_ev[p];
+        for (int p = 0; p < active_players; ++p)
+            result->ev[player_map[p]] += path_probability * icm.icm_ev[p];
         result->leaf_count++;
         result->probability += path_probability;
         return 0;

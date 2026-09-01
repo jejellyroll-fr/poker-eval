@@ -104,6 +104,20 @@ int main(void)
             assert(fabs(chips - 200.0) < 1e-9);
         }
 
+    /* A generated bust is represented by a zero stack.  FGS must remove that
+     * player from the terminal ICM input instead of rejecting the leaf. */
+    fill_hu_symmetric(&input, 1);
+    input.stacks[0] = 10.0;
+    input.stacks[1] = 100.0;
+    input.pot = 20.0;
+    input.win_probability[0] = 0.5;
+    input.win_probability[1] = 0.5;
+    assert(pe_fgs_generate_even_contribution(&input, nodes, 512, edges, 512,
+                                             &tree) == 0);
+    assert(pe_fgs_calculate_tree(&tree, &result) == 0);
+    assert(result.leaf_count == 2);
+    assert(isfinite(result.ev[0]) && isfinite(result.ev[1]));
+
     /* Capacity exhaustion is reported, not truncated. */
     fill_hu_symmetric(&input, 2);
     assert(pe_fgs_generate_even_contribution(&input, nodes, 2, edges, 512,

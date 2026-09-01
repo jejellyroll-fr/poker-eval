@@ -989,6 +989,24 @@ static void test_exploitability_target(void)
           "negative measured exploitability must be rejected");
 }
 
+static void test_rejects_infinite_tolerance(void)
+{
+    pe_vector_game_t game;
+    pe_best_response_vector_config_t config;
+    pe_best_response_vector_result_t result;
+    pe_exploitability_vector_result_t exploitability;
+
+    init_game(&game);
+    config = pe_best_response_vector_config_default();
+    config.tie_tolerance = INFINITY;
+    CHECK(pe_best_response_vector(&game, 0u, &config, &result) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "best response must reject an infinite tie tolerance");
+    CHECK(pe_exploitability_vector(&game, &config, &exploitability) ==
+              PE_SOLVER_ERR_INVALID_CONFIG,
+          "exploitability must reject an infinite tie tolerance");
+}
+
 int main(void)
 {
     test_shared_infoset_and_convergence();
@@ -998,6 +1016,7 @@ int main(void)
     test_exploitability_metrics();
     test_multiway_guarantee_contract();
     test_exploitability_target();
+    test_rejects_infinite_tolerance();
     if (failures != 0)
     {
         fprintf(stderr, "test_best_response_ii: %d failure(s)\n", failures);
