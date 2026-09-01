@@ -353,7 +353,7 @@ static int vector_joint_opponent_reach(
 
         if (!pe_finite_double(reach_weight) || reach_weight < 0.0)
             return -1;
-        if (reach_weight == 0.0)
+        if (!(reach_weight > 0.0))
             continue;
         compatible = vector_combo_is_compatible(
             game, state, acting, own_combo, opponents[depth],
