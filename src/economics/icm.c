@@ -94,16 +94,26 @@ static void recursive_icm(int depth,
 int pe_icm_calculate(const icm_input_t *input, icm_result_t *result)
 {
     if (!input || !result) return -1;
-    if (input->num_players <= 0 || input->num_players > ICM_MAX_PLAYERS) return -1;
-    if (input->num_payouts <= 0) return -1;
+    if (input->num_players <= 0 || input->num_players > ICM_MAX_PLAYERS ||
+        input->num_payouts <= 0 || input->num_payouts > input->num_players)
+        return -1;
 
     double total_chips = 0.0;
     int active[ICM_MAX_PLAYERS];
     for (int i = 0; i < input->num_players; ++i) {
+        if (!pe_finite_double(input->stacks[i]) ||
+            !(input->stacks[i] > 0.0))
+            return -1;
         total_chips += input->stacks[i];
+        if (!pe_finite_double(total_chips))
+            return -1;
         active[i] = 1;
         result->icm_ev[i] = 0.0;
     }
+
+    for (int i = 0; i < input->num_payouts; ++i)
+        if (!pe_finite_double(input->payouts[i]) || input->payouts[i] < 0.0)
+            return -1;
 
     if (total_chips <= 0.0) return -1;
 
@@ -111,7 +121,11 @@ int pe_icm_calculate(const icm_input_t *input, icm_result_t *result)
 
     /* Calculate equity shares */
     double total_payout = 0.0;
-    for (int i = 0; i < input->num_payouts; ++i) total_payout += input->payouts[i];
+    for (int i = 0; i < input->num_payouts; ++i) {
+        total_payout += input->payouts[i];
+        if (!pe_finite_double(total_payout))
+            return -1;
+    }
 
     for (int i = 0; i < input->num_players; ++i) {
         if (total_payout > 0.0)

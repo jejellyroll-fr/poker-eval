@@ -1,6 +1,7 @@
 #include <poker_eval/economics/icm.h>
 #include <stdio.h>
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 
 static void test_icm_basic(void)
@@ -51,10 +52,30 @@ static void test_icm_3way(void)
     (void)sum;
 }
 
+static void test_icm_rejects_non_finite_totals(void)
+{
+    icm_input_t input = {
+        .stacks = {DBL_MAX, DBL_MAX},
+        .num_players = 2,
+        .payouts = {70.0, 30.0},
+        .num_payouts = 2
+    };
+    icm_result_t result = {0};
+
+    assert(pe_icm_calculate(&input, &result) != 0);
+    input.stacks[0] = NAN;
+    input.stacks[1] = 100.0;
+    assert(pe_icm_calculate(&input, &result) != 0);
+    input.stacks[0] = 100.0;
+    input.payouts[0] = NAN;
+    assert(pe_icm_calculate(&input, &result) != 0);
+}
+
 int main(void)
 {
     test_icm_basic();
     test_icm_3way();
+    test_icm_rejects_non_finite_totals();
     printf("All ICM tests passed!\n");
     return 0;
 }
