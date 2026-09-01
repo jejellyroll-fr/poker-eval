@@ -655,7 +655,8 @@ static int gui_command_executable_allowed(const char *command)
     }
     if (length == 0u || length >= sizeof(executable))
         return 0;
-    memcpy(executable, cursor, length);
+    for (size_t i = 0u; i < length; ++i)
+        executable[i] = cursor[i];
     executable[length] = '\0';
     return gui_solver_executable_allowed(executable);
 }
@@ -686,7 +687,8 @@ static int run_command_capture(app_t *app, const char *command,
     if (command_length >= sizeof(command_copy) ||
         !gui_command_executable_allowed(command))
         return -1;
-    memcpy(command_copy, command, command_length + 1u);
+    for (size_t i = 0u; i <= command_length; ++i)
+        command_copy[i] = command[i];
     memset(&security, 0, sizeof(security));
     security.nLength = sizeof(security);
     security.bInheritHandle = TRUE;

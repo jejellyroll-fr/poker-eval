@@ -786,19 +786,21 @@ pe_solver_status_t pe_best_response_vector(
             {
                 uint16_t best = 0u;
                 uint16_t action;
+                double best_value = 0.0;
+                for (uint16_t combo = 0u; combo < ctx.combo_count; ++combo)
+                    best_value += entry->action_values[combo];
                 for (action = 1u; action < entry->action_count; ++action)
                 {
                     uint16_t combo;
                     double candidate = 0.0;
-                    double current = 0.0;
                     for (combo = 0u; combo < ctx.combo_count; ++combo)
-                    {
                         candidate += entry->action_values[
                             (size_t)action * ctx.combo_count + combo];
-                        current += entry->action_values[combo];
-                    }
-                    if (candidate > current + config->tie_tolerance)
+                    if (candidate > best_value + config->tie_tolerance)
+                    {
                         best = action;
+                        best_value = candidate;
+                    }
                 }
                 for (uint16_t combo = 0u; combo < ctx.combo_count; ++combo)
                 {
@@ -816,12 +818,17 @@ pe_solver_status_t pe_best_response_vector(
                 {
                     uint16_t best = 0u;
                     uint16_t action;
+                    double best_value = entry->action_values[combo];
                     for (action = 1u; action < entry->action_count; ++action)
-                        if (entry->action_values[
-                                (size_t)action * ctx.combo_count + combo] >
-                            entry->action_values[combo] +
-                                config->tie_tolerance)
+                    {
+                        double candidate = entry->action_values[
+                            (size_t)action * ctx.combo_count + combo];
+                        if (candidate > best_value + config->tie_tolerance)
+                        {
                             best = action;
+                            best_value = candidate;
+                        }
+                    }
                     if (best != entry->selected[combo])
                     {
                         entry->selected[combo] = best;

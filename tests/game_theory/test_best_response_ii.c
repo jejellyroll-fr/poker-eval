@@ -563,6 +563,124 @@ static void init_game(pe_vector_game_t *game)
     game->terminal_values = br_terminal_values;
 }
 
+typedef struct three_action_state_t three_action_state_t;
+
+struct three_action_state_t
+{
+    int terminal;
+    const three_action_state_t *children[3];
+    double payoff;
+};
+
+static three_action_state_t three_action_root;
+static three_action_state_t three_action_terminals[3];
+
+static int three_action_is_terminal(const void *state, void *user)
+{
+    (void)user;
+    return ((const three_action_state_t *)state)->terminal;
+}
+
+static int three_action_acting_player(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0;
+}
+
+static uint16_t three_action_count(const void *state, void *user)
+{
+    (void)user;
+    return ((const three_action_state_t *)state)->terminal ? 0u : 3u;
+}
+
+static uint64_t three_action_infoset(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 99u;
+}
+
+static const void *three_action_apply(const void *state, uint16_t action,
+                                      void *user)
+{
+    const three_action_state_t *node =
+        (const three_action_state_t *)state;
+    (void)user;
+    return !node->terminal && action < 3u ? node->children[action] : NULL;
+}
+
+static int three_action_strategy(const void *state, uint64_t infoset,
+                                 uint16_t action, pe_value_vec_t *out,
+                                 void *user)
+{
+    (void)state;
+    (void)infoset;
+    (void)user;
+    if (!out || out->n != 1u || action >= 3u)
+        return -1;
+    out->v[0] = 1.0 / 3.0;
+    return 0;
+}
+
+static int three_action_terminal_values(const void *state,
+                                        const pe_reach_vec_t *reach,
+                                        pe_value_vec_t *out,
+                                        uint8_t player_count, void *user)
+{
+    const three_action_state_t *terminal =
+        (const three_action_state_t *)state;
+    (void)reach;
+    (void)user;
+    if (!out || player_count != 2u)
+        return -1;
+    out[0].v[0] = terminal->payoff;
+    out[1].v[0] = -terminal->payoff;
+    return 0;
+}
+
+static void init_three_action_game(pe_vector_game_t *game)
+{
+    memset(&three_action_root, 0, sizeof(three_action_root));
+    memset(three_action_terminals, 0, sizeof(three_action_terminals));
+    three_action_root.children[0] = &three_action_terminals[0];
+    three_action_root.children[1] = &three_action_terminals[1];
+    three_action_root.children[2] = &three_action_terminals[2];
+    for (size_t i = 0u; i < 3u; ++i)
+        three_action_terminals[i].terminal = 1;
+    three_action_terminals[0].payoff = 0.0;
+    three_action_terminals[1].payoff = 10.0;
+    three_action_terminals[2].payoff = 1.0;
+
+    memset(game, 0, sizeof(*game));
+    game->root = &three_action_root;
+    game->player_count = 2u;
+    game->combo_count = 1u;
+    game->is_terminal = three_action_is_terminal;
+    game->acting_player = three_action_acting_player;
+    game->action_count = three_action_count;
+    game->infoset_key = three_action_infoset;
+    game->strategy = three_action_strategy;
+    game->apply_action = three_action_apply;
+    game->terminal_values = three_action_terminal_values;
+}
+
+static void test_three_action_best_response_uses_current_best(void)
+{
+    pe_vector_game_t game;
+    pe_best_response_vector_config_t config;
+    pe_best_response_vector_result_t result;
+
+    init_three_action_game(&game);
+    config = pe_best_response_vector_config_default();
+    CHECK(pe_best_response_vector(&game, 0u, &config, &result) ==
+              PE_SOLVER_OK,
+          "three-action best response failed");
+    CHECK(fabs(result.value - 10.0) <= 1e-12,
+          "best response must retain the best of three actions: %.17g",
+          result.value);
+}
+
 static void test_shared_infoset_and_convergence(void)
 {
     pe_vector_game_t game;
@@ -875,6 +993,7 @@ int main(void)
 {
     test_shared_infoset_and_convergence();
     test_kuhn_two_player_parity();
+    test_three_action_best_response_uses_current_best();
     test_combo_specific_best_response_and_policy_reach();
     test_exploitability_metrics();
     test_multiway_guarantee_contract();

@@ -105,12 +105,34 @@ static double range_weight(const pe_preflop_deal_sampler_t *sampler,
             .combos[index].weight;
 }
 
+static int has_completion(const pe_preflop_deal_sampler_t *sampler,
+                          uint8_t player, mask_t used)
+{
+    size_t count;
+
+    if (player == sampler->player_count)
+        return 1;
+    count = range_count(sampler, player);
+    for (size_t i = 0u; i < count; ++i)
+    {
+        mask_t cards = range_cards(sampler, player, i);
+        double weight = range_weight(sampler, player, i);
+        if (!mask_is_valid(cards) ||
+            mask_popcount(cards) != sampler->hole_cards ||
+            mask_intersects(cards, used) || !finite_positive(weight))
+            continue;
+        if (has_completion(sampler, (uint8_t)(player + 1u), used | cards))
+            return 1;
+    }
+    return 0;
+}
+
 #define PE_PREFLOP_SAMPLE_ATTEMPTS 4096u
 
-/* Draw from the card-removal proposal once.  A valid range prefix can still
-   have no continuation (for example, the first player's selected hand may
-   block the only hand in the next range).  The caller retries the complete
-   deal in that case instead of turning a recoverable draw into an error. */
+/* Draw from a card-removal proposal that excludes prefixes with no complete
+   continuation. This avoids conditioning a sequential proposal on retries:
+   proposal_probability is the probability of the returned deal under the
+   actual proposal, so target/proposal remains an unbiased importance weight. */
 static int sample_sequential(const pe_preflop_deal_sampler_t *sampler,
                              pe_rng_t *rng,
                              pe_preflop_deal_sample_t *out)
@@ -137,7 +159,9 @@ static int sample_sequential(const pe_preflop_deal_sampler_t *sampler,
             mask_t cards = range_cards(sampler, player, i);
             double weight = range_weight(sampler, player, i);
             if (!mask_is_valid(cards) || mask_popcount(cards) != sampler->hole_cards ||
-                mask_intersects(cards, used) || !finite_positive(weight))
+                mask_intersects(cards, used) || !finite_positive(weight) ||
+                !has_completion(sampler, (uint8_t)(player + 1u),
+                                used | cards))
                 continue;
             total += weight;
         }
@@ -148,7 +172,9 @@ static int sample_sequential(const pe_preflop_deal_sampler_t *sampler,
             mask_t cards = range_cards(sampler, player, i);
             double weight = range_weight(sampler, player, i);
             if (!mask_is_valid(cards) || mask_popcount(cards) != sampler->hole_cards ||
-                mask_intersects(cards, used) || !finite_positive(weight))
+                mask_intersects(cards, used) || !finite_positive(weight) ||
+                !has_completion(sampler, (uint8_t)(player + 1u),
+                                used | cards))
                 continue;
             last_legal = i;
             cumulative += weight;
@@ -191,9 +217,8 @@ int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
             ratio /= sampler->reference_weight_sum;
         if (finite_positive(ratio))
         {
-            /* With no exact normalisation, this is the unbiased
-               importance weight for the unnormalised product range.  The
-               restart-on-dead-end factor is common to all complete deals. */
+            /* With no exact normalisation, this is the unbiased importance
+               weight for the unnormalised product range. */
             out->importance_ratio = ratio;
             return 0;
         }

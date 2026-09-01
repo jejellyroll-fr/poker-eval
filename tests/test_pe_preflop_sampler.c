@@ -93,9 +93,8 @@ int main(void)
     }
 
     /* A legal first-player draw can block every hand in the next range.
-       The sampler must resample the complete deal and keep the valid branch
-       instead of failing the sample.  With no measured normalisation, the
-       returned weight must still correct the sequential proposal. */
+       The sampler must exclude that dead-end prefix while retaining the
+       correct importance weight for the valid branch. */
     {
         pe_holdem_combo_t blocked[] = {
             {cards((int[]){0, 1}, 2u), 1.0},
@@ -116,7 +115,7 @@ int main(void)
             pe_preflop_deal_sample_t sample;
             if (pe_preflop_deal_sampler_sample(&sampler, &rng, &sample) != 0 ||
                 sample.holes[0] != blocked[1].cards ||
-                fabs(sample.importance_ratio - 3.0) > 1e-12)
+                fabs(sample.importance_ratio - 2.0) > 1e-12)
             {
                 fprintf(stderr,
                         "test_pe_preflop_sampler: dead-end resampling failed\n");
