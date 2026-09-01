@@ -61,10 +61,29 @@ static void test_folded_dead_money(void)
           "folded dead money was not awarded to the live winner");
 }
 
+static void test_existing_pot_without_contributions(void)
+{
+    pe_betting_state_t state = {0};
+    pe_pot_slice_t slices[1] = {{0}};
+    uint8_t winners[] = {0x02u};
+    double awards[3];
+    uint8_t count = 0u;
+    state.player_count = 3u;
+    state.active[0] = state.active[1] = state.active[2] = 1;
+    state.pot = 12.0;
+    CHECK(pe_pot_slices_build(&state, slices, 1u, &count) == 0 &&
+              count == 1u && slices[0].eligible_mask == 0x07u,
+          "existing pot was not made eligible for active players");
+    CHECK(pe_pot_distribute(slices, count, winners, 3u, awards) == 0 &&
+              fabs(awards[1] - 12.0) < 1e-12,
+          "existing pot was not distributed to the active winner");
+}
+
 int main(void)
 {
     test_three_way_side_pots();
     test_folded_dead_money();
+    test_existing_pot_without_contributions();
     if (failures)
         return 1;
     puts("test_pe_pots: multiway side-pot construction passed");

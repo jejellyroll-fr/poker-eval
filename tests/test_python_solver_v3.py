@@ -44,6 +44,12 @@ except RuntimeError as exc:
     assert "status" in str(exc)
 else:
     raise AssertionError("strategy queries before solve must raise RuntimeError")
+try:
+    pypokereval.solver_v3_metrics(solver)
+except RuntimeError as exc:
+    assert "status" in str(exc)
+else:
+    raise AssertionError("metrics queries before solve must raise RuntimeError")
 pypokereval.solver_v3_run(solver)
 progress = pypokereval.solver_v3_progress(solver)
 assert progress["complete"]

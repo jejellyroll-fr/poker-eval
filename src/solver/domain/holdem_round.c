@@ -92,6 +92,7 @@ pe_holdem_round_status_t pe_holdem_round_advance(
 {
     uint8_t player;
     pe_holdem_street_t next_street;
+    int has_actor = 0;
 
     if (!state || !rules || !out)
         return PE_HOLDEM_ROUND_ERR_NULL_ARGUMENT;
@@ -111,9 +112,18 @@ pe_holdem_round_status_t pe_holdem_round_advance(
     out->betting.current_bet = 0.0;
     out->betting.min_raise = rules->min_raise;
     out->betting.raises_made = 0u;
-    out->betting.round_complete = 0;
+    for (player = 0u; player < out->betting.player_count; ++player)
+    {
+        if (out->betting.active[player] && !out->betting.all_in[player])
+        {
+            has_actor = 1;
+            break;
+        }
+    }
+    out->betting.round_complete = has_actor ? 0 : 1;
     out->betting.terminal = 0;
     out->betting.winner = -1;
+    out->betting.to_act = has_actor ? (int8_t)first_to_act : -1;
     for (player = 0u; player < out->betting.player_count; ++player)
     {
         out->betting.acted[player] = 0;

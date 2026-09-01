@@ -66,10 +66,14 @@ int pe_pot_slices_build(const pe_betting_state_t *state,
     {
         if (state->pot > 0.0)
         {
+            uint8_t eligible = 0u;
             if (capacity < 1u)
                 return -2;
+            for (player = 0u; player < state->player_count; ++player)
+                if (state->active[player])
+                    eligible |= (uint8_t)(1u << player);
             out[0].amount = state->pot;
-            out[0].eligible_mask = 0u;
+            out[0].eligible_mask = eligible;
             *out_count = 1u;
         }
         else

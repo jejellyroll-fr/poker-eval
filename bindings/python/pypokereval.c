@@ -3063,6 +3063,7 @@ static PyObject *py_solver_v3_metrics(PyObject *self, PyObject *args)
     PyObject *capsule;
     py_solver_v3_context_t *ctx;
     pe_metrics_t metrics;
+    pe_solver_status_t status;
     PyObject *gaps;
     PyObject *result;
     uint8_t player;
@@ -3070,8 +3071,14 @@ static PyObject *py_solver_v3_metrics(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O", &capsule))
         return NULL;
     ctx = py_solver_v3_get_context(capsule);
-    if (!ctx || pe_solver_metrics(ctx->solver, &metrics) != PE_SOLVER_OK)
+    if (!ctx)
         return NULL;
+    status = pe_solver_metrics(ctx->solver, &metrics);
+    if (status != PE_SOLVER_OK) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "v3 metrics query failed with status %d", (int)status);
+        return NULL;
+    }
     gaps = PyList_New(metrics.num_players);
     if (!gaps)
         return NULL;
