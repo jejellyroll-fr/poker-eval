@@ -127,8 +127,6 @@ static int has_completion(const pe_preflop_deal_sampler_t *sampler,
     return 0;
 }
 
-#define PE_PREFLOP_SAMPLE_ATTEMPTS 4096u
-
 /* Draw from a card-removal proposal that excludes prefixes with no complete
    continuation. This avoids conditioning a sequential proposal on retries:
    proposal_probability is the probability of the returned deal under the
@@ -200,29 +198,23 @@ int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
                                    pe_rng_t *rng,
                                    pe_preflop_deal_sample_t *out)
 {
-    unsigned attempt;
+    double ratio;
 
     if (!sampler || !sampler->ranges || !rng || !out ||
         !valid_common(sampler->board, sampler->player_count) ||
         !valid_variant(sampler->variant, sampler->hole_cards))
         return -1;
-    for (attempt = 0u; attempt < PE_PREFLOP_SAMPLE_ATTEMPTS; ++attempt)
-    {
-        double ratio;
+    if (sample_sequential(sampler, rng, out) != 0)
+        return -1;
+    ratio = out->target_weight / out->proposal_probability;
+    if (sampler->reference_weight_sum > 0.0)
+        ratio /= sampler->reference_weight_sum;
+    if (!finite_positive(ratio)) {
         memset(out, 0, sizeof(*out));
-        if (sample_sequential(sampler, rng, out) != 0)
-            continue;
-        ratio = out->target_weight / out->proposal_probability;
-        if (sampler->reference_weight_sum > 0.0)
-            ratio /= sampler->reference_weight_sum;
-        if (finite_positive(ratio))
-        {
-            /* With no exact normalisation, this is the unbiased importance
-               weight for the unnormalised product range. */
-            out->importance_ratio = ratio;
-            return 0;
-        }
+        return -1;
     }
-    memset(out, 0, sizeof(*out));
-    return -1;
+    /* With no exact normalisation, this is the unbiased importance weight
+       for the unnormalised product range. */
+    out->importance_ratio = ratio;
+    return 0;
 }

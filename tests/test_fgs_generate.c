@@ -63,6 +63,27 @@ int main(void)
     assert(fabs(result.ev[0] - 50.0) < 1e-9);
     assert(fabs(result.ev[1] - 50.0) < 1e-9);
 
+    /* The public player cap is larger than the branching cap used by the
+     * original generator; every validated player must now get a branch. */
+    memset(&input, 0, sizeof(input));
+    input.num_players = 17;
+    input.num_payouts = 17;
+    input.pot = 20.0;
+    input.depth = 1;
+    for (int player = 0; player < input.num_players; ++player) {
+        input.stacks[player] = 100.0;
+        input.win_probability[player] = 1.0;
+        input.payouts[player] = (double)(input.num_players - player);
+    }
+    assert(pe_fgs_generate_even_contribution(&input, nodes, 512, edges, 512,
+                                             &tree) == 0);
+    assert(tree.node_count == 18 && tree.edge_count == 17);
+    for (int edge = 0; edge < 17; ++edge) {
+        assert(edges[edge].child_index >= 1 && edges[edge].child_index < 18);
+        assert(edges[edge].probability > 0.0);
+        assert(nodes[edges[edge].child_index].terminal == 1);
+    }
+
     /* Depth 2 with a favorite: four leaves, probability mass conserved,
      * EV order follows the win probabilities, payouts stay fully distributed. */
     fill_hu_symmetric(&input, 2);

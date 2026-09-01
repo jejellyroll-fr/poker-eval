@@ -449,6 +449,7 @@ static int parse_document(json_reader_t *reader, pe_hrc_import_t *out,
             if (!parse_payouts(reader, out, error)) { free(key); return 0; }
         } else if (strcmp(key, "bounty_multiplier") == 0) {
             if (!parse_number(reader, &out->bounty_multiplier, error)) { free(key); return 0; }
+            out->has_bounty_multiplier = 1;
         } else if (!skip_value(reader, error)) { free(key); return 0; }
         free(key);
         if (take(reader, '}')) break;
@@ -459,7 +460,12 @@ static int parse_document(json_reader_t *reader, pe_hrc_import_t *out,
     out->config.tree.num_players = out->pot_model.player_count;
     out->config.terminal_value = NULL;
     out->config.user_data = NULL;
-    out->bounty_multiplier = out->bounty_multiplier > 0.0 ? out->bounty_multiplier : 1.0;
+    if (!out->has_bounty_multiplier)
+        out->bounty_multiplier = 1.0;
+    else if (out->bounty_multiplier < 0.0) {
+        set_error(reader, error, "bounty multiplier cannot be negative");
+        return 0;
+    }
     for (int p = 0; p < out->pot_model.player_count; ++p) {
         StdDeck_CardMask empty;
         StdDeck_CardMask_RESET(empty);

@@ -43,6 +43,7 @@ typedef struct {
     double payouts[ICM_MAX_PLAYERS];
     int num_payouts;
     double bounty_multiplier;
+    int has_bounty_multiplier;
 } pe_hrc_import_t;
 
 /* Supported document shape: {schema:"pe-hrc/v1"|"pe-pko/v1",

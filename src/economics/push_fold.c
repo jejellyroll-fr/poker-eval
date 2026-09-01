@@ -39,14 +39,23 @@ int pe_push_fold_solve(const pe_push_fold_input_t *input,
         return -1;
     iterations = input->iterations > 0 ? input->iterations : 100000;
     effective_stack = fmin(input->hero_stack, input->villain_stack);
+    if (!finite_double(input->pot_before_push + effective_stack))
+        return -1;
     memset(result, 0, sizeof(*result));
     /* Rows: hero fold/push. Columns: villain fold/call. */
     payoff[0][0] = 0.0;
     payoff[0][1] = 0.0;
     payoff[1][0] = input->pot_before_push;
-    payoff[1][1] = input->hero_equity_when_called *
-                   (input->pot_before_push + effective_stack) -
-                   (1.0 - input->hero_equity_when_called) * effective_stack;
+    {
+        double win_component = input->hero_equity_when_called *
+                                (input->pot_before_push + effective_stack);
+        double loss_component = (1.0 - input->hero_equity_when_called) *
+                                effective_stack;
+        if (!finite_double(win_component) || !finite_double(loss_component) ||
+            !finite_double(win_component - loss_component))
+            return -1;
+        payoff[1][1] = win_component - loss_component;
+    }
     for (int iter = 0; iter < iterations; ++iter) {
         double hs[2], vs[2], hero_value[2], villain_value[2];
         double node_value = 0.0;

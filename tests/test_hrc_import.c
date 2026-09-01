@@ -53,6 +53,26 @@ static int reject_fractional_value(const char *json, const char *needle,
     return 1;
 }
 
+static int replace_json_value(const char *json, const char *needle,
+                              const char *replacement, char *out,
+                              size_t out_size)
+{
+    const char *at = strstr(json, needle);
+    size_t prefix;
+    size_t suffix;
+    size_t replacement_length = strlen(replacement);
+    if (!at || strlen(json) >= out_size)
+        return 0;
+    prefix = (size_t)(at - json);
+    suffix = strlen(at + strlen(needle));
+    if (prefix + replacement_length + suffix >= out_size)
+        return 0;
+    memcpy(out, json, prefix);
+    memcpy(out + prefix, replacement, replacement_length);
+    memcpy(out + prefix + replacement_length, at + strlen(needle), suffix + 1u);
+    return 1;
+}
+
 int main(void)
 {
     const char *json =
@@ -97,6 +117,26 @@ int main(void)
     assert(fabs(pko_result.elimination_probability[0][1] - 1.0) < 1e-9);
     assert(fabs(pko_result.pko.bounty_ev[0] - 25.0) < 1e-9);
     pe_hrc_import_free(&imported);
+
+    {
+        char zero_multiplier_json[2048];
+        assert(replace_json_value(json, "\"bounty_multiplier\":1",
+                                  "\"bounty_multiplier\":0",
+                                  zero_multiplier_json,
+                                  sizeof(zero_multiplier_json)));
+        assert(pe_hrc_import_json(zero_multiplier_json,
+                                  strlen(zero_multiplier_json), zero_terminal,
+                                  NULL, &imported, &error) == 0);
+        assert(imported.has_bounty_multiplier == 1 &&
+               fabs(imported.bounty_multiplier) < 1e-12);
+        assert(pe_hrc_import_make_pko_input(&imported, 8, pko_outcome, NULL,
+                                            &pko_input) == 0);
+        assert(fabs(pko_input.base.bounty_multiplier) < 1e-12);
+        pe_hrc_import_free(&imported);
+        assert(reject_fractional_value(json, "\"bounty_multiplier\":1",
+                                       "\"bounty_multiplier\":-1",
+                                       zero_terminal));
+    }
 
     /* The parser must honor the caller-provided byte length even when the
        input is not NUL-terminated or ends in the middle of a number. */

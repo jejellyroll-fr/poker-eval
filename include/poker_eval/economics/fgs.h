@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define PE_FGS_MAX_CHILDREN 16
+#define PE_FGS_MAX_CHILDREN ICM_MAX_PLAYERS
 #define PE_FGS_MAX_DEPTH 128
 
 typedef struct {

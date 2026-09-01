@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -40,6 +41,11 @@ int main(void)
         assert(pe_push_fold_solve(&invalid, &result) == -1);
         invalid = input;
         invalid.villain_stack = INFINITY;
+        assert(pe_push_fold_solve(&invalid, &result) == -1);
+        invalid = input;
+        invalid.pot_before_push = DBL_MAX;
+        invalid.hero_stack = DBL_MAX;
+        invalid.villain_stack = DBL_MAX;
         assert(pe_push_fold_solve(&invalid, &result) == -1);
     }
 
