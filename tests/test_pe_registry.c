@@ -526,6 +526,30 @@ static void test_diagnostics_overflow_is_counted(void)
     CHECK(diag.count + diag.dropped >= 1, "nothing was reported at all");
 }
 
+static void test_invalid_enum_values_are_refused(void)
+{
+    pe_solver_config_t cfg = pe_solver_config_default();
+    pe_execution_plan_t plan;
+    pe_diagnostics_t diag;
+
+    cfg.algorithm.traversal = (pe_traversal_mode_t)-1;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR &&
+              diag_mentions(&diag, "traversal mode"),
+          "invalid traversal enum was accepted");
+
+    cfg = pe_solver_config_default();
+    cfg.execution.precision = PE_PREC_COUNT;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR &&
+              diag_mentions(&diag, "precision mode"),
+          "invalid precision enum was accepted");
+
+    cfg = pe_solver_config_default();
+    cfg.execution.backend = PE_COMPUTE_COUNT;
+    CHECK(pe_plan_resolve(&cfg, ALL_CAPS, &plan, &diag) == PE_VALID_ERROR &&
+              diag_mentions(&diag, "execution backend"),
+          "invalid backend enum was accepted");
+}
+
 int main(void)
 {
     test_every_preset_expands();
@@ -546,6 +570,7 @@ int main(void)
     test_null_arguments();
     test_plan_text();
     test_diagnostics_overflow_is_counted();
+    test_invalid_enum_values_are_refused();
 
     if (g_failures != 0)
     {

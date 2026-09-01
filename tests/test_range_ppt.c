@@ -56,6 +56,9 @@ int main(void)
         CHECK(pe_monker_ppt_count("AKQJT", &count) ==
                   PE_MONKER_PPT_ERR_TOO_MANY_CARDS,
               "five-card PPT definition was accepted");
+        CHECK(pe_monker_ppt_count("AA+", &count) ==
+                  PE_MONKER_PPT_ERR_SYNTAX,
+              "unsupported PPT '+' suffix was silently accepted");
         CHECK(pe_monker_ppt_count("", &count) == PE_MONKER_PPT_ERR_EMPTY,
               "empty PPT definition was accepted");
     }

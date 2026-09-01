@@ -2,8 +2,6 @@
  * work_coordinator.c - heterogeneous worker registry and dispatcher
  */
 
-#include <poker_eval/solver/pe_work_coordinator.h>
-
 #include <math.h>
 #include <float.h>
 #include <errno.h>
@@ -12,10 +10,15 @@
 #include <string.h>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #else
 #include <sys/select.h>
 #endif
+
+#include <poker_eval/solver/pe_work_coordinator.h>
 
 typedef struct worker_candidate_t
 {

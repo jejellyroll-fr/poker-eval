@@ -63,7 +63,8 @@
 #define STRATEGY_TABLE_MAX_ROWS 600u
 #define STRATEGY_CAPTURE_CAPACITY 524288u
 #define MONKER_GRID_MAX_ROWS PE_MONKER_CLASS_COUNT
-#define STRATEGY_TABLE_ACTIONS 4u
+#define STRATEGY_TABLE_ACTIONS MPF_TREE_ACTION_MAX
+#define STRATEGY_RESPONSE_ACTIONS 4u
 #define MAX_DECISION_STEPS 64u
 #define MAX_PLAYERS_DISPLAY 6u
 #define MAX_SETUP_PLAYERS 8u
@@ -185,7 +186,7 @@ struct _app_t
     Label *lbl_player_evs[MAX_PLAYERS_DISPLAY];
 
     /* Responses */
-    Button *btn_responses[STRATEGY_TABLE_ACTIONS];
+    Button *btn_responses[STRATEGY_RESPONSE_ACTIONS];
     Button *btn_equity_graph;
     Button *btn_board_overview;
 
@@ -3693,7 +3694,7 @@ static void update_responses_for_active_step(App *app)
 {
     if (!app)
         return;
-    for (uint32_t a = 0u; a < STRATEGY_TABLE_ACTIONS; ++a)
+    for (uint32_t a = 0u; a < STRATEGY_RESPONSE_ACTIONS; ++a)
     {
         if (app->active_step_index >= 0 && app->active_step_index < (int)app->decision_step_count &&
             a < app->decision_steps[app->active_step_index].action_count)
@@ -3713,7 +3714,7 @@ static void i_on_response_click(App *app, Event *event)
 {
     Button *sender = event_sender(event, Button);
     uint32_t clicked_action = 0u;
-    for (uint32_t a = 0u; a < STRATEGY_TABLE_ACTIONS; ++a)
+    for (uint32_t a = 0u; a < STRATEGY_RESPONSE_ACTIONS; ++a)
     {
         if (app->btn_responses[a] == sender)
         {
@@ -3998,7 +3999,7 @@ static void mkr_update_table_headers(App *app)
             snprintf(label, sizeof(label), "Action %u", action + 1u);
         tableview_header_title(app->strategy_table, action + 3u, label);
     }
-    tableview_header_title(app->strategy_table, 7u,
+    tableview_header_title(app->strategy_table, 3u + STRATEGY_TABLE_ACTIONS,
                            app->mkr_loaded ? "Highest frequency" : "EV by action");
 }
 
@@ -5416,16 +5417,11 @@ static void i_on_strategy_table(App *app, Event *event)
                     best_value = stored->bytes[base + (uint32_t)action];
                     best = action;
                 }
-            cell->align = pos->col == 0u ? ekLEFT : ekCENTER;
-            switch (pos->col)
-            {
-            case 0u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", hand); break;
-            case 1u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "100.0%%"); break;
-            case 2u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "P%d", node->acting_player + 1); break;
-            case 3u:
-            case 4u:
-            case 5u:
-            case 6u:
+            cell->align = pos->col == 0u ||
+                          pos->col == 3u + STRATEGY_TABLE_ACTIONS
+                              ? ekLEFT : ekCENTER;
+            if (pos->col >= 3u &&
+                pos->col < 3u + STRATEGY_TABLE_ACTIONS)
             {
                 uint32_t action = pos->col - 3u;
                 if (action < (uint32_t)node->action_count)
@@ -5433,27 +5429,29 @@ static void i_on_strategy_table(App *app, Event *event)
                              "%.1f%%", stored->bytes[base + action] * 100.0 / 256.0);
                 else
                     app->table_cell_text[0] = '\0';
-                break;
             }
-            case 7u:
-                tree_action_label(node, best, app->table_cell_text, sizeof(app->table_cell_text));
-                break;
+            else if (pos->col == 3u + STRATEGY_TABLE_ACTIONS)
+            {
+                tree_action_label(node, best, app->table_cell_text,
+                                  sizeof(app->table_cell_text));
+            }
+            else
+            switch (pos->col)
+            {
+            case 0u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", hand); break;
+            case 1u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "100.0%%"); break;
+            case 2u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "P%d", node->acting_player + 1); break;
             default: app->table_cell_text[0] = '\0'; break;
             }
             cell->text = app->table_cell_text;
             break;
         }
         row = &app->strategy_rows[pos->row];
-        cell->align = pos->col == 0u ? ekLEFT : pos->col == 7u ? ekLEFT : ekCENTER;
-        switch (pos->col)
-        {
-        case 0u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", row->hand); break;
-        case 1u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", row->node); break;
-        case 2u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", row->player); break;
-        case 3u:
-        case 4u:
-        case 5u:
-        case 6u:
+        cell->align = pos->col == 0u ||
+                      pos->col == 3u + STRATEGY_TABLE_ACTIONS
+                          ? ekLEFT : ekCENTER;
+        if (pos->col >= 3u &&
+            pos->col < 3u + STRATEGY_TABLE_ACTIONS)
         {
             uint32_t action = pos->col - 3u;
             if (action < row->action_count)
@@ -5461,17 +5459,26 @@ static void i_on_strategy_table(App *app, Event *event)
                          row->actions[action], row->ev[action][0] ? " | EV " : "", row->ev[action]);
             else
                 app->table_cell_text[0] = '\0';
-            break;
         }
-        case 7u:
+        else if (pos->col == 3u + STRATEGY_TABLE_ACTIONS)
+        {
             app->table_cell_text[0] = '\0';
-            for (uint32_t action = 0u; action < row->action_count && action < STRATEGY_TABLE_ACTIONS; ++action)
+            for (uint32_t action = 0u; action < row->action_count &&
+                 action < STRATEGY_TABLE_ACTIONS; ++action)
             {
                 size_t used = strlen(app->table_cell_text);
-                snprintf(app->table_cell_text + used, sizeof(app->table_cell_text) - used,
-                         "%s%s= %s", action ? "; " : "", row->actions[action], row->ev[action]);
+                snprintf(app->table_cell_text + used,
+                         sizeof(app->table_cell_text) - used,
+                         "%s%s= %s", action ? "; " : "", row->actions[action],
+                         row->ev[action]);
             }
-            break;
+        }
+        else
+        switch (pos->col)
+        {
+        case 0u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", row->hand); break;
+        case 1u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", row->node); break;
+        case 2u: snprintf(app->table_cell_text, sizeof(app->table_cell_text), "%s", row->player); break;
         default: app->table_cell_text[0] = '\0'; break;
         }
         cell->text = app->table_cell_text;
@@ -6727,7 +6734,7 @@ static Panel *i_result_panel(App *app)
     for (uint32_t i = 0u; i < MAX_PLAYERS_DISPLAY; ++i)
         app->lbl_player_evs[i] = label_create();
 
-    for (uint32_t a = 0u; a < STRATEGY_TABLE_ACTIONS; ++a)
+    for (uint32_t a = 0u; a < STRATEGY_RESPONSE_ACTIONS; ++a)
     {
         app->btn_responses[a] = button_push();
         button_text(app->btn_responses[a], "—");
@@ -6936,24 +6943,23 @@ static Panel *i_result_panel(App *app)
         Layout *playout2 = layout_create(1, 1);
 
         tableview_OnData(app->strategy_table, listener(app, i_on_strategy_table, App));
-        for (uint32_t column = 0u; column < 8u; ++column)
+        for (uint32_t column = 0u;
+             column < 3u + STRATEGY_TABLE_ACTIONS + 1u; ++column)
             tableview_add_column_text(app->strategy_table);
         tableview_header_title(app->strategy_table, 0u, "Hand");
         tableview_header_title(app->strategy_table, 1u, "Node");
         tableview_header_title(app->strategy_table, 2u, "Player");
-        tableview_header_title(app->strategy_table, 3u, "—");
-        tableview_header_title(app->strategy_table, 4u, "—");
-        tableview_header_title(app->strategy_table, 5u, "—");
-        tableview_header_title(app->strategy_table, 6u, "—");
-        tableview_header_title(app->strategy_table, 7u, "EV by action");
+        for (uint32_t column = 0u; column < STRATEGY_TABLE_ACTIONS; ++column)
+            tableview_header_title(app->strategy_table, 3u + column, "—");
+        tableview_header_title(app->strategy_table,
+                               3u + STRATEGY_TABLE_ACTIONS, "EV by action");
         tableview_column_width(app->strategy_table, 0u, 118.f);
         tableview_column_width(app->strategy_table, 1u, 58.f);
         tableview_column_width(app->strategy_table, 2u, 62.f);
-        tableview_column_width(app->strategy_table, 3u, 150.f);
-        tableview_column_width(app->strategy_table, 4u, 150.f);
-        tableview_column_width(app->strategy_table, 5u, 150.f);
-        tableview_column_width(app->strategy_table, 6u, 150.f);
-        tableview_column_width(app->strategy_table, 7u, 310.f);
+        for (uint32_t column = 0u; column < STRATEGY_TABLE_ACTIONS; ++column)
+            tableview_column_width(app->strategy_table, 3u + column, 150.f);
+        tableview_column_width(app->strategy_table,
+                               3u + STRATEGY_TABLE_ACTIONS, 310.f);
         tableview_header_resizable(app->strategy_table, TRUE);
         tableview_header_height(app->strategy_table, 28.f);
         tableview_row_height(app->strategy_table, 28.f);

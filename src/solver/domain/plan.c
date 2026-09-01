@@ -248,6 +248,89 @@ static void pe_check_combination(const pe_algorithm_config_t *algo,
     }
 }
 
+static int pe_check_enum_ranges(const pe_solver_config_t *cfg,
+                                const pe_algorithm_config_t *algo,
+                                pe_diagnostics_t *diag)
+{
+    int valid = 1;
+    if ((int)algo->traversal < 0 || algo->traversal >= PE_TRAVERSAL_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "algorithm traversal mode %d is out of range",
+                    (int)algo->traversal);
+    }
+    if ((int)algo->regret < 0 || algo->regret >= PE_REGRET_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "algorithm regret mode %d is out of range",
+                    (int)algo->regret);
+    }
+    if ((int)algo->policy < 0 || algo->policy >= PE_POLICY_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "algorithm policy mode %d is out of range",
+                    (int)algo->policy);
+    }
+    if ((int)algo->averaging < 0 || algo->averaging >= PE_AVG_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "algorithm averaging mode %d is out of range",
+                    (int)algo->averaging);
+    }
+    if ((int)algo->pruning < 0 || algo->pruning >= PE_PRUNE_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "algorithm pruning mode %d is out of range",
+                    (int)algo->pruning);
+    }
+    if ((int)cfg->execution.precision < 0 ||
+        cfg->execution.precision >= PE_PREC_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "execution precision mode %d is out of range",
+                    (int)cfg->execution.precision);
+    }
+    if ((int)cfg->execution.backend < 0 ||
+        cfg->execution.backend >= PE_COMPUTE_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "execution backend %d is out of range",
+                    (int)cfg->execution.backend);
+    }
+    if ((int)cfg->execution.stages.traversal < 0 ||
+        cfg->execution.stages.traversal >= PE_COMPUTE_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "traversal backend %d is out of range",
+                    (int)cfg->execution.stages.traversal);
+    }
+    if ((int)cfg->execution.stages.update < 0 ||
+        cfg->execution.stages.update >= PE_COMPUTE_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "update backend %d is out of range",
+                    (int)cfg->execution.stages.update);
+    }
+    if ((int)cfg->execution.stages.terminal_eval < 0 ||
+        cfg->execution.stages.terminal_eval >= PE_COMPUTE_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "terminal evaluation backend %d is out of range",
+                    (int)cfg->execution.stages.terminal_eval);
+    }
+    return valid;
+}
+
 static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *diag)
 {
     const pe_algorithm_config_t *a = &cfg->algorithm;
@@ -346,7 +429,8 @@ pe_valid_severity_t pe_plan_resolve(const pe_solver_config_t *cfg,
         return PE_VALID_ERROR;
     }
 
-    pe_check_combination(&algo, out_diag);
+    if (pe_check_enum_ranges(cfg, &algo, out_diag))
+        pe_check_combination(&algo, out_diag);
     pe_check_ranges(cfg, out_diag);
 
     memset(&plan, 0, sizeof(plan));

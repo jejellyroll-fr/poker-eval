@@ -132,15 +132,12 @@ static pe_monker_ppt_status_t parse_term(ppt_parser_t *parser,
     end = parser->position;
     if (end == start)
         return PE_MONKER_PPT_ERR_SYNTAX;
-    if (parser->position < parser->length && parser->text[parser->position] == '+') {
-        ++parser->position;
-        if (parser->position < parser->length &&
-            parser->text[parser->position] != ',' &&
-            parser->text[parser->position] != ':' &&
-            parser->text[parser->position] != ')' &&
-            parser->text[parser->position] != '!')
-            return PE_MONKER_PPT_ERR_SYNTAX;
-    }
+    /* '+' has no defined meaning in the four-card PPT grammar. Do not
+       consume it and silently narrow the requested range. The hold'em range
+       parser has its own documented '+' expansion; this parser must reject
+       it until equivalent Omaha semantics are implemented. */
+    if (parser->position < parser->length && parser->text[parser->position] == '+')
+        return PE_MONKER_PPT_ERR_SYNTAX;
     if (end - start >= 3u && parser->text[end - 1u] == 's') {
         suited = 1;
         --end;
