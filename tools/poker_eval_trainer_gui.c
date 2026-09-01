@@ -6,6 +6,11 @@
 #endif
 
 #include <ctype.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#endif
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -605,13 +610,19 @@ static int command_to_argv(char *command, char **argv, size_t capacity)
     return (int)count;
 }
 
+#endif
+
 static int gui_solver_executable_allowed(const char *path)
 {
     const char *name;
+    const char *backslash;
 
     if (path == NULL || path[0] == '\0')
         return 0;
     name = strrchr(path, '/');
+    backslash = strrchr(path, '\\');
+    if (backslash != NULL && (name == NULL || backslash > name))
+        name = backslash;
     name = name != NULL ? name + 1 : path;
     return strcmp(name, "pe-vector-sim") == 0 ||
            strcmp(name, "pe-preflop-solve") == 0 ||
@@ -619,6 +630,35 @@ static int gui_solver_executable_allowed(const char *path)
            strcmp(name, "mpf_run_with_metrics") == 0;
 }
 
+#ifdef _WIN32
+static int gui_command_executable_allowed(const char *command)
+{
+    char executable[1024];
+    const char *cursor = command;
+    size_t length = 0u;
+
+    if (!cursor)
+        return 0;
+    while (*cursor == ' ' || *cursor == '\t')
+        ++cursor;
+    if (*cursor == '"')
+    {
+        ++cursor;
+        while (cursor[length] && cursor[length] != '"')
+            ++length;
+    }
+    else
+    {
+        while (cursor[length] && cursor[length] != ' ' &&
+               cursor[length] != '\t')
+            ++length;
+    }
+    if (length == 0u || length >= sizeof(executable))
+        return 0;
+    memcpy(executable, cursor, length);
+    executable[length] = '\0';
+    return gui_solver_executable_allowed(executable);
+}
 #endif
 
 /* Run an internally-built command without a shell and capture its output into
@@ -631,10 +671,72 @@ static int run_command_capture(app_t *app, const char *command,
     size_t used = 0u;
     int exit_status;
 #ifdef _WIN32
-    (void)app;
-    if (!command)
+    SECURITY_ATTRIBUTES security;
+    STARTUPINFOA startup;
+    PROCESS_INFORMATION process;
+    HANDLE read_handle;
+    HANDLE write_handle;
+    char command_copy[32768];
+    size_t command_length;
+    int descriptor;
+
+    if (!app || !command)
         return -1;
-    stream = _popen(command, "r");
+    command_length = gui_bounded_length(command, sizeof(command_copy));
+    if (command_length >= sizeof(command_copy) ||
+        !gui_command_executable_allowed(command))
+        return -1;
+    memcpy(command_copy, command, command_length + 1u);
+    memset(&security, 0, sizeof(security));
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    if (!CreatePipe(&read_handle, &write_handle, &security, 0))
+        return -1;
+    if (!SetHandleInformation(read_handle, HANDLE_FLAG_INHERIT, 0))
+    {
+        CloseHandle(read_handle);
+        CloseHandle(write_handle);
+        return -1;
+    }
+    memset(&startup, 0, sizeof(startup));
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = write_handle;
+    startup.hStdError = write_handle;
+    memset(&process, 0, sizeof(process));
+    if (!CreateProcessA(NULL, command_copy, NULL, NULL, TRUE, 0, NULL, NULL,
+                        &startup, &process))
+    {
+        CloseHandle(read_handle);
+        CloseHandle(write_handle);
+        return -1;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(write_handle);
+    SDL_AtomicSet(&app->solve_child_pid, (int)process.dwProcessId);
+    if (SDL_AtomicGet(&app->solve_cancel) != 0)
+        (void)TerminateProcess(process.hProcess, 1u);
+    descriptor = _open_osfhandle((intptr_t)read_handle, _O_RDONLY | _O_BINARY);
+    if (descriptor < 0)
+    {
+        CloseHandle(read_handle);
+        (void)TerminateProcess(process.hProcess, 1u);
+        (void)WaitForSingleObject(process.hProcess, INFINITE);
+        CloseHandle(process.hProcess);
+        SDL_AtomicSet(&app->solve_child_pid, 0);
+        return -1;
+    }
+    stream = _fdopen(descriptor, "r");
+    if (!stream)
+    {
+        _close(descriptor);
+        (void)TerminateProcess(process.hProcess, 1u);
+        (void)WaitForSingleObject(process.hProcess, INFINITE);
+        CloseHandle(process.hProcess);
+        SDL_AtomicSet(&app->solve_child_pid, 0);
+        return -1;
+    }
 #else
     char command_copy[32768];
     char *argv[64];
@@ -654,7 +756,7 @@ static int run_command_capture(app_t *app, const char *command,
     command_copy[command_length] = '\0';
     if (command_to_argv(command_copy, argv,
                        sizeof(argv) / sizeof(argv[0])) < 1 ||
-        argv[0] == NULL || strchr(argv[0], '/') == NULL ||
+        argv[0] == NULL ||
         !gui_solver_executable_allowed(argv[0]) || pipe(pipe_fds) != 0)
         return -1;
     if (posix_spawn_file_actions_init(&actions) != 0)
@@ -673,7 +775,7 @@ static int run_command_capture(app_t *app, const char *command,
         posix_spawn_file_actions_destroy(&actions);
         return -1;
     }
-    spawn_status = posix_spawn(&child, argv[0], &actions, NULL, argv, environ);
+    spawn_status = posix_spawnp(&child, argv[0], &actions, NULL, argv, environ);
     posix_spawn_file_actions_destroy(&actions);
     close(pipe_fds[1]);
     if (spawn_status != 0)
@@ -717,7 +819,20 @@ static int run_command_capture(app_t *app, const char *command,
         }
     }
 #ifdef _WIN32
-    exit_status = _pclose(stream);
+    {
+        int close_status = fclose(stream);
+        DWORD process_status = 0u;
+        DWORD wait_status = WaitForSingleObject(process.hProcess, INFINITE);
+        if (wait_status != WAIT_OBJECT_0 ||
+            !GetExitCodeProcess(process.hProcess, &process_status))
+            exit_status = -1;
+        else
+            exit_status = (int)process_status;
+        CloseHandle(process.hProcess);
+        SDL_AtomicSet(&app->solve_child_pid, 0);
+        if (close_status != 0)
+            return -1;
+    }
 #else
     {
         int close_status = fclose(stream);
@@ -875,7 +990,20 @@ static void cancel_pending_solve(app_t *app)
     if (!app || SDL_AtomicGet(&app->solve_state) != SOLVE_RUNNING)
         return;
     SDL_AtomicSet(&app->solve_cancel, 1);
-#ifndef _WIN32
+#ifdef _WIN32
+    {
+        DWORD child = (DWORD)SDL_AtomicGet(&app->solve_child_pid);
+        if (child != 0u)
+        {
+            HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, child);
+            if (process)
+            {
+                (void)TerminateProcess(process, 1u);
+                CloseHandle(process);
+            }
+        }
+    }
+#else
     {
         int child = SDL_AtomicGet(&app->solve_child_pid);
         if (child > 0)

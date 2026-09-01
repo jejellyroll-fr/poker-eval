@@ -3010,12 +3010,19 @@ static PyObject *py_solver_v3_progress(PyObject *self, PyObject *args)
     PyObject *capsule;
     py_solver_v3_context_t *ctx;
     pe_progress_t progress;
+    pe_solver_status_t status;
     (void)self;
     if (!PyArg_ParseTuple(args, "O", &capsule))
         return NULL;
     ctx = py_solver_v3_get_context(capsule);
-    if (!ctx || pe_solver_progress(ctx->solver, &progress) != PE_SOLVER_OK)
+    if (!ctx)
         return NULL;
+    status = pe_solver_progress(ctx->solver, &progress);
+    if (status != PE_SOLVER_OK) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "v3 progress query failed with status %d", (int)status);
+        return NULL;
+    }
     return Py_BuildValue("{s:K,s:K,s:d,s:i,s:i,s:i}", "iteration",
                          (unsigned long long)progress.iteration,
                          "total_iterations",
