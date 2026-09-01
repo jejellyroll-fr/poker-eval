@@ -384,6 +384,7 @@ int pe_work_coordinator_dispatch_and_collect(
                             PE_WORK_PROTOCOL_MAX_PAYLOAD;
     coordinator_inflight_t inflight[PE_WORK_COORDINATOR_MAX_WORKERS];
     int assignment_count;
+    int rc = -1;
     size_t completed = 0u;
     size_t i;
 
@@ -485,12 +486,11 @@ int pe_work_coordinator_dispatch_and_collect(
                 goto fail;
         }
     }
-    free(frame);
-    return assignment_count;
+    rc = assignment_count;
 
 fail:
     free(frame);
-    return -1;
+    return rc;
 }
 
 int pe_work_coordinator_collect_results(
