@@ -116,8 +116,8 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
             const pe_fgs_edge_t *edge = &tree->edges[node->first_edge + i];
             int child_elimination_round[ICM_MAX_PLAYERS];
             const pe_fgs_node_t *child = &tree->nodes[edge->child_index];
-            memcpy(child_elimination_round, elimination_round,
-                   sizeof(child_elimination_round));
+            for (int p = 0; p < ICM_MAX_PLAYERS; ++p)
+                child_elimination_round[p] = elimination_round[p];
             for (int p = 0; p < tree->num_players; ++p) {
                 if (child_elimination_round[p] < 0 && node->stacks[p] > 0.0 &&
                     child->stacks[p] <= 0.0)
