@@ -119,6 +119,41 @@ int main(void)
     assert(isfinite(result.ev[0]) && isfinite(result.ev[1]));
     assert(fabs(result.ev[0] + result.ev[1] - 100.0) < 1e-9);
 
+    /* Elimination payouts follow the path, not seat order. The first busted
+     * player gets third place and the second busted player gets second place. */
+    {
+        pe_fgs_node_t order_nodes[3];
+        pe_fgs_edge_t order_edges[2] = {{1, 1.0}, {2, 1.0}};
+        pe_fgs_tree_t order_tree;
+        memset(order_nodes, 0, sizeof(order_nodes));
+        order_nodes[0].first_edge = 0;
+        order_nodes[0].edge_count = 1;
+        order_nodes[0].stacks[0] = 10.0;
+        order_nodes[0].stacks[1] = 20.0;
+        order_nodes[0].stacks[2] = 100.0;
+        order_nodes[1].first_edge = 1;
+        order_nodes[1].edge_count = 1;
+        order_nodes[1].stacks[1] = 20.0;
+        order_nodes[1].stacks[2] = 110.0;
+        order_nodes[2].terminal = 1;
+        order_nodes[2].stacks[2] = 130.0;
+        memset(&order_tree, 0, sizeof(order_tree));
+        order_tree.nodes = order_nodes;
+        order_tree.node_count = 3;
+        order_tree.edges = order_edges;
+        order_tree.edge_count = 2;
+        order_tree.root_index = 0;
+        order_tree.num_players = 3;
+        order_tree.num_payouts = 3;
+        order_tree.payouts[0] = 60.0;
+        order_tree.payouts[1] = 30.0;
+        order_tree.payouts[2] = 10.0;
+        assert(pe_fgs_calculate_tree(&order_tree, &result) == 0);
+        assert(fabs(result.ev[0] - 10.0) < 1e-9);
+        assert(fabs(result.ev[1] - 30.0) < 1e-9);
+        assert(fabs(result.ev[2] - 60.0) < 1e-9);
+    }
+
     /* Capacity exhaustion is reported, not truncated. */
     fill_hu_symmetric(&input, 2);
     assert(pe_fgs_generate_even_contribution(&input, nodes, 2, edges, 512,

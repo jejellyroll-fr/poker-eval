@@ -8,7 +8,8 @@
 #include "../solver/domain/finite_double.h"
 
 static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_probability,
-                   int depth, pe_fgs_result_t *result, int *active)
+                   int depth, pe_fgs_result_t *result, int *active,
+                   const int *elimination_round)
 {
     const pe_fgs_node_t *node;
     if (depth > PE_FGS_MAX_DEPTH || node_index < 0 ||
@@ -20,6 +21,8 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
         icm_result_t icm;
         int player_map[ICM_MAX_PLAYERS];
         int eliminated_map[ICM_MAX_PLAYERS];
+        int eliminated_round[ICM_MAX_PLAYERS];
+        int assigned[ICM_MAX_PLAYERS];
         int active_players = 0;
         int eliminated_players = 0;
         memset(&input, 0, sizeof(input));
@@ -30,8 +33,11 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
                 player_map[active_players] = p;
                 input.stacks[active_players++] = node->stacks[p];
             }
-            else
+            else {
                 eliminated_map[eliminated_players++] = p;
+                eliminated_round[eliminated_players - 1] = elimination_round[p] >= 0
+                    ? elimination_round[p] : 0;
+            }
         }
         if (active_players == 0)
             return -1;
@@ -48,11 +54,38 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
             return -1;
         for (int p = 0; p < active_players; ++p)
             result->ev[player_map[p]] += path_probability * icm.icm_ev[p];
-        for (int p = 0; p < eliminated_players; ++p) {
-            int payout_index = active_players + p;
-            if (payout_index < tree->num_payouts)
-                result->ev[eliminated_map[p]] +=
-                    path_probability * tree->payouts[payout_index];
+        memset(assigned, 0, sizeof(assigned));
+        for (int placed = 0; placed < eliminated_players;) {
+            int group_round = PE_FGS_MAX_DEPTH + 1;
+            int group_count = 0;
+            double group_payout = 0.0;
+
+            for (int p = 0; p < eliminated_players; ++p)
+                if (!assigned[p] && eliminated_round[p] < group_round)
+                    group_round = eliminated_round[p];
+            for (int p = 0; p < eliminated_players; ++p)
+                if (!assigned[p] && eliminated_round[p] == group_round)
+                    group_count++;
+            if (group_count == 0)
+                return -1;
+
+            /* Earlier eliminations finish later. Players eliminated by the
+             * same transition tie and split the places for that group. */
+            {
+                int first_payout = tree->num_players - placed - group_count;
+                int last_payout = tree->num_players - placed - 1;
+                for (int payout = first_payout; payout <= last_payout; ++payout)
+                    if (payout >= 0 && payout < tree->num_payouts)
+                        group_payout += tree->payouts[payout];
+            }
+            for (int p = 0; p < eliminated_players; ++p) {
+                if (!assigned[p] && eliminated_round[p] == group_round) {
+                    result->ev[eliminated_map[p]] +=
+                        path_probability * group_payout / (double)group_count;
+                    assigned[p] = 1;
+                }
+            }
+            placed += group_count;
         }
         result->leaf_count++;
         result->probability += path_probability;
@@ -81,8 +114,17 @@ static int fgs_walk(const pe_fgs_tree_t *tree, int node_index, double path_proba
         }
         for (size_t i = 0; i < node->edge_count; ++i) {
             const pe_fgs_edge_t *edge = &tree->edges[node->first_edge + i];
+            int child_elimination_round[ICM_MAX_PLAYERS];
+            const pe_fgs_node_t *child = &tree->nodes[edge->child_index];
+            memcpy(child_elimination_round, elimination_round,
+                   sizeof(child_elimination_round));
+            for (int p = 0; p < tree->num_players; ++p) {
+                if (child_elimination_round[p] < 0 && node->stacks[p] > 0.0 &&
+                    child->stacks[p] <= 0.0)
+                    child_elimination_round[p] = depth + 1;
+            }
             if (fgs_walk(tree, edge->child_index, path_probability * edge->probability,
-                         depth + 1, result, active) != 0) {
+                         depth + 1, result, active, child_elimination_round) != 0) {
                 active[node_index] = 0;
                 return -1;
             }
@@ -104,8 +146,18 @@ int pe_fgs_calculate_tree(const pe_fgs_tree_t *tree, pe_fgs_result_t *result)
         return -1;
     memset(result, 0, sizeof(*result));
     memset(active, 0, sizeof(active));
-    if (fgs_walk(tree, tree->root_index, 1.0, 0, result, active) != 0 ||
-        fabs(result->probability - 1.0) > 1e-8)
+    {
+        int elimination_round[ICM_MAX_PLAYERS];
+        for (int p = 0; p < ICM_MAX_PLAYERS; ++p)
+            elimination_round[p] = -1;
+        for (int p = 0; p < tree->num_players; ++p)
+            if (tree->nodes[tree->root_index].stacks[p] <= 0.0)
+                elimination_round[p] = 0;
+        if (fgs_walk(tree, tree->root_index, 1.0, 0, result, active,
+                     elimination_round) != 0)
+            return -1;
+    }
+    if (fabs(result->probability - 1.0) > 1e-8)
         return -1;
     return 0;
 }

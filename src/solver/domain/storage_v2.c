@@ -712,6 +712,13 @@ const double *pe_storage_values_const(const pe_storage_t *s, pe_infoset_id_t id,
         return NULL;
     if (s->precision == PE_PREC_F32 || s->precision == PE_PREC_FIXED16)
     {
+        /* A const lookup must not create compact storage for an array that
+         * has never been accessed. Mutable access materializes the resident
+         * representation and decoded span. */
+        if ((s->precision == PE_PREC_F32 && !s->float_values[which]) ||
+            (s->precision == PE_PREC_FIXED16 &&
+             (!s->fixed_values[which] || !s->fixed_scales[which])))
+            return NULL;
         /* The port's const accessor may materialize a decoded read span; the
            representation remains logically const even though its cache is
            populated. Convert through uintptr_t to keep strict cast-qual

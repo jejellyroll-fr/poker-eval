@@ -43,6 +43,9 @@ int main(void)
     second = pe_storage_resolve(f32, 20u, 4, 1, 0);
     if (second == PE_INFOSET_ID_INVALID)
         return fail("second f32 resolve failed");
+    if (pe_storage_values_const(f32, 0u, PE_VALUES_REGRET) ||
+        pe_storage_values_const(fixed, first, PE_VALUES_REGRET))
+        return fail("const lookup materialized untouched compact storage");
 
     double *values = pe_storage_values(fixed, first, PE_VALUES_REGRET);
     if (!values)
