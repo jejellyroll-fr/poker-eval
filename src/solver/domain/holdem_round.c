@@ -120,6 +120,9 @@ pe_holdem_round_status_t pe_holdem_round_advance(
             break;
         }
     }
+    if (has_actor && (!out->betting.active[first_to_act] ||
+                      out->betting.all_in[first_to_act]))
+        return PE_HOLDEM_ROUND_ERR_INVALID_STATE;
     out->betting.round_complete = has_actor ? 0 : 1;
     out->betting.terminal = 0;
     out->betting.winner = -1;

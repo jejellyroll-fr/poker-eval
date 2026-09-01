@@ -157,9 +157,6 @@ pe_action_status_t pe_action_commitment(
     if (!finite_nonnegative(to_call) || !finite_nonnegative(stack) ||
         !finite_nonnegative(pot) || !finite_nonnegative(min_raise))
         return PE_ACTION_ERR_INVALID;
-    if (to_call > stack + 1e-9)
-        return PE_ACTION_ERR_INVALID;
-
     if (action->kind == PE_ACTION_FOLD || action->kind == PE_ACTION_CHECK)
     {
         if (action->kind == PE_ACTION_CHECK && to_call > 1e-9)
@@ -176,6 +173,8 @@ pe_action_status_t pe_action_commitment(
         *out_commitment = stack;
         return PE_ACTION_OK;
     }
+    if (to_call > stack + 1e-9)
+        return PE_ACTION_ERR_INVALID;
     if (action->kind != PE_ACTION_BET && action->kind != PE_ACTION_RAISE)
         return PE_ACTION_ERR_INVALID;
 

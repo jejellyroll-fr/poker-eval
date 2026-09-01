@@ -145,6 +145,18 @@ static void test_average_uniform_fallback(void)
         CHECK(!isnan(out[i]), "average produced NaN at %zu", i);
 }
 
+static void test_average_rejects_infinite_reach(void)
+{
+    const double strategy[] = {0.5, 0.5};
+    const double reach[] = {INFINITY};
+    double weighted[] = {0.0, 0.0};
+    double normalizer[] = {0.0};
+
+    CHECK(pe_average_accumulate_vector(weighted, normalizer, strategy, reach,
+                                       2u, 1u, 1.0) != 0,
+          "infinite reach accepted by average update");
+}
+
 static void test_delayed_linear_average(void)
 {
     const double strategy[] = {0.25, 0.75};
@@ -471,6 +483,7 @@ int main(void)
     test_uniform_fallback_and_invalid_inputs();
     test_reach_weighted_average();
     test_average_uniform_fallback();
+    test_average_rejects_infinite_reach();
     test_delayed_linear_average();
     test_importance_weighted_average();
     test_sampled_chance_is_unbiased();

@@ -23,7 +23,7 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
         return -1;
 
     for (combo = 0; combo < combo_count; ++combo)
-        if (reach[combo] < 0.0 || isnan(reach[combo]))
+        if (reach[combo] < 0.0 || !pe_finite_double(reach[combo]))
             return -1;
 
     for (combo = 0; combo < combo_count; ++combo)

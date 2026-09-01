@@ -186,12 +186,40 @@ static void test_short_stack_call_is_not_an_all_in_call(void)
           "ordinary call cannot exceed the remaining stack");
 }
 
+static void test_short_all_in_call(void)
+{
+    pe_betting_rules_t rules;
+    pe_betting_state_t state;
+    pe_betting_state_t next;
+    pe_action_t all_in = action(PE_ACTION_ALL_IN, PE_AMOUNT_NONE, 0.0);
+
+    setup(&state, &rules, 5.0, 100.0);
+    state.to_call = 10.0;
+    state.current_bet = 10.0;
+    state.round_contrib[1] = 10.0;
+    state.invested[1] = 10.0;
+    state.pot = 10.0;
+    state.acted[0] = 1;
+    CHECK(pe_betting_state_validate(&state, &rules) == PE_BETTING_OK,
+          "short all-in call setup");
+    CHECK(pe_betting_action_is_legal(&state, &rules, &all_in) ==
+              PE_BETTING_OK,
+          "short all-in call is legal after an earlier action");
+    CHECK(pe_betting_apply_action(&state, &rules, &all_in, &next) ==
+              PE_BETTING_OK && next.all_in[0] &&
+              fabs(next.stack[0]) < 1e-12 &&
+              fabs(next.round_contrib[0] - 5.0) < 1e-12 &&
+              next.to_act == 1,
+          "short all-in call commits the remaining stack");
+}
+
 int main(void)
 {
     test_bet_call_and_round_end();
     test_fold_terminal();
     test_all_in_and_reopen_rule();
     test_short_stack_call_is_not_an_all_in_call();
+    test_short_all_in_call();
     if (failures)
         fprintf(stderr, "test_pe_betting_state: %d failure(s)\n", failures);
     else

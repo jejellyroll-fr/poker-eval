@@ -211,7 +211,9 @@ pe_betting_status_t pe_betting_action_is_legal(
        enforce the flag here so callers cannot manufacture a raise where only
        call or fold is legal. */
     if ((action->kind == PE_ACTION_BET || action->kind == PE_ACTION_RAISE ||
-         action->kind == PE_ACTION_ALL_IN) && state->acted[state->to_act])
+         (action->kind == PE_ACTION_ALL_IN &&
+          state->stack[state->to_act] > outstanding + epsilon)) &&
+        state->acted[state->to_act])
         return PE_BETTING_ERR_ILLEGAL_ACTION;
     if (action->kind == PE_ACTION_CHANCE || action->kind == PE_ACTION_TERMINAL)
         return PE_BETTING_ERR_ILLEGAL_ACTION;

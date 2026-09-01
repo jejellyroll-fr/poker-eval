@@ -152,11 +152,34 @@ static void test_all_in_runout(void)
           "all-in runout did not reach showdown");
 }
 
+static void test_first_to_act_must_be_eligible(void)
+{
+    const double stacks[] = {10.0, 10.0};
+    const mask_t flop = card(0) | card(1) | card(2);
+    pe_betting_rules_t rules;
+    pe_holdem_round_state_t state;
+    pe_holdem_round_state_t next;
+
+    pe_betting_rules_default(&rules, 2u);
+    CHECK(pe_holdem_round_init(&state, MASK_EMPTY, MASK_EMPTY, &rules,
+                               stacks, 2u, 0, 0.0, 0.0) ==
+              PE_HOLDEM_ROUND_OK,
+          "ineligible first actor setup failed");
+    state.betting.round_complete = 1;
+    state.betting.to_act = -1;
+    state.betting.all_in[0] = 1;
+    state.betting.stack[0] = 0.0;
+    CHECK(pe_holdem_round_advance(&state, &rules, flop, 0, &next) ==
+              PE_HOLDEM_ROUND_ERR_INVALID_STATE,
+          "ineligible first actor was accepted");
+}
+
 int main(void)
 {
     test_action_and_street_path();
     test_invalid_transition();
     test_all_in_runout();
+    test_first_to_act_must_be_eligible();
     if (failures)
         return 1;
     puts("test_pe_holdem_round: actions and all public streets passed");
