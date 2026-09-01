@@ -13,6 +13,7 @@
 #include <string.h>
 
 #ifndef _WIN32
+#include <signal.h>
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -91,6 +92,7 @@ typedef struct {
     char feedback[256];
     int running;
     int page;
+    int training_action_scroll;
     int range_editor_player;
     uint8_t range_matrix[2][13][13];
     uint64_t selected_key;
@@ -114,6 +116,8 @@ typedef struct {
      * solve_state to SOLVE_DONE; the main loop drains the handoff. */
     SDL_Thread *solve_thread;
     SDL_atomic_t solve_state;
+    SDL_atomic_t solve_cancel;
+    SDL_atomic_t solve_child_pid;
     int solve_exit_status;
     char solve_command[32768];
     char solve_staging[1024];
@@ -335,7 +339,7 @@ static void next_spot(app_t *app)
             }
         }
     }
-    if (!has_selected) return; app->current = selected; app->has_current = 1; app->answered_current = 0; app->selected_action = -1; app->best_action = -1;
+    if (!has_selected) return; app->current = selected; app->has_current = 1; app->answered_current = 0; app->selected_action = -1; app->best_action = -1; app->training_action_scroll = 0;
 }
 
 static void answer(app_t *app, int selected)
@@ -619,14 +623,17 @@ static int gui_solver_executable_allowed(const char *path)
 
 /* Run an internally-built command without a shell and capture its output into
  * destination. Returns the process exit status, or -1 when it cannot start. */
-static int run_command_capture(const char *command, char *destination,
-                               size_t capacity)
+static int run_command_capture(app_t *app, const char *command,
+                               char *destination, size_t capacity)
 {
     char output[4096];
     FILE *stream;
     size_t used = 0u;
     int exit_status;
 #ifdef _WIN32
+    (void)app;
+    if (!command)
+        return -1;
     stream = _popen(command, "r");
 #else
     char command_copy[32768];
@@ -637,8 +644,10 @@ static int run_command_capture(const char *command, char *destination,
     int spawn_status;
     posix_spawn_file_actions_t actions;
 
+    if (!app || !command)
+        return -1;
     command_length = gui_bounded_length(command, sizeof(command_copy));
-    if (!command || command_length >= sizeof(command_copy))
+    if (command_length >= sizeof(command_copy))
         return -1;
     for (size_t i = 0u; i < command_length; ++i)
         command_copy[i] = command[i];
@@ -672,11 +681,17 @@ static int run_command_capture(const char *command, char *destination,
         close(pipe_fds[0]);
         return -1;
     }
+    SDL_AtomicSet(&app->solve_child_pid, (int)child);
+    if (SDL_AtomicGet(&app->solve_cancel) != 0)
+        (void)kill(child, SIGTERM);
     stream = fdopen(pipe_fds[0], "r");
     if (!stream)
     {
         close(pipe_fds[0]);
+        if (SDL_AtomicGet(&app->solve_cancel) != 0)
+            (void)kill(child, SIGTERM);
         (void)waitpid(child, NULL, 0);
+        SDL_AtomicSet(&app->solve_child_pid, 0);
         return -1;
     }
 #endif
@@ -704,8 +719,13 @@ static int run_command_capture(const char *command, char *destination,
 #ifdef _WIN32
     exit_status = _pclose(stream);
 #else
-    if (fclose(stream) != 0 || waitpid(child, &exit_status, 0) < 0)
-        return -1;
+    {
+        int close_status = fclose(stream);
+        int wait_status = waitpid(child, &exit_status, 0);
+        SDL_AtomicSet(&app->solve_child_pid, 0);
+        if (close_status != 0 || wait_status < 0)
+            return -1;
+    }
     if (WIFEXITED(exit_status))
         exit_status = WEXITSTATUS(exit_status);
     else if (WIFSIGNALED(exit_status))
@@ -720,7 +740,7 @@ static int solve_worker(void *userdata)
 {
     app_t *app = (app_t *)userdata;
     app->solve_exit_status =
-        run_command_capture(app->solve_command, app->solve_staging,
+        run_command_capture(app, app->solve_command, app->solve_staging,
                             sizeof(app->solve_staging));
     SDL_AtomicSet(&app->solve_state, SOLVE_DONE);
     return 0;
@@ -743,11 +763,13 @@ static int launch_solver(app_t *app, const char *command, const char *success,
     app->solve_staging[0] = '\0';
     app->solver_result[0] = '\0';
     app->solve_exit_status = -1;
+    SDL_AtomicSet(&app->solve_cancel, 0);
+    SDL_AtomicSet(&app->solve_child_pid, 0);
     SDL_AtomicSet(&app->solve_state, SOLVE_RUNNING);
     app->solve_thread = SDL_CreateThread(solve_worker, "pe-solve", app);
     if (!app->solve_thread)
     {
-        int exit_status = run_command_capture(command, app->solver_result,
+        int exit_status = run_command_capture(app, command, app->solver_result,
                                               sizeof(app->solver_result));
         SDL_AtomicSet(&app->solve_state, SOLVE_IDLE);
         copy_field(app->solver_status, sizeof(app->solver_status),
@@ -846,6 +868,20 @@ static void finish_pending_solve(app_t *app)
         if (app->solve_exit_status == 0)
             load_tree_json_file(app, app->tree_json_path);
     }
+}
+
+static void cancel_pending_solve(app_t *app)
+{
+    if (!app || SDL_AtomicGet(&app->solve_state) != SOLVE_RUNNING)
+        return;
+    SDL_AtomicSet(&app->solve_cancel, 1);
+#ifndef _WIN32
+    {
+        int child = SDL_AtomicGet(&app->solve_child_pid);
+        if (child > 0)
+            (void)kill((pid_t)child, SIGTERM);
+    }
+#endif
 }
 
 /* Load an mpf-format tree JSON file into the tree view. */
@@ -1843,17 +1879,37 @@ static void render_solver_legacy(SDL_Renderer *renderer, const app_t *app)
         text(renderer, right + 24, 416, meta && meta->position[0] ? meta->position : "UNKNOWN", 2, white);
         text(renderer, right + 24, 480, "TRAIN THIS SPOT", 2, muted);
         {
+            const spot_t *spot = &app->spots[app->selected_spot < app->spot_count ? app->selected_spot : 0];
             int button_width = (width - right - 100) / 2;
-            for (int action = 0; action < 4; ++action)
+            int visible_rows = (height - 530) / 48;
+            int total_rows = (spot->actions + 1) / 2;
+            int max_scroll;
+            int scroll;
+            if (visible_rows < 1) visible_rows = 1;
+            max_scroll = total_rows > visible_rows ? total_rows - visible_rows : 0;
+            scroll = app->training_action_scroll > max_scroll ? max_scroll : app->training_action_scroll;
+            for (int row = 0; row < visible_rows; ++row)
             {
-                int bx = right + 24 + (action % 2) * (button_width + 12);
-                int by = 506 + (action / 2) * 48;
-                const char *name = app->action_names[action][0] ? app->action_names[action] : "OPTION";
-                panel(renderer, (rect_t){bx, by, button_width, 38},
-                      action == app->selected_action ? (SDL_Color){35, 77, 73, 255} : surface2,
-                      action == app->selected_action ? green : outline);
-                text(renderer, bx + 12, by + 12, name, 2, white);
+                int action_row = scroll + row;
+                for (int column = 0; column < 2; ++column)
+                {
+                    int action = action_row * 2 + column;
+                    int bx;
+                    int by;
+                    const char *name;
+                    if (action >= spot->actions) continue;
+                    bx = right + 24 + column * (button_width + 12);
+                    by = 506 + row * 48;
+                    name = app->action_names[action][0] ? app->action_names[action] : "OPTION";
+                    panel(renderer, (rect_t){bx, by, button_width, 38},
+                          action == app->selected_action ? (SDL_Color){35, 77, 73, 255} : surface2,
+                          action == app->selected_action ? green : outline);
+                    text(renderer, bx + 12, by + 12, name, 2, white);
+                }
             }
+            if (max_scroll > 0)
+                text(renderer, right + 24, 506 + visible_rows * 48 - 10,
+                     "SCROLL FOR MORE ACTIONS", 1, muted);
         }
     }
     if (app->page == 2 && app->spot_count)
@@ -2259,11 +2315,30 @@ int main(int argc, char **argv)
     while (app.running) {
         finish_pending_solve(&app);
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) app.running = 0;
+            if (event.type == SDL_QUIT) {
+                app.running = 0;
+                cancel_pending_solve(&app);
+                break;
+            }
             else if (event.type == SDL_DROPFILE) {
                 set_dropped_file(&app, event.drop.file);
                 if (app.spot_count) next_spot(&app);
                 SDL_free(event.drop.file);
+            }
+            else if (event.type == SDL_MOUSEWHEEL && app.page == 2 && app.spot_count) {
+                int output_width = 0, output_height = 0;
+                int visible_rows;
+                int total_rows;
+                int max_scroll;
+                SDL_GetRendererOutputSize(renderer, &output_width, &output_height);
+                (void)output_width;
+                visible_rows = (output_height - 530) / 48;
+                if (visible_rows < 1) visible_rows = 1;
+                total_rows = (app.spots[app.selected_spot < app.spot_count ? app.selected_spot : 0].actions + 1) / 2;
+                max_scroll = total_rows > visible_rows ? total_rows - visible_rows : 0;
+                app.training_action_scroll -= event.wheel.y;
+                if (app.training_action_scroll < 0) app.training_action_scroll = 0;
+                if (app.training_action_scroll > max_scroll) app.training_action_scroll = max_scroll;
             }
             else if (event.type == SDL_TEXTINPUT) append_text_input(&app, event.text.text);
             else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_n) next_spot(&app);
@@ -2338,6 +2413,7 @@ int main(int argc, char **argv)
                     if (picked < app.spot_count) {
                         app.selected_spot = picked;
                         app.selected_key = app.spots[picked].key;
+                        app.training_action_scroll = 0;
                     }
                 }
                 else if (app.page == 2 && inside(layout.next_button, mouse_x, mouse_y)) {
@@ -2348,15 +2424,28 @@ int main(int argc, char **argv)
                     }
                 }
                 else if (app.page == 2 && app.spot_count && mouse_x >= 1030 &&
-                         mouse_x < output_width - 52 && mouse_y >= 506 && mouse_y < 582) {
+                         mouse_x < output_width - 52 && mouse_y >= 506) {
                     int button_width = (output_width - 1030 - 76) / 2;
-                    int column = (mouse_x - 1054) / (button_width + 12);
-                    int row = (mouse_y - 506) / 48;
-                    int action = row * 2 + column;
-                    int local_x = mouse_x - (1054 + column * (button_width + 12));
-                    int local_y = mouse_y - (506 + row * 48);
+                    int visible_rows = (output_height - 530) / 48;
+                    int total_rows;
+                    int max_scroll;
+                    int scroll;
+                    int column;
+                    int row;
+                    int action;
+                    int local_x;
+                    int local_y;
                     size_t selected = app.selected_spot < app.spot_count ? app.selected_spot : 0;
-                    if (column >= 0 && column < 2 && row >= 0 && row < 2 &&
+                    if (visible_rows < 1) visible_rows = 1;
+                    total_rows = (app.spots[selected].actions + 1) / 2;
+                    max_scroll = total_rows > visible_rows ? total_rows - visible_rows : 0;
+                    scroll = app.training_action_scroll > max_scroll ? max_scroll : app.training_action_scroll;
+                    column = button_width > 0 ? (mouse_x - 1054) / (button_width + 12) : -1;
+                    row = (mouse_y - 506) / 48;
+                    action = (scroll + row) * 2 + column;
+                    local_x = column >= 0 ? mouse_x - (1054 + column * (button_width + 12)) : -1;
+                    local_y = mouse_y - (506 + row * 48);
+                    if (column >= 0 && column < 2 && row >= 0 && row < visible_rows &&
                         local_x >= 0 && local_x < button_width && local_y >= 0 && local_y < 38 &&
                         action < app.spots[selected].actions) {
                         app.current = selected;
@@ -2399,7 +2488,9 @@ int main(int argc, char **argv)
         }
         render_solver(renderer, &app); SDL_Delay(16);
     }
-    /* Do not leak the worker: wait out any solve still in flight. */
+    /* Stop the child before joining the worker so closing never waits for a
+     * long solve to finish naturally. */
+    cancel_pending_solve(&app);
     while (SDL_AtomicGet(&app.solve_state) == SOLVE_RUNNING) SDL_Delay(16);
     finish_pending_solve(&app);
     pe_tree_json_free(&app.tree_view);
