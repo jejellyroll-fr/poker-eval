@@ -153,17 +153,17 @@ static int parse_manifest_magic(const char *line, char magic[64],
 
 uint32_t pe_solver_shard_for_key(uint64_t key, uint32_t shard_count)
 {
-    uint64_t x = key;
+    uint64_t hash = UINT64_C(14695981039346656037);
+    int byte;
     if (shard_count == 0u)
         return UINT32_MAX;
-    /* SplitMix64 finalizer avoids pathological low-bit distributions while
-       preserving a cheap, platform-independent routing rule. */
-    x ^= x >> 30;
-    x *= UINT64_C(0xbf58476d1ce4e5b9);
-    x ^= x >> 27;
-    x *= UINT64_C(0x94d049bb133111eb);
-    x ^= x >> 31;
-    return (uint32_t)(x % (uint64_t)shard_count);
+    /* Hash the key in a fixed byte order so this remains FNV-1a-compatible
+       across machines with different native integer representations. */
+    for (byte = 7; byte >= 0; --byte) {
+        hash ^= (key >> (unsigned)(byte * 8)) & UINT64_C(0xff);
+        hash *= UINT64_C(1099511628211);
+    }
+    return (uint32_t)(hash % (uint64_t)shard_count);
 }
 
 int pe_solver_shard_valid(pe_solver_shard_t shard)
@@ -232,8 +232,14 @@ int pe_solver_cluster_manifest_write(
     for (i = 0; i < manifest->task_count; ++i)
     {
         const pe_solver_cluster_task_t *task = &tasks[i];
+        size_t status_length = bounded_length(task->status,
+                                              sizeof(task->status));
+        size_t checkpoint_length = bounded_length(task->checkpoint_path,
+                                                  sizeof(task->checkpoint_path));
         if (task->shard_id >= manifest->shard_count ||
             task->begin > task->end ||
+            status_length >= sizeof(task->status) ||
+            checkpoint_length >= sizeof(task->checkpoint_path) ||
             strchr(task->status, '\n') || strchr(task->status, '\t') ||
             strchr(task->checkpoint_path, '\n') ||
             strchr(task->checkpoint_path, '\t') ||

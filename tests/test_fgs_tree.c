@@ -30,6 +30,9 @@ int main(void)
     nodes[1].stacks[0] = 100.0;
     tree.payouts[0] = -1.0;
     assert(pe_fgs_calculate_tree(&tree, &result) == -1);
+    tree.payouts[0] = 70.0;
+    tree.num_payouts = 3;
+    assert(pe_fgs_calculate_tree(&tree, &result) == -1);
 
     puts("Dynamic FGS tree tests passed");
     return 0;

@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #if !defined(_WIN32)
+#include <pthread.h>
 #include <sys/socket.h>
 #endif
 
@@ -243,6 +244,92 @@ static void test_collect_results(void)
 #endif
 }
 
+#if !defined(_WIN32)
+typedef struct coordinator_worker_thread_t {
+    pe_work_socket_t socket;
+    const pe_runtime_capabilities_t *runtime;
+    size_t unit_count;
+    int result;
+} coordinator_worker_thread_t;
+
+static int coordinator_test_execute(const pe_work_unit_t *unit,
+                                    pe_compute_kind_t backend,
+                                    pe_work_result_t *result,
+                                    void *user_data)
+{
+    (void)user_data;
+    result->iterations = unit->iteration_end - unit->iteration_begin;
+    result->infosets_trained = 1u;
+    result->constraints_satisfied = 1;
+    result->backend = backend;
+    result->exploitability = 0.0;
+    result->worst_margin = 0.0;
+    result->mean_margin = 0.0;
+    return 0;
+}
+
+static void *coordinator_worker_thread(void *user_data)
+{
+    coordinator_worker_thread_t *worker = user_data;
+    worker->result = pe_work_worker_run_batch(
+        worker->socket, worker->runtime, coordinator_test_execute, NULL,
+        worker->unit_count, NULL);
+    return NULL;
+}
+
+static void test_dispatch_and_collect(void)
+{
+    pe_runtime_capabilities_t runtime = {0};
+    pe_work_coordinator_t coordinator;
+    pe_work_worker_channel_t channels[2];
+    pe_work_worker_assignment_t assignments[2];
+    pe_work_reducer_t reducer;
+    pe_work_unit_t units[4];
+    coordinator_worker_thread_t workers[2];
+    pthread_t threads[2];
+    int sockets[2][2];
+    size_t i;
+
+    mark_backend(&runtime, PE_COMPUTE_CPU_REF, 1.0);
+    pe_work_coordinator_init(&coordinator);
+    assert(pe_work_coordinator_register(&coordinator, 11u, &runtime) == 0);
+    assert(pe_work_coordinator_register(&coordinator, 22u, &runtime) == 0);
+    for (i = 0u; i < 4u; ++i) {
+        pe_work_unit_init(&units[i]);
+        units[i].public_state = i + 1u;
+        units[i].iteration_end = 1u;
+    }
+    /* The socket pairs are per worker, not per unit. */
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets[0]) == 0);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets[1]) == 0);
+    channels[0] = (pe_work_worker_channel_t){11u, (pe_work_socket_t)sockets[0][0]};
+    channels[1] = (pe_work_worker_channel_t){22u, (pe_work_socket_t)sockets[1][0]};
+    workers[0] = (coordinator_worker_thread_t){
+        (pe_work_socket_t)sockets[0][1], &runtime, 2u, -1};
+    workers[1] = (coordinator_worker_thread_t){
+        (pe_work_socket_t)sockets[1][1], &runtime, 2u, -1};
+    assert(pthread_create(&threads[0], NULL, coordinator_worker_thread,
+                          &workers[0]) == 0);
+    assert(pthread_create(&threads[1], NULL, coordinator_worker_thread,
+                          &workers[1]) == 0);
+    pe_work_reducer_init(&reducer);
+    assert(pe_work_coordinator_dispatch_and_collect(
+               &coordinator, units, 4u, channels, 2u, assignments, 2u,
+               &reducer) == 2);
+    assert(pthread_join(threads[0], NULL) == 0);
+    assert(pthread_join(threads[1], NULL) == 0);
+    assert(workers[0].result == 0 && workers[1].result == 0);
+    assert(pe_work_reducer_count(&reducer) == 4u);
+    pe_work_reducer_destroy(&reducer);
+    for (i = 0u; i < 4u; ++i)
+        pe_work_unit_destroy(&units[i]);
+    for (i = 0u; i < 2u; ++i) {
+        pe_work_socket_close((pe_work_socket_t)sockets[i][0]);
+        pe_work_socket_close((pe_work_socket_t)sockets[i][1]);
+    }
+}
+#endif
+
 static int execute_distributed_unit(const pe_work_unit_t *unit,
                                     pe_compute_kind_t backend,
                                     pe_work_result_t *result,
@@ -328,6 +415,9 @@ int main(void)
     test_capability_handshake();
     test_dispatch_channels();
     test_collect_results();
+#if !defined(_WIN32)
+    test_dispatch_and_collect();
+#endif
     test_end_to_end_dispatch();
     return 0;
 }

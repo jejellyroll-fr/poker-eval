@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -65,6 +66,21 @@ int main(void)
         pe_push_fold_multiway_result_t matched_result = {0};
         assert(pe_push_fold_multiway_solve(&matched, &matched_result) == 0);
         assert(fabs(matched_result.hero_ev - 0.9375) < 1e-12);
+    }
+
+    {
+        pe_push_fold_multiway_input_t overflowing = input;
+        pe_push_fold_multiway_result_t overflowing_result = {0};
+        overflowing.hero_stack = DBL_MAX;
+        overflowing.villain_stacks[0] = DBL_MAX;
+        overflowing.villain_stacks[1] = DBL_MAX;
+        overflowing.num_villains = 2;
+        overflowing.hero_equity_by_call_mask[0] = 0.0;
+        overflowing.hero_equity_by_call_mask[1] = 0.5;
+        overflowing.hero_equity_by_call_mask[2] = 0.5;
+        overflowing.hero_equity_by_call_mask[3] = 0.5;
+        assert(pe_push_fold_multiway_solve(&overflowing,
+                                           &overflowing_result) == -1);
     }
 
     puts("Multiway push/fold tests passed");

@@ -80,7 +80,8 @@ int pe_fgs_calculate_tree(const pe_fgs_tree_t *tree, pe_fgs_result_t *result)
         tree->node_count > 4096 || tree->root_index < 0 ||
         (size_t)tree->root_index >= tree->node_count || tree->num_players <= 0 ||
         tree->num_players > ICM_MAX_PLAYERS || tree->num_payouts <= 0 ||
-        tree->num_payouts > ICM_MAX_PLAYERS)
+        tree->num_payouts > ICM_MAX_PLAYERS ||
+        tree->num_payouts > tree->num_players)
         return -1;
     memset(result, 0, sizeof(*result));
     memset(active, 0, sizeof(active));
@@ -189,6 +190,7 @@ int pe_fgs_generate_even_contribution(const pe_fgs_scenario_input_t *input,
         return -1;
     if (input->num_players < 2 || input->num_players > ICM_MAX_PLAYERS ||
         input->num_payouts < 1 || input->num_payouts > ICM_MAX_PLAYERS ||
+        input->num_payouts > input->num_players ||
         input->depth < 0 || input->depth > PE_FGS_MAX_DEPTH)
         return -1;
     for (i = 0; i < input->num_players; ++i) {

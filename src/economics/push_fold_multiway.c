@@ -22,23 +22,35 @@ static void regret_strategy(const double *regret, double *strategy,
         strategy[action] = fmax(0.0, regret[action]) / sum;
 }
 
-static double pushed_payoff(const pe_push_fold_multiway_input_t *input, int mask)
+static int pushed_payoff(const pe_push_fold_multiway_input_t *input, int mask,
+                         double *out)
 {
     double called_stacks = 0.0;
     double effective_risk = 0.0;
+    double pot_plus_called;
+    double win_value;
+    double loss_value;
     int profiles = 1 << input->num_villains;
-    if (mask < 0 || mask >= profiles) return 0.0;
-    if (mask == 0) return input->pot_before_push;
+    if (!out || mask < 0 || mask >= profiles) return -1;
+    if (mask == 0) {
+        *out = input->pot_before_push;
+        return pe_finite_double(*out) ? 0 : -1;
+    }
     for (int i = 0; i < input->num_villains; ++i)
         if (mask & (1 << i))
         {
             double matched = fmin(input->hero_stack, input->villain_stacks[i]);
             called_stacks += matched;
+            if (!pe_finite_double(called_stacks)) return -1;
             effective_risk = fmax(effective_risk, matched);
         }
-    return input->hero_equity_by_call_mask[mask] *
-               (input->pot_before_push + called_stacks) -
-           (1.0 - input->hero_equity_by_call_mask[mask]) * effective_risk;
+    pot_plus_called = input->pot_before_push + called_stacks;
+    if (!pe_finite_double(pot_plus_called)) return -1;
+    win_value = input->hero_equity_by_call_mask[mask] * pot_plus_called;
+    loss_value = (1.0 - input->hero_equity_by_call_mask[mask]) * effective_risk;
+    if (!pe_finite_double(win_value) || !pe_finite_double(loss_value)) return -1;
+    *out = win_value - loss_value;
+    return pe_finite_double(*out) ? 0 : -1;
 }
 
 int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
@@ -48,6 +60,7 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
     double coalition_regret[PE_PUSH_FOLD_MAX_PROFILES] = {0.0};
     double hero_sum[2] = {0.0, 0.0};
     double coalition_sum[PE_PUSH_FOLD_MAX_PROFILES] = {0.0};
+    double payoffs[PE_PUSH_FOLD_MAX_PROFILES];
     int iterations, profiles;
     if (!input || !result || !pe_finite_double(input->pot_before_push) ||
         !pe_finite_double(input->hero_stack) || input->num_villains < 1 ||
@@ -61,6 +74,8 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
         if (input->hero_equity_by_call_mask[mask] < 0.0 ||
             input->hero_equity_by_call_mask[mask] > 1.0 ||
             !pe_finite_double(input->hero_equity_by_call_mask[mask])) return -1;
+    for (int mask = 0; mask < profiles; ++mask)
+        if (pushed_payoff(input, mask, &payoffs[mask]) != 0) return -1;
     memset(result, 0, sizeof(*result));
     for (int iter = 0; iter < iterations; ++iter) {
         double hs[2];
@@ -73,8 +88,7 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
         for (int mask = 0; mask < profiles; ++mask)
         {
             double probability = coalition_strategy[mask];
-            double payoff = pushed_payoff(input, mask);
-            push_value += probability * payoff;
+            push_value += probability * payoffs[mask];
             coalition_sum[mask] += probability;
         }
         node_value = hs[1] * push_value;
@@ -82,7 +96,7 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
         hero_regret[1] += push_value - node_value;
         for (int mask = 0; mask < profiles; ++mask)
             coalition_regret[mask] +=
-                node_value - hs[1] * pushed_payoff(input, mask);
+                node_value - hs[1] * payoffs[mask];
     }
     result->hero_push_frequency = hero_sum[1] / (double)iterations;
     result->hero_ev = 0.0;
@@ -98,15 +112,15 @@ int pe_push_fold_multiway_solve(const pe_push_fold_multiway_input_t *input,
         double average_push_value = 0.0;
         for (int mask = 0; mask < profiles; ++mask)
             average_push_value += coalition_sum[mask] / (double)iterations *
-                                  pushed_payoff(input, mask);
+                                  payoffs[mask];
         result->hero_ev = result->hero_push_frequency * average_push_value;
     }
     {
         double hero_push_value = 0.0, villain_best = INFINITY;
         for (int mask = 0; mask < profiles; ++mask) {
             double probability = coalition_sum[mask] / (double)iterations;
-            hero_push_value += probability * pushed_payoff(input, mask);
-            villain_best = fmin(villain_best, result->hero_push_frequency * pushed_payoff(input, mask));
+            hero_push_value += probability * payoffs[mask];
+            villain_best = fmin(villain_best, result->hero_push_frequency * payoffs[mask]);
         }
         double hero_best = fmax(0.0, hero_push_value);
         result->exploitability = fmax(0.0, hero_best - result->hero_ev) +

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -24,6 +25,12 @@ int main(void)
     assert(fabs(result.bounty_ev[0] - 12.5) < 1e-9);
     assert(fabs(result.total_ev[0] - 62.5) < 1e-9);
     assert(isfinite(result.total_ev[1]));
+
+    /* Derived bounty EV must not silently become infinity. */
+    input.elimination_probability[0][1] = 1.0;
+    input.bounties[1] = DBL_MAX;
+    input.bounty_multiplier = 2.0;
+    assert(pe_pko_calculate(&input, &result) == -1);
     puts("PKO overlay tests passed");
     return 0;
 }

@@ -6,9 +6,16 @@
 
 #include <math.h>
 #include <float.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <sys/select.h>
+#endif
 
 typedef struct worker_candidate_t
 {
@@ -364,10 +371,17 @@ int pe_work_coordinator_dispatch_and_collect(
     size_t capacity,
     pe_work_reducer_t *reducer)
 {
+    typedef struct coordinator_inflight_t {
+        size_t channel_index;
+        size_t next_unit;
+        size_t remaining;
+    } coordinator_inflight_t;
     uint8_t *frame;
     size_t frame_capacity = PE_WORK_PROTOCOL_HEADER_SIZE +
                             PE_WORK_PROTOCOL_MAX_PAYLOAD;
+    coordinator_inflight_t inflight[PE_WORK_COORDINATOR_MAX_WORKERS];
     int assignment_count;
+    size_t completed = 0u;
     size_t i;
 
     if (!reducer || !units || unit_count == 0u || !channels ||
@@ -381,48 +395,99 @@ int pe_work_coordinator_dispatch_and_collect(
     frame = (uint8_t *)malloc(frame_capacity);
     if (!frame)
         return -1;
-    for (i = 0u; i < (size_t)assignment_count; ++i)
-    {
+    /* Keep one request in flight per worker. This lets all persistent workers
+       make progress concurrently without filling a worker's response socket. */
+    for (i = 0u; i < (size_t)assignment_count; ++i) {
         const pe_work_worker_assignment_t *assignment = &out[i];
-        size_t channel_index;
-        size_t j;
-
         if (coordinator_channel_index(assignment, channels, channel_count,
-                                      &channel_index) != 0)
-        {
-            free(frame);
-            return -1;
+                                      &inflight[i].channel_index) != 0 ||
+            assignment->unit_count == 0u)
+            goto fail;
+        inflight[i].next_unit = assignment->first_unit;
+        inflight[i].remaining = assignment->unit_count;
+        if (pe_work_socket_send_work_unit(
+                channels[inflight[i].channel_index].socket,
+                &units[inflight[i].next_unit]) != 0)
+            goto fail;
+    }
+    while (completed < unit_count) {
+        fd_set readable;
+#if defined(_WIN32)
+        int ready;
+#else
+        int max_fd = -1;
+        int ready;
+#endif
+        FD_ZERO(&readable);
+        for (i = 0u; i < (size_t)assignment_count; ++i) {
+            if (inflight[i].remaining == 0u)
+                continue;
+#if defined(_WIN32)
+            FD_SET((SOCKET)channels[inflight[i].channel_index].socket,
+                   &readable);
+#else
+            if ((int)channels[inflight[i].channel_index].socket < 0 ||
+                (int)channels[inflight[i].channel_index].socket >= FD_SETSIZE)
+                goto fail;
+            FD_SET((int)channels[inflight[i].channel_index].socket, &readable);
+            if ((int)channels[inflight[i].channel_index].socket > max_fd)
+                max_fd = (int)channels[inflight[i].channel_index].socket;
+#endif
         }
-        for (j = 0u; j < assignment->unit_count; ++j)
-        {
-            const pe_work_unit_t *unit = &units[assignment->first_unit + j];
+#if defined(_WIN32)
+        ready = select(0, &readable, NULL, NULL, NULL);
+#else
+        ready = select(max_fd + 1, &readable, NULL, NULL, NULL);
+#endif
+        if (ready < 0) {
+#if !defined(_WIN32)
+            if (errno == EINTR)
+                continue;
+#endif
+            goto fail;
+        }
+        if (ready == 0)
+            continue;
+        for (i = 0u; i < (size_t)assignment_count; ++i) {
+            const pe_work_worker_assignment_t *assignment = &out[i];
+            size_t channel_index = inflight[i].channel_index;
             pe_work_result_t result;
             size_t frame_size;
-
-            if (pe_work_socket_send_work_unit(channels[channel_index].socket,
-                                              unit) != 0 ||
-                pe_work_socket_recv_frame(channels[channel_index].socket,
+#if defined(_WIN32)
+            if (!FD_ISSET((SOCKET)channels[channel_index].socket,
+                          &readable))
+#else
+            if (!FD_ISSET((int)channels[channel_index].socket, &readable))
+#endif
+                continue;
+            if (pe_work_socket_recv_frame(channels[channel_index].socket,
                                           frame, frame_capacity,
-                                          &frame_size) != 0)
-            {
-                free(frame);
-                return -1;
-            }
-            if (pe_work_frame_decode_result(frame, frame_size, &result) != 0 ||
-                result.public_state != unit->public_state ||
-                result.iteration_begin != unit->iteration_begin ||
-                result.iteration_end != unit->iteration_end ||
+                                          &frame_size) != 0 ||
+                pe_work_frame_decode_result(frame, frame_size, &result) != 0 ||
+                result.public_state != units[inflight[i].next_unit].public_state ||
+                result.iteration_begin !=
+                    units[inflight[i].next_unit].iteration_begin ||
+                result.iteration_end != units[inflight[i].next_unit].iteration_end ||
                 result.backend != assignment->backend ||
                 pe_work_reducer_accept(reducer, assignment->worker_id,
                                        &result) != 0)
-            {
-                free(frame);
-                return -1;
-            }
+                goto fail;
+            ++inflight[i].next_unit;
+            --inflight[i].remaining;
+            ++completed;
+            if (inflight[i].remaining != 0u &&
+                pe_work_socket_send_work_unit(
+                    channels[channel_index].socket,
+                    &units[inflight[i].next_unit]) != 0)
+                goto fail;
         }
     }
     free(frame);
     return assignment_count;
+
+fail:
+    free(frame);
+    return -1;
 }
 
 int pe_work_coordinator_collect_results(

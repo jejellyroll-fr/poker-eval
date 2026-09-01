@@ -119,6 +119,10 @@ int main(void)
     input.win_probability[0] = -0.1;
     assert(pe_fgs_generate_even_contribution(&input, nodes, 512, edges, 512,
                                              &tree) != 0);
+    fill_hu_symmetric(&input, 1);
+    input.num_payouts = 3;
+    assert(pe_fgs_generate_even_contribution(&input, nodes, 512, edges, 512,
+                                             &tree) != 0);
 
     puts("FGS scenario generator tests passed");
     return 0;
