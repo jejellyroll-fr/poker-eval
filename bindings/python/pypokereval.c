@@ -3032,6 +3032,7 @@ static PyObject *py_solver_v3_strategy_query(PyObject *self, PyObject *args)
     py_solver_v3_context_t *ctx;
     pe_strategy_query_t query;
     pe_strategy_view_t view;
+    pe_solver_status_t status;
     PyObject *result;
     size_t i;
     (void)self;
@@ -3043,8 +3044,12 @@ static PyObject *py_solver_v3_strategy_query(PyObject *self, PyObject *args)
     if (!ctx)
         return NULL;
     query.infoset = (uint32_t)infoset;
-    if (pe_solver_strategy(ctx->solver, &query, &view) != PE_SOLVER_OK)
+    status = pe_solver_strategy(ctx->solver, &query, &view);
+    if (status != PE_SOLVER_OK) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "v3 strategy query failed with status %d", (int)status);
         return NULL;
+    }
     result = PyList_New(view.count);
     if (!result)
         return NULL;

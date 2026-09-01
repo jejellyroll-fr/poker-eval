@@ -38,6 +38,12 @@ game = OneStepGame()
 solver = pypokereval.solver_v3_create(
     ("root",), game, max_iterations=1, expected_infosets=1
 )
+try:
+    pypokereval.solver_v3_strategy(solver, 0)
+except RuntimeError as exc:
+    assert "status" in str(exc)
+else:
+    raise AssertionError("strategy queries before solve must raise RuntimeError")
 pypokereval.solver_v3_run(solver)
 progress = pypokereval.solver_v3_progress(solver)
 assert progress["complete"]

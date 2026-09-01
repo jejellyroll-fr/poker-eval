@@ -40,9 +40,11 @@ struct pe_cfr_solver_t {
     struct {
         uint64_t key;
         int action_count;
+        int actions[CFR_MAX_ACTIONS];
     } *action_counts;
     size_t action_count_size;
     size_t action_count_capacity;
+    int callback_error;
 };
 
 struct pe_solver_api_t {
@@ -539,14 +541,28 @@ static int pe_cfr_cb_actions(cfr_game_t *game, uint64_t state, int *actions,
     (void)user;
     count = cfr->callbacks.get_actions(state, actions, max_actions,
                                        cfr->callbacks.user);
-    if (count <= 0)
-        return count;
+    if (count < 0 || count > CFR_MAX_ACTIONS) {
+        cfr->callback_error = 1;
+        set_error(cfr->parent, "CFR callback returned an invalid action count");
+        return -1;
+    }
     key = cfr->callbacks.get_infoset_key
         ? cfr->callbacks.get_infoset_key(state, cfr->callbacks.user) : state;
     for (size_t i = 0u; i < cfr->action_count_size; ++i)
         if (cfr->action_counts[i].key == key) {
-            if (cfr->action_counts[i].action_count != count)
+            if (cfr->action_counts[i].action_count != count) {
+                cfr->callback_error = 1;
+                set_error(cfr->parent,
+                          "CFR callback returned inconsistent action counts for an infoset");
                 return -1;
+            }
+            for (int action = 0; action < count; ++action)
+                if (cfr->action_counts[i].actions[action] != actions[action]) {
+                    cfr->callback_error = 1;
+                    set_error(cfr->parent,
+                              "CFR callback returned inconsistent actions for an infoset");
+                    return -1;
+                }
             return count;
         }
     if (cfr->action_count_size == cfr->action_count_capacity) {
@@ -563,6 +579,8 @@ static int pe_cfr_cb_actions(cfr_game_t *game, uint64_t state, int *actions,
     }
     cfr->action_counts[cfr->action_count_size].key = key;
     cfr->action_counts[cfr->action_count_size].action_count = count;
+    for (int action = 0; action < count; ++action)
+        cfr->action_counts[cfr->action_count_size].actions[action] = actions[action];
     ++cfr->action_count_size;
     return count;
 }
@@ -695,8 +713,9 @@ pe_error_t pe_cfr_solve(pe_cfr_handle_t cfr, int iterations) {
         return PE_ERROR_INVALID_ARGUMENT;
     }
     cfr->config.max_iterations = iterations;
+    cfr->callback_error = 0;
     if (cfr_solve(&cfr->cfr_game, cfr->storage, &cfr->config,
-                  &cfr->exploitability) < 0.0)
+                  &cfr->exploitability) < 0.0 || cfr->callback_error)
         return PE_ERROR_UNKNOWN;
     cfr->iteration += (uint64_t)iterations;
     return PE_OK;

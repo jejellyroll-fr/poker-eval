@@ -69,6 +69,19 @@ static int chance_get_actions(uint64_t state, int *actions, int max_actions,
     return 2;
 }
 
+static int reordered_get_actions(uint64_t state, int *actions, int max_actions,
+                                 void *user)
+{
+    if (chance_get_actions(state, actions, max_actions, user) != 2)
+        return 0;
+    if (state == 3u) {
+        int first = actions[0];
+        actions[0] = actions[1];
+        actions[1] = first;
+    }
+    return 2;
+}
+
 static uint64_t chance_apply_action(uint64_t state, int action, void *user)
 {
     (void)user;
@@ -253,6 +266,19 @@ int main(void)
             return 1;
         }
         pe_cfr_free(chance_solver);
+
+        {
+            pe_cfr_game_desc_t reordered_desc = chance_desc;
+            reordered_desc.get_actions = reordered_get_actions;
+            chance_solver = pe_cfr_create_callbacks(root, &reordered_desc, 4);
+            if (!chance_solver || pe_cfr_solve(chance_solver, 4) == PE_OK) {
+                fprintf(stderr, "callback C CFR rejected inconsistent infoset actions\n");
+                pe_cfr_free(chance_solver);
+                pe_free(root);
+                return 1;
+            }
+            pe_cfr_free(chance_solver);
+        }
     }
     pe_free(root);
     return 0;
