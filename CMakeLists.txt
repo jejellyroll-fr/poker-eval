@@ -611,6 +611,7 @@ configure_package_config_file(
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/poker-eval-config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/poker-eval-config-version.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindZSTD.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/poker-eval
 )
 

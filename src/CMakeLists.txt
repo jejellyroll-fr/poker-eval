@@ -18,9 +18,9 @@ add_subdirectory(ofc)
 # Resolve the optional compression dependency before configuring the engine.
 # The engine target uses this result to expose zstd-backed .pe_sol snapshots.
 if(ENABLE_ZSTD)
-    find_path(PE_ZSTD_INCLUDE_DIR zstd.h)
-    find_library(PE_ZSTD_LIBRARY NAMES zstd libzstd)
-    if(PE_ZSTD_INCLUDE_DIR AND PE_ZSTD_LIBRARY)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+    find_package(ZSTD QUIET MODULE)
+    if(ZSTD_FOUND AND TARGET ZSTD::ZSTD)
         set(POKER_EVAL_WITH_ZSTD ON)
         message(STATUS "zstd found, enabling compressed .pe_sol snapshots")
     else()
@@ -30,6 +30,7 @@ if(ENABLE_ZSTD)
 else()
     set(POKER_EVAL_WITH_ZSTD OFF)
 endif()
+set(POKER_EVAL_WITH_ZSTD "${POKER_EVAL_WITH_ZSTD}" PARENT_SCOPE)
 
 add_subdirectory(engine)
 

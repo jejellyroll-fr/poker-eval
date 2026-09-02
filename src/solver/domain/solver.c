@@ -96,6 +96,7 @@ struct pe_solver_t {
     int state;
     int checkpoint_loaded;
     uint64_t iteration;
+    int runner_active;
     pthread_mutex_t lifecycle_lock;
     pthread_cond_t lifecycle_cond;
 };
@@ -301,9 +302,14 @@ void pe_solver_destroy(pe_solver_t *solver)
     if (solver == NULL)
         return;
 
-    if (pe_solver_state(solver) == PE_SOLVER_STATE_RUNNING ||
-        pe_solver_state(solver) == PE_SOLVER_STATE_PAUSED)
-        pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
+    pthread_mutex_lock(&solver->lifecycle_lock);
+    if (solver->state == PE_SOLVER_STATE_RUNNING ||
+        solver->state == PE_SOLVER_STATE_PAUSED)
+        solver->state = PE_SOLVER_STATE_STOPPED;
+    pthread_cond_broadcast(&solver->lifecycle_cond);
+    while (solver->runner_active)
+        pthread_cond_wait(&solver->lifecycle_cond, &solver->lifecycle_lock);
+    pthread_mutex_unlock(&solver->lifecycle_lock);
 
     /* Give a buffering adapter its chance before the pointer goes away. */
     pe_telemetry_flush(solver->deps.telemetry);
@@ -1504,6 +1510,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
 pe_solver_status_t pe_solver_run(pe_solver_t *solver)
 {
     pe_solver_status_t validation;
+    pe_solver_status_t status;
     pe_execution_plan_t plan;
 
     if (solver == NULL)
@@ -1514,8 +1521,14 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
        one-shot lifecycle transition: once dispatch was attempted, accepting
        another call would make a future backend allocate or append a second
        solve on the same instance without an explicit reset contract. */
-    if (pe_solver_state(solver) != PE_SOLVER_STATE_CREATED)
+    pthread_mutex_lock(&solver->lifecycle_lock);
+    if (solver->state != PE_SOLVER_STATE_CREATED || solver->runner_active)
+    {
+        pthread_mutex_unlock(&solver->lifecycle_lock);
         return PE_SOLVER_ERR_INVALID_STATE;
+    }
+    solver->runner_active = 1;
+    pthread_mutex_unlock(&solver->lifecycle_lock);
 
     /* Do not dispatch an execution backend for a plan that cannot be
        honoured. Once a real backend is installed, this preflight remains the
@@ -1523,17 +1536,31 @@ pe_solver_status_t pe_solver_run(pe_solver_t *solver)
        iteration driver. */
     validation = pe_solver_validate(solver, NULL);
     if (validation != PE_SOLVER_OK)
-        return validation;
+    {
+        status = validation;
+        goto run_finished;
+    }
     pe_solver_set_state(solver, PE_SOLVER_STATE_VALIDATED);
     if (!solver->checkpoint_loaded)
         pe_solver_set_iteration(solver, 0u);
 
     if (pe_solver_plan(solver, &plan) != PE_SOLVER_OK)
-        return PE_SOLVER_ERR_INVALID_CONFIG;
+    {
+        status = PE_SOLVER_ERR_INVALID_CONFIG;
+        goto run_finished;
+    }
     if (plan.traversal == PE_TRAVERSAL_EXTERNAL_SAMPLING ||
         plan.traversal == PE_TRAVERSAL_OUTCOME_SAMPLING)
-        return pe_solver_run_sampled(solver, &plan);
-    return pe_solver_run_vector(solver, &plan);
+        status = pe_solver_run_sampled(solver, &plan);
+    else
+        status = pe_solver_run_vector(solver, &plan);
+
+run_finished:
+    pthread_mutex_lock(&solver->lifecycle_lock);
+    solver->runner_active = 0;
+    pthread_cond_broadcast(&solver->lifecycle_cond);
+    pthread_mutex_unlock(&solver->lifecycle_lock);
+    return status;
 }
 
 pe_solver_status_t pe_solver_pause(pe_solver_t *solver)

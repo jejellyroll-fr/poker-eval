@@ -86,6 +86,22 @@ int main(void)
     StdDeck_CardMask_OR(p1_combo.hand, StdDeck_MASK(0), StdDeck_MASK(13));
     config.max_profiles = 8;
 
+    /* The evaluator uses a fixed path buffer; reject a tree that needs an
+     * additional decision frame instead of accepting it and failing later. */
+    {
+        pe_hrc_node_t deep_nodes[PE_HRC_MAX_DEPTH + 2] = {0};
+        config.tree.nodes = deep_nodes;
+        config.tree.node_count = PE_HRC_MAX_DEPTH + 2;
+        config.tree.root_index = 0;
+        for (int node = 0; node <= PE_HRC_MAX_DEPTH; ++node) {
+            deep_nodes[node].player_to_act = 0;
+            deep_nodes[node].action_count = 1;
+            deep_nodes[node].actions[0].child_index = node + 1;
+        }
+        deep_nodes[PE_HRC_MAX_DEPTH + 1].terminal = 1;
+        assert(pe_hrc_validate(&config) == PE_HRC_ERR_INVALID_TREE);
+    }
+
     {
         pe_hrc_node_t invalid_nodes[5] = {0};
         memcpy(invalid_nodes, nodes, sizeof(nodes));

@@ -64,7 +64,8 @@ static double counterfactual_reach(const solve_context_t *ctx,
     return reach;
 }
 
-static int validate_node(const pe_hrc_tree_t *tree, int index, int *color)
+static int validate_node(const pe_hrc_tree_t *tree, int index, int depth,
+                         int *color)
 {
     const pe_hrc_node_t *node;
     if (index < 0 || (size_t)index >= tree->node_count)
@@ -75,15 +76,19 @@ static int validate_node(const pe_hrc_tree_t *tree, int index, int *color)
         return 1;
     color[index] = 1;
     node = &tree->nodes[index];
+    if (depth < 0 || depth > PE_HRC_MAX_DEPTH)
+        return 0;
     if (node->terminal) {
         if (node->action_count != 0)
             return 0;
     } else {
         if (node->player_to_act < 0 || node->player_to_act >= tree->num_players ||
-            node->action_count == 0 || node->action_count > PE_HRC_MAX_ACTIONS)
+            node->action_count == 0 || node->action_count > PE_HRC_MAX_ACTIONS ||
+            depth >= PE_HRC_MAX_DEPTH)
             return 0;
         for (unsigned i = 0; i < node->action_count; ++i) {
-            if (!validate_node(tree, node->actions[i].child_index, color))
+            if (!validate_node(tree, node->actions[i].child_index, depth + 1,
+                               color))
                 return 0;
         }
     }
@@ -101,14 +106,15 @@ pe_hrc_status_t pe_hrc_validate(const pe_hrc_config_t *config)
         config->max_profiles == 0)
         return PE_HRC_ERR_NULL_ARGUMENT;
     memset(color, 0, sizeof(color));
-    if (!validate_node(&config->tree, config->tree.root_index, color))
+    if (!validate_node(&config->tree, config->tree.root_index, 0, color))
         return PE_HRC_ERR_INVALID_TREE;
     /* The solver allocates and initializes per-node storage by iterating the
        whole supplied array, not just nodes reachable from root.  Validate
        disconnected nodes as well so an unreachable malformed player node
        cannot later index ranges[-1] or ranges[num_players]. */
     for (size_t node = 0; node < config->tree.node_count; ++node)
-        if (color[node] == 0 && !validate_node(&config->tree, (int)node, color))
+        if (color[node] == 0 &&
+            !validate_node(&config->tree, (int)node, 0, color))
             return PE_HRC_ERR_INVALID_TREE;
     for (int p = 0; p < config->tree.num_players; ++p) {
         if (!config->ranges[p].combos || config->ranges[p].count == 0)
