@@ -36,6 +36,7 @@
 #endif
 
 #include <math.h>
+#include <string.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
@@ -73,6 +74,10 @@
 #include <poker_eval/distributions/omaha_distributions.h> // Added for Omaha hand instantiation
 #include <poker_eval/distributions/stud_distributions.h>  // Added for Stud hand instantiation
 #include <poker_eval/equity/RangeEquity.h>                // Added for Range Equity functionality
+#include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_traversal.h>
 #include <stdbool.h>
 
 #ifdef WIN32
@@ -2388,6 +2393,715 @@ cleanup_multi:
   return py_return_dict;
 }
 
+typedef struct py_solver_v3_context_t {
+    pe_solver_t *solver;
+    pe_vector_game_t game;
+    PyObject *game_object;
+    PyObject *states;
+} py_solver_v3_context_t;
+
+static PyObject *py_solver_v3_object(const void *state)
+{
+    PyObject *object;
+    memcpy(&object, &state, sizeof(object));
+    return object;
+}
+
+static PyObject *py_solver_v3_call(py_solver_v3_context_t *ctx,
+                                   const char *name, PyObject *args)
+{
+    PyObject *fn = PyObject_GetAttrString(ctx->game_object, name);
+    PyObject *result;
+    if (!fn)
+        return NULL;
+    if (!PyCallable_Check(fn)) {
+        PyErr_Format(PyExc_TypeError, "game.%s must be callable", name);
+        Py_DECREF(fn);
+        return NULL;
+    }
+    result = PyObject_CallObject(fn, args);
+    Py_DECREF(fn);
+    return result;
+}
+
+static PyObject *py_solver_v3_one_state_args(const void *state)
+{
+    return PyTuple_Pack(1, py_solver_v3_object(state));
+}
+
+static PyObject *py_solver_v3_reach_object(const pe_reach_vec_t *reach,
+                                            uint8_t players)
+{
+    PyObject *outer;
+    uint8_t player;
+
+    if (!reach) {
+        PyErr_SetString(PyExc_ValueError, "terminal_values received no reach vectors");
+        return NULL;
+    }
+    outer = PyList_New((Py_ssize_t)players);
+    if (!outer)
+        return NULL;
+    for (player = 0u; player < players; ++player) {
+        PyObject *values;
+        size_t combo;
+        if (reach[player].n > (size_t)PY_SSIZE_T_MAX) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "reach vector is too large for Python");
+            Py_DECREF(outer);
+            return NULL;
+        }
+        values = PyList_New((Py_ssize_t)reach[player].n);
+        if (!values) {
+            Py_DECREF(outer);
+            return NULL;
+        }
+        for (combo = 0u; combo < reach[player].n; ++combo) {
+            PyObject *value = PyFloat_FromDouble(reach[player].v[combo]);
+            if (!value) {
+                Py_DECREF(values);
+                Py_DECREF(outer);
+                return NULL;
+            }
+            PyList_SET_ITEM(values, (Py_ssize_t)combo, value);
+        }
+        PyList_SET_ITEM(outer, (Py_ssize_t)player, values);
+    }
+    return outer;
+}
+
+static const void *py_solver_v3_store_state(py_solver_v3_context_t *ctx,
+                                             PyObject *state)
+{
+    if (PyList_Append(ctx->states, state) != 0)
+        return NULL;
+    return (const void *)state;
+}
+
+static void py_solver_v3_release_state(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    Py_ssize_t index;
+    if (!ctx || !ctx->states || !state || state == ctx->game.root)
+        return;
+    /* The vector-game contract releases one ownership acquired by each
+       apply_action call.  Remove one matching list entry, rather than
+       retaining every visit until capsule destruction. */
+    for (index = PyList_GET_SIZE(ctx->states) - 1; index >= 0; --index)
+        if ((const void *)PyList_GET_ITEM(ctx->states, index) == state) {
+            if (PySequence_DelItem(ctx->states, index) != 0)
+                PyErr_Clear();
+            return;
+        }
+}
+
+static int py_solver_v3_is_terminal(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    int value;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "is_terminal", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    value = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return value;
+}
+
+static int py_solver_v3_acting_player(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    long value;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "acting_player", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    value = PyLong_AsLong(result);
+    Py_DECREF(result);
+    if (PyErr_Occurred() || value < 0 || value >= (long)ctx->game.player_count) {
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_ValueError, "acting_player is out of range");
+        return -1;
+    }
+    return (int)value;
+}
+
+static uint16_t py_solver_v3_action_count(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    unsigned long value;
+    if (!args)
+        return 0u;
+    result = py_solver_v3_call(ctx, "action_count", args);
+    Py_DECREF(args);
+    if (!result)
+        return 0u;
+    value = PyLong_AsUnsignedLong(result);
+    Py_DECREF(result);
+    if (PyErr_Occurred() || value == 0ul || value > 65535ul) {
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_ValueError, "action_count must be in 1..65535");
+        return 0u;
+    }
+    return (uint16_t)value;
+}
+
+static uint64_t py_solver_v3_infoset_key(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    unsigned long long value;
+    if (!args)
+        return 0u;
+    result = py_solver_v3_call(ctx, "infoset_key", args);
+    Py_DECREF(args);
+    if (!result)
+        return 0u;
+    value = PyLong_AsUnsignedLongLong(result);
+    Py_DECREF(result);
+    return PyErr_Occurred() ? 0u : (uint64_t)value;
+}
+
+static const void *py_solver_v3_apply_action(const void *state,
+                                              uint16_t action, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *action_object = PyLong_FromUnsignedLong((unsigned long)action);
+    PyObject *args;
+    PyObject *result;
+    const void *stored;
+    if (!action_object)
+        return NULL;
+    args = PyTuple_Pack(2, py_solver_v3_object(state), action_object);
+    Py_DECREF(action_object);
+    if (!args)
+        return NULL;
+    result = py_solver_v3_call(ctx, "apply_action", args);
+    Py_DECREF(args);
+    if (!result)
+        return NULL;
+    if (result == Py_None) {
+        PyErr_SetString(PyExc_ValueError, "apply_action returned None");
+        Py_DECREF(result);
+        return NULL;
+    }
+    stored = py_solver_v3_store_state(ctx, result);
+    Py_DECREF(result);
+    return stored;
+}
+
+static int py_solver_v3_combo_compatible(const void *state, uint8_t player,
+                                         uint16_t player_combo,
+                                         uint8_t opponent,
+                                         uint16_t opponent_combo, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(OKKKK)", py_solver_v3_object(state),
+                                   (unsigned long long)player,
+                                   (unsigned long long)player_combo,
+                                   (unsigned long long)opponent,
+                                   (unsigned long long)opponent_combo);
+    PyObject *result;
+    int value;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "combo_compatible", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    value = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return value;
+}
+
+static int py_solver_v3_is_chance(const void *state, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    int value;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "is_chance", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    value = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return value;
+}
+
+static uint16_t py_solver_v3_chance_outcome_count(const void *state,
+                                                   void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = py_solver_v3_one_state_args(state);
+    PyObject *result;
+    unsigned long value;
+    if (!args)
+        return 0u;
+    result = py_solver_v3_call(ctx, "chance_outcome_count", args);
+    Py_DECREF(args);
+    if (!result)
+        return 0u;
+    value = PyLong_AsUnsignedLong(result);
+    Py_DECREF(result);
+    if (PyErr_Occurred() || value == 0ul || value > (unsigned long)UINT16_MAX) {
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_ValueError,
+                            "chance_outcome_count must be in 1..65535");
+        return 0u;
+    }
+    return (uint16_t)value;
+}
+
+static double py_solver_v3_chance_outcome_weight(const void *state,
+                                                  uint16_t outcome,
+                                                  void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(OK)", py_solver_v3_object(state),
+                                   (unsigned long long)outcome);
+    PyObject *result;
+    double value;
+    if (!args)
+        return NAN;
+    result = py_solver_v3_call(ctx, "chance_outcome_weight", args);
+    Py_DECREF(args);
+    if (!result)
+        return NAN;
+    value = PyFloat_AsDouble(result);
+    Py_DECREF(result);
+    return value;
+}
+
+static const void *py_solver_v3_apply_chance(const void *state, int outcome,
+                                              void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(Oi)", py_solver_v3_object(state), outcome);
+    PyObject *result;
+    const void *stored;
+    if (!args)
+        return NULL;
+    result = py_solver_v3_call(ctx, "apply_chance", args);
+    Py_DECREF(args);
+    if (!result)
+        return NULL;
+    if (result == Py_None) {
+        PyErr_SetString(PyExc_ValueError, "apply_chance returned None");
+        Py_DECREF(result);
+        return NULL;
+    }
+    stored = py_solver_v3_store_state(ctx, result);
+    Py_DECREF(result);
+    return stored;
+}
+
+static int py_solver_v3_strategy_callback(const void *state, uint64_t key,
+                                          uint16_t action, pe_value_vec_t *out,
+                                          void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *args = Py_BuildValue("(OKKK)", py_solver_v3_object(state),
+                                   (unsigned long long)key,
+                                   (unsigned long long)action,
+                                   (unsigned long long)out->n);
+    PyObject *result;
+    PyObject *sequence;
+    Py_ssize_t i;
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "strategy", args);
+    Py_DECREF(args);
+    if (!result)
+        return -1;
+    sequence = PySequence_Fast(result, "game.strategy must return a sequence");
+    Py_DECREF(result);
+    if (!sequence)
+        return -1;
+    if (PySequence_Fast_GET_SIZE(sequence) != (Py_ssize_t)out->n) {
+        PyErr_SetString(PyExc_ValueError,
+                        "game.strategy returned the wrong combo count");
+        Py_DECREF(sequence);
+        return -1;
+    }
+    for (i = 0; i < (Py_ssize_t)out->n; ++i) {
+        out->v[i] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, i));
+        if (PyErr_Occurred()) {
+            Py_DECREF(sequence);
+            return -1;
+        }
+    }
+    Py_DECREF(sequence);
+    return 0;
+}
+
+static int py_solver_v3_terminal_values(const void *state,
+                                        const pe_reach_vec_t *reach,
+                                        pe_value_vec_t *out,
+                                        uint8_t players, void *user)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
+    PyObject *reach_object = py_solver_v3_reach_object(reach, players);
+    PyObject *args;
+    PyObject *result;
+    PyObject *outer;
+    uint8_t player;
+    if (!reach_object)
+        return -1;
+    args = PyTuple_Pack(2, py_solver_v3_object(state), reach_object);
+    Py_DECREF(reach_object);
+    if (!args)
+        return -1;
+    result = py_solver_v3_call(ctx, "terminal_values", args);
+    Py_DECREF(args);
+    /* Keep the original one-argument callback usable while allowing new
+       callbacks to consume blocker/range reach. A TypeError is retried only
+       when it looks like Python rejected the callback arity; TypeErrors raised
+       by the callback body are preserved. */
+    if (!result && PyErr_ExceptionMatches(PyExc_TypeError)) {
+        PyObject *type = NULL;
+        PyObject *value = NULL;
+        PyObject *traceback = NULL;
+        PyObject *message = NULL;
+        const char *text = NULL;
+        int wrong_arity = 0;
+        PyErr_Fetch(&type, &value, &traceback);
+        message = PyObject_Str(value);
+        if (message)
+            text = PyUnicode_AsUTF8(message);
+        if (text && strstr(text, "argument") != NULL &&
+            (strstr(text, "given") != NULL ||
+             strstr(text, "required") != NULL ||
+             strstr(text, "exactly") != NULL))
+            wrong_arity = 1;
+        Py_XDECREF(message);
+        if (wrong_arity) {
+            Py_XDECREF(type);
+            Py_XDECREF(value);
+            Py_XDECREF(traceback);
+            args = py_solver_v3_one_state_args(state);
+            if (!args)
+                return -1;
+            result = py_solver_v3_call(ctx, "terminal_values", args);
+            Py_DECREF(args);
+        } else {
+            PyErr_Restore(type, value, traceback);
+        }
+    }
+    if (!result)
+        return -1;
+    outer = PySequence_Fast(result,
+                            "game.terminal_values must return player sequences");
+    Py_DECREF(result);
+    if (!outer)
+        return -1;
+    if (PySequence_Fast_GET_SIZE(outer) != (Py_ssize_t)players) {
+        PyErr_SetString(PyExc_ValueError,
+                        "terminal_values returned the wrong player count");
+        Py_DECREF(outer);
+        return -1;
+    }
+    for (player = 0u; player < players; ++player) {
+        PyObject *values = PySequence_Fast(
+            PySequence_Fast_GET_ITEM(outer, player),
+            "terminal_values entries must be sequences");
+        Py_ssize_t combo;
+        if (!values) {
+            Py_DECREF(outer);
+            return -1;
+        }
+        if (PySequence_Fast_GET_SIZE(values) != (Py_ssize_t)out[player].n) {
+            PyErr_SetString(PyExc_ValueError,
+                            "terminal_values returned the wrong combo count");
+            Py_DECREF(values);
+            Py_DECREF(outer);
+            return -1;
+        }
+        for (combo = 0; combo < (Py_ssize_t)out[player].n; ++combo) {
+            out[player].v[combo] = PyFloat_AsDouble(
+                PySequence_Fast_GET_ITEM(values, combo));
+            if (PyErr_Occurred()) {
+                Py_DECREF(values);
+                Py_DECREF(outer);
+                return -1;
+            }
+        }
+        Py_DECREF(values);
+    }
+    Py_DECREF(outer);
+    return 0;
+}
+
+static void py_solver_v3_destroy_context(py_solver_v3_context_t *ctx)
+{
+    if (!ctx)
+        return;
+    pe_solver_destroy(ctx->solver);
+    Py_XDECREF(ctx->states);
+    Py_XDECREF(ctx->game_object);
+    free(ctx);
+}
+
+static void py_solver_v3_capsule_destructor(PyObject *capsule)
+{
+    py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)PyCapsule_GetPointer(
+        capsule, "poker_eval.solver_v3");
+    if (ctx)
+        py_solver_v3_destroy_context(ctx);
+}
+
+static py_solver_v3_context_t *py_solver_v3_get_context(PyObject *capsule)
+{
+    return (py_solver_v3_context_t *)PyCapsule_GetPointer(
+        capsule, "poker_eval.solver_v3");
+}
+
+static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
+                                     PyObject *kwargs)
+{
+    PyObject *root;
+    PyObject *game_object;
+    unsigned int players = 2u;
+    unsigned int combos = 1u;
+    unsigned long long max_iterations = 1000ull;
+    double target = 0.0;
+    unsigned long long interval = 0ull;
+    unsigned long long expected_infosets = 1ull;
+    unsigned int expected_actions = 2u;
+    static const char *kwlist[] = {"root", "game", "players", "combos",
+                                   "max_iterations", "target_exploitability_mbb",
+                                   "exploitability_interval", "expected_infosets",
+                                   "expected_actions", NULL};
+    py_solver_v3_context_t *ctx;
+    pe_solver_config_t config;
+    pe_solver_deps_t deps;
+    PyObject *capsule;
+    int has_chance;
+    (void)self;
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OO|IIKdKKI", (char **)(void *)kwlist, &root, &game_object,
+            &players, &combos, &max_iterations, &target, &interval,
+            &expected_infosets, &expected_actions))
+        return NULL;
+    if (players < 2u || players > PE_SOLVER_MAX_PLAYERS || combos == 0u ||
+        combos > UINT16_MAX || expected_actions < 1u) {
+        PyErr_SetString(PyExc_ValueError,
+                        "players, combos and expected_actions are invalid; combos must fit uint16_t");
+        return NULL;
+    }
+    if (!PyObject_HasAttrString(game_object, "is_terminal") ||
+        !PyObject_HasAttrString(game_object, "acting_player") ||
+        !PyObject_HasAttrString(game_object, "action_count") ||
+        !PyObject_HasAttrString(game_object, "infoset_key") ||
+        !PyObject_HasAttrString(game_object, "apply_action") ||
+        !PyObject_HasAttrString(game_object, "terminal_values")) {
+        PyErr_SetString(PyExc_TypeError,
+                        "game must implement the v3 callback methods");
+        return NULL;
+    }
+    has_chance = PyObject_HasAttrString(game_object, "is_chance") ||
+                 PyObject_HasAttrString(game_object, "chance_outcome_count") ||
+                 PyObject_HasAttrString(game_object, "chance_outcome_weight") ||
+                 PyObject_HasAttrString(game_object, "apply_chance");
+    if (has_chance &&
+        (!PyObject_HasAttrString(game_object, "is_chance") ||
+         !PyObject_HasAttrString(game_object, "chance_outcome_count") ||
+         !PyObject_HasAttrString(game_object, "chance_outcome_weight") ||
+         !PyObject_HasAttrString(game_object, "apply_chance"))) {
+        PyErr_SetString(PyExc_TypeError,
+                        "chance games must implement all chance callback methods");
+        return NULL;
+    }
+    ctx = (py_solver_v3_context_t *)calloc(1u, sizeof(*ctx));
+    if (!ctx) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    ctx->game_object = game_object;
+    Py_INCREF(game_object);
+    ctx->states = PyList_New(0);
+    if (!ctx->states || PyList_Append(ctx->states, root) != 0) {
+        py_solver_v3_destroy_context(ctx);
+        return NULL;
+    }
+    memset(&ctx->game, 0, sizeof(ctx->game));
+    ctx->game.root = root;
+    ctx->game.user = ctx;
+    ctx->game.player_count = (uint8_t)players;
+    ctx->game.combo_count = (uint16_t)combos;
+    ctx->game.is_terminal = py_solver_v3_is_terminal;
+    ctx->game.acting_player = py_solver_v3_acting_player;
+    ctx->game.action_count = py_solver_v3_action_count;
+    ctx->game.infoset_key = py_solver_v3_infoset_key;
+    ctx->game.apply_action = py_solver_v3_apply_action;
+    ctx->game.terminal_values = py_solver_v3_terminal_values;
+    ctx->game.release_state = py_solver_v3_release_state;
+    if (PyObject_HasAttrString(game_object, "combo_compatible"))
+        ctx->game.combo_compatible = py_solver_v3_combo_compatible;
+    if (has_chance) {
+        ctx->game.is_chance = py_solver_v3_is_chance;
+        ctx->game.chance_outcome_count = py_solver_v3_chance_outcome_count;
+        ctx->game.chance_outcome_weight = py_solver_v3_chance_outcome_weight;
+        ctx->game.apply_chance = py_solver_v3_apply_chance;
+    }
+    if (PyObject_HasAttrString(game_object, "strategy"))
+        ctx->game.strategy = py_solver_v3_strategy_callback;
+    config = pe_solver_config_default();
+    config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+    config.max_iterations = (uint64_t)max_iterations;
+    config.target_exploitability_mbb = target;
+    config.exploitability_interval = (uint64_t)interval;
+    config.problem.expected_infosets = (uint64_t)expected_infosets;
+    config.problem.expected_actions = (uint16_t)expected_actions;
+    config.problem.expected_combos = (uint16_t)combos;
+    deps = pe_solver_deps_default();
+    deps.vector_game = &ctx->game;
+    ctx->solver = pe_solver_create(&config, &deps);
+    if (!ctx->solver) {
+        py_solver_v3_destroy_context(ctx);
+        PyErr_SetString(PyExc_RuntimeError, "could not create v3 solver");
+        return NULL;
+    }
+    capsule = PyCapsule_New(ctx, "poker_eval.solver_v3",
+                            py_solver_v3_capsule_destructor);
+    if (!capsule) {
+        py_solver_v3_destroy_context(ctx);
+        return NULL;
+    }
+    return capsule;
+}
+
+static PyObject *py_solver_v3_run(PyObject *self, PyObject *args)
+{
+    PyObject *capsule;
+    py_solver_v3_context_t *ctx;
+    pe_solver_status_t status;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "O", &capsule))
+        return NULL;
+    ctx = py_solver_v3_get_context(capsule);
+    if (!ctx)
+        return NULL;
+    status = pe_solver_run(ctx->solver);
+    if (status != PE_SOLVER_OK) {
+        if (!PyErr_Occurred())
+            PyErr_Format(PyExc_RuntimeError, "v3 solver failed with status %d",
+                         (int)status);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *py_solver_v3_progress(PyObject *self, PyObject *args)
+{
+    PyObject *capsule;
+    py_solver_v3_context_t *ctx;
+    pe_progress_t progress;
+    pe_solver_status_t status;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "O", &capsule))
+        return NULL;
+    ctx = py_solver_v3_get_context(capsule);
+    if (!ctx)
+        return NULL;
+    status = pe_solver_progress(ctx->solver, &progress);
+    if (status != PE_SOLVER_OK) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "v3 progress query failed with status %d", (int)status);
+        return NULL;
+    }
+    return Py_BuildValue("{s:K,s:K,s:d,s:i,s:i,s:i}", "iteration",
+                         (unsigned long long)progress.iteration,
+                         "total_iterations",
+                         (unsigned long long)progress.total_iterations,
+                         "fraction", progress.fraction, "running",
+                         progress.running, "paused", progress.paused,
+                         "complete", progress.complete);
+}
+
+static PyObject *py_solver_v3_strategy_query(PyObject *self, PyObject *args)
+{
+    PyObject *capsule;
+    unsigned long long infoset;
+    py_solver_v3_context_t *ctx;
+    pe_strategy_query_t query;
+    pe_strategy_view_t view;
+    pe_solver_status_t status;
+    PyObject *result;
+    size_t i;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OK", &capsule, &infoset))
+        return NULL;
+    if (infoset > UINT32_MAX)
+        return PyErr_Format(PyExc_ValueError, "infoset is out of range");
+    ctx = py_solver_v3_get_context(capsule);
+    if (!ctx)
+        return NULL;
+    query.infoset = (uint32_t)infoset;
+    status = pe_solver_strategy(ctx->solver, &query, &view);
+    if (status != PE_SOLVER_OK) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "v3 strategy query failed with status %d", (int)status);
+        return NULL;
+    }
+    result = PyList_New(view.count);
+    if (!result)
+        return NULL;
+    for (i = 0u; i < view.count; ++i)
+        PyList_SET_ITEM(result, i, PyFloat_FromDouble(view.values[i]));
+    return result;
+}
+
+static PyObject *py_solver_v3_metrics(PyObject *self, PyObject *args)
+{
+    PyObject *capsule;
+    py_solver_v3_context_t *ctx;
+    pe_metrics_t metrics;
+    pe_solver_status_t status;
+    PyObject *gaps;
+    PyObject *result;
+    uint8_t player;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "O", &capsule))
+        return NULL;
+    ctx = py_solver_v3_get_context(capsule);
+    if (!ctx)
+        return NULL;
+    status = pe_solver_metrics(ctx->solver, &metrics);
+    if (status != PE_SOLVER_OK) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "v3 metrics query failed with status %d", (int)status);
+        return NULL;
+    }
+    gaps = PyList_New(metrics.num_players);
+    if (!gaps)
+        return NULL;
+    for (player = 0u; player < metrics.num_players; ++player)
+        PyList_SET_ITEM(gaps, player, PyFloat_FromDouble(metrics.br_gap[player]));
+    result = Py_BuildValue("{s:d,s:d,s:d,s:i,s:i,s:O}",
+                           "exploitability_raw", metrics.exploitability_raw,
+                           "exploitability_mbb_per_game",
+                           metrics.exploitability_mbb_per_game,
+                           "big_blind", metrics.big_blind, "guarantee",
+                           (int)metrics.guarantee, "players", metrics.num_players,
+                           "br_gap", gaps);
+    Py_DECREF(gaps);
+    return result;
+}
+
 static PyMethodDef base_methods[] = {
     {"eval_hand", (PyCFunction)eval_hand, METH_VARARGS | METH_KEYWORDS, doc_eval_hand},
     {"poker_eval", (PyCFunction)(void (*)(void))poker_eval, METH_VARARGS | METH_KEYWORDS, doc_poker_eval},
@@ -2399,6 +3113,11 @@ static PyMethodDef base_methods[] = {
     {"calculate_equity_for_ranges", (PyCFunction)py_calculate_equity_for_ranges, METH_VARARGS, "Calculates equity for player ranges."},
     {"calculate_multiway_equity", (PyCFunction)(void (*)(void))calculate_multiway_equity, METH_VARARGS | METH_KEYWORDS, "Calculates multiway equity with side pots."},
     {"convert_card_strings_to_mask_value", (PyCFunction)py_convert_card_strings_to_mask_value, METH_VARARGS, "Converts a list of card strings to its uint64_t card mask value."},
+    {"solver_v3_create", (PyCFunction)(void (*)(void))py_solver_v3_create, METH_VARARGS | METH_KEYWORDS, "Create a Python-callback-backed v3 solver."},
+    {"solver_v3_run", (PyCFunction)py_solver_v3_run, METH_VARARGS, "Run a v3 solver capsule."},
+    {"solver_v3_progress", (PyCFunction)py_solver_v3_progress, METH_VARARGS, "Read v3 solver progress."},
+    {"solver_v3_strategy", (PyCFunction)py_solver_v3_strategy_query, METH_VARARGS, "Read a v3 average strategy."},
+    {"solver_v3_metrics", (PyCFunction)py_solver_v3_metrics, METH_VARARGS, "Read v3 exploitability metrics."},
     {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef pokereval_3_11 =

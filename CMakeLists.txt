@@ -275,6 +275,7 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 option(ENABLE_OPENMP "Enable OpenMP support" ON)
+option(ENABLE_ZSTD "Enable zstd-compressed .pe_sol snapshots when available" ON)
 find_package(OpenMP)
 
 if(NOT ENABLE_OPENMP)
@@ -529,6 +530,15 @@ endif()
 # undefined CMAKE_INSTALL_BINDIR turns that into the absolute /poker-eval-examples.
 include(GNUInstallDirs)
 
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+    set(POKER_EVAL_WITH_ZLIB ON)
+    message(STATUS "zlib found, enabling compressed .mkr archive support")
+else()
+    set(POKER_EVAL_WITH_ZLIB OFF)
+    message(STATUS "zlib not found, compressed .mkr archive support disabled")
+endif()
+
 # Modular sources (core/games/equity/utils/etc.)
 add_subdirectory(src)
 add_subdirectory(tools)
@@ -601,6 +611,7 @@ configure_package_config_file(
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/poker-eval-config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/poker-eval-config-version.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindZSTD.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/poker-eval
 )
 

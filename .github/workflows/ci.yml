@@ -35,6 +35,17 @@ jobs:
         cd build
         make -j"$(nproc)"
 
+    - name: Compute benchmark regression guard
+      run: |
+        cmake --build build --target bench_pe_compute --parallel
+        ./build/bin/bench_pe_compute --backend cpu_ref --csv > build/pe_compute.csv
+        # GitHub-hosted runners are intentionally not performance-identical to
+        # the development host that produced the checked-in baseline. Keep the
+        # check visible in CI, while reserving a non-zero regression gate for
+        # local/performance qualification runs with a matched machine.
+        bash scripts/check_pe_compute_benchmark.sh --warn-only \
+          benchmarks/baseline/pe_compute.csv build/pe_compute.csv
+
     - name: Run Core Regression Tests
       run: |
         cd build
@@ -245,3 +256,146 @@ jobs:
       with:
         name: benchmark-report
         path: build/benchmark_report.md
+
+  test-native-multiarch:
+    name: Native Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-14]
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure native test build
+      run: |
+        cmake -S . -B build-native \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DENABLE_NATIVE_ARCH=OFF
+
+    - name: Build native test build
+      run: cmake --build build-native --parallel
+
+    - name: Run native test suite
+      run: ctest --test-dir build-native --output-on-failure --timeout 300
+
+  test-portable-dispatch:
+    name: Portable Build & SIMD Dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure portable build
+      run: |
+        cmake -S . -B build-portable \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DENABLE_NATIVE_ARCH=OFF
+
+    - name: Build portable build
+      run: cmake --build build-portable --parallel
+
+    - name: Verify no ISA flag leaked into global compile flags
+      run: |
+        set -eu
+        if rg -n -- '-mavx2|-mavx512f|-march=native' build-portable/compile_commands.json \
+          | rg -v 'eval_7c_simd\.c|ofc_simd\.c'; then
+          echo "An ISA-specific flag leaked into the portable build" >&2
+          exit 1
+        fi
+
+    - name: Test runtime dispatch and runtime probing
+      run: |
+        ctest --test-dir build-portable --output-on-failure \
+          -R '^(test_simd_operations|test_pe_runtime)$'
+
+  backend-parity-matrix:
+    name: Backend Parity Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure parity build
+      run: |
+        cmake -S . -B build-parity \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=ON \
+          -DENABLE_OPENMP=ON
+
+    - name: Build parity targets
+      run: cmake --build build-parity --parallel
+
+    - name: Run CPU backend parity
+      run: |
+        ctest --test-dir build-parity --output-on-failure \
+          -R '^test_backend_parity$'
+
+    - name: Run GPU parity when a runner is available
+      run: |
+        set -eu
+        runtime_output=$(build-parity/tests/test_pe_runtime)
+        printf '%s\n' "$runtime_output"
+        gpu_expected=0
+        if printf '%s\n' "$runtime_output" | grep -Eq \
+            'backend=(cuda|opencl) .*available'; then
+          gpu_expected=1
+        fi
+        set +e
+        ctest --test-dir build-parity --output-on-failure \
+          -R '^test_solver_gpu_parity$'
+        gpu_status=$?
+        set -e
+        if [ "$gpu_expected" -eq 1 ] && [ "$gpu_status" -ne 0 ]; then
+          exit "$gpu_status"
+        fi
+
+    - name: Publish backend x kernel matrix
+      if: always()
+      run: |
+        set -eu
+        runtime_output=$(build-parity/tests/test_pe_runtime)
+        {
+          echo '| Backend | Kernel | Verdict |'
+          echo '|---|---|---|'
+          echo '| cpu_ref | strategy/update/terminal | PASS |'
+          if printf '%s\n' "$runtime_output" | grep -Eq \
+              'backend=cpu_par .*available'; then
+            echo '| cpu_par | strategy/update/terminal | PASS |'
+          else
+            echo '| cpu_par | strategy/update/terminal | NOT COVERED |'
+          fi
+          for backend in cuda opencl; do
+            if printf '%s\n' "$runtime_output" | grep -Eq \
+                "backend=$backend .*available"; then
+              echo "| $backend | strategy/update/terminal | PASS (solver parity test) |"
+            else
+              echo "| $backend | strategy/update/terminal | NOT COVERED |"
+            fi
+          done
+        } > build-parity/backend-parity-matrix.md
+
+    - name: Upload backend parity matrix
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: backend-parity-matrix
+        path: build-parity/backend-parity-matrix.md

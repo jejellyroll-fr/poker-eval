@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Minimal Test Harness */
 #define TEST_ASSERT(cond) do { \
@@ -128,6 +129,29 @@ static void test_weights(void) {
     TEST_ASSERT_EQUAL(6, range->count);
     TEST_ASSERT((range->total_weight - 3.0) < 0.0001 && (range->total_weight - 3.0) > -0.0001); /* 6 * 0.5 */
     pe_range_free(range);
+}
+
+static void test_omaha_weights_reject_non_finite(void) {
+    pe_range_t *range = NULL;
+    pe_status_t status;
+
+    status = pe_range_parse(game_omaha5, "AsKsQd3c9h:nan",
+                            empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
+    TEST_ASSERT(range == NULL);
+
+    status = pe_range_parse(game_omaha6, "AsKsQd3c9h8s7d:inf",
+                            empty_mask(), NULL, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
+    TEST_ASSERT(range == NULL);
+
+    pe_parse_opts_t opts;
+    pe_range_opts_init(&opts);
+    opts.default_weight = NAN;
+    status = pe_range_parse(game_omaha5, "AsKsQd3c9h", empty_mask(),
+                            &opts, &range);
+    TEST_ASSERT_EQUAL(PE_STATUS_PARSE_ERROR, status);
+    TEST_ASSERT(range == NULL);
 }
 
 static void test_omaha_compatibility(void) {
@@ -336,6 +360,7 @@ int main(void) {
     RUN_TEST(test_parse_specific);
     RUN_TEST(test_parse_multiple);
     RUN_TEST(test_weights);
+    RUN_TEST(test_omaha_weights_reject_non_finite);
     RUN_TEST(test_omaha_compatibility);
     RUN_TEST(test_badugi_range);
     RUN_TEST(test_pineapple8_specific);

@@ -34,7 +34,7 @@ Standalone reference oracles (`analytical_oracles.[ch]`):
 | `test_leduc_openspiel` | Leduc Hold'em (6 cards, 2 rounds, max 2 raises) | `solver == independent full-tree enumeration` ± 1e-3, zero-sum mirror, >100 infosets (proves the full chance tree is traversed) |
 | `test_gambit_exact_lp` | 2×2 simultaneous matrix game (+ an exact sequence-form LP oracle) | LP exact value `0.2`; CFR policy value → `0.2` ± 1e-4; solver == brute minimax; zero-sum mirror |
 | `test_extended_analytical_games` | Jam-or-Fold, continuous `[0,1]`, static and non-static two-street matrix games | Closed-form jam frequencies/value, continuous endpoint/value, and independent two-street value `0.4` |
-| `test_best_response_exploitability` (ISSUE-12, #168) | Kuhn 2p, 3-player Kuhn poker, perfect-information Gambit game | Engine `cfr_best_response_value`/`cfr_exploitability` (and multiway variants) equal an independent recursive oracle; deliberately exploitable policies (Always Fold → BR=+1, Always Call → BR=+0.5) match closed forms; Kuhn 2p policy value converges to `-1/18` over iterations; 3-player Kuhn NashConv == independent oracle; exact Gambit-LP equilibrium → exploitability `e < 1e-7` |
+| `test_best_response_exploitability` (ISSUE-12, #168) | Kuhn 2p, 3-player Kuhn poker, perfect-information Gambit game | Engine `cfr_best_response_perfect_info`/`cfr_exploitability_perfect_info` (with deprecated aliases and multiway variants) equal an independent recursive oracle; deliberately exploitable policies (Always Fold → BR=+1, Always Call → BR=+0.5) match closed forms; Kuhn 2p policy value converges to `-1/18` over iterations; 3-player Kuhn NashConv == independent oracle; exact Gambit-LP equilibrium → exploitability `e < 1e-7` |
 
 Every test builds the game as a `cfr_game_t` vtable, runs the real
 `cfr_solve`, then verifies:
@@ -54,7 +54,8 @@ The tests therefore **do not** gate on exploitability `< ε`; they gate on
 policy-value agreement with the independent oracle, which is exact.
 
 `test_best_response_exploitability` additionally validates the *perfect-
-information* exploitability engine itself. Because `cfr_exploitability()` is a
+information* exploitability engine itself. Because `cfr_exploitability_perfect_info()`
+(and its deprecated `cfr_exploitability()` alias) is a
 perfect-information best response, it is an upper bound that stays positive at
 equilibrium for imperfect-information games (AKQ, Kuhn, Leduc). To verify the
 engine reports `e(sigma) ~ 0` at an exact equilibrium, that test uses a

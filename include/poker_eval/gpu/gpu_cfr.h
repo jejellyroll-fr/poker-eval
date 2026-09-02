@@ -4,7 +4,9 @@
  * Copyright (C) 2025 poker-eval contributors
  *
  * Matrix formulation of CFR for massive parallelization on GPU.
- * Target: ×200-×400 speedup vs CPU CFR implementation.
+ * This compatibility API is a matrix maintenance primitive. It does not
+ * claim a tree-solver speedup; use pe_solver_run with a compute port for a
+ * complete CFR solve.
  *
  * Key idea: Reformulate CFR updates as matrix operations (GEMV/SpMV)
  * that can be efficiently computed on GPU with thousands of threads.
@@ -20,6 +22,13 @@
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+/* The autonomous matrix solver predates the v3 port-based solver API. */
+#if defined(__GNUC__) || defined(__clang__)
+#define PE_GPU_CFR_DEPRECATED(message) __attribute__((deprecated(message)))
+#else
+#define PE_GPU_CFR_DEPRECATED(message)
 #endif
 
 /**
@@ -160,14 +169,12 @@ int gpu_cfr_download_state(
 );
 
 /**
- * Run CFR iterations on GPU
+ * Run matrix maintenance iterations
  *
  * Performs the following per iteration:
- * 1. Compute current strategy π = regret_matching(R)
- * 2. Traverse game tree (or sample via MCCFR)
- * 3. Compute regret deltas Δ
- * 4. Update regrets: R' = discount * R + Δ  (GPU AXPY)
- * 5. Update avg strategy: S' = S + weight * π  (GPU AXPY)
+ * The compatibility API has no game callback, so it performs the matrix-side
+ * regret matching and average-strategy accumulation only. Complete tree
+ * traversal belongs to pe_solver_run and its compute ports.
  *
  * @param ctx         GPU-CFR context
  * @param iterations  Number of iterations to run
@@ -176,7 +183,7 @@ int gpu_cfr_download_state(
 int gpu_cfr_solve(
     gpu_cfr_context_t* ctx,
     int iterations
-);
+) PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
 /**
  * Get GPU-CFR statistics
@@ -293,18 +300,25 @@ typedef struct gpu_cfr_adapter_t gpu_cfr_adapter_t;
 gpu_cfr_adapter_t *gpu_cfr_adapter_create(
     cfr_game_t *game,
     cfr_matrix_storage_t *matrix,
-    int mc_samples);
+    int mc_samples
+) PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-void gpu_cfr_adapter_free(gpu_cfr_adapter_t *adapter);
+void gpu_cfr_adapter_free(gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-int gpu_cfr_adapter_compute_deltas(gpu_cfr_adapter_t *adapter);
+int gpu_cfr_adapter_compute_deltas(gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-const float *gpu_cfr_adapter_get_deltas(const gpu_cfr_adapter_t *adapter);
+const float *gpu_cfr_adapter_get_deltas(const gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
-int gpu_cfr_adapter_get_visited_infosets(const gpu_cfr_adapter_t *adapter);
+int gpu_cfr_adapter_get_visited_infosets(const gpu_cfr_adapter_t *adapter)
+    PE_GPU_CFR_DEPRECATED("use pe_solver_run with a GPU compute port instead");
 
 #ifdef __cplusplus
 }
 #endif
+
+#undef PE_GPU_CFR_DEPRECATED
 
 #endif /* POKER_EVAL_GPU_CFR_H */

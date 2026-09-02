@@ -1,0 +1,325 @@
+/* test_preflop_allin_game.c - terminal oracles and sampled preflop solve. */
+
+#include <poker_eval/core/cardmask_compat.h>
+#include <poker_eval/deck/deck_std.h>
+#include <poker_eval/range.h>
+#include <poker_eval/solver/pe_preflop_allin_game.h>
+#include <poker_eval/solver/pe_range.h>
+#include <poker_eval/solver/pe_storage.h>
+
+#include <assert.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static StdDeck_CardMask make_mask(int rank_a, int suit_a, int rank_b, int suit_b)
+{
+    StdDeck_CardMask mask;
+    StdDeck_CardMask_RESET(mask);
+    StdDeck_CardMask_OR(mask, StdDeck_MASK(StdDeck_MAKE_CARD(rank_a, suit_a)),
+                        StdDeck_MASK(StdDeck_MAKE_CARD(rank_b, suit_b)));
+    return mask;
+}
+
+static StdDeck_CardMask make_mask_n(const int *ranks, const int *suits, size_t count)
+{
+    StdDeck_CardMask mask;
+    StdDeck_CardMask_RESET(mask);
+    for (size_t i = 0u; i < count; ++i)
+        StdDeck_CardMask_SET(mask, StdDeck_MAKE_CARD(ranks[i], suits[i]));
+    return mask;
+}
+
+static void fill_rules(pe_preflop_allin_rules_t *rules, double stack,
+                       int allow_nonallin_call)
+{
+    memset(rules, 0, sizeof(*rules));
+    rules->player_count = 2;
+    rules->stacks[0] = stack;
+    rules->stacks[1] = stack;
+    rules->small_blind = 0.5;
+    rules->big_blind = 1.0;
+    rules->min_raise = 1.0;
+    rules->raise_cap = 4;
+    rules->allow_nonallin_call = allow_nonallin_call;
+    rules->showdown_samples = 512;
+    rules->showdown_seed = 0xA11CE;
+}
+
+static int run_solve(pe_preflop_allin_game_t *game, int iterations,
+                     uint64_t seed, pe_storage_t **out_storage)
+{
+    pe_storage_t *storage = pe_storage_create(32);
+    pe_external_sampling_ctx_t ctx[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    pe_update_batch_t batch = {0};
+    const pe_external_game_t *external = pe_preflop_allin_external(game);
+    int players = pe_preflop_allin_player_count(game);
+
+    if (!storage || players < 2 || players > PE_PREFLOP_ALLIN_MAX_PLAYERS)
+        return -1;
+    pe_preflop_allin_game_set_storage(game, storage);
+    for (int player = 0; player < players; ++player)
+    {
+        if (pe_external_sampling_ctx_init(&ctx[player], external,
+                                          pe_storage_ram_ops(), storage,
+                                          player, seed + (uint64_t)player) != 0)
+        {
+            pe_storage_destroy(storage);
+            return -1;
+        }
+    }
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        for (int player = 0; player < players; ++player)
+        {
+            if (pe_external_sampling_run(&ctx[player], &batch) != 0)
+            {
+                pe_update_batch_destroy(&batch);
+                for (int q = 0; q < players; ++q)
+                    pe_external_sampling_ctx_destroy(&ctx[q]);
+                pe_storage_destroy(storage);
+                return -1;
+            }
+            for (size_t i = 0u; i < batch.count; ++i)
+            {
+                double *regret = pe_storage_values(
+                    storage, batch.items[i].infoset, PE_VALUES_REGRET);
+                double *average = pe_storage_values(
+                    storage, batch.items[i].infoset, PE_VALUES_AVERAGE);
+                if (!regret || !average)
+                {
+                    pe_update_batch_destroy(&batch);
+                    for (int q = 0; q < players; ++q)
+                        pe_external_sampling_ctx_destroy(&ctx[q]);
+                    pe_storage_destroy(storage);
+                    return -1;
+                }
+                regret[batch.items[i].action] += batch.items[i].delta;
+                average[batch.items[i].action] += batch.items[i].average_delta;
+            }
+            pe_update_batch_clear(&batch);
+        }
+    }
+    pe_update_batch_destroy(&batch);
+    for (int player = 0; player < players; ++player)
+        pe_external_sampling_ctx_destroy(&ctx[player]);
+    *out_storage = storage;
+    return 0;
+}
+
+int main(void)
+{
+    pe_preflop_allin_rules_t rules;
+    pe_range_t *range_aa = NULL;
+    pe_range_t *range_kk = NULL;
+    pe_range_t *range_full_a = NULL;
+    pe_range_t *range_full_b = NULL;
+    StdDeck_CardMask dead;
+
+    StdDeck_CardMask_RESET(dead);
+
+    /* ---- Showdown oracle: AA vs KK ---- */
+    {
+        pe_range_t *ranges[2];
+        pe_preflop_allin_game_t *game;
+        mask_t holes[2];
+        double equity[2];
+
+        assert(pe_solver_range_parse(game_holdem, "AsAh", dead, &range_aa) ==
+               PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_holdem, "KcKd", dead, &range_kk) ==
+               PE_SOLVER_OK);
+        ranges[0] = range_aa;
+        ranges[1] = range_kk;
+        fill_rules(&rules, 10.0, 1);
+        game = pe_preflop_allin_game_create(&rules, ranges);
+        assert(game != NULL);
+
+        holes[0] = cardmask_to_mask_t(make_mask(StdDeck_Rank_ACE, StdDeck_Suit_SPADES,
+                                                StdDeck_Rank_ACE, StdDeck_Suit_HEARTS));
+        holes[1] = cardmask_to_mask_t(make_mask(StdDeck_Rank_KING, StdDeck_Suit_CLUBS,
+                                                StdDeck_Rank_KING, StdDeck_Suit_DIAMONDS));
+        assert(pe_preflop_allin_showdown_equity(game, holes, equity) == 0);
+        assert(fabs(equity[0] + equity[1] - 1.0) < 1e-9);
+        assert(equity[0] > 0.75 && equity[0] < 0.90);
+
+        /* Deterministic: same deal, same numbers. */
+        {
+            double again[2];
+            assert(pe_preflop_allin_showdown_equity(game, holes, again) == 0);
+            assert(again[0] == equity[0] && again[1] == equity[1]);
+        }
+        pe_preflop_allin_game_destroy(game);
+    }
+
+    /* ---- Full sampled solve: all-in-or-fold, both players 100% ranges ---- */
+    {
+        pe_range_t *ranges[2];
+        pe_preflop_allin_game_t *game;
+        pe_storage_t *storage = NULL;
+
+        assert(pe_solver_range_parse(game_holdem, "100%", dead, &range_full_a) ==
+               PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_holdem, "100%", dead, &range_full_b) ==
+               PE_SOLVER_OK);
+        ranges[0] = range_full_a;
+        ranges[1] = range_full_b;
+        fill_rules(&rules, 10.0, 0); /* calls only legal when all in */
+        rules.raise_count = 0;       /* push or fold only */
+        game = pe_preflop_allin_game_create(&rules, ranges);
+        assert(game != NULL);
+
+        assert(run_solve(game, 200, 777u, &storage) == 0);
+        assert(storage != NULL);
+        assert(pe_storage_count(storage) > 0u);
+
+        /* Every stored infoset carries a normalised average strategy. */
+        for (size_t id = 0u; id < pe_storage_count(storage); ++id)
+        {
+            const pe_infoset_meta_t *meta = pe_storage_meta(storage, id);
+            const double *average =
+                pe_storage_values_const(storage, id, PE_VALUES_AVERAGE);
+            const double *regret =
+                pe_storage_values_const(storage, id, PE_VALUES_REGRET);
+            double sum = 0.0;
+            assert(meta != NULL && average != NULL && regret != NULL);
+            assert(meta->combo_count == 1u);
+            for (uint16_t a = 0u; a < meta->action_count; ++a)
+            {
+                assert(isfinite(average[a]));
+                assert(isfinite(regret[a]));
+                sum += average[a];
+            }
+            assert(sum > 0.0);
+        }
+        assert(pe_preflop_allin_infodesc_count(game) > 0u);
+        {
+            uint64_t key = 0u;
+            char text[96];
+            assert(pe_preflop_allin_infodesc_at(game, 0u, &key, text,
+                                                sizeof(text)) == 0);
+            assert(text[0] != '\0');
+        }
+        pe_storage_destroy(storage);
+
+        /* Determinism: identical seed reproduces identical regrets. */
+        {
+            pe_storage_t *rerun = NULL;
+            assert(run_solve(game, 200, 777u, &rerun) == 0);
+            assert(pe_storage_count(rerun) == pe_storage_count(storage == NULL ? NULL : rerun));
+            for (size_t id = 0u; id < pe_storage_count(rerun); ++id)
+            {
+                const pe_infoset_meta_t *meta = pe_storage_meta(rerun, id);
+                const double *regret =
+                    pe_storage_values_const(rerun, id, PE_VALUES_REGRET);
+                assert(meta != NULL && regret != NULL);
+                for (uint16_t a = 0u; a < meta->action_count; ++a)
+                    assert(isfinite(regret[a]));
+            }
+            pe_storage_destroy(rerun);
+        }
+        pe_preflop_allin_game_destroy(game);
+    }
+
+    /* ---- Invalid configurations are rejected ---- */
+    {
+        pe_range_t *ranges[PE_PREFLOP_ALLIN_MAX_PLAYERS] =
+            {range_aa, range_kk, NULL, NULL, NULL, NULL};
+        fill_rules(&rules, 10.0, 1);
+        rules.player_count = 3;
+        assert(pe_preflop_allin_game_create(&rules, ranges) == NULL);
+        fill_rules(&rules, 0.5, 1); /* stack cannot cover the big blind */
+        assert(pe_preflop_allin_game_create(&rules, ranges) == NULL);
+    }
+
+    /* ---- PLO5 multiway: five-card deals, card removal and BR traversal ---- */
+    {
+        pe_range_t *ranges[3] = {NULL, NULL, NULL};
+        pe_preflop_allin_game_t *game;
+        pe_storage_t *storage = NULL;
+        mask_t holes[3];
+        double equity[3];
+        const int ranks0[] = {StdDeck_Rank_ACE, StdDeck_Rank_KING,
+                              StdDeck_Rank_QUEEN, StdDeck_Rank_3, StdDeck_Rank_9};
+        const int suits0[] = {StdDeck_Suit_SPADES, StdDeck_Suit_SPADES,
+                              StdDeck_Suit_DIAMONDS, StdDeck_Suit_CLUBS,
+                              StdDeck_Suit_HEARTS};
+        const int ranks1[] = {StdDeck_Rank_ACE, StdDeck_Rank_KING,
+                              StdDeck_Rank_JACK, StdDeck_Rank_TEN, StdDeck_Rank_8};
+        const int suits1[] = {StdDeck_Suit_HEARTS, StdDeck_Suit_HEARTS,
+                              StdDeck_Suit_DIAMONDS, StdDeck_Suit_CLUBS,
+                              StdDeck_Suit_SPADES};
+        const int ranks2[] = {StdDeck_Rank_ACE, StdDeck_Rank_KING,
+                              StdDeck_Rank_QUEEN, StdDeck_Rank_2, StdDeck_Rank_3};
+        const int suits2[] = {StdDeck_Suit_DIAMONDS, StdDeck_Suit_DIAMONDS,
+                              StdDeck_Suit_HEARTS, StdDeck_Suit_SPADES,
+                              StdDeck_Suit_HEARTS};
+
+        assert(pe_solver_range_parse(game_omaha5, "AsKsQd3c9h", dead,
+                                     &ranges[0]) == PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_omaha5, "AhKhJdTc8s", dead,
+                                     &ranges[1]) == PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_omaha5, "AdKdQh2s3h", dead,
+                                     &ranges[2]) == PE_SOLVER_OK);
+        memset(&rules, 0, sizeof(rules));
+        rules.variant = PE_PREFLOP_PLO5;
+        rules.player_count = 3;
+        rules.stacks[0] = rules.stacks[1] = rules.stacks[2] = 10.0;
+        rules.small_blind = 0.5;
+        rules.big_blind = 1.0;
+        rules.min_raise = 1.0;
+        rules.postflop_streets = 1;
+        rules.showdown_samples = 32;
+        rules.showdown_seed = 0xA105u;
+        game = pe_preflop_allin_game_create(&rules, ranges);
+        assert(game != NULL);
+        assert(pe_preflop_allin_player_count(game) == 3);
+
+        holes[0] = cardmask_to_mask_t(make_mask_n(ranks0, suits0, 5u));
+        holes[1] = cardmask_to_mask_t(make_mask_n(ranks1, suits1, 5u));
+        holes[2] = cardmask_to_mask_t(make_mask_n(ranks2, suits2, 5u));
+        assert(pe_preflop_allin_showdown_equity(game, holes, equity) == 0);
+        assert(fabs(equity[0] + equity[1] + equity[2] - 1.0) < 1e-9);
+        assert(run_solve(game, 4, 0xA105u, &storage) == 0);
+        assert(storage != NULL && pe_storage_count(storage) > 0u);
+        pe_storage_destroy(storage);
+        pe_preflop_allin_game_destroy(game);
+        for (int player = 0; player < 3; ++player)
+            pe_range_free(ranges[player]);
+    }
+
+    /* ---- Full Hold'em street traversal: preflop -> flop -> turn -> river ---- */
+    {
+        pe_range_t *ranges[2] = {NULL, NULL};
+        pe_preflop_allin_game_t *game;
+        pe_storage_t *storage = NULL;
+
+        assert(pe_solver_range_parse(game_holdem, "AsAh", dead,
+                                     &ranges[0]) == PE_SOLVER_OK);
+        assert(pe_solver_range_parse(game_holdem, "KcKd", dead,
+                                     &ranges[1]) == PE_SOLVER_OK);
+        fill_rules(&rules, 10.0, 0);
+        rules.raise_count = 1;
+        rules.raise_sizes[0] = 2.5;
+        rules.postflop_streets = 1;
+        rules.showdown_samples = 1;
+        game = pe_preflop_allin_game_create(&rules, ranges);
+        assert(game != NULL);
+        assert(run_solve(game, 1, 0x51EE7u, &storage) == 0);
+        assert(storage != NULL && pe_storage_count(storage) > 0u);
+        /* Street and board are part of the infoset identity, so a completed
+           run must expose more than the preflop root alone. */
+        assert(pe_preflop_allin_infodesc_count(game) >= 4u);
+        pe_storage_destroy(storage);
+        pe_preflop_allin_game_destroy(game);
+        pe_range_free(ranges[0]);
+        pe_range_free(ranges[1]);
+    }
+
+    pe_range_free(range_aa);
+    pe_range_free(range_kk);
+    pe_range_free(range_full_a);
+    pe_range_free(range_full_b);
+    puts("preflop all-in game tests passed");
+    return 0;
+}

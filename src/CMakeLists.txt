@@ -10,11 +10,174 @@ add_subdirectory(games)
 add_subdirectory(distributions)
 add_subdirectory(range)
 add_subdirectory(equity)
-add_subdirectory(engine)
 add_subdirectory(economics)
 add_subdirectory(gpu)
 add_subdirectory(examples)
 add_subdirectory(ofc)
+
+# Resolve the optional compression dependency before configuring the engine.
+# The engine target uses this result to expose zstd-backed .pe_sol snapshots.
+if(ENABLE_ZSTD)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+    find_package(ZSTD QUIET MODULE)
+    if(ZSTD_FOUND AND TARGET ZSTD::ZSTD)
+        set(POKER_EVAL_WITH_ZSTD ON)
+        message(STATUS "zstd found, enabling compressed .pe_sol snapshots")
+    else()
+        set(POKER_EVAL_WITH_ZSTD OFF)
+        message(STATUS "zstd not found, compressed .pe_sol snapshots disabled")
+    endif()
+else()
+    set(POKER_EVAL_WITH_ZSTD OFF)
+endif()
+set(POKER_EVAL_WITH_ZSTD "${POKER_EVAL_WITH_ZSTD}" PARENT_SCOPE)
+
+add_subdirectory(engine)
+
+# Solver module (architecture v3). The hexagon's domain is declared here rather
+# than through add_subdirectory: it is a single translation unit for now, and
+# CTR-01 is scoped to this file. It deliberately links nothing — the domain
+# depends on ports, never on the engine, the evaluator or a GPU backend.
+add_library(poker_solver
+    solver/domain/actions.c
+    solver/domain/betting_state.c
+    solver/domain/betting_vector.c
+    solver/domain/holdem_river.c
+    solver/domain/holdem_chance.c
+    solver/domain/holdem_deals.c
+    solver/domain/holdem_streets.c
+    solver/domain/holdem_round.c
+    solver/domain/variant.c
+    solver/domain/variant_terminal.c
+    solver/domain/omaha_deals.c
+    solver/domain/preflop_deal_sampler.c
+    solver/domain/preflop_betting.c
+    solver/domain/preflop_allin_game.c
+    solver/domain/cfr_external_adapter.c
+    solver/domain/cluster.c
+    solver/domain/runout_report.c
+    solver/domain/omaha_river.c
+    solver/domain/pots.c
+    solver/domain/solver.c
+    solver/domain/registry.c
+    solver/domain/config.c
+    solver/domain/rng.c
+    solver/domain/plan.c
+    solver/domain/runtime.c
+    solver/domain/work_unit.c
+    solver/domain/work_scheduler.c
+    solver/domain/work_protocol.c
+    solver/domain/work_coordinator.c
+    solver/domain/work_reducer.c
+    solver/domain/work_executor.c
+    solver/domain/storage_v2.c
+    solver/domain/range.c
+    solver/domain/reach.c
+    solver/domain/blockers.c
+    solver/domain/chance.c
+    solver/domain/combinations.c
+    solver/domain/telemetry.c
+    solver/domain/traversal_full_vector.c
+    solver/domain/batch.c
+    solver/domain/regret_vanilla.c
+    solver/domain/regret_plus.c
+    solver/domain/regret_dcfr.c
+    solver/domain/regret_legacy_exp.c
+    solver/domain/average.c
+    solver/domain/pruning_rbp.c
+    solver/domain/showdown_vector.c
+    solver/domain/traversal_chance_vector.c
+    solver/domain/traversal_external.c
+    solver/domain/external_best_response.c
+    solver/domain/traversal_outcome.c
+    solver/domain/compute_layout.c
+    solver/domain/best_response_ii.c
+    solver/adapters/storage_ram.c
+    solver/adapters/persist_checkpoint.c
+    solver/adapters/compute_cpu_ref.c
+    solver/adapters/compute_cpu_par.c
+    solver/adapters/compute_simd.c
+    solver/adapters/compute_gpu_updates.c
+    solver/adapters/compute_cuda.c
+    solver/adapters/compute_opencl.c
+    solver/adapters/compute_hip.c
+    solver/adapters/compute_metal.c
+    solver/adapters/evaluator_equity.c
+    solver/adapters/evaluator_gpu.c
+    solver/adapters/monker_classes.c
+    solver/adapters/monker_key.c
+    solver/adapters/monker_strategy.c
+    solver/adapters/monker_tree_vector.c
+    solver/adapters/monker_omaha_tree.c
+    solver/adapters/monker_tree_reader.c
+    solver/adapters/monker_mkr_reader.c
+    solver/adapters/monker_filters.c
+    solver/adapters/range_ppt.c
+    solver/adapters/range_parser.c
+    solver/adapters/telemetry_null.c
+    solver/adapters/telemetry_stream.c
+    solver/adapters/telemetry_callback.c
+)
+
+target_include_directories(poker_solver PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+)
+
+# The only link dependency of the domain, and it is a leaf: PCG32 lives in
+# poker_core, which itself links nothing but libm. No engine, no evaluator, no
+# GPU backend — those arrive through the driven ports.
+# The range parser adapter needs the range engine. The edge is acyclic:
+# poker-eval-range reaches poker_core, poker_equity and poker_distributions,
+# and none of those links poker_solver.
+target_link_libraries(poker_solver PUBLIC poker_core poker-eval-range poker_equity)
+
+if(POKER_EVAL_WITH_ZLIB)
+    target_compile_definitions(poker_solver PRIVATE PE_HAVE_ZLIB=1)
+    target_link_libraries(poker_solver PRIVATE ZLIB::ZLIB)
+endif()
+
+if(POKER_EVAL_WITH_OPENMP)
+    target_link_libraries(poker_solver PUBLIC OpenMP::OpenMP_C)
+endif()
+
+if(WIN32)
+    target_link_libraries(poker_solver PRIVATE ws2_32)
+endif()
+
+# The adapter itself is always present, but only the CUDA build gets access to
+# the existing batched GPU library and its CUDA headers/runtime.
+if(TARGET poker_cuda_batch AND TARGET poker_gpu_unified)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_CUDA_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_CUDA_COMPILED=1)
+    target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
+endif()
+
+if(TARGET poker_opencl AND TARGET poker_gpu_unified)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_OPENCL_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_OPENCL_COMPILED=1)
+    target_link_libraries(poker_solver PRIVATE poker_gpu_unified)
+endif()
+
+# HIP and Metal carry regret kernels only; neither has a batched terminal
+# evaluator yet, so they do not depend on poker_gpu_unified.
+if(TARGET poker_hip_regret)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_HIP_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_HIP_COMPILED=1)
+    target_link_libraries(poker_solver PRIVATE poker_hip_regret)
+endif()
+
+if(TARGET poker_metal_regret)
+    target_compile_definitions(poker_solver PRIVATE PE_COMPUTE_METAL_AVAILABLE=1)
+    target_compile_definitions(poker_solver PRIVATE PE_RUNTIME_METAL_COMPILED=1)
+    target_link_libraries(poker_solver PRIVATE poker_metal_regret)
+endif()
+
+install(TARGETS poker_solver
+        EXPORT poker-eval-targets
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin)
 
 # The modular libraries above are declared without an explicit type, so they
 # follow BUILD_SHARED_LIBS. Apply the properties a shared build needs in one
@@ -30,6 +193,7 @@ set(POKER_EVAL_MODULES
     poker_betting
     poker_economics
     poker_ofc
+    poker_solver
 )
 
 foreach(module IN LISTS POKER_EVAL_MODULES)
@@ -70,6 +234,7 @@ elseif(UNIX AND NOT APPLE)
         poker_betting
         poker_economics
         poker_ofc
+        poker_solver
         -Wl,--end-group
     )
 else()
@@ -88,6 +253,7 @@ else()
         poker_betting
         poker_economics
         poker_ofc
+        poker_solver
     )
 endif()
 

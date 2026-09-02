@@ -1,0 +1,88 @@
+#include <assert.h>
+#include <float.h>
+#include <math.h>
+#include <stdio.h>
+
+#include <poker_eval/economics/push_fold_multiway.h>
+
+int main(void)
+{
+    pe_push_fold_multiway_input_t input = {
+        .pot_before_push = 1.0,
+        .hero_stack = 10.0,
+        .villain_stacks = {10.0, 10.0},
+        .num_villains = 2,
+        .hero_equity_by_call_mask = {0.0, 0.5, 0.4, 0.3},
+        .iterations = 20000
+    };
+    pe_push_fold_multiway_result_t result = {0};
+    assert(pe_push_fold_multiway_solve(&input, &result) == 0);
+    assert(result.iterations == 20000);
+    assert(isfinite(result.hero_ev) && isfinite(result.exploitability));
+    assert(result.hero_push_frequency >= 0.0 && result.hero_push_frequency <= 1.0);
+    for (int i = 0; i < 2; ++i)
+        assert(result.villain_call_frequency[i] >= 0.0 && result.villain_call_frequency[i] <= 1.0);
+
+    /* The callers are one coalition and may choose a correlated mask.  Two
+       single-caller losses make every push unprofitable, so the equilibrium
+       must not be the independent 50%/50% result. */
+    {
+        pe_push_fold_multiway_input_t coalition = {
+            .pot_before_push = 1.0,
+            .hero_stack = 1.0,
+            .villain_stacks = {1.0, 1.0},
+            .num_villains = 2,
+            .hero_equity_by_call_mask = {1.0, 0.0, 0.0, 1.0},
+            .iterations = 20000
+        };
+        pe_push_fold_multiway_result_t coalition_result = {0};
+        assert(pe_push_fold_multiway_solve(&coalition, &coalition_result) == 0);
+        assert(coalition_result.hero_push_frequency < 0.05);
+    }
+
+    /* A caller cannot contribute more than the hero can match. */
+    {
+        pe_push_fold_multiway_input_t asymmetric = input;
+        pe_push_fold_multiway_result_t asymmetric_result = {0};
+        asymmetric.hero_stack = 100.0;
+        asymmetric.villain_stacks[0] = 10.0;
+        asymmetric.num_villains = 1;
+        asymmetric.hero_equity_by_call_mask[0] = 0.0;
+        asymmetric.hero_equity_by_call_mask[1] = 0.6;
+        assert(pe_push_fold_multiway_solve(&asymmetric, &asymmetric_result) == 0);
+        assert(asymmetric_result.hero_push_frequency > 0.95);
+    }
+
+    /* Two short callers still match only one hero contribution. */
+    {
+        pe_push_fold_multiway_input_t matched = {
+            .pot_before_push = 1.0,
+            .hero_stack = 100.0,
+            .villain_stacks = {10.0, 10.0},
+            .num_villains = 2,
+            .hero_equity_by_call_mask = {0.5, 0.5, 0.5, 0.5},
+            .iterations = 1
+        };
+        pe_push_fold_multiway_result_t matched_result = {0};
+        assert(pe_push_fold_multiway_solve(&matched, &matched_result) == 0);
+        assert(fabs(matched_result.hero_ev - 0.9375) < 1e-12);
+    }
+
+    {
+        pe_push_fold_multiway_input_t overflowing = input;
+        pe_push_fold_multiway_result_t overflowing_result = {0};
+        overflowing.hero_stack = DBL_MAX;
+        overflowing.villain_stacks[0] = DBL_MAX;
+        overflowing.villain_stacks[1] = DBL_MAX;
+        overflowing.num_villains = 2;
+        overflowing.hero_equity_by_call_mask[0] = 0.0;
+        overflowing.hero_equity_by_call_mask[1] = 0.5;
+        overflowing.hero_equity_by_call_mask[2] = 0.5;
+        overflowing.hero_equity_by_call_mask[3] = 0.5;
+        assert(pe_push_fold_multiway_solve(&overflowing,
+                                           &overflowing_result) == -1);
+    }
+
+    puts("Multiway push/fold tests passed");
+    return 0;
+}

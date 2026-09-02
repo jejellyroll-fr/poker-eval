@@ -108,8 +108,6 @@ int main(void)
     /* ---- Save compact .pe_sol ---- */
     ASSERT_TRUE(pe_cfr_save_storage(storage, sol_path) == 0, "save storage");
 
-    cfr_storage_destroy(storage);
-
     /* ---- Load compact .pe_sol (heap copy) ---- */
     cfr_storage_t *loaded = cfr_storage_create();
     ASSERT_TRUE(loaded != NULL, "loaded allocation");
@@ -193,6 +191,52 @@ int main(void)
     ASSERT_NEAR(sum_a, 1.0, 1e-9, "strat_a sums to 1");
 
     cfr_storage_destroy(loaded);
+
+    /* zstd is optional at configure time. When present, the compressed
+     * snapshot must load through the same public API and preserve the rows. */
+    {
+        char zstd_path[512];
+        ASSERT_TRUE(make_tmp_path(zstd_path, sizeof(zstd_path), ".pe_sol.zst") == 0,
+                    "zstd tmp path");
+        int zrc = pe_cfr_save_storage_zstd(storage, zstd_path, 3);
+        if (zrc == 0)
+        {
+            cfr_storage_t *zloaded = cfr_storage_create();
+            ASSERT_TRUE(zloaded != NULL, "zstd loaded allocation");
+            ASSERT_TRUE(pe_cfr_load_storage(zloaded, zstd_path) == 0,
+                        "load zstd storage");
+            double zprob[2];
+            cfr_storage_get_avg_strategy(zloaded, KEY_A, 2, zprob);
+            ASSERT_NEAR(zprob[0], 0.25, 1e-4, "zstd strat_a[0]");
+            ASSERT_NEAR(zprob[1], 0.75, 1e-4, "zstd strat_a[1]");
+            cfr_storage_destroy(zloaded);
+        }
+        else
+        {
+            ASSERT_TRUE(errno == ENOTSUP, "zstd disabled must report ENOTSUP");
+        }
+        if (zrc == 0)
+        {
+            char empty_path[512];
+            cfr_storage_t *empty = cfr_storage_create();
+            ASSERT_TRUE(empty != NULL, "empty storage allocation");
+            ASSERT_TRUE(make_tmp_path(empty_path, sizeof(empty_path), ".pe_sol.zst") == 0,
+                        "empty zstd tmp path");
+            ASSERT_TRUE(pe_cfr_save_storage_zstd(empty, empty_path, 3) == 0,
+                        "save empty zstd storage");
+            cfr_storage_t *empty_loaded = cfr_storage_create();
+            ASSERT_TRUE(empty_loaded != NULL, "empty zstd loaded allocation");
+            ASSERT_TRUE(pe_cfr_load_storage(empty_loaded, empty_path) == 0,
+                        "load empty zstd storage");
+            ASSERT_TRUE(cfr_storage_count_infosets(empty_loaded) == 0,
+                        "empty zstd infoset count");
+            cfr_storage_destroy(empty_loaded);
+            cfr_storage_destroy(empty);
+            remove(empty_path);
+        }
+        remove(zstd_path);
+    }
+    cfr_storage_destroy(storage);
 
     /* ---- Memory-mapped view ---- */
     pe_sol_mmap_t *view = NULL;

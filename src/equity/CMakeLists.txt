@@ -2,7 +2,6 @@
 
 # Equity source files
 set(EQUITY_SOURCES
-    pcg_rng.c
     enumerate.c
     enumerate_dispatch.c
     canonicalize.c

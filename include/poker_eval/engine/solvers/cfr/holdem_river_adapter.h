@@ -13,6 +13,7 @@
 #include "board_texture.h"
 #include "poker_eval/core/eval_context.h"
 #include "poker_eval/core/modern_cardmask.h"
+#include <poker_eval/solver/pe_compute.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,13 +56,16 @@ typedef struct {
      *   not owned by the state; NULL falls back to mode 3).
      * bucket_mode == 6 : board-texture merging via pe_board_texture_id, keyed on
      *   texture_level (pe_texture_filter_level_t, 0 = disabled).
-     * bucket_mode == 7 : both combined (MonkerSolver Strength+Texture pairing). */
+     * bucket_mode == 7 : both combined (strength + texture pairing). */
     pe_strength_table_t *strength_table;
     int texture_level;
     /* FEAT-13 (#192): turn board (4 cards) when solved multi-street, so
      * texture merging can also collapse turn nodes reached from different
      * 4-board runs; MASK_EMPTY when solving river-only. */
     mask_t turn_board;
+    /* Optional terminal evaluator borrowed from the compute layer. */
+    const pe_compute_ops_t *compute_ops;
+    void *compute_self;
 } holdem_river_state_t;
 
 /* Create Hold'em river adapter */

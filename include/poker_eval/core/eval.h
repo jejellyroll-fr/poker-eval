@@ -254,7 +254,7 @@ StdDeck_StdRules_EVAL_N(StdDeck_CardMask cards, int n_cards)
   };
 
   /* Should never happen */
-  assert(!"Logic error in StdDeck_StdRules_EVAL_N");
+  assert(0 && "Logic error in StdDeck_StdRules_EVAL_N");
 }
 
 #undef SC

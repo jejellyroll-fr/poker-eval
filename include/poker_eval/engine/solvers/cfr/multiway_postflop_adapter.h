@@ -5,6 +5,10 @@
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/economics/rake.h>
+#include <poker_eval/solver/pe_chance.h>
+#include <poker_eval/solver/pe_abstraction.h>
+#include <poker_eval/solver/pe_game_rules.h>
+#include <poker_eval/solver/pe_range.h>
 
 #if !defined(_WIN32)
 #include <poker_eval/core/pthread_compat.h>
@@ -23,6 +27,13 @@ extern "C" {
 
 struct mpf_tree_def_t;
 struct mpf_state_s;
+
+/* One possible joint deal of the private hands, with its probability. */
+typedef struct mpf_private_deal_t
+{
+    mask_t hole[MPF_MAX_PLAYERS];
+    double weight;
+} mpf_private_deal_t;
 struct mpf_perf_stats_pool_t;
 
 #if !defined(_WIN32)
@@ -104,6 +115,21 @@ typedef struct
 
     mask_t hole[MPF_MAX_PLAYERS];
     int hole_specified[MPF_MAX_PLAYERS];
+
+    /*
+     * Private range per player (RNG-02). Borrowed: the caller owns it and must
+     * keep it alive for the life of the game.
+     *
+     * A range and a fixed hole say the same thing when the range holds one
+     * combo, and that is the only case supported so far — mpf_build_game
+     * materialises it into hole[p]. A range with several combos is refused
+     * rather than collapsed onto its first entry: solving one hand while the
+     * caller asked for a range would produce numbers that look like a range
+     * solve. RNG-03 adds the root private chance that makes them meaningful.
+     *
+     * The range must have been through pe_solver_range_prepare().
+     */
+    const pe_range_t *range[MPF_MAX_PLAYERS];
     int board_cards[5];
     int board_card_count;
 
@@ -144,6 +170,14 @@ typedef struct
     int enable_card_bunching;
     int folded_range_provided[MPF_MAX_PLAYERS];
     double folded_range_prob[MPF_MAX_PLAYERS][52];
+
+    /* FEAT-13 / ABS-02: optional general postflop abstraction. A supplied
+       model is borrowed for the life of the game; when it is NULL and a
+       postflop board is already available, mpf_build_game trains a model for
+       the initial board and owns it from the root state. */
+    int strength_buckets_per_street; /* 0 = disabled */
+    int texture_filter_level;         /* pe_texture_filter_level_t */
+    const pe_abstraction_model_t *abstraction_model;
 } mpf_config_t;
 
 typedef struct mpf_state_s
@@ -217,6 +251,24 @@ typedef struct mpf_state_s
     /* Set only on the root state: it owns (and must free) stack_index. */
     int owns_stack_index;
 
+    /*
+     * Root private chance (RNG-03).
+     *
+     * One entry per joint deal that is actually possible: the cartesian
+     * product of the players' ranges, minus every combination where two
+     * players hold the same card or a card already on the board. Weights are
+     * the product of the per-player weights, renormalised over what survives.
+     *
+     * Owned by the root state. `private_children` caches the dealt states the
+     * same way chance_children does for board cards, but sized by the number
+     * of deals rather than by 52.
+     */
+    struct mpf_private_deal_t *private_deals;
+    struct mpf_state_s **private_children;
+    int private_deal_count;
+    /* Set on the root when there is a deal to make; cleared by apply_chance. */
+    int private_pending;
+
     /* FEAT-03: real chance nodes */
     int keyed_mode;            /* use infoset keys instead of raw state pointers */
     struct mpf_state_s *key_map_owner; /* game instance owning keyed states */
@@ -224,6 +276,28 @@ typedef struct mpf_state_s
     int chance_pending;        /* next street transition deals a card (chance state) */
     int chance_children_count; /* number of dealt children so far */
     struct mpf_state_s *chance_children[52]; /* cached per-outcome children */
+
+    /*
+     * CHN-02: how many board cards the pending chance node deals at once.
+     * One for the turn and the river, three for the flop, zero when nothing
+     * is pending. The count is what separates the two node kinds; deriving it
+     * from the street instead would misread a solve that starts on the flop
+     * with a pinned board.
+     */
+    int chance_deal_cards;
+    /*
+     * Cached children of a flop chance node, sized by C(unused,3) rather than
+     * by 52 — which is why they cannot live in chance_children[]. Allocated on
+     * the first deal and owned by the node, like every other chance child.
+     */
+    struct mpf_state_s **flop_children;
+    int flop_child_count;
+    /*
+     * Board cards the configuration pinned. A preflop start with fewer than
+     * three of them is the only case where the flop is dealt by chance; with
+     * three or more the caller chose the board and it is not chance's to pick.
+     */
+    int known_board_cards;
     cfr_storage_t *lock_storage;
 
     /* FEAT-14 (#150): folded-range card bunching (copied from mpf_config_t).
@@ -233,6 +307,13 @@ typedef struct mpf_state_s
     int enable_card_bunching;
     int folded_range_provided[MPF_MAX_PLAYERS];
     double folded_range_prob[MPF_MAX_PLAYERS][52];
+
+    /* FEAT-13 / ABS-02: shared by cloned states; only the root owns an
+       automatically trained model. */
+    int strength_buckets_per_street;
+    int texture_filter_level;
+    const pe_abstraction_model_t *abstraction_model;
+    int owns_abstraction_model;
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);
@@ -271,6 +352,43 @@ size_t mpf_state_stack_index_capacity(const mpf_state_t *state);
    tests/diagnostics can locate a state's storage entry without reaching into
    the adapter's static helpers. */
 uint64_t mpf_state_infoset_key(const mpf_state_t *state);
+
+/*
+ * What kind of chance node a state is, if any (CHN-01).
+ *
+ * The two booleans it replaces — chance_pending and private_pending — are kept
+ * as the storage, because every clone path in the adapter copies them; what
+ * changes is that nothing outside this function reads them to decide what a
+ * node *is*. The distinction matters most for chance_children[52], which is
+ * indexed by card and is therefore only meaningful for PE_CHANCE_BOARD_ONE.
+ */
+pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state);
+
+/*
+ * CHN-02: resolve a state key back to the state it names.
+ *
+ * In keyed mode a key is an infoset key, not a pointer, so a caller holding
+ * the result of apply_action or apply_chance has no way to look at what it
+ * was given. The solver does not need this; anything checking what a chance
+ * node actually dealt does.
+ */
+const mpf_state_t *mpf_state_for_key(cfr_game_t *game, uint64_t key);
+
+/* CHN-03: draw one chance outcome by direct sampling.
+ *
+ * Enumeration is a strategy, not an identity: a wide node (a full-deck flop,
+ * a multiway deal from ranges) costs as many children as outcomes, and a
+ * sampled traversal needs the same transitions without building them. This
+ * draws an outcome with the same numbering apply_chance would index, plus the
+ * importance ratio that corrects for any non-uniform deal — bunching weights
+ * on a board card, private-deal weights. Uniform deals (every flop combination)
+ * draw with ratio 1.0.
+ *
+ * Returns 0 on success, -1 when `state` or `rng` is NULL, or the state is not
+ * a chance node the sampler understands.
+ */
+int mpf_chance_sample(const mpf_state_t *state, pe_rng_t *rng,
+                      pe_chance_sample_t *out);
 
 struct mpf_perf_stats_pool_t *mpf_perf_stats_pool_create(int max_threads_hint);
 void mpf_perf_stats_pool_destroy(struct mpf_perf_stats_pool_t *pool);

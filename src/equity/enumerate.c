@@ -321,10 +321,11 @@ static void split_double_board(StdDeck_CardMask supplied,
     }
 }
 
-/* The override is scoped to the synchronous wrapper call. */
-static int double_board_override_valid;
-static StdDeck_CardMask double_board_override1;
-static StdDeck_CardMask double_board_override2;
+typedef struct
+{
+  StdDeck_CardMask board1;
+  StdDeck_CardMask board2;
+} enum_double_board_override_t;
 
 #define INNER_LOOP_HOLDEM                                 \
   INNER_LOOP({                                            \
@@ -1374,10 +1375,10 @@ static int chinese13_evaluate_rows(StdDeck_CardMask hand, chinese13_rows_t *out)
     result->nsamples++;                                                                \
   } while (0)
 
-int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
-                   StdDeck_CardMask board, StdDeck_CardMask dead,
-                   int npockets, int nboard, int orderflag,
-                   enum_result_t *result)
+static int enumExhaustive_with_override(
+    enum_game_t game, StdDeck_CardMask pockets[], StdDeck_CardMask board,
+    StdDeck_CardMask dead, int npockets, int nboard, int orderflag,
+    enum_result_t *result, const enum_double_board_override_t *override)
 {
   int idx;
 
@@ -1641,8 +1642,8 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
     int need1, need2;
     if (nboard < 0 || nboard > 10)
       return 1;
-    if (double_board_override_valid)
-      board_base1 = double_board_override1, board_base2 = double_board_override2;
+    if (override != NULL)
+      board_base1 = override->board1, board_base2 = override->board2;
     else if (nboard > 5)
       split_double_board(board, &board_base1, &board_base2);
     else
@@ -2313,6 +2314,15 @@ int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
   return 0;
 }
 
+int enumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
+                   StdDeck_CardMask board, StdDeck_CardMask dead,
+                   int npockets, int nboard, int orderflag,
+                   enum_result_t *result)
+{
+  return enumExhaustive_with_override(game, pockets, board, dead, npockets,
+                                      nboard, orderflag, result, NULL);
+}
+
 int enumExhaustiveDoubleBoard(enum_game_t game, StdDeck_CardMask pockets[],
                               StdDeck_CardMask board1, int nboard1,
                               StdDeck_CardMask board2, int nboard2,
@@ -2326,19 +2336,16 @@ int enumExhaustiveDoubleBoard(enum_game_t game, StdDeck_CardMask pockets[],
     return 1;
   StdDeck_CardMask effective_dead = dead;
   StdDeck_CardMask_OR(effective_dead, effective_dead, board2);
-  double_board_override1 = board1;
-  double_board_override2 = board2;
-  double_board_override_valid = 1;
-  int rc = enumExhaustive(game, pockets, board1, effective_dead, npockets,
-                          nboard1 + nboard2, orderflag, result);
-  double_board_override_valid = 0;
-  return rc;
+  enum_double_board_override_t override = {board1, board2};
+  return enumExhaustive_with_override(
+      game, pockets, board1, effective_dead, npockets, nboard1 + nboard2,
+      orderflag, result, &override);
 }
 
-int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
-               StdDeck_CardMask board, StdDeck_CardMask dead,
-               int npockets, int nboard, int niter, int orderflag,
-               enum_result_t *result)
+static int enumSample_with_override(
+    enum_game_t game, StdDeck_CardMask pockets[], StdDeck_CardMask board,
+    StdDeck_CardMask dead, int npockets, int nboard, int niter, int orderflag,
+    enum_result_t *result, const enum_double_board_override_t *override)
 {
   int idx;
   int numCards;
@@ -2998,8 +3005,8 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
     if (nboard < 0 || nboard > 10)
       return 1;
     StdDeck_CardMask board_base1, board_base2;
-    if (double_board_override_valid)
-      board_base1 = double_board_override1, board_base2 = double_board_override2;
+    if (override != NULL)
+      board_base1 = override->board1, board_base2 = override->board2;
     else if (nboard > 5)
       split_double_board(board, &board_base1, &board_base2);
     else
@@ -3269,6 +3276,15 @@ int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
   return 0;
 }
 
+int enumSample(enum_game_t game, StdDeck_CardMask pockets[],
+               StdDeck_CardMask board, StdDeck_CardMask dead,
+               int npockets, int nboard, int niter, int orderflag,
+               enum_result_t *result)
+{
+  return enumSample_with_override(game, pockets, board, dead, npockets,
+                                  nboard, niter, orderflag, result, NULL);
+}
+
 int enumSampleDoubleBoard(enum_game_t game, StdDeck_CardMask pockets[],
                           StdDeck_CardMask board1, int nboard1,
                           StdDeck_CardMask board2, int nboard2,
@@ -3282,13 +3298,10 @@ int enumSampleDoubleBoard(enum_game_t game, StdDeck_CardMask pockets[],
     return 1;
   StdDeck_CardMask effective_dead = dead;
   StdDeck_CardMask_OR(effective_dead, effective_dead, board2);
-  double_board_override1 = board1;
-  double_board_override2 = board2;
-  double_board_override_valid = 1;
-  int rc = enumSample(game, pockets, board1, effective_dead, npockets,
-                      nboard1 + nboard2, niter, orderflag, result);
-  double_board_override_valid = 0;
-  return rc;
+  enum_double_board_override_t override = {board1, board2};
+  return enumSample_with_override(
+      game, pockets, board1, effective_dead, npockets, nboard1 + nboard2,
+      niter, orderflag, result, &override);
 }
 
 void enumResultClear(enum_result_t *result)

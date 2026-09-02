@@ -1,0 +1,159 @@
+/*
+ * pe_traversal.h - Traversal lane port (architecture v3, VEC-02)
+ *
+ * The vector traversal owns the descent and the per-combo reach vectors. It
+ * emits raw regret deltas into a batch; regret rules, averaging and discount
+ * are deliberately outside this port.
+ */
+
+#ifndef POKER_EVAL_PE_TRAVERSAL_H
+#define POKER_EVAL_PE_TRAVERSAL_H
+
+#include <poker_eval/solver/pe_storage_port.h>
+#include <poker_eval/solver/pe_batch.h>
+#include <poker_eval/solver/pe_game_rules.h>
+#include <poker_eval/solver/pe_vector.h>
+#include <poker_eval/solver/pe_telemetry.h>
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define PE_TRAVERSAL_MAX_PLAYERS 8u
+
+typedef struct pe_traversal_ctx_t pe_traversal_ctx_t;
+
+typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
+                                                  int outcome,
+                                                  void *user);
+
+/* Return non-zero when two private-combo entries can coexist in `state`.
+ * A missing callback means that the combo dimensions are independent and all
+ * entries are considered compatible. */
+typedef int (*pe_vector_combo_compatible_fn)(const void *state,
+                                             uint8_t player,
+                                             uint16_t player_combo,
+                                             uint8_t opponent,
+                                             uint16_t opponent_combo,
+                                             void *user);
+
+/*
+ * The rules adapter used by the VEC-02 skeleton. States are borrowed and may
+ * be static; apply_action returns another borrowed state. Later tickets will
+ * replace this compact surface with pe_game_rules_t without changing the
+ * traversal port.
+ */
+typedef struct pe_vector_game_t
+{
+    const void *root;
+    void *user;
+    uint8_t player_count;
+    uint16_t combo_count;
+
+    /* Exact chance enumeration is optional. A game with these callbacks
+     * unset has no chance nodes; outcome weights are normalized per state. */
+    int (*is_chance)(const void *state, void *user);
+    uint16_t (*chance_outcome_count)(const void *state, void *user);
+    double (*chance_outcome_weight)(const void *state, uint16_t outcome,
+                                    void *user);
+    pe_vector_apply_chance_fn apply_chance;
+
+    int (*is_terminal)(const void *state, void *user);
+    int (*acting_player)(const void *state, void *user);
+    uint16_t (*action_count)(const void *state, void *user);
+    uint64_t (*infoset_key)(const void *state, void *user);
+
+    /* Fill one action's probability vector. NULL means uniform strategy. */
+    int (*strategy)(const void *state, uint64_t infoset_key,
+                    uint16_t action, pe_value_vec_t *out, void *user);
+    const void *(*apply_action)(const void *state, uint16_t action, void *user);
+
+    /* Optional terminal callback. Each output vector is conditional on that
+       player's own combo; `reach` carries the current range of every player.
+       This lets a rules adapter apply blockers and evolving reaches once. */
+    int (*terminal_values)(const void *state,
+                           const pe_reach_vec_t *reach,
+                           pe_value_vec_t *out_values, uint8_t player_count,
+                           void *user);
+    /* Optional lifetime hook for a child returned by apply_action.  The
+       traversal calls it after the child has been fully consumed. */
+    void (*release_state)(const void *state, void *user);
+    /* Optional private-combo compatibility callback used for counterfactual
+       opponent reach. It is deliberately separate from terminal_values so
+       the traversal can weight regrets without guessing from combo indexes. */
+    pe_vector_combo_compatible_fn combo_compatible;
+} pe_vector_game_t;
+
+struct pe_traversal_ctx_t
+{
+    const pe_vector_game_t *game;
+    const pe_storage_ops_t *storage;
+    void *storage_self;
+    pe_reach_vec_t reach[PE_TRAVERSAL_MAX_PLAYERS];
+    size_t visited_nodes;
+    size_t terminal_nodes;
+    pe_telemetry_counters_t counters;
+    /* Private, thread-local scratch arena owned by the full vector lane. */
+    void *arena;
+    uint64_t iteration;
+    int initialized;
+};
+
+typedef struct
+{
+    const char *name;
+    uint64_t required_caps;
+    int (*begin_iteration)(pe_traversal_ctx_t *ctx, uint64_t iteration);
+    int (*run_iteration)(pe_traversal_ctx_t *ctx, pe_update_batch_t *out_batch);
+    int (*end_iteration)(pe_traversal_ctx_t *ctx, uint64_t iteration);
+} pe_traversal_ops_t;
+
+typedef int (*pe_vector_chance_sample_fn)(const void *state,
+                                          pe_rng_t *rng,
+                                          pe_chance_sample_t *out,
+                                          void *user);
+
+/** Context for one-vector-per-combo chance sampling (VEC-08). */
+typedef struct
+{
+    const pe_vector_game_t *game;
+    pe_vector_chance_sample_fn sample_chance;
+    pe_vector_apply_chance_fn apply_chance;
+    void *user;
+    pe_rng_t rng;
+    pe_reach_vec_t reach[PE_TRAVERSAL_MAX_PLAYERS];
+    pe_value_vec_t values[PE_TRAVERSAL_MAX_PLAYERS];
+    size_t visited_nodes;
+    size_t terminal_nodes;
+    size_t sampled_chance_nodes;
+    double importance_ratio;
+    int initialized;
+} pe_chance_vector_ctx_t;
+
+int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
+                          const pe_vector_game_t *game);
+int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,
+                                 const pe_storage_ops_t *storage,
+                                 void *storage_self);
+void pe_traversal_ctx_destroy(pe_traversal_ctx_t *ctx);
+
+const pe_traversal_ops_t *pe_traversal_full_vector_ops(void);
+
+int pe_chance_vector_ctx_init(pe_chance_vector_ctx_t *ctx,
+                              const pe_vector_game_t *game,
+                              pe_vector_chance_sample_fn sample_chance,
+                              pe_vector_apply_chance_fn apply_chance,
+                              uint64_t seed);
+void pe_chance_vector_ctx_destroy(pe_chance_vector_ctx_t *ctx);
+int pe_chance_vector_run(pe_chance_vector_ctx_t *ctx);
+const pe_value_vec_t *pe_chance_vector_values(
+    const pe_chance_vector_ctx_t *ctx, uint8_t player);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POKER_EVAL_PE_TRAVERSAL_H */

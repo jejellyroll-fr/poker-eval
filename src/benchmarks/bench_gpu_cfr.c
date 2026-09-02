@@ -1,12 +1,14 @@
 /*
- * bench_gpu_cfr.c - GPU-CFR vs CPU-CFR benchmark
+ * bench_gpu_cfr.c - GPU vs CPU regret-matching primitive benchmark
  *
  * Copyright (C) 2025 poker-eval contributors
  *
- * Compares GPU-CFR (matrix-based) vs CPU-CFR (hash-map based)
- * for various problem sizes.
- *
- * Target: Demonstrate ×200-×400 speedup on GPU
+ * Compares the legacy GPU matrix regret-matching/average-strategy primitive
+ * against CPU storage updates of the same shape. Both sides operate on
+ * synthetic regret deltas without a game tree, so this measures update-kernel
+ * throughput only; it does not benchmark a full CFR solve and makes no
+ * speedup claim. Real solving goes through pe_solver_run() and its compute
+ * ports (see docs/gpu/guides/GPU_ACCELERATION_GUIDE.md).
  */
 
 #include <poker_eval/gpu/gpu_cfr.h>
@@ -170,7 +172,7 @@ int main(int argc, char **argv)
 {
     printf("=======================================================\n");
     printf("   GPU-CFR vs CPU-CFR Performance Benchmark\n");
-    printf("   Target: ×200-×400 speedup\n");
+    printf("   Legacy matrix primitive benchmark (no speedup claim)\n");
     printf("=======================================================\n");
 
     /* Test configurations */
@@ -188,8 +190,8 @@ int main(int argc, char **argv)
 
     int num_configs = sizeof(configs) / sizeof(configs[0]);
 
-    printf("\nBenchmark Configuration    CPU Time    GPU Time    Speedup    Target\n");
-    printf("-------------------------------------------------------------------------\n");
+    printf("\nBenchmark Configuration    CPU Time    Matrix Time    Ratio\n");
+    printf("-----------------------------------------------------------\n");
 
     for (int i = 0; i < num_configs; i++)
     {
@@ -208,30 +210,8 @@ int main(int argc, char **argv)
         {
             double speedup = cpu_time / gpu_time;
 
-            const char *target_status = "";
-            if (speedup >= 400.0)
-            {
-                target_status = " [EXCELLENT]";
-            }
-            else if (speedup >= 200.0)
-            {
-                target_status = " [TARGET MET]";
-            }
-            else if (speedup >= 100.0)
-            {
-                target_status = " [GOOD]";
-            }
-            else if (speedup >= 50.0)
-            {
-                target_status = " [OK]";
-            }
-            else
-            {
-                target_status = " [BELOW TARGET]";
-            }
-
-            printf("%-26s  %-10.1f  %-10.1f  %-10.1fx  %s\n",
-                   "Config", cpu_time, gpu_time, speedup, target_status);
+            printf("%-26s  %-10.1f  %-12.1f  %-10.1fx\n",
+                   "Config", cpu_time, gpu_time, speedup);
             printf("  %dK infosets, %d iter\n",
                    num_infosets / 1000, iterations);
         }

@@ -325,7 +325,19 @@ static int km_test_reference(const km_open_spiel_reference_t *reference)
 
     cfr_config_t config;
     memset(&config, 0, sizeof(config));
-    config.max_iterations = 250;
+    /* EXT-07 raised this from 250. The discount used to be applied once per
+       *visit* of an infoset, so a poker infoset reached N times in an
+       iteration accumulated d^N; the canonical rule discounts once per
+       iteration and is therefore gentler, and needs a larger budget to reach
+       the same NashConv on this game.
+     *
+     * The threshold below is unchanged. The budget is generous on purpose:
+     * three-player Kuhn is not zero-sum, so CFR guarantees no-regret rather
+     * than Nash, and the measured NashConv oscillates with the iteration
+     * count (2.7% at 250, 2.9% at 400, 2.3% at 1200). At 2000 both games sit
+     * around 0.5% and 0.2%, far enough from 2.5% that the test is not
+     * measuring which side of an oscillation it landed on. */
+    config.max_iterations = 2000;
     config.enable_dcfr = 1;
     config.dcfr_alpha = 1.5;
     config.dcfr_beta = 0.0;

@@ -21,6 +21,10 @@ set(CORE_SOURCES
     combo_7to5_hilo.c
     eval_7c_simd.c
     eval_cache.c
+    # PCG32 sampling core. Its header has always lived in
+    # include/poker_eval/core/, but the implementation sat under equity/; moving
+    # it here lets the solver domain use it without linking the equity module.
+    pcg_rng.c
     status.c
     deterministic_benchmark.c
     joker_expansion_controlled.c
@@ -42,6 +46,7 @@ set(CORE_SOURCES
     t_jokercardmasks.c
     t_astudcardmasks.c
     universal_deck.c
+    safe_format.c
 )
 
 # Core header files

@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <signal.h>
 
+#include <poker_eval/solver/pe_telemetry.h>
+#include <poker_eval/solver/pe_solver_config.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,6 +66,16 @@ typedef struct cfr_metrics_buffer_t cfr_metrics_buffer_t;
 typedef double (*pe_utility_fn)(const int32_t *final_stacks, int num_players,
                                 int player_id, void *user_data);
 
+/* Optional value estimate used instead of aborting when a depth-limited solve
+ * reaches a non-terminal leaf. The callback fills one utility per player.
+ * This is the integration contract for a neural/value-network evaluator; CFR
+ * itself remains model-agnostic and exact when the callback is NULL. */
+typedef void (*cfr_depth_value_fn)(cfr_game_t *game,
+                                   uint64_t state_key,
+                                   int num_players,
+                                   double *out_utilities,
+                                   void *user_data);
+
 typedef struct {
     pe_utility_fn utility_fn; /* Custom payoff fn (NULL = default linear chips) */
     void *user_data;          /* Opaque context passed to utility_fn */
@@ -108,6 +121,12 @@ struct cfr_storage_t {
     size_t used_count;
     uint32_t keep_avg_strategy_mask;
     uint32_t keep_ev_mask;
+    /* Strategy extraction mode (EXT-01). Held per storage rather than in a
+     * process-wide static: the previous global made the solver non-reentrant,
+     * so two solves in one process silently shared an ECFR temperature. */
+    int use_ecfr;
+    double ecfr_lambda;
+    int num_threads;
 };
 
 /* CFR game interface (vtable) */
@@ -234,11 +253,21 @@ struct cfr_game_t {
     /* Generic terminal utility override (ISSUE-14, #170).  NULL utility_fn keeps
      * the legacy linear get_utility evaluation with zero overhead. */
     pe_cfr_utility_config_t utility;
+
+    /* Context-aware variant for callback-backed games. It takes precedence
+     * over get_infoset_key when supplied. Appended to preserve the layout of
+     * legacy positional initializers. */
+    uint64_t (*get_infoset_key_with_user)(const void *state, void *user_data);
+    void *infoset_user_data;
 };
 
 /* CFR configuration */
 struct cfr_config_t {
     int max_iterations;
+    /* Number of OpenMP workers used by storage-wide CFR maintenance. The
+     * recursive legacy walk remains single-walk unless a game supplies a
+     * thread-safe traversal contract; 0/1 keeps the historical behaviour. */
+    int num_threads;
     int max_depth;         /* Max tree recursion depth (0 = CFR_DEFAULT_MAX_DEPTH) */
     int checkpoint_interval;
     double convergence_threshold;
@@ -274,7 +303,7 @@ struct cfr_config_t {
     uint32_t keep_ev_mask;           /* 0 = retain every street */
 
     /* Postflop abstraction (FEAT-13): street-by-street node abstraction in the
-     * style of MonkerSolver. strength_buckets_per_street is the target number
+     * style of the compatible solver. strength_buckets_per_street is the target number
      * of strength buckets (the EHS/EHS2 k-means count from strength_bucketing.h)
      * used per street; texture_filter_level selects how aggressively boards are
      * merged by texture (Perfect / Large / Medium / Small / None, see
@@ -304,7 +333,29 @@ struct cfr_config_t {
     cfr_metrics_listener_fn metrics_fn;
     void *metrics_user;
     volatile sig_atomic_t *stop_flag;
+
+    /* Where the solver's messages go (EXT-03). NULL keeps the historical
+     * behaviour — every line on stderr, flushed — so an existing caller sees
+     * no change. A host that wants to capture progress, route it to a UI or
+     * silence it installs its own adapter instead of redirecting a stream. */
+    const pe_telemetry_ops_t *telemetry;
+
+    /* Depth-limited solving hook. NULL preserves the historical hard error. */
+    cfr_depth_value_fn depth_value_fn;
+    void *depth_value_user_data;
 };
+
+/**
+ * Translate the v2 boolean configuration into the v3 axis vocabulary.
+ *
+ * This is a pure compatibility conversion. It does not validate a game or
+ * allocate solver storage; cfr_solve() remains the owner of the legacy game
+ * and storage ports until the public solver has a game-rules port.
+ *
+ * @return 0 on success, -1 when either argument is NULL.
+ */
+int cfr_config_to_pe_solver_config(const cfr_config_t *legacy,
+                                   pe_solver_config_t *out);
 
 typedef struct cfr_metrics_snapshot_t {
     int iteration;
@@ -358,11 +409,33 @@ void cfr_storage_get_strategy(
     double* out_strategy
 );
 
-/* Configure strategy extraction mode (called by solver) */
+/*
+ * Configure strategy extraction for one storage (EXT-01).
+ *
+ * `use_ecfr` selects the exponential (ECFR) policy over regret matching, and
+ * `ecfr_lambda` is its temperature; a non-positive lambda is clamped to 1.0.
+ * The setting belongs to the storage, so two solves running in one process
+ * cannot disturb each other.
+ */
+void cfr_storage_set_strategy_mode_for(cfr_storage_t *storage,
+                                       int use_ecfr,
+                                       double ecfr_lambda);
+
+/*
+ * Deprecated (EXT-01): the process-wide variant. It has no storage to act on
+ * and is now a no-op. Call cfr_storage_set_strategy_mode_for() instead.
+ *
+ * Kept so that out-of-tree callers still link, and marked deprecated so they
+ * find out at compile time rather than by silently losing their setting.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated("use cfr_storage_set_strategy_mode_for(storage, ...)")))
+#endif
 void cfr_storage_set_strategy_mode(int use_ecfr, double ecfr_lambda);
 void cfr_storage_set_memory_masks(cfr_storage_t *storage,
                                   uint32_t keep_avg_strategy_mask,
                                   uint32_t keep_ev_mask);
+void cfr_storage_set_num_threads(cfr_storage_t *storage, int num_threads);
 
 void cfr_storage_get_strategy_at_street(cfr_storage_t*, uint64_t, int, int, double*);
 void cfr_storage_update_regret_at_street(cfr_storage_t*, uint64_t, int, int, const double*, double);
@@ -393,6 +466,12 @@ void cfr_storage_get_avg_strategy(
 );
 
 int cfr_storage_has_entry(
+    cfr_storage_t* storage,
+    uint64_t key
+);
+
+/* Return the action count stored for an infoset, or 0 when it is absent. */
+int cfr_storage_action_count(
     cfr_storage_t* storage,
     uint64_t key
 );
@@ -529,8 +608,49 @@ typedef void (*cfr_iterate_callback)(
     void* user_data
 );
 
+/*
+ * Scale every accumulated regret by `factor` (EXT-07).
+ *
+ * Used to apply a discount once per iteration, before that iteration's deltas
+ * are accumulated: R_t = R_(t-1) * d(t) + r_t. A factor of 1.0 returns
+ * immediately.
+ */
+/*
+ * Writable spans of an infoset's arrays (STO-04), creating the entry when
+ * absent. Returns NULL when the array does not exist — the average is dropped
+ * on streets excluded by the selective-memory masks.
+ *
+ * The pointer is invalidated by the next call that grows this storage.
+ */
+double *cfr_storage_regret_span(cfr_storage_t *storage, uint64_t key, int n_actions);
+double *cfr_storage_avg_span(cfr_storage_t *storage, uint64_t key, int n_actions);
+
+void cfr_storage_scale_regrets(cfr_storage_t *storage, double factor);
+
+/* Merge one worker's independently accumulated CFR state into `destination`.
+ * The source is never modified.  This is intentionally an additive merge:
+ * source regrets and average-strategy masses are multiplied by their scales
+ * and added to the destination.  It is the primitive used by the batched
+ * parallel legacy solver; callers must not merge two storages that represent
+ * continuation states from the same infoset without an explicit policy. */
+int cfr_storage_merge_scaled(cfr_storage_t *destination,
+                             const cfr_storage_t *source,
+                             double regret_scale,
+                             double average_scale);
+
+/* Stable, endian-independent snapshot used by distributed CFR workers. The
+ * blob contains sorted (infoset key, regret, average-strategy) records and is
+ * intentionally independent of the private hash-table layout. */
+int cfr_storage_export_delta(const cfr_storage_t *storage,
+                             uint8_t **out_blob,
+                             size_t *out_size);
+int cfr_storage_apply_delta(cfr_storage_t *storage,
+                            const uint8_t *blob,
+                            size_t blob_size,
+                            double scale);
+
 void cfr_storage_iterate(
-    cfr_storage_t* storage,
+    const cfr_storage_t* storage,
     cfr_iterate_callback callback,
     void* user_data
 );
@@ -568,8 +688,15 @@ double cfr_chance_weight(
     void* user_data
 );
 
-/* Best response value (for exploitability calculation) */
-double cfr_best_response_value(
+/**
+ * Compute a perfect-information best-response value.
+ *
+ * The maximizing player may choose a different action at every concrete
+ * state, including states that share an information set. In an imperfect-
+ * information game this is therefore an upper bound, not the legal
+ * information-set best response.
+ */
+double cfr_best_response_perfect_info(
     cfr_game_t* game,
     cfr_storage_t* storage,
     int player,
@@ -577,18 +704,74 @@ double cfr_best_response_value(
 );
 
 /*
- * Compute exact 2-player best-response exploitability.
+ * Compute exact 2-player perfect-information best-response exploitability.
  *
- * Despite its old name ("proxy") this is an exact computation: it walks the
- * game tree once per player and returns the sum of the best-response values,
- * so it is expensive and should be run on a configurable period (see
- * cfr_config_t::exploitability_interval) rather than on every iteration.
+ * This walks the game tree once per player and returns the sum of the
+ * perfect-information best-response values, so it is expensive and should be
+ * run on a configurable period (see cfr_config_t::exploitability_interval)
+ * rather than on every iteration. For imperfect-information games it remains
+ * an upper bound at equilibrium because the BR can observe hidden state.
  * For N-player games use cfr_exploitability_multiway instead.
  */
+double cfr_exploitability_perfect_info(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    void* user_data
+);
+
+/** Compatibility alias for cfr_best_response_perfect_info().
+ * Deprecated: new code should use the explicit perfect-information name. */
+double cfr_best_response_value(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    int player,
+    void* user_data
+);
+
+/** Compatibility alias for cfr_exploitability_perfect_info().
+ * Deprecated: new code should use the explicit perfect-information name. */
 double cfr_exploitability(
     cfr_game_t* game,
     cfr_storage_t* storage,
     void* user_data
+);
+
+/**
+ * Compute an information-set-consistent best response.
+ *
+ * Unlike cfr_best_response_perfect_info(), the selected action is shared by
+ * all concrete states in the same information set. The implementation uses
+ * counterfactual reach and iterates the infoset action choices to a fixed
+ * point. This is the legal exploitability measure for imperfect-information
+ * games.
+ */
+double cfr_best_response_value_infoset(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    int player,
+    void* user_data
+);
+
+/** Result of the infoset best-response fixed-point iteration. */
+typedef struct cfr_best_response_infoset_result_t {
+    double value;
+    int iterations;
+    int converged;
+} cfr_best_response_infoset_result_t;
+
+/**
+ * Infoset best response with convergence diagnostics.
+ *
+ * `converged` is zero when the bounded fixed-point iteration reached its
+ * limit; callers must not treat the returned value as a converged result in
+ * that case. `iterations` is the number of passes actually performed.
+ */
+int cfr_best_response_value_infoset_ex(
+    cfr_game_t* game,
+    cfr_storage_t* storage,
+    int player,
+    void* user_data,
+    cfr_best_response_infoset_result_t* out_result
 );
 
 /**
@@ -654,7 +837,8 @@ int cfr_compute_policy_values_detailed(
  *
  * Computes the expected value for a player when they play a best response
  * strategy while all other players follow their average strategies from storage.
- * This is an extension of cfr_best_response_value that supports N>2 players.
+ * This is the multiway extension of the perfect-information best response and
+ * supports N>2 players.
  *
  * @param game      Game interface with vtable (must have current_player callback)
  * @param storage   CFR storage containing average strategies

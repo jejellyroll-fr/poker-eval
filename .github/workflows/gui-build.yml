@@ -1,0 +1,116 @@
+name: GUI Build (SDL2)
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  gui-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            configure: >-
+              cmake -S . -B build -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=ON
+              -DBUILD_BINDINGS=OFF -DBUILD_GPU=OFF -DENABLE_OPENMP=OFF
+            build: cmake --build build --target poker-eval-trainer-gui -j
+            binary: build/tools/poker-eval-trainer-gui
+          - os: macos-14
+            configure: >-
+              cmake -S . -B build -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=ON
+              -DBUILD_BINDINGS=OFF -DBUILD_GPU=OFF -DENABLE_OPENMP=OFF
+            build: cmake --build build --target poker-eval-trainer-gui -j
+            binary: build/tools/poker-eval-trainer-gui
+          # Windows uses the project preset (Visual Studio generator, static
+          # libs) and stages SDL2.dll next to the executable for the smoke.
+          # The preset uses the Visual Studio 17 2022 generator. Keep this
+          # runner aligned with that generator instead of windows-latest,
+          # whose image can move to a newer Visual Studio before the preset
+          # is updated.
+          - os: windows-2022
+            configure: >-
+              cmake --preset windows-msvc
+              -DPE_SDL2_ROOT="$env:PE_SDL2_CI_ROOT"
+              -DPE_SDL2_INCLUDE_DIR="$env:PE_SDL2_CI_INCLUDE"
+              -DPE_SDL2_LIBRARY="$env:PE_SDL2_CI_LIBRARY"
+              -DCMAKE_C_FLAGS="/I$env:PE_SDL2_CI_INCLUDE"
+            build: >-
+              cmake --build build/windows-msvc --target poker-eval-trainer-gui
+              --config Release
+            binary: build/windows-msvc/tools/Release/poker-eval-trainer-gui.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install SDL2 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+      - name: Install SDL2 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl2
+
+      - name: Install SDL2 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\sdl2.zip"
+          Expand-Archive "$env:RUNNER_TEMP\sdl2.zip" -DestinationPath "$env:RUNNER_TEMP\sdl2"
+          $sdl2ArchiveRoot = Join-Path $env:RUNNER_TEMP "sdl2"
+          $header = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL.h" |
+            Select-Object -First 1
+          $library = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.lib" |
+            Where-Object { $_.FullName -match "[\\/]lib[\\/]x64[\\/]SDL2\.lib$" } |
+            Select-Object -First 1
+          if (-not $library) {
+            $library = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.lib" |
+              Select-Object -First 1
+          }
+          $dll = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.dll" |
+            Where-Object { $_.FullName -match "[\\/]lib[\\/]x64[\\/]SDL2\.dll$" } |
+            Select-Object -First 1
+          if (-not $dll) {
+            $dll = Get-ChildItem -Path $sdl2ArchiveRoot -Recurse -File -Filter "SDL2.dll" |
+              Select-Object -First 1
+          }
+          if (-not $header) { throw "SDL2 header not found in $sdl2ArchiveRoot" }
+          if (-not $library) { throw "SDL2 library not found in $sdl2ArchiveRoot" }
+          if (-not $dll) { throw "SDL2 runtime not found in $sdl2ArchiveRoot" }
+          $sdl2Include = (Split-Path -Parent $header.FullName).Replace('\', '/')
+          $sdl2Library = $library.FullName.Replace('\', '/')
+          $sdl2Dll = $dll.FullName.Replace('\', '/')
+          $sdl2Root = (Split-Path -Parent $sdl2Include).Replace('\', '/')
+          "CMAKE_PREFIX_PATH=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_ROOT=$sdl2Root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_INCLUDE=$sdl2Include" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_LIBRARY=$sdl2Library" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PE_SDL2_CI_DLL=$sdl2Dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure
+        run: ${{ matrix.configure }}
+
+      # The GUI target only exists when CMake found SDL2, so a missing SDL2
+      # fails this step instead of silently skipping the GUI.
+      - name: Build GUI
+        run: ${{ matrix.build }}
+
+      - name: Stage SDL2.dll (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >
+          Copy-Item
+          "$env:PE_SDL2_CI_DLL"
+          -Destination "build\windows-msvc\tools\Release\"
+
+      - name: Check binary
+        shell: bash
+        run: test -e "${{ matrix.binary }}"
+
+      - name: Headless usage smoke
+        shell: bash
+        run: SDL_VIDEODRIVER=dummy "${{ matrix.binary }}" --help

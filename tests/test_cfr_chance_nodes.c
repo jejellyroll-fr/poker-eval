@@ -12,6 +12,8 @@
 
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
 #include <poker_eval/engine/solvers/cfr/multiway_postflop_adapter.h>
+#include <poker_eval/solver/pe_chance.h>
+#include <poker_eval/solver/pe_range.h>
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 
@@ -145,6 +147,142 @@ static int build_and_solve(const EvalContext *ctx, int chance_enabled,
     return 0;
 }
 
+/*
+ * CHN-01: a chance node says what kind it is.
+ *
+ * The v2 model answered "is a card pending?" with a boolean, and RNG-03 added
+ * a second one. Two flags describing four possible node kinds is a state
+ * machine nobody wrote down; naming the kinds makes the differences checkable.
+ *
+ * The one that matters operationally: chance_children[52] is indexed by card,
+ * so it is only meaningful for PE_CHANCE_BOARD_ONE. A node kind that is merely
+ * implied cannot carry that constraint.
+ */
+static StdDeck_CardMask no_dead_mask(void)
+{
+    StdDeck_CardMask m;
+    StdDeck_CardMask_RESET(m);
+    return m;
+}
+
+static int test_chance_kinds(void)
+{
+    EvalConfig eval_cfg = eval_config_holdem();
+    EvalContext *ctx = eval_context_create(&eval_cfg);
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+    pe_range_t *aa = NULL;
+    int failures = 0;
+
+    if (!ctx)
+        return 1;
+
+    /* A turn state with chance enabled deals one board card. */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.ctx = ctx;
+    cfg.rules = MPF_RULE_HOLDEM;
+    cfg.num_players = 2;
+    cfg.start_street = MPF_STREET_TURN;
+    cfg.board_cards[0] = 20; cfg.board_cards[1] = 15; cfg.board_cards[2] = 10;
+    cfg.board_cards[3] = 5;
+    cfg.board_card_count = 4;
+    cfg.stacks[0] = 100.0; cfg.stacks[1] = 100.0;
+    cfg.sb = 0.5; cfg.bb = 1.0;
+    cfg.bet_sizes_common[0] = 0.75;
+    cfg.bet_size_count_common = 1;
+    cfg.raise_cap = 1;
+    cfg.enable_pot_sizing = 1;
+    cfg.enable_chance_nodes = 1;
+    cfg.hole[0] = mask_set(mask_set(MASK_EMPTY, 51), 46);
+    cfg.hole[1] = mask_set(mask_set(MASK_EMPTY, 40), 33);
+    cfg.hole_specified[0] = 1;
+    cfg.hole_specified[1] = 1;
+
+    if (mpf_build_game(&cfg, &game, &root) != 0)
+    {
+        fprintf(stderr, "FAILED: turn build\n");
+        eval_context_destroy(ctx);
+        return 1;
+    }
+    /* The root of a turn game is a decision, not a deal; the deal appears once
+       the betting round completes. What must hold here is that a state with no
+       pending card reports NONE rather than a stale flag. */
+    if (mpf_state_chance_kind(&root) != PE_CHANCE_NONE)
+    {
+        fprintf(stderr, "FAILED: a decision node reports %s\n",
+                pe_chance_kind_name(mpf_state_chance_kind(&root)));
+        failures++;
+    }
+    mpf_state_cleanup(&root);
+
+    /* A root with a range wider than one combo deals the private hands. */
+    if (pe_solver_range_parse(game_holdem, "AA", no_dead_mask(), &aa) != PE_SOLVER_OK)
+    {
+        fprintf(stderr, "FAILED: range parse\n");
+        eval_context_destroy(ctx);
+        return failures + 1;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.ctx = ctx;
+    cfg.rules = MPF_RULE_HOLDEM;
+    cfg.num_players = 2;
+    cfg.start_street = MPF_STREET_RIVER;
+    cfg.board_cards[0] = 20; cfg.board_cards[1] = 15; cfg.board_cards[2] = 10;
+    cfg.board_cards[3] = 5;  cfg.board_cards[4] = 1;
+    cfg.board_card_count = 5;
+    cfg.stacks[0] = 100.0; cfg.stacks[1] = 100.0;
+    cfg.sb = 0.5; cfg.bb = 1.0;
+    cfg.bet_sizes_common[0] = 0.75;
+    cfg.bet_size_count_common = 1;
+    cfg.raise_cap = 1;
+    cfg.enable_pot_sizing = 1;
+    cfg.range[0] = aa;
+    cfg.hole[1] = mask_set(mask_set(MASK_EMPTY, 40), 33);
+    cfg.hole_specified[1] = 1;
+
+    if (mpf_build_game(&cfg, &game, &root) != 0)
+    {
+        fprintf(stderr, "FAILED: range build\n");
+        pe_range_free(aa);
+        eval_context_destroy(ctx);
+        return failures + 1;
+    }
+    if (mpf_state_chance_kind(&root) != PE_CHANCE_PRIVATE_HANDS)
+    {
+        fprintf(stderr, "FAILED: a range root reports %s, expected private-hands\n",
+                pe_chance_kind_name(mpf_state_chance_kind(&root)));
+        failures++;
+    }
+    /* And its outcomes are deals, not cards — which is exactly why the
+       card-indexed cache must not be used for this kind. */
+    if (game.get_chance_outcomes(&game, (uint64_t)(uintptr_t)game.initial_state, NULL)
+        != root.private_deal_count)
+    {
+        fprintf(stderr, "FAILED: outcome count is not the deal count\n");
+        failures++;
+    }
+    mpf_state_cleanup(&root);
+    pe_range_free(aa);
+
+    if (mpf_state_chance_kind(NULL) != PE_CHANCE_NONE)
+    {
+        fprintf(stderr, "FAILED: a NULL state is a chance node\n");
+        failures++;
+    }
+    if (pe_chance_kind_name(PE_CHANCE_BOARD_ONE) == NULL ||
+        pe_chance_kind_name(PE_CHANCE_KIND_COUNT) != NULL)
+    {
+        fprintf(stderr, "FAILED: chance kind naming\n");
+        failures++;
+    }
+
+    eval_context_destroy(ctx);
+    if (failures == 0)
+        printf("  chance kinds reported correctly\n");
+    return failures;
+}
+
 int main(void)
 {
     EvalConfig ecfg = eval_config_holdem();
@@ -243,6 +381,13 @@ int main(void)
     mpf_state_cleanup(&mstate);
 
     eval_context_destroy(ctx);
+
+    if (test_chance_kinds() != 0)
+    {
+        fprintf(stderr, "FAILED: chance kinds\n");
+        return 1;
+    }
+
     printf("PASSED\n");
     return 0;
 }

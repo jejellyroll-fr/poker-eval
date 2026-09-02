@@ -67,6 +67,19 @@ static uint64_t cyc_apply_action(cfr_game_t *game, uint64_t key, int action, voi
     return key;
 }
 
+static int depth_value_hits;
+
+static void cyc_depth_value(cfr_game_t *game, uint64_t key, int num_players,
+                            double *out_utilities, void *user)
+{
+    (void)game;
+    (void)key;
+    (void)user;
+    ++depth_value_hits;
+    for (int player = 0; player < num_players; ++player)
+        out_utilities[player] = 0.0;
+}
+
 static int run_cycle(int max_depth)
 {
     cfr_game_t game;
@@ -96,6 +109,33 @@ static int run_cycle(int max_depth)
     return 0;
 }
 
+static int run_depth_value(void)
+{
+    cfr_game_t game;
+    cfr_config_t cfg;
+    memset(&game, 0, sizeof(game));
+    game.current_player = cyc_current_player;
+    game.get_actions = cyc_get_actions;
+    game.apply_action = cyc_apply_action;
+    game.is_terminal = cyc_is_terminal;
+    game.get_utility = cyc_get_utility;
+    game.initial_state = (void *)(uintptr_t)0u;
+    game.state_size = sizeof(uint64_t);
+    game.num_players = 2;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.max_iterations = 2;
+    cfg.max_depth = 4;
+    cfg.depth_value_fn = cyc_depth_value;
+    depth_value_hits = 0;
+    cfr_storage_t *storage = cfr_storage_create();
+    CHECK(storage != NULL, "storage allocation for depth value callback");
+    double exploitability = cfr_solve(&game, storage, &cfg, NULL);
+    CHECK(exploitability != -1.0, "depth value callback must prevent depth abort");
+    CHECK(depth_value_hits > 0, "depth value callback was not called");
+    cfr_storage_destroy(storage);
+    return 0;
+}
+
 int main(void)
 {
     /* Small explicit limit makes the test fast and deterministic. */
@@ -103,6 +143,8 @@ int main(void)
 
     /* Default limit (0 -> CFR_DEFAULT_MAX_DEPTH) must also abort. */
     CHECK(run_cycle(0) == 0, "cycle abort at default depth");
+
+    CHECK(run_depth_value() == 0, "depth value callback handles a truncated tree");
 
     printf("CFR recursion depth guard test passed.\n");
     return 0;

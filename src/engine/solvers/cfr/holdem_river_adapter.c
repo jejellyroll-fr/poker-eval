@@ -15,6 +15,7 @@ static int hr_num_actions(const void *s);
 static void hr_apply_action(const void *s, int a, void *out);
 static int hr_should_trace(void);
 static int hr_player_to_act(const void *s);
+static eval_t hr_eval_7c(const holdem_river_state_t *st, mask_t cards);
 
 // Wrapper functions to adapt to new cfr_game_t interface
 
@@ -89,8 +90,8 @@ static bool hr_is_terminal(const void *s, double util[2])
         /* showdown: evaluate best 5-card hands */
         mask_t seven0 = st->h0 | st->board;
         mask_t seven1 = st->h1 | st->board;
-        eval_t v0 = pe_eval_7c(st->ctx, seven0);
-        eval_t v1 = pe_eval_7c(st->ctx, seven1);
+        eval_t v0 = hr_eval_7c(st, seven0);
+        eval_t v1 = hr_eval_7c(st, seven1);
         if (v0 > v1)
         {
             util[0] = st->pot;
@@ -167,12 +168,52 @@ static void hr_trace_state(const char *stage, int action, const holdem_river_sta
             st->pot);
 }
 
+static eval_t hr_eval_7c(const holdem_river_state_t *st, mask_t cards)
+{
+    uint8_t encoded[7];
+    uint32_t values[1];
+    pe_terminal_batch_t input;
+    pe_value_batch_t output;
+    size_t count = 0u;
+    int card;
+
+    if (st == NULL)
+        return 0;
+
+    if (st->compute_ops && st->compute_self &&
+        st->compute_ops->terminal_eval_batch) {
+        for (card = 0; card < MODERN_DECK_SIZE; ++card) {
+            if (mask_is_set(cards, card)) {
+                if (count >= sizeof(encoded))
+                    return pe_eval_7c(st->ctx, cards);
+                encoded[count++] = (uint8_t)card;
+            }
+        }
+        if (count == sizeof(encoded)) {
+            memset(&input, 0, sizeof(input));
+            input.game = game_holdem;
+            input.cards = encoded;
+            input.count = 1u;
+            output.values = values;
+            output.capacity = 1u;
+            output.count = 0u;
+            if (st->compute_ops->terminal_eval_batch(st->compute_self,
+                                                     &input, &output) == 0 &&
+                output.count == 1u)
+                return (eval_t)values[0];
+        }
+    }
+    return pe_eval_7c(st->ctx, cards);
+}
+
 static void hr_apply_action(const void *s, int a, void *out)
 {
     const holdem_river_state_t *st = (const holdem_river_state_t *)s;
     holdem_river_state_t *ns = (holdem_river_state_t *)out;
-    *ns = *st;
     int trace = hr_should_trace();
+    if (st == NULL || ns == NULL)
+        return;
+    *ns = *st;
     if (trace)
     {
         hr_trace_state("before", a, st);
@@ -329,7 +370,7 @@ static uint64_t hr_infoset_key(const void *s)
                 (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
     }
     /* FEAT-13 (#190/#192): combined strength buckets + texture merging (mode 7).
-     * MonkerSolver "Strength Buckets + Texture Filter" pairing: strength bucket
+     * Compatible "Strength Buckets + Texture Filter" pairing: strength bucket
      * at <<48, texture at tex_hi (<<56) and tex_lo (<<44). */
     if (st->bucket_mode == 7 && st->strength_table && st->texture_level > 0)
     {
@@ -357,7 +398,7 @@ static uint64_t hr_infoset_key(const void *s)
                 (uint64_t)(st->raises_left & 0xF) | ((uint64_t)(p & 1) << 4));
     }
 
-    eval_t p_eval = pe_eval_7c(st->ctx, hp | st->board);
+    eval_t p_eval = hr_eval_7c(st, hp | st->board);
     hand_class_t pcl = eval_get_hand_class(p_eval);
     int p_cls = ((int)pcl) & 0xF;
 
@@ -520,6 +561,8 @@ void hr_build_game(const EvalContext *ctx, mask_t h0, mask_t h1, mask_t board, c
     out_state->texture_level = 0;
     out_state->extra_feats = 0;
     out_state->turn_board = MASK_EMPTY;
+    out_state->compute_ops = NULL;
+    out_state->compute_self = NULL;
     out_game->initial_state = out_state;
     out_game->game_data = out_state;
     out_game->is_terminal = hr_is_terminal_wrapper;

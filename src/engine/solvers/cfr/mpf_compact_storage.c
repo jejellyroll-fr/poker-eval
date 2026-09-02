@@ -19,6 +19,10 @@
 #include <errno.h>
 #include <stdint.h>
 
+#ifdef PE_HAVE_ZSTD
+#include <zstd.h>
+#endif
+
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -56,6 +60,15 @@
 #define PE_TREE_VERSION 1
 
 #define PE_SOL_QMAX 65535u /* max value of a quantized probability */
+
+typedef struct
+{
+    char magic[8];
+    uint32_t version;
+    uint32_t flags;
+    uint64_t infoset_count;
+    uint64_t reserved;
+} pe_sol_header_t;
 
 /* Quantize a probability in [0,1] to a uint16_t in [0, PE_SOL_QMAX]. */
 static uint16_t pe_quantize(double p)
@@ -132,7 +145,7 @@ static void pe_sol_write_cb(uint64_t key,
     }
     /* Guarantee the quantized row sums to PE_SOL_QMAX by adjusting the largest
      * bucket, eliminating systematic drift in the distribution. */
-    if (n > 0 && scaled_sum != (double)PE_SOL_QMAX)
+    if (n > 0 && fabs(scaled_sum - (double)PE_SOL_QMAX) > 0.0)
     {
         long diff = (long)PE_SOL_QMAX - (long)scaled_sum;
         int max_idx = 0;
@@ -173,16 +186,10 @@ int pe_cfr_save_storage(cfr_storage_t *storage, const char *path)
     if (!f)
         return -1;
 
-    struct
-    {
-        char magic[8];
-        uint32_t version;
-        uint32_t flags;
-        uint64_t infoset_count;
-        uint64_t reserved;
-    } hdr;
+    pe_sol_header_t hdr;
     memset(&hdr, 0, sizeof(hdr));
-    memcpy(hdr.magic, PE_SOL_MAGIC, 8);
+    for (size_t i = 0u; i < sizeof(hdr.magic); ++i)
+        hdr.magic[i] = PE_SOL_MAGIC[i];
     hdr.version = PE_SOL_VERSION;
     hdr.flags = 0; /* 16-bit fixed-point quantization */
     hdr.infoset_count = (uint64_t)count;
@@ -214,6 +221,102 @@ int pe_cfr_save_storage(cfr_storage_t *storage, const char *path)
     return 0;
 }
 
+int pe_cfr_save_storage_zstd(cfr_storage_t *storage, const char *path, int level)
+{
+#ifndef PE_HAVE_ZSTD
+    (void)storage;
+    (void)path;
+    (void)level;
+    errno = ENOTSUP;
+    return -1;
+#else
+    FILE *f;
+    unsigned char *raw = NULL;
+    unsigned char *compressed = NULL;
+    size_t raw_size;
+    size_t payload_size;
+    size_t compressed_size;
+    pe_sol_header_t hdr;
+    int result = -1;
+
+    if (!storage || !path || !*path)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    /* Reuse the canonical writer so compressed and mmap-readable snapshots
+       have byte-for-byte identical records after decompression. If the
+       compression step fails, the caller still has a valid uncompressed file. */
+    if (pe_cfr_save_storage(storage, path) != 0)
+        return -1;
+    f = fopen(path, "rb");
+    if (!f)
+        return -1;
+    if (fseek(f, 0L, SEEK_END) != 0)
+        goto cleanup_read;
+    long end = ftell(f);
+    if (end < 0 || (unsigned long)end > (unsigned long)SIZE_MAX)
+        goto cleanup_read;
+    raw_size = (size_t)end;
+    if (raw_size < sizeof(hdr) || fseek(f, 0L, SEEK_SET) != 0)
+        goto cleanup_read;
+    raw = (unsigned char *)malloc(raw_size);
+    if (!raw || fread(raw, 1u, raw_size, f) != raw_size)
+        goto cleanup_read;
+    for (size_t i = 0u; i < sizeof(hdr); ++i)
+        ((unsigned char *)&hdr)[i] = raw[i];
+    if (memcmp(hdr.magic, PE_SOL_MAGIC, sizeof(hdr.magic)) != 0 ||
+        hdr.version != PE_SOL_VERSION || hdr.flags != 0u)
+    {
+        errno = EINVAL;
+        goto cleanup_read;
+    }
+    payload_size = raw_size - sizeof(hdr);
+    compressed_size = ZSTD_compressBound(payload_size);
+    compressed = (unsigned char *)malloc(compressed_size);
+    if (!compressed)
+    {
+        errno = ENOMEM;
+        goto cleanup_read;
+    }
+    compressed_size = ZSTD_compress(compressed, compressed_size,
+                                    raw + sizeof(hdr), payload_size,
+                                    level == 0 ? 0 : level);
+    if (ZSTD_isError(compressed_size))
+    {
+        errno = EIO;
+        goto cleanup_read;
+    }
+    hdr.flags = 1u;
+    hdr.reserved = (uint64_t)payload_size;
+    if (fclose(f) != 0)
+    {
+        f = NULL;
+        goto cleanup_read;
+    }
+    f = fopen(path, "wb");
+    if (f == NULL)
+        goto cleanup_write;
+    if (fwrite(&hdr, sizeof(hdr), 1u, f) != 1u ||
+        fwrite(compressed, 1u, compressed_size, f) != compressed_size)
+        goto cleanup_write;
+    result = 0;
+
+cleanup_write:
+    if (f != NULL) {
+        if (fclose(f) != 0)
+            result = -1;
+        f = NULL;
+    }
+cleanup_read:
+    if (f != NULL)
+        fclose(f);
+    free(compressed);
+    free(raw);
+    return result;
+#endif
+}
+
 /* ===========================================================================
  * .pe_sol read (heap copy)
  * =========================================================================== */
@@ -230,14 +333,7 @@ int pe_cfr_load_storage(cfr_storage_t *storage, const char *path)
     if (!f)
         return -1;
 
-    struct
-    {
-        char magic[8];
-        uint32_t version;
-        uint32_t flags;
-        uint64_t infoset_count;
-        uint64_t reserved;
-    } hdr;
+    pe_sol_header_t hdr;
     if (fread(&hdr, sizeof(hdr), 1, f) != 1)
     {
         int err = errno;
@@ -251,7 +347,81 @@ int pe_cfr_load_storage(cfr_storage_t *storage, const char *path)
         errno = EINVAL;
         return -1;
     }
-    if (hdr.flags != 0)
+    if (hdr.flags == 1u)
+    {
+#ifdef PE_HAVE_ZSTD
+        unsigned char *compressed = NULL;
+        unsigned char *payload = NULL;
+        size_t compressed_size;
+        size_t payload_size;
+        long end;
+        FILE *decoded;
+
+        if (hdr.reserved > (uint64_t)SIZE_MAX ||
+            fseek(f, 0L, SEEK_END) != 0)
+        {
+            fclose(f);
+            errno = EINVAL;
+            return -1;
+        }
+        end = ftell(f);
+        if (end < 0 || (uint64_t)end < (uint64_t)sizeof(hdr))
+        {
+            fclose(f);
+            errno = EINVAL;
+            return -1;
+        }
+        compressed_size = (size_t)((uint64_t)end - (uint64_t)sizeof(hdr));
+        payload_size = (size_t)hdr.reserved;
+        if (fseek(f, (long)sizeof(hdr), SEEK_SET) != 0)
+        {
+            fclose(f);
+            errno = EIO;
+            return -1;
+        }
+        compressed = (unsigned char *)malloc(compressed_size ? compressed_size : 1u);
+        payload = (unsigned char *)malloc(payload_size ? payload_size : 1u);
+        if (!compressed || !payload ||
+            (compressed_size > 0u &&
+             fread(compressed, 1u, compressed_size, f) != compressed_size))
+        {
+            free(compressed);
+            free(payload);
+            fclose(f);
+            errno = ENOMEM;
+            return -1;
+        }
+        size_t decoded_size = ZSTD_decompress(payload, payload_size,
+                                               compressed, compressed_size);
+        free(compressed);
+        if (ZSTD_isError(decoded_size) || decoded_size != payload_size)
+        {
+            free(payload);
+            fclose(f);
+            errno = EINVAL;
+            return -1;
+        }
+        fclose(f);
+        f = NULL;
+        decoded = tmpfile();
+        if (!decoded || fwrite(payload, 1u, payload_size, decoded) != payload_size ||
+            fseek(decoded, 0L, SEEK_SET) != 0)
+        {
+            free(payload);
+            if (decoded)
+                fclose(decoded);
+            errno = EIO;
+            return -1;
+        }
+        free(payload);
+        f = decoded;
+#else
+        fclose(f);
+        errno = ENOTSUP;
+        return -1;
+#endif
+    }
+    else if (hdr.flags != 0u)
     {
         fclose(f);
         errno = ENOTSUP;
@@ -926,7 +1096,8 @@ int pe_tree_save(const mpf_tree_def_t *tree, const char *path)
         char magic[8];
         uint32_t version;
     } hdr;
-    memcpy(hdr.magic, PE_TREE_MAGIC, 8);
+    for (size_t i = 0u; i < sizeof(hdr.magic); ++i)
+        hdr.magic[i] = PE_TREE_MAGIC[i];
     hdr.version = PE_TREE_VERSION;
     if (fwrite(&hdr, sizeof(hdr), 1, f) != 1)
     {

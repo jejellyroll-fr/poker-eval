@@ -157,6 +157,7 @@ add_unity_test(test_pineapple_unity unity_tests/test_pineapple_unity.c)
 add_unity_test(test_pineapple8_unity unity_tests/test_pineapple8_unity.c)
 add_unity_test(test_pineapple_variants_unity unity_tests/test_pineapple_variants_unity.c)
 add_unity_test(test_pineapple_batched_unity unity_tests/test_pineapple_batched_unity.c)
+set_tests_properties(test_pineapple_batched_unity PROPERTIES TIMEOUT 300)
 add_unity_test(test_montecarlo_convergence_unity unity_tests/test_montecarlo_convergence_unity.c)
 add_unity_test(test_drawmaha_unity unity_tests/test_drawmaha_unity.c)
 add_unity_test(test_draw_optimizer test_draw_optimizer.c)
@@ -309,6 +310,8 @@ set(TEST_SOURCES
     test_cache_demo.c
     simple_alignment_test.c
     test_mpf_tree_parser.c
+    test_tree_editor_model.c
+    test_pe_analysis_model.c
 
     # Betting API tests
     test_betting_api.c
@@ -355,6 +358,19 @@ set(TEST_SOURCES
     test_courchevel.c
     test_rake.c
     test_icm.c
+    test_icm_asymmetric.c
+    test_pko.c
+    test_pko_ranges.c
+    test_pko_showdown.c
+    test_hrc_import.c
+    test_hrc.c
+    test_fgs_tree.c
+    test_fgs_generate.c
+    test_nn_depth_value.c
+    test_push_fold.c
+    test_push_fold_multiway.c
+    test_draw_chance.c
+    test_draw_game_adapter.c
     test_a5_triple_draw.c
     test_paytable_ev.c
 )
@@ -559,6 +575,20 @@ foreach(test_source ${TEST_SOURCES})
     add_poker_test(${test_name})
 endforeach()
 
+if(TARGET test_tree_editor_model)
+    target_sources(test_tree_editor_model PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/pe_tree_editor_model.c)
+endif()
+
+# The Studio's analysis model is GUI-free on purpose so that it can be tested
+# here; the panel is a shell over it.
+if(TARGET test_pe_analysis_model)
+    target_sources(test_pe_analysis_model PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/pe_analysis_model.c)
+    target_include_directories(test_pe_analysis_model PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools)
+endif()
+
 # Quick smoke tests for ctest -L fast
 get_property(_all_tests DIRECTORY PROPERTY TESTS)
 set(_fast_tests
@@ -596,6 +626,19 @@ endif()
 # Section 5.5: Economics tests
 set_tests_properties(test_rake PROPERTIES LABELS "economics")
 set_tests_properties(test_icm PROPERTIES LABELS "economics")
+set_tests_properties(test_icm_asymmetric PROPERTIES LABELS "economics;tournament")
+set_tests_properties(test_pko PROPERTIES LABELS "economics;tournament;pko")
+set_tests_properties(test_pko_ranges PROPERTIES LABELS "economics;tournament;pko;range")
+set_tests_properties(test_pko_showdown PROPERTIES LABELS "economics;tournament;pko;range")
+set_tests_properties(test_hrc_import PROPERTIES LABELS "economics;tournament;hrc;pko;range;betting")
+set_tests_properties(test_hrc PROPERTIES LABELS "economics;tournament;hrc;range")
+set_tests_properties(test_fgs_tree PROPERTIES LABELS "economics;tournament;fgs")
+set_tests_properties(test_fgs_generate PROPERTIES LABELS "economics;tournament;fgs")
+set_tests_properties(test_nn_depth_value PROPERTIES LABELS "engine;cfr;neural")
+set_tests_properties(test_push_fold PROPERTIES LABELS "economics;tournament")
+set_tests_properties(test_push_fold_multiway PROPERTIES LABELS "economics;tournament;multiway")
+set_tests_properties(test_draw_chance PROPERTIES LABELS "games;draw;engine")
+set_tests_properties(test_draw_game_adapter PROPERTIES LABELS "games;draw;engine;cfr")
 set_tests_properties(test_paytable_ev PROPERTIES LABELS "economics;paytable")
 set_tests_properties(test_draw_optimizer_fn PROPERTIES LABELS "economics;paytable")
 set_tests_properties(test_video_poker_strategy PROPERTIES LABELS "economics;paytable;fast")
@@ -694,6 +737,8 @@ add_poker_test(test_cfr_icm_utility)
 set_tests_properties(test_cfr_icm_utility PROPERTIES LABELS "engine;cfr;icm;feat17")
 add_poker_test(test_board_canonical)
 set_tests_properties(test_board_canonical PROPERTIES LABELS "engine;cfr;canonicalize")
+add_poker_test(test_pe_isomorphism)
+set_tests_properties(test_pe_isomorphism PROPERTIES LABELS "engine;cfr;canonicalize;iso01")
 add_poker_test(test_hand_clustering)
 set_tests_properties(test_hand_clustering PROPERTIES LABELS "engine;cfr;cluster" TIMEOUT 180)
 add_poker_test(test_board_texture)
@@ -709,6 +754,14 @@ set_tests_properties(test_cfr_bunching PROPERTIES LABELS "engine;cfr;bunching;fe
 add_poker_test(test_cfr_compact_storage)
 set_tests_properties(test_cfr_compact_storage PROPERTIES LABELS "engine;cfr;compact")
 set_tests_properties(test_cfr_multiway PROPERTIES LABELS "engine;cfr;multiway")
+add_poker_test(test_cfr_strategy_mode)
+add_poker_test(test_cfr_telemetry)
+add_poker_test(test_cfr_dcfr_discount)
+add_poker_test(test_cfr_legacy_plan)
+set_tests_properties(test_cfr_legacy_plan PROPERTIES LABELS "engine;cfr;api02")
+set_tests_properties(test_cfr_dcfr_discount PROPERTIES LABELS "engine;cfr;dcfr;ext07")
+set_tests_properties(test_cfr_telemetry PROPERTIES LABELS "engine;cfr;telemetry;ext03")
+set_tests_properties(test_cfr_strategy_mode PROPERTIES LABELS "engine;cfr;strategy-mode;ext01")
 add_poker_test(test_cfr_get_actions_clamp)
 set_tests_properties(test_cfr_get_actions_clamp PROPERTIES LABELS "engine;cfr;bug07")
 add_poker_test(test_cfr_node_lock)
@@ -718,6 +771,8 @@ set_tests_properties(test_cfr_opponent_model PROPERTIES LABELS "engine;cfr;lock;
 add_poker_test(test_cfr_periodic_relock)
 set_tests_properties(test_cfr_periodic_relock PROPERTIES LABELS "engine;cfr;lock;feat11")
 add_poker_test(test_cfr_periodic_relock_multiway)
+add_poker_test(test_cfr_relock_ev_loss)
+set_tests_properties(test_cfr_relock_ev_loss PROPERTIES LABELS "engine;cfr;lock;feat11;ext08")
 set_tests_properties(test_cfr_periodic_relock_multiway PROPERTIES LABELS "engine;cfr;lock;feat11;multiway")
 add_poker_test(test_cfr_subgame_resolve)
 set_tests_properties(test_cfr_subgame_resolve PROPERTIES LABELS "engine;cfr;resolve;feat05" TIMEOUT 180)
@@ -734,6 +789,192 @@ add_poker_test(test_mpf_tree)
 set_tests_properties(test_mpf_tree PROPERTIES LABELS "engine;cfr;multiway;feat06" TIMEOUT 180)
 add_poker_test(test_bet_sizing)
 set_tests_properties(test_bet_sizing PROPERTIES LABELS "engine;cfr;bet-sizing;issue166")
+# Architecture v3 solver (docs/project/SOLVER_ARCHITECTURE_V3.md). These tests
+# exercise the hexagon's domain and its ports; they are labelled "solver-v3" so
+# the whole layer can be run on its own as it grows.
+add_poker_test(test_pe_capabilities)
+set_tests_properties(test_pe_capabilities PROPERTIES LABELS "solver;solver-v3;ctr02")
+add_poker_test(test_pe_actions)
+set_tests_properties(test_pe_actions PROPERTIES LABELS "solver;solver-v3;rules;ugs01")
+add_poker_test(test_pe_betting_state)
+set_tests_properties(test_pe_betting_state PROPERTIES LABELS "solver;solver-v3;rules;ugs02")
+add_poker_test(test_pe_betting_vector)
+set_tests_properties(test_pe_betting_vector PROPERTIES LABELS "solver;solver-v3;rules;vector;ugs03")
+add_poker_test(test_pe_holdem_river)
+set_tests_properties(test_pe_holdem_river PROPERTIES LABELS "solver;solver-v3;holdem;vector;ugs04")
+add_poker_test(test_pe_holdem_chance)
+set_tests_properties(test_pe_holdem_chance PROPERTIES LABELS "solver;solver-v3;holdem;chance;ugs06")
+add_poker_test(test_pe_holdem_deals)
+set_tests_properties(test_pe_holdem_deals PROPERTIES LABELS "solver;solver-v3;holdem;ranges;card-removal;ugs04b")
+add_poker_test(test_pe_holdem_streets)
+set_tests_properties(test_pe_holdem_streets PROPERTIES LABELS "solver;solver-v3;holdem;chance;streets;ugs07")
+add_poker_test(test_pe_omaha_deals)
+set_tests_properties(test_pe_omaha_deals PROPERTIES LABELS "solver;solver-v3;omaha;plo5;plo6;card-removal;ugs08")
+add_poker_test(test_pe_pots)
+set_tests_properties(test_pe_pots PROPERTIES LABELS "solver;solver-v3;multiway;sidepots;ugs05")
+add_poker_test(test_pe_solver_config)
+set_tests_properties(test_pe_solver_config PROPERTIES LABELS "solver;solver-v3;ctr03")
+add_poker_test(test_pe_ports)
+set_tests_properties(test_pe_ports PROPERTIES LABELS "solver;solver-v3;ctr04")
+add_poker_test(test_pe_rng)
+set_tests_properties(test_pe_rng PROPERTIES LABELS "solver;solver-v3;ctr05")
+add_poker_test(test_pe_registry)
+set_tests_properties(test_pe_registry PROPERTIES LABELS "solver;solver-v3;ctr06")
+add_poker_test(test_pe_runtime)
+set_tests_properties(test_pe_runtime PROPERTIES LABELS "solver;solver-v3;runtime")
+add_poker_test(test_pe_work_unit)
+set_tests_properties(test_pe_work_unit PROPERTIES LABELS "solver;solver-v3;distributed")
+add_poker_test(test_pe_work_scheduler)
+set_tests_properties(test_pe_work_scheduler PROPERTIES LABELS "solver;solver-v3;distributed;dist03")
+add_poker_test(test_pe_work_protocol)
+set_tests_properties(test_pe_work_protocol PROPERTIES LABELS "solver;solver-v3;distributed;dist03;protocol")
+add_poker_test(test_pe_work_coordinator)
+set_tests_properties(test_pe_work_coordinator PROPERTIES LABELS "solver;solver-v3;distributed;dist03;coordinator")
+add_poker_test(test_pe_work_reducer)
+set_tests_properties(test_pe_work_reducer PROPERTIES LABELS "solver;solver-v3;distributed;dist03;reducer")
+add_poker_test(test_pe_work_executor)
+set_tests_properties(test_pe_work_executor PROPERTIES LABELS "solver;solver-v3;distributed;dist03;worker")
+add_poker_test(test_pe_work_cfr)
+set_tests_properties(test_pe_work_cfr PROPERTIES LABELS "solver;solver-v3;distributed;dist02;dist03;cfr")
+add_poker_test(test_pe_regret_legacy_exp)
+set_tests_properties(test_pe_regret_legacy_exp PROPERTIES LABELS "solver;solver-v3;alg05")
+add_poker_test(test_pe_batch)
+set_tests_properties(test_pe_batch PROPERTIES LABELS "solver;solver-v3;par01")
+add_poker_test(test_pe_compute_cpu_par)
+set_tests_properties(test_pe_compute_cpu_par PROPERTIES LABELS "solver;solver-v3;par03")
+add_poker_test(test_compute_cpu_ref)
+set_tests_properties(test_compute_cpu_ref PROPERTIES LABELS "solver;solver-v3;gpu01")
+add_poker_test(test_pe_compute_gpu_updates)
+target_include_directories(test_pe_compute_gpu_updates PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/solver/adapters)
+set_tests_properties(test_pe_compute_gpu_updates PROPERTIES LABELS "solver;solver-v3;gpu06")
+add_poker_test(test_pe_compute_layout)
+set_tests_properties(test_pe_compute_layout PROPERTIES LABELS "solver;solver-v3;gpu06")
+add_poker_test(test_compute_cuda)
+set_tests_properties(test_compute_cuda PROPERTIES LABELS "solver;solver-v3;gpu03")
+add_poker_test(test_compute_opencl)
+set_tests_properties(test_compute_opencl PROPERTIES LABELS "solver;solver-v3;gpu04")
+
+add_poker_test(test_compute_regret_gpu)
+set_tests_properties(test_compute_regret_gpu PROPERTIES
+    LABELS "solver;solver-v3;gpu;parity"
+    SKIP_RETURN_CODE 77)
+add_poker_test(test_solver_gpu_parity)
+set_tests_properties(test_solver_gpu_parity PROPERTIES
+    LABELS "solver;solver-v3;gpu05"
+    SKIP_RETURN_CODE 77)
+add_poker_test(test_rbp)
+set_tests_properties(test_rbp PROPERTIES LABELS "solver;solver-v3;rbp01")
+add_poker_test(test_pe_solver_api)
+set_tests_properties(test_pe_solver_api PROPERTIES LABELS "solver;solver-v3;api01")
+add_poker_test(test_pe_checkpoint_v2)
+set_tests_properties(test_pe_checkpoint_v2 PROPERTIES LABELS "solver;solver-v3;api04")
+add_poker_test(test_abstraction_port)
+set_tests_properties(test_abstraction_port PROPERTIES LABELS "solver;solver-v3;abs01")
+add_poker_test(test_mpf_abstraction)
+set_tests_properties(test_mpf_abstraction PROPERTIES LABELS "engine;cfr;multiway;solver-v3;abs02;abs03" TIMEOUT 180)
+add_poker_test(test_pe_storage_precision)
+set_tests_properties(test_pe_storage_precision PROPERTIES LABELS "solver;solver-v3;abs04;storage" TIMEOUT 120)
+add_poker_test(test_external_mccfr)
+set_tests_properties(test_external_mccfr PROPERTIES LABELS "solver;solver-v3;lnb01;mccfr" TIMEOUT 120)
+add_poker_test(test_pe_solver_sampled)
+set_tests_properties(test_pe_solver_sampled PROPERTIES LABELS "solver;solver-v3;lane-b;preflop" TIMEOUT 30)
+add_poker_test(test_pe_cfr_external_adapter)
+set_tests_properties(test_pe_cfr_external_adapter PROPERTIES LABELS "solver;solver-v3;lane-b;legacy-bridge" TIMEOUT 30)
+add_poker_test(test_pe_preflop_sampler)
+set_tests_properties(test_pe_preflop_sampler PROPERTIES LABELS "solver;solver-v3;preflop;holdem;plo4;plo5;plo6;card-removal" TIMEOUT 30)
+add_poker_test(test_pe_preflop_betting)
+set_tests_properties(test_pe_preflop_betting PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;betting" TIMEOUT 30)
+add_poker_test(test_preflop_allin_game)
+set_tests_properties(test_preflop_allin_game PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;holdem;plo5;multiway;showdown" TIMEOUT 60)
+add_poker_test(test_pe_runout_report)
+set_tests_properties(test_pe_runout_report PROPERTIES LABELS "solver;solver-v3;runout;holdem" TIMEOUT 30)
+
+add_poker_test(test_outcome_mccfr)
+set_tests_properties(test_outcome_mccfr PROPERTIES LABELS "solver;solver-v3;out01;mccfr" TIMEOUT 120)
+add_poker_test(test_evaluator_port)
+set_tests_properties(test_evaluator_port PROPERTIES LABELS "solver;solver-v3;gpu02")
+add_poker_test(test_backend_parity)
+set_tests_properties(test_backend_parity PROPERTIES LABELS "solver;solver-v3;par04")
+add_poker_test(test_monker_tree)
+set_tests_properties(test_monker_tree PROPERTIES LABELS "solver;solver-v3;monker;mkr01")
+add_poker_test(test_monker_layout)
+set_tests_properties(test_monker_layout PROPERTIES LABELS "solver;solver-v3;monker;holdem;plo5;plo6;mkr02")
+
+if(TARGET pe-vector-sim)
+    add_test(NAME pe_vector_sim_holdem
+        COMMAND $<TARGET_FILE:pe-vector-sim>
+            --game holdem
+            --board "2c 7d Th Js Qc"
+            --range0 AsKs
+            --range1 9c8c)
+    set_tests_properties(pe_vector_sim_holdem PROPERTIES LABELS "solver;cli;vector;holdem")
+    add_test(NAME pe_vector_sim_plo5
+        COMMAND $<TARGET_FILE:pe-vector-sim>
+            --game plo5
+            --board "2c 7d Th Js Qc"
+            --range0 AsKsQd3c3d
+            --range1 9c8d5c6c7c)
+    set_tests_properties(pe_vector_sim_plo5 PROPERTIES LABELS "solver;cli;vector;plo5")
+    add_test(NAME pe_vector_sim_plo6
+        COMMAND $<TARGET_FILE:pe-vector-sim>
+            --game plo6
+            --board "2c 7d Th Js Qc"
+            --range0 AsKsQd3c3d2d
+            --range1 9c8d5c6c7c8c)
+    set_tests_properties(pe_vector_sim_plo6 PROPERTIES LABELS "solver;cli;vector;plo6")
+endif()
+if(POKER_EVAL_WITH_ZLIB)
+    add_poker_test(test_monker_mkr)
+    target_link_libraries(test_monker_mkr PRIVATE ZLIB::ZLIB)
+    set_tests_properties(test_monker_mkr PROPERTIES LABELS "solver;solver-v3;monker;mkr04;mkr05")
+endif()
+add_poker_test(test_monker_filters)
+set_tests_properties(test_monker_filters PROPERTIES LABELS "solver;solver-v3;monker;mkr06")
+add_poker_test(test_range_ppt)
+set_tests_properties(test_range_ppt PROPERTIES LABELS "solver;solver-v3;monker;mkr07")
+add_poker_test(test_pe_storage_ids)
+add_poker_test(test_pe_traversal_vector)
+add_poker_test(test_pe_vector_cfr)
+add_poker_test(test_pe_storage_port)
+add_poker_test(test_pe_estimate)
+add_poker_test(test_pe_solver_cluster)
+add_poker_test(test_pe_range)
+add_poker_test(test_mpf_ranges)
+add_poker_test(test_pe_vector)
+add_poker_test(test_pe_blockers)
+add_poker_test(test_pe_showdown)
+add_poker_test(test_pe_holdem_river_ranges)
+add_poker_test(test_pe_holdem_round)
+add_poker_test(test_pe_variant)
+add_poker_test(test_pe_variant_terminal)
+add_poker_test(test_pe_combinations)
+add_poker_test(test_mpf_flop_chance)
+add_poker_test(test_monker_classes)
+if(POKER_EVAL_WITH_ZLIB)
+    add_poker_test(test_monker_strategy)
+    target_link_libraries(test_monker_strategy PRIVATE ZLIB::ZLIB)
+    set_tests_properties(test_monker_strategy PROPERTIES LABELS "solver;monker;strategy" TIMEOUT 300)
+endif()
+add_poker_test(test_pe_monker_key)
+add_poker_test(test_mpf_infoset_privacy)
+set_tests_properties(test_pe_combinations PROPERTIES LABELS "solver;solver-v3;chn02")
+set_tests_properties(test_mpf_flop_chance PROPERTIES LABELS "engine;cfr;multiway;chance;chn02" TIMEOUT 300)
+set_tests_properties(test_monker_classes PROPERTIES LABELS "solver;monker;classes" TIMEOUT 300)
+set_tests_properties(test_pe_monker_key PROPERTIES LABELS "solver;solver-v3;monker;key" TIMEOUT 30)
+set_tests_properties(test_mpf_infoset_privacy PROPERTIES LABELS "engine;cfr;multiway;infoset;inf01")
+set_tests_properties(test_pe_blockers PROPERTIES LABELS "solver;solver-v3;rng05")
+set_tests_properties(test_pe_vector PROPERTIES LABELS "solver;solver-v3;rng04")
+set_tests_properties(test_mpf_ranges PROPERTIES LABELS "engine;cfr;multiway;ranges;rng02" TIMEOUT 120)
+set_tests_properties(test_pe_range PROPERTIES LABELS "solver;solver-v3;rng01")
+set_tests_properties(test_pe_estimate PROPERTIES LABELS "solver;solver-v3;sto05" TIMEOUT 120)
+set_tests_properties(test_pe_storage_port PROPERTIES LABELS "solver;solver-v3;sto03")
+set_tests_properties(test_pe_storage_ids PROPERTIES LABELS "solver;solver-v3;sto01" TIMEOUT 120)
+set_tests_properties(test_pe_showdown PROPERTIES LABELS "solver;solver-v3;vec06")
+set_tests_properties(test_pe_holdem_river_ranges PROPERTIES LABELS "solver;solver-v3;vec10")
+set_tests_properties(test_pe_traversal_vector PROPERTIES LABELS "solver;solver-v3;vec02")
+set_tests_properties(test_pe_vector_cfr PROPERTIES LABELS "solver;solver-v3;vec03;vec08")
+
 add_poker_test(test_ismcts_poker)
 set_tests_properties(test_ismcts_poker PROPERTIES LABELS "engine;ismcts;solver")
 add_poker_test(test_ismcts_pool_cap)
@@ -1391,6 +1632,24 @@ add_game_theory_test(test_kuhn_openspiel    test_kuhn_openspiel.c)
 add_game_theory_test(test_kuhn_multiway_openspiel
                      test_kuhn_multiway_openspiel.c)
 add_game_theory_test(test_leduc_openspiel   test_leduc_openspiel.c)
+add_game_theory_test(test_vector_vs_scalar  test_vector_vs_scalar.c)
+add_game_theory_test(test_best_response_ii  test_best_response_ii.c)
+add_game_theory_test(test_best_response_ii_multiway
+                     test_best_response_ii_multiway.c)
+add_game_theory_test(test_best_response_ii_leduc
+                     test_best_response_ii_leduc.c)
+add_game_theory_test(test_cfr_plus test_cfr_plus.c)
+if(TEST test_cfr_plus)
+    set_tests_properties(test_cfr_plus PROPERTIES
+        LABELS "solver;solver-v3;game_theory;alg01"
+        TIMEOUT 180)
+endif()
+add_game_theory_test(test_cfr_dcfr test_cfr_dcfr.c)
+if(TEST test_cfr_dcfr)
+    set_tests_properties(test_cfr_dcfr PROPERTIES
+        LABELS "solver;solver-v3;game_theory;alg03"
+        TIMEOUT 180)
+endif()
 add_game_theory_test(test_gambit_exact_lp   test_gambit_exact_lp.c)
 add_game_theory_test(test_extended_analytical_games
                      test_extended_analytical_games.c)
@@ -1405,4 +1664,204 @@ if(TEST test_best_response_exploitability)
     set_tests_properties(test_best_response_exploitability PROPERTIES
         LABELS "engine;cfr;game_theory;feat09;feat12"
         TIMEOUT 300)
+endif()
+
+if(TEST test_vector_vs_scalar)
+    set_tests_properties(test_vector_vs_scalar PROPERTIES
+        LABELS "solver;solver-v3;game_theory;vec09"
+        TIMEOUT 180)
+endif()
+
+if(TEST test_best_response_ii)
+    set_tests_properties(test_best_response_ii PROPERTIES
+        LABELS "solver;solver-v3;game_theory;br02"
+        TIMEOUT 180)
+endif()
+if(TEST test_best_response_ii_multiway)
+    set_tests_properties(test_best_response_ii_multiway PROPERTIES
+        LABELS "solver;solver-v3;game_theory;br02"
+        TIMEOUT 180)
+endif()
+if(TEST test_best_response_ii_leduc)
+    set_tests_properties(test_best_response_ii_leduc PROPERTIES
+        LABELS "solver;solver-v3;game_theory;br02"
+        TIMEOUT 180)
+endif()
+
+add_poker_test(test_hand_history_parse)
+if(TARGET test_hand_history_parse)
+    set_tests_properties(test_hand_history_parse PROPERTIES LABELS "product;import")
+endif()
+
+add_poker_test(test_pe_sol_format)
+if(TARGET test_pe_sol_format)
+    set_tests_properties(test_pe_sol_format PROPERTIES LABELS "product;import")
+endif()
+
+add_poker_test(test_pe_tree_json)
+if(TARGET test_pe_tree_json)
+    target_compile_definitions(test_pe_tree_json PRIVATE
+        PE_TREE_JSON_SAMPLE="${CMAKE_SOURCE_DIR}/examples/heads_up_river/tree.json")
+    set_tests_properties(test_pe_tree_json PROPERTIES LABELS "product;import")
+endif()
+
+add_poker_test(test_pe_tree_layout)
+if(TARGET test_pe_tree_layout)
+    set_tests_properties(test_pe_tree_layout PROPERTIES LABELS "product;import")
+endif()
+
+if(TARGET pe-hand-history-import)
+    add_test(NAME pe_hand_history_import_smoke
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json
+            --output ${CMAKE_BINARY_DIR}/pe-hand-history-smoke.json)
+    set_tests_properties(pe_hand_history_import_smoke PROPERTIES LABELS "product;import")
+
+    # Content-level regressions for the importer. ctest passes
+    # PASS_REGULAR_EXPRESSION when ANY listed pattern matches, so each check
+    # gets its own test. The tool writes JSON to stdout when --output is
+    # omitted. The fixture amounts are multi-digit on purpose: the old parser
+    # read "bets $10" as 0 and "raises $12 to $37" as 7.
+    add_test(NAME pe_hand_history_import_multi_digit_amount
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json)
+    set_tests_properties(pe_hand_history_import_multi_digit_amount PROPERTIES
+        LABELS "product;import"
+        PASS_REGULAR_EXPRESSION "\"amount\":37\\.00")
+
+    add_test(NAME pe_hand_history_import_clean_hand_id
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json)
+    set_tests_properties(pe_hand_history_import_clean_hand_id PROPERTIES
+        LABELS "product;import"
+        PASS_REGULAR_EXPRESSION "\"hand_id\":\"987654321\"")
+
+    add_test(NAME pe_hand_history_import_clean_player_names
+        COMMAND pe-hand-history-import
+            --input ${CMAKE_SOURCE_DIR}/tests/fixtures/sample_pokerstars_hand.txt
+            --format json)
+    set_tests_properties(pe_hand_history_import_clean_player_names PROPERTIES
+        LABELS "product;import"
+        PASS_REGULAR_EXPRESSION "\"player\":\"Villain\"")
+endif()
+
+if(TARGET pe-preflop-tree)
+    add_test(NAME pe_preflop_tree_smoke
+        COMMAND pe-preflop-tree
+            --players 2 --stack 100 --stack 100 --raises 2,4,8
+            --range 0 "22+,AKs" --range 1 "random"
+            --output ${CMAKE_BINARY_DIR}/pe-preflop-tree-smoke.json)
+    set_tests_properties(pe_preflop_tree_smoke PROPERTIES LABELS "product;solver")
+endif()
+
+if(TARGET pe-preflop-solve)
+    add_test(NAME pe_preflop_solve_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 2
+            --samples 8
+            --raise 2.5
+            --output ${CMAKE_BINARY_DIR}/pe-preflop-solve-smoke.json)
+    set_tests_properties(pe_preflop_solve_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop"
+        PASS_REGULAR_EXPRESSION "STRATEGY REPORT;HAND TABLE;frequencies"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_external_dcfr_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 2
+            --samples 1
+            --algorithm external-dcfr
+            --alpha 2.25
+            --beta 0.5
+            --gamma 1.75
+            --br-samples 1
+            --exploitability-interval 1)
+    set_tests_properties(pe_preflop_solve_external_dcfr_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;dcfr"
+        PASS_REGULAR_EXPRESSION "regret=dcfr"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_reports_execution_axes
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 1
+            --samples 1
+            --backend cpu_ref
+            --br-samples 1
+            --exploitability-interval 1)
+    set_tests_properties(pe_preflop_solve_reports_execution_axes PROPERTIES
+        LABELS "product;solver;lane-b;preflop;runtime"
+        PASS_REGULAR_EXPRESSION "backend=cpu_ref backend_validated=1;simd_cfr=not-integrated"
+        TIMEOUT 60)
+    add_test(NAME mpf_lane_b_reports_runtime_metadata
+        COMMAND mpf_run_with_metrics
+            --tree ${PROJECT_SOURCE_DIR}/examples/heads_up_river/tree.json
+            --lane-b
+            --iterations 1
+            --benchmark-json ${CMAKE_CURRENT_BINARY_DIR}/mpf-lane-b-runtime.json)
+    set_tests_properties(mpf_lane_b_reports_runtime_metadata PROPERTIES
+        LABELS "product;solver;lane-b;runtime"
+        PASS_REGULAR_EXPRESSION "lane_b_runtime=backend_validated=1;simd_cfr=not-integrated"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_rejects_full_tree_preset
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 1
+            --samples 1
+            --algorithm dcfr)
+    set_tests_properties(pe_preflop_solve_rejects_full_tree_preset PROPERTIES
+        LABELS "product;solver;lane-b;validation"
+        WILL_FAIL TRUE
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_postflop_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AsAh
+            --range1 KcKd
+            --iterations 1
+            --samples 1
+            --raise 2.5
+            --br-samples 1
+            --postflop)
+    set_tests_properties(pe_preflop_solve_postflop_smoke PROPERTIES
+        LABELS "product;solver;lane-b;postflop;holdem"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_plo5_multiway_smoke
+        COMMAND pe-preflop-solve
+            --game plo5
+            --players 3
+            --range0 AsKsQd3c9h
+            --range1 AhKhJdTc8s
+            --range2 AdKdQh2s3h
+            --iterations 2
+            --samples 8
+            --raise 2.5
+            --br-samples 8)
+    set_tests_properties(pe_preflop_solve_plo5_multiway_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;plo5;multiway;card-removal"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_plo6_smoke
+        COMMAND pe-preflop-solve
+            --game plo6
+            --players 2
+            --range0 AsKsQd3c9h5h
+            --range1 AhKhJdTc8s4s
+            --iterations 1
+            --samples 4
+            --raise 2.5
+            --br-samples 4)
+    set_tests_properties(pe_preflop_solve_plo6_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;plo6;card-removal"
+        TIMEOUT 60)
 endif()

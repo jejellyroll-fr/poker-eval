@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 /* GPU-CFR context structure */
 struct gpu_cfr_context_t {
@@ -183,9 +184,6 @@ gpu_cfr_context_t* gpu_cfr_init(const gpu_cfr_config_t* config) {
         return NULL;
     }
 
-    /* TODO: Allocate GPU memory */
-    /* This would use cudaMalloc or clCreateBuffer depending on backend */
-
     if (config->verbose) {
         printf("GPU-CFR initialized:\n");
         printf("  Infosets: %d\n", config->num_infosets);
@@ -205,9 +203,6 @@ void gpu_cfr_free(gpu_cfr_context_t* ctx) {
 
     cfr_matrix_storage_free(ctx->host_storage);
 
-    /* TODO: Free GPU memory */
-    /* cudaFree(ctx->d_regrets), etc. */
-
     free(ctx);
 }
 
@@ -217,20 +212,21 @@ int gpu_cfr_load_state(
     gpu_cfr_context_t* ctx,
     const cfr_matrix_storage_t* storage
 ) {
-    if (!ctx || !storage) return -1;
+    if (!ctx || !storage || storage->num_infosets != ctx->config.num_infosets ||
+        storage->max_actions != ctx->config.max_actions)
+        return -1;
 
     /* Copy to host storage */
     size_t matrix_size = storage->num_infosets * storage->max_actions;
 
-    memcpy(ctx->host_storage->regrets, storage->regrets,
-           matrix_size * sizeof(float));
-    memcpy(ctx->host_storage->avg_strategy, storage->avg_strategy,
-           matrix_size * sizeof(float));
-    memcpy(ctx->host_storage->action_counts, storage->action_counts,
-           storage->num_infosets * sizeof(uint8_t));
-
-    /* TODO: Upload to GPU */
-    /* cudaMemcpy(ctx->d_regrets, ctx->host_storage->regrets, ...) */
+    for (size_t i = 0u; i < matrix_size; ++i) {
+        ctx->host_storage->regrets[i] = storage->regrets[i];
+        ctx->host_storage->avg_strategy[i] = storage->avg_strategy[i];
+    }
+    for (size_t i = 0u; i < storage->num_infosets; ++i) {
+        ctx->host_storage->action_counts[i] = storage->action_counts[i];
+        ctx->host_storage->infoset_keys[i] = storage->infoset_keys[i];
+    }
 
     return 0;
 }
@@ -239,18 +235,22 @@ int gpu_cfr_download_state(
     gpu_cfr_context_t* ctx,
     cfr_matrix_storage_t* storage
 ) {
-    if (!ctx || !storage) return -1;
-
-    /* TODO: Download from GPU */
-    /* cudaMemcpy(ctx->host_storage->regrets, ctx->d_regrets, ...) */
+    if (!ctx || !storage || storage->num_infosets != ctx->config.num_infosets ||
+        storage->max_actions != ctx->config.max_actions)
+        return -1;
 
     /* Copy from host storage */
     size_t matrix_size = ctx->host_storage->num_infosets * ctx->host_storage->max_actions;
 
-    memcpy(storage->regrets, ctx->host_storage->regrets,
-           matrix_size * sizeof(float));
-    memcpy(storage->avg_strategy, ctx->host_storage->avg_strategy,
-           matrix_size * sizeof(float));
+    for (size_t i = 0u; i < matrix_size; ++i) {
+        storage->regrets[i] = ctx->host_storage->regrets[i];
+        storage->avg_strategy[i] = ctx->host_storage->avg_strategy[i];
+        storage->curr_strategy[i] = ctx->host_storage->curr_strategy[i];
+    }
+    for (size_t i = 0u; i < storage->num_infosets; ++i) {
+        storage->action_counts[i] = ctx->host_storage->action_counts[i];
+        storage->infoset_keys[i] = ctx->host_storage->infoset_keys[i];
+    }
 
     return 0;
 }
@@ -266,27 +266,40 @@ int gpu_cfr_solve(
     if (ctx->config.verbose) {
         printf("Running %d GPU-CFR iterations...\n", iterations);
     }
-
-    /* TODO: Implement actual GPU-CFR iterations */
-    /*
-     * Per iteration:
-     * 1. Compute strategy: π = regret_matching(R)  [GPU kernel]
-     * 2. Traverse/sample game tree [CPU or GPU]
-     * 3. Compute regret deltas Δ [CPU or GPU]
-     * 4. Update regrets: R' = discount * R + Δ  [GPU AXPY kernel]
-     * 5. Update avg strategy: S' = S + weight * π  [GPU AXPY kernel]
-     */
-
-    /* Stub implementation (CPU fallback) */
+    /* This legacy matrix API has no game-tree callback, so it cannot invent
+       regret deltas. It now performs the useful, deterministic matrix part of
+       CFR (regret matching and average-strategy accumulation) instead of
+       silently looping as a no-op. Full tree solving belongs to pe_solver_run
+       with a compute port. */
+    clock_t start = clock();
     for (int iter = 0; iter < iterations; iter++) {
-        /* Placeholder: just show progress */
         if (ctx->config.verbose && (iter % 100 == 0)) {
             printf("  Iteration %d/%d\n", iter, iterations);
         }
-
-        /* TODO: GPU kernels here */
+        for (int row = 0; row < ctx->host_storage->num_infosets; ++row)
+        {
+            int actions = (int)ctx->host_storage->action_counts[row];
+            if (actions <= 0 || actions > ctx->host_storage->max_actions)
+                continue;
+            int base = row * ctx->host_storage->max_actions;
+            float positive = 0.0f;
+            for (int action = 0; action < actions; ++action)
+                if (ctx->host_storage->regrets[base + action] > 0.0f)
+                    positive += ctx->host_storage->regrets[base + action];
+            float uniform = 1.0f / (float)actions;
+            for (int action = 0; action < actions; ++action)
+            {
+                float regret = ctx->host_storage->regrets[base + action];
+                float strategy = positive > 0.0f
+                    ? (regret > 0.0f ? regret / positive : 0.0f) : uniform;
+                ctx->host_storage->curr_strategy[base + action] = strategy;
+                ctx->host_storage->avg_strategy[base + action] +=
+                    strategy * ctx->config.strategy_weight;
+            }
+        }
     }
-
+    ctx->stats.total_time_ms = (double)(clock() - start) * 1000.0 / CLOCKS_PER_SEC;
+    ctx->stats.avg_iteration_time_ms = ctx->stats.total_time_ms / (double)iterations;
     ctx->stats.iterations_completed += iterations;
 
     return 0;

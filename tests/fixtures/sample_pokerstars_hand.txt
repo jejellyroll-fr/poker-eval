@@ -1,0 +1,17 @@
+PokerStars Hand #987654321: Hold'em No Limit ($0.50/$1.00 USD) - 2026/08/24
+Table 'Test' 6-max Seat #1 is the button
+*** HOLE CARDS ***
+Dealt to Hero [As Kd]
+Villain: raises $2 to $3
+Hero: calls $2
+*** FLOP *** [Ah 7c 2d]
+Villain: bets $14
+Hero: calls $14
+*** TURN *** [Ah 7c 2d] [Ks]
+Villain: checks
+Hero: bets $25
+Villain: raises $12 to $37
+Hero: calls $12
+*** RIVER *** [Ah 7c 2d Ks] [3h]
+Villain: bets $60
+Hero: folds

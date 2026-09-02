@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <math.h>
 
+#include "../solver/domain/finite_double.h"
+
 /* Context for iterator callback */
 typedef struct
 {
@@ -229,13 +231,13 @@ int cfr_matrix_validate(const cfr_matrix_storage_t *matrix)
         /* Check for NaN/Inf */
         for (int a = 0; a < matrix->max_actions; a++)
         {
-            if (!isfinite(matrix->regrets[base_idx + a]))
+            if (!pe_finite_double((double)matrix->regrets[base_idx + a]))
             {
                 fprintf(stderr, "Invalid regret at [%d,%d]: %f\n",
                         i, a, matrix->regrets[base_idx + a]);
                 errors++;
             }
-            if (!isfinite(matrix->avg_strategy[base_idx + a]))
+            if (!pe_finite_double((double)matrix->avg_strategy[base_idx + a]))
             {
                 fprintf(stderr, "Invalid strategy at [%d,%d]: %f\n",
                         i, a, matrix->avg_strategy[base_idx + a]);

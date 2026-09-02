@@ -1,5 +1,7 @@
 #include <poker_eval/engine/solvers/cfr/bet_sizing.h>
 
+#include "../../../solver/domain/finite_double.h"
+
 #include <math.h>
 #include <stddef.h>
 
@@ -24,7 +26,7 @@ int pe_optimal_bet_size(double pot,
                         pe_bet_sizing_result_t *out_result)
 {
     if (!out_result || !candidate_fractions || !value_fn ||
-        !isfinite(pot) || pot <= 0.0 || !isfinite(effective_stack) ||
+        !pe_finite_double(pot) || pot <= 0.0 || !pe_finite_double(effective_stack) ||
         effective_stack <= 0.0 || num_candidates <= 0 ||
         num_candidates > PE_BET_SIZING_MAX_OPTIONS)
         return -1;
@@ -36,12 +38,12 @@ int pe_optimal_bet_size(double pot,
     for (int i = 0; i < num_candidates; ++i)
     {
         const double fraction = candidate_fractions[i];
-        if (!isfinite(fraction) || fraction <= 0.0)
+        if (!pe_finite_double(fraction) || fraction <= 0.0)
             return -1;
 
         const double amount = fmin(pot * fraction, effective_stack);
         const double ev = value_fn(fraction, amount, ctx);
-        if (!isfinite(ev))
+        if (!pe_finite_double(ev))
             return -1;
 
         int duplicate = -1;

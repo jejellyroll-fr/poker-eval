@@ -42,6 +42,13 @@ here instead of silently skipping it.")
         message(STATUS "CUDA found, building CUDA acceleration")
 
         set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -O3 -arch=sm_50)
+        if(UNIX)
+            # FindCUDA's legacy CUDA_ADD_LIBRARY path does not consistently
+            # propagate POSITION_INDEPENDENT_CODE to generated device objects.
+            # The solver is shared on Linux, so pass the host PIC flag through
+            # nvcc explicitly for those objects.
+            list(APPEND CUDA_NVCC_FLAGS -Xcompiler=-fPIC)
+        endif()
 
         cuda_add_library(poker_cuda STATIC
             cuda/eval_cuda_kernel.cu
@@ -61,6 +68,7 @@ here instead of silently skipping it.")
 
         cuda_add_library(poker_gpu_cfr_cuda STATIC
             kernels/gpu_cfr_kernels.cu
+            kernels_regret_cuda.cu
             gpu_cfr_cuda.cu
         )
 
@@ -117,6 +125,14 @@ here instead of silently skipping it.")
         target_link_libraries(poker_gpu_combinatorics_cuda ${CUDA_LIBRARIES} poker_core)
         target_link_libraries(poker_cuda_batch ${CUDA_LIBRARIES} poker_core)
 
+        # These archives are linked into shared solver libraries on the
+        # install/CUDA jobs. Keep their objects position independent so the
+        # final shared link is valid on ELF platforms as well as macOS.
+        set_target_properties(poker_cuda poker_cuda_generic
+                              poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda
+                              poker_cuda_batch
+                              PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
         list(APPEND GPU_LIBRARIES poker_cuda poker_cuda_generic poker_gpu_cfr_cuda poker_gpu_combinatorics_cuda poker_cuda_batch)
 
         add_definitions(-DHAVE_CUDA)
@@ -162,6 +178,7 @@ here instead of silently skipping it.")
 
         # GPU-CFR OpenCL backend
         add_library(poker_gpu_cfr_opencl STATIC
+            kernels_regret_opencl.c
             gpu_cfr_opencl.c
         )
 
@@ -239,6 +256,15 @@ here instead of silently skipping it.")
             PUBLIC poker_core
             PRIVATE ${GPU_LIBRARIES})
 
+        # The shared CUDA regret primitive is intentionally C-like but is
+        # compiled as C++ by nvcc because it uses nothrow new/delete.  A C
+        # executable linking this archive does not automatically pull the C++
+        # runtime, which otherwise leaves operator new/delete unresolved on
+        # Linux CUDA builds.  Propagate the host C++ runtime with the archive.
+        if(CUDA_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(poker_gpu_unified PUBLIC stdc++)
+        endif()
+
         if(CUDA_FOUND)
             target_compile_definitions(poker_gpu_unified PRIVATE HAVE_CUDA)
             target_compile_definitions(poker_gpu_unified PRIVATE ENABLE_CUDA)
@@ -305,6 +331,63 @@ here instead of silently skipping it.")
                 DESTINATION include)
         install(FILES include/poker_eval/gpu/eval_multi_gpu.h
                 DESTINATION include/poker_eval/gpu)
+    endif()
+
+    # ------------------------------------------------------------------ #
+    # HIP / ROCm (GPU-02)
+    #
+    # The kernels are the CUDA ones: hip/kernels_regret_hip.hip.cpp includes
+    # common/pe_regret_kernels.inc, exactly as the CUDA translation unit does.
+    # Only the regret primitives exist here -- there is no HIP batched
+    # terminal evaluator -- so this target is small and independent.
+    # ------------------------------------------------------------------ #
+    find_package(hip QUIET)
+    if(hip_FOUND)
+        message(STATUS "ROCm/HIP found, building the HIP regret kernels")
+        set_source_files_properties(hip/kernels_regret_hip.hip.cpp
+                                    PROPERTIES LANGUAGE HIP)
+        add_library(poker_hip_regret STATIC hip/kernels_regret_hip.hip.cpp)
+        target_include_directories(poker_hip_regret PUBLIC
+            ${CMAKE_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(poker_hip_regret PUBLIC hip::device)
+        install(TARGETS poker_hip_regret
+                LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+        install(FILES ${CMAKE_SOURCE_DIR}/include/poker_eval/gpu/pe_regret_hip.h
+                DESTINATION include/poker_eval/gpu)
+    else()
+        message(STATUS "ROCm/HIP not found - the HIP backend will NOT be built")
+    endif()
+
+    # ------------------------------------------------------------------ #
+    # Metal (GPU-03)
+    #
+    # Apple only. All the Objective-C is in one file behind a C ABI; the
+    # shading-language source is compiled at context creation, so no Metal
+    # toolchain is needed at build time.
+    # ------------------------------------------------------------------ #
+    if(APPLE)
+        find_library(METAL_FRAMEWORK Metal)
+        find_library(FOUNDATION_FRAMEWORK Foundation)
+        if(METAL_FRAMEWORK AND FOUNDATION_FRAMEWORK)
+            message(STATUS "Metal found, building the Metal regret kernels")
+            add_library(poker_metal_regret STATIC metal/pe_regret_metal.m)
+            target_include_directories(poker_metal_regret PUBLIC
+                ${CMAKE_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/metal)
+            # ARC owns the Objective-C objects; the C struct holds them through
+            # CFBridgingRetain, which is why the bridge compiles under -fobjc-arc.
+            target_compile_options(poker_metal_regret PRIVATE -fobjc-arc)
+            target_link_libraries(poker_metal_regret PUBLIC
+                ${METAL_FRAMEWORK} ${FOUNDATION_FRAMEWORK})
+            install(TARGETS poker_metal_regret
+                    LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+            install(FILES
+                ${CMAKE_SOURCE_DIR}/include/poker_eval/gpu/pe_regret_metal.h
+                DESTINATION include/poker_eval/gpu)
+        else()
+            message(STATUS "Metal framework not found - the Metal backend will NOT be built")
+        endif()
     endif()
 
     set(GPU_ACCELERATION_AVAILABLE ${GPU_LIBRARIES} PARENT_SCOPE)

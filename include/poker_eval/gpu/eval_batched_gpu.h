@@ -78,7 +78,7 @@ POKEREVAL_EXPORT gpu_eval_config_t gpu_eval_default_config(void);
  * @param config  Configuration (or NULL for defaults)
  * @return Context handle, or NULL on failure
  */
-POKEREVAL_EXPORT gpu_eval_context_t* gpu_eval_init(const gpu_eval_config_t* config);
+POKEREVAL_EXPORT gpu_eval_context_t* gpu_eval_init_batched(const gpu_eval_config_t* config);
 
 /**
  * Free GPU evaluation context

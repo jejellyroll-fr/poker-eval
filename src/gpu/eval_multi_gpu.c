@@ -129,7 +129,7 @@ multi_gpu_context_t* multi_gpu_init(const multi_gpu_config_t* config) {
         gpu_cfg.enable_profiling = ctx->config.enable_profiling;
         gpu_cfg.verbose = ctx->config.verbose;
 
-        ctx->gpu_contexts[i] = gpu_eval_init(&gpu_cfg);
+        ctx->gpu_contexts[i] = gpu_eval_init_batched(&gpu_cfg);
         if (!ctx->gpu_contexts[i]) {
             if (ctx->config.verbose) {
                 fprintf(stderr, "Failed to initialize GPU %d\n", i);

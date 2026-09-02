@@ -7,12 +7,15 @@
  */
 
 #include "poker_eval_api.h"
+#include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/core/eval.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/rules_std.h>
 #include <poker_eval/core/evx_defs.h>
 #include <poker_eval/core/enumerate.h>
+#include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/engine/solvers/cfr/mpf_compact_storage.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -27,9 +30,25 @@ struct pe_context_t {
 struct pe_cfr_solver_t {
     pe_handle_t parent;
     pe_game_type_t game;
-    /* CFR storage would go here */
-    void* storage;
+    cfr_game_t cfr_game;
+    cfr_storage_t *storage;
+    cfr_config_t config;
+    pe_cfr_game_desc_t callbacks;
+    int ready;
     uint64_t iteration;
+    double exploitability;
+    struct {
+        uint64_t key;
+        int action_count;
+        int actions[CFR_MAX_ACTIONS];
+    } *action_counts;
+    size_t action_count_size;
+    size_t action_count_capacity;
+    int callback_error;
+};
+
+struct pe_solver_api_t {
+    pe_solver_t* solver;
 };
 
 struct pe_icm_calc_t {
@@ -499,47 +518,346 @@ pe_cfr_handle_t pe_cfr_create(pe_handle_t handle,
     return cfr;
 }
 
+static int pe_cfr_cb_terminal(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.is_terminal(state, cfr->callbacks.user);
+}
+
+static int pe_cfr_cb_player(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.current_player(state, cfr->callbacks.user);
+}
+
+static int pe_cfr_cb_actions(cfr_game_t *game, uint64_t state, int *actions,
+                             int max_actions, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    int count;
+    uint64_t key;
+    (void)user;
+    count = cfr->callbacks.get_actions(state, actions, max_actions,
+                                       cfr->callbacks.user);
+    if (count < 0 || count > CFR_MAX_ACTIONS) {
+        cfr->callback_error = 1;
+        set_error(cfr->parent, "CFR callback returned an invalid action count");
+        return -1;
+    }
+    key = cfr->callbacks.get_infoset_key
+        ? cfr->callbacks.get_infoset_key(state, cfr->callbacks.user) : state;
+    for (size_t i = 0u; i < cfr->action_count_size; ++i)
+        if (cfr->action_counts[i].key == key) {
+            if (cfr->action_counts[i].action_count != count) {
+                cfr->callback_error = 1;
+                set_error(cfr->parent,
+                          "CFR callback returned inconsistent action counts for an infoset");
+                return -1;
+            }
+            for (int action = 0; action < count; ++action)
+                if (cfr->action_counts[i].actions[action] != actions[action]) {
+                    cfr->callback_error = 1;
+                    set_error(cfr->parent,
+                              "CFR callback returned inconsistent actions for an infoset");
+                    return -1;
+                }
+            return count;
+        }
+    if (cfr->action_count_size == cfr->action_count_capacity) {
+        size_t capacity = cfr->action_count_capacity == 0u
+            ? 32u : cfr->action_count_capacity * 2u;
+        void *grown = realloc(cfr->action_counts,
+                              capacity * sizeof(*cfr->action_counts));
+        if (!grown) {
+            set_error(cfr->parent, "could not retain CFR action-count metadata");
+            return -1;
+        }
+        cfr->action_counts = grown;
+        cfr->action_count_capacity = capacity;
+    }
+    cfr->action_counts[cfr->action_count_size].key = key;
+    cfr->action_counts[cfr->action_count_size].action_count = count;
+    for (int action = 0; action < count; ++action)
+        cfr->action_counts[cfr->action_count_size].actions[action] = actions[action];
+    ++cfr->action_count_size;
+    return count;
+}
+
+static uint64_t pe_cfr_cb_apply(cfr_game_t *game, uint64_t state, int action, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.apply_action(state, action, cfr->callbacks.user);
+}
+
+static double pe_cfr_cb_utility(cfr_game_t *game, uint64_t state, int player, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_utility(state, player, cfr->callbacks.user);
+}
+
+static int pe_cfr_cb_chance(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.is_chance
+        ? cfr->callbacks.is_chance(state, cfr->callbacks.user) : 0;
+}
+
+static int pe_cfr_cb_chance_outcomes(cfr_game_t *game, uint64_t state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_chance_outcomes
+        ? cfr->callbacks.get_chance_outcomes(state, cfr->callbacks.user) : 0;
+}
+
+static double pe_cfr_cb_chance_weight(cfr_game_t *game, uint64_t state,
+                                      int outcome, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.get_chance_weight
+        ? cfr->callbacks.get_chance_weight(state, outcome,
+                                           cfr->callbacks.user) : 1.0;
+}
+
+static uint64_t pe_cfr_cb_apply_chance(cfr_game_t *game, uint64_t state,
+                                       int outcome, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)game->game_data;
+    (void)user;
+    return cfr->callbacks.apply_chance
+        ? cfr->callbacks.apply_chance(state, outcome,
+                                      cfr->callbacks.user) : 0u;
+}
+
+static uint64_t pe_cfr_cb_infoset_key(const void *state, void *user)
+{
+    pe_cfr_handle_t cfr = (pe_cfr_handle_t)user;
+    uint64_t key = (uint64_t)(uintptr_t)state;
+    return cfr && cfr->callbacks.get_infoset_key
+        ? cfr->callbacks.get_infoset_key(key, cfr->callbacks.user) : key;
+}
+
+pe_cfr_handle_t pe_cfr_create_callbacks(pe_handle_t handle,
+                                        const pe_cfr_game_desc_t *game,
+                                        int max_iterations)
+{
+    pe_cfr_handle_t cfr;
+    if (!handle || !game || max_iterations <= 0 || game->num_players < 2 ||
+        game->num_players > CFR_MAX_PLAYERS || !game->is_terminal ||
+        !game->current_player || !game->get_actions || !game->apply_action ||
+        !game->get_utility ||
+        (game->is_chance &&
+         (!game->get_chance_outcomes || !game->apply_chance)))
+        return NULL;
+    cfr = (pe_cfr_handle_t)calloc(1, sizeof(*cfr));
+    if (!cfr)
+        return NULL;
+    cfr->parent = handle;
+    cfr->callbacks = *game;
+    cfr->config.max_iterations = max_iterations;
+    cfr->config.num_threads = handle->config.num_threads;
+    cfr->config.exploitability_interval = 0;
+    cfr->config.max_depth = 0;
+    cfr->cfr_game.current_player = pe_cfr_cb_player;
+    cfr->cfr_game.get_actions = pe_cfr_cb_actions;
+    cfr->cfr_game.apply_action = pe_cfr_cb_apply;
+    cfr->cfr_game.is_terminal = pe_cfr_cb_terminal;
+    cfr->cfr_game.get_utility = pe_cfr_cb_utility;
+    /* Only install an infoset adapter when the caller requested a mapping.
+     * This lets the core retain its perfect-information semantics for the
+     * ordinary callback case while using the legal shared-action BR for
+     * explicitly merged histories. */
+    cfr->cfr_game.get_infoset_key_with_user = game->get_infoset_key
+        ? pe_cfr_cb_infoset_key : NULL;
+    cfr->cfr_game.infoset_user_data = cfr;
+    cfr->cfr_game.game_data = cfr;
+    cfr->cfr_game.initial_state = (void *)(uintptr_t)game->initial_state;
+    cfr->cfr_game.num_players = game->num_players;
+    if (game->is_chance)
+        cfr->cfr_game.is_chance = pe_cfr_cb_chance;
+    if (game->get_chance_outcomes)
+        cfr->cfr_game.get_chance_outcomes = pe_cfr_cb_chance_outcomes;
+    if (game->get_chance_weight)
+        cfr->cfr_game.get_chance_weight = pe_cfr_cb_chance_weight;
+    if (game->apply_chance)
+        cfr->cfr_game.apply_chance = pe_cfr_cb_apply_chance;
+    cfr->storage = cfr_storage_create();
+    if (!cfr->storage)
+    {
+        free(cfr);
+        return NULL;
+    }
+    cfr->ready = 1;
+    return cfr;
+}
+
 void pe_cfr_free(pe_cfr_handle_t cfr) {
     if (cfr) {
+        cfr_storage_destroy(cfr->storage);
+        free(cfr->action_counts);
         free(cfr);
     }
 }
 
 pe_error_t pe_cfr_solve(pe_cfr_handle_t cfr, int iterations) {
     if (!cfr || iterations <= 0) return PE_ERROR_INVALID_ARGUMENT;
-
-    /* CFR solving requires full library integration */
-    set_error(cfr->parent, "CFR solving requires linking with poker_engine library");
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready || !cfr->storage)
+    {
+        set_error(cfr->parent, "CFR handle has no callback-backed game; use pe_cfr_create_callbacks");
+        return PE_ERROR_INVALID_ARGUMENT;
+    }
+    cfr->config.max_iterations = iterations;
+    cfr->callback_error = 0;
+    if (cfr_solve(&cfr->cfr_game, cfr->storage, &cfr->config,
+                  &cfr->exploitability) < 0.0 || cfr->callback_error)
+        return PE_ERROR_UNKNOWN;
+    cfr->iteration += (uint64_t)iterations;
+    return PE_OK;
 }
 
 int pe_cfr_get_strategy(pe_cfr_handle_t cfr,
                         uint64_t infoset_key,
                         double* strategy,
                         int max_actions) {
-    (void)infoset_key;
-    (void)strategy;
-    (void)max_actions;
-    if (!cfr) return -1;
-    return -1;
+    int action_count = 0;
+    if (!cfr || !cfr->ready || !strategy || max_actions <= 0) return -1;
+    for (size_t i = 0u; i < cfr->action_count_size; ++i)
+        if (cfr->action_counts[i].key == infoset_key) {
+            action_count = cfr->action_counts[i].action_count;
+            break;
+        }
+    if (action_count == 0)
+        action_count = cfr_storage_action_count(cfr->storage, infoset_key);
+    if (action_count <= 0 || action_count > max_actions)
+        return -1;
+    cfr_storage_get_avg_strategy(cfr->storage, infoset_key, action_count,
+                                 strategy);
+    return action_count;
 }
 
 pe_error_t pe_cfr_save(pe_cfr_handle_t cfr, const char* filepath) {
-    (void)filepath;
+    size_t length;
     if (!cfr) return PE_ERROR_INVALID_HANDLE;
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready || !filepath) return PE_ERROR_INVALID_ARGUMENT;
+    length = strnlen(filepath, 4096u);
+    if ((length >= 5u && strcmp(filepath + length - 5u, ".zstd") == 0) ||
+        (length >= 4u && strcmp(filepath + length - 4u, ".zst") == 0))
+        return pe_cfr_save_storage_zstd(cfr->storage, filepath, 0) == 0
+            ? PE_OK : PE_ERROR_IO_FAILED;
+    return pe_cfr_save_storage(cfr->storage, filepath) == 0 ? PE_OK : PE_ERROR_IO_FAILED;
 }
 
 pe_error_t pe_cfr_load(pe_cfr_handle_t cfr, const char* filepath) {
-    (void)filepath;
+    cfr_storage_t *replacement;
+    cfr_storage_t *old;
+    int load_result;
     if (!cfr) return PE_ERROR_INVALID_HANDLE;
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready || !filepath) return PE_ERROR_INVALID_ARGUMENT;
+    replacement = cfr_storage_create();
+    if (!replacement)
+        return PE_ERROR_OUT_OF_MEMORY;
+    /* The storage reader inspects the file header, so both the regular and
+     * zstd formats are handled without relying on a filename convention. */
+    load_result = pe_cfr_load_storage(replacement, filepath);
+    if (load_result != 0) {
+        cfr_storage_destroy(replacement);
+        return PE_ERROR_IO_FAILED;
+    }
+    old = cfr->storage;
+    cfr->storage = replacement;
+    cfr_storage_destroy(old);
+    free(cfr->action_counts);
+    cfr->action_counts = NULL;
+    cfr->action_count_size = 0u;
+    cfr->action_count_capacity = 0u;
+    cfr->iteration = 0u;
+    cfr->exploitability = 0.0;
+    return PE_OK;
 }
 
 pe_error_t pe_cfr_get_exploitability(pe_cfr_handle_t cfr, double* exploitability) {
     if (!cfr || !exploitability) return PE_ERROR_INVALID_ARGUMENT;
-    *exploitability = 0.0;
-    return PE_ERROR_NOT_SUPPORTED;
+    if (!cfr->ready)
+        return PE_ERROR_INVALID_ARGUMENT;
+    *exploitability = cfr->exploitability;
+    return PE_OK;
+}
+
+/* ===== Solver v3 façade ===== */
+
+pe_solver_api_handle_t pe_solver_api_create(const pe_solver_config_t* config,
+                                            const pe_vector_game_t* game)
+{
+    struct pe_solver_api_t* api;
+    pe_solver_deps_t deps;
+
+    if (!config || !game)
+        return NULL;
+    api = (struct pe_solver_api_t*)calloc(1u, sizeof(*api));
+    if (!api)
+        return NULL;
+    deps = pe_solver_deps_default();
+    deps.vector_game = game;
+    api->solver = pe_solver_create(config, &deps);
+    if (!api->solver) {
+        free(api);
+        return NULL;
+    }
+    return api;
+}
+
+void pe_solver_api_free(pe_solver_api_handle_t api)
+{
+    if (!api)
+        return;
+    pe_solver_destroy(api->solver);
+    free(api);
+}
+
+pe_solver_status_t pe_solver_api_validate(pe_solver_api_handle_t api,
+                                          pe_diagnostics_t* diagnostics)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_validate(api->solver, diagnostics);
+}
+
+pe_solver_status_t pe_solver_api_run(pe_solver_api_handle_t api)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_run(api->solver);
+}
+
+pe_solver_status_t pe_solver_api_progress(pe_solver_api_handle_t api,
+                                          pe_progress_t* progress)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_progress(api->solver, progress);
+}
+
+pe_solver_status_t pe_solver_api_metrics(pe_solver_api_handle_t api,
+                                         pe_metrics_t* metrics)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_metrics(api->solver, metrics);
+}
+
+pe_solver_status_t pe_solver_api_strategy(pe_solver_api_handle_t api,
+                                          const pe_strategy_query_t* query,
+                                          pe_strategy_view_t* view)
+{
+    if (!api)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    return pe_solver_strategy(api->solver, query, view);
 }
 
 /* ===== ICM Calculator ===== */

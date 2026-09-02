@@ -9,6 +9,70 @@
 #include <math.h>
 #include <errno.h>
 #include <stdint.h>
+#include <limits.h>
+
+#include "../../../solver/domain/finite_double.h"
+
+#ifdef PE_LEGACY_CFR_OPENMP
+#include <omp.h>
+#endif
+
+#if defined(HAS_AVX2)
+#include <immintrin.h>
+#if defined(__GNUC__) || defined(__clang__)
+#define PE_CFR_TARGET_AVX2 __attribute__((target("avx2")))
+#else
+#define PE_CFR_TARGET_AVX2
+#endif
+#else
+#define PE_CFR_TARGET_AVX2
+#endif
+#if defined(HAS_NEON) && (defined(__aarch64__) || defined(__arm64__))
+#include <arm_neon.h>
+#endif
+
+static PE_CFR_TARGET_AVX2 double cfr_sum_positive(const double *values, int count)
+{
+#if defined(HAS_AVX2)
+    __m256d sum = _mm256_setzero_pd();
+    const __m256d zero = _mm256_setzero_pd();
+    int i = 0;
+    for (; i + 4 <= count; i += 4)
+    {
+        __m256d v = _mm256_loadu_pd(values + i);
+        sum = _mm256_add_pd(sum, _mm256_max_pd(v, zero));
+    }
+    double lanes[4];
+    _mm256_storeu_pd(lanes, sum);
+    double total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+    for (; i < count; ++i)
+        if (values[i] > 0.0)
+            total += values[i];
+    return total;
+#elif defined(HAS_NEON) && (defined(__aarch64__) || defined(__arm64__))
+    float64x2_t sum = vdupq_n_f64(0.0);
+    const float64x2_t zero = vdupq_n_f64(0.0);
+    int i = 0;
+    for (; i + 2 <= count; i += 2)
+    {
+        float64x2_t v = vld1q_f64(values + i);
+        sum = vaddq_f64(sum, vmaxq_f64(v, zero));
+    }
+    double lanes[2];
+    vst1q_f64(lanes, sum);
+    double total = lanes[0] + lanes[1];
+    for (; i < count; ++i)
+        if (values[i] > 0.0)
+            total += values[i];
+    return total;
+#else
+    double total = 0.0;
+    for (int i = 0; i < count; ++i)
+        if (values[i] > 0.0)
+            total += values[i];
+    return total;
+#endif
+}
 
 #if defined(_MSC_VER)
 #define CFR_THREAD_LOCAL __declspec(thread)
@@ -18,8 +82,6 @@
 #define CFR_THREAD_LOCAL _Thread_local
 #endif
 
-static CFR_THREAD_LOCAL int g_use_ecfr = 0;
-static CFR_THREAD_LOCAL double g_ecfr_lambda = 1.0;
 
 static int keep_for_street(uint32_t mask, int street)
 {
@@ -173,13 +235,21 @@ static size_t next_pow2(size_t x)
     return p;
 }
 
+void cfr_storage_set_strategy_mode_for(cfr_storage_t *s, int use_ecfr, double ecfr_lambda)
+{
+    if (!s)
+        return;
+    s->use_ecfr = use_ecfr ? 1 : 0;
+    s->ecfr_lambda = (ecfr_lambda <= 0.0) ? 1.0 : ecfr_lambda;
+}
+
+/* EXT-01: the process-wide setter is gone. Keeping a static here would restore
+   exactly the non-reentrancy this ticket removes, so the shim does nothing and
+   the header marks it deprecated to say so at compile time. */
 void cfr_storage_set_strategy_mode(int use_ecfr, double ecfr_lambda)
 {
-    g_use_ecfr = use_ecfr ? 1 : 0;
-    if (ecfr_lambda <= 0.0)
-        g_ecfr_lambda = 1.0;
-    else
-        g_ecfr_lambda = ecfr_lambda;
+    (void)use_ecfr;
+    (void)ecfr_lambda;
 }
 
 cfr_storage_t *cfr_storage_create(void)
@@ -188,6 +258,12 @@ cfr_storage_t *cfr_storage_create(void)
     if (!s)
         return NULL;
     s->cap = 1 << 16; /* 65536 */
+    /* calloc leaves ecfr_lambda at 0.0, which would turn exp(lambda * r) into
+       a constant and silently produce a uniform policy. The neutral
+       temperature is 1.0, so it is set rather than assumed. */
+    s->use_ecfr = 0;
+    s->ecfr_lambda = 1.0;
+    s->num_threads = 1;
     s->tab = (entry_t *)calloc(s->cap, sizeof(entry_t));
     if (!s->tab)
     {
@@ -204,17 +280,41 @@ void cfr_storage_set_memory_masks(cfr_storage_t *s, uint32_t avg_mask, uint32_t 
     s->keep_ev_mask = ev_mask;
 }
 
+void cfr_storage_set_num_threads(cfr_storage_t *s, int num_threads)
+{
+    if (!s)
+        return;
+    s->num_threads = num_threads > 0 ? num_threads : 1;
+}
+
 void cfr_storage_destroy(cfr_storage_t *s)
 {
     if (!s)
         return;
-    for (size_t i = 0; i < s->cap; i++)
-        if (s->tab[i].used)
-        {
-            free(s->tab[i].regret);
-            free(s->tab[i].avg);
-            free(s->tab[i].locked);
-        }
+#ifdef PE_LEGACY_CFR_OPENMP
+    if (s->cap <= (size_t)INT_MAX)
+    {
+        int i;
+#pragma omp parallel for schedule(static) num_threads(s->num_threads)
+        for (i = 0; i < (int)s->cap; ++i)
+            if (s->tab[i].used)
+            {
+                free(s->tab[i].regret);
+                free(s->tab[i].avg);
+                free(s->tab[i].locked);
+            }
+    }
+    else
+#endif
+    {
+        for (size_t i = 0; i < s->cap; ++i)
+            if (s->tab[i].used)
+            {
+                free(s->tab[i].regret);
+                free(s->tab[i].avg);
+                free(s->tab[i].locked);
+            }
+    }
     free(s->tab);
     free(s);
 }
@@ -323,6 +423,12 @@ static entry_t *find_entry(cfr_storage_t *s, uint64_t key)
 int cfr_storage_has_entry(cfr_storage_t *s, uint64_t key)
 {
     return find_entry(s, key) ? 1 : 0;
+}
+
+int cfr_storage_action_count(cfr_storage_t *s, uint64_t key)
+{
+    entry_t *entry = find_entry(s, key);
+    return entry ? entry->n : 0;
 }
 
 int cfr_storage_set_locked_strategy(cfr_storage_t *s, uint64_t infoset, const double *probs, int n)
@@ -459,15 +565,9 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
             probs[i] = 1.0 / action_count;
         return;
     }
-    if (!g_use_ecfr)
+    if (!s->use_ecfr)
     {
-        double sum_pos = 0.0;
-        for (int i = 0; i < action_count; i++)
-        {
-            double r = e->regret[i];
-            if (r > 0)
-                sum_pos += r;
-        }
+        double sum_pos = cfr_sum_positive(e->regret, action_count);
         if (sum_pos > 0)
         {
             for (int i = 0; i < action_count; i++)
@@ -498,7 +598,7 @@ void cfr_storage_get_strategy(cfr_storage_t *s, uint64_t infoset, int action_cou
                 double rp = e->regret[i];
                 if (rp > 0.0)
                 {
-                    double w = exp(g_ecfr_lambda * (rp - max_pos));
+                    double w = exp(s->ecfr_lambda * (rp - max_pos));
                     probs[i] = w;
                     sum_w += w;
                 }
@@ -527,14 +627,14 @@ void cfr_storage_get_strategy_at_street(cfr_storage_t *s, uint64_t key, int n, i
     entry_t *e = get_entry_at_street(s, key, n, street);
     if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
     if (e->locked) { for (int i = 0; i < n; ++i) probs[i] = e->locked[i]; return; }
-    if (g_use_ecfr) {
+    if (s->use_ecfr) {
         double max_pos = 0.0, sum_w = 0.0;
         for (int i = 0; i < n; ++i)
             if (e->regret[i] > max_pos) max_pos = e->regret[i];
         if (max_pos > 0.0) {
             for (int i = 0; i < n; ++i) {
                 probs[i] = e->regret[i] > 0.0
-                    ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                    ? exp(s->ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
                 sum_w += probs[i];
             }
             if (sum_w > 0.0) {
@@ -636,13 +736,13 @@ void cfr_storage_get_regret_strategy_at_street(cfr_storage_t *s, uint64_t key, i
 {
     entry_t *e = get_entry_at_street(s, key, n, street);
     if (!e) { for (int i = 0; i < n; ++i) probs[i] = 1.0 / n; return; }
-    if (g_use_ecfr) {
+    if (s->use_ecfr) {
         double max_pos = 0.0, sum_w = 0.0;
         for (int i = 0; i < n; ++i)
             if (e->regret[i] > max_pos) max_pos = e->regret[i];
         if (max_pos > 0.0) {
             for (int i = 0; i < n; ++i) {
-                probs[i] = e->regret[i] > 0.0 ? exp(g_ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                probs[i] = e->regret[i] > 0.0 ? exp(s->ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
                 sum_w += probs[i];
             }
             if (sum_w > 0.0) { for (int i = 0; i < n; ++i) probs[i] /= sum_w; return; }
@@ -725,20 +825,483 @@ size_t cfr_storage_count_infosets(cfr_storage_t *s)
     return cnt;
 }
 
-void cfr_storage_iterate(cfr_storage_t *s, cfr_iterate_callback fn, void *user)
+/*
+ * Scale every accumulated regret by `factor` (EXT-07).
+ *
+ * Discounted CFR discounts the cumulative regret once per iteration, applied
+ * to what was there before this iteration's deltas land on it:
+ *
+ *     R_t = R_(t-1) * d(t) + r_t
+ *
+ * The v2 solver instead passed `d` to every per-node regret update, and a
+ * poker infoset is reached many times in one iteration, so it accumulated
+ * d^N. This is the operation that lets the discount happen exactly once.
+ */
+/*
+ * Writable spans of an entry's arrays (STO-04).
+ *
+ * The storage port hands callers a span rather than a copy, and the v2 storage
+ * had no way to give one out. These create the entry if it is absent, exactly
+ * like the update functions do.
+ *
+ * The pointer is invalidated by anything that grows the table or the entry, so
+ * it is good until the next call that touches this storage — the same contract
+ * the port already states.
+ */
+double *cfr_storage_regret_span(cfr_storage_t *s, uint64_t key, int n_actions)
+{
+    entry_t *e = get_entry(s, key, n_actions);
+    return e ? e->regret : NULL;
+}
+
+double *cfr_storage_avg_span(cfr_storage_t *s, uint64_t key, int n_actions)
+{
+    entry_t *e = get_entry(s, key, n_actions);
+    /* avg is absent when selective memory dropped this street. */
+    return e ? e->avg : NULL;
+}
+
+void cfr_storage_scale_regrets(cfr_storage_t *s, double factor)
+{
+    if (!s || !s->tab)
+        return;
+    /* Nothing to do, and worth skipping: a full sweep of the table costs the
+       same whether or not the factor is neutral. */
+    if (factor == 1.0)
+        return;
+
+#ifdef PE_LEGACY_CFR_OPENMP
+    if (s->cap <= (size_t)INT_MAX)
+    {
+        int i;
+#pragma omp parallel for schedule(static) num_threads(s->num_threads)
+        for (i = 0; i < (int)s->cap; ++i)
+        {
+            entry_t *e = &s->tab[i];
+            if (!e->used || !e->regret)
+                continue;
+            for (int a = 0; a < e->n; ++a)
+                e->regret[a] *= factor;
+        }
+    }
+    else
+#endif
+    {
+        for (size_t i = 0; i < s->cap; ++i)
+        {
+            entry_t *e = &s->tab[i];
+            if (!e->used || !e->regret)
+                continue;
+            for (int a = 0; a < e->n; ++a)
+                e->regret[a] *= factor;
+        }
+    }
+}
+
+typedef struct {
+    cfr_storage_t *destination;
+    double regret_scale;
+    double average_scale;
+    int failed;
+} cfr_storage_merge_context_t;
+
+static void cfr_storage_merge_callback(uint64_t key, int n_actions,
+                                       const double *regret,
+                                       const double *average,
+                                       void *user_data)
+{
+    cfr_storage_merge_context_t *ctx =
+        (cfr_storage_merge_context_t *)user_data;
+    double *scaled_regret;
+    double *scaled_average;
+    int i;
+
+    if (!ctx || ctx->failed || !regret || !average || n_actions <= 0)
+        return;
+    scaled_regret = (double *)malloc((size_t)n_actions * sizeof(double));
+    scaled_average = (double *)malloc((size_t)n_actions * sizeof(double));
+    if (!scaled_regret || !scaled_average)
+    {
+        free(scaled_regret);
+        free(scaled_average);
+        ctx->failed = 1;
+        return;
+    }
+    for (i = 0; i < n_actions; ++i)
+    {
+        scaled_regret[i] = regret[i] * ctx->regret_scale;
+        scaled_average[i] = average[i] * ctx->average_scale;
+    }
+    cfr_storage_update_regret(ctx->destination, key, n_actions,
+                              scaled_regret, 1.0);
+    cfr_storage_update_avg(ctx->destination, key, n_actions,
+                           scaled_average, 1.0);
+    free(scaled_regret);
+    free(scaled_average);
+}
+
+int cfr_storage_merge_scaled(cfr_storage_t *destination,
+                             const cfr_storage_t *source,
+                             double regret_scale,
+                             double average_scale)
+{
+    cfr_storage_merge_context_t ctx;
+    if (!destination || !source || !source->tab ||
+        !pe_finite_double(regret_scale) || !pe_finite_double(average_scale))
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    ctx.destination = destination;
+    ctx.regret_scale = regret_scale;
+    ctx.average_scale = average_scale;
+    ctx.failed = 0;
+    cfr_storage_iterate(source, cfr_storage_merge_callback, &ctx);
+    return ctx.failed ? -1 : 0;
+}
+
+/* A storage delta is deliberately a value snapshot rather than a dump of the
+ * private hash table.  Workers can therefore be built against a different
+ * table size and the coordinator still has one stable merge format. */
+#define CFR_DELTA_MAGIC "CFRDELTA"
+#define CFR_DELTA_VERSION 1u
+#define CFR_DELTA_HEADER_SIZE 16u
+#define CFR_DELTA_RECORD_HEADER_SIZE 16u
+
+typedef struct {
+    uint64_t key;
+    int n;
+    const double *regret;
+    const double *average;
+} cfr_delta_entry_t;
+
+typedef struct {
+    cfr_delta_entry_t *entries;
+    size_t count;
+    size_t capacity;
+    int failed;
+} cfr_delta_collect_t;
+
+static void cfr_delta_put_u32(uint8_t *out, uint32_t value)
+{
+    out[0] = (uint8_t)(value >> 24u);
+    out[1] = (uint8_t)(value >> 16u);
+    out[2] = (uint8_t)(value >> 8u);
+    out[3] = (uint8_t)value;
+}
+
+static void cfr_delta_put_u64(uint8_t *out, uint64_t value)
+{
+    size_t i;
+    for (i = 0u; i < 8u; ++i)
+        out[i] = (uint8_t)(value >> (56u - 8u * i));
+}
+
+static uint32_t cfr_delta_get_u32(const uint8_t *in)
+{
+    return ((uint32_t)in[0] << 24u) | ((uint32_t)in[1] << 16u) |
+           ((uint32_t)in[2] << 8u) | (uint32_t)in[3];
+}
+
+static uint64_t cfr_delta_get_u64(const uint8_t *in)
+{
+    size_t i;
+    uint64_t value = 0u;
+    for (i = 0u; i < 8u; ++i)
+        value = (value << 8u) | (uint64_t)in[i];
+    return value;
+}
+
+static void cfr_delta_put_double(uint8_t *out, double value)
+{
+    union {
+        double value;
+        uint64_t bits;
+    } converted;
+    converted.value = value;
+    cfr_delta_put_u64(out, converted.bits);
+}
+
+static double cfr_delta_get_double(const uint8_t *in)
+{
+    union {
+        double value;
+        uint64_t bits;
+    } converted;
+    converted.bits = cfr_delta_get_u64(in);
+    return converted.value;
+}
+
+static int cfr_delta_entry_before(const void *left_ptr, const void *right_ptr)
+{
+    const cfr_delta_entry_t *left = (const cfr_delta_entry_t *)left_ptr;
+    const cfr_delta_entry_t *right = (const cfr_delta_entry_t *)right_ptr;
+    if (left->key != right->key)
+        return left->key < right->key ? -1 : 1;
+    if (left->n != right->n)
+        return left->n < right->n ? -1 : 1;
+    return 0;
+}
+
+static void cfr_delta_collect_callback(uint64_t key, int n_actions,
+                                       const double *regret,
+                                       const double *average,
+                                       void *user_data)
+{
+    cfr_delta_collect_t *collect = (cfr_delta_collect_t *)user_data;
+    if (!collect || collect->failed || !regret || !average || n_actions <= 0)
+        return;
+    if (collect->count == collect->capacity) {
+        size_t next = collect->capacity ? collect->capacity * 2u : 64u;
+        cfr_delta_entry_t *grown;
+        if (next < collect->capacity ||
+            next > SIZE_MAX / sizeof(*grown)) {
+            collect->failed = 1;
+            return;
+        }
+        grown = (cfr_delta_entry_t *)realloc(collect->entries,
+                                             next * sizeof(*grown));
+        if (!grown) {
+            collect->failed = 1;
+            return;
+        }
+        collect->entries = grown;
+        collect->capacity = next;
+    }
+    collect->entries[collect->count].key = key;
+    collect->entries[collect->count].n = n_actions;
+    collect->entries[collect->count].regret = regret;
+    collect->entries[collect->count].average = average;
+    ++collect->count;
+}
+
+int cfr_storage_export_delta(const cfr_storage_t *storage,
+                             uint8_t **out_blob,
+                             size_t *out_size)
+{
+    cfr_delta_collect_t collect = {0};
+    size_t total = CFR_DELTA_HEADER_SIZE;
+    size_t i;
+    uint8_t *blob;
+    uint8_t *cursor;
+
+    if (!storage || !out_blob || !out_size) {
+        errno = EINVAL;
+        return -1;
+    }
+    *out_blob = NULL;
+    *out_size = 0u;
+    cfr_storage_iterate(storage, cfr_delta_collect_callback, &collect);
+    if (collect.failed) {
+        free(collect.entries);
+        return -1;
+    }
+    if (collect.count > UINT32_MAX) {
+        free(collect.entries);
+        return -1;
+    }
+    qsort(collect.entries, collect.count, sizeof(*collect.entries),
+          cfr_delta_entry_before);
+    if (collect.count > (SIZE_MAX - total) / 16u) {
+        free(collect.entries);
+        return -1;
+    }
+    for (i = 0u; i < collect.count; ++i) {
+        size_t n = (size_t)collect.entries[i].n;
+        size_t values;
+        if (n > (SIZE_MAX - CFR_DELTA_RECORD_HEADER_SIZE) /
+                 (2u * sizeof(double))) {
+            free(collect.entries);
+            return -1;
+        }
+        values = CFR_DELTA_RECORD_HEADER_SIZE + 2u * n * sizeof(double);
+        if (total > SIZE_MAX - values) {
+            free(collect.entries);
+            return -1;
+        }
+        total += values;
+    }
+    blob = (uint8_t *)malloc(total);
+    if (!blob) {
+        free(collect.entries);
+        return -1;
+    }
+    for (i = 0u; i < 8u; ++i)
+        blob[i] = CFR_DELTA_MAGIC[i];
+    cfr_delta_put_u32(blob + 8u, CFR_DELTA_VERSION);
+    cfr_delta_put_u32(blob + 12u, (uint32_t)collect.count);
+    cursor = blob + CFR_DELTA_HEADER_SIZE;
+    for (i = 0u; i < collect.count; ++i) {
+        const cfr_delta_entry_t *entry = &collect.entries[i];
+        size_t action;
+        cfr_delta_put_u64(cursor, entry->key);
+        cfr_delta_put_u32(cursor + 8u, (uint32_t)entry->n);
+        cfr_delta_put_u32(cursor + 12u, 0u);
+        cursor += CFR_DELTA_RECORD_HEADER_SIZE;
+        for (action = 0u; action < (size_t)entry->n; ++action) {
+            cfr_delta_put_double(cursor, entry->regret[action]);
+            cursor += sizeof(double);
+        }
+        for (action = 0u; action < (size_t)entry->n; ++action) {
+            cfr_delta_put_double(cursor, entry->average[action]);
+            cursor += sizeof(double);
+        }
+    }
+    free(collect.entries);
+    *out_blob = blob;
+    *out_size = total;
+    return 0;
+}
+
+int cfr_storage_apply_delta(cfr_storage_t *storage,
+                            const uint8_t *blob,
+                            size_t blob_size,
+                            double scale)
+{
+    size_t cursor = CFR_DELTA_HEADER_SIZE;
+    uint32_t count;
+    uint32_t version;
+    uint32_t index;
+    double *regret = NULL;
+    double *average = NULL;
+
+    if (!storage || !blob || blob_size < CFR_DELTA_HEADER_SIZE ||
+        !pe_finite_double(scale) || memcmp(blob, CFR_DELTA_MAGIC, 8u) != 0)
+        return -1;
+    version = cfr_delta_get_u32(blob + 8u);
+    count = cfr_delta_get_u32(blob + 12u);
+    if (version != CFR_DELTA_VERSION)
+        return -1;
+    for (index = 0u; index < count; ++index) {
+        uint64_t key;
+        uint32_t n32;
+        size_t n;
+        size_t bytes;
+        size_t action;
+        if (blob_size - cursor < CFR_DELTA_RECORD_HEADER_SIZE)
+            goto fail;
+        key = cfr_delta_get_u64(blob + cursor);
+        n32 = cfr_delta_get_u32(blob + cursor + 8u);
+        if (cfr_delta_get_u32(blob + cursor + 12u) != 0u || n32 == 0u)
+            goto fail;
+        n = (size_t)n32;
+        if ((uint64_t)n != (uint64_t)n32)
+            goto fail;
+        if (n > (SIZE_MAX - CFR_DELTA_RECORD_HEADER_SIZE) /
+                 (2u * sizeof(double)))
+            goto fail;
+        bytes = CFR_DELTA_RECORD_HEADER_SIZE + 2u * n * sizeof(double);
+        if (bytes > blob_size - cursor)
+            goto fail;
+        regret = (double *)malloc(n * sizeof(double));
+        average = (double *)malloc(n * sizeof(double));
+        if (!regret || !average)
+            goto fail;
+        cursor += CFR_DELTA_RECORD_HEADER_SIZE;
+        for (action = 0u; action < n; ++action) {
+            regret[action] = cfr_delta_get_double(blob + cursor);
+            cursor += sizeof(double);
+            if (!pe_finite_double(regret[action]))
+                goto fail;
+        }
+        for (action = 0u; action < n; ++action) {
+            average[action] = cfr_delta_get_double(blob + cursor);
+            cursor += sizeof(double);
+            if (!pe_finite_double(average[action]))
+                goto fail;
+        }
+        for (action = 0u; action < n; ++action) {
+            regret[action] *= scale;
+            average[action] *= scale;
+        }
+        cfr_storage_update_regret(storage, key, (int)n, regret, 1.0);
+        cfr_storage_update_avg(storage, key, (int)n, average, 1.0);
+        free(regret);
+        free(average);
+        regret = NULL;
+        average = NULL;
+    }
+    if (cursor != blob_size)
+        return -1;
+    return 0;
+
+fail:
+    free(regret);
+    free(average);
+    return -1;
+}
+
+static void cfr_storage_strategy_from_entry(const cfr_storage_t *s,
+                                             const entry_t *e,
+                                             double *probs)
+{
+    int i;
+    int n;
+    if (!s || !e || !probs || e->n <= 0)
+        return;
+    n = e->n;
+    if (e->locked)
+    {
+        for (i = 0; i < n; ++i)
+            probs[i] = e->locked[i];
+        return;
+    }
+    if (s->use_ecfr)
+    {
+        double max_pos = 0.0;
+        double sum = 0.0;
+        for (i = 0; i < n; ++i)
+            if (e->regret[i] > max_pos)
+                max_pos = e->regret[i];
+        if (max_pos > 0.0)
+        {
+            for (i = 0; i < n; ++i)
+            {
+                probs[i] = e->regret[i] > 0.0
+                    ? exp(s->ecfr_lambda * (e->regret[i] - max_pos)) : 0.0;
+                sum += probs[i];
+            }
+            if (sum > 0.0)
+            {
+                for (i = 0; i < n; ++i)
+                    probs[i] /= sum;
+                return;
+            }
+        }
+    }
+    else
+    {
+        double sum = 0.0;
+        for (i = 0; i < n; ++i)
+            if (e->regret[i] > 0.0)
+                sum += e->regret[i];
+        if (sum > 0.0)
+        {
+            for (i = 0; i < n; ++i)
+                probs[i] = e->regret[i] > 0.0 ? e->regret[i] / sum : 0.0;
+            return;
+        }
+    }
+    for (i = 0; i < n; ++i)
+        probs[i] = 1.0 / n;
+}
+
+void cfr_storage_iterate(const cfr_storage_t *s,
+                         cfr_iterate_callback fn,
+                         void *user)
 {
     if (!s || !fn || !s->tab)
         return;
     for (size_t i = 0; i < s->cap; i++)
         if (s->tab[i].used)
         {
-            entry_t *e = &s->tab[i];
-            double *avg = e->avg;
+            const entry_t *e = &s->tab[i];
+            const double *avg = e->avg;
             double *fallback = NULL;
             if (!avg) {
                 fallback = (double *)malloc(sizeof(double) * (size_t)e->n);
                 if (!fallback) continue;
-                cfr_storage_get_strategy_at_street(s, e->key, e->n, -1, fallback);
+                cfr_storage_strategy_from_entry(s, e, fallback);
                 avg = fallback;
             }
             fn(e->key, e->n, e->regret, avg, user);

@@ -9,12 +9,23 @@ set(ENGINE_SOURCES
     # target cycle, which CMake only tolerates between static archives.
     ${CMAKE_CURRENT_SOURCE_DIR}/../games/mixed_game.c
     policy/nn_policy.c
+    policy/nn_depth_value.c
     solvers/cfr/board_canonical.c
     solvers/cfr/board_texture.c
     solvers/cfr/strength_bucketing.c
     solvers/cfr/draw_abstraction.c
+    solvers/cfr/draw_chance.c
+    solvers/cfr/draw_game_adapter.c
     solvers/cfr/icm_utility.c
     solvers/cfr/cfr_core.c
+    solvers/cfr/cfr_parallel.c
+    solvers/cfr/cfr_work_adapter.c
+    solvers/cfr/legacy_vector_adapter.c
+    solvers/cfr/cfr_traversal_full_scalar.c
+    solvers/cfr/cfr_locks.c
+    solvers/cfr/cfr_storage_legacy_port.c
+    solvers/cfr/cfr_regret_ops.c
+    solvers/cfr/cfr_average_ops.c
     solvers/cfr/bet_sizing.c
     solvers/cfr/cfr_storage.c
     solvers/cfr/hand_clustering.c
@@ -35,6 +46,7 @@ set(ENGINE_SOURCES
     solvers/cfr/stud8_river_adapter.c
     solvers/cfr/razz_river_adapter.c
     solvers/ismcts/ismcts_poker.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../solver/domain/abstraction.c
 )
 
 add_library(poker_engine ${ENGINE_SOURCES})
@@ -49,7 +61,30 @@ target_include_directories(poker_engine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics m)
+# EXT-03: the legacy solver now reports through the v3 telemetry port instead
+# of writing to stderr itself. The dependency runs engine -> solver, which is
+# the migration direction; poker_solver itself links only poker_core.
+target_link_libraries(poker_engine PUBLIC poker_core poker_games poker_equity poker_economics poker_solver m)
+if(POKER_EVAL_WITH_OPENMP)
+    target_link_libraries(poker_engine PUBLIC OpenMP::OpenMP_C)
+    target_compile_definitions(poker_engine PRIVATE PE_LEGACY_CFR_OPENMP=1)
+endif()
+if(POKER_EVAL_WITH_ZSTD)
+    target_link_libraries(poker_engine PUBLIC ZSTD::ZSTD)
+    target_compile_definitions(poker_engine PRIVATE PE_HAVE_ZSTD=1)
+endif()
+
+if(BUILD_TESTS)
+    add_executable(test_legacy_vector_adapter
+        ${CMAKE_SOURCE_DIR}/tests/test_legacy_vector_adapter.c)
+    target_link_libraries(test_legacy_vector_adapter PRIVATE poker_engine)
+    add_test(NAME test_legacy_vector_adapter COMMAND test_legacy_vector_adapter)
+
+    add_executable(test_cfr_parallel
+        ${CMAKE_SOURCE_DIR}/tests/test_cfr_parallel.c)
+    target_link_libraries(test_cfr_parallel PRIVATE poker_engine)
+    add_test(NAME test_cfr_parallel COMMAND test_cfr_parallel)
+endif()
 
 install(TARGETS poker_engine
         EXPORT poker-eval-targets

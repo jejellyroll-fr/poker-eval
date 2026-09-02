@@ -24,6 +24,15 @@
 #include <arm_neon.h>
 #endif
 
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#define PE_RUNTIME_X86_SIMD 1
+#define PE_TARGET_AVX2 __attribute__((target("avx2")))
+#define PE_TARGET_AVX512 __attribute__((target("avx512f")))
+#else
+#define PE_TARGET_AVX2
+#define PE_TARGET_AVX512
+#endif
+
 /* Lookup tables for SIMD evaluation */
 static int simd_pc32_tbl[8192];
 static int simd_straight_tbl[8192];
@@ -89,44 +98,58 @@ static simd_capability_t detected_capability = SIMD_NONE;
 static int capability_detected = 0;
 
 #ifdef __x86_64__
-static void detect_cpu_features(void) {
+static simd_capability_t detect_cpu_features(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    /* The builtin performs the CPUID/XGETBV checks at runtime and remains
+     * available when this translation unit was built without an ISA flag. */
+    if (__builtin_cpu_supports("avx512f"))
+        return SIMD_AVX512;
+    if (__builtin_cpu_supports("avx2"))
+        return SIMD_AVX2;
+    if (__builtin_cpu_supports("sse2"))
+        return SIMD_SSE2;
+#else
     unsigned int eax, ebx, ecx, edx;
-    
-    /* Check for AVX2 support */
-    if (__get_cpuid_max(0, NULL) >= 7) {
+
+    if (__get_cpuid_max(0, NULL) >= 7)
+    {
         __cpuid_count(7, 0, eax, ebx, ecx, edx);
-        /* Runtime CPU support is only usable when this translation unit was
-         * compiled with the corresponding ISA. Generic builds intentionally
-         * omit -mavx2/-mavx512f and must therefore stay on the scalar path. */
-#if defined(__AVX2__)
-        if (ebx & (1 << 5)) { /* AVX2 */
-            detected_capability = SIMD_AVX2;
-        }
-#endif
-        
-        /* Check for AVX-512F support */
-#if defined(__AVX512F__)
-        if (ebx & (1 << 16)) { /* AVX-512F */
-            detected_capability = SIMD_AVX512;
-        }
-#endif
+        if (ebx & (1u << 16))
+            return SIMD_AVX512;
+        if (ebx & (1u << 5))
+            return SIMD_AVX2;
     }
+#endif
+    return SIMD_NONE;
 }
 #endif
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
-static void detect_cpu_features(void) {
+static simd_capability_t detect_cpu_features(void) {
     /* NEON is mandatory on AArch64 and universally available on ARMv7 with
      * __ARM_NEON defined; there is no runtime query analogous to CPUID. */
-    detected_capability = SIMD_NEON;
+    return SIMD_NEON;
 }
 #endif
+
+simd_capability_t simd_compiled_capability(void)
+{
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    return SIMD_NEON;
+#elif defined(PE_RUNTIME_X86_SIMD) || (defined(__AVX512F__) && defined(__AVX2__))
+    return SIMD_AVX512;
+#elif defined(__AVX2__)
+    return SIMD_AVX2;
+#else
+    return SIMD_NONE;
+#endif
+}
 
 simd_capability_t simd_detect_capability(void) {
     if (!capability_detected) {
         simd_init_tables(); /* Ensure tables are ready */
 #if defined(__x86_64__) || defined(__aarch64__) || defined(__ARM_NEON)
-        detect_cpu_features();
+        detected_capability = detect_cpu_features();
 #endif
         /* Allow env overrides */
         const char* force512 = getenv("PE_FORCE_AVX512");
@@ -135,23 +158,28 @@ simd_capability_t simd_detect_capability(void) {
         if (disable && (strcmp(disable, "1") == 0 || strcasecmp(disable, "true") == 0 || strcasecmp(disable, "yes") == 0)) {
             detected_capability = SIMD_NONE;
         } else if (force512 && (strcmp(force512, "1") == 0 || strcasecmp(force512, "true") == 0)) {
-#ifdef __AVX512F__
             detected_capability = SIMD_AVX512;
-#elif defined(__AVX2__)
-            detected_capability = SIMD_AVX2;
-#else
-            detected_capability = SIMD_NONE;
-#endif
         } else if (force2 && (strcmp(force2, "1") == 0 || strcasecmp(force2, "true") == 0)) {
-#ifdef __AVX2__
             detected_capability = SIMD_AVX2;
-#else
-            detected_capability = SIMD_NONE;
-#endif
         }
         capability_detected = 1;
     }
     return detected_capability;
+}
+
+simd_capability_t simd_runtime_capability(void)
+{
+    simd_capability_t machine = simd_detect_capability();
+    simd_capability_t compiled = simd_compiled_capability();
+
+    if (machine == SIMD_NEON && compiled == SIMD_NEON)
+        return SIMD_NEON;
+    if (machine == SIMD_AVX512 && compiled == SIMD_AVX512)
+        return SIMD_AVX512;
+    if ((machine == SIMD_AVX512 || machine == SIMD_AVX2) &&
+        (compiled == SIMD_AVX512 || compiled == SIMD_AVX2))
+        return SIMD_AVX2;
+    return SIMD_NONE;
 }
 
 const char* simd_capability_name(simd_capability_t cap) {
@@ -193,7 +221,7 @@ void simd_extract_results_to_array(const simd_result_batch_t* batch, HandVal* re
     memcpy(results, batch->results, batch->batch_size * sizeof(HandVal));
 }
 
-#ifdef __AVX2__
+#if defined(PE_RUNTIME_X86_SIMD) || defined(__AVX2__)
 /* Helper to convert StdDeck_CardMask to modern mask_t */
 static inline mask_t simd_stddeck_to_mask(StdDeck_CardMask sd) {
     mask_t m = 0;
@@ -280,7 +308,7 @@ static inline HandVal simd_eval_5c_nfs_from_masks(uint32_t A1, uint32_t M1, uint
 }
 
 /* Vertical AVX2 Evaluator for batch of 5-card hands */
-static void simd_eval_5c_vertical_avx2(const simd_card_batch_t* batch, int start_idx, int count, HandVal* results) {
+static PE_TARGET_AVX2 void simd_eval_5c_vertical_avx2(const simd_card_batch_t* batch, int start_idx, int count, HandVal* results) {
     __m256i vS0 = _mm256_loadu_si256((const __m256i*)&batch->spades[start_idx]);
     __m256i vS1 = _mm256_loadu_si256((const __m256i*)&batch->clubs[start_idx]);
     __m256i vS2 = _mm256_loadu_si256((const __m256i*)&batch->diamonds[start_idx]);
@@ -381,7 +409,7 @@ static void simd_eval_5c_vertical_avx2(const simd_card_batch_t* batch, int start
 }
 
 /* Horizontal AVX2 Evaluator for a single 7-card hand */
-static inline HandVal simd_eval_7c_horizontal_avx2(mask_t mask) {
+static PE_TARGET_AVX2 inline HandVal simd_eval_7c_horizontal_avx2(mask_t mask) {
     int n = mask_popcount(mask);
     if (n == 5) {
         /* 5-card optimization: direct scalar eval */
@@ -505,7 +533,7 @@ static inline HandVal simd_eval_7c_horizontal_avx2(mask_t mask) {
 }
 
 /* AVX2 helper for rotating ranks (Ace to low) */
-static inline __m256i avx2_rotate_ranks(__m256i ranks) {
+static PE_TARGET_AVX2 inline __m256i avx2_rotate_ranks(__m256i ranks) {
     /* Lowball_ROTATE_RANKS: ((ranks & ~ACE) << 1) | ((ranks >> ACE) & 1) */
     /* Ace is bit 12 (StdDeck_Rank_ACE) */
     const __m256i ace_mask = _mm256_set1_epi32(1 << StdDeck_Rank_ACE);
@@ -521,7 +549,7 @@ static inline __m256i avx2_rotate_ranks(__m256i ranks) {
 }
 
 /* AVX2 implementation - processes batch using Horizontal SIMD for each hand */
-int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch_t* results) {
+PE_TARGET_AVX2 int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch_t* results) {
     int i;
     results->batch_size = batch->batch_size;
 
@@ -556,9 +584,9 @@ int simd_eval_batch_hands_avx2(const simd_card_batch_t* batch, simd_result_batch
 }
 #endif
 
-#ifdef __AVX512F__
+#if defined(PE_RUNTIME_X86_SIMD) || defined(__AVX512F__)
 /* AVX-512 helper for rotating ranks */
-static inline __m512i avx512_rotate_ranks(__m512i ranks) {
+static PE_TARGET_AVX512 inline __m512i avx512_rotate_ranks(__m512i ranks) {
     const __m512i ace_mask = _mm512_set1_epi32(1 << StdDeck_Rank_ACE);
     const __m512i one = _mm512_set1_epi32(1);
 
@@ -572,10 +600,8 @@ static inline __m512i avx512_rotate_ranks(__m512i ranks) {
 }
 
 /* AVX-512 implementation - processes 8 hands at once */
-int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_batch_t* results) {
+PE_TARGET_AVX512 int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_batch_t* results) {
     int i;
-    __m512i spades_vec, clubs_vec, diamonds_vec, hearts_vec;
-    __m512i ranks_or;
     
     results->batch_size = batch->batch_size;
     
@@ -584,18 +610,12 @@ int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_bat
         int j, remaining = batch->batch_size - i;
         int process_count = (remaining < 8) ? remaining : 8;
         
-        /* Load 8 hands worth of data */
-        spades_vec = _mm512_loadu_si512((__m512i*)&batch->spades[i]);
-        clubs_vec = _mm512_loadu_si512((__m512i*)&batch->clubs[i]);
-        diamonds_vec = _mm512_loadu_si512((__m512i*)&batch->diamonds[i]);
-        hearts_vec = _mm512_loadu_si512((__m512i*)&batch->hearts[i]);
-        
-        /* Calculate ranks_or = spades | clubs | diamonds | hearts */
-        ranks_or = _mm512_or_si512(spades_vec, clubs_vec);
-        ranks_or = _mm512_or_si512(ranks_or, diamonds_vec);
-        ranks_or = _mm512_or_si512(ranks_or, hearts_vec);
-
-        /* For each hand in the batch, evaluate using cached scalar code */
+        /* The batch stores eight uint32_t lanes per suit.  An AVX-512
+         * register is sixteen lanes wide, so a 512-bit load would read past
+         * every suit array (and past the struct for hearts).  The scalar
+         * cached evaluator is the correctness path for this implementation;
+         * keep the per-hand reconstruction bounded until a genuine 16-lane
+         * layout is introduced. */
         for (j = 0; j < process_count; j++) {
             StdDeck_CardMask hand;
             hand.cards_n = 0;
@@ -606,7 +626,6 @@ int simd_eval_batch_hands_avx512(const simd_card_batch_t* batch, simd_result_bat
             hand.cards.diamonds = batch->diamonds[i+j];
             hand.cards.hearts = batch->hearts[i+j];
             
-            /* Cached standard evaluation */
             results->results[i+j] = StdDeck_StdRules_EVAL_N_Cached(hand, 7);
         }
     }
@@ -668,7 +687,7 @@ int simd_eval_batch_hands_neon(const simd_card_batch_t* batch, simd_result_batch
 
 /* Adaptive batch evaluation */
 int simd_eval_batch_hands_adaptive(const simd_card_batch_t* batch, simd_result_batch_t* results) {
-    simd_capability_t cap = simd_detect_capability();
+    simd_capability_t cap = simd_runtime_capability();
     int rc = 0;
     
     switch (cap) {
@@ -972,7 +991,11 @@ int simd_eval_low27_multiple_hands(const StdDeck_CardMask* hands, int count, Low
 #if defined(__AVX2__)
         if (cap >= SIMD_AVX2) {
             int i;
-            for (i = 0; i < batch_size; i += 4) {
+            /* The AVX2 load contains eight uint32_t lanes.  Process the
+             * padded batch in matching groups; iterating by four would make
+             * the second load start at lane four and read past the fixed
+             * eight-lane suit arrays. */
+            for (i = 0; i < batch_size; i += 8) {
                 __m256i spades = _mm256_loadu_si256((const __m256i*)&batch.spades[i]);
                 __m256i clubs = _mm256_loadu_si256((const __m256i*)&batch.clubs[i]);
                 __m256i diamonds = _mm256_loadu_si256((const __m256i*)&batch.diamonds[i]);

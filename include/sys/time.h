@@ -10,8 +10,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <stdint.h>
-#include <windows.h>
 #include <winsock2.h>
+#include <windows.h>
 
 static __inline int gettimeofday(struct timeval *tv, void *tz) {
   (void)tz;

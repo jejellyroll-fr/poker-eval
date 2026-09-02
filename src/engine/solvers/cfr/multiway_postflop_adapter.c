@@ -3,6 +3,7 @@
 #include <poker_eval/engine/solvers/cfr/mpf_stack_index.h>
 #include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/solver/pe_combinations.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -10,6 +11,17 @@
 #include <stdio.h>
 
 #define MPF_EPS 1e-9
+
+/*
+ * CHN-02: the widest flop node the adapter will build, C(52,3). Nothing can
+ * legitimately exceed it, so the guard never fires in play — it is there so
+ * that a wrong unused-card count is refused rather than turned into an
+ * allocation. The cost worth knowing is the other one: every outcome is a
+ * cached child state, and at 17296 flops from a full deck that is tens of
+ * megabytes for a single node. Lane A exists precisely so this is not how
+ * preflop gets solved at scale.
+ */
+#define MPF_MAX_FLOP_OUTCOMES 22100u
 
 static int mpf_adapter_debug_enabled(void)
 {
@@ -439,6 +451,84 @@ static uint64_t mpf_pattern_hash(const mpf_state_t *st, int player)
     return mpf_fnv1a_hash(str, strlen(str));
 }
 
+/* Texture-only abstraction still needs the acting player's exact private
+ * pattern, but must not retain the exact board in that component. */
+static uint64_t mpf_hole_pattern_hash(const mpf_state_t *st, int player)
+{
+    mask_t hole = st->hole[player];
+    char key[100];
+    char fallback[100];
+    const char *str = fallback;
+    if (pe_board_canonical_key(hole, st->total_hole_cards,
+                               key, sizeof(key)) == 0)
+    {
+        str = key;
+    }
+    else
+    {
+        int pos = 0;
+        for (int c = 0; c < MODERN_DECK_SIZE && pos < 98; ++c)
+        {
+            if (mask_is_set(hole, c))
+            {
+                fallback[pos++] = (char)('0' + (MODERN_GET_RANK(c) % 10));
+                fallback[pos++] = (char)('0' + MODERN_GET_SUIT(c));
+            }
+        }
+        fallback[pos] = '\0';
+    }
+    return mpf_fnv1a_hash(str, strlen(str));
+}
+
+/* ABS-02: replace the exact private-hand/board pattern with the trained
+ * abstraction pair only when the caller explicitly enabled strength
+ * bucketing and supplied (or successfully trained) a model. The caller's
+ * zero-value configuration therefore takes the exact historical path. */
+static int mpf_abstraction_key(const mpf_state_t *st, int player,
+                               uint64_t *out_key)
+{
+    if (!st || !out_key || player < 0 || player >= st->num_players ||
+        (st->strength_buckets_per_street <= 0 &&
+         st->texture_filter_level <= PE_TEXTURE_FILTER_NONE))
+        return 0;
+    if (st->board_revealed < 3 || st->board_revealed > 5)
+        return 0;
+
+    uint64_t texture = pe_board_texture_id(
+        st->board_mask, (pe_texture_filter_level_t)st->texture_filter_level);
+    if (st->strength_buckets_per_street > 0 && st->abstraction_model &&
+        mask_popcount(st->hole[player]) == st->total_hole_cards)
+    {
+        const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+        if (ops && ops->bucket_of)
+        {
+            int bucket = ops->bucket_of(st->abstraction_model, st->ctx,
+                                        st->hole[player], st->board_mask,
+                                        (int)st->street);
+            if (bucket >= 0)
+            {
+                *out_key = (((uint64_t)(uint32_t)bucket) << 32) ^ texture;
+                return 1;
+            }
+        }
+    }
+
+    if (st->texture_filter_level <= PE_TEXTURE_FILTER_NONE)
+        return 0;
+
+    /* PERFECT has no merge and therefore preserves the historical canonical
+       board+hole hash when no strength abstraction is active. */
+    if (st->strength_buckets_per_street <= 0 &&
+        st->texture_filter_level == PE_TEXTURE_FILTER_PERFECT)
+        return 0;
+
+    /* Texture-only mode keeps the private pattern exact and merges only the
+       board component. PERFECT naturally becomes the exact board id. */
+    uint64_t hole_hash = mpf_hole_pattern_hash(st, player);
+    *out_key = mpf_fnv1a_hash_seeded(hole_hash, &texture, sizeof(texture));
+    return 1;
+}
+
 /* Content-derived infoset key for a decision state (keyed_mode only).
  * All bet/board fields are folded into a single running hash; each field
  * re-seeds from the previous field's digest so the key depends on every
@@ -470,7 +560,14 @@ static uint64_t mpf_infoset_key(const mpf_state_t *st)
     h = mpf_fnv1a_hash_seeded(h, &rc, sizeof(rc));
     h = mpf_fnv1a_hash_seeded(h, &acted_flags, sizeof(acted_flags));
     h = mpf_fnv1a_hash_seeded(h, &active_flags, sizeof(active_flags));
-    uint64_t bh = mpf_pattern_hash(st, p);
+    uint64_t bh;
+    uint64_t abstraction_key;
+    if ((st->strength_buckets_per_street > 0 ||
+         st->texture_filter_level > PE_TEXTURE_FILTER_NONE) &&
+        mpf_abstraction_key(st, p, &abstraction_key))
+        bh = abstraction_key;
+    else
+        bh = mpf_pattern_hash(st, p);
     h = mpf_fnv1a_hash_seeded(h, &bh, sizeof(bh));
     /* FEAT-10 (#146): fold the committed-stack configuration hash into the
        infoset key so asymmetrical (and equivalent-by-action-order) stack
@@ -624,8 +721,25 @@ static int mpf_bunching_enabled(const mpf_state_t *st)
  * or the outcome index is out of range. */
 static double mpf_get_chance_weight_wrapper(cfr_game_t *game, uint64_t key, int outcome, void *user)
 {
+    {
+        const mpf_state_t *root = mpf_wrapper_state(game, key);
+        if (mpf_state_chance_kind(root) == PE_CHANCE_PRIVATE_HANDS)
+        {
+            (void)user;
+            if (outcome < 0 || outcome >= root->private_deal_count)
+                return 0.0;
+            return root->private_deals[outcome].weight;
+        }
+    }
+
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
+    /* Flop outcomes are combination indices, not card indices: the bunching
+       estimator below reads `outcome` as a position in the unused-card list
+       and would weight the wrong card. Every flop is equally likely until
+       CHN-04 teaches the estimator to speak in combinations. */
+    if (mpf_state_chance_kind(st) == PE_CHANCE_FLOP_THREE)
+        return 1.0;
     if (!mpf_bunching_enabled(st))
         return 1.0;
     int cards[52];
@@ -691,21 +805,41 @@ int mpf_bunching_compute_survival(const mpf_config_t *cfg, double out_survival[5
     return 0;
 }
 
+/* Does the preflop-to-flop transition belong to chance, or did the caller
+ * pin the board? Three configured board cards mean the flop is a given and
+ * dealing it again would both contradict the caller and put cards back in the
+ * deck that are already on the table. */
+static int mpf_flop_is_chance(const mpf_state_t *st)
+{
+    return (st && st->enable_chance_nodes && st->known_board_cards < 3) ? 1 : 0;
+}
+
 static void mpf_enter_chance(mpf_state_t *st)
 {
     mpf_street_t next_street = st->street;
-    if (st->street == MPF_STREET_FLOP)
+    int deal = 1;
+    if (st->street == MPF_STREET_PREFLOP)
+    {
+        next_street = MPF_STREET_FLOP;
+        deal = 3;
+    }
+    else if (st->street == MPF_STREET_FLOP)
         next_street = MPF_STREET_TURN;
     else if (st->street == MPF_STREET_TURN)
         next_street = MPF_STREET_RIVER;
     st->street = next_street;
+    st->chance_deal_cards = deal;
     st->chance_pending = 1;
     st->to_act = -1;
     st->util_ready = 0;
     MPF_PERF_INC_STATE(st, street_transitions);
 }
 
-static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_state_t *out)
+/* Deal `count` board cards into a child state. The flop deals three at once
+ * and the turn and river one; the arithmetic is the same either way, and
+ * sharing it is what keeps the one-card path bit-for-bit what it was. */
+static void mpf_chance_deal_cards_internal(const mpf_state_t *st, const int *cards,
+                                           int count, mpf_state_t *out)
 {
     /* out may be a cached child from a previous iteration holding the whole
      * betting/chance subtree dealt before. Release it so the re-deal never
@@ -717,20 +851,33 @@ static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_st
     out->util_ready = 0;
     /* Cloned state borrows the shared sparse index but never owns it. */
     out->owns_stack_index = 0;
+    out->owns_abstraction_model = 0;
     for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
         out->action_cache[i] = NULL;
     for (int i = 0; i < 52; ++i)
         out->chance_children[i] = NULL;
     out->chance_children_count = 0;
-    out->board_cards[out->board_revealed] = card_idx;
-    out->board_revealed += 1;
+    out->flop_children = NULL;
+    out->flop_child_count = 0;
+    for (int i = 0; i < count && out->board_revealed < 5; ++i)
+    {
+        out->board_cards[out->board_revealed] = cards[i];
+        out->board_revealed += 1;
+    }
     mpf_update_board(out, out->board_revealed);
+    out->known_board_cards = out->board_revealed;
     out->chance_pending = 0;
+    out->chance_deal_cards = 0;
     mpf_reset_round(out, out->street);
     out->first_to_act = mpf_first_player_after(out, out->button_index + 1);
     out->to_act = out->first_to_act;
     if (out->tree_enabled && out->tree && out->tree_node_idx >= 0)
         mpf_apply_tree_node(out, out->tree_node_idx);
+}
+
+static void mpf_chance_deal_internal(const mpf_state_t *st, int card_idx, mpf_state_t *out)
+{
+    mpf_chance_deal_cards_internal(st, &card_idx, 1, out);
 }
 
 /* ===== state wrapper helpers ========================================== */
@@ -813,7 +960,7 @@ static double mpf_compute_stpr(const mpf_state_t *st)
 }
 
 /* True when a remaining stack of `remaining` chips is small enough to trigger
- * MonkerSolver-style effective all-in: remaining <= threshold% * pot. */
+ * Compatible effective all-in: remaining <= threshold% * pot. */
 static int mpf_is_effective_all_in(const mpf_state_t *st, double remaining)
 {
     if (!st->is_pot_limit)
@@ -1142,6 +1289,12 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
              * enumerates every unseen card instead of a fixed runout. */
             mpf_enter_chance(out);
         }
+        else if (out->keyed_mode && out->street == MPF_STREET_PREFLOP &&
+                 mpf_flop_is_chance(out))
+        {
+            /* CHN-02: the flop is dealt as one combination of three. */
+            mpf_enter_chance(out);
+        }
         else
         {
             mpf_advance_street(out);
@@ -1283,28 +1436,164 @@ static uint64_t mpf_apply_action_wrapper(cfr_game_t *game, uint64_t key, int act
 
 /* ===== FEAT-03: chance node wrappers ================================== */
 
+pe_chance_kind_t mpf_state_chance_kind(const mpf_state_t *state)
+{
+    if (!state)
+        return PE_CHANCE_NONE;
+
+    /* The root deals first: a state cannot be waiting for a board card before
+       anyone has been given a hand. */
+    if (state->private_pending)
+        return PE_CHANCE_PRIVATE_HANDS;
+
+    if (!state->chance_pending)
+        return PE_CHANCE_NONE;
+
+    /* A flop is three cards dealt at once. Dealing them one at a time would
+       reach the same boards but weight each of them six times — once per
+       ordering — so the two kinds are genuinely different nodes and not a
+       convenience. chance_deal_cards is what the transition recorded. */
+    if (state->chance_deal_cards == 3)
+        return PE_CHANCE_FLOP_THREE;
+    return PE_CHANCE_BOARD_ONE;
+}
+
+const mpf_state_t *mpf_state_for_key(cfr_game_t *game, uint64_t key)
+{
+    if (!game)
+        return NULL;
+    return mpf_wrapper_state(game, key);
+}
+
 static int mpf_is_chance_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    return (st && st->chance_pending) ? 1 : 0;
+    return (mpf_state_chance_kind(st) != PE_CHANCE_NONE) ? 1 : 0;
 }
 
 static int mpf_get_chance_outcomes_wrapper(cfr_game_t *game, uint64_t key, void *user)
 {
     const mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    if (!st || !st->chance_pending)
+    switch (mpf_state_chance_kind(st))
+    {
+    case PE_CHANCE_PRIVATE_HANDS:
+        return st->private_deal_count;
+    case PE_CHANCE_BOARD_ONE:
+    {
+        int cards[52];
+        return mpf_unused_cards(st, cards, 52);
+    }
+    case PE_CHANCE_FLOP_THREE:
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        uint64_t combos = pe_comb_count((unsigned)count, 3);
+        if (combos == 0 || combos > MPF_MAX_FLOP_OUTCOMES)
+            return 0;
+        return (int)combos;
+    }
+    case PE_CHANCE_NONE:
+    case PE_CHANCE_DRAW_N:
+    case PE_CHANCE_KIND_COUNT:
+    default:
         return 0;
-    int cards[52];
-    return mpf_unused_cards(st, cards, 52);
+    }
 }
 
 static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int outcome, void *user)
 {
     mpf_state_t *st = mpf_wrapper_state(game, key);
     (void)user;
-    if (!st || !st->chance_pending)
+    if (!st)
+        return 0;
+
+    if (mpf_state_chance_kind(st) == PE_CHANCE_PRIVATE_HANDS)
+    {
+        /* Deal the private hands. The child is cached and owned by the root,
+           exactly as a board-card child is, so the traversal's release_state
+           stays a no-op for chance children. */
+        mpf_state_t *dealt;
+        if (outcome < 0 || outcome >= st->private_deal_count)
+            return 0;
+        dealt = st->private_children[outcome];
+        if (!dealt)
+        {
+            dealt = (mpf_state_t *)malloc(sizeof(mpf_state_t));
+            if (!dealt)
+                return 0;
+            *dealt = *st;
+            dealt->heap_owned = 1;
+            dealt->owns_stack_index = 0;
+            dealt->private_deals = NULL;
+            dealt->private_children = NULL;
+            dealt->private_deal_count = 0;
+            dealt->private_pending = 0;
+            dealt->util_ready = 0;
+            for (int i = 0; i < MPF_TREE_ACTION_MAX; ++i)
+                dealt->action_cache[i] = NULL;
+            for (int i = 0; i < 52; ++i)
+                dealt->chance_children[i] = NULL;
+            dealt->chance_children_count = 0;
+            dealt->flop_children = NULL;
+            dealt->flop_child_count = 0;
+            for (int i = 0; i < st->num_players; ++i)
+                dealt->hole[i] = st->private_deals[outcome].hole[i];
+            st->private_children[outcome] = dealt;
+        }
+        /* The dealt state must be reachable by its infoset key, exactly like a
+           board-card child: keyed mode is what the storage indexes by, and an
+           unregistered state is one the traversal cannot look up again. */
+        if (st->keyed_mode)
+            mpf_key_map_register(mpf_infoset_key(dealt), dealt);
+        return mpf_state_key(dealt);
+    }
+
+    if (mpf_state_chance_kind(st) == PE_CHANCE_FLOP_THREE)
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        uint64_t combos = pe_comb_count((unsigned)count, 3);
+        unsigned flop[PE_COMB_MAX_K];
+        int dealt[3];
+        mpf_state_t *child;
+        if (combos == 0 || combos > MPF_MAX_FLOP_OUTCOMES)
+            return 0;
+        if (outcome < 0 || (uint64_t)outcome >= combos)
+            return 0;
+        if (pe_comb_unrank((unsigned)count, 3, (uint64_t)outcome, flop) != PE_SOLVER_OK)
+            return 0;
+        if (!st->flop_children)
+        {
+            st->flop_children =
+                (mpf_state_t **)calloc((size_t)combos, sizeof(mpf_state_t *));
+            if (!st->flop_children)
+                return 0;
+            st->flop_child_count = (int)combos;
+        }
+        if (outcome >= st->flop_child_count)
+            return 0;
+        for (int i = 0; i < 3; ++i)
+            dealt[i] = cards[flop[i]];
+        child = st->flop_children[outcome];
+        if (!child)
+        {
+            child = (mpf_state_t *)malloc(sizeof(mpf_state_t));
+            if (!child)
+                return 0;
+            memset(child, 0, sizeof(*child));
+            st->flop_children[outcome] = child;
+        }
+        mpf_chance_deal_cards_internal(st, dealt, 3, child);
+        if (st->keyed_mode)
+            mpf_key_map_register(mpf_infoset_key(child), child);
+        return mpf_state_key(child);
+    }
+
+    /* Past this point the node deals one board card, which is the only kind
+       chance_children[52] can index. */
+    if (mpf_state_chance_kind(st) != PE_CHANCE_BOARD_ONE)
         return 0;
     int cards[52];
     int count = mpf_unused_cards(st, cards, 52);
@@ -1325,6 +1614,119 @@ static uint64_t mpf_apply_chance_wrapper(cfr_game_t *game, uint64_t key, int out
     if (st->keyed_mode)
         mpf_key_map_register(mpf_infoset_key(child), child);
     return mpf_state_key(child);
+}
+
+/*
+ * CHN-03: draw one chance outcome by direct sampling.
+ *
+ * The deck deals uniformly; anything an estimator biases (a bunched board
+ * card, a weighted private deal) is sampled at its actual probability and the
+ * importance ratio carries the correction back to the uniform scale. A flop
+ * combination is drawn uniformly, so its ratio is exactly 1.0 and a sweep of
+ * the sampler reproduces the enumerated distribution one-for-one.
+ */
+int mpf_chance_sample(const mpf_state_t *st, pe_rng_t *rng,
+                      pe_chance_sample_t *out)
+{
+    if (!out)
+        return -1;
+    out->outcome = 0;
+    out->importance_ratio = 1.0;
+    if (!st || !rng)
+        return -1;
+
+    switch (mpf_state_chance_kind(st))
+    {
+    case PE_CHANCE_PRIVATE_HANDS:
+    {
+        int n = st->private_deal_count;
+        if (n <= 0)
+            return -1;
+        double total = 0.0;
+        for (int i = 0; i < n; ++i)
+            total += st->private_deals[i].weight;
+        if (!(total > 0.0))
+            return -1;
+        double u = pe_rng_uniform01(rng) * total;
+        double acc = 0.0;
+        int pick = n - 1;
+        for (int i = 0; i < n; ++i)
+        {
+            acc += st->private_deals[i].weight;
+            if (u < acc)
+            {
+                pick = i;
+                break;
+            }
+        }
+        out->outcome = pick;
+        out->importance_ratio =
+            (1.0 / (double)n) /
+            (st->private_deals[pick].weight / total);
+        return 0;
+    }
+
+    case PE_CHANCE_FLOP_THREE:
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        uint64_t combos = pe_comb_count((unsigned)count, 3);
+        if (combos == 0 || combos > MPF_MAX_FLOP_OUTCOMES)
+            return -1;
+        out->outcome = (int)pe_rng_below(rng, (uint32_t)combos);
+        out->importance_ratio = 1.0; /* uniform over combinations */
+        return 0;
+    }
+
+    case PE_CHANCE_BOARD_ONE:
+    {
+        int cards[52];
+        int count = mpf_unused_cards(st, cards, 52);
+        if (count <= 0)
+            return -1;
+        if (!mpf_bunching_enabled(st))
+        {
+            out->outcome = (int)pe_rng_below(rng, (uint32_t)count);
+            out->importance_ratio = 1.0;
+            return 0;
+        }
+        double wsum = 0.0;
+        double weights[52];
+        for (int i = 0; i < count; ++i)
+        {
+            weights[i] = mpf_bunching_state_survival(st, cards[i]);
+            wsum += weights[i];
+        }
+        if (!(wsum > 0.0))
+        {
+            out->outcome = (int)pe_rng_below(rng, (uint32_t)count);
+            out->importance_ratio = 1.0;
+            return 0;
+        }
+        double u = pe_rng_uniform01(rng) * wsum;
+        double acc = 0.0;
+        int pick = count - 1;
+        for (int i = 0; i < count; ++i)
+        {
+            acc += weights[i];
+            if (u < acc)
+            {
+                pick = i;
+                break;
+            }
+        }
+        out->outcome = pick;
+        out->importance_ratio =
+            (1.0 / (double)count) / (weights[pick] / wsum);
+        return 0;
+    }
+
+    case PE_CHANCE_NONE:
+    case PE_CHANCE_DRAW_N:
+    case PE_CHANCE_KIND_COUNT:
+    default:
+        return -1;
+    }
 }
 
 static int mpf_is_terminal(const mpf_state_t *st)
@@ -2059,6 +2461,280 @@ int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
     return applied;
 }
 
+/*
+ * Resolve the private ranges into fixed holes (RNG-02).
+ *
+ * Card indices are the same 0..51 in both representations, so the conversion
+ * is a bit-for-bit walk rather than a rank/suit round trip.
+ *
+ * A one-combo range is a fixed hand written another way and is materialised
+ * here. Anything wider is left alone: the root private chance node deals it
+ * (RNG-03), and writing a hole here would pin the player to one combo.
+ *
+ * Returns 0, or -1 on a range that is unprepared or empty.
+ */
+static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
+                              int *out_specified)
+{
+    for (int p = 0; p < cfg->num_players && p < MPF_MAX_PLAYERS; ++p)
+    {
+        pe_range_view_t view;
+        mask_t m = MASK_EMPTY;
+
+        if (cfg->range[p] == NULL)
+            continue;
+
+        if (!pe_solver_range_is_prepared(cfg->range[p], 1e-9))
+            return -1;
+
+        view = pe_solver_range_view(cfg->range[p]);
+        if (view.count != 1)
+            continue;   /* wider ranges are dealt by the root chance node */
+
+        for (int c = 0; c < MODERN_DECK_SIZE; ++c)
+            if (StdDeck_CardMask_CARD_IS_SET(view.combos[0].hand, c))
+                m = mask_set(m, c);
+
+        out_hole[p] = m;
+        out_specified[p] = 1;
+    }
+    return 0;
+}
+
+/*
+ * Build the joint private deals (RNG-03).
+ *
+ * The cartesian product of the players' ranges, minus every combination that
+ * is impossible because two players would hold the same card, or because a
+ * card is already on the board. That removal is not a detail: it is the whole
+ * reason a range solve differs from solving each hand independently. Two
+ * players both holding "AA" have 36 nominal pairs and 6 real ones.
+ *
+ * Weights multiply and are then renormalised over what survives, so the deals
+ * form a probability distribution — which is what the chance node needs and
+ * what makes the counterfactual reach probabilities mean anything.
+ *
+ * A player with no range contributes their fixed hole, as a single certain
+ * option. A player with neither contributes an empty hand, which is what the
+ * model already did.
+ *
+ * Returns 0 on success, -1 when the product is too large to enumerate or no
+ * combination survives.
+ */
+#define MPF_MAX_PRIVATE_DEALS (1u << 20)
+
+static int mpf_range_option_count(const mpf_config_t *cfg, int p)
+{
+    if (cfg->range[p] != NULL)
+        return (int)pe_solver_range_view(cfg->range[p]).count;
+    return 1;   /* the fixed hole, or an empty hand */
+}
+
+static void mpf_range_option(const mpf_config_t *cfg, int p, int idx,
+                             mask_t *out_hole, double *out_weight)
+{
+    if (cfg->range[p] != NULL)
+    {
+        pe_range_view_t view = pe_solver_range_view(cfg->range[p]);
+        mask_t m = MASK_EMPTY;
+        for (int c = 0; c < MODERN_DECK_SIZE; ++c)
+            if (StdDeck_CardMask_CARD_IS_SET(view.combos[idx].hand, c))
+                m = mask_set(m, c);
+        *out_hole = m;
+        *out_weight = view.combos[idx].weight;
+        return;
+    }
+    *out_hole = cfg->hole[p];
+    *out_weight = 1.0;
+}
+
+static int mpf_build_private_deals(const mpf_config_t *cfg, mask_t board,
+                                   mpf_private_deal_t **out_deals,
+                                   int *out_count)
+{
+    int counts[MPF_MAX_PLAYERS];
+    int idx[MPF_MAX_PLAYERS];
+    unsigned long long product = 1;
+    mpf_private_deal_t *deals;
+    int capacity;
+    int n = 0;
+    double total = 0.0;
+    int p;
+
+    for (p = 0; p < cfg->num_players; ++p)
+    {
+        counts[p] = mpf_range_option_count(cfg, p);
+        if (counts[p] <= 0)
+            return -1;
+        idx[p] = 0;
+        product *= (unsigned long long)counts[p];
+        if (product > MPF_MAX_PRIVATE_DEALS)
+            return -1;   /* refused rather than truncated */
+    }
+
+    capacity = (int)product;
+    deals = (mpf_private_deal_t *)calloc((size_t)capacity, sizeof(mpf_private_deal_t));
+    if (!deals)
+        return -1;
+
+    for (;;)
+    {
+        mask_t used = board;
+        double w = 1.0;
+        int ok = 1;
+
+        for (p = 0; p < cfg->num_players && ok; ++p)
+        {
+            mask_t h;
+            double pw;
+            mpf_range_option(cfg, p, idx[p], &h, &pw);
+            /* A card cannot be in two hands, nor in a hand and on the board. */
+            if ((h & used) != 0)
+                ok = 0;
+            else
+            {
+                used |= h;
+                w *= pw;
+                deals[n].hole[p] = h;
+            }
+        }
+
+        if (ok && w > 0.0)
+        {
+            deals[n].weight = w;
+            total += w;
+            n++;
+        }
+
+        /* Odometer over the players' option indices. */
+        for (p = cfg->num_players - 1; p >= 0; --p)
+        {
+            if (++idx[p] < counts[p])
+                break;
+            idx[p] = 0;
+        }
+        if (p < 0)
+            break;
+    }
+
+    if (n == 0 || !(total > 0.0))
+    {
+        free(deals);
+        return -1;
+    }
+
+    for (int i = 0; i < n; ++i)
+        deals[i].weight /= total;
+
+    *out_deals = deals;
+    *out_count = n;
+    return 0;
+}
+
+/*
+ * Release what mpf_build_game has allocated, on a path that then fails.
+ *
+ * The function has always allocated a stack index early and had no way to
+ * give it back; nothing noticed, because it had no failure path after that
+ * point. RNG-03 added two — an unprepared range and a configuration whose
+ * every deal is impossible — and leaks(1) noticed immediately.
+ */
+static int mpf_build_fail(mpf_state_t *st)
+{
+    if (st->owns_abstraction_model && st->abstraction_model)
+    {
+        const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+        if (ops && ops->destroy)
+            ops->destroy((pe_abstraction_model_t *)st->abstraction_model);
+        st->abstraction_model = NULL;
+        st->owns_abstraction_model = 0;
+    }
+    if (st->owns_stack_index && st->stack_index)
+    {
+        mpf_stack_index_destroy(st->stack_index);
+        st->stack_index = NULL;
+        st->owns_stack_index = 0;
+    }
+    free(st->private_children);
+    free(st->private_deals);
+    st->private_children = NULL;
+    st->private_deals = NULL;
+    st->private_deal_count = 0;
+    free(st->flop_children);
+    st->flop_children = NULL;
+    st->flop_child_count = 0;
+    return -1;
+}
+
+static void mpf_collect_abstraction_hands(const int *cards, int card_count,
+                                          int need, int start, int depth,
+                                          mask_t current, mask_t *out,
+                                          size_t cap, size_t *count)
+{
+    if (*count >= cap)
+        return;
+    if (depth == need)
+    {
+        out[(*count)++] = current;
+        return;
+    }
+    int remaining = need - depth;
+    for (int i = start; i <= card_count - remaining && *count < cap; ++i)
+    {
+        mpf_collect_abstraction_hands(cards, card_count, need, i + 1,
+                                      depth + 1, mask_set(current, cards[i]),
+                                      out, cap, count);
+    }
+}
+
+/* Train the default MPF model only when a postflop board is already known.
+ * Chance-node games may provide a pre-trained model through the config; a
+ * future street can then use it without mutating the state during keying. */
+static int mpf_prepare_abstraction(const mpf_config_t *cfg, mpf_state_t *st)
+{
+    if (!cfg || !st || st->strength_buckets_per_street <= 0)
+        return 0;
+    if (cfg->abstraction_model)
+    {
+        st->abstraction_model = cfg->abstraction_model;
+        return 0;
+    }
+    if (st->board_revealed < 3 || st->board_revealed > 5 ||
+        (st->total_hole_cards != 2 && st->total_hole_cards != 4))
+        return 0;
+
+    int cards[MODERN_DECK_SIZE];
+    int card_count = 0;
+    for (int card = 0; card < MODERN_DECK_SIZE; ++card)
+        if (!mask_is_set(st->board_mask, card))
+            cards[card_count++] = card;
+
+    size_t cap = (st->total_hole_cards == 2) ? 1326u : 1024u;
+    mask_t *hands = (mask_t *)calloc(cap, sizeof(*hands));
+    if (!hands)
+        return -1;
+    size_t hand_count = 0;
+    mpf_collect_abstraction_hands(cards, card_count, st->total_hole_cards,
+                                  0, 0, MASK_EMPTY, hands, cap, &hand_count);
+
+    pe_abstraction_config_t acfg;
+    memset(&acfg, 0, sizeof(acfg));
+    acfg.strength.n_buckets = st->strength_buckets_per_street;
+    acfg.strength.hole_cards = st->total_hole_cards;
+    acfg.strength.max_samples = (uint32_t)cap;
+    acfg.texture_filter = (pe_texture_filter_level_t)st->texture_filter_level;
+    const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+    pe_abstraction_model_t *model = NULL;
+    int rc = (ops && ops->train && hand_count > 0) ?
+        ops->train(&model, st->ctx, st->board_mask, hands, hand_count, &acfg) : -1;
+    free(hands);
+    if (rc != 0 || !model)
+        return -1;
+    st->abstraction_model = model;
+    st->owns_abstraction_model = 1;
+    return 0;
+}
+
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
 {
     if (!cfg || !cfg->ctx || !out_game || !out_state)
@@ -2084,6 +2760,10 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         mpf_perf_stats_reset(perf_stats);
 
     out_state->ctx = cfg->ctx;
+    out_state->strength_buckets_per_street = cfg->strength_buckets_per_street;
+    out_state->texture_filter_level = cfg->texture_filter_level;
+    out_state->abstraction_model = cfg->abstraction_model;
+    out_state->owns_abstraction_model = 0;
     out_state->rake = cfg->rake;
     out_state->rules = cfg->rules;
     out_state->lock_storage = NULL;
@@ -2138,11 +2818,31 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
         out_state->base_bet_sizes[i] = out_state->bet_sizes[i];
     out_state->base_enable_pot_sizing = out_state->enable_pot_sizing;
 
+    /* A one-combo range is a fixed hand written another way; anything wider is
+       refused until RNG-03 provides the root private chance. */
+    mask_t resolved_hole[MPF_MAX_PLAYERS];
+    int resolved_specified[MPF_MAX_PLAYERS];
+    for (int i = 0; i < MPF_MAX_PLAYERS; ++i)
+    {
+        resolved_hole[i] = cfg->hole[i];
+        resolved_specified[i] = cfg->hole_specified[i];
+    }
+    if (mpf_resolve_ranges(cfg, resolved_hole, resolved_specified) != 0)
+        return mpf_build_fail(out_state);
+
+    /* Any range wider than one combo turns the root into a private-deal chance
+       node. Below one, nothing changes and the model behaves as it always
+       has — which is what keeps every existing configuration bit-identical. */
+    int needs_private_deal = 0;
+    for (int i = 0; i < cfg->num_players; ++i)
+        if (cfg->range[i] != NULL && pe_solver_range_view(cfg->range[i]).count > 1)
+            needs_private_deal = 1;
+
     for (int i = 0; i < cfg->num_players; ++i)
     {
         out_state->stacks[i] = cfg->stacks[i];
         out_state->active[i] = 1;
-        out_state->hole[i] = cfg->hole[i];
+        out_state->hole[i] = resolved_hole[i];
         out_state->invested[i] = 0.0;
         out_state->round_contrib[i] = 0.0;
         out_state->acted_this_round[i] = 0;
@@ -2163,6 +2863,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     int reveal_at_start = (cfg->start_street == MPF_STREET_FLOP) ? 3 :
                           (cfg->start_street == MPF_STREET_TURN) ? 4 :
                           (cfg->start_street == MPF_STREET_RIVER) ? 5 : 0;
+    out_state->known_board_cards = board_limit;
     int load_limit = board_limit;
     if (cfg->enable_chance_nodes && reveal_at_start > 0 && load_limit > reveal_at_start)
         load_limit = reveal_at_start; /* turn/river cards are dealt by chance */
@@ -2290,9 +2991,41 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->keyed_mode = cfg->enable_chance_nodes ? 1 : 0;
     out_state->key_map_owner = out_state;
     out_state->chance_pending = 0;
+    out_state->chance_deal_cards = 0;
     out_state->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
         out_state->chance_children[i] = NULL;
+    out_state->flop_children = NULL;
+    out_state->flop_child_count = 0;
+
+    out_state->private_deals = NULL;
+    out_state->private_children = NULL;
+    out_state->private_deal_count = 0;
+    out_state->private_pending = 0;
+    if (needs_private_deal)
+    {
+        /* Keyed mode is required: the dealt states are heap clones, and the
+           storage must index them by infoset key rather than by pointer. */
+        out_state->keyed_mode = 1;
+        if (mpf_build_private_deals(cfg, out_state->board_mask,
+                                    &out_state->private_deals,
+                                    &out_state->private_deal_count) != 0)
+            return mpf_build_fail(out_state);
+        out_state->private_children =
+            (mpf_state_t **)calloc((size_t)out_state->private_deal_count,
+                                   sizeof(mpf_state_t *));
+        if (!out_state->private_children)
+        {
+            return mpf_build_fail(out_state);
+        }
+        out_state->private_pending = 1;
+        /* Until the deal happens nobody holds anything: leaving the fixed
+           holes in place would let an infoset key see cards the player has
+           not been given. */
+        for (int i = 0; i < cfg->num_players; ++i)
+            if (cfg->range[i] != NULL && pe_solver_range_view(cfg->range[i]).count > 1)
+                out_state->hole[i] = MASK_EMPTY;
+    }
     /* FEAT-14 (#150): folded-range card bunching configuration. Copied into
        the state (and inherited by every derived child through the state
        clone in mpf_apply_action_internal / mpf_chance_deal_internal) so the
@@ -2313,6 +3046,9 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     {
         mpf_restore_base_bets(out_state);
     }
+
+    if (mpf_prepare_abstraction(cfg, out_state) != 0)
+        return mpf_build_fail(out_state);
 
     /* FEAT-10 (#146): now that stacks/round_contrib/active are fully
        populated (including any tree-node or preconfig overrides), resolve
@@ -2378,6 +3114,38 @@ static void mpf_state_cleanup_internal(mpf_state_t *state)
         }
     }
     state->chance_children_count = 0;
+
+    for (int i = 0; i < state->private_deal_count; ++i)
+    {
+        mpf_state_t *child = state->private_children ? state->private_children[i] : NULL;
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            state->private_children[i] = NULL;
+        }
+    }
+    free(state->private_children);
+    free(state->private_deals);
+    state->private_children = NULL;
+    state->private_deals = NULL;
+    state->private_deal_count = 0;
+
+    for (int i = 0; i < state->flop_child_count; ++i)
+    {
+        mpf_state_t *child = state->flop_children ? state->flop_children[i] : NULL;
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            state->flop_children[i] = NULL;
+        }
+    }
+    free(state->flop_children);
+    state->flop_children = NULL;
+    state->flop_child_count = 0;
 }
 
 static int mpf_state_ptr_seen(mpf_state_t **seen, int seen_count, const mpf_state_t *ptr)
@@ -2476,6 +3244,14 @@ void mpf_state_cleanup(mpf_state_t *state)
         mpf_stack_index_destroy(state->stack_index);
         state->stack_index = NULL;
         state->owns_stack_index = 0;
+    }
+    if (state->owns_abstraction_model && state->abstraction_model)
+    {
+        const pe_abstraction_ops_t *ops = pe_abstraction_ops();
+        if (ops && ops->destroy)
+            ops->destroy((pe_abstraction_model_t *)state->abstraction_model);
+        state->abstraction_model = NULL;
+        state->owns_abstraction_model = 0;
     }
     if (state->tree)
         mpf_tree_release_cache(state->tree, state);

@@ -12,6 +12,18 @@ if(POKER_EVAL_WITH_OPENMP)
     find_dependency(OpenMP)
 endif()
 
+set(POKER_EVAL_WITH_ZLIB @POKER_EVAL_WITH_ZLIB@)
+if(POKER_EVAL_WITH_ZLIB)
+    find_dependency(ZLIB)
+endif()
+
+set(POKER_EVAL_WITH_ZSTD @POKER_EVAL_WITH_ZSTD@)
+if(POKER_EVAL_WITH_ZSTD)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+    find_dependency(ZSTD)
+    list(REMOVE_ITEM CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/poker-eval-targets.cmake")
 
 check_required_components(poker-eval)

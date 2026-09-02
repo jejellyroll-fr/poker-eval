@@ -34,7 +34,7 @@ class PokerEvalConan(ConanFile):
         "use_five_cards": False
     }
     
-    exports_sources = "CMakeLists.txt", "cmake/*", "include/*", "lib/*", "examples/*", "tests/*", "gpu/*", "bindings/*"
+    exports_sources = "CMakeLists.txt", "cmake/*", "include/*", "examples/*", "tests/*", "gpu/*", "bindings/*"
     
     def config_options(self):
         if self.settings.os == "Windows":
@@ -61,7 +61,6 @@ class PokerEvalConan(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["BUILD_SHARED_LIBS"] = self.options.shared
-        tc.variables["BUILD_STATIC_LIBS"] = not self.options.shared
         tc.variables["BUILD_GPU"] = self.options.with_gpu
         tc.variables["BUILD_BINDINGS"] = self.options.with_python or self.options.with_java
         tc.variables["BUILD_PYTHON_BINDING"] = self.options.with_python

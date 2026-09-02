@@ -10,6 +10,7 @@ message(STATUS "Building performance benchmarks")
 
 # Benchmark executables
 set(BENCHMARK_PROGRAMS
+    bench_pe_compute
     ofc_simd_benchmark
     benchmark_canonical_vs_legacy
     benchmark_iterator_perf
@@ -188,7 +189,7 @@ if(GPU_BENCHMARK_AVAILABLE)
     endforeach()
 
     # Original OFC GPU benchmark (from gpu/ directory)
-    add_executable(ofc_gpu_benchmark ${CMAKE_SOURCE_DIR}/gpu/ofc_gpu_benchmark.c)
+    add_executable(ofc_gpu_benchmark ${CMAKE_SOURCE_DIR}/src/gpu/ofc_gpu_benchmark.c)
     target_link_libraries(ofc_gpu_benchmark poker_gpu poker_eval_modular ${CMAKE_THREAD_LIBS_INIT})
 
     target_compile_options(ofc_gpu_benchmark PRIVATE
