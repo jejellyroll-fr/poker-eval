@@ -61,6 +61,8 @@ build/
 build-studio/
 build-coverage/
 build-omp/
+build-asan/
+build-ubsan/
 Testing/
 nul
 

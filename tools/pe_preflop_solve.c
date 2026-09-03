@@ -20,6 +20,7 @@
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_rng.h>
+#include <poker_eval/core/modern_cardmask.h>
 
 #include <errno.h>
 #include <ctype.h>
@@ -66,6 +67,15 @@ typedef struct {
     const char *checkpoint_path;
     const char *resume_path;
     uint64_t checkpoint_interval;
+    /* Postflop root (Lane B street trees).  street names preflop (default,
+     * classic blind-posted root) or flop/turn/river (root at that street
+     * with the fixed --board, --pot and first actor). */
+    const char *street;
+    const char *board;
+    double pot;
+    int have_pot;
+    int to_act;
+    int have_to_act;
     pe_algorithm_preset_t algorithm;
     pe_policy_mode_t policy;
     double exponential_lambda;
@@ -465,6 +475,13 @@ static void usage(FILE *stream)
         "  --allow-calls                allow calls before all-in\n"
         "  --postflop                   continue through flop, turn and river\n"
         "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
+        "  --street NAME               root street: preflop (default), flop, turn or river.\n"
+        "                              With a tree, the tree decisions are followed on every\n"
+        "                              street the tree declares; other streets roll out.\n"
+        "  --board CARDS               fixed board for a flop/turn/river root (e.g. AsKdQc)\n"
+        "  --pot BB                    pot at a flop/turn/river root (required there)\n"
+        "  --to-act SEAT               seat to act first at a postflop root\n"
+        "                              (default: tree header first_to_act, else 0)\n"
         "  --algorithm NAME             Lane B: external-mccfr, external-dcfr,\n"
         "                               outcome-mccfr or external-ecfr\n"
         "                               (full-tree cfr/cfr+/dcfr presets are\n"
@@ -526,6 +543,27 @@ static void i_hash_str(uint64_t *hash, const char *text)
         i_hash_byte(hash, *p);
 }
 
+/* Root street names for Lane B street trees: preflop keeps the classic
+ * blind-posted root; flop/turn/river root the game at that street with
+ * the fixed --board, --pot and first actor.  Returns 0..3 or -1. */
+static int parse_street_name(const char *text)
+{
+    if (!text || !*text || strcmp(text, "preflop") == 0)
+        return 0;
+    if (strcmp(text, "flop") == 0)
+        return 1;
+    if (strcmp(text, "turn") == 0)
+        return 2;
+    if (strcmp(text, "river") == 0)
+        return 3;
+    return -1;
+}
+
+static int street_board_cards(int street)
+{
+    return street == 1 ? 3 : street == 2 ? 4 : street == 3 ? 5 : 0;
+}
+
 /* Deterministic fingerprint of the solve spot; the checkpoint adapter stores it
  * so it can refuse to resume a checkpoint saved on a different spot. */
 static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree)
@@ -533,8 +571,15 @@ static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree)
     uint64_t h = UINT64_C(0x50455f5052464c42);
     i_hash_str(&h, options->game);
     i_hash_str(&h, options->tree);
+    i_hash_str(&h, options->street);
+    i_hash_str(&h, options->board);
     {
         double v = options->target_mbb;
+        for (unsigned i = 0; i < sizeof(v); ++i)
+            i_hash_byte(&h, ((const unsigned char *)&v)[i]);
+    }
+    {
+        double v = options->have_pot ? options->pot : 0.0;
         for (unsigned i = 0; i < sizeof(v); ++i)
             i_hash_byte(&h, ((const unsigned char *)&v)[i]);
     }
@@ -689,6 +734,10 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--exploitability-interval") == 0 ||
              strcmp(arg, "--checkpoint") == 0 ||
              strcmp(arg, "--resume") == 0 ||
+             strcmp(arg, "--street") == 0 ||
+             strcmp(arg, "--board") == 0 ||
+             strcmp(arg, "--pot") == 0 ||
+             strcmp(arg, "--to-act") == 0 ||
              strcmp(arg, "--checkpoint-interval") == 0) &&
             (!value || value[0] == '-')) {
             fprintf(stderr, "missing value for %s\n", arg);
@@ -754,6 +803,18 @@ options->checkpoint_interval =0u;
                 return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
+        } else if (strcmp(arg, "--street") == 0) {
+            options->street = value;
+        } else if (strcmp(arg, "--board") == 0) {
+            options->board = value;
+        } else if (strcmp(arg, "--pot") == 0) {
+            if (parse_positive_double(value, &options->pot) != 0) return -1;
+            options->have_pot = 1;
+        } else if (strcmp(arg, "--to-act") == 0) {
+            uint64_t seat;
+            if (parse_u64(value, &seat) != 0) return -1;
+            options->to_act = (int)seat;
+            options->have_to_act = 1;
         } else if (strcmp(arg, "--output") == 0) options->output = value;
         else if (strcmp(arg, "--tree") == 0) options->tree = value;
         else if (strcmp(arg, "--algorithm") == 0) {
@@ -940,6 +1001,42 @@ int main(int argc, char **argv)
     }
     variant = parse_variant(options.game);
     memset(&tree_header, 0, sizeof(tree_header));
+    int root_street = parse_street_name(options.street);
+    mask_t board_mask = 0u;
+    if (root_street < 0)
+    {
+        fprintf(stderr, "unknown --street '%s' (want preflop, flop, turn or river)\n",
+                options.street ? options.street : "(null)");
+        goto fail;
+    }
+    if (root_street == 0 && options.board)
+    {
+        fprintf(stderr, "--board needs a flop, turn or river --street\n");
+        goto fail;
+    }
+    if (root_street != 0)
+    {
+        int need;
+        if (!options.board)
+        {
+            fprintf(stderr, "--street %s needs --board CARDS\n",
+                    options.street);
+            goto fail;
+        }
+        board_mask = string_to_mask(options.board);
+        need = street_board_cards(root_street);
+        if (mask_popcount(board_mask) != (uint32_t)need)
+        {
+            fprintf(stderr, "--board must hold exactly %d cards for %s\n",
+                    need, options.street);
+            goto fail;
+        }
+        if (!options.have_pot)
+        {
+            fprintf(stderr, "--street %s needs --pot BB\n", options.street);
+            goto fail;
+        }
+    }
     if (options.tree)
     {
         if (tree_path_is_json(options.tree))
@@ -968,13 +1065,65 @@ int main(int argc, char **argv)
                 goto fail;
             }
         }
-        if (tree_header.street != 0 ||
+        if (tree_header.street != (uint32_t)root_street ||
             tree_header.player_count != (uint32_t)options.players)
         {
             fprintf(stderr,
-                    "tree must be preflop and contain %d players (got street=%u players=%u)\n",
+                    "tree street must match --street %s and contain %d players (got street=%u players=%u)\n",
+                    options.street ? options.street : "preflop",
                     options.players, tree_header.street, tree_header.player_count);
             goto fail;
+        }
+        /* The driver follows tree decisions on the run's root street;
+         * nodes from other streets are never entered (a tree-terminal
+         * node ends the round, later streets roll out).  A mixed-street
+         * tree therefore needs one run per street, each with its
+         * street-matching tree — say so loudly instead of solving
+         * partially in silence. */
+        {
+            uint32_t postflop_nodes = 0u;
+            char census[160];
+            size_t census_used = 0u;
+            uint32_t street_nodes[5] = {0u, 0u, 0u, 0u, 0u};
+            static const char *names[5] = {"PRE", "FLOP", "TURN", "RIVER", "SHOWDOWN"};
+            if (tree && tree->nodes && tree->node_count > 0)
+            {
+                for (int ni = 0; ni < tree->node_count; ++ni)
+                {
+                    if (tree->nodes[ni].type == MPF_TREE_NODE_PLAYER &&
+                        (int)tree->nodes[ni].street > 0)
+                        ++postflop_nodes;
+                    if (tree->nodes[ni].type == MPF_TREE_NODE_PLAYER &&
+                        (int)tree->nodes[ni].street >= 0 &&
+                        (int)tree->nodes[ni].street < 5)
+                        ++street_nodes[(int)tree->nodes[ni].street];
+                }
+            }
+            census[0] = '\0';
+            for (int street = 0; street < 5; ++street)
+            {
+                if (street_nodes[street] == 0u)
+                    continue;
+                census_used += (size_t)snprintf(census + census_used,
+                                                sizeof(census) - census_used,
+                                                "%s%s=%u", census_used ? " " : "",
+                                                names[street], street_nodes[street]);
+                if (census_used + 1u >= sizeof(census))
+                    break;
+            }
+            printf("tree_streets=%s\n",
+                   census[0] ? census : "none");
+            fflush(stdout);
+            if (postflop_nodes > 0u && !options.postflop_streets &&
+                root_street == 0)
+            {
+                fprintf(stderr,
+                        "warning: tree holds %u decision node(s) off the preflop "
+                        "root street; they are never entered (later streets roll "
+                        "out to showdown). Solve each street separately with its "
+                        "street-matching tree.\n",
+                        postflop_nodes);
+            }
         }
     }
     StdDeck_CardMask_RESET(dead);
@@ -996,6 +1145,14 @@ int main(int argc, char **argv)
     rules.player_count = options.players;
     for (int player = 0; player < options.players; ++player)
         rules.stacks[player] = options.stack;
+    /* Postflop roots use remaining stacks: prefer the tree header's when
+     * present, else the --stack value. */
+    if (root_street != 0 && tree)
+    {
+        for (int player = 0; player < options.players; ++player)
+            if (tree_header.stacks[player] > 0.0)
+                rules.stacks[player] = tree_header.stacks[player];
+    }
     rules.small_blind = options.small_blind;
     rules.big_blind = options.big_blind;
     rules.ante = options.ante;
@@ -1008,6 +1165,23 @@ int main(int argc, char **argv)
     rules.tree_showdown = tree != NULL ? 1 : 0;
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
+    rules.root_street = root_street;
+    rules.root_board = (uint64_t)board_mask;
+    rules.root_pot = options.have_pot ? options.pot : 0.0;
+    if (options.have_to_act)
+    {
+        if (options.to_act >= options.players)
+        {
+            fprintf(stderr, "--to-act seat %d out of range for %d players\n",
+                    options.to_act, options.players);
+            goto fail;
+        }
+        rules.root_to_act = options.to_act;
+    }
+    else if (tree && tree_header.first_to_act >= 0)
+        rules.root_to_act = tree_header.first_to_act;
+    else
+        rules.root_to_act = 0;
     for (size_t i = 0u; i < sizeof(rules.raise_sizes) / sizeof(rules.raise_sizes[0]); ++i)
         rules.raise_sizes[i] = options.raise_sizes[i];
     game = pe_preflop_allin_game_create(&rules, ranges);
@@ -1120,7 +1294,7 @@ int main(int argc, char **argv)
         printf("preflop_solver=lane-b algorithm=%s traversal=%s regret=%s policy=%s "
                "backend=%s backend_validated=1 cpu_threads=%d precision=%s simd_detected=%s "
                "simd_cfr=not-integrated dcfr_alpha=%.6g dcfr_beta=%.6g "
-               "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s\n",
+               "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s street=%s board=%s\n",
                config.algorithm.preset == PE_PRESET_CUSTOM
                    ? "custom" : pe_preset_name(options.algorithm),
                pe_traversal_name(config.algorithm.traversal),
@@ -1133,7 +1307,9 @@ int main(int argc, char **argv)
                config.algorithm.dcfr_alpha, config.algorithm.dcfr_beta,
                config.algorithm.dcfr_gamma, config.algorithm.exponential_lambda,
                options.game, options.players, options.postflop_streets,
-               tree ? options.tree : "none");
+               tree ? options.tree : "none",
+               options.street ? options.street : "preflop",
+               options.board ? options.board : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         printf("solver_phase=complete stop_reason=%s report=starting\n",

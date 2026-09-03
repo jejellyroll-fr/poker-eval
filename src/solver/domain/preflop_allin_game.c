@@ -116,6 +116,43 @@ static int tree_action_to_semantic(const mpf_tree_node_t *node, int index,
     }
 }
 
+/* Tree action semantics depend on the betting state it is played in.
+ *
+ * Monker-style trees name the aggressive edge "raise" and the passive one
+ * "call" on every street, but the betting state machine distinguishes
+ * bet/check (nothing outstanding) from raise/call (a live bet).  Preflop
+ * the big blind always leaves something to call, so only CALL -> CHECK ever
+ * fired; a flop/turn/river root opens with to_call == 0, where an unmapped
+ * "raise" is rejected as illegal and the node collapses to a single check.
+ * Translate both edges here so the tree means the same thing on any street.
+ *
+ * Note the two conversions read different quantities, matching what
+ * pe_betting_action_is_legal() checks: CHECK is about this player's own
+ * outstanding amount, BET about whether anyone has bet this round at all. */
+static int tree_action_to_semantic_in_state(const mpf_tree_node_t *node,
+                                            int index,
+                                            const pe_betting_state_t *betting,
+                                            pe_action_t *out)
+{
+    int actor;
+    double contribution;
+    double outstanding;
+
+    if (tree_action_to_semantic(node, index, out) != 0)
+        return -1;
+    if (!betting)
+        return 0;
+    actor = betting->to_act;
+    contribution = actor >= 0 ? betting->round_contrib[actor] : 0.0;
+    outstanding = betting->to_call > contribution
+                      ? betting->to_call - contribution : 0.0;
+    if (out->kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
+        out->kind = PE_ACTION_CHECK;
+    else if (out->kind == PE_ACTION_RAISE && betting->to_call <= PREFLOP_EPSILON)
+        out->kind = PE_ACTION_BET;
+    return 0;
+}
+
 static const mpf_tree_node_t *preflop_tree_node(
     const pe_preflop_allin_game_t *game,
     const pe_preflop_betting_state_t *state)
@@ -187,30 +224,37 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
     uint16_t i;
     int index;
 
-    if (game->rules.tree && state->street == PE_HOLDEM_PREFLOP &&
-        state->tree_node_index >= 0)
+    /* Tree-bound enumeration.  The tree is followed on whatever street
+     * its nodes declare (single-street Monker files carry one street;
+     * JSON trees may carry several): a node only constrains states on
+     * its own street.  Preflop mismatch keeps the legacy empty action
+     * set; off-tree postflop states fall through to generic betting. */
+    if (game->rules.tree && state->tree_node_index >= 0)
     {
         const mpf_tree_node_t *node = preflop_tree_node(game, state);
-        uint16_t kept = 0u;
-        if (!node || node->type != MPF_TREE_NODE_PLAYER ||
-            node->acting_player != betting->to_act)
-            return 0u;
-        for (index = 0; index < node->action_count && kept < max_actions; ++index)
+        if (node && node->type == MPF_TREE_NODE_PLAYER &&
+            node->acting_player == betting->to_act &&
+            (int)node->street == (int)state->street)
         {
-            pe_action_t candidate;
-            if (tree_action_to_semantic(node, index, &candidate) != 0)
-                continue;
-            if (candidate.kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
-                candidate.kind = PE_ACTION_CHECK;
-            if (pe_betting_action_is_legal(betting, &game->betting_rules,
-                                           &candidate) == PE_BETTING_OK)
+            uint16_t kept = 0u;
+            for (index = 0; index < node->action_count && kept < max_actions; ++index)
             {
-                if (out)
-                    out[kept] = candidate;
-                ++kept;
+                pe_action_t candidate;
+                if (tree_action_to_semantic_in_state(node, index, betting,
+                                                     &candidate) != 0)
+                    continue;
+                if (pe_betting_action_is_legal(betting, &game->betting_rules,
+                                               &candidate) == PE_BETTING_OK)
+                {
+                    if (out)
+                        out[kept] = candidate;
+                    ++kept;
+                }
             }
+            return kept;
         }
-        return kept;
+        if ((int)state->street == (int)PE_HOLDEM_PREFLOP)
+            return 0u;
     }
 
     if (betting->terminal || betting->round_complete || betting->to_act < 0)
@@ -770,26 +814,25 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
     pe_preflop_allin_game_t *game = user;
     if (!game || !child)
         return 0;
-    if (game->rules.tree && source->street == PE_HOLDEM_PREFLOP &&
-        source->tree_node_index >= 0)
+    /* Tree-bound transitions on any street the tree declares.  A node
+     * only constrains states on its own street: anything else behaves
+     * exactly like an unmapped node (legacy path below), which is what
+     * turns a tree-terminal preflop node into an automatic
+     * flop/turn/river rollout. */
+    if (game->rules.tree && source->tree_node_index >= 0)
     {
         const mpf_tree_node_t *node = preflop_tree_node(game, source);
         int next_index = -1;
+        if (node && (int)node->street != (int)source->street)
+            node = NULL;
         if (node)
         {
             for (int i = 0; i < node->action_count; ++i)
             {
                 pe_action_t candidate;
-                if (tree_action_to_semantic(node, i, &candidate) != 0)
+                if (tree_action_to_semantic_in_state(node, i, &source->betting,
+                                                     &candidate) != 0)
                     continue;
-                int actor = source->betting.to_act;
-                double contribution = actor >= 0
-                    ? source->betting.round_contrib[actor] : 0.0;
-                double outstanding = source->betting.to_call > contribution
-                    ? source->betting.to_call - contribution : 0.0;
-                if (candidate.kind == PE_ACTION_CALL &&
-                    outstanding <= PREFLOP_EPSILON)
-                    candidate.kind = PE_ACTION_CHECK;
                 if (tree_action_matches(action, &candidate))
                 {
                     next_index = node->actions[i].next_index;
@@ -797,15 +840,28 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
                 }
             }
         }
-        child->tree_node_index = next_index;
-        if (game->rules.tree_showdown && !child->betting.terminal &&
+        child->tree_node_index = (node != NULL) ? next_index : -1;
+        if (node != NULL && game->rules.tree_showdown && !child->betting.terminal &&
             (next_index < 0 || next_index >= game->rules.tree->node_count ||
              game->rules.tree->nodes[next_index].type == MPF_TREE_NODE_TERMINAL))
         {
             child->betting.round_complete = 1;
             child->betting.to_act = -1;
-            child->is_chance = 1;
             child->tree_node_index = -1;
+            /* Off the river there is a street left to deal, so the tree
+             * terminal becomes a chance node that rolls out.  On the river
+             * the board is already complete: it is the showdown itself, and
+             * marking it a chance node sent preflop_chance_child looking for
+             * a sixth board card, which fails the whole traversal. */
+            if (source->street == PE_HOLDEM_RIVER)
+            {
+                child->betting.terminal = 1;
+                child->is_chance = 0;
+            }
+            else
+            {
+                child->is_chance = 1;
+            }
             return 0;
         }
     }
@@ -862,6 +918,40 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
     pe_preflop_allin_game_t *game = user;
     if (!source || !rng || !sample || !child || !game)
         return -1;
+    /* Root deal FIRST, on any street: hole cards are empty exactly until
+     * the first deal.  The board-dealing branch below assumes dealt holes
+     * (it advances a finished round to the next street); reaching it with
+     * empty holes used to deal a turn card over an undealt flop root, so
+     * postflop roots played out empty-handed with zero decisions. */
+    {
+        int holes_empty = 1;
+        for (int p = 0; p < game->rules.player_count; ++p)
+        {
+            if (source->holes[p] != MASK_EMPTY)
+            {
+                holes_empty = 0;
+                break;
+            }
+        }
+        if (holes_empty)
+        {
+            pe_preflop_deal_sample_t deal;
+            if (pe_preflop_deal_sampler_sample(&game->sampler, rng, &deal) != 0)
+                return -1;
+            child->betting = source->betting;
+            child->is_chance = 0;
+            for (int p = 0; p < game->rules.player_count; ++p)
+                child->holes[p] = deal.holes[p];
+            child->board = source->board;
+            child->dead_cards = source->dead_cards;
+            for (int p = 0; p < game->rules.player_count; ++p)
+                child->dead_cards |= deal.holes[p];
+            child->street = source->street;
+            sample->outcome = 0;
+            sample->importance_ratio = deal.importance_ratio;
+            return 0;
+        }
+    }
     if (game->rules.tree_showdown &&
         ((source->street != PE_HOLDEM_PREFLOP &&
           source->street != PE_HOLDEM_RIVER) ||
@@ -884,24 +974,7 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
         sample->importance_ratio = 1.0;
         return 0;
     }
-    if (source->street == PE_HOLDEM_PREFLOP && source->dead_cards == MASK_EMPTY)
-    {
-        pe_preflop_deal_sample_t deal;
-        if (pe_preflop_deal_sampler_sample(&game->sampler, rng, &deal) != 0)
-            return -1;
-        child->betting = source->betting;
-        child->is_chance = 0;
-        for (int p = 0; p < game->rules.player_count; ++p)
-            child->holes[p] = deal.holes[p];
-        child->board = MASK_EMPTY;
-        child->dead_cards = MASK_EMPTY;
-        for (int p = 0; p < game->rules.player_count; ++p)
-            child->dead_cards |= deal.holes[p];
-        child->street = PE_HOLDEM_PREFLOP;
-        sample->outcome = 0;
-        sample->importance_ratio = deal.importance_ratio;
-        return 0;
-    }
+    /* Generic round advance (holes already dealt): draw the next board. */
     {
         mask_t next_board;
         pe_holdem_round_state_t round;
@@ -993,13 +1066,30 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         rules->variant < PE_PREFLOP_HOLDEM ||
         rules->variant > PE_PREFLOP_PLO6 ||
         rules->showdown_samples <= 0 ||
-        !(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
-        rules->big_blind < rules->small_blind ||
-        !(rules->ante >= 0.0) || rules->ante > DBL_MAX ||
-        rules->ante >= rules->big_blind ||
+        rules->root_street < 0 || rules->root_street > (int)PE_HOLDEM_RIVER ||
         rules->raise_count < 0 || rules->raise_count > PE_PREFLOP_ALLIN_MAX_RAISE_SIZES ||
         !(rules->min_raise > 0.0))
         return NULL;
+    /* Forced bets are only meaningful at a preflop root: a flop/turn/river
+     * root posts nothing and takes its pot from rules->root_pot, so a caller
+     * rooting there must not be made to invent blind values it ignores. */
+    if (rules->root_street == 0)
+    {
+        if (!(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
+            rules->big_blind < rules->small_blind ||
+            !(rules->ante >= 0.0) || rules->ante > DBL_MAX ||
+            rules->ante >= rules->big_blind)
+            return NULL;
+    }
+    else if (!(rules->root_pot > 0.0) ||
+             mask_popcount((mask_t)rules->root_board) !=
+                 (rules->root_street == (int)PE_HOLDEM_FLOP ? 3u :
+                  rules->root_street == (int)PE_HOLDEM_TURN ? 4u : 5u))
+    {
+        /* A postflop root without a pot, or with a board that does not match
+         * its street, would silently solve a different spot than asked. */
+        return NULL;
+    }
     for (player = 0; player < rules->player_count; ++player)
     {
         if (!ranges[player] || !ranges[player]->combos ||
@@ -1064,11 +1154,11 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
 
     if ((rules->variant == PE_PREFLOP_HOLDEM &&
          pe_preflop_deal_sampler_init_holdem(
-             &game->sampler, MASK_EMPTY, game->holdem_ranges,
+             &game->sampler, (mask_t)rules->root_board, game->holdem_ranges,
              (uint8_t)rules->player_count) != 0) ||
         (rules->variant != PE_PREFLOP_HOLDEM &&
          pe_preflop_deal_sampler_init_omaha(
-             &game->sampler, MASK_EMPTY, game->omaha_ranges,
+             &game->sampler, (mask_t)rules->root_board, game->omaha_ranges,
              (uint8_t)rules->player_count,
              rules->variant == PE_PREFLOP_PLO4 ? 4u :
              rules->variant == PE_PREFLOP_PLO5 ? 5u : 6u) != 0))
@@ -1121,6 +1211,30 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->root_betting.betting.pot = 0.0;
     for (player = 0; player < rules->player_count; ++player)
         game->root_betting.betting.pot += posts[player];
+
+    if (rules->root_street != 0)
+    {
+        /* Postflop root (Lane B street trees): throw away the blind-posted
+         * root above — no blinds here, stacks as-is (remaining), fixed
+         * board dead from the start, given pot and first actor. */
+        int to_act = rules->root_to_act >= 0 &&
+                     rules->root_to_act < rules->player_count
+                         ? rules->root_to_act : 0;
+        for (player = 0; player < rules->player_count; ++player)
+            stacks_after[player] = rules->stacks[player];
+        if (pe_betting_state_init(&game->root_betting.betting,
+                                  &game->betting_rules,
+                                  stacks_after, (uint8_t)rules->player_count,
+                                  to_act, rules->root_pot,
+                                  0.0) != PE_BETTING_OK)
+        {
+            pe_preflop_allin_game_destroy(game);
+            return NULL;
+        }
+        game->root_betting.street = (pe_holdem_street_t)rules->root_street;
+        game->root_betting.board = (mask_t)rules->root_board;
+        game->root_betting.dead_cards = (mask_t)rules->root_board;
+    }
 
     game->ops.action_count = preflop_op_action_count;
     game->ops.action_at = preflop_op_action_at;

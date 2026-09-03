@@ -2522,6 +2522,114 @@ static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
  * combination survives.
  */
 #define MPF_MAX_PRIVATE_DEALS (1u << 20)
+/* Draw budget when the joint deal space overflows MPF_MAX_PRIVATE_DEALS.
+ * Full PLO ranges need ~4.5e10 joint deals; enumerating them is hopeless,
+ * but a systematic sample keeps build bounded (~256k deals) while the
+ * traversal only ever visits a fraction of it. */
+#define MPF_SAMPLED_PRIVATE_DEALS (1u << 18)
+
+static void mpf_range_option(const mpf_config_t *cfg, int p, int idx,
+                             mask_t *out_hole, double *out_weight);
+
+/* Systematic sample of the joint private-deal space.
+ *
+ * Full enumeration is refused above MPF_MAX_PRIVATE_DEALS, which every
+ * wide PLO range exceeds on its own (211876 PLO combos per player =>
+ * ~4.5e10 joint deals heads-up).  Instead of failing the build, draw a
+ * deterministic stride through the linearized option product: cell
+ * j*stride for j in [0, draws), decoded in mixed radix, card-consistent
+ * cells kept with product-of-combo weights, renormalized exactly like the
+ * full path.  Inclusion probabilities are near-equal across cells, so the
+ * stored weights stay correct without any importance correction, and the
+ * traversal (which samples deals) behaves as on the full product.
+ * Arithmetic is exact below 2^53 cells (covers heads-up PLO by orders of
+ * magnitude); beyond that the stride degrades gracefully while every
+ * emitted deal remains valid.  No RNG involved: identical inputs give
+ * identical deal sets. */
+static int mpf_build_private_deals_sampled(const mpf_config_t *cfg,
+                                           mask_t board,
+                                           const int *counts,
+                                           mpf_private_deal_t **out_deals,
+                                           int *out_count)
+{
+    enum { DRAWS = MPF_SAMPLED_PRIVATE_DEALS };
+    mpf_private_deal_t *deals;
+    double total_cells = 1.0;
+    double stride;
+    double total = 0.0;
+    int idx[MPF_MAX_PLAYERS];
+    int n = 0;
+    int p;
+    unsigned long long j;
+
+    for (p = 0; p < cfg->num_players; ++p)
+        total_cells *= (double)counts[p];
+    stride = total_cells / (double)DRAWS;
+    if (!(stride >= 1.0))
+        stride = 1.0;
+
+    deals = (mpf_private_deal_t *)calloc(DRAWS, sizeof(mpf_private_deal_t));
+    if (!deals)
+        return -1;
+
+    for (j = 0u; j < (unsigned long long)DRAWS; ++j)
+    {
+        double r = (double)j * stride;
+        mask_t used = board;
+        double w = 1.0;
+        int ok = 1;
+
+        /* Mixed-radix decode, least significant digit = last player. */
+        for (p = cfg->num_players - 1; p >= 0; --p)
+        {
+            double c = (double)counts[p];
+            double q = (double)(unsigned long long)(r / c);
+            long digit = (long)(r - q * c);
+            if (digit < 0L)
+                digit = 0L;
+            if (digit >= (long)counts[p])
+                digit = (long)counts[p] - 1L;
+            idx[p] = (int)digit;
+            r = q;
+        }
+
+        for (p = 0; p < cfg->num_players && ok; ++p)
+        {
+            mask_t h;
+            double pw;
+            mpf_range_option(cfg, p, idx[p], &h, &pw);
+            /* A card cannot be in two hands, nor in a hand and on the board. */
+            if ((h & used) != 0)
+                ok = 0;
+            else
+            {
+                used |= h;
+                w *= pw;
+                deals[n].hole[p] = h;
+            }
+        }
+
+        if (ok && w > 0.0)
+        {
+            deals[n].weight = w;
+            total += w;
+            n++;
+        }
+    }
+
+    if (n == 0 || !(total > 0.0))
+    {
+        free(deals);
+        return -1;
+    }
+
+    for (int i = 0; i < n; ++i)
+        deals[i].weight /= total;
+
+    *out_deals = deals;
+    *out_count = n;
+    return 0;
+}
 
 static int mpf_range_option_count(const mpf_config_t *cfg, int p)
 {
@@ -2561,16 +2669,28 @@ static int mpf_build_private_deals(const mpf_config_t *cfg, mask_t board,
     double total = 0.0;
     int p;
 
+    double approx = 1.0;
+
     for (p = 0; p < cfg->num_players; ++p)
     {
         counts[p] = mpf_range_option_count(cfg, p);
         if (counts[p] <= 0)
             return -1;
         idx[p] = 0;
-        product *= (unsigned long long)counts[p];
-        if (product > MPF_MAX_PRIVATE_DEALS)
-            return -1;   /* refused rather than truncated */
+        /* Double running product: exact below 2^53 and wraparound-free
+         * above, unlike the ull accumulator it replaces for sizing. */
+        approx *= (double)counts[p];
     }
+    if (!(approx <= (double)MPF_MAX_PRIVATE_DEALS))
+    {
+        MPF_ADAPTER_DEBUG("mpf: private deals sampled (joint=%.0f > cap=%u)\n",
+                          approx, (unsigned)MPF_MAX_PRIVATE_DEALS);
+        return mpf_build_private_deals_sampled(cfg, board, counts,
+                                               out_deals, out_count);
+    }
+    MPF_ADAPTER_DEBUG("mpf: private deals enumerated (joint=%.0f)\n", approx);
+    for (p = 0; p < cfg->num_players; ++p)
+        product *= (unsigned long long)counts[p];
 
     capacity = (int)product;
     deals = (mpf_private_deal_t *)calloc((size_t)capacity, sizeof(mpf_private_deal_t));

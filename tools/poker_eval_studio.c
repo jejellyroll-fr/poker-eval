@@ -348,10 +348,17 @@ struct _app_t
     time_t solve_started_at;
     uint64_t solve_update_count;
     uint32_t tree_node_count;
+    /* Player decision nodes past preflop (street > 0) in the loaded tree,
+     * plus the per-street census.  Lane B follows tree decisions on the
+     * run's street and rolls later streets out; nodes from any other
+     * street are never entered — surfaced as an explicit warning. */
+    uint32_t tree_street_nodes[5];
     /* The results table must follow the topology, not the last Setup
      * selection.  This is especially important when an external .mkr is
      * loaded directly: its tree may be 4-max while Setup still says 2. */
     uint32_t tree_player_count;
+    /* Per-street player-node census of the loaded tree (see read_tree). */
+    char tree_street_summary[128];
 
     /* Strategy Rows & Monker Hands */
     uint32_t strategy_row_count;
@@ -519,6 +526,14 @@ static const char *street_name(int street)
 {
     static const char *names[] = {"preflop", "flop", "turn", "river"};
     return street >= 0 && street < 4 ? names[street] : "unknown";
+}
+
+/* Same names in upper case, for status headings.  street_name() itself must
+ * stay lower case: it is passed verbatim to the driver's --street flag. */
+static const char *street_name_upper(int street)
+{
+    static const char *names[] = {"PREFLOP", "FLOP", "TURN", "RIVER"};
+    return street >= 0 && street < 4 ? names[street] : "UNKNOWN";
 }
 
 static const char *game_name(enum_game_t game)
@@ -4606,6 +4621,44 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
         return -1;
     }
     app->tree_node_count = tree->node_count > 0 ? (uint32_t)tree->node_count : 0u;
+    {
+        /* Per-street census shown in TREE CONTEXT: proves what the file
+         * actually holds.  The binary Monker format stores a single
+         * street (all nodes inherit the header street); JSON trees may
+         * carry several.  Lane B follows the run street's decisions. */
+        uint32_t street_nodes[5] = {0u, 0u, 0u, 0u, 0u};
+        char *street_text = app->tree_street_summary;
+        size_t used = 0u;
+        static const char *names[5] = {"PRE", "FLOP", "TURN", "RIVER", "SHOWDOWN"};
+        if (tree->nodes && tree->node_count > 0)
+        {
+            for (int node_index = 0; node_index < tree->node_count; ++node_index)
+            {
+                const mpf_tree_node_t *node = &tree->nodes[node_index];
+                if (node->type == MPF_TREE_NODE_PLAYER &&
+                    (int)node->street >= 0 && (int)node->street < 5)
+                    ++street_nodes[(int)node->street];
+            }
+        }
+        /* Unconditional: loading a node-less tree must clear the previous
+         * tree's census, not inherit it. */
+        for (int street = 0; street < 5; ++street)
+            app->tree_street_nodes[street] = street_nodes[street];
+        street_text[0] = '\0';
+        for (int street = 0; street < 5; ++street)
+        {
+            if (street_nodes[street] == 0u)
+                continue;
+            used += (size_t)snprintf(street_text + used,
+                                     sizeof(app->tree_street_summary) - used,
+                                     "%s%s=%u", used ? " " : "",
+                                     names[street], street_nodes[street]);
+            if (used + 1u >= sizeof(app->tree_street_summary))
+                break;
+        }
+        if (used == 0u)
+            snprintf(street_text, sizeof(app->tree_street_summary), "none");
+    }
     app->tree_player_count = header->player_count >= 2u &&
                              header->player_count <= 6u
         ? header->player_count : 0u;
@@ -4633,6 +4686,10 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
             edit_text(app->board_edit_quick, "");
         edit_text(app->range0_edit, "100%");
         edit_text(app->range1_edit, "100%");
+        /* Blinds build the preflop pot; a leftover postflop figure here
+         * would be silently ignored, so clear it. */
+        if (app->setup_pot_edit)
+            edit_text(app->setup_pot_edit, "");
     }
     else
     {
@@ -4640,6 +4697,8 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
             edit_text(app->range0_edit, "100%");
         if (!edit_get_text(app->range1_edit) || !*edit_get_text(app->range1_edit))
             edit_text(app->range1_edit, "100%");
+        if (app->setup_pot_edit)
+            edit_phtext(app->setup_pot_edit, "Required: pot in the middle at this node");
     }
     label_text(app->board_label, header->street == 0
                ? "BOARD / RUNOUT: automatic through river"
@@ -4670,6 +4729,9 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
                         street_name(header->street));
         textview_printf(app->strategy_view, "nodes                         %d\n",
                         tree->node_count);
+        textview_printf(app->strategy_view, "decision nodes by street      %s\n",
+                        app->tree_street_summary[0] ? app->tree_street_summary : "?");
+        textview_printf(app->strategy_view, "solved streets                Lane B follows the run street's tree decisions; other streets are dealt and rolled out\n");
         textview_printf(app->strategy_view, "ranges                        %s\n",
                         ranges_present ? "embedded" : "external / defaults to 100%%");
         textview_printf(app->strategy_view, "board / runouts               %s\n",
@@ -4679,14 +4741,16 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
                           "Run the spot to replace this context with the strategy table.");
     }
     status(app,
-           "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d\nRanges: %s\n\n%s",
+           "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d (%s)\nRanges: %s\n\n%s",
            game_name(layout->game),
            ranges_present ? " (from tree)" : " (selected)",
            header->player_count, street_name(header->street), tree->node_count,
+           app->tree_street_summary[0] ? app->tree_street_summary : "?",
            ranges_present ? "embedded" : "not embedded; enter external ranges",
            header->street == 0
                ? "Preflop Lane B: ranges are sampled with card removal; public boards are dealt through river."
-               : "Enter the board cards for this tree street before Solve.");
+               : "Postflop Lane B: enter the board cards AND the pot at the root before Solve\n"
+                 "(there are no blinds postflop, and stacks are read as remaining).");
     mpf_tree_free(tree);
     pe_monker_range_set_free(&ranges);
     return 0;
@@ -6525,8 +6589,7 @@ static void i_on_solve(App *app, Event *event)
 {
     pe_monker_tree_header_t header;
     pe_monker_combo_layout_t layout;
-    char tree[2048], board[256], runner[2048], mkr[2048];
-    char range0[4200], range1[4200];
+    char tree[2048], board[256], runner[2048];
     char command[8192];
     size_t used = 0u;
     int board_cards;
@@ -6741,11 +6804,18 @@ static void i_on_solve(App *app, Event *event)
          * the progress views render it as infinity. */
         iterations = STUDIO_NO_ITER_CAP;
     }
-    if (header.street == 0)
+    /* Lane B drives preflop AND flop/turn/river roots through the same
+     * sampled solver: pe-preflop-solve takes --street/--board/--pot to root
+     * the game at a street instead of at the blinds.  Everything else on
+     * this path (algorithm, backend, precision, stop rule, checkpoints)
+     * behaves identically on every street. */
+    if (header.street <= 3u)
     {
         pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *info;
         char backend_display[96];
+        char root_options[512];
+        double root_pot = 0.0;
         const char *configured_runner = usable_optional_path(runner_path)
             ? runner_path : "pe-preflop-solve";
         if (strcmp(configured_runner, "pe-vector-sim") == 0)
@@ -6760,17 +6830,65 @@ static void i_on_solve(App *app, Event *event)
         if (header.player_count < 2u || header.player_count > 6u ||
             usable_optional_path(mkr_path))
         {
-            status(app, "SOLVE BLOCKED\nPreflop Lane B supports 2..6 players and solves the tree from ranges; .mkr import is not used by this path.");
+            status(app, "SOLVE BLOCKED\nLane B supports 2..6 players and solves the tree from ranges; .mkr import is not used by this path.");
             unref(event);
             return;
+        }
+        /* Postflop root: the board is the spot, and the pot is an input the
+         * tree cannot supply (the binary Monker header only carries
+         * committed chips at street zero, and clears them afterwards). */
+        root_options[0] = '\0';
+        if (header.street > 0u)
+        {
+            board_cards = card_count(board_text);
+            if (board_cards != street_cards((int)header.street))
+            {
+                status(app,
+                       "SOLVE BLOCKED\nExpected %d board cards for %s, received %d.",
+                       street_cards((int)header.street),
+                       street_name((int)header.street), board_cards);
+                unref(event);
+                return;
+            }
+            if (parse_ui_target(app->setup_pot_edit
+                                    ? edit_get_text(app->setup_pot_edit) : "",
+                                &root_pot) != 0 || root_pot <= 0.0)
+            {
+                status(app,
+                       "SOLVE BLOCKED\nA %s root needs POT AT ROOT (BB): there are no\n"
+                       "blinds to post postflop, so the money already in the middle\n"
+                       "must be entered.",
+                       street_name((int)header.street));
+                unref(event);
+                return;
+            }
+            if (quote_argument(board_text, board, sizeof(board)) != 0)
+            {
+                status(app, "SOLVE ERROR\nBoard text is too long.");
+                unref(event);
+                return;
+            }
+            /* first_to_act comes from the tree header; -1 means "unspecified"
+             * and the solver defaults to seat 0. */
+            (void)snprintf(root_options, sizeof(root_options),
+                           " --street %s --board %s --pot %.17g",
+                           street_name((int)header.street), board, root_pot);
+            if (header.first_to_act >= 0 &&
+                header.first_to_act < (int)header.player_count)
+            {
+                size_t root_len = strlen(root_options);
+                (void)snprintf(root_options + root_len,
+                               sizeof(root_options) - root_len,
+                               " --to-act %d", header.first_to_act);
+            }
         }
         if (!preflop_algorithm_supported_ui(algorithm))
         {
             status(app,
                    "SOLVE BLOCKED\n"
-                   "Lane B preflop currently supports sampled presets only:\n"
+                   "Lane B currently supports sampled presets only:\n"
                    "external-mccfr, external-dcfr, outcome-mccfr, external-ecfr.\n"
-                   "'%s' is a full-tree/experimental preset and has no preflop adapter yet.",
+                   "'%s' is a full-tree/experimental preset and has no Lane B adapter yet.",
                    pe_preset_name(algorithm));
             unref(event);
             return;
@@ -6880,14 +6998,14 @@ static void i_on_solve(App *app, Event *event)
                            dcfr_alpha, dcfr_beta, dcfr_gamma);
         }
         used = (size_t)snprintf(command, sizeof(command),
-                                "%s --game %s --players %u --tree %s"
+                                "%s --game %s --players %u --tree %s%s"
                                 " --iterations %" PRIu64 " --samples 1"
                                 " --br-samples 32 --target-mbb %.17g"
                                 " --exploitability-interval %" PRIu64
                                 "%s --threads %" PRIu64,
                                 runner, game_name(layout.game),
-                                header.player_count, tree, iterations,
-                                target_mbb, interval,
+                                header.player_count, tree, root_options,
+                                iterations, target_mbb, interval,
                                 algorithm_options, threads);
         for (uint32_t player = 0u; player < header.player_count; ++player)
         {
@@ -6960,9 +7078,10 @@ static void i_on_solve(App *app, Event *event)
             }
         }
         snprintf(config_text, sizeof(config_text),
-                 "Lane B preflop | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
+                 "Lane B %s | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
 " | policy %s%s | SIMD %s",
+                  street_name((int)header.street),
                   pe_preset_name(algorithm), algorithm_axes,
                   stop_mode == 0u ? "iterations"
                   : stop_mode == 1u ? "exploitability only (no iteration cap)"
@@ -6989,13 +7108,43 @@ static void i_on_solve(App *app, Event *event)
                 : (stop_mode == 2u)
                     ? "\nStop rule: manual only — runs until you click Stop run."
                     : "";
+            /* Lane B enters tree decisions only on the run's root street;
+             * nodes declared on any other street are never reached and the
+             * later streets are dealt and rolled out to showdown.  Say so
+             * rather than solving a fraction of the file in silence. */
+            char scope_note[256];
+            char root_note[192];
+            uint32_t off_street = 0u;
+            scope_note[0] = '\0';
+            for (uint32_t street = 0u; street < 5u; ++street)
+                if (street != header.street)
+                    off_street += app->tree_street_nodes[street];
+            if (off_street > 0u)
+            {
+                snprintf(scope_note, sizeof(scope_note),
+                         "\nSCOPE WARNING: this tree holds %u decision node(s) off the "
+                         "%s root street; they are never entered (later streets "
+                         "roll out to showdown). Solve each street separately with "
+                         "its street-matching tree.",
+                         off_street, street_name((int)header.street));
+            }
+            if (header.street > 0u)
+                snprintf(root_note, sizeof(root_note),
+                         "Board %s is dead; pot %.2f BB and the stacks are taken as "
+                         "remaining (no blinds postflop). Later streets are dealt "
+                         "through river.",
+                         board_text && *board_text ? board_text : "(none)", root_pot);
+            else
+                snprintf(root_note, sizeof(root_note),
+                         "Empty ranges are 100%%; boards are dealt through river.");
             status(app,
-                   "SOLVING PREFLOP\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\n"
+                   "SOLVING %s\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\n"
                    "SIMD detected: %s (CFR traversal scalar)\nOMP_NUM_THREADS=%" PRIu64 "\n"
-                   "%s%s\nEmpty ranges are 100%%; boards are dealt through river.",
+                   "%s%s%s\n%s",
+                   street_name_upper((int)header.street),
                    command, pe_preset_name(algorithm), algorithm_axes,
                    backend_display, pe_runtime_simd_name(runtime.simd),
-                   threads, parallel_note, stop_note);
+                   threads, parallel_note, stop_note, scope_note, root_note);
         }
         app->solve_has_resolved = 1;
         app->solve_resolved_threads = (int)threads;
@@ -7009,103 +7158,12 @@ static void i_on_solve(App *app, Event *event)
         unref(event);
         return;
     }
-    board_cards = card_count(board_text);
-    if (board_cards != street_cards(header.street))
-    {
-        status(app, "SOLVE BLOCKED\nExpected %d board cards for %s, received %d.",
-               street_cards(header.street), street_name(header.street), board_cards);
-        unref(event);
-        return;
-    }
-    if (header.street != 3)
-    {
-        status(app, "SOLVE BLOCKED\nVector CPU currently consumes river tree spots.\nUse Legacy CFR for %s trees.",
-               street_name(header.street));
-        unref(event);
-        return;
-    }
-    /* pe-vector-sim is a terminal evaluator/tree-path replay, not a CFR
-     * runner. Keep the setup controls honest for postflop trees: an
-     * explicitly requested GPU backend or non-reference precision cannot be
-     * silently ignored by the command. */
-    if (backend != PE_COMPUTE_AUTO && backend != PE_COMPUTE_CPU_REF)
-    {
-        status(app, "SOLVE BLOCKED\nPostflop vector evaluation currently uses CPU reference only.\n"
-               "CUDA/OpenCL are available for the sampled preflop solver when validated.");
-        unref(event);
-        return;
-    }
-    if (precision != PE_PREC_F64)
-    {
-        status(app, "SOLVE BLOCKED\nPostflop vector evaluation currently uses f64.\n"
-               "Select f64 or use the sampled preflop solver for alternate precision.");
-        unref(event);
-        return;
-    }
-    if (layout.combo_count == 0u && header.player_count != 2u)
-    {
-        status(app, "SOLVE BLOCKED\nThis native vector screen needs one external range per player; current tree has %u players.",
-               header.player_count);
-        unref(event);
-        return;
-    }
-    {
-        const char *configured_runner = usable_optional_path(runner_path) &&
-            strcmp(runner_path, "pe-preflop-solve") != 0
-            ? runner_path : "pe-vector-sim";
-        const char *resolved_runner = resolve_runner(configured_runner,
-                                                     "pe-vector-sim");
-        if (!resolved_runner)
-        {
-            status(app, "SOLVE ERROR\nCould not find pe-vector-sim next to Studio, in build/tools or in build-studio/tools.\nBuild the solver tools before starting a postflop run.");
-            unref(event);
-            return;
-        }
-        if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
-            quote_argument(board_text, board, sizeof(board)) != 0 ||
-            quote_argument(resolved_runner, runner, sizeof(runner)) != 0)
-        {
-            status(app, "SOLVE ERROR\nPath is too long.");
-            unref(event);
-            return;
-        }
-    }
-    used = (size_t)snprintf(command, sizeof(command),
-                            "%s --game %s --board %s --players %u --tree %s",
-                            runner, game_name(layout.game), board,
-                            header.player_count, tree);
-    if (layout.combo_count == 0u)
-    {
-        if (!range0_text || !*range0_text || !range1_text || !*range1_text ||
-            quote_argument(range0_text, range0, sizeof(range0)) != 0 ||
-            quote_argument(range1_text, range1, sizeof(range1)) != 0)
-        {
-            status(app, "SOLVE BLOCKED\nEnter both external ranges for this rangeless tree.");
-            unref(event);
-            return;
-        }
-        used += (size_t)snprintf(command + used, sizeof(command) - used,
-                                 " --range0 %s --range1 %s", range0, range1);
-    }
-    if (usable_optional_path(mkr_path) && quote_argument(mkr_path, mkr, sizeof(mkr)) == 0)
-        (void)snprintf(command + used, sizeof(command) - used, " --mkr %s", mkr);
-    (void)snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
-    snprintf(config_text, sizeof(config_text),
-             "Postflop vector terminal | engine vector-terminal | CPU reference"
-             " | f64 | SIMD detected automatically | CFR controls not applicable");
-    label_text(app->run_config, config_text);
-    status(app, "EVALUATING POSTFLOP\n%s\n\nThis path replays the tree and evaluates terminal equities; it does not run CFR.", command);
-    app->solve_has_resolved = 1;
-    app->solve_resolved_threads = 1;
-    snprintf(app->solve_resolved_backend, sizeof(app->solve_resolved_backend),
-             "%s", "cpu_ref");
-    /* Postflop evaluation has no stop rule; clear any stale preflop
-     * stop-mode state so i_solve_end never misreports a verdict. */
-    app->solve_stop_mode = 0u;
-    app->solve_run_iterations = 0u;
-    app->solve_run_target = 0.0;
-    if (i_start_solve(app, command) != 0)
-        status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
+    /* Streets past river do not exist: the header is malformed or the
+     * file is not a spot tree. */
+    status(app,
+           "SOLVE BLOCKED\nThis tree declares street %u, which is not a\n"
+           "playable root (expected preflop, flop, turn or river).",
+           header.street);
     unref(event);
 }
 
@@ -7121,6 +7179,7 @@ static Panel *i_setup_panel(App *app)
     Label *tree_label = label_create();
     Label *mkr_label = label_create();
     Label *board_label = label_create();
+    Label *pot_label = label_create();
     Label *range0_label = label_create();
     Label *range1_label = label_create();
     Label *runner_label = label_create();
@@ -7149,6 +7208,7 @@ static Panel *i_setup_panel(App *app)
     app->tree_edit = edit_create();
     app->mkr_edit = edit_create();
     app->board_edit = edit_create();
+    app->setup_pot_edit = edit_create();
     app->range0_edit = edit_create();
     app->range1_edit = edit_create();
     app->runner_edit = edit_create();
@@ -7176,6 +7236,7 @@ static Panel *i_setup_panel(App *app)
     label_text(tree_label, ".TREE");
     label_text(mkr_label, ".MKR (optional)");
     label_text(board_label, "BOARD (tree street)");
+    label_text(pot_label, "POT AT ROOT (BB, postflop trees)");
     label_text(range0_label, "RANGE PLAYER 1");
     label_text(range1_label, "RANGE PLAYER 2");
     label_text(runner_label, "SOLVER DRIVER");
@@ -7258,6 +7319,10 @@ static Panel *i_setup_panel(App *app)
     edit_phtext(app->tree_edit, "/path/to/spot.tree");
     edit_phtext(app->mkr_edit, "/path/to/strategy.mkr");
     edit_phtext(app->board_edit, "No board (preflop: automatic)");
+    /* Postflop roots carry no blinds: the money already in the middle is
+     * an input, and the binary Monker header only stores committed chips
+     * at street zero. Preflop runs ignore it (blinds build the pot). */
+    edit_phtext(app->setup_pot_edit, "Preflop: unused (blinds build the pot)");
     edit_phtext(app->range0_edit, "100%");
     edit_phtext(app->range1_edit, "100%");
     edit_text(app->runner_edit, "pe-preflop-solve");
@@ -7285,6 +7350,8 @@ static Panel *i_setup_panel(App *app)
                    listener(app, i_on_setup_state_change, App));
     edit_OnChange(app->board_edit,
                   listener(app, i_on_setup_state_change, App));
+    edit_OnChange(app->setup_pot_edit,
+                  listener(app, i_on_setup_state_change, App));
     layout_label(layout, title, 0, 0);
     layout_label(layout, game_label, 0, 1);
     layout_combo(layout, app->game_combo, 0, 2);
@@ -7298,6 +7365,8 @@ static Panel *i_setup_panel(App *app)
     layout_button(layout, browse_mkr, 1, 6);
     layout_label(layout, board_label, 0, 7);
     layout_edit(layout, app->board_edit, 0, 8);
+    layout_label(layout, pot_label, 1, 7);
+    layout_edit(layout, app->setup_pot_edit, 1, 8);
     layout_label(layout, range0_label, 0, 9);
     layout_edit(layout, app->range0_edit, 0, 10);
     layout_label(layout, range1_label, 1, 9);

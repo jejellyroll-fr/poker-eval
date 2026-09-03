@@ -60,6 +60,17 @@ typedef struct
     /* Showdown resolution. */
     int showdown_samples; /* sampled boards per called terminal */
     uint64_t showdown_seed;
+    /* Postflop root (Lane B street trees).  root_street == 0 (preflop)
+     * preserves the classic blind-posted root.  A nonzero street (flop /
+     * turn / river) roots the game there with the fixed board, pot and
+     * first actor below: blinds are ignored, stacks are taken as-is
+     * (remaining stacks), and hole cards are sampled per iteration with
+     * the board dead.  Tree decisions are followed on every street the
+     * tree declares; later streets roll out to showdown. */
+    int root_street;
+    uint64_t root_board; /* card mask of the fixed flop/turn/river board */
+    double root_pot;
+    int root_to_act; /* seating index to act first, -1 = seat 0 */
 } pe_preflop_allin_rules_t;
 
 typedef struct pe_preflop_allin_game_t pe_preflop_allin_game_t;
