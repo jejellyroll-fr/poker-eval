@@ -71,6 +71,19 @@ typedef struct
     uint64_t root_board; /* card mask of the fixed flop/turn/river board */
     double root_pot;
     int root_to_act; /* seating index to act first, -1 = seat 0 */
+    /* Every player holds the complete range ("any hand").  The `ranges`
+     * argument to pe_preflop_allin_game_create is then ignored and may be
+     * NULL: deals are drawn straight from the live deck.
+     *
+     * This is what makes 5- and 6-card Omaha solvable.  A full PLO6 range is
+     * C(52,6) = 20,358,520 combos -- 326 MB per player to store, and the
+     * enumerated proposal walks that list once per player per drawn deal.
+     * The complete-range draw is O(hole_cards) and yields the same
+     * distribution and the same importance weight.
+     *
+     * All-or-nothing on purpose: a mix of complete and explicit ranges would
+     * need per-choice completion checks that have no closed form. */
+    int complete_ranges;
 } pe_preflop_allin_rules_t;
 
 typedef struct pe_preflop_allin_game_t pe_preflop_allin_game_t;

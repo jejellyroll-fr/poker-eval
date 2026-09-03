@@ -29,7 +29,21 @@ typedef struct
     mask_t board;
     uint8_t player_count;
     uint8_t hole_cards;
-    const void *ranges; /* borrowed pe_holdem_range_t[] or pe_omaha_range_t[] */
+    /* Borrowed pe_holdem_range_t[] or pe_omaha_range_t[].  NULL means every
+       player holds the complete range (see complete_ranges). */
+    const void *ranges;
+
+    /* Set when `ranges` is NULL: every player's range is "any hand", so the
+       deal is drawn straight from the live deck instead of walking a combo
+       list.  This is not an optimisation detail, it is what makes 5- and
+       6-card Omaha solvable at all: a full PLO6 range is C(52,6) = 20.4M
+       combos (326 MB per player) and the sequential proposal is linear in
+       that count per drawn deal.  Drawing uniformly from the live deck is
+       mathematically the same proposal -- a uniform n-subset, with the
+       per-player legal total C(live, n) -- at O(hole_cards) per player.
+       Only the all-players-complete case is modelled, because a mixed deal
+       would need per-choice completion checks that have no closed form. */
+    uint8_t complete_ranges;
 
     /* Exact normalisation of the product range distribution.  When zero,
        sampling still applies target/proposal importance weighting, but the

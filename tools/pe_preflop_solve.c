@@ -564,6 +564,24 @@ static int street_board_cards(int street)
     return street == 1 ? 3 : street == 2 ? 4 : street == 3 ? 5 : 0;
 }
 
+/* A range spec that means "any hand".  Recognised before parsing so the
+ * solver can use its complete-range draw instead of materialising the combo
+ * list: full PLO5/PLO6 ranges are 2.6M / 20.4M hands, which is neither
+ * storable nor walkable per deal, and the 5- and 6-card parser deliberately
+ * refuses percentages it has no ranked table for. */
+static int range_is_complete(const char *text)
+{
+    if (!text || !*text)
+        return 1;   /* the drivers default an empty range to 100% */
+    while (*text == ' ' || *text == '\t')
+        ++text;
+    /* "100%" is what this repo's tools and the Studio already emit for a full
+     * range; "random" is ProPokerTools' spelling for the same thing.  Nothing
+     * else is treated as complete -- an unrecognised spelling must reach the
+     * parser and be judged there, not silently become "any hand". */
+    return strcmp(text, "100%") == 0 || strcmp(text, "random") == 0;
+}
+
 /* Deterministic fingerprint of the solve spot; the checkpoint adapter stores it
  * so it can refuse to resume a checkpoint saved on a different spot. */
 static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree)
@@ -1127,7 +1145,14 @@ int main(int argc, char **argv)
         }
     }
     StdDeck_CardMask_RESET(dead);
-    for (int player = 0; player < options.players; ++player) {
+    /* All-or-nothing: the complete-range draw has no closed form for a deal
+     * that mixes "any hand" with an explicit list, so one restricted range
+     * puts every player back on the enumerated path. */
+    int complete_ranges = 1;
+    for (int player = 0; player < options.players; ++player)
+        if (!range_is_complete(options.range[player]))
+            complete_ranges = 0;
+    for (int player = 0; !complete_ranges && player < options.players; ++player) {
         enum_game_t range_game = variant == PE_PREFLOP_HOLDEM ? game_holdem
             : variant == PE_PREFLOP_PLO4 ? game_omaha
             : variant == PE_PREFLOP_PLO5 ? game_omaha5 : game_omaha6;
@@ -1136,6 +1161,25 @@ int main(int argc, char **argv)
             !ranges[player]) {
             fprintf(stderr, "invalid %s range%d: %s\n", options.game, player,
                     options.range[player]);
+            if (variant == PE_PREFLOP_PLO5 || variant == PE_PREFLOP_PLO6)
+            {
+                int n = variant == PE_PREFLOP_PLO5 ? 5 : 6;
+                fprintf(stderr,
+                        "note: %s ranges accept\n"
+                        "  - a complete hand: %s\n"
+                        "  - a ProPokerTools rank pattern, 'x' for any rank: %s\n"
+                        "  - the full range: 100%%\n"
+                        "A pattern is refused when it expands past %u combos "
+                        "(AAxxxx alone is 1.4M); narrow it, e.g. AAKxxx "
+                        "instead of AAxxxx.\n"
+                        "Suit suffixes (ds/ss/ts/qs/r) are 4-card notation and "
+                        "are not accepted for %d-card hands: their suit-count "
+                        "shapes have no agreed %d-card meaning.\n",
+                        options.game,
+                        n == 5 ? "AsKsQd3c9h" : "AsKsQd3c9h8d",
+                        n == 5 ? "AAxxx, AKQxx, AAKKx" : "AKQJxx, AAKKxx",
+                        (unsigned)500000, n, n);
+            }
             goto fail;
         }
     }
@@ -1165,6 +1209,7 @@ int main(int argc, char **argv)
     rules.tree_showdown = tree != NULL ? 1 : 0;
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
+    rules.complete_ranges = complete_ranges;
     rules.root_street = root_street;
     rules.root_board = (uint64_t)board_mask;
     rules.root_pot = options.have_pot ? options.pot : 0.0;

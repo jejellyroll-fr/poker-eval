@@ -1092,8 +1092,13 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     }
     for (player = 0; player < rules->player_count; ++player)
     {
-        if (!ranges[player] || !ranges[player]->combos ||
-            ranges[player]->count == 0 || !(rules->stacks[player] > 0.0))
+        if (!(rules->stacks[player] > 0.0))
+            return NULL;
+        /* Complete ranges carry no combo list to validate. */
+        if (rules->complete_ranges)
+            continue;
+        if (!ranges || !ranges[player] || !ranges[player]->combos ||
+            ranges[player]->count == 0)
             return NULL;
     }
 
@@ -1103,8 +1108,10 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->rules = *rules;
     game->ranges = ranges;
 
-    /* Convert prepared ranges to mask-based combos for the deal sampler. */
-    for (player = 0; player < rules->player_count; ++player)
+    /* Convert prepared ranges to mask-based combos for the deal sampler.
+     * Skipped entirely for complete ranges: there is no list to build. */
+    for (player = 0; !rules->complete_ranges && player < rules->player_count;
+         ++player)
     {
         pe_range_view_t view = pe_solver_range_view(ranges[player]);
         unsigned required_cards = rules->variant == PE_PREFLOP_HOLDEM ? 2u :
@@ -1152,13 +1159,16 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         }
     }
 
+    /* NULL ranges tell the sampler every player holds any hand. */
     if ((rules->variant == PE_PREFLOP_HOLDEM &&
          pe_preflop_deal_sampler_init_holdem(
-             &game->sampler, (mask_t)rules->root_board, game->holdem_ranges,
+             &game->sampler, (mask_t)rules->root_board,
+             rules->complete_ranges ? NULL : game->holdem_ranges,
              (uint8_t)rules->player_count) != 0) ||
         (rules->variant != PE_PREFLOP_HOLDEM &&
          pe_preflop_deal_sampler_init_omaha(
-             &game->sampler, (mask_t)rules->root_board, game->omaha_ranges,
+             &game->sampler, (mask_t)rules->root_board,
+             rules->complete_ranges ? NULL : game->omaha_ranges,
              (uint8_t)rules->player_count,
              rules->variant == PE_PREFLOP_PLO4 ? 4u :
              rules->variant == PE_PREFLOP_PLO5 ? 5u : 6u) != 0))

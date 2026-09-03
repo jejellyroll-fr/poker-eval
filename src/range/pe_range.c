@@ -56,6 +56,201 @@ static int pe_range_add_combo(pe_range_t *range, StdDeck_CardMask hand, double w
     return 1;
 }
 
+/* ---------------- PPT-style rank patterns for 5- and 6-card Omaha -------
+ *
+ * ProPokerTools notation (the one PLO Mastermind and the rest of the PLO
+ * tooling use) writes an agnostic hand as n rank slots, with 'x' for "any
+ * rank": AAxx / AKQxx / AAKKx.  ARP already implements this for PLO4, but
+ * OmahaHand_Instantiate is written as hand-unrolled four-card loops and its
+ * ranked tables are C(52,4), so a 5- or 6-card pattern sent through it came
+ * back as FOUR-card hands.  This is the n-card expander.
+ *
+ * Deliberately NOT implemented here: the suit-property suffixes (ds, ss, ts,
+ * qs, r).  Their four-card definitions are exact suit-count shapes -- ds is
+ * 2-2-0-0, rainbow is 1-1-1-1 -- and those shapes do not carry over to five
+ * and six cards on their own (six cards cannot be rainbow at all, and "double
+ * suited" could mean 2-2-1-1 or 2-2-2-0).  Picking one would be inventing
+ * notation rather than following it, so a suffixed 5/6-card pattern is
+ * rejected with a message instead of guessed at.
+ *
+ * "At least" semantics, as in PPT: AAxx contains AhAsAcKd.  A hand is
+ * therefore reachable through several required/wildcard splits, so the
+ * expansion deduplicates. */
+
+#define PLO_PATTERN_MAX_COMBOS 500000u
+
+static int plo_streq_ci(const char *lhs, const char *rhs)
+{
+    for (; *lhs && *rhs; ++lhs, ++rhs)
+        if (tolower((unsigned char)*lhs) != tolower((unsigned char)*rhs))
+            return 0;
+    return *lhs == '\0' && *rhs == '\0';
+}
+
+typedef struct {
+    int ranks[6];       /* required ranks, ascending; length required_count */
+    size_t required_count;
+    size_t wildcards;
+} plo_rank_pattern_t;
+
+/* "AAxxx" -> required {A,A}, 3 wildcards.  Returns 0 if this is not a rank
+ * pattern of the requested width (callers then try other token forms). */
+static int plo_rank_pattern_parse(const char *compact, size_t expected_cards,
+                                  plo_rank_pattern_t *out)
+{
+    size_t length = strnlen(compact, 16u);
+    memset(out, 0, sizeof(*out));
+    if (length != expected_cards)
+        return 0;
+    for (size_t i = 0u; i < length; ++i) {
+        if (compact[i] == 'x' || compact[i] == 'X') {
+            out->wildcards++;
+        } else {
+            int rank = char_to_rank(compact[i]);
+            if (rank < 0)
+                return 0;
+            out->ranks[out->required_count++] = rank;
+        }
+    }
+    /* All wildcards is the complete range; callers handle that spelling
+     * separately because it must not be materialised. */
+    return out->required_count > 0u;
+}
+
+static int mask_compare_qsort(const void *a, const void *b)
+{
+    return memcmp(a, b, sizeof(StdDeck_CardMask));
+}
+
+/* Choose distinct suits for the required ranks, then draw the wildcards from
+ * whatever is left.  Recursive over required cards, then over wildcards. */
+typedef struct {
+    StdDeck_CardMask *hands;
+    size_t count;
+    size_t capacity;
+    StdDeck_CardMask dead;
+    const plo_rank_pattern_t *pattern;
+    int overflow;
+} plo_expand_ctx_t;
+
+static int plo_expand_emit(plo_expand_ctx_t *ctx, StdDeck_CardMask hand)
+{
+    if (ctx->count == ctx->capacity) {
+        size_t grown = ctx->capacity ? ctx->capacity * 2u : 4096u;
+        StdDeck_CardMask *bigger;
+        if (grown > PLO_PATTERN_MAX_COMBOS) {
+            if (ctx->capacity >= PLO_PATTERN_MAX_COMBOS) {
+                ctx->overflow = 1;
+                return 0;
+            }
+            grown = PLO_PATTERN_MAX_COMBOS;
+        }
+        bigger = realloc(ctx->hands, grown * sizeof(*bigger));
+        if (!bigger)
+            return 0;
+        ctx->hands = bigger;
+        ctx->capacity = grown;
+    }
+    ctx->hands[ctx->count++] = hand;
+    return 1;
+}
+
+static int plo_expand_wildcards(plo_expand_ctx_t *ctx, StdDeck_CardMask hand,
+                                size_t remaining, int first_card)
+{
+    if (remaining == 0u)
+        return plo_expand_emit(ctx, hand);
+    for (int card = first_card; card < StdDeck_N_CARDS; ++card) {
+        StdDeck_CardMask next = hand;
+        if (StdDeck_CardMask_CARD_IS_SET(hand, card) ||
+            StdDeck_CardMask_CARD_IS_SET(ctx->dead, card))
+            continue;
+        StdDeck_CardMask_SET(next, card);
+        if (!plo_expand_wildcards(ctx, next, remaining - 1u, card + 1))
+            return 0;
+    }
+    return 1;
+}
+
+static int plo_expand_required(plo_expand_ctx_t *ctx, StdDeck_CardMask hand,
+                               size_t index)
+{
+    if (index == ctx->pattern->required_count)
+        return plo_expand_wildcards(ctx, hand, ctx->pattern->wildcards, 0);
+    for (int suit = 0; suit < StdDeck_Suit_COUNT; ++suit) {
+        int card = StdDeck_MAKE_CARD(ctx->pattern->ranks[index], suit);
+        StdDeck_CardMask next = hand;
+        if (StdDeck_CardMask_CARD_IS_SET(hand, card) ||
+            StdDeck_CardMask_CARD_IS_SET(ctx->dead, card))
+            continue;
+        StdDeck_CardMask_SET(next, card);
+        if (!plo_expand_required(ctx, next, index + 1u))
+            return 0;
+    }
+    return 1;
+}
+
+/* Expand one pattern into `range`, deduplicated.  Returns 0 on failure and
+ * sets *out_overflow when the pattern is simply too wide to materialise. */
+static int plo_rank_pattern_expand(pe_range_t *range,
+                                   const plo_rank_pattern_t *pattern,
+                                   StdDeck_CardMask dead_cards, double weight,
+                                   size_t expected_cards, int *out_overflow)
+{
+    plo_expand_ctx_t ctx;
+    int ok = 1;
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.dead = dead_cards;
+    ctx.pattern = pattern;
+    *out_overflow = 0;
+
+    if (pattern->required_count + pattern->wildcards != expected_cards)
+        return 0;
+
+    {
+        StdDeck_CardMask empty;
+        StdDeck_CardMask_RESET(empty);
+        if (!plo_expand_required(&ctx, empty, 0u))
+            ok = 0;
+    }
+    if (ctx.overflow) {
+        *out_overflow = 1;
+        ok = 0;
+    }
+    if (ok && ctx.count > 0u) {
+        /* "At least" semantics let one hand arise from several splits. */
+        qsort(ctx.hands, ctx.count, sizeof(*ctx.hands), mask_compare_qsort);
+        for (size_t i = 0u; i < ctx.count; ++i) {
+            if (i > 0u && StdDeck_CardMask_EQUAL(ctx.hands[i], ctx.hands[i - 1u]))
+                continue;
+            if (!pe_range_add_combo(range, ctx.hands[i], weight)) {
+                ok = 0;
+                break;
+            }
+        }
+    } else if (ok) {
+        ok = 0;   /* every instance was blocked by dead cards */
+    }
+    free(ctx.hands);
+    return ok;
+}
+
+/* Suit-property suffixes are recognised only to reject them explicitly. */
+static int plo_has_suit_suffix(const char *compact)
+{
+    size_t length = strnlen(compact, 16u);
+    if (length >= 2u) {
+        const char *tail = compact + length - 2u;
+        if (plo_streq_ci(tail, "ds") || plo_streq_ci(tail, "ss") ||
+            plo_streq_ci(tail, "ts") || plo_streq_ci(tail, "qs") ||
+            plo_streq_ci(tail, "rr"))
+            return 1;
+    }
+    return length >= 1u && (compact[length - 1u] == 'r' ||
+                            compact[length - 1u] == 'R');
+}
+
 /* ARP's Omaha grammar is intentionally four-card oriented.  PLO5/PLO6
  * still need a lossless path for concrete hands (the product-facing solver
  * uses these tokens for imported ranges and GUI presets), so keep the small
@@ -93,6 +288,19 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
         }
     }
     compact[length] = '\0';
+
+    /* PPT rank pattern (AAxxx / AKQxx): n rank slots, 'x' for any rank.
+     * Checked before the concrete-hand form, which is twice as long. */
+    if (length == expected_cards) {
+        plo_rank_pattern_t pattern;
+        int overflow = 0;
+        if (plo_has_suit_suffix(compact))
+            return 0;
+        if (plo_rank_pattern_parse(compact, expected_cards, &pattern))
+            return plo_rank_pattern_expand(range, &pattern, dead_cards, weight,
+                                           expected_cards, &overflow);
+        return 0;
+    }
     if (length != expected_cards * 2u)
         return 0;
 
@@ -559,19 +767,22 @@ pe_status_t pe_range_parse(
         return PE_STATUS_OK;
     }
 
-    /* ARP's concrete-hand grammar currently stops at PLO4.  Preserve the
-     * complete PLO5/PLO6 hand here; otherwise a product range such as
-     * AsKsQd3c9h would be rejected (or, worse, silently reduced to four
-     * cards).  The generic ARP path remains available for its PLO4 patterns. */
+    /* ARP's concrete-hand grammar and its ranked tables stop at PLO4:
+     * omaha_hand_rankings and OMAHA_ALL_CONCRETE_HANDS are both C(52,4).
+     * Handing a PLO5/PLO6 string to that path returned FOUR-card combos for
+     * patterns and percentages, silently solving the wrong game.  So this is
+     * the only path for 5- and 6-card Omaha, and anything it cannot honour
+     * exactly is a parse error rather than a hand of the wrong width. */
     if (variant == game_omaha5 || variant == game_omaha6) {
         pe_status_t fixed_status = parse_fixed_omaha_range(
             variant, range_str, dead_cards, opts, range);
-        if (fixed_status == PE_STATUS_OK) {
-            *out_range = range;
-            return PE_STATUS_OK;
+        if (fixed_status != PE_STATUS_OK) {
+            pe_range_free(range);
+            *out_range = NULL;
+            return PE_STATUS_PARSE_ERROR;
         }
-        range->count = 0u;
-        range->total_weight = 0.0;
+        *out_range = range;
+        return PE_STATUS_OK;
     }
 
     /* For Omaha and other non-Hold'em, use Omaha parser */

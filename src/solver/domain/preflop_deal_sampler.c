@@ -11,6 +11,16 @@ static int finite_positive(double value)
     return value > 0.0 && value <= DBL_MAX;
 }
 
+/* Number of n-card combinations available from `live` cards, as a double.
+   C(47,6) is about 1.0e7, so this stays exact well inside 2^53. */
+static double combinations(unsigned live, unsigned n)
+{
+    double result = 1.0;
+    for (unsigned i = 0u; i < n; ++i)
+        result = result * (double)(live - i) / (double)(i + 1u);
+    return result;
+}
+
 static int valid_variant(pe_preflop_variant_t variant, uint8_t hole_cards)
 {
     return (variant == PE_PREFLOP_HOLDEM && hole_cards == 2u) ||
@@ -25,17 +35,27 @@ static int valid_common(mask_t board, uint8_t players)
            players <= PE_PREFLOP_MAX_PLAYERS && mask_popcount(board) <= 5;
 }
 
+/* A complete-range deal needs hole_cards per player out of the live deck. */
+static int complete_deal_fits(const pe_preflop_deal_sampler_t *sampler)
+{
+    unsigned live = 52u - (unsigned)mask_popcount(sampler->board);
+    return (unsigned)sampler->player_count * (unsigned)sampler->hole_cards <= live;
+}
+
 int pe_preflop_deal_sampler_init_holdem(
     pe_preflop_deal_sampler_t *out, mask_t board,
     const pe_holdem_range_t *ranges, uint8_t player_count)
 {
-    if (!out || !ranges || !valid_common(board, player_count)) return -1;
+    if (!out || !valid_common(board, player_count)) return -1;
     memset(out, 0, sizeof(*out));
     out->variant = PE_PREFLOP_HOLDEM;
     out->board = board;
     out->player_count = player_count;
     out->hole_cards = 2u;
     out->ranges = ranges;
+    /* NULL ranges: every player holds any hand (see complete_ranges). */
+    out->complete_ranges = ranges ? 0u : 1u;
+    if (!ranges && !complete_deal_fits(out)) return -1;
     return 0;
 }
 
@@ -49,7 +69,7 @@ int pe_preflop_deal_sampler_init_omaha(
     else if (hole_cards == 5u) variant = PE_PREFLOP_PLO5;
     else if (hole_cards == 6u) variant = PE_PREFLOP_PLO6;
     else return -1;
-    if (!out || !ranges || !valid_common(board, player_count) ||
+    if (!out || !valid_common(board, player_count) ||
         !valid_variant(variant, hole_cards))
         return -1;
     memset(out, 0, sizeof(*out));
@@ -58,6 +78,8 @@ int pe_preflop_deal_sampler_init_omaha(
     out->player_count = player_count;
     out->hole_cards = hole_cards;
     out->ranges = ranges;
+    out->complete_ranges = ranges ? 0u : 1u;
+    if (!ranges && !complete_deal_fits(out)) return -1;
     return 0;
 }
 
@@ -65,8 +87,29 @@ int pe_preflop_deal_sampler_measure(const pe_preflop_deal_sampler_t *sampler,
                                     size_t *out_deal_count,
                                     double *out_weight_sum)
 {
-    if (!sampler || !sampler->ranges || !out_deal_count || !out_weight_sum)
+    if (!sampler || !out_deal_count || !out_weight_sum ||
+        (!sampler->ranges && !sampler->complete_ranges))
         return -1;
+    if (sampler->complete_ranges)
+    {
+        /* Legal joint deals: each player draws from what the board and the
+           earlier players left, so the count is the product of the shrinking
+           binomials.  Every deal carries weight 1. */
+        double deals = 1.0;
+        unsigned live = 52u - (unsigned)mask_popcount(sampler->board);
+        for (uint8_t player = 0u; player < sampler->player_count; ++player)
+        {
+            if (live < (unsigned)sampler->hole_cards)
+                return -1;
+            deals *= combinations(live, sampler->hole_cards);
+            live -= (unsigned)sampler->hole_cards;
+        }
+        if (!finite_positive(deals) || deals > (double)SIZE_MAX)
+            return -1;
+        *out_deal_count = (size_t)deals;
+        *out_weight_sum = deals;
+        return 0;
+    }
     if (sampler->variant == PE_PREFLOP_HOLDEM)
         return pe_holdem_deals_measure(
             sampler->board, (const pe_holdem_range_t *)sampler->ranges,
@@ -125,6 +168,57 @@ static int has_completion(const pe_preflop_deal_sampler_t *sampler,
             return 1;
     }
     return 0;
+}
+
+/* Complete ranges: every player holds any hand, so the deal is a uniform
+   draw from the live deck rather than a walk over C(52,n) combos.
+
+   This is the same proposal the enumerated path builds, computed in closed
+   form.  There, each player's legal weight total is the sum over their legal
+   combos; with every combo present at weight 1 that total is exactly
+   C(live, hole_cards), and the chosen combo contributes target 1 and
+   proposal 1/total.  So the importance ratio comes out identical -- the
+   product of the per-player totals -- and the two paths are interchangeable
+   on a 100% range, which is what test_pe_preflop_sampler pins. */
+static int sample_complete(const pe_preflop_deal_sampler_t *sampler,
+                           pe_rng_t *rng,
+                           pe_preflop_deal_sample_t *out)
+{
+    mask_t used = sampler->board;
+    double target = 1.0;
+    double proposal = 1.0;
+
+    memset(out, 0, sizeof(*out));
+    for (uint8_t player = 0u; player < sampler->player_count; ++player)
+    {
+        unsigned live = 52u - (unsigned)mask_popcount(used);
+        double total = combinations(live, sampler->hole_cards);
+        mask_t hole = MASK_EMPTY;
+
+        if (live < (unsigned)sampler->hole_cards || !finite_positive(total))
+            return -1;
+        /* Uniform n-subset of the live deck: reject cards already taken.
+           Every draw has at least (live - n + 1) acceptable cards out of 52,
+           so this terminates quickly for any legal player/board count. */
+        for (uint8_t drawn = 0u; drawn < sampler->hole_cards; ++drawn)
+        {
+            for (;;)
+            {
+                uint32_t card = pe_rng_below(rng, 52u);
+                mask_t bit = mask_set(MASK_EMPTY, (int)card);
+                if (mask_intersects(bit, used) || mask_intersects(bit, hole))
+                    continue;
+                hole |= bit;
+                break;
+            }
+        }
+        out->holes[player] = hole;
+        used |= hole;
+        proposal /= total;
+    }
+    out->target_weight = target;
+    out->proposal_probability = proposal;
+    return finite_positive(target) && finite_positive(proposal) ? 0 : -1;
 }
 
 /* Draw from a card-removal proposal that excludes prefixes with no complete
@@ -200,11 +294,17 @@ int pe_preflop_deal_sampler_sample(const pe_preflop_deal_sampler_t *sampler,
 {
     double ratio;
 
-    if (!sampler || !sampler->ranges || !rng || !out ||
+    if (!sampler || !rng || !out ||
+        (!sampler->ranges && !sampler->complete_ranges) ||
         !valid_common(sampler->board, sampler->player_count) ||
         !valid_variant(sampler->variant, sampler->hole_cards))
         return -1;
-    if (sample_sequential(sampler, rng, out) != 0)
+    if (sampler->complete_ranges)
+    {
+        if (sample_complete(sampler, rng, out) != 0)
+            return -1;
+    }
+    else if (sample_sequential(sampler, rng, out) != 0)
         return -1;
     ratio = out->target_weight / out->proposal_probability;
     if (sampler->reference_weight_sum > 0.0)
