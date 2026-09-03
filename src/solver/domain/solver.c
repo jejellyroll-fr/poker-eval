@@ -1649,8 +1649,19 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
 {
     if (solver == NULL || query == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    if (pe_solver_state(solver) != PE_SOLVER_STATE_COMPLETED)
-        return PE_SOLVER_ERR_INVALID_STATE;
+    /* The average strategy is meaningful once iterations have run, not
+     * only on clean completion: graceful stops (STOPPED) and pauses
+     * (PAUSED) must be reportable — otherwise every interrupted run
+     * prints an empty HAND TABLE (Studio "no results after Stop").
+     * RUNNING stays rejected: storage may be mid-update.  Mirrors the
+     * pe_solver_save state guard. */
+    {
+        int state = pe_solver_state(solver);
+        if (state != PE_SOLVER_STATE_COMPLETED &&
+            state != PE_SOLVER_STATE_PAUSED &&
+            state != PE_SOLVER_STATE_STOPPED)
+            return PE_SOLVER_ERR_INVALID_STATE;
+    }
     if (solver->storage == NULL || solver->storage->shape == NULL ||
         solver->storage->values_const == NULL ||
         !pe_storage_serves(solver->storage, PE_VALUES_AVERAGE) ||

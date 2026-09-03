@@ -1,6 +1,9 @@
 # Prerequisites
 *.d
 
+# Solver runtime artifacts (checkpoints next to trees / CWD)
+*.ckpt
+
 # Object files
 *.o
 *.ko

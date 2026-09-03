@@ -46,6 +46,15 @@ The wrapper retains the methods used by fpdb: `poker_eval`, `best`,
 | [4-Way Postflop Example](examples/4way_postflop/README.md) | End-to-end walkthrough: build a tree, run CFR, export results |
 | [Heads-Up River Example](examples/heads_up_river/README.md) | Two-player river spot with JSON/CSV export and EV aggregation |
 
+### Poker Eval Studio UI
+
+To build the native desktop GUI (Poker Eval Studio):
+
+```bash
+./build_studio.sh
+./build-studio/tools/poker-eval-studio
+```
+
 ## Build options
 
 | Option | Default | Purpose |

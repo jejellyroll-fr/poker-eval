@@ -63,6 +63,11 @@
 #define STRATEGY_TABLE_MAX_ROWS 600u
 #define STRATEGY_CAPTURE_CAPACITY 524288u
 #define MONKER_GRID_MAX_ROWS PE_MONKER_CLASS_COUNT
+/* "No iteration cap" ceiling for single-option stop modes (target-only,
+ * manual-only).  The solver core rejects max_iterations==0 with no target,
+ * so "run until target / manual stop" is encoded as this huge cap
+ * (~30 000 years at 1000 iter/s).  The UI renders it as infinity. */
+#define STUDIO_NO_ITER_CAP UINT64_C(1000000000000)
 #define STRATEGY_TABLE_ACTIONS MPF_TREE_ACTION_MAX
 #define STRATEGY_RESPONSE_ACTIONS 4u
 #define MAX_DECISION_STEPS 64u
@@ -393,6 +398,33 @@ struct _app_t
     char table_cell_text[512];
     char solve_command[8192];
     char solve_output[131072];
+
+    /* Checkpoint / resume state.  When a solver run writes a checkpoint,
+     * i_solve_end stores the file path here and the next "Resume" click
+     * reissues the same solve command with --resume <path>. */
+    int solve_checkpoint_available;
+    int solve_resume_mode;
+    int solve_terminate_sent;
+    char solve_checkpoint_path[1024];
+
+    /* Resolved backend and effective thread count of the current (or last)
+     * solve.  Captured at i_start_solve so the results view can show the
+     * values the solver actually used, not the user's raw input. */
+    int solve_has_resolved;
+    int solve_resolved_threads;
+    char solve_resolved_backend[64];
+
+    /* Stop-mode state of the current (or last) solve.  stop_mode mirrors
+     * the Setup combo: 0 = max iterations, 1 = exploitability target
+     * (iterations act as a per-run safety cap, extended on each Resume),
+     * 2 = run forever (manual stop).  stop_reason holds the solver's
+     * verdict ("target" / "max_iterations" / "" when unknown). */
+    uint32_t solve_stop_mode;
+    uint64_t solve_run_iterations;
+    double solve_run_target;
+    char solve_stop_reason[32];
+    /* Last end-of-run diagnostics line (see i_solve_end). */
+    char solve_diag_line[320];
 };
 
 static void i_on_close(App *app, Event *event);
@@ -4288,16 +4320,35 @@ static void update_result_view(App *app, const char *output, int running)
         double elapsed = app->solve_started_at != (time_t)0
             ? difftime(time(NULL), app->solve_started_at) : 0.0;
         progress_value(app->run_progress_bar, (real32_t)fraction);
-        snprintf(progress_text, sizeof(progress_text),
-                 "%s  |  iteration %" PRIu64 " / %" PRIu64
-                 "  |  %.1f%%",
-                 reporting ? "REPORTING" : running ? "RUNNING" : "LAST CHECK",
-                 iteration, total,
-                 fraction * 100.0);
-        snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64,
-                 iteration, total);
+        if (total >= STUDIO_NO_ITER_CAP)
+        {
+            /* Single-option stop modes (target-only / manual-only) carry
+             * no iteration cap: show infinity instead of the raw 1e12. */
+            snprintf(progress_text, sizeof(progress_text),
+                     "%s  |  iteration %" PRIu64 " / no cap"
+                     "  |  target %.2f mBB",
+                     reporting ? "REPORTING" : running ? "RUNNING" : "LAST CHECK",
+                     iteration, target);
+        }
+        else
+        {
+            snprintf(progress_text, sizeof(progress_text),
+                     "%s  |  iteration %" PRIu64 " / %" PRIu64
+                     "  |  %.1f%%",
+                     reporting ? "REPORTING" : running ? "RUNNING" : "LAST CHECK",
+                     iteration, total,
+                     fraction * 100.0);
+        }
+        if (total >= STUDIO_NO_ITER_CAP)
+            snprintf(text, sizeof(text), "%" PRIu64 " / no cap", iteration);
+        else
+            snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64,
+                     iteration, total);
         label_text(app->run_progress, text);
-        snprintf(text, sizeof(text), "%.1f%%", fraction * 100.0);
+        if (total >= STUDIO_NO_ITER_CAP)
+            snprintf(text, sizeof(text), "tgt %.2f", target);
+        else
+            snprintf(text, sizeof(text), "%.1f%%", fraction * 100.0);
         label_text(app->run_fraction, text);
         snprintf(text, sizeof(text), "%.2f mBB", exploitability);
         label_text(app->run_metrics, text);
@@ -4309,14 +4360,20 @@ static void update_result_view(App *app, const char *output, int running)
         /* Left Stats Panel */
         if (app->lbl_status_val)
         {
-            snprintf(text, sizeof(text), "%s, %02d:%02d, 1 thread(s)",
+            int tcount = (app->solve_has_resolved && app->solve_resolved_threads > 0)
+                             ? app->solve_resolved_threads
+                             : 1;
+            snprintf(text, sizeof(text), "%s, %02d:%02d, %d thread(s)",
                      reporting ? "Reporting" : running ? "Running" : "Complete",
-                     (int)elapsed / 60, (int)elapsed % 60);
+                     (int)elapsed / 60, (int)elapsed % 60, tcount);
             label_text(app->lbl_status_val, text);
         }
         if (app->lbl_iterations_val)
         {
-            snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64, iteration, total);
+            if (total >= STUDIO_NO_ITER_CAP)
+                snprintf(text, sizeof(text), "%" PRIu64 " / no cap", iteration);
+            else
+                snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64, iteration, total);
             label_text(app->lbl_iterations_val, text);
         }
         if (app->lbl_exploit_val)
@@ -4772,31 +4829,149 @@ static const char *resolve_runner(const char *configured, const char *name)
     return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : NULL;
 }
 
+/* spot_checkpoint_path derives a stable per-spot checkpoint file path
+ * from the source tree path: "<tree_dir>/<tree_basename>.ckpt" (or just
+ * "<basename>.ckpt" when the tree path has no directory), so the solver
+ * can write there during a normal run and the Studio can resume from it.
+ * Returns 0 on success, -1 if the path is too long. */
+static int spot_checkpoint_path(const char *tree_path, char *out, size_t capacity)
+{
+    const char *base;
+    const char *sep;
+    size_t base_len;
+    size_t dir_len;
+    if (!tree_path || !*tree_path || !out || capacity == 0u)
+        return -1;
+    sep = strrchr(tree_path, PE_PATH_SEPARATOR);
+    base = (sep != NULL) ? sep + 1 : tree_path;
+    dir_len = (sep != NULL) ? (size_t)(sep - tree_path) : 0u;
+    base_len = strlen(base);
+    /* Strip a trailing ".tree" if any. */
+    if (base_len > 5u &&
+        strcmp(base + base_len - 5u, ".tree") == 0)
+    {
+        base_len -= 5u;
+    }
+    if (base_len == 0u)
+    {
+        base = "spot";
+        base_len = 4u;
+    }
+    if (dir_len > 0u)
+    {
+        if (snprintf(out, capacity, "%.*s%c%.*s.ckpt",
+                     (int)dir_len, tree_path, PE_PATH_SEPARATOR,
+                     (int)base_len, base) >= (int)capacity)
+            return -1;
+    }
+    else if (snprintf(out, capacity, "%.*s.ckpt",
+                      (int)base_len, base) >= (int)capacity)
+    {
+        return -1;
+    }
+    return 0;
+}
+
+/* Appends at most n bytes from src to a NUL-terminated buffer,
+ * honouring capacity.  *used tracks the current length. */
+static void i_copy_append(char *out, size_t capacity, size_t *used,
+                          const char *src, size_t n)
+{
+    size_t room;
+    if (!out || capacity == 0u || !used || !src || n == 0u)
+        return;
+    if (*used + 1u >= capacity)
+        return;
+    room = capacity - 1u - *used;
+    if (n > room)
+        n = room;
+    memcpy(out + *used, src, n);
+    *used += n;
+    out[*used] = '\0';
+}
+
 static void i_solve_copy_output(App *app, char *out, size_t capacity)
 {
     size_t total, length, used = 0u;
     if (!app || !out || capacity == 0u)
         return;
     bmutex_lock(app->solve_mutex);
-    /* Prefer the preserved report prefix. It contains STRATEGY REPORT,
-     * DECISION STEPS and the first result rows needed to populate the UI. */
+    /* Assemble a render-friendly window instead of a dumb byte prefix.
+     * On multi-megabyte reports (e.g. plo4, 100k+ rows) the first 64KB
+     * hold only the header and DECISION STEPS: the HAND TABLE the grid
+     * needs starts far beyond, and the guarantee=/progress lines the
+     * stats need live before the report marker — so a prefix copy
+     * renders an empty Results panel after Stop.  The window below
+     * carries: synthetic progress + guarantee lines (rebuilt from the
+     * scanned telemetry/metrics), the report header, the first decision
+     * steps, then HAND TABLE rows until the budget runs out. */
     if (app->strategy_output_length > 0u)
     {
-        length = app->strategy_output_length < capacity - 1u
-            ? app->strategy_output_length : capacity - 1u;
-        memcpy(out, app->strategy_output, length);
-        used = length;
-        /* Add the newest tail when there is room, which keeps final metrics
-         * and launch errors visible without sacrificing the report prefix. */
-        total = strlen(app->solve_output);
-        if (used + 1u < capacity && total > 0u)
+        char line[256];
+        const char *cursor;
+        const char *end;
+        const char *hands;
+        size_t n;
+        unsigned steps = 0u;
+        int width;
+        out[0] = '\0';
+        used = 0u;
+        if (app->telemetry_valid)
         {
-            size_t tail = total < capacity - used - 1u
-                ? total : capacity - used - 1u;
-            memcpy(out + used, app->solve_output + total - tail, tail);
-            used += tail;
+            width = snprintf(line, sizeof(line),
+                             "progress iteration=%" PRIu64 " total=%" PRIu64
+                             " fraction=%f exploitability_mbb=%f target_mbb=%f\n",
+                             app->telemetry_iteration, app->telemetry_total,
+                             app->telemetry_fraction, app->telemetry_exploitability,
+                             app->telemetry_target);
+            if (width > 0)
+                i_copy_append(out, capacity, &used, line, (size_t)width);
         }
-        out[used] = '\0';
+        if (app->final_metrics_valid)
+        {
+            width = snprintf(line, sizeof(line),
+                             "guarantee=%s exploitability_raw=%f"
+                             " exploitability_mbb=%f br_samples=%" PRIu64 "\n",
+                             app->final_guarantee, app->final_raw,
+                             app->final_mbb, app->final_samples);
+            if (width > 0)
+                i_copy_append(out, capacity, &used, line, (size_t)width);
+        }
+        end = strchr(app->strategy_output, '\n');
+        n = end ? (size_t)(end - app->strategy_output) + 1u
+                : strlen(app->strategy_output);
+        i_copy_append(out, capacity, &used, app->strategy_output, n);
+        cursor = app->strategy_output;
+        while (steps < 96u && (cursor = strstr(cursor, "tree_step ")) != NULL)
+        {
+            end = strchr(cursor, '\n');
+            n = end ? (size_t)(end - cursor) + 1u : strlen(cursor);
+            if (used + n + 1u > capacity)
+                break;
+            i_copy_append(out, capacity, &used, cursor, n);
+            cursor += n;
+            ++steps;
+        }
+        hands = strstr(app->strategy_output, "HAND TABLE");
+        if (hands != NULL)
+        {
+            i_copy_append(out, capacity, &used, "HAND TABLE\n", 11u);
+            cursor = strchr(hands, '\n');
+            cursor = cursor ? cursor + 1u : NULL;
+            while (cursor && *cursor)
+            {
+                end = strchr(cursor, '\n');
+                n = end ? (size_t)(end - cursor) + 1u : strlen(cursor);
+                if (used + n + 1u > capacity)
+                    break;
+                i_copy_append(out, capacity, &used, cursor, n);
+                /* RANGE GRID ends the hand section; copying it is useless
+                 * for the grid and would eat the row budget. */
+                if (n >= 10u && strncmp(cursor, "RANGE GRID", 10u) == 0)
+                    break;
+                cursor = end ? end + 1u : NULL;
+            }
+        }
     }
     else
     {
@@ -5735,6 +5910,66 @@ static void i_solve_scan_line(App *app, const char *line)
         app->final_mbb = mbb;
         app->final_samples = samples;
     }
+
+    /* The solver prints "solver_phase=complete stop_reason=<target|
+     * max_iterations> report=starting" at the end of every run.  Capture
+     * the verdict so i_solve_end can tell "target reached" apart from
+     * "safety cap reached" in exploitability-target mode. */
+    {
+        const char *marker = "stop_reason=";
+        const char *found = strstr(line, marker);
+        if (found != NULL)
+        {
+            char reason[32];
+            size_t length = 0u;
+            found += strlen(marker);
+            while (found[length] != '\0' && found[length] != ' ' &&
+                   found[length] != '\n' && found[length] != '\r' &&
+                   length + 1u < sizeof(reason))
+            {
+                reason[length] = found[length];
+                ++length;
+            }
+            reason[length] = '\0';
+            if (length > 0u)
+                snprintf(app->solve_stop_reason, sizeof(app->solve_stop_reason),
+                         "%s", reason);
+        }
+    }
+
+    /* The solver logs "checkpoint_saved=1 path=<file>" whenever it writes
+     * a checkpoint.  Capture the file path so the Resume button can be
+     * offered without the user having to type anything. */
+    if (strstr(line, "checkpoint_saved=1") != NULL)
+    {
+        const char *path_eq = strstr(line, "path=");
+        if (path_eq != NULL)
+        {
+            const char *path_start = path_eq + 5u;
+            size_t path_len = 0u;
+            while (path_start[path_len] != '\0' &&
+                   path_start[path_len] != ' ' &&
+                   path_start[path_len] != '\n' &&
+                   path_start[path_len] != '\r' &&
+                   path_len + 1u < sizeof(app->solve_checkpoint_path))
+            {
+                app->solve_checkpoint_path[path_len] = path_start[path_len];
+                ++path_len;
+            }
+            if (path_len > 0u)
+            {
+                app->solve_checkpoint_path[path_len] = '\0';
+                app->solve_checkpoint_available = 1;
+            }
+        }
+        else
+        {
+            /* No path= field: the solver wrote to the --checkpoint path
+             * we passed in; trust the command-line contract and enable
+             * Resume whenever a checkpoint was emitted. */
+            app->solve_checkpoint_available = 1;
+        }
+    }
 }
 
 static void i_solve_scan_output(App *app, const char *data, size_t length)
@@ -5853,15 +6088,35 @@ static void i_solve_request_stop(App *app)
     bmutex_lock(app->solve_mutex);
     app->solve_cancel_requested = 1;
     proc = app->solve_proc;
+    /* First click: SIGTERM (whole group) so the solver can flush a
+     * checkpoint and a partial report.  A subsequent click escalates to
+     * SIGKILL when the process hasn't exited yet. */
     if (proc)
-        (void)bproc_cancel(proc);
+    {
+        if (!app->solve_terminate_sent)
+        {
+            (void)bproc_terminate(proc);
+            app->solve_terminate_sent = 1;
+        }
+        else
+        {
+            (void)bproc_cancel(proc);
+        }
+    }
     bmutex_unlock(app->solve_mutex);
-    button_text(app->solve_button, "Stopping...");
+    button_text(app->solve_button,
+                app->solve_terminate_sent ? "Force kill" : "Stopping...");
     if (app->setup_run_state)
         label_text(app->setup_run_state, "STOPPING");
     if (app->setup_run_progress)
-        label_text(app->setup_run_progress, "Waiting for the solver safe point...");
-    status(app, "STOPPING\nThe solver is being stopped at the current safe point...");
+        label_text(app->setup_run_progress,
+                   app->solve_terminate_sent
+                       ? "Waiting for safe point (force kill pending)..."
+                       : "Waiting for the solver safe point...");
+    status(app,
+           app->solve_terminate_sent
+               ? "STOPPING (force)\nThe solver did not exit gracefully; sending SIGKILL."
+               : "STOPPING\nThe solver is being stopped at the current safe point...");
 }
 
 static uint32_t i_solve_main(App *app)
@@ -5907,6 +6162,8 @@ static void i_solve_update(App *app)
 {
     char output[64000];
     int running;
+    int capturing = 0;
+    size_t strat_len = 0u;
     uint64_t iteration = 0u;
     uint64_t total = 0u;
     double fraction = 0.0;
@@ -5917,24 +6174,47 @@ static void i_solve_update(App *app)
         return;
     bmutex_lock(app->solve_mutex);
     running = app->solve_running;
+    capturing = app->strategy_capture_started;
+    strat_len = app->strategy_output_length;
     if (running)
         ++app->solve_update_count;
     bmutex_unlock(app->solve_mutex);
     i_solve_copy_output(app, output, sizeof(output));
     update_result_view(app, output, running);
     update_strategy_view(app, output);
-    if (running && last_progress_line(output, &iteration, &total, &fraction,
+    if (running && capturing)
+    {
+        /* The solver stopped iterating and is streaming the per-hand
+         * report (empirical EVs are slow: seconds per row on big plo
+         * trees).  Say so explicitly — otherwise the run looks hung and
+         * the user clicks Stop again, SIGKILLing the report mid-write
+         * and leaving an empty grid (the #1 cause of "no results"). */
+        status(app,
+               "REPORTING\nstrategy report streaming (%.1f KB received)\n"
+               "The grid fills in live. Please wait — do NOT click Stop "
+               "again, it would kill the report.",
+               (double)strat_len / 1024.0);
+    }
+    else if (running && last_progress_line(output, &iteration, &total, &fraction,
                                       &exploitability, &target))
     {
-        report_phase = total > 0u && iteration >= total;
-        status(app,
-               "%s\niteration=%" PRIu64 "/%" PRIu64
-               " (%.1f%%)\nexploitability=%.2f mBB\n\n"
-               "%s",
-               report_phase ? "REPORTING" : "SOLVING",
-               iteration, total, fraction * 100.0, exploitability,
-               report_phase ? "Solver stopped; materialising the result table."
-                            : "Live result table is updating. Click Stop solve to interrupt.");
+        report_phase = total > 0u && total < STUDIO_NO_ITER_CAP && iteration >= total;
+        if (total >= STUDIO_NO_ITER_CAP)
+            status(app,
+                   "%s\niteration=%" PRIu64 " (no cap)\nexploitability=%.2f mBB / target=%.2f mBB\n\n"
+                   "%s",
+                   report_phase ? "REPORTING" : "SOLVING",
+                   iteration, exploitability, target,
+                   "Live result table is updating. Click Stop solve to interrupt.");
+        else
+            status(app,
+                   "%s\niteration=%" PRIu64 "/%" PRIu64
+                   " (%.1f%%)\nexploitability=%.2f mBB\n\n"
+                   "%s",
+                   report_phase ? "REPORTING" : "SOLVING",
+                   iteration, total, fraction * 100.0, exploitability,
+                   report_phase ? "Solver stopped; materialising the result table."
+                                : "Live result table is updating. Click Stop solve to interrupt.");
     }
 }
 
@@ -5942,20 +6222,121 @@ static void i_solve_end(App *app, const uint32_t exit_code)
 {
     char output[64000];
     int cancelled;
+    int has_checkpoint;
     if (!app)
         return;
     bmutex_lock(app->solve_mutex);
     cancelled = app->solve_cancel_requested;
+    has_checkpoint = app->solve_checkpoint_available;
     app->solve_running = 0;
     app->solve_cancel_requested = 0;
+    app->solve_terminate_sent = 0;
+    app->solve_resume_mode = 0;
     bmutex_unlock(app->solve_mutex);
-    button_text(app->solve_button, "Solve this spot");
+    /* NOTE: output must be copied and the result/strategy views refreshed
+     * in every branch — otherwise the Results panel stays empty and the
+     * status shows "No output from solver." even on exit_code=0. */
     i_solve_copy_output(app, output, sizeof(output));
     update_result_view(app, output, 0);
     update_strategy_view(app, output);
-    status(app, "%s\nexit_code=%u\n%s",
-           cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
-           exit_code, output[0] ? output : "No output from solver.");
+    /* Temporary end-of-run diagnostics: what did the views actually
+     * receive?  Written to the status and dumped to
+     * /tmp/studio_last_output.txt for post-mortem analysis. */
+    {
+        char diag[320];
+        char gg[32] = "";
+        double raw = 0.0, mbb = 0.0, df = 0.0, de = 0.0, dg = 0.0;
+        uint64_t di = 0u, dt = 0u, ds = 0u;
+        size_t out_len, strat_len, solve_len;
+        int tv, fv, hp, hf;
+        FILE *dump;
+        bmutex_lock(app->solve_mutex);
+        strat_len = app->strategy_output_length;
+        solve_len = strlen(app->solve_output);
+        tv = app->telemetry_valid;
+        fv = app->final_metrics_valid;
+        bmutex_unlock(app->solve_mutex);
+        out_len = strlen(output);
+        hp = last_progress_line(output, &di, &dt, &df, &de, &dg);
+        hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds);
+        dump = fopen("/tmp/studio_last_output.txt", "w");
+        if (dump)
+        {
+            fwrite(output, 1u, out_len, dump);
+            fclose(dump);
+        }
+        snprintf(diag, sizeof(diag),
+                 "[diag out=%zu strat=%zu solve=%zu tv=%d fv=%d prog=%d final=%d "
+                 "reason=%s mode=%u rows=%u hands=%u]",
+                 out_len, strat_len, solve_len, tv, fv, hp, hf,
+                 app->solve_stop_reason, app->solve_stop_mode,
+                 app->strategy_row_count, app->monker_hand_count);
+        snprintf(app->solve_diag_line, sizeof(app->solve_diag_line), "%s", diag);
+    }
+    /* A checkpoint is only worth offering as "Resume" when continuing is
+     * meaningful.  A clean finish at the requested stop condition (mode 0
+     * max reached, or mode 1 target reached) would resume into a no-op —
+     * re-running an already-satisfied command — so fall back to a fresh
+     * solve there.  Resume stays for: manual stops, and mode-1 runs that
+     * hit the per-run iteration cap before reaching the target. */
+    if (!cancelled && has_checkpoint)
+    {
+        if ((app->solve_stop_mode == 0u &&
+             strcmp(app->solve_stop_reason, "max_iterations") == 0) ||
+            (app->solve_stop_mode == 1u &&
+             strcmp(app->solve_stop_reason, "target") == 0))
+        {
+            bmutex_lock(app->solve_mutex);
+            app->solve_checkpoint_available = 0;
+            bmutex_unlock(app->solve_mutex);
+            has_checkpoint = 0;
+        }
+    }
+    if (has_checkpoint && app->solve_checkpoint_path[0] != '\0' &&
+        (cancelled || app->solve_stop_mode == 1u || app->solve_stop_mode == 2u ||
+         app->solve_stop_reason[0] == '\0'))
+    {
+        if (!cancelled && app->solve_stop_mode == 1u &&
+            strcmp(app->solve_stop_reason, "max_iterations") == 0)
+        {
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "TARGET NOT REACHED\nexit_code=%u\nExploitability %.2f mBB is still above the %.2f mBB target after %" PRIu64 " iterations.\nClick \"Resume this spot\" to continue toward the target.\nCheckpoint: %s\n%s",
+                   exit_code, app->final_mbb, app->solve_run_target,
+                   app->solve_run_iterations, app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.");
+        }
+        else
+        {
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "%s\nexit_code=%u\nA checkpoint was saved to %s; click \"Resume this spot\" to continue, or change Setup / delete the .ckpt for a fresh solve.\n%s\n%s",
+                   cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
+                   exit_code, app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.",
+                   app->solve_diag_line);
+        }
+    }
+    else
+    {
+        if (!cancelled && app->solve_stop_mode == 1u &&
+            strcmp(app->solve_stop_reason, "target") == 0)
+        {
+            char reached_line[128];
+            snprintf(reached_line, sizeof(reached_line),
+                     "TARGET REACHED: exploitability %.2f mBB <= target %.2f mBB.\n",
+                     app->final_mbb, app->solve_run_target);
+            button_text(app->solve_button, "Solve this spot");
+            status(app, "SOLVE RESULT\n%s\nexit_code=%u\n%s",
+                   reached_line, exit_code,
+                   output[0] ? output : "No output from solver.");
+        }
+        else
+        {
+            button_text(app->solve_button, "Solve this spot");
+            status(app, "%s\nexit_code=%u\n%s",
+                   cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
+                   exit_code, output[0] ? output : "No output from solver.");
+        }
+    }
 }
 
 static int i_start_solve(App *app, const char *command)
@@ -5969,7 +6350,10 @@ static int i_start_solve(App *app, const char *command)
         bmutex_unlock(app->solve_mutex);
         return -1;
     }
-    snprintf(app->solve_command, sizeof(app->solve_command), "%s", command);
+    /* snprintf with overlapping src/dst is UB; the Resume path used to
+     * call i_start_solve(app, app->solve_command). Guard it. */
+    if ((const void *)command != (const void *)app->solve_command)
+        snprintf(app->solve_command, sizeof(app->solve_command), "%s", command);
     app->solve_output[0] = '\0';
     app->solve_output_total = 0u;
     app->solve_line_length = 0u;
@@ -5990,6 +6374,7 @@ static int i_start_solve(App *app, const char *command)
     app->final_raw = 0.0;
     app->final_mbb = 0.0;
     app->final_samples = 0u;
+    app->solve_stop_reason[0] = '\0';
     app->player_evs_valid = 0;
     for (uint32_t player = 0u; player < MAX_PLAYERS_DISPLAY; ++player)
     {
@@ -5999,6 +6384,17 @@ static int i_start_solve(App *app, const char *command)
             label_text(app->lbl_player_evs[player], "—");
     }
     app->solve_cancel_requested = 0;
+    app->solve_terminate_sent = 0;
+    /* A fresh run replaces any prior checkpoint for this spot unless the
+     * caller is resuming from it.  In resume mode keep the path as a
+     * fallback until the solver re-emits checkpoint_saved=1; the flag is
+     * consumed here so the *next* fresh run starts clean. */
+    if (!app->solve_resume_mode)
+    {
+        app->solve_checkpoint_available = 0;
+        app->solve_checkpoint_path[0] = '\0';
+    }
+    app->solve_resume_mode = 0;
     app->solve_running = 1;
     app->solve_started_at = time(NULL);
     app->solve_update_count = 0u;
@@ -6017,6 +6413,45 @@ static int i_start_solve(App *app, const char *command)
     panel_visible_layout(app->pages, 1u);
     panel_update(app->pages);
     osapp_task(app, .10f, i_solve_main, i_solve_update, i_solve_end, App);
+    return 0;
+}
+
+/* i_rewrite_iterations replaces the first "--iterations <digits>" token in
+ * cmd with "--iterations <value>".  Returns 0 on success, -1 when the
+ * token is missing or the buffer is too small.  Used by Resume in
+ * exploitability-target mode to extend the safety cap so the continued
+ * run actually performs new iterations toward the target instead of
+ * exiting immediately (already at max). */
+static int i_rewrite_iterations(char *cmd, size_t capacity, uint64_t value)
+{
+    const char *flag = " --iterations ";
+    char *found;
+    char *digits;
+    char *end;
+    char replacement[64];
+    size_t head_len, tail_len, repl_len;
+    int repl;
+    if (!cmd || capacity == 0u)
+        return -1;
+    found = strstr(cmd, flag);
+    if (!found)
+        return -1;
+    digits = found + strlen(flag);
+    end = digits;
+    while (*end >= '0' && *end <= '9')
+        ++end;
+    if (end == digits)
+        return -1;
+    repl = snprintf(replacement, sizeof(replacement), " --iterations %" PRIu64, value);
+    if (repl <= 0 || (size_t)repl >= sizeof(replacement))
+        return -1;
+    repl_len = (size_t)repl;
+    head_len = (size_t)(found - cmd);
+    tail_len = strlen(end);
+    if (head_len + repl_len + tail_len + 1u > capacity)
+        return -1;
+    memmove(cmd + head_len + repl_len, end, tail_len + 1u);
+    memcpy(cmd + head_len, replacement, repl_len);
     return 0;
 }
 
@@ -6132,6 +6567,109 @@ static void i_on_solve(App *app, Event *event)
     }
     bmutex_unlock(app->solve_mutex);
 
+    /* The same button is reused for "Solve this spot" (fresh run) and
+     * "Resume this spot" (continue from the saved checkpoint).  When a
+     * checkpoint is available, re-issue the last solve command with
+     * --resume <ckpt> appended (before the trailing " 2>&1").
+     * Escape hatches for a fresh solve: switching to a different tree
+     * (different derived .ckpt) or deleting the .ckpt file falls through
+     * to the fresh path below. */
+    if (app->solve_checkpoint_available && app->solve_checkpoint_path[0] != '\0' &&
+        app->solve_command[0] != '\0')
+    {
+        char resume_cmd[8192];
+        char resume_quoted[1100];
+        const char *suffix = " 2>&1";
+        size_t base_len;
+        {
+            char expected_ckpt[1024];
+            int fresh_needed = 0;
+            if (tree_path && *tree_path &&
+                spot_checkpoint_path(tree_path, expected_ckpt,
+                                     sizeof(expected_ckpt)) == 0 &&
+                strcmp(expected_ckpt, app->solve_checkpoint_path) != 0)
+            {
+                fresh_needed = 1;
+            }
+            if (!fresh_needed)
+            {
+                FILE *probe = fopen(app->solve_checkpoint_path, "rb");
+                if (probe)
+                    fclose(probe);
+                else
+                    fresh_needed = 1;
+            }
+            if (fresh_needed)
+            {
+                bmutex_lock(app->solve_mutex);
+                app->solve_checkpoint_available = 0;
+                app->solve_checkpoint_path[0] = '\0';
+                app->solve_resume_mode = 0;
+                bmutex_unlock(app->solve_mutex);
+            }
+            else
+            {
+                snprintf(resume_cmd, sizeof(resume_cmd), "%s", app->solve_command);
+        base_len = strlen(resume_cmd);
+        {
+            size_t suffix_len = strlen(suffix);
+            if (base_len >= suffix_len &&
+                strcmp(resume_cmd + base_len - suffix_len, suffix) == 0)
+            {
+                resume_cmd[base_len - suffix_len] = '\0';
+                base_len -= suffix_len;
+            }
+        }
+        /* Don't stack --resume flags if the stored command already has one. */
+        if (strstr(resume_cmd, "--resume") == NULL &&
+            quote_argument(app->solve_checkpoint_path, resume_quoted,
+                           sizeof(resume_quoted)) == 0 &&
+            strlen(resume_cmd) + strlen(resume_quoted) + 32u < sizeof(resume_cmd))
+        {
+            snprintf(resume_cmd + strlen(resume_cmd),
+                     sizeof(resume_cmd) - strlen(resume_cmd),
+                     " --resume %s%s", resume_quoted, suffix);
+        }
+        else if (strstr(resume_cmd, "--resume") == NULL)
+        {
+            status(app, "SOLVE ERROR\nCheckpoint path is too long.");
+            unref(event);
+            return;
+        }
+        else if (strlen(resume_cmd) + strlen(suffix) + 1u < sizeof(resume_cmd))
+        {
+            snprintf(resume_cmd + strlen(resume_cmd),
+                     sizeof(resume_cmd) - strlen(resume_cmd), "%s", suffix);
+        }
+        /* Exploitability-target mode: runs carry no iteration cap
+         * (STUDIO_NO_ITER_CAP), so normally there is nothing to extend.
+         * Only extend when the stored cap is a legacy finite value from
+         * an older build; otherwise resume verbatim toward the target. */
+        if (app->solve_stop_mode == 1u && app->solve_run_iterations > 0u &&
+            app->solve_run_iterations < STUDIO_NO_ITER_CAP)
+        {
+            uint64_t extended = app->solve_run_iterations * 2u;
+            if (extended < app->solve_run_iterations || extended > STUDIO_NO_ITER_CAP)
+                extended = STUDIO_NO_ITER_CAP;
+            if (i_rewrite_iterations(resume_cmd, sizeof(resume_cmd), extended) == 0)
+                app->solve_run_iterations = extended;
+        }
+        app->solve_resume_mode = 1;
+        snprintf(app->solve_command, sizeof(app->solve_command), "%s", resume_cmd);
+        if (app->solve_stop_mode == 1u)
+            status(app, "RESUMING\nReissuing last solve command with --resume %s.\nContinues toward %.2f mBB (no iteration cap).",
+                   app->solve_checkpoint_path, app->solve_run_target);
+        else
+            status(app, "RESUMING\nReissuing last solve command with --resume %s.",
+                   app->solve_checkpoint_path);
+        if (i_start_solve(app, resume_cmd) != 0)
+            status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
+        unref(event);
+        return;
+            }
+        }
+    }
+
     if (!tree_path || !*tree_path || read_tree(app, tree_path, &header, &layout) != 0)
     {
         unref(event);
@@ -6193,8 +6731,16 @@ static void i_on_solve(App *app, Event *event)
         unref(event);
         return;
     }
-    if (stop_mode == 0u)
+    if (stop_mode != 1u)
         target_mbb = 0.0;
+    if (stop_mode != 0u)
+    {
+        /* Single stop option at a time: target-only (mode 1) and
+         * manual-only (mode 2) carry no iteration cap.  The core rejects
+         * max_iterations==0, so encode "no cap" as STUDIO_NO_ITER_CAP;
+         * the progress views render it as infinity. */
+        iterations = STUDIO_NO_ITER_CAP;
+    }
     if (header.street == 0)
     {
         pe_runtime_capabilities_t runtime;
@@ -6237,12 +6783,37 @@ static void i_on_solve(App *app, Event *event)
         }
         if (backend == PE_COMPUTE_AUTO)
         {
-            backend = pe_runtime_recommended_backend(&runtime);
-            if (backend == PE_COMPUTE_AUTO)
+            /* For the external-sampling preflop driver the host loop is
+             * single-threaded.  Honour the user's thread count rather than
+             * always picking the backend with the highest measured
+             * single-kernel rate (which is a poor predictor for this driver
+             * on small preflop ranges).
+             *
+             *   threads == 1  -> cpu_ref (OpenMP pool stays dormant, no
+             *                    per-batch parallel-for overhead).
+             *   threads  > 1  -> cpu_par when available so the thread count
+             *                    the user typed is actually used by the
+             *                    per-batch kernels. */
+            const pe_runtime_backend_info_t *ref = &runtime.backends[PE_COMPUTE_CPU_REF];
+            const pe_runtime_backend_info_t *par = &runtime.backends[PE_COMPUTE_CPU_PAR];
+            if (threads > 1u && par->runtime_available && par->validated)
             {
-                status(app, "SOLVE BLOCKED\nNo validated CPU/GPU backend is available.");
-                unref(event);
-                return;
+                backend = PE_COMPUTE_CPU_PAR;
+            }
+            else if (ref->runtime_available && ref->validated)
+            {
+                backend = PE_COMPUTE_CPU_REF;
+                threads = 1u;
+            }
+            else
+            {
+                backend = pe_runtime_recommended_backend(&runtime);
+                if (backend == PE_COMPUTE_AUTO)
+                {
+                    status(app, "SOLVE BLOCKED\nNo validated CPU/GPU backend is available.");
+                    unref(event);
+                    return;
+                }
             }
         }
         info = &runtime.backends[backend];
@@ -6250,6 +6821,21 @@ static void i_on_solve(App *app, Event *event)
         {
             status(app, "SOLVE BLOCKED\nBackend %s is not usable: %s",
                    pe_compute_kind_name(backend), info->reason);
+            unref(event);
+            return;
+        }
+        /* The cpu_ref adapter enforces a single thread (cpu_threads must be 0
+         * or 1).  If the user explicitly picked cpu_ref with threads > 1,
+         * block the run with a clear message rather than silently clamping
+         * (silent clamps make the field look ignored).  The user can either
+         * lower CPU threads or switch the backend combo to cpu_par / auto. */
+        if (backend == PE_COMPUTE_CPU_REF && threads > 1u)
+        {
+            status(app,
+                   "SOLVE BLOCKED\nBackend %s is single-threaded; CPU threads is %" PRIu64
+                   " but cpu_ref can only use 1.\n"
+                   "Switch the backend combo to cpu_par (or auto) to use more than one CPU thread.",
+                   pe_compute_kind_name(backend), threads);
             unref(event);
             return;
         }
@@ -6320,24 +6906,104 @@ static void i_on_solve(App *app, Event *event)
             used += (size_t)snprintf(command + used, sizeof(command) - used,
                                      " --range%u %s", player, range);
         }
+
+        /* Append --checkpoint <spot>.ckpt (and --resume if applicable).
+         * The solver writes its checkpoint next to the tree so a stopped
+         * run can be resumed without losing the math state. */
+        {
+            char ckpt_path[1024];
+            char ckpt_quoted[1100];
+            if (spot_checkpoint_path(tree_path, ckpt_path, sizeof(ckpt_path)) != 0)
+            {
+                status(app, "SOLVE ERROR\nCould not derive a checkpoint path for this spot.");
+                unref(event);
+                return;
+            }
+            if (quote_argument(ckpt_path, ckpt_quoted, sizeof(ckpt_quoted)) != 0)
+            {
+                status(app, "SOLVE ERROR\nCheckpoint path is too long.");
+                unref(event);
+                return;
+            }
+            used += (size_t)snprintf(command + used, sizeof(command) - used,
+                                     " --checkpoint %s", ckpt_quoted);
+            if (app->solve_resume_mode && app->solve_checkpoint_available &&
+                app->solve_checkpoint_path[0] != '\0')
+            {
+                char resume_quoted[1100];
+                if (quote_argument(app->solve_checkpoint_path, resume_quoted,
+                                   sizeof(resume_quoted)) == 0)
+                {
+                    used += (size_t)snprintf(command + used, sizeof(command) - used,
+                                             " --resume %s", resume_quoted);
+                }
+            }
+        }
+
         (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
                        " 2>&1");
+
+        /* Set OMP_NUM_THREADS for the spawned shell so any parallel region
+         * (per-batch kernel, terminal-eval microbench, future host-side
+         * parallel sampling) honors the user-selected thread count.  We
+         * prepend it because the inner solver is launched by /bin/bash -c. */
+        {
+            char env_prefix[64];
+            int prefix_len = snprintf(env_prefix, sizeof(env_prefix),
+                                      "OMP_NUM_THREADS=%" PRIu64 " ",
+                                      threads);
+            size_t cmd_len = strlen(command);
+            if (prefix_len > 0 && (size_t)prefix_len + cmd_len + 1u < sizeof(command))
+            {
+                memmove(command + prefix_len, command, cmd_len + 1u);
+                memcpy(command, env_prefix, (size_t)prefix_len);
+            }
+        }
         snprintf(config_text, sizeof(config_text),
                  "Lane B preflop | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
-                 " | policy %s%s | SIMD %s",
-                 pe_preset_name(algorithm), algorithm_axes,
-                 stop_mode == 0u ? "iterations" : "exploitability",
-                 target_mbb, iterations, interval,
+" | policy %s%s | SIMD %s",
+                  pe_preset_name(algorithm), algorithm_axes,
+                  stop_mode == 0u ? "iterations"
+                  : stop_mode == 1u ? "exploitability only (no iteration cap)"
+                  : "manual only (no cap, no target)",
+                  target_mbb, iterations, interval,
                  pe_preset_name(algorithm), backend_display,
                  pe_precision_name(precision), threads,
                  policy == PE_POLICY_COUNT ? "preset" : pe_policy_name(policy),
                  fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "",
                  pe_runtime_simd_name(runtime.simd));
         label_text(app->run_config, config_text);
-        status(app, "SOLVING PREFLOP\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\nSIMD detected: %s (CFR traversal scalar)\nEmpty ranges are 100%%; boards are dealt through river.",
-               command, pe_preset_name(algorithm), algorithm_axes,
-               backend_display, pe_runtime_simd_name(runtime.simd));
+        {
+            const char *parallel_note = (backend == PE_COMPUTE_CPU_PAR)
+                ? "OpenMP parallel regions run with the user-selected thread count;\n"
+                  "note: the external-sampling host loop is single-threaded (only per-batch\n"
+                  "kernels are parallel)."
+                : "The external-sampling host loop is single-threaded; per-batch kernels\n"
+                  "are scalar.  Pick cpu_par from the backend combo and increase CPU threads\n"
+                  "if you want OpenMP inside the per-batch kernels (only profitable on\n"
+                  "larger batches).";
+            const char *stop_note = (stop_mode == 1u)
+                ? "\nStop rule: exploitability target ONLY (no iteration cap) —\n"
+                  "runs until empirical exploitability <= target or you click Stop run."
+                : (stop_mode == 2u)
+                    ? "\nStop rule: manual only — runs until you click Stop run."
+                    : "";
+            status(app,
+                   "SOLVING PREFLOP\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\n"
+                   "SIMD detected: %s (CFR traversal scalar)\nOMP_NUM_THREADS=%" PRIu64 "\n"
+                   "%s%s\nEmpty ranges are 100%%; boards are dealt through river.",
+                   command, pe_preset_name(algorithm), algorithm_axes,
+                   backend_display, pe_runtime_simd_name(runtime.simd),
+                   threads, parallel_note, stop_note);
+        }
+        app->solve_has_resolved = 1;
+        app->solve_resolved_threads = (int)threads;
+        snprintf(app->solve_resolved_backend, sizeof(app->solve_resolved_backend),
+                 "%s", pe_compute_kind_name(backend));
+        app->solve_stop_mode = stop_mode;
+        app->solve_run_iterations = iterations;
+        app->solve_run_target = target_mbb;
         if (i_start_solve(app, command) != 0)
             status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
         unref(event);
@@ -6429,6 +7095,15 @@ static void i_on_solve(App *app, Event *event)
              " | f64 | SIMD detected automatically | CFR controls not applicable");
     label_text(app->run_config, config_text);
     status(app, "EVALUATING POSTFLOP\n%s\n\nThis path replays the tree and evaluates terminal equities; it does not run CFR.", command);
+    app->solve_has_resolved = 1;
+    app->solve_resolved_threads = 1;
+    snprintf(app->solve_resolved_backend, sizeof(app->solve_resolved_backend),
+             "%s", "cpu_ref");
+    /* Postflop evaluation has no stop rule; clear any stale preflop
+     * stop-mode state so i_solve_end never misreports a verdict. */
+    app->solve_stop_mode = 0u;
+    app->solve_run_iterations = 0u;
+    app->solve_run_target = 0.0;
     if (i_start_solve(app, command) != 0)
         status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
     unref(event);
@@ -6574,6 +7249,7 @@ static Panel *i_setup_panel(App *app)
     button_text(stop, "Stop run");
     combo_add_elem(app->stop_mode_combo, "Max iterations (hard stop)", NULL);
     combo_add_elem(app->stop_mode_combo, "Exploitability target (mBB)", NULL);
+    combo_add_elem(app->stop_mode_combo, "Run forever (manual stop)", NULL);
     /* A new desktop run must finish deterministically unless the user opts
      * into a target-based run. A 1 mBB target is not expected to be reached by
      * the empirical Lane B estimate on a fresh tree, which previously left

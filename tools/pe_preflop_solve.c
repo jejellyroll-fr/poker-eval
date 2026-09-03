@@ -18,6 +18,7 @@
 #include <poker_eval/solver/pe_solver_plan.h>
 #include <poker_eval/solver/pe_runtime.h>
 #include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_rng.h>
 
 #include <errno.h>
@@ -25,9 +26,12 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
+#include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../src/solver/domain/finite_double.h"
 
@@ -59,6 +63,9 @@ typedef struct {
     uint64_t seed;
     const char *output;
     const char *tree;
+    const char *checkpoint_path;
+    const char *resume_path;
+    uint64_t checkpoint_interval;
     pe_algorithm_preset_t algorithm;
     pe_policy_mode_t policy;
     double exponential_lambda;
@@ -312,30 +319,53 @@ static void print_strategy_report(const options_t *options,
     }
     else
         printf("tree_step node=generated actor=sampled branches=from sampled decisions\n");
+    fflush(stdout);
     printf("OBSERVED DECISIONS\n");
-    for (size_t i = 0u; i < desc_count && emitted < 64u; ++i)
+    /* Deduplicate on (tree node, actor), keeping first-occurrence order.
+     * NOTE: this used to rescan all previous infosets per row (O(n^2)
+     * view_at calls); on long runs (n = 77594) that is ~3e9 calls and the
+     * report never finishes — the Studio waits forever on Stop.  A small
+     * seen-list (at most 64 entries are ever emitted) makes it O(64n)
+     * with byte-identical output. */
     {
-        int duplicate = 0;
-        pe_preflop_infodesc_view_t view;
-        if (pe_preflop_allin_infodesc_view_at(game, i, &view) != 0)
-            continue;
-        for (size_t j = 0u; j < i; ++j)
+        struct {
+            int node;
+            int actor;
+        } seen[64];
+        size_t seen_count = 0u;
+        for (size_t i = 0u; i < desc_count && emitted < 64u; ++i)
         {
-            pe_preflop_infodesc_view_t previous;
-            if (pe_preflop_allin_infodesc_view_at(game, j, &previous) == 0 &&
-                previous.tree_node_index == view.tree_node_index &&
-                previous.actor == view.actor)
-                duplicate = 1;
+            int duplicate = 0;
+            pe_preflop_infodesc_view_t view;
+            if (pe_preflop_allin_infodesc_view_at(game, i, &view) != 0)
+                continue;
+            for (size_t k = 0u; k < seen_count; ++k)
+            {
+                if (seen[k].node == view.tree_node_index &&
+                    seen[k].actor == (int)view.actor)
+                {
+                    duplicate = 1;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            if (seen_count < 64u)
+            {
+                seen[seen_count].node = view.tree_node_index;
+                seen[seen_count].actor = (int)view.actor;
+                ++seen_count;
+            }
+            printf("step node=%d actor=P%d hand=%s pot=%.2f to_call=%.2f actions=",
+                   view.tree_node_index, view.actor + 1, view.hand,
+                   view.pot, view.to_call);
+            for (uint16_t a = 0u; a < view.action_count; ++a)
+                printf("%s%s", a ? "|" : "", view.actions[a]);
+            putchar('\n');
+            ++emitted;
         }
-        if (duplicate) continue;
-        printf("step node=%d actor=P%d hand=%s pot=%.2f to_call=%.2f actions=",
-               view.tree_node_index, view.actor + 1, view.hand,
-               view.pot, view.to_call);
-        for (uint16_t a = 0u; a < view.action_count; ++a)
-            printf("%s%s", a ? "|" : "", view.actions[a]);
-        putchar('\n');
-        ++emitted;
     }
+    fflush(stdout);
+    fflush(stdout);
     printf("HAND TABLE\nhand\tnode\tactor\tfrequencies\tEV by action\n");
     for (size_t id = 0u; id < solver_count && emitted < 180u; ++id)
     {
@@ -453,13 +483,69 @@ static void usage(FILE *stream)
         "  --exploitability-interval N  measure/print convergence every N iterations\n"
         "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
+"  --checkpoint FILE            save a v2 checkpoint (at completion and every --checkpoint-interval\\n"
+        "  --resume FILE               load a v2 checkpoint and continue the solve\\n"
+        "  --checkpoint-interval N     save a checkpoint every N iterations (0=off\\n"
         "  --help                       show this help\n", DEFAULT_ITERATIONS);
 }
+static pe_solver_t *g_solver = NULL;
+static volatile sig_atomic_t g_stop_requested = 0;
+static pthread_t g_stop_watcher;
+
+/* A stop requested by SIGINT/SIGTERM only sets this flag (async-signal-safe) ;
+ * a dedicated watcher thread calls pe_solver_stop() fromits own stack so the
+ * solve thread never re-locks the lifecycle mutex from insidea signal handler(:, */
+static void i_on_signal(int signo)
+{
+    (void)signo;
+    g_stop_requested = 1;
+}
+
+static void *i_stop_watcher(void *opaque)
+{
+    (void)opaque;
+    /* Poll a stop request; call pe_solver_stop from a thread distinct from
+     * the solving thread.  Short sleep keeps the latency around one iteration. */
+    while (g_stop_requested == 0)
+        usleep(50000);
+    if (g_solver)
+        pe_solver_stop(g_solver);
+    return NULL;
+}
+static void i_hash_byte(uint64_t *hash, unsigned char byte)
+{
+    *hash ^= byte;
+    *hash *= UINT64_C(0x100000001b3);
+}
+
+static void i_hash_str(uint64_t *hash, const char *text)
+{
+    if (!text)
+        return;
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
+        i_hash_byte(hash, *p);
+}
+
+/* Deterministic fingerprint of the solve spot; the checkpoint adapter stores it
+ * so it can refuse to resume a checkpoint saved on a different spot. */
+static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree)
+{
+    uint64_t h = UINT64_C(0x50455f5052464c42);
+    i_hash_str(&h, options->game);
+    i_hash_str(&h, options->tree);
+    {
+        double v = options->target_mbb;
+        for (unsigned i = 0; i < sizeof(v); ++i)
+            i_hash_byte(&h, ((const unsigned char *)&v)[i]);
+    }
+    return h;
+}
+
 
 static int parse_u64(const char *text, uint64_t *out)
 {
     char *end = NULL;
-    unsigned long long value;
+unsigned long long value;
     if (!text || !out || !*text)
         return -1;
     errno = 0;
@@ -561,6 +647,7 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->min_raise = DEFAULT_MIN_RAISE;
     options->br_samples = 256u;
     options->exploitability_interval = 256u;
+options->checkpoint_interval =0u;
     options->target_mbb = 1.0;
     options->seed = UINT64_C(0x50455f5052464c42);
     options->algorithm = PE_PRESET_EXTERNAL_MCCFR;
@@ -599,7 +686,10 @@ static int parse_options(int argc, char **argv, options_t *options)
              strcmp(arg, "--precision") == 0 ||
              strcmp(arg, "--threads") == 0 ||
              strcmp(arg, "--target-mbb") == 0 ||
-             strcmp(arg, "--exploitability-interval") == 0) &&
+             strcmp(arg, "--exploitability-interval") == 0 ||
+             strcmp(arg, "--checkpoint") == 0 ||
+             strcmp(arg, "--resume") == 0 ||
+             strcmp(arg, "--checkpoint-interval") == 0) &&
             (!value || value[0] == '-')) {
             fprintf(stderr, "missing value for %s\n", arg);
             return -1;
@@ -654,6 +744,13 @@ static int parse_options(int argc, char **argv, options_t *options)
         } else if (strcmp(arg, "--exploitability-interval") == 0) {
             if (parse_u64(value, &options->exploitability_interval) != 0 ||
                 options->exploitability_interval == 0u)
+                return -1;
+} else if (strcmp(arg, "--checkpoint") == 0) {
+            options->checkpoint_path = value;
+        } else if (strcmp(arg, "--resume") == 0) {
+            options->resume_path = value;
+        } else if (strcmp(arg, "--checkpoint-interval") == 0) {
+            if (parse_u64(value,&options->checkpoint_interval) != 0)
                 return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
@@ -960,8 +1057,54 @@ int main(int argc, char **argv)
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);
     deps.telemetry = pe_telemetry_stdout();
+    deps.persist = (const pe_persist_ops_t *)pe_persist_checkpoint_ops();
     solver = pe_solver_create(&config, &deps);
-    status = solver ? pe_solver_run(solver) : PE_SOLVER_ERR_OUT_OF_MEMORY;
+        status = solver ? PE_SOLVER_OK : PE_SOLVER_ERR_OUT_OF_MEMORY;
+    g_solver = solver;
+    if (options.resume_path && solver) {
+        pe_persist_source_t src;
+        memset(&src, 0, sizeof(src));
+        src.path = options.resume_path;
+        src.game_hash = spot_hash(&options, tree);
+        src.tree_hash = src.game_hash;
+        if (pe_solver_load(solver, &src) != PE_SOLVER_OK) {
+            fprintf(stderr, "could not resume checkpoint %s\n", options.resume_path);
+            status = PE_SOLVER_ERR_EXECUTION;
+        } else {
+            pe_progress_t p;
+            pe_solver_progress(solver, &p);
+            printf("resumed_checkpoint=1 path=%s continuation_iteration=%" PRIu64 "\n", options.resume_path, p.iteration);
+        }
+    }
+    if (status == PE_SOLVER_OK) {
+        signal(SIGINT, i_on_signal);
+        signal(SIGTERM, i_on_signal);
+        g_stop_requested = 0;
+        if (pthread_create(&g_stop_watcher,NULL,i_stop_watcher,NULL) !=0){
+            g_stop_watcher = (pthread_t)0;
+        }
+        if (g_stop_requested && g_solver)
+            pe_solver_stop(g_solver);
+        status = pe_solver_run(solver);
+        g_stop_requested = 1;
+        if (g_stop_watcher)
+            pthread_join(g_stop_watcher,NULL);
+        if (options.checkpoint_path && solver) {
+            pe_persist_target_t t;
+            memset(&t, 0, sizeof(t));
+            t.path = options.checkpoint_path;
+            t.game_hash = spot_hash(&options, tree);
+            t.tree_hash = t.game_hash;
+            if (pe_solver_save(solver, &t) == PE_SOLVER_OK) {
+                pe_progress_t p;
+                pe_solver_progress(solver, &p);
+                printf("checkpoint_saved=1 path=%s iteration=%" PRIu64 "\n", options.checkpoint_path, p.iteration);
+            } else {
+                fprintf(stderr, "checkpoint save failed\n");
+            }
+        }
+        g_solver = NULL;
+    }
     if (solver)
         (void)pe_solver_progress(solver, &progress);
     if (solver)
@@ -975,7 +1118,7 @@ int main(int argc, char **argv)
             game, (pe_storage_t *)pe_solver_get_storage_instance(solver));
         size_t infosets = pe_preflop_allin_infodesc_count(game);
         printf("preflop_solver=lane-b algorithm=%s traversal=%s regret=%s policy=%s "
-               "backend=%s backend_validated=1 precision=%s simd_detected=%s "
+               "backend=%s backend_validated=1 cpu_threads=%d precision=%s simd_detected=%s "
                "simd_cfr=not-integrated dcfr_alpha=%.6g dcfr_beta=%.6g "
                "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s\n",
                config.algorithm.preset == PE_PRESET_CUSTOM
@@ -984,6 +1127,7 @@ int main(int argc, char **argv)
                pe_regret_name(config.algorithm.regret),
                pe_policy_name(config.algorithm.policy),
                pe_compute_kind_name(options.backend),
+               options.cpu_threads,
                pe_precision_name(options.precision),
                pe_runtime_simd_name(detected_simd),
                config.algorithm.dcfr_alpha, config.algorithm.dcfr_beta,
@@ -993,8 +1137,9 @@ int main(int argc, char **argv)
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         printf("solver_phase=complete stop_reason=%s report=starting\n",
-               options.target_mbb > 0.0 &&
-               metrics.exploitability_mbb_per_game <= options.target_mbb
+               !progress.complete ? "stopped"
+               : options.target_mbb > 0.0 &&
+                 metrics.exploitability_mbb_per_game <= options.target_mbb
                    ? "target" : "max_iterations");
         fflush(stdout);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
