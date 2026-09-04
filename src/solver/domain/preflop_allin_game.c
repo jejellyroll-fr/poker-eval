@@ -582,7 +582,25 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
         hash = preflop_mix_u64(
             hash, preflop_quantize(betting->round_contrib[player]));
     if (actor >= 0)
-        hash = preflop_mix_u64(hash, (uint64_t)canon_hole);
+    {
+        /* With a board abstraction on, the hole must be canonicalised on its
+         * OWN, not jointly with the board.  Joint canonicalisation ties the
+         * hand's suit labels to the concrete board, so two boards the
+         * abstraction has merged still produced different keys for the same
+         * hand and the merge barely happened: DETAILED classes are 32x larger
+         * than an isomorphism class yet cut infosets by only 11%.  Merging
+         * boards while refusing to merge the hands that sit on them is not a
+         * coherent abstraction. */
+        mask_t hole_key = canon_hole;
+        if (game->rules.board_texture_level > 0)
+        {
+            mask_t hole_only_board;
+            preflop_canonical_view(MASK_EMPTY, state->holes[actor],
+                                   &hole_only_board, &hole_key);
+            (void)hole_only_board;
+        }
+        hash = preflop_mix_u64(hash, (uint64_t)hole_key);
+    }
     preflop_record_desc(game, hash, state);
     return hash;
 }
