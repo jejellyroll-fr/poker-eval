@@ -5132,17 +5132,79 @@ static int result_street(const App *app)
         ? -1 : (int)combo_get_selected(app->street_filter) - 1;
 }
 
+/* Money along one betting path.
+ *
+ * A node's pot is NOT a property of the node: these trees funnel several
+ * lines into the same next-street node, so turn_first sits in 2.00 after a
+ * checked flop and 4.64 after bet-call.  It is only well defined for a given
+ * path, which is why it is accumulated here, down the same walk that prints
+ * the decision history, rather than declared per node. */
+typedef struct
+{
+    double pot;
+    double contrib[2];   /* this round, per seat */
+    double bet;          /* highest contribution this round */
+    int street;
+} path_money_t;
+
+/* Both size conventions the engine uses, confirmed against a solve:
+ * a "chips" size is the increment ABOVE the call, a pot_sizing size is a
+ * fraction of the pot once the call is made. */
+static void path_money_apply(path_money_t *money, const mpf_tree_node_t *node,
+                             int action)
+{
+    int seat = node->acting_player >= 0 && node->acting_player < 2
+                   ? node->acting_player : 0;
+    double outstanding = money->bet - money->contrib[seat];
+    if (outstanding < 0.0)
+        outstanding = 0.0;
+    if (node->actions[action].type == MPF_TREE_ACTION_FOLD)
+        return;
+    if (node->actions[action].type == MPF_TREE_ACTION_CALL)
+    {
+        money->pot += outstanding;
+        money->contrib[seat] = money->bet;
+        return;
+    }
+    if (node->actions[action].type == MPF_TREE_ACTION_RAISE)
+    {
+        int index = node->actions[action].size_index;
+        double size = (index >= 0 && index < node->bet_size_count)
+                          ? node->bet_sizes[index] : 0.0;
+        double raise_by;
+        if (size < 0.0)           /* all-in / min-raise markers */
+            return;
+        raise_by = node->use_pot_sizing ? size * (money->pot + outstanding) : size;
+        money->pot += outstanding + raise_by;
+        money->contrib[seat] = money->bet + raise_by;
+        money->bet = money->contrib[seat];
+    }
+}
+
 static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
                             int target, unsigned char *visited,
                             uint32_t depth, char *history, size_t capacity,
-                            size_t *used)
+                            size_t *used, path_money_t *money,
+                            double *out_pot)
 {
     const mpf_tree_node_t *node;
     if (!tree || !visited || !history || !used || node_index < 0 ||
         node_index >= tree->node_count || depth > (uint32_t)tree->node_count)
         return 0;
+    if (node_index >= 0 && node_index < tree->node_count &&
+        (int)tree->nodes[node_index].street != money->street)
+    {
+        /* New street: the round's contributions reset, the pot carries. */
+        money->street = (int)tree->nodes[node_index].street;
+        money->contrib[0] = money->contrib[1] = 0.0;
+        money->bet = 0.0;
+    }
     if (node_index == target)
+    {
+        if (out_pot)
+            *out_pot = money->pot;
         return 1;
+    }
     if (visited[node_index])
         return 0;
     visited[node_index] = 1u;
@@ -5183,11 +5245,17 @@ static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
                 }
             }
         }
-        if (tree_history_dfs(tree, node->actions[action].next_index, target,
-                             visited, depth + 1u, history, capacity, used))
         {
-            visited[node_index] = 0u;
-            return 1;
+            path_money_t saved = *money;
+            path_money_apply(money, node, action);
+            if (tree_history_dfs(tree, node->actions[action].next_index, target,
+                                 visited, depth + 1u, history, capacity, used,
+                                 money, out_pot))
+            {
+                visited[node_index] = 0u;
+                return 1;
+            }
+            *money = saved;
         }
         *used = previous;
         history[*used] = '\0';
@@ -5196,12 +5264,37 @@ static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
     return 0;
 }
 
-static void tree_history_for_node(const mpf_tree_def_t *tree, int target,
-                                  char history[512])
+/* The pot the tree starts from: what the root node declares, else the POT AT
+ * ROOT field for a postflop tree, else the blinds the driver posts by default
+ * (pe-preflop-solve's DEFAULT_SMALL_BLIND + DEFAULT_BIG_BLIND). */
+static double tree_root_pot(const App *app, const mpf_tree_def_t *tree, int root)
+{
+    if (tree && root >= 0 && root < tree->node_count &&
+        tree->nodes[root].has_snapshot && tree->nodes[root].snapshot.has_pot)
+        return tree->nodes[root].snapshot.pot;
+    if (tree && root >= 0 && root < tree->node_count &&
+        (int)tree->nodes[root].street != 0)
+    {
+        double pot = 0.0;
+        if (app && app->setup_pot_edit &&
+            parse_ui_target(edit_get_text(app->setup_pot_edit), &pot) == 0 &&
+            pot > 0.0)
+            return pot;
+        return 0.0;
+    }
+    return 1.5;
+}
+
+static void tree_history_for_node(const App *app, const mpf_tree_def_t *tree,
+                                  int target, char history[512],
+                                  double *out_pot, int *out_has_pot)
 {
     unsigned char *visited;
     size_t used;
     int root;
+    path_money_t money;
+    if (out_has_pot)
+        *out_has_pot = 0;
     if (!history)
         return;
     history[0] = '\0';
@@ -5220,7 +5313,25 @@ static void tree_history_for_node(const mpf_tree_def_t *tree, int target,
     visited = (unsigned char *)calloc((size_t)tree->node_count, sizeof(*visited));
     if (!visited)
         return;
-    (void)tree_history_dfs(tree, root, target, visited, 0u, history, 512u, &used);
+    memset(&money, 0, sizeof(money));
+    money.pot = tree_root_pot(app, tree, root);
+    money.street = (int)tree->nodes[root].street;
+    if (money.street == 0)
+    {
+        /* Heads-up blinds are already in the middle at the preflop root. */
+        money.contrib[0] = 0.5;
+        money.contrib[1] = 1.0;
+        money.bet = 1.0;
+    }
+    {
+        double pot = money.pot;
+        if (tree_history_dfs(tree, root, target, visited, 0u, history, 512u,
+                             &used, &money, &pot) && out_pot && out_has_pot)
+        {
+            *out_pot = pot;
+            *out_has_pot = money.pot > 0.0 || pot > 0.0;
+        }
+    }
     free(visited);
 }
 
@@ -5250,7 +5361,8 @@ static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tr
         step->node_index = node_index;
         step->street = (int)node->street;
         step->acting_player = node->acting_player;
-        tree_history_for_node(tree, node_index, step->history);
+        tree_history_for_node(app, tree, node_index, step->history,
+                              &step->pot, &step->has_pot);
         for (int action = 0; action < node->action_count &&
              action < STRATEGY_TABLE_ACTIONS; ++action)
         {
@@ -5392,7 +5504,8 @@ static void refresh_result_filters(App *app, const char *output)
                         if (!sep) break;
                     }
                 }
-                tree_history_for_node(app->mkr_tree, st->node_index, st->history);
+                tree_history_for_node(app, app->mkr_tree, st->node_index,
+                                      st->history, &st->pot, &st->has_pot);
 
                 {
                     size_t used = (size_t)snprintf(item, sizeof(item),

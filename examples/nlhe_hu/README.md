@@ -11,6 +11,12 @@ Actions are check, call, bet/raise and fold. Preflop opens to 2.5bb; postflop
 bets are 66% pot (`"pot_sizing": true`), which is the usual c-bet size and,
 unlike PLO, not capped at the pot.
 
+Note the two size conventions, because they are easy to mix up: a plain
+`sizes` value is the raise increment **above the call**, not a raise-to. The
+preflop profile is `1.5`, which over the 1bb call is an open to 2.5bb — the
+solver's own branch label reads `RAISE 1.50`, the increment. A
+`"pot_sizing": true` value is a fraction of the pot once the call is made.
+
 ## The three flop trees
 
 Same shape, same ranges, same pot — **only the board differs**. So any
