@@ -21,6 +21,8 @@
 #include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_rng.h>
 #include <poker_eval/core/modern_cardmask.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 #include <errno.h>
 #include <ctype.h>
@@ -78,6 +80,20 @@ typedef struct {
      * couple of dozen decisions showed a handful of hands each. */
     size_t report_rows;
     const char *board_abstraction;
+    /* Board to interrogate the SOLVER for, rather than sampling the report.
+     * The report prints at most --report-rows sampled infosets; a query walks
+     * every infoset the solve holds and emits the ones whose board matches,
+     * uncapped, so a chosen board comes back with its whole hand table. */
+    const char *query_board;
+    /* Stay alive after the report and answer board queries on stdin, instead
+     * of exiting and forcing a fresh process (and a fresh solve) per board.
+     * The solve's infoset descriptions only exist in the process that played
+     * them -- the checkpoint stores strategies, not descriptions -- so a
+     * query is only complete while that process is still up. */
+    int interactive;
+    /* Resolved --board-abstraction, so the report and the query read the
+     * solve with the same rule the solve was keyed with. */
+    int board_texture_level;
     double pot;
     int have_pot;
     int to_act;
@@ -276,6 +292,26 @@ static double action_ev(const pe_external_game_t *external,
     return total / (double)samples;
 }
 
+/* Do two boards name the same spot, under the rule this run keyed its
+ * infosets with?  Exact suit isomorphism normally; the texture id when a
+ * board abstraction is on, so a query reads the solve the same way the solve
+ * wrote it. */
+static int query_board_matches(mask_t a, mask_t b, int level)
+{
+    int na = (int)mask_popcount(a);
+    int nb = (int)mask_popcount(b);
+    char ka[32];
+    char kb[32];
+    if (na != nb || na == 0)
+        return 0;
+    if (level > 0)
+        return pe_board_texture_id(a, (pe_texture_filter_level_t)level) ==
+               pe_board_texture_id(b, (pe_texture_filter_level_t)level);
+    return pe_board_canonical_key(a, na, ka, sizeof(ka)) == 0 &&
+           pe_board_canonical_key(b, nb, kb, sizeof(kb)) == 0 &&
+           strcmp(ka, kb) == 0;
+}
+
 static void print_strategy_report(const options_t *options,
                                   pe_preflop_allin_game_t *game,
                                   pe_solver_t *solver,
@@ -384,8 +420,22 @@ static void print_strategy_report(const options_t *options,
     fflush(stdout);
     fflush(stdout);
     printf("HAND TABLE\nhand\tnode\tactor\tfrequencies\tEV by action\n");
+    /* A query walks every infoset and keeps only the matching boards, so the
+     * row cap does not apply: the point is to return a board's COMPLETE hand
+     * table, which the sampled report structurally cannot. */
+    mask_t query_mask = MASK_EMPTY;
+    int querying = 0;
+    if (options->query_board && *options->query_board)
+    {
+        query_mask = string_to_mask(options->query_board);
+        querying = mask_popcount(query_mask) > 0;
+        printf("BOARD QUERY board=%s abstraction=%s\n",
+               options->query_board,
+               options->board_abstraction ? options->board_abstraction : "none");
+        fflush(stdout);
+    }
     for (size_t id = 0u; id < solver_count &&
-                        (report_rows == 0u || emitted < report_rows); ++id)
+                        (querying || report_rows == 0u || emitted < report_rows); ++id)
     {
         uint64_t key = 0u;
         pe_strategy_query_t query;
@@ -399,6 +449,10 @@ static void print_strategy_report(const options_t *options,
         if (desc_index == SIZE_MAX ||
             pe_preflop_allin_infodesc_view_at(game, desc_index, &view) != 0 ||
             pe_preflop_allin_infodesc_state_at(game, desc_index, &state) != 0)
+            continue;
+        if (querying &&
+            !query_board_matches(state.board, query_mask,
+                                 options->board_texture_level))
             continue;
         query.infoset = (uint32_t)id;
         if (pe_solver_strategy(solver, &query, &strategy) != PE_SOLVER_OK)
@@ -479,7 +533,9 @@ static void print_strategy_report(const options_t *options,
             putchar('\n');
         }
     }
-    if (report_rows != 0u && emitted >= report_rows)
+    if (querying)
+        printf("board_query_rows=%zu\n", emitted);
+    if (!querying && report_rows != 0u && emitted >= report_rows)
         printf("... report capped at %zu visible rows (--report-rows); the solve "
                "storage still contains all %zu infosets.\n",
                report_rows, solver_count);
@@ -504,6 +560,14 @@ static void usage(FILE *stream)
         "  --allow-calls                allow calls before all-in\n"
         "  --postflop                   continue through flop, turn and river\n"
         "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
+        "  --interactive               after the report, keep running and answer\n"
+        "                              \"query <cards>\" lines on stdin with that board\'s\n"
+        "                              hand table; \"quit\" or EOF ends the process.\n"
+        "  --query-board CARDS         emit the hand table of every infoset whose board\n"
+        "                              matches CARDS, walking the whole solve instead of\n"
+        "                              the sampled report. Ignores --report-rows and uses\n"
+        "                              the run\'s own board matching (suit isomorphism, or\n"
+        "                              the texture id when --board-abstraction is set).\n"
         "  --board-abstraction LEVEL   merge boards a level cannot tell apart:\n"
         "                              none (default, exact), small, medium, large.\n"
         "                              Coarser levels let one sampled board answer for\n"
@@ -856,6 +920,7 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--to-act") == 0 ||
              strcmp(arg, "--report-rows") == 0 ||
              strcmp(arg, "--board-abstraction") == 0 ||
+             strcmp(arg, "--query-board") == 0 ||
              strcmp(arg, "--checkpoint-interval") == 0) &&
             (!value || value[0] == '-')) {
             fprintf(stderr, "missing value for %s\n", arg);
@@ -921,6 +986,11 @@ options->checkpoint_interval =0u;
                 return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
+        } else if (strcmp(arg, "--interactive") == 0) {
+            options->interactive = 1;
+            continue;
+        } else if (strcmp(arg, "--query-board") == 0) {
+            options->query_board = value;
         } else if (strcmp(arg, "--board-abstraction") == 0) {
             options->board_abstraction = value;
         } else if (strcmp(arg, "--report-rows") == 0) {
@@ -1324,6 +1394,7 @@ int main(int argc, char **argv)
             goto fail;
         }
         rules.board_texture_level = level;
+        options.board_texture_level = level;
     }
     rules.root_street = root_street;
     rules.root_board = (uint64_t)board_mask;
@@ -1410,6 +1481,7 @@ int main(int argc, char **argv)
             printf("resumed_checkpoint=1 path=%s continuation_iteration=%" PRIu64 "\n", options.resume_path, p.iteration);
         }
     }
+    int interrupted = 0;
     if (status == PE_SOLVER_OK) {
         signal(SIGINT, i_on_signal);
         signal(SIGTERM, i_on_signal);
@@ -1420,6 +1492,10 @@ int main(int argc, char **argv)
         if (g_stop_requested && g_solver)
             pe_solver_stop(g_solver);
         status = pe_solver_run(solver);
+        /* Capture the interrupt BEFORE the flag is reused below to stop the
+         * watcher thread.  An interrupted solve must not go on to serve
+         * queries: the user asked for the run to end. */
+        interrupted = g_stop_requested != 0;
         g_stop_requested = 1;
         if (g_stop_watcher)
             pthread_join(g_stop_watcher,NULL);
@@ -1483,6 +1559,37 @@ int main(int argc, char **argv)
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
                metrics.exploitability_mbb_per_game, options.br_samples);
         print_strategy_report(&options, game, solver, tree);
+        /* Serve after an interrupt too.  Stopping a run is the normal way to
+         * say "that is enough, let me look at it" -- and with an iteration
+         * cap disabled it is the ONLY way a run ever ends, so refusing to
+         * serve then made board queries unreachable.  This was safe to
+         * refuse only while an orphaned solver could outlive its shell; that
+         * is fixed at the launch site, and "quit" ends the process cleanly. */
+        if (options.interactive)
+        {
+            /* The game and solver stay in memory, so every query sees the
+             * complete set of infosets the solve visited -- descriptions
+             * included -- which a resumed process cannot reconstruct. */
+            char line[256];
+            printf("interactive=1 ready interrupted=%d\n", interrupted);
+            fflush(stdout);
+            while (fgets(line, sizeof(line), stdin))
+            {
+                size_t len = strlen(line);
+                while (len > 0u && (line[len - 1u] == '\n' || line[len - 1u] == '\r'))
+                    line[--len] = '\0';
+                if (strcmp(line, "quit") == 0)
+                    break;
+                if (strncmp(line, "query ", 6u) == 0 && line[6])
+                {
+                    options_t query_options = options;
+                    query_options.query_board = line + 6;
+                    print_strategy_report(&query_options, game, solver, tree);
+                }
+                printf("query_done\n");
+                fflush(stdout);
+            }
+        }
         if (options.output)
             write_report(options.output, &options, &metrics, &progress, infosets,
                          detected_simd);
