@@ -10,6 +10,7 @@
 #include <nappgui.h>
 
 #include <poker_eval/engine/solvers/cfr/board_canonical.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_runtime.h>
@@ -68,6 +69,13 @@
 #define STUDIO_REPORT_ROWS 4000u
 #define STRATEGY_CAPTURE_CAPACITY 524288u
 #define MONKER_GRID_MAX_ROWS PE_MONKER_CLASS_COUNT
+
+/* strategy_table_add_row writes strategy_rows[i] and monker_hands[i] with the
+ * same index, so the row cap must never exceed the grid array.  Raising
+ * STRATEGY_TABLE_MAX_ROWS past MONKER_GRID_MAX_ROWS would overflow
+ * monker_hands silently; catch it at compile time instead. */
+typedef char pe_studio_row_cap_fits[
+    (STRATEGY_TABLE_MAX_ROWS <= MONKER_GRID_MAX_ROWS) ? 1 : -1];
 /* "No iteration cap" ceiling for single-option stop modes (target-only,
  * manual-only).  The solver core rejects max_iterations==0 with no target,
  * so "run until target / manual stop" is encoded as this huge cap
@@ -434,6 +442,27 @@ struct _app_t
      * left the already-computed report untouched. */
     char result_board_cards[64];
 
+    /* Board abstraction the CURRENT report was produced with
+     * (pe_texture_filter_level_t).  The view has to match runouts by the same
+     * rule the solver keyed them with: comparing exact canonical boards
+     * against a run that merged them by texture finds almost nothing. */
+    int solve_board_abstraction;
+
+    /* The solver stays alive after its report and answers "query <board>" on
+     * stdin.  It has to: the infoset DESCRIPTIONS (key -> hand/board/node)
+     * only exist in the process that played them -- a checkpoint stores
+     * strategies, not descriptions -- so a resumed process answers a board
+     * query with a fraction of the hands.  While serving, the run is
+     * finished for the user even though the process is still up. */
+    int solve_serving;
+    /* Bytes of solver output already folded into the views, and whether the
+     * serving UI has been applied for them.  While serving, the process never
+     * exits, so the 10 Hz update loop would otherwise re-copy and re-parse a
+     * multi-megabyte report forever -- which locks the interface up once the
+     * results are on screen. */
+    size_t solve_view_total;
+    int solve_view_serving_applied;
+
     /* Reusable copy of the above for the render paths.  Owned by the app
      * rather than malloc'd per call: i_solve_update runs ten times a second
      * while a solve is live. */
@@ -473,6 +502,45 @@ static void render_current_strategy_view(App *app);
 static void i_on_result_filter(App *app, Event *event);
 static void refresh_result_filters(App *app, const char *output);
 static int result_line_board(const char *line, char *out, size_t capacity);
+
+/* Warning appended wherever exploitability is shown.  With boards merged,
+ * the best-response search only ever plays inside the abstraction, so the
+ * figure is the exploitability of the ABSTRACT game -- it says nothing about
+ * an opponent who tells the merged boards apart, and it drops toward zero as
+ * the abstraction gets coarser.  Measured: "small" puts all 22100 flops in 2
+ * classes, "medium" in 3, "large" in 7. */
+static const char *board_abstraction_caveat(const App *app)
+{
+    static const char *names[] = {"", " (small: 2 flop classes)",
+                                  " (medium: 3 flop classes)",
+                                  " (large: 7 flop classes)"};
+    int level = app ? app->solve_board_abstraction : 0;
+    if (level <= 0 || level > 3)
+        return "";
+    return names[level];
+}
+
+/* Write one command line to the live solver's stdin.  Returns 0 when it was
+ * handed over.  Only meaningful while the process is serving queries. */
+static int i_solve_send(App *app, const char *line)
+{
+    Proc *proc;
+    int serving;
+    uint32_t written = 0u;
+    perror_t error;
+    if (!app || !line || !*line)
+        return -1;
+    bmutex_lock(app->solve_mutex);
+    proc = app->solve_proc;
+    serving = app->solve_serving;
+    bmutex_unlock(app->solve_mutex);
+    if (!proc || !serving)
+        return -1;
+    if (!bproc_write(proc, (const byte_t *)line, (uint32_t)strlen(line),
+                     &written, &error))
+        return -1;
+    return 0;
+}
 
 /* Combo index to the --board-abstraction spelling the driver takes. */
 static const char *selected_board_abstraction(const App *app)
@@ -3380,8 +3448,27 @@ static void i_on_click_board_matrix(App *app, Event *event)
         snprintf(app->result_board_cards, sizeof(app->result_board_cards),
                  "%s", updated);
         view_update(app->board_matrix_view);
-        /* The report is already computed; re-render it through the new
-         * filter.  Without this the click changed nothing on screen. */
+        /* Ask the LIVE solver for this board rather than filtering the
+         * sampled report: the report holds at most --report-rows infosets,
+         * so most boards are simply absent from it.  A query walks every
+         * infoset the solve visited.  Only a complete board is a question
+         * the solver can answer; a partial pick stays a filter. */
+        {
+            int cards = card_count(app->result_board_cards);
+            if (cards >= 3 && cards <= 5)
+            {
+                char command[96];
+                snprintf(command, sizeof(command), "query %s\n",
+                         app->result_board_cards);
+                if (i_solve_send(app, command) == 0)
+                    status(app,
+                           "QUERYING %s\nAsking the running solver for this board's "
+                           "hand table.\nThe result replaces the sampled report below.",
+                           app->result_board_cards);
+            }
+        }
+        /* Re-render either way: with no live solver this is still a filter
+         * over whatever the report already holds. */
         render_current_strategy_view(app);
     }
 }
@@ -4447,7 +4534,8 @@ static void update_result_view(App *app, const char *output, int running)
         else
             snprintf(text, sizeof(text), "%.1f%%", fraction * 100.0);
         label_text(app->run_fraction, text);
-        snprintf(text, sizeof(text), "%.2f mBB", exploitability);
+        snprintf(text, sizeof(text), "%.2f mBB%s", exploitability,
+                 board_abstraction_caveat(app)[0] ? "  (abstract)" : "");
         label_text(app->run_metrics, text);
         snprintf(text, sizeof(text), reporting ? "REPORTING  %02d:%02d"
                  : running ? "RUNNING  %02d:%02d" : "LAST CHECK",
@@ -4508,14 +4596,19 @@ static void update_result_view(App *app, const char *output, int running)
             label_text(app->setup_run_progress, progress_text);
         if (app->setup_run_metrics)
         {
+            const char *caveat = board_abstraction_caveat(app);
             if (target > 0.0)
                 snprintf(text, sizeof(text),
-                         "Empirical exploitability: %.2f mBB  |  stop target: %.2f mBB",
-                         exploitability, target);
+                         "Empirical exploitability: %.2f mBB  |  stop target: %.2f mBB%s%s",
+                         exploitability, target,
+                         caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
+                         caveat);
             else
                 snprintf(text, sizeof(text),
-                         "Empirical exploitability: %.2f mBB  |  stop target: disabled (max iterations)",
-                         exploitability);
+                         "Empirical exploitability: %.2f mBB  |  stop target: disabled (max iterations)%s%s",
+                         exploitability,
+                         caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
+                         caveat);
             label_text(app->setup_run_metrics, text);
         }
     }
@@ -4595,10 +4688,16 @@ static void update_result_view(App *app, const char *output, int running)
     }
     if (have_final)
     {
-        snprintf(text, sizeof(text),
-                 "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64,
-                 guarantee, mbb, raw, samples);
-        snprintf(progress_text, sizeof(progress_text), "%.2f mBB", mbb);
+        {
+            const char *caveat = board_abstraction_caveat(app);
+            snprintf(text, sizeof(text),
+                     "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64 "%s%s",
+                     guarantee, mbb, raw, samples,
+                     caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
+                     caveat);
+        }
+        snprintf(progress_text, sizeof(progress_text), "%.2f mBB%s", mbb,
+                 board_abstraction_caveat(app)[0] ? "  (abstract)" : "");
         label_text(app->run_metrics, progress_text);
         if (app->lbl_exploit_val)
             label_text(app->lbl_exploit_val, progress_text);
@@ -5782,7 +5881,8 @@ static int board_text_to_mask(const char *text, mask_t *out)
  * the useful reading of half a board and is not isomorphism-invariant
  * anyway (there is no such thing as "the ace of hearts" up to suit
  * renaming). */
-static int result_line_board_contains(const char *line, const char *cards)
+static int result_line_board_contains(const char *line, const char *cards,
+                                     int level)
 {
     char row_board[64];
     mask_t picked = MASK_EMPTY;
@@ -5802,6 +5902,13 @@ static int result_line_board_contains(const char *line, const char *cards)
     {
         char picked_key[32];
         char row_key[32];
+        /* Match by whatever rule the run keyed its infosets with.  With an
+         * abstraction on, the solver merged boards by texture, so demanding
+         * an exact isomorphic board here would reject nearly every row of a
+         * report that does contain the answer. */
+        if (level > 0)
+            return pe_board_texture_id(picked, (pe_texture_filter_level_t)level) ==
+                   pe_board_texture_id(row_mask, (pe_texture_filter_level_t)level);
         if (pe_board_canonical_key(picked, picked_count,
                                    picked_key, sizeof(picked_key)) == 0 &&
             pe_board_canonical_key(row_mask, row_count,
@@ -6353,7 +6460,8 @@ static void render_strategy_view(App *app, const char *output)
                 if ((street < 0 || row_street < 0 || street == row_street) &&
                     (step_node < 0 || row_node == step_node) &&
                     (!board || result_line_board_matches(line, board)) &&
-                    result_line_board_contains(line, app->result_board_cards))
+                    result_line_board_contains(line, app->result_board_cards,
+                                               app->solve_board_abstraction))
                 {
                     pending_ev_row = (int)app->strategy_row_count;
                     strategy_table_add_row(app, line);
@@ -6441,6 +6549,23 @@ static void i_solve_scan_line(App *app, const char *line)
     uint64_t samples = 0u;
     if (!app || !line)
         return;
+    if (strncmp(line, "interactive=", 12u) == 0)
+    {
+        /* NO LOCKING HERE.  i_solve_scan_line is called with solve_mutex
+         * already held, and every other field it touches is written bare for
+         * that reason.  Taking the lock again deadlocked the reader thread
+         * while it HELD the mutex, so the UI thread blocked forever in
+         * i_solve_update and the whole window froze the instant this marker
+         * arrived -- that is, right after the results appeared.
+         *
+         * A stopped run serves too: with no iteration cap, stopping is the
+         * only way a run ever ends, so refusing to serve after a stop put
+         * board queries out of reach entirely. */
+        app->solve_serving = (line[12] == '1');
+        if (app->solve_serving)
+            app->solve_cancel_requested = 0;
+        return;
+    }
     if (sscanf(line,
                "progress iteration=%" SCNu64 " total=%" SCNu64
                " fraction=%lf exploitability_mbb=%lf target_mbb=%lf",
@@ -6642,25 +6767,43 @@ static void i_solve_request_stop(App *app)
     Proc *proc;
     if (!app)
         return;
+    /* A serving solver has already finished its work and is only waiting for
+     * queries: ask it to quit so it exits cleanly, rather than signalling it
+     * as though a solve were being interrupted. */
+    if (i_solve_send(app, "quit\n") == 0)
+    {
+        bmutex_lock(app->solve_mutex);
+        app->solve_serving = 0;
+    app->solve_view_total = 0u;
+    app->solve_view_serving_applied = 0;
+        bmutex_unlock(app->solve_mutex);
+        return;
+    }
+    int escalate;
+    /* Decide under the lock, act OUTSIDE it.  bproc_terminate and especially
+     * bproc_cancel touch the process and its pipes and can block; holding
+     * solve_mutex across them deadlocked all three parties: the reader thread
+     * waited for the mutex inside i_solve_append_output, so it stopped
+     * draining the pipe, so the solver blocked writing to a full pipe, so the
+     * process call never returned.  The UI froze with the solver asleep at
+     * 0% CPU. */
     bmutex_lock(app->solve_mutex);
     app->solve_cancel_requested = 1;
     proc = app->solve_proc;
-    /* First click: SIGTERM (whole group) so the solver can flush a
-     * checkpoint and a partial report.  A subsequent click escalates to
-     * SIGKILL when the process hasn't exited yet. */
+    escalate = app->solve_terminate_sent;
+    if (proc && !escalate)
+        app->solve_terminate_sent = 1;
+    bmutex_unlock(app->solve_mutex);
+
+    /* First click: SIGTERM so the solver can flush a checkpoint and a partial
+     * report.  A subsequent click escalates when it has not exited yet. */
     if (proc)
     {
-        if (!app->solve_terminate_sent)
-        {
+        if (!escalate)
             (void)bproc_terminate(proc);
-            app->solve_terminate_sent = 1;
-        }
         else
-        {
             (void)bproc_cancel(proc);
-        }
     }
-    bmutex_unlock(app->solve_mutex);
     button_text(app->solve_button,
                 app->solve_terminate_sent ? "Force kill" : "Stopping...");
     if (app->setup_run_state)
@@ -6685,11 +6828,17 @@ static uint32_t i_solve_main(App *app)
     uint32_t exit_code = 1u;
 
     proc = bproc_exec(app->solve_command, &error);
-    bmutex_lock(app->solve_mutex);
-    app->solve_proc = proc;
-    if (proc && app->solve_cancel_requested)
-        (void)bproc_cancel(proc);
-    bmutex_unlock(app->solve_mutex);
+    {
+        /* Same rule here: never call into the process while holding the
+         * mutex the reader thread needs. */
+        int cancel_now;
+        bmutex_lock(app->solve_mutex);
+        app->solve_proc = proc;
+        cancel_now = proc && app->solve_cancel_requested;
+        bmutex_unlock(app->solve_mutex);
+        if (cancel_now)
+            (void)bproc_cancel(proc);
+    }
     if (!proc)
     {
         i_solve_append_output(app, "Could not launch solver process.\n", 34u);
@@ -6732,20 +6881,81 @@ static void i_solve_update(App *app)
     int report_phase = 0;
     if (!app)
         return;
+    int serving;
     bmutex_lock(app->solve_mutex);
     running = app->solve_running;
+    serving = app->solve_serving;
     capturing = app->strategy_capture_started;
     strat_len = app->strategy_output_length;
     if (running)
         ++app->solve_update_count;
     bmutex_unlock(app->solve_mutex);
+    /* The process is still up to answer board queries, but the solve itself
+     * is over: present it as finished so the user is not left staring at a
+     * progress bar that will never move again. */
+    if (serving)
+        running = 0;
+    /* Nothing new from a process that is only waiting for queries: there is
+     * nothing to redraw, and redrawing anyway is what froze the UI. */
+    {
+        size_t total;
+        bmutex_lock(app->solve_mutex);
+        total = app->solve_output_total;
+        bmutex_unlock(app->solve_mutex);
+        if (serving && total == app->solve_view_total &&
+            app->solve_view_serving_applied)
+            return;
+        app->solve_view_total = total;
+    }
     output = report_scratch(app);
     if (!output)
         return;
-    i_solve_copy_output(app, output, sizeof(app->solve_output));
-    update_result_view(app, output, running);
-    update_strategy_view(app, output);
-    if (running && capturing)
+    {
+        /* Tick profiling for the UI freeze hunt.  Only slow ticks are
+         * reported, so the log stays readable; set PE_STUDIO_TICK_LOG=all to
+         * see every one. */
+        const char *tick_log = getenv("PE_STUDIO_TICK_LOG");
+        clock_t t0 = tick_log ? clock() : 0;
+        clock_t t1, t2, t3;
+        i_solve_copy_output(app, output, sizeof(app->solve_output));
+        t1 = tick_log ? clock() : 0;
+        update_result_view(app, output, running);
+        t2 = tick_log ? clock() : 0;
+        update_strategy_view(app, output);
+        t3 = tick_log ? clock() : 0;
+        if (tick_log)
+        {
+            double copy_ms = 1000.0 * (double)(t1 - t0) / CLOCKS_PER_SEC;
+            double result_ms = 1000.0 * (double)(t2 - t1) / CLOCKS_PER_SEC;
+            double strat_ms = 1000.0 * (double)(t3 - t2) / CLOCKS_PER_SEC;
+            double total_ms = copy_ms + result_ms + strat_ms;
+            if (total_ms > 50.0 || strcmp(tick_log, "all") == 0)
+            {
+                fprintf(stdout,
+                        "TICK serving=%d running=%d bytes=%zu copy=%.1fms "
+                        "result=%.1fms strategy=%.1fms total=%.1fms\n",
+                        serving, running, app->solve_view_total,
+                        copy_ms, result_ms, strat_ms, total_ms);
+                fflush(stdout);
+            }
+        }
+    }
+    if (serving)
+    {
+        app->solve_view_serving_applied = 1;
+        /* The button still stops the process, so it must not read "Solve
+         * this spot": while serving, solve_running is set and a click goes
+         * to the stop path. */
+        button_text(app->solve_button, "Release solver");
+        label_text(app->run_state, "READY FOR BOARD QUERIES");
+        label_text(app->setup_run_state, "READY FOR BOARD QUERIES");
+        status(app,
+               "SOLVE COMPLETE — SOLVER HELD OPEN FOR QUERIES\n"
+               "Click 3 to 5 cards in the BOARD MATRIX to ask the solver for that\n"
+               "exact board's hand table; fewer cards just filter what is shown.\n"
+               "Release solver (or Stop run) frees it and ends the session.");
+    }
+    else if (running && capturing)
     {
         /* The solver stopped iterating and is streaming the per-hand
          * report (empirical EVs are slow: seconds per row on big plo
@@ -6794,6 +7004,7 @@ static void i_solve_end(App *app, const uint32_t exit_code)
     app->solve_running = 0;
     app->solve_cancel_requested = 0;
     app->solve_terminate_sent = 0;
+    app->solve_serving = 0;
     app->solve_resume_mode = 0;
     bmutex_unlock(app->solve_mutex);
     /* NOTE: output must be copied and the result/strategy views refreshed
@@ -7506,6 +7717,7 @@ static void i_on_solve(App *app, Event *event)
                                 " --exploitability-interval %" PRIu64
                                 " --report-rows %u"
                                 " --board-abstraction %s"
+                                " --interactive"
                                 "%s --threads %" PRIu64,
                                 runner, game_name(layout.game),
                                 header.player_count, tree, root_options,
@@ -7572,9 +7784,15 @@ static void i_on_solve(App *app, Event *event)
          * parallel sampling) honors the user-selected thread count.  We
          * prepend it because the inner solver is launched by /bin/bash -c. */
         {
+            /* "exec env VAR=..." makes the shell REPLACE itself with the
+             * solver.  Without it bash keeps running as a parent (the
+             * trailing redirection stops it from exec-ing on its own), so
+             * bproc_terminate signalled bash and left the solver orphaned:
+             * it kept writing to the pipe, the reader never saw EOF, and the
+             * run stayed "running" forever with no way back. */
             char env_prefix[64];
             int prefix_len = snprintf(env_prefix, sizeof(env_prefix),
-                                      "OMP_NUM_THREADS=%" PRIu64 " ",
+                                      "exec env OMP_NUM_THREADS=%" PRIu64 " ",
                                       threads);
             size_t cmd_len = strlen(command);
             if (prefix_len > 0 && (size_t)prefix_len + cmd_len + 1u < sizeof(command))
@@ -7653,6 +7871,8 @@ static void i_on_solve(App *app, Event *event)
                    threads, parallel_note, stop_note, scope_note, root_note);
         }
         app->solve_has_resolved = 1;
+        app->solve_board_abstraction = (int)combo_get_selected(
+            app->board_abstraction_combo);
         app->solve_resolved_threads = (int)threads;
         snprintf(app->solve_resolved_backend, sizeof(app->solve_resolved_backend),
                  "%s", pe_compute_kind_name(backend));
