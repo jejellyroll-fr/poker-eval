@@ -105,6 +105,15 @@ typedef struct _monker_hand_entry_t
 typedef struct _decision_step_t
 {
     int node_index;
+    /* Street this node sits on.  A tree may span preflop..river, so the
+     * report's rows do NOT all belong to one street and cannot be filtered
+     * against a single scope street. */
+    int street;
+    /* Pot facing the actor at this node, read from the report's
+     * "step node=N ... pot=X" line.  The table widget used to draw a
+     * hardcoded "POT: 3.0 BB / PREFLOP" whatever was selected. */
+    double pot;
+    int has_pot;
     char id[32];
     int acting_player;
     uint32_t action_count;
@@ -2048,6 +2057,11 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
         ? "AKQJT9876" : "AKQJT98765432";
     int count = (int)strlen(ranks);
     double values[13][13][5] = {{{0.0}}};
+    /* Concrete deals per 13x13 class.  A class such as 87s holds several
+     * sampled combos and each contributes frequencies summing to 1, so the
+     * cell must average them.  Adding them straight up is what produced the
+     * impossible "200%" on any class with two sampled combos. */
+    int contributors[13][13] = {{0}};
     int left = 42;
     int top = 50;
     real32_t cell = (width - (real32_t)left - 270.0f) / (real32_t)count;
@@ -2087,6 +2101,7 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
                     entry->freqs[action];
                 has_values = 1;
             }
+            ++contributors[row][column];
         }
         else
         {
@@ -2100,8 +2115,17 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
                     entry->freqs[action];
                 has_values = 1;
             }
+            ++contributors[row][column];
         }
     }
+    /* Average the class: one row per sampled deal, so the mean strategy of
+     * the class.  Frequencies then sum to 1 per cell, as they must. */
+    for (int row = 0; row < 13; ++row)
+        for (int column = 0; column < 13; ++column)
+            if (contributors[row][column] > 1)
+                for (int action = 0; action < 5; ++action)
+                    values[row][column][action] /=
+                        (double)contributors[row][column];
 
     if (app->bold_font)
         draw_font(ctx, app->bold_font);
@@ -3363,12 +3387,30 @@ static void i_on_draw_poker_table(App *app, Event *event)
         draw_font(ctx, app->bold_font);
     draw_text_color(ctx, color_rgb(240, 240, 240));
     draw_text_align(ctx, ekCENTER, ekCENTER);
-    draw_text(ctx, "POT: 3.0 BB", cx, cy - 8.0f);
+    {
+        /* Follow the selected decision step rather than a fixed preflop
+         * placeholder: on a tree spanning several streets the table has to
+         * say which one is on screen. */
+        const DecisionStep *active = NULL;
+        char pot_text[48];
+        const char *street_text = "PREFLOP";
+        if (app->active_step_index >= 0 &&
+            app->active_step_index < (int)app->decision_step_count)
+        {
+            active = &app->decision_steps[app->active_step_index];
+            street_text = street_name_upper(active->street);
+        }
+        if (active && active->has_pot)
+            snprintf(pot_text, sizeof(pot_text), "POT: %.2f BB", active->pot);
+        else
+            snprintf(pot_text, sizeof(pot_text), "POT: --");
+        draw_text(ctx, pot_text, cx, cy - 8.0f);
 
-    if (app->regular_font)
-        draw_font(ctx, app->regular_font);
-    draw_text_color(ctx, color_rgba(255, 255, 255, 180));
-    draw_text(ctx, "PREFLOP", cx, cy + 8.0f);
+        if (app->regular_font)
+            draw_font(ctx, app->regular_font);
+        draw_text_color(ctx, color_rgba(255, 255, 255, 180));
+        draw_text(ctx, street_text, cx, cy + 8.0f);
+    }
 
     /* Public cards remain visible in the table view as well as in the
        board matrix.  Preflop deliberately shows an empty board. */
@@ -5206,6 +5248,7 @@ static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tr
         step = &app->decision_steps[app->decision_step_count];
         memset(step, 0, sizeof(*step));
         step->node_index = node_index;
+        step->street = (int)node->street;
         step->acting_player = node->acting_player;
         tree_history_for_node(tree, node_index, step->history);
         for (int action = 0; action < node->action_count &&
@@ -5288,8 +5331,11 @@ static void refresh_result_filters(App *app, const char *output)
     combo_add_elem(app->street_filter, "Flop", NULL);
     combo_add_elem(app->street_filter, "Turn", NULL);
     combo_add_elem(app->street_filter, "River", NULL);
-    combo_selected(app->street_filter,
-                   output && strstr(output, "STRATEGY REPORT") != NULL ? 1u : 0u);
+    /* "All streets".  This used to jump to Preflop whenever a report was
+     * present, which was harmless only while every row was mislabelled
+     * preflop anyway.  Now that rows carry their real street, pinning the
+     * filter here hid every flop/turn/river row the moment a run finished. */
+    combo_selected(app->street_filter, 0u);
 
     output_has_steps = output && strstr(output, "tree_step ") != NULL;
     {
@@ -5378,6 +5424,32 @@ static void refresh_result_filters(App *app, const char *output)
             app->active_step_index = combo_count(app->step_filter) > 1u ? 0 : -1;
         }
     }
+    /* Pot per node, from the report's observed-decision lines
+     * ("step node=N actor=P1 hand=... pot=X to_call=Y ...").  The tree alone
+     * cannot supply it: the pot at a node depends on the betting path. */
+    cursor = output;
+    while (cursor && (cursor = strstr(cursor, "step node=")) != NULL)
+    {
+        const char *pot_field;
+        const char *line_end = strchr(cursor, '\n');
+        int node_index = atoi(cursor + 10);
+        /* "tree_step node=" also ends in "step node=" -- those lines carry
+         * no pot, and strstr below simply finds nothing in them. */
+        pot_field = strstr(cursor, "pot=");
+        if (pot_field && (!line_end || pot_field < line_end))
+        {
+            double value = atof(pot_field + 4);
+            for (uint32_t i = 0u; i < app->decision_step_count; ++i)
+                if (app->decision_steps[i].node_index == node_index &&
+                    !app->decision_steps[i].has_pot)
+                {
+                    app->decision_steps[i].pot = value;
+                    app->decision_steps[i].has_pot = 1;
+                    break;
+                }
+        }
+        cursor = line_end ? line_end + 1 : NULL;
+    }
     update_responses_for_active_step(app);
 
     combo_clear(app->board_filter);
@@ -5425,6 +5497,20 @@ static int result_line_node(const char *line)
 {
     const char *node = line ? strstr(line, "node=") : NULL;
     return node ? atoi(node + 5) : -1;
+}
+
+/* Street of one report row, from the decision step that owns its node.
+ * The report's own header carries the run's ROOT street only, so a tree
+ * spanning several streets cannot be filtered against a single value: every
+ * flop/turn/river row would be judged preflop and dropped. */
+static int result_node_street(const App *app, int node_index)
+{
+    if (!app || node_index < 0)
+        return -1;
+    for (uint32_t i = 0u; i < app->decision_step_count; ++i)
+        if (app->decision_steps[i].node_index == node_index)
+            return app->decision_steps[i].street;
+    return -1;
 }
 
 static int result_scope_street(const App *app, const char *output)
@@ -5617,37 +5703,47 @@ static void strategy_table_add_row(App *app, const char *line)
     app->monker_hand_count = app->strategy_row_count;
 }
 
-static void strategy_table_apply_ev_update(App *app, const char *line)
+/* Apply one ev_update to the row it belongs to.
+ *
+ * The report emits a hand row and its ev_update back to back, so the pairing
+ * is positional.  Matching by (hand, node, player) instead looked safe but
+ * was not: a hand is sampled at the same node many times over a run, and the
+ * search always stopped at the FIRST match, so every later occurrence kept
+ * its EV column on "pending" while the first row was overwritten again and
+ * again.  On a multi-street tree, where the same hand recurs at every node
+ * it reaches, that left most of the table blank. */
+static void strategy_table_apply_ev_update_at(App *app, uint32_t row_index,
+                                              const char *line)
 {
     char hand[128], node[32], actor[32], ev[640];
+    StrategyTableRow *row;
+    MonkerHandEntry *mhand;
     int fields;
-    if (!app || !line)
+    if (!app || !line || row_index >= app->strategy_row_count)
         return;
     fields = sscanf(line, "ev_update\t%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\n]",
                     hand, node, actor, ev);
     if (fields != 4)
         return;
-    for (uint32_t row_index = 0u; row_index < app->strategy_row_count; ++row_index)
-    {
-        StrategyTableRow *row = &app->strategy_rows[row_index];
-        if (strcmp(row->hand, hand) != 0 || strcmp(row->node, node) != 0 ||
-            strcmp(row->player, actor) != 0)
-            continue;
-        row->action_count = row->action_count > 0u ? row->action_count :
-                            parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
-        (void)parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
-        MonkerHandEntry *mhand = &app->monker_hands[row_index];
-        for (uint32_t action = 0u; action < row->action_count &&
-             action < STRATEGY_TABLE_ACTIONS; ++action)
-        {
-            char *end = NULL;
-            mhand->evs[action] = strtod(row->ev[action], &end);
-            if (end == row->ev[action] || (end && *end != '\0'))
-                mhand->evs[action] = 0.0;
-            snprintf(mhand->ev_strs[action], sizeof(mhand->ev_strs[action]),
-                     "%s", row->ev[action]);
-        }
+    row = &app->strategy_rows[row_index];
+    /* Still verify the pairing: a dropped or reordered line must not write
+     * one hand's equity onto another's. */
+    if (strcmp(row->hand, hand) != 0 || strcmp(row->node, node) != 0 ||
+        strcmp(row->player, actor) != 0)
         return;
+    row->action_count = row->action_count > 0u ? row->action_count :
+                        parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
+    (void)parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
+    mhand = &app->monker_hands[row_index];
+    for (uint32_t action = 0u; action < row->action_count &&
+         action < STRATEGY_TABLE_ACTIONS; ++action)
+    {
+        char *end = NULL;
+        mhand->evs[action] = strtod(row->ev[action], &end);
+        if (end == row->ev[action] || (end && *end != '\0'))
+            mhand->evs[action] = 0.0;
+        snprintf(mhand->ev_strs[action], sizeof(mhand->ev_strs[action]),
+                 "%s", row->ev[action]);
     }
 }
 
@@ -5851,11 +5947,18 @@ static void render_strategy_view(App *app, const char *output)
         char line[2048];
         if (n >= sizeof(line)) n = sizeof(line) - 1u;
         memcpy(line, cursor, n); line[n] = '\0';
-        if ((street < 0 || street == scope_street) &&
-            (step_node < 0 || result_line_node(line) == step_node))
         {
-            result_write_line(app->strategy_view, line);
-            step_started = 1;
+            int line_node = result_line_node(line);
+            int line_street = result_node_street(app, line_node);
+            /* line_street < 0 means the node's street is unknown (steps
+             * rebuilt from the report carry no street).  Unknown must not
+             * mean preflop, or the rows vanish under a street filter. */
+            if ((street < 0 || line_street < 0 || street == line_street) &&
+                (step_node < 0 || line_node == step_node))
+            {
+                result_write_line(app->strategy_view, line);
+                step_started = 1;
+            }
         }
         cursor = end ? strstr(end + 1u, "tree_step ") : NULL;
     }
@@ -5890,6 +5993,10 @@ static void render_strategy_view(App *app, const char *output)
         result_write_line(app->strategy_view, "PER-HAND STRATEGY TABLE");
         result_write_line(app->strategy_view, "HAND         NODE  PLAYER  ACTION FREQUENCIES                 EV BY ACTION");
         cursor = strchr(cursor, '\n');
+        /* Row the next ev_update belongs to, or -1 when the hand row just
+         * seen was filtered out (its equity must not land on the row kept
+         * before it). */
+        int pending_ev_row = -1;
         while (cursor && *cursor && visible_rows < (int)STRATEGY_TABLE_MAX_ROWS)
         {
             const char *end = strchr(cursor + 1u, '\n');
@@ -5901,41 +6008,50 @@ static void render_strategy_view(App *app, const char *output)
             memcpy(line, cursor + 1u, n); line[n] = '\0';
             if (strncmp(line, "RANGE GRID", 10u) == 0)
                 break;
-            /* ev_update is consumed by strategy_table_apply_ev_update below;
-             * it must never become a visible hand row. The report emits it
-             * immediately after each hand row. */
-            if (strncmp(line, "ev_update\t", 10u) == 0 ||
-                strncmp(line, "report_phase=", 13u) == 0)
+            /* The report emits ev_update immediately after its hand row, so
+             * it is applied to that row rather than searched for. It must
+             * never become a visible row of its own. */
+            if (strncmp(line, "ev_update\t", 10u) == 0)
+            {
+                if (pending_ev_row >= 0)
+                    strategy_table_apply_ev_update_at(app, (uint32_t)pending_ev_row,
+                                                      line);
+                pending_ev_row = -1;
+                cursor = end;
+                continue;
+            }
+            if (strncmp(line, "report_phase=", 13u) == 0)
             {
                 cursor = end;
                 continue;
             }
             fields = sscanf(line, "%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\t]\t%639[^\n]",
                             hand, node, actor, frequencies, ev);
-            if (fields == 5 && strcmp(hand, "hand") != 0 &&
-                is_card_hand_text(hand) &&
-                (street < 0 || street == scope_street) &&
-                (step_node < 0 || atoi(node) == step_node) &&
-                (!board || strstr(line, board) != NULL || scope_street == 0))
+            if (fields == 5 && strcmp(hand, "hand") != 0 && is_card_hand_text(hand))
             {
-                strategy_table_add_row(app, line);
-                ++visible_rows;
-                table_started = 1;
+                int row_node = atoi(node);
+                int row_street = result_node_street(app, row_node);
+                if ((street < 0 || row_street < 0 || street == row_street) &&
+                    (step_node < 0 || row_node == step_node) &&
+                    (!board || strstr(line, board) != NULL ||
+                     row_street == 0 || row_street < 0))
+                {
+                    pending_ev_row = (int)app->strategy_row_count;
+                    strategy_table_add_row(app, line);
+                    if ((int)app->strategy_row_count == pending_ev_row)
+                        pending_ev_row = -1;   /* row was rejected */
+                    else
+                    {
+                        ++visible_rows;
+                        table_started = 1;
+                    }
+                }
+                else
+                {
+                    pending_ev_row = -1;
+                }
             }
             cursor = end;
-        }
-
-        cursor = strstr(output, "ev_update\t");
-        while (cursor)
-        {
-            const char *end = strchr(cursor, '\n');
-            size_t n = end ? (size_t)(end - cursor) : strlen(cursor);
-            char line[2048];
-            if (n >= sizeof(line)) n = sizeof(line) - 1u;
-            memcpy(line, cursor, n);
-            line[n] = '\0';
-            strategy_table_apply_ev_update(app, line);
-            cursor = end ? strstr(end + 1u, "ev_update\t") : NULL;
         }
     }
     if (!table_started)
@@ -5943,8 +6059,13 @@ static void render_strategy_view(App *app, const char *output)
 
     sort_monker_hands(app);
     update_active_action_totals(app);
-    if (!app->mkr_loaded && app->monker_hand_count > 0u)
-        render_card_preview(app, app->monker_hands[0].hand);
+    /* Nothing is selected until the user clicks a row.  Previewing row 0 and
+     * leaving selected_hand_index at 0 made an arbitrary hand look chosen. */
+    if (!app->mkr_loaded)
+    {
+        app->selected_hand_index = -1;
+        render_card_preview(app, NULL);
+    }
     if (app->strategy_table)
         tableview_update(app->strategy_table);
     if (app->strategy_grid_view)
