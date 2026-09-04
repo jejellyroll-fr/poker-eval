@@ -143,6 +143,13 @@ int pe_preflop_allin_infodesc_at(const pe_preflop_allin_game_t *game,
                                  size_t index, uint64_t *out_key,
                                  char *out_text, size_t text_capacity);
 
+/* Index of the description recorded for `key`, or -1 when the key was never
+ * seen.  The game already maintains the key -> index map that recording needs,
+ * so a reader has no reason to scan the descriptions itself: a report that did
+ * was quadratic in the number of infosets, which on a long solve is millions. */
+int pe_preflop_allin_infodesc_find(const pe_preflop_allin_game_t *game,
+                                   uint64_t key, size_t *out_index);
+
 int pe_preflop_allin_infodesc_view_at(
     const pe_preflop_allin_game_t *game, size_t index,
     pe_preflop_infodesc_view_t *out);

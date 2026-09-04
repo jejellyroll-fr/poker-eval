@@ -51,6 +51,7 @@ typedef struct {
     const char *range[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int players;
     uint64_t iterations;
+    int verbose;
     int showdown_samples;
     double stack;
     double small_blind;
@@ -113,20 +114,7 @@ typedef struct {
     int show_capabilities;
 } options_t;
 
-typedef struct
-{
-    uint64_t key;
-    size_t index;
-} report_desc_ref_t;
 
-static size_t find_desc_index(const report_desc_ref_t *refs, size_t count,
-                              uint64_t key)
-{
-    for (size_t i = 0u; i < count; ++i)
-        if (refs[i].key == key)
-            return refs[i].index;
-    return SIZE_MAX;
-}
 
 static int report_rank_index(char rank)
 {
@@ -319,7 +307,6 @@ static void print_strategy_report(const options_t *options,
 {
     size_t desc_count = pe_preflop_allin_infodesc_count(game);
     size_t solver_count = pe_solver_strategy_count(solver);
-    report_desc_ref_t *refs;
     const pe_external_game_t *external = pe_preflop_allin_external(game);
     size_t report_rows = options->report_rows;
     size_t emitted = 0u;
@@ -335,18 +322,6 @@ static void print_strategy_report(const options_t *options,
     {
         printf("No sampled decision infosets were materialised.\n");
         return;
-    }
-    refs = calloc(desc_count, sizeof(*refs));
-    if (!refs)
-        return;
-    for (size_t i = 0u; i < desc_count; ++i)
-    {
-        pe_preflop_infodesc_view_t view;
-        if (pe_preflop_allin_infodesc_view_at(game, i, &view) == 0)
-        {
-            refs[i].key = view.key;
-            refs[i].index = i;
-        }
     }
     printf("DECISION STEPS (tree branches)\n");
     if (tree)
@@ -445,14 +420,17 @@ static void print_strategy_report(const options_t *options,
         pe_preflop_betting_state_t state;
         if (pe_solver_strategy_key_at(solver, (uint32_t)id, &key) != PE_SOLVER_OK)
             continue;
-        desc_index = find_desc_index(refs, desc_count, key);
-        if (desc_index == SIZE_MAX ||
-            pe_preflop_allin_infodesc_view_at(game, desc_index, &view) != 0 ||
+        if (pe_preflop_allin_infodesc_find(game, key, &desc_index) != 0 ||
             pe_preflop_allin_infodesc_state_at(game, desc_index, &state) != 0)
             continue;
+        /* Filter on the board BEFORE building the view: the view formats the
+         * context line and every action label, and a query discards nearly
+         * every row it is handed. */
         if (querying &&
             !query_board_matches(state.board, query_mask,
                                  options->board_texture_level))
+            continue;
+        if (pe_preflop_allin_infodesc_view_at(game, desc_index, &view) != 0)
             continue;
         query.infoset = (uint32_t)id;
         if (pe_solver_strategy(solver, &query, &strategy) != PE_SOLVER_OK)
@@ -541,7 +519,6 @@ static void print_strategy_report(const options_t *options,
                report_rows, solver_count);
     printf("report_phase=complete rows=%zu\n", emitted);
     fflush(stdout);
-    free(refs);
 }
 
 static void usage(FILE *stream)
@@ -593,7 +570,8 @@ static void usage(FILE *stream)
         "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
         "  --exploitability-interval N  measure/print convergence every N iterations\n"
-        "  --seed N                     deterministic RNG seed\n"
+        "  --verbose                    emit the per-iteration debug counters\n"
+"  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
 "  --checkpoint FILE            save a v2 checkpoint (at completion and every --checkpoint-interval\\n"
         "  --resume FILE               load a v2 checkpoint and continue the solve\\n"
@@ -871,6 +849,7 @@ static int parse_options(int argc, char **argv, options_t *options)
         options->range[player] = "100%";
     options->players = 2;
     options->iterations = DEFAULT_ITERATIONS;
+    options->verbose = 0;
     options->showdown_samples = DEFAULT_SHOWDOWN_SAMPLES;
     options->stack = DEFAULT_STACK;
     options->report_rows = DEFAULT_REPORT_ROWS;
@@ -968,6 +947,9 @@ options->checkpoint_interval =0u;
             continue;
         } else if (strcmp(arg, "--postflop") == 0) {
             options->postflop_streets = 1;
+            continue;
+        } else if (strcmp(arg, "--verbose") == 0) {
+            options->verbose = 1;
             continue;
         } else if (strcmp(arg, "--br-samples") == 0) {
             if (parse_u64(value, &options->br_samples) != 0 ||
@@ -1132,6 +1114,7 @@ int main(int argc, char **argv)
     pe_preflop_allin_game_t *game = NULL;
     pe_solver_config_t config;
     pe_solver_deps_t deps;
+    pe_telemetry_ops_t telemetry_sink;
     pe_solver_t *solver = NULL;
     pe_solver_status_t status;
     pe_progress_t progress = {0};
@@ -1470,7 +1453,14 @@ int main(int argc, char **argv)
     config.seed = options.seed;
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);
-    deps.telemetry = pe_telemetry_stdout();
+    /* The stdout sink accepts every level, and the sampled loop emits a DEBUG
+     * counter line per iteration: a million-iteration run wrote a million
+     * lines nobody reads, through a pipe when the Studio is the reader.  Cap
+     * the sink at INFO unless --verbose asks for the rest. */
+    telemetry_sink = *pe_telemetry_stdout();
+    if (!options.verbose)
+        telemetry_sink.max_level = PE_LOG_INFO;
+    deps.telemetry = &telemetry_sink;
     deps.persist = (const pe_persist_ops_t *)pe_persist_checkpoint_ops();
     solver = pe_solver_create(&config, &deps);
         status = solver ? PE_SOLVER_OK : PE_SOLVER_ERR_OUT_OF_MEMORY;

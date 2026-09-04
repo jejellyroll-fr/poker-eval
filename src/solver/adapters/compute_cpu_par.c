@@ -24,6 +24,19 @@ typedef struct
     int threads;
 } pe_cpu_par_t;
 
+/* Forking a team costs a few microseconds of barrier traffic, which is more
+ * than a short loop of arithmetic takes.  A sampled Lane B iteration applies
+ * a batch of a few dozen updates and does it once per iteration, so at 200k
+ * iterations the fork/join was 14% of the run and put eleven worker threads
+ * to sleep and back 200k times -- all of the solve's system time, for no
+ * work.  Below these counts the `if` clause runs the region serially in the
+ * encountering thread and forks nothing.
+ *
+ * The write-back loops move two doubles per element; the strategy loop runs a
+ * whole regret-matching per element, so it pays for a team much sooner. */
+#define PE_CPU_PAR_MIN_ELEMS 512
+#define PE_CPU_PAR_MIN_STRATEGY_ELEMS 64
+
 typedef struct
 {
     double *regrets;
@@ -256,7 +269,8 @@ static int cpu_par_strategy_batch(void *self, const pe_infoset_batch_t *in,
     }
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#pragma omp parallel for schedule(static) num_threads(backend->threads) \
+    if (in->count >= (size_t)PE_CPU_PAR_MIN_STRATEGY_ELEMS)
 #endif
     for (infoset = 0; infoset < (int)in->count; ++infoset)
         cpu_par_strategy_one(&backend->config, in, out, (size_t)infoset);
@@ -485,7 +499,8 @@ static int cpu_par_apply_update_batch(void *self,
             }
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#pragma omp parallel for schedule(static) num_threads(backend->threads) \
+    if (batch->soa.group_count >= (size_t)PE_CPU_PAR_MIN_ELEMS)
 #endif
         for (group_index = 0; group_index < (int)batch->soa.group_count;
              ++group_index)
@@ -569,7 +584,8 @@ static int cpu_par_apply_update_batch(void *self,
         if (!fast_safe && !failed)
         {
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#pragma omp parallel for schedule(static) num_threads(backend->threads) \
+    if (batch->soa.group_count >= (size_t)PE_CPU_PAR_MIN_ELEMS)
 #endif
             for (group_index = 0; group_index < (int)batch->soa.group_count;
                  ++group_index)
@@ -653,7 +669,8 @@ static int cpu_par_apply_update_batch(void *self,
     }
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) num_threads(backend->threads)
+#pragma omp parallel for schedule(static) num_threads(backend->threads) \
+    if (batch->count >= (size_t)PE_CPU_PAR_MIN_ELEMS)
 #endif
     for (i = 0; i < (int)batch->count; ++i)
     {

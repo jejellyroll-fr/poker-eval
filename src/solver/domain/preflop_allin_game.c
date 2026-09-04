@@ -47,6 +47,12 @@ typedef struct
                  [PE_PREFLOP_ALLIN_MAX_ACTION_LABEL];
 } preflop_infodesc_t;
 
+typedef struct
+{
+    uint64_t key;
+    uint32_t index; /* desc_count + 1; 0 marks the slot empty */
+} preflop_desc_slot_t;
+
 struct pe_preflop_allin_game_t
 {
     pe_preflop_allin_rules_t rules;
@@ -63,10 +69,66 @@ struct pe_preflop_allin_game_t
     pe_external_game_t external;
     pe_storage_t *storage;
     EvalContext *eval_ctx;
-    preflop_infodesc_t *descs;
+    /* Descriptions live in fixed-size chunks rather than one array.  A
+     * description is ~1.3 KB and a long solve materialises millions of them,
+     * so doubling a single block meant repeatedly copying gigabytes; the
+     * chunks never move. */
+    preflop_infodesc_t **desc_chunks;
+    size_t desc_chunk_count;
     size_t desc_count;
-    size_t desc_capacity;
+    /* Open-addressed key -> desc_index+1 map (slot == 0 means empty).
+     * Without it preflop_record_desc scanned every description already
+     * recorded on every infoset visit, which is quadratic in the number of
+     * infosets and was the dominant cost of a long solve.
+     *
+     * The slot carries its own copy of the key.  Probing through the
+     * descriptions instead would read one 1.3 KB record per probe, scattered
+     * over gigabytes: a cache and TLB miss each time, which cost more than
+     * the scan it replaced once the table stopped fitting in cache. */
+    preflop_desc_slot_t *desc_index;
+    size_t desc_index_mask;
 };
+
+#define PREFLOP_DESC_CHUNK 1024u
+
+static preflop_infodesc_t *preflop_desc_at(const pe_preflop_allin_game_t *game,
+                                           size_t index)
+{
+    return &game->desc_chunks[index / PREFLOP_DESC_CHUNK]
+                             [index % PREFLOP_DESC_CHUNK];
+}
+
+/* Make room for description `index`, allocating a chunk when it starts one. */
+static int preflop_desc_reserve(pe_preflop_allin_game_t *game, size_t index)
+{
+    size_t chunk = index / PREFLOP_DESC_CHUNK;
+    if (chunk < game->desc_chunk_count && game->desc_chunks[chunk])
+        return 0;
+    if (chunk >= game->desc_chunk_count)
+    {
+        size_t capacity = game->desc_chunk_count ? game->desc_chunk_count * 2u
+                                                 : 16u;
+        preflop_infodesc_t **grown;
+        while (capacity <= chunk)
+            capacity *= 2u;
+        grown = (preflop_infodesc_t **)realloc(
+            game->desc_chunks, capacity * sizeof(*grown));
+        if (!grown)
+            return -1;
+        game->desc_chunks = grown;
+        for (size_t i = game->desc_chunk_count; i < capacity; ++i)
+            game->desc_chunks[i] = NULL;
+        game->desc_chunk_count = capacity;
+    }
+    if (!game->desc_chunks[chunk])
+    {
+        game->desc_chunks[chunk] = (preflop_infodesc_t *)calloc(
+            PREFLOP_DESC_CHUNK, sizeof(preflop_infodesc_t));
+        if (!game->desc_chunks[chunk])
+            return -1;
+    }
+    return 0;
+}
 
 static int tree_action_to_semantic(const mpf_tree_node_t *node, int index,
                                    pe_action_t *out)
@@ -393,56 +455,108 @@ static int tree_action_matches(const pe_action_t *wanted,
  * Infset identity and descriptions
  * ------------------------------------------------------------------ */
 
+/* The description table is keyed by the same 64-bit infoset key the storage
+ * uses, so a plain open-addressed map over it is enough: the key is already
+ * well mixed and needs no further hashing beyond the mask. */
+static size_t preflop_desc_slot(const pe_preflop_allin_game_t *game,
+                                uint64_t key)
+{
+    size_t slot = (size_t)key & game->desc_index_mask;
+    while (game->desc_index[slot].index != 0u &&
+           game->desc_index[slot].key != key)
+        slot = (slot + 1u) & game->desc_index_mask;
+    return slot;
+}
+
+/* Rebuild the map at `slots` entries.  Returns -1 and leaves the old map in
+ * place on allocation failure; the caller then keeps the descriptions it has
+ * rather than losing them. */
+static int preflop_desc_index_rebuild(pe_preflop_allin_game_t *game,
+                                      size_t slots)
+{
+    preflop_desc_slot_t *table =
+        (preflop_desc_slot_t *)calloc(slots, sizeof(*table));
+    preflop_desc_slot_t *old = game->desc_index;
+    size_t old_slots = old ? game->desc_index_mask + 1u : 0u;
+    if (!table)
+        return -1;
+    game->desc_index = table;
+    game->desc_index_mask = slots - 1u;
+    for (size_t i = 0u; i < old_slots; ++i)
+    {
+        size_t slot;
+        if (old[i].index == 0u)
+            continue;
+        slot = (size_t)old[i].key & game->desc_index_mask;
+        while (game->desc_index[slot].index != 0u)
+            slot = (slot + 1u) & game->desc_index_mask;
+        game->desc_index[slot] = old[i];
+    }
+    free(old);
+    return 0;
+}
+
 static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
                                 const pe_preflop_betting_state_t *state)
 {
     const pe_betting_state_t *betting = &state->betting;
     pe_action_t actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS];
     uint16_t action_count;
-    size_t i;
-    for (i = 0u; i < game->desc_count; ++i)
-        if (game->descs[i].key == key)
-            return;
-    if (game->desc_count == game->desc_capacity)
+    preflop_infodesc_t *desc;
+    size_t slot;
+    /* The slot stores the position as a uint32_t.  Nothing can reach four
+     * billion 1.3 KB descriptions, but stop recording rather than wrap. */
+    if (game->desc_count >= UINT32_MAX - 1u)
+        return;
+    if (!game->desc_index && preflop_desc_index_rebuild(game, 256u) != 0)
+        return;
+    slot = preflop_desc_slot(game, key);
+    if (game->desc_index[slot].index != 0u)
+        return;
+    if (preflop_desc_reserve(game, game->desc_count) != 0)
+        return;
+    /* Keep the map under a 70% load factor, matching the storage table.  The
+     * rebuild invalidates `slot`, so take it again afterwards. */
+    if ((game->desc_count + 1u) * 10u > (game->desc_index_mask + 1u) * 7u)
     {
-        size_t capacity = game->desc_capacity ? game->desc_capacity * 2u : 64u;
-        preflop_infodesc_t *grown =
-            realloc(game->descs, capacity * sizeof(*grown));
-        if (!grown)
+        if (preflop_desc_index_rebuild(game,
+                                       (game->desc_index_mask + 1u) * 2u) != 0)
             return;
-        game->descs = grown;
-        game->desc_capacity = capacity;
+        slot = preflop_desc_slot(game, key);
     }
-    game->descs[game->desc_count].key = key;
-    game->descs[game->desc_count].state = *state;
-    game->descs[game->desc_count].actor = betting->to_act;
-    game->descs[game->desc_count].tree_node_index = state->tree_node_index;
-    game->descs[game->desc_count].pot = betting->pot;
-    game->descs[game->desc_count].to_call = betting->to_call;
-    game->descs[game->desc_count].hand[0] = '\0';
+    game->desc_index[slot].key = key;
+    game->desc_index[slot].index = (uint32_t)(game->desc_count + 1u);
+    desc = preflop_desc_at(game, game->desc_count);
+    desc->key = key;
+    desc->state = *state;
+    desc->actor = betting->to_act;
+    desc->tree_node_index = state->tree_node_index;
+    desc->pot = betting->pot;
+    desc->to_call = betting->to_call;
+    desc->hand[0] = '\0';
     if (betting->to_act >= 0 && betting->to_act < betting->player_count)
     {
         size_t used = 0u;
         const mask_t hand = state->holes[betting->to_act];
         const char suit_chars[] = "cdhs";
-        for (int card = 0; card < 52 && used + 2u < sizeof(game->descs[game->desc_count].hand); ++card)
+        for (int card = 0; card < 52 && used + 2u < sizeof(desc->hand); ++card)
         {
             if (!mask_is_set(hand, card))
                 continue;
-            game->descs[game->desc_count].hand[used++] =
+            desc->hand[used++] =
                 StdDeck_rankChars[MODERN_GET_RANK(card)];
-            game->descs[game->desc_count].hand[used++] =
+            desc->hand[used++] =
                 suit_chars[MODERN_GET_SUIT(card)];
         }
-        game->descs[game->desc_count].hand[used] = '\0';
+        desc->hand[used] = '\0';
     }
     action_count = preflop_enumerate(game, state, actions,
                                       PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS);
-    game->descs[game->desc_count].action_count = action_count;
+    desc->action_count = action_count;
     for (uint16_t action = 0u; action < action_count; ++action)
     {
         const pe_action_t *a = &actions[action];
-        char *label = game->descs[game->desc_count].actions[action];
+        char *label = desc->actions[action];
         if (a->kind == PE_ACTION_RAISE)
         {
             if (a->amount_kind == PE_AMOUNT_POT_FRACTION)
@@ -458,20 +572,20 @@ static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
             snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
                      pe_action_kind_string(a->kind));
     }
-    snprintf(game->descs[game->desc_count].text, PREFLOP_DESC_TEXT,
+    snprintf(desc->text, PREFLOP_DESC_TEXT,
              "P%d hand=%s node=%d pot=%.1f tocall=%.1f bet=%.1f raises=%d actions=", betting->to_act,
-             game->descs[game->desc_count].hand, state->tree_node_index,
+             desc->hand, state->tree_node_index,
              betting->pot, betting->to_call, betting->current_bet,
              (int)betting->raises_made);
     {
-        size_t used = strnlen(game->descs[game->desc_count].text,
+        size_t used = strnlen(desc->text,
                               PREFLOP_DESC_TEXT);
         for (uint16_t action = 0u; action < action_count && used + 2u < PREFLOP_DESC_TEXT; ++action)
         {
-            int written = snprintf(game->descs[game->desc_count].text + used,
+            int written = snprintf(desc->text + used,
                                    PREFLOP_DESC_TEXT - used, "%s%s",
                                    action ? "|" : "",
-                                   game->descs[game->desc_count].actions[action]);
+                                   desc->actions[action]);
             if (written < 0 || (size_t)written >= PREFLOP_DESC_TEXT - used)
                 break;
             used += (size_t)written;
@@ -547,12 +661,20 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
     uint64_t masks = 0u;
     int player;
 
-    mask_t canon_board;
-    mask_t canon_hole;
+    const int abstracted = game->rules.board_texture_level > 0;
+    mask_t canon_board = MASK_EMPTY;
+    mask_t canon_hole = MASK_EMPTY;
 
-    preflop_canonical_view(state->board,
-                           actor >= 0 ? state->holes[actor] : MASK_EMPTY,
-                           &canon_board, &canon_hole);
+    /* Canonicalising searches all 24 suit permutations, and it was the single
+     * most expensive thing in a solve.  It is only needed when the board is
+     * exact: every field pe_board_texture_id reads (texture class, suit
+     * count, ranks, gaps) is already invariant under a suit permutation, so
+     * an abstracted key gets the same id from the raw board.  Below, the
+     * hole is canonicalised on its own instead. */
+    if (!abstracted)
+        preflop_canonical_view(state->board,
+                               actor >= 0 ? state->holes[actor] : MASK_EMPTY,
+                               &canon_board, &canon_hole);
 
     hash = preflop_mix_u64(hash, (uint64_t)actor);
     hash = preflop_mix_u64(hash, (uint64_t)state->street);
@@ -561,8 +683,8 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
      * level 0 the id is the canonical mask itself and nothing is merged. */
     hash = preflop_mix_u64(
         hash,
-        game->rules.board_texture_level > 0
-            ? pe_board_texture_id(canon_board,
+        abstracted
+            ? pe_board_texture_id(state->board,
                                   (pe_texture_filter_level_t)
                                       game->rules.board_texture_level)
             : (uint64_t)canon_board);
@@ -592,7 +714,7 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
          * boards while refusing to merge the hands that sit on them is not a
          * coherent abstraction. */
         mask_t hole_key = canon_hole;
-        if (game->rules.board_texture_level > 0)
+        if (abstracted)
         {
             mask_t hole_only_board;
             preflop_canonical_view(MASK_EMPTY, state->holes[actor],
@@ -1405,7 +1527,10 @@ void pe_preflop_allin_game_destroy(pe_preflop_allin_game_t *game)
         free(game->holdem_combo_owned[player]);
         free(game->omaha_combo_owned[player]);
     }
-    free(game->descs);
+    for (size_t chunk = 0u; chunk < game->desc_chunk_count; ++chunk)
+        free(game->desc_chunks[chunk]);
+    free(game->desc_chunks);
+    free(game->desc_index);
     free(game);
 }
 
@@ -1439,8 +1564,21 @@ int pe_preflop_allin_infodesc_at(const pe_preflop_allin_game_t *game,
     if (!game || index >= game->desc_count || !out_key || !out_text ||
         text_capacity == 0u)
         return -1;
-    *out_key = game->descs[index].key;
-    snprintf(out_text, text_capacity, "%s", game->descs[index].text);
+    *out_key = preflop_desc_at(game, index)->key;
+    snprintf(out_text, text_capacity, "%s", preflop_desc_at(game, index)->text);
+    return 0;
+}
+
+int pe_preflop_allin_infodesc_find(const pe_preflop_allin_game_t *game,
+                                   uint64_t key, size_t *out_index)
+{
+    size_t slot;
+    if (!game || !out_index || !game->desc_index)
+        return -1;
+    slot = preflop_desc_slot(game, key);
+    if (game->desc_index[slot].index == 0u)
+        return -1;
+    *out_index = (size_t)game->desc_index[slot].index - 1u;
     return 0;
 }
 
@@ -1451,19 +1589,19 @@ int pe_preflop_allin_infodesc_view_at(
     if (!game || !out || index >= game->desc_count)
         return -1;
     memset(out, 0, sizeof(*out));
-    out->key = game->descs[index].key;
-    out->actor = game->descs[index].actor;
-    out->tree_node_index = game->descs[index].tree_node_index;
-    out->pot = game->descs[index].pot;
-    out->to_call = game->descs[index].to_call;
-    snprintf(out->hand, sizeof(out->hand), "%s", game->descs[index].hand);
-    snprintf(out->context, sizeof(out->context), "%s", game->descs[index].text);
-    out->action_count = game->descs[index].action_count;
+    out->key = preflop_desc_at(game, index)->key;
+    out->actor = preflop_desc_at(game, index)->actor;
+    out->tree_node_index = preflop_desc_at(game, index)->tree_node_index;
+    out->pot = preflop_desc_at(game, index)->pot;
+    out->to_call = preflop_desc_at(game, index)->to_call;
+    snprintf(out->hand, sizeof(out->hand), "%s", preflop_desc_at(game, index)->hand);
+    snprintf(out->context, sizeof(out->context), "%s", preflop_desc_at(game, index)->text);
+    out->action_count = preflop_desc_at(game, index)->action_count;
     if (out->action_count > PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS)
         out->action_count = PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS;
     for (uint16_t action = 0u; action < out->action_count; ++action)
         snprintf(out->actions[action], PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
-                 game->descs[index].actions[action]);
+                 preflop_desc_at(game, index)->actions[action]);
     return 0;
 }
 
@@ -1473,6 +1611,6 @@ int pe_preflop_allin_infodesc_state_at(
 {
     if (!game || !out || index >= game->desc_count)
         return -1;
-    *out = game->descs[index].state;
+    *out = preflop_desc_at(game, index)->state;
     return 0;
 }
