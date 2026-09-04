@@ -4758,9 +4758,13 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
 
 static void i_on_tree(App *app, Event *event)
 {
-    const char_t *types[] = {"tree"};
-    const char_t *path = comwin_open_file(app->window, "Open Monker tree",
-                                          types, 1, NULL, NULL);
+    /* Both tree formats the loader accepts: the binary Monker .tree, and the
+     * JSON trees read by tree_path_is_json (.json, including .tree.json).
+     * Filtering on "tree" alone hid every JSON tree from this dialog and
+     * left typing the path as the only way in. */
+    const char_t *types[] = {"tree", "json"};
+    const char_t *path = comwin_open_file(app->window, "Open tree (.tree or .json)",
+                                          types, 2, NULL, NULL);
     if (path != NULL)
     {
         edit_text(app->tree_edit, path);
