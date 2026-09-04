@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "root": "pre_open",
+  "betProfiles": [
+    {
+      "id": "open",
+      "sizes": [
+        2.5
+      ],
+      "pot_sizing": false
+    },
+    {
+      "id": "cbet",
+      "sizes": [
+        0.66
+      ],
+      "pot_sizing": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "pre_open",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 0,
+      "bet_profile": "open",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "pre_bb_walk"
+        },
+        {
+          "type": "call",
+          "next": "pre_bb_option"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "pre_bb_vs_raise"
+        }
+      ]
+    },
+    {
+      "id": "pre_bb_option",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 1,
+      "bet_profile": "open",
+      "actions": [
+        {
+          "type": "call",
+          "next": "flop_first"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "pre_sb_vs_raise"
+        }
+      ]
+    },
+    {
+      "id": "pre_bb_vs_raise",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 1,
+      "bet_profile": "open",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "pre_sb_wins"
+        },
+        {
+          "type": "call",
+          "next": "flop_first"
+        }
+      ]
+    },
+    {
+      "id": "pre_sb_vs_raise",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 0,
+      "bet_profile": "open",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "pre_bb_wins"
+        },
+        {
+          "type": "call",
+          "next": "flop_first"
+        }
+      ]
+    },
+    {
+      "id": "pre_bb_walk",
+      "type": "terminal",
+      "street": "PREFLOP"
+    },
+    {
+      "id": "pre_sb_wins",
+      "type": "terminal",
+      "street": "PREFLOP"
+    },
+    {
+      "id": "pre_bb_wins",
+      "type": "terminal",
+      "street": "PREFLOP"
+    },
+    {
+      "id": "flop_first",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "flop_second"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "flop_second_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "flop_second",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "turn_first"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "flop_first_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "flop_second_vs_bet",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "flop_first_wins"
+        },
+        {
+          "type": "call",
+          "next": "turn_first"
+        }
+      ]
+    },
+    {
+      "id": "flop_first_vs_bet",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "flop_second_wins"
+        },
+        {
+          "type": "call",
+          "next": "turn_first"
+        }
+      ]
+    },
+    {
+      "id": "flop_first_wins",
+      "type": "terminal",
+      "street": "FLOP"
+    },
+    {
+      "id": "flop_second_wins",
+      "type": "terminal",
+      "street": "FLOP"
+    },
+    {
+      "id": "turn_first",
+      "type": "player",
+      "street": "TURN",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "turn_second"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "turn_second_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "turn_second",
+      "type": "player",
+      "street": "TURN",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "river_first"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "turn_first_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "turn_second_vs_bet",
+      "type": "player",
+      "street": "TURN",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "turn_first_wins"
+        },
+        {
+          "type": "call",
+          "next": "river_first"
+        }
+      ]
+    },
+    {
+      "id": "turn_first_vs_bet",
+      "type": "player",
+      "street": "TURN",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "turn_second_wins"
+        },
+        {
+          "type": "call",
+          "next": "river_first"
+        }
+      ]
+    },
+    {
+      "id": "turn_first_wins",
+      "type": "terminal",
+      "street": "TURN"
+    },
+    {
+      "id": "turn_second_wins",
+      "type": "terminal",
+      "street": "TURN"
+    },
+    {
+      "id": "river_first",
+      "type": "player",
+      "street": "RIVER",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "river_second"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "river_second_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "river_second",
+      "type": "player",
+      "street": "RIVER",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "showdown"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "river_first_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "river_second_vs_bet",
+      "type": "player",
+      "street": "RIVER",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "river_first_wins"
+        },
+        {
+          "type": "call",
+          "next": "showdown"
+        }
+      ]
+    },
+    {
+      "id": "river_first_vs_bet",
+      "type": "player",
+      "street": "RIVER",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "river_second_wins"
+        },
+        {
+          "type": "call",
+          "next": "showdown"
+        }
+      ]
+    },
+    {
+      "id": "river_first_wins",
+      "type": "terminal",
+      "street": "RIVER"
+    },
+    {
+      "id": "river_second_wins",
+      "type": "terminal",
+      "street": "RIVER"
+    },
+    {
+      "id": "showdown",
+      "type": "terminal",
+      "street": "RIVER"
+    }
+  ]
+}
