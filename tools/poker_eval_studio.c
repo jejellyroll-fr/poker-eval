@@ -7084,6 +7084,15 @@ static void i_solve_end(App *app, const uint32_t exit_code)
                    output[0] ? output : "No output from solver.");
         }
         else if (!cancelled &&
+                 strcmp(app->solve_stop_reason, "error") == 0)
+        {
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "SOLVE ENDED ON A TRAVERSAL ERROR\nexit_code=%u\nA sampled traversal returned a non-finite value after %" PRIu64 " iterations and the run ended there.  What the solve had is kept.\nThe solver's last lines below say at which iteration.\nCheckpoint: %s\n%s",
+                   exit_code, app->solve_run_iterations,
+                   app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.");
+        }
+        else if (!cancelled &&
                  strcmp(app->solve_stop_reason, "memory_budget") == 0)
         {
             /* A run with no iteration cap grows its state space for as long

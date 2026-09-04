@@ -1575,16 +1575,20 @@ int main(int argc, char **argv)
                options.board_abstraction ? options.board_abstraction : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
+        /* The solver names the cause; "stopped" used to cover a caller stop,
+         * a signal and a budget alike, which is no use to anyone watching a
+         * run end on its own.  interrupted distinguishes a signal we received
+         * from a stop the solver decided on. */
         printf("solver_phase=complete stop_reason=%s report=starting\n",
-               progress.memory_exhausted ? "memory_budget"
-               : !progress.complete ? "stopped"
-               : options.target_mbb > 0.0 &&
-                 metrics.exploitability_mbb_per_game <= options.target_mbb
-                   ? "target" : "max_iterations");
-        if (progress.memory_exhausted)
-            printf("memory_budget_mb=%.1f held_mb=%.1f\n",
-                   (double)options.max_ram_bytes / (1024.0 * 1024.0),
-                   (double)progress.memory_bytes / (1024.0 * 1024.0));
+               progress.stop_cause == PE_STOP_REQUESTED && interrupted
+                   ? "interrupted"
+                   : pe_stop_cause_name(progress.stop_cause));
+        printf("stop_detail cause=%s interrupted=%d iteration=%" PRIu64
+               " held_mb=%.1f budget_mb=%.1f\n",
+               pe_stop_cause_name(progress.stop_cause), interrupted,
+               progress.iteration,
+               (double)progress.memory_bytes / (1024.0 * 1024.0),
+               (double)options.max_ram_bytes / (1024.0 * 1024.0));
         fflush(stdout);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,

@@ -102,6 +102,7 @@ struct pe_solver_t {
        only honest bound is one checked while it runs. */
     uint64_t memory_bytes;
     int memory_exhausted;
+    pe_stop_cause_t stop_cause;
     pthread_mutex_t lifecycle_lock;
     pthread_cond_t lifecycle_cond;
 };
@@ -1180,6 +1181,21 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
     return PE_SOLVER_OK;
 }
 
+const char *pe_stop_cause_name(pe_stop_cause_t cause)
+{
+    switch (cause)
+    {
+    case PE_STOP_ITERATIONS:     return "max_iterations";
+    case PE_STOP_TARGET:         return "target";
+    case PE_STOP_REQUESTED:      return "stop_requested";
+    case PE_STOP_PAUSED:         return "paused";
+    case PE_STOP_MEMORY_BUDGET:  return "memory_budget";
+    case PE_STOP_ERROR:          return "error";
+    case PE_STOP_NONE:
+    default:                     return "running";
+    }
+}
+
 /* Bytes the solve is holding: the solver's own storage plus whatever the game
  * adapter has accumulated (Lane B records one description per infoset it has
  * ever visited, which on an uncapped run is the larger of the two). */
@@ -1345,6 +1361,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     }
 
     pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
+    solver->stop_cause = PE_STOP_NONE;
+    solver->memory_exhausted = 0;
     {
         uint64_t heartbeat_interval = solver->config.exploitability_interval;
         if (heartbeat_interval == 0u)
@@ -1439,6 +1457,15 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         }
         if (rc != 0)
         {
+            /* A traversal that returns a non-finite value ends the run at an
+               arbitrary iteration and used to look exactly like a manual
+               stop.  Say so. */
+            solver->stop_cause = PE_STOP_ERROR;
+            pe_telemetry_emitf(
+                solver->deps.telemetry, PE_LOG_WARN, "solver", iteration,
+                "sampled traversal failed at iteration %" PRIu64
+                "; the run ends here.\n", iteration);
+            pe_telemetry_flush(solver->deps.telemetry);
             pe_solver_destroy_batch_array(sample_batches, samples);
             free(sources);
             pe_update_batch_destroy(&aggregated_batch);
@@ -1488,6 +1515,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 solver->config.execution.max_ram_bytes)
             {
                 solver->memory_exhausted = 1;
+                solver->stop_cause = PE_STOP_MEMORY_BUDGET;
                 pe_telemetry_emitf(
                     solver->deps.telemetry, PE_LOG_WARN, "solver", iteration,
                     "memory budget reached: %.1f MB held, %.1f MB allowed;"
@@ -1503,6 +1531,33 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 break;
             }
         }
+    }
+    /* Name the reason before anything else can overwrite the state.  The loop
+       condition folds three unrelated exits into one test, and reporting them
+       all as "stopped" is what left a run that ended on its own with nothing
+       to explain it. */
+    if (solver->stop_cause == PE_STOP_NONE)
+    {
+        int state_now = pe_solver_state(solver);
+        if (target_reached)
+            solver->stop_cause = PE_STOP_TARGET;
+        else if (solver->config.max_iterations > 0u &&
+                 iteration > solver->config.max_iterations)
+            solver->stop_cause = PE_STOP_ITERATIONS;
+        else if (state_now == PE_SOLVER_STATE_PAUSED)
+            solver->stop_cause = PE_STOP_PAUSED;
+        else
+            solver->stop_cause = PE_STOP_REQUESTED;
+    }
+    {
+        uint64_t held = pe_solver_footprint_bytes(solver);
+        solver->memory_bytes = held;
+        pe_telemetry_emitf(
+            solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+            "solve_loop_end cause=%s iteration=%" PRIu64 " memory_mb=%.1f\n",
+            pe_stop_cause_name(solver->stop_cause), iteration,
+            (double)held / (1024.0 * 1024.0));
+        pe_telemetry_flush(solver->deps.telemetry);
     }
     }
     if (pe_solver_state(solver) == PE_SOLVER_STATE_STOPPED ||
@@ -1693,6 +1748,7 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
     out->complete = solver->state == PE_SOLVER_STATE_COMPLETED;
     out->memory_bytes = solver->memory_bytes;
     out->memory_exhausted = solver->memory_exhausted;
+    out->stop_cause = solver->stop_cause;
     pthread_mutex_unlock(pe_solver_lifecycle_lock(solver));
     return PE_SOLVER_OK;
 }
