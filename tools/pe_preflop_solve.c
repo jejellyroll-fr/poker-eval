@@ -568,11 +568,6 @@ static void usage(FILE *stream)
         "                              the sampled report. Ignores --report-rows and uses\n"
         "                              the run\'s own board matching (suit isomorphism, or\n"
         "                              the texture id when --board-abstraction is set).\n"
-        "  --board-abstraction LEVEL   merge boards a level cannot tell apart:\n"
-        "                              none (default, exact), small, medium, large.\n"
-        "                              Coarser levels let one sampled board answer for\n"
-        "                              its whole texture class, at the cost of averaging\n"
-        "                              the strategies of every board in that class.\n"
         "  --report-rows N             hand rows printed in the report (default 2000,\n"
         "                              0 = every sampled infoset)\n"
         "  --street NAME               root street: preflop (default), flop, turn or river.\n"
@@ -604,6 +599,18 @@ static void usage(FILE *stream)
         "  --resume FILE               load a v2 checkpoint and continue the solve\\n"
         "  --checkpoint-interval N     save a checkpoint every N iterations (0=off\\n"
         "  --help                       show this help\n", DEFAULT_ITERATIONS);
+    /* Split out: the single usage literal was over the 4095-char limit C99
+     * guarantees, which -Woverlength-strings rejects. */
+    fputs(
+        "  --board-abstraction LEVEL   merge boards a level cannot tell apart:\n"
+        "                              none (default, exact), small, medium, large,\n"
+        "                              detailed.\n"
+        "                              One sampled board then answers for its whole\n"
+        "                              class, at the cost of averaging every board in it.\n"
+        "                              small/medium/large ignore board RANKS (2, 3 and 7\n"
+        "                              classes for all 22100 flops); detailed keeps them\n"
+        "                              (366 flop classes) and is the one to use when the\n"
+        "                              board has to be played.\n", stream);
 }
 static pe_solver_t *g_solver = NULL;
 static volatile sig_atomic_t g_stop_requested = 0;
@@ -654,6 +661,7 @@ static int parse_board_abstraction(const char *text)
     if (strcmp(text, "small") == 0)   return PE_TEXTURE_FILTER_SMALL;
     if (strcmp(text, "medium") == 0)  return PE_TEXTURE_FILTER_MEDIUM;
     if (strcmp(text, "large") == 0)   return PE_TEXTURE_FILTER_LARGE;
+    if (strcmp(text, "detailed") == 0) return PE_TEXTURE_FILTER_DETAILED;
     if (strcmp(text, "perfect") == 0) return PE_TEXTURE_FILTER_PERFECT;
     return -1;
 }
@@ -1390,7 +1398,8 @@ int main(int argc, char **argv)
         {
             fprintf(stderr,
                     "unknown --board-abstraction '%s' (want none, small, "
-                    "medium, large or perfect)\n", options.board_abstraction);
+                    "medium, large, detailed or perfect)\n",
+                    options.board_abstraction);
             goto fail;
         }
         rules.board_texture_level = level;

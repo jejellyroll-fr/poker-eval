@@ -30,6 +30,7 @@ const char *pe_texture_filter_name(pe_texture_filter_level_t level)
     case PE_TEXTURE_FILTER_SMALL:   return "Small";
     case PE_TEXTURE_FILTER_MEDIUM:  return "Medium";
     case PE_TEXTURE_FILTER_LARGE:   return "Large";
+    case PE_TEXTURE_FILTER_DETAILED:return "Detailed";
     case PE_TEXTURE_FILTER_PERFECT: return "Perfect";
     case PE_TEXTURE_FILTER_COUNT:
     default:                        return "Unknown";
@@ -54,6 +55,8 @@ double pe_board_texture_density(pe_texture_filter_level_t level)
     switch (level)
     {
     case PE_TEXTURE_FILTER_PERFECT: return 1.0;
+    /* Rank-aware, so far denser than LARGE without being exact. */
+    case PE_TEXTURE_FILTER_DETAILED:return 0.9;
     case PE_TEXTURE_FILTER_LARGE:   return 0.75;
     case PE_TEXTURE_FILTER_MEDIUM:  return 0.5;
     case PE_TEXTURE_FILTER_SMALL:   return 0.25;
@@ -253,9 +256,26 @@ uint64_t pe_board_texture_id(mask_t board, pe_texture_filter_level_t level)
     uint64_t id = 0;
     switch (level)
     {
+    case PE_TEXTURE_FILTER_DETAILED:
+        /* Rank-aware.  The coarser levels below deliberately drop ranks,
+         * which merges a king-high board with a nine-high one -- fine for a
+         * cheap node count, wrong for anything that has to play the board.
+         * 17 bits, so it still fits beside a strength bucket in a 64-bit key.
+         *
+         *   [16:15] texture class      [14:13] distinct suits
+         *   [12: 9] high card rank     [ 8: 5] paired rank (0 = unpaired)
+         *   [ 4: 3] connectivity gap   [ 2: 0] broadway count
+         */
+        id = ((uint64_t)(b.texture_class & 0x3) << 15) |
+             ((uint64_t)((b.n_suits > 0 ? b.n_suits - 1 : 0) & 0x3) << 13) |
+             ((uint64_t)(b.high_card_rank >= 0 ? b.high_card_rank & 0xF : 0xF) << 9) |
+             ((uint64_t)(b.paired_rank >= 0 ? (b.paired_rank + 1) & 0xF : 0) << 5) |
+             ((uint64_t)((b.max_gap < 0 ? 3 : b.max_gap > 3 ? 3 : b.max_gap) & 0x3) << 3) |
+             ((uint64_t)(b.n_broadway > 7 ? 7 : b.n_broadway) & 0x7);
+        break;
     case PE_TEXTURE_FILTER_LARGE:
-        /* coarse texture class (0..3) + suit count (2..4 -> 0..2). Compact so
-         * the id fits the 8-bit texture field of an infoset key. */
+        /* Coarse texture class (0..3) + suit count (2..4 -> 0..2).  Ranks are
+         * NOT part of this id, despite what the header used to claim. */
         id = ((uint64_t)b.texture_class << 2) |
              ((uint64_t)(b.n_suits > 2 ? b.n_suits - 2 : 0) & 0x3);
         break;

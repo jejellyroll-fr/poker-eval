@@ -511,11 +511,12 @@ static int result_line_board(const char *line, char *out, size_t capacity);
  * classes, "medium" in 3, "large" in 7. */
 static const char *board_abstraction_caveat(const App *app)
 {
-    static const char *names[] = {"", " (small: 2 flop classes)",
+    static const char *names[] = {"", " (detailed: 366 flop classes)",
+                                  " (large: 7 flop classes)",
                                   " (medium: 3 flop classes)",
-                                  " (large: 7 flop classes)"};
+                                  " (small: 2 flop classes)"};
     int level = app ? app->solve_board_abstraction : 0;
-    if (level <= 0 || level > 3)
+    if (level <= 0 || level > 4)
         return "";
     return names[level];
 }
@@ -545,10 +546,10 @@ static int i_solve_send(App *app, const char *line)
 /* Combo index to the --board-abstraction spelling the driver takes. */
 static const char *selected_board_abstraction(const App *app)
 {
-    static const char *names[] = {"none", "small", "medium", "large"};
+    static const char *names[] = {"none", "detailed", "large", "medium", "small"};
     uint32_t index = app && app->board_abstraction_combo
         ? combo_get_selected(app->board_abstraction_combo) : 0u;
-    return index < 4u ? names[index] : "none";
+    return index < 5u ? names[index] : "none";
 }
 static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tree);
 static void result_write_line(TextView *view, const char *line);
@@ -8032,12 +8033,16 @@ static Panel *i_setup_panel(App *app)
     combo_add_elem(app->precision_combo, "mixed", NULL);
     combo_add_elem(app->precision_combo, "fixed16", NULL);
     combo_selected(app->precision_combo, PE_PREC_F64);
-    /* Order is coarsest-merging first after "exact", matching how the levels
-     * actually behave: small merges most, large keeps the most detail. */
+    /* Ordered finest first, so the useful choice sits next to "exact".
+     * small/medium/large ignore board ranks entirely -- 2, 3 and 7 classes
+     * for all 22100 flops -- so they merge a king-high board with a nine-high
+     * one.  Detailed keeps the ranks (366 flop classes) and is the level to
+     * pick when the board has to be played. */
     combo_add_elem(app->board_abstraction_combo, "None (exact boards)", NULL);
-    combo_add_elem(app->board_abstraction_combo, "Small (wet/dry only)", NULL);
-    combo_add_elem(app->board_abstraction_combo, "Medium (wet/dry + paired)", NULL);
-    combo_add_elem(app->board_abstraction_combo, "Large (texture class + ranks)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Detailed (366 flop classes)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Large (7 classes, no ranks)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Medium (3 classes, no ranks)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Small (2 classes, no ranks)", NULL);
     combo_selected(app->board_abstraction_combo, 0u);
     button_text(browse_tree, "Browse...");
     button_text(browse_mkr, "Browse...");
