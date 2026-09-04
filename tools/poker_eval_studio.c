@@ -7083,6 +7083,19 @@ static void i_solve_end(App *app, const uint32_t exit_code)
                    app->solve_run_iterations, app->solve_checkpoint_path,
                    output[0] ? output : "No output from solver.");
         }
+        else if (!cancelled &&
+                 strcmp(app->solve_stop_reason, "memory_budget") == 0)
+        {
+            /* A run with no iteration cap grows its state space for as long
+             * as it runs.  It used to be the kernel that ended those, with
+             * everything lost; now the solver stops itself first and the
+             * checkpoint is on disk. */
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "MEMORY BUDGET REACHED\nexit_code=%u\nThe solve stopped itself after %" PRIu64 " iterations rather than be killed for memory; the strategy, the report and the checkpoint are intact.\nTo go further: use a coarser BOARD ABSTRACTION (it bounds how many infosets exist at all), cap the iterations, or raise the budget.\nCheckpoint: %s\n%s",
+                   exit_code, app->solve_run_iterations,
+                   app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.");
+        }
         else
         {
             button_text(app->solve_button, "Resume this spot");

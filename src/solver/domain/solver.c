@@ -97,6 +97,11 @@ struct pe_solver_t {
     int checkpoint_loaded;
     uint64_t iteration;
     int runner_active;
+    /* Footprint measured at the last heartbeat, and whether a budget stopped
+       the run.  A sampled lane grows its state space as it samples, so the
+       only honest bound is one checked while it runs. */
+    uint64_t memory_bytes;
+    int memory_exhausted;
     pthread_mutex_t lifecycle_lock;
     pthread_cond_t lifecycle_cond;
 };
@@ -526,13 +531,16 @@ static void pe_solver_vector_emit_heartbeat(pe_solver_t *solver,
     pe_telemetry_emitf(
         solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
         "progress iteration=%" PRIu64 " total=%" PRIu64
-        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f\n",
+        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f"
+        " memory_mb=%.1f budget_mb=%.1f\n",
         iteration, solver->config.max_iterations,
         solver->config.max_iterations > 0u
             ? (double)iteration / (double)solver->config.max_iterations : 0.0,
         solver->metrics_available
             ? solver->metrics.exploitability_mbb_per_game : 0.0,
-        solver->config.target_exploitability_mbb);
+        solver->config.target_exploitability_mbb,
+        (double)solver->memory_bytes / (1024.0 * 1024.0),
+        (double)solver->config.execution.max_ram_bytes / (1024.0 * 1024.0));
     pe_telemetry_flush(solver->deps.telemetry);
 }
 
@@ -1172,6 +1180,23 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
     return PE_SOLVER_OK;
 }
 
+/* Bytes the solve is holding: the solver's own storage plus whatever the game
+ * adapter has accumulated (Lane B records one description per infoset it has
+ * ever visited, which on an uncapped run is the larger of the two). */
+static uint64_t pe_solver_footprint_bytes(const pe_solver_t *solver)
+{
+    uint64_t total = 0u;
+    if (!solver)
+        return 0u;
+    if (solver->storage && solver->storage->bytes && solver->storage_self)
+        total += (uint64_t)solver->storage->bytes(solver->storage_self);
+    if (solver->deps.external_game &&
+        solver->deps.external_game->footprint_bytes)
+        total += (uint64_t)solver->deps.external_game->footprint_bytes(
+            solver->deps.external_game->user);
+    return total;
+}
+
 static void pe_solver_sampled_emit_heartbeat(
     pe_solver_t *solver, uint64_t iteration)
 {
@@ -1447,6 +1472,37 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         {
             pe_solver_sampled_emit_heartbeat(solver, iteration);
         }
+
+        /* A sampled run with no iteration cap ends only when the caller stops
+           it -- or when the kernel does.  Every unseen board is a new infoset
+           and a new description, so the footprint grows for as long as the
+           run does, and a run left going overnight was killed outright with
+           its whole solve lost.  Stopping on the budget instead ends the run
+           the same way a manual stop does: the strategy, the report and the
+           checkpoint all survive. */
+        if (solver->config.execution.max_ram_bytes > 0u &&
+            (iteration == 1u || iteration % heartbeat_interval == 0u))
+        {
+            solver->memory_bytes = pe_solver_footprint_bytes(solver);
+            if (solver->memory_bytes >
+                solver->config.execution.max_ram_bytes)
+            {
+                solver->memory_exhausted = 1;
+                pe_telemetry_emitf(
+                    solver->deps.telemetry, PE_LOG_WARN, "solver", iteration,
+                    "memory budget reached: %.1f MB held, %.1f MB allowed;"
+                    " stopping at iteration %" PRIu64 " with the solve"
+                    " intact.  Raise the budget, cap the iterations, or use"
+                    " a coarser board abstraction.\n",
+                    (double)solver->memory_bytes / (1024.0 * 1024.0),
+                    (double)solver->config.execution.max_ram_bytes /
+                        (1024.0 * 1024.0),
+                    iteration);
+                pe_telemetry_flush(solver->deps.telemetry);
+                pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
+                break;
+            }
+        }
     }
     }
     if (pe_solver_state(solver) == PE_SOLVER_STATE_STOPPED ||
@@ -1635,6 +1691,8 @@ pe_solver_status_t pe_solver_progress(const pe_solver_t *solver,
     out->running = solver->state == PE_SOLVER_STATE_RUNNING;
     out->paused = solver->state == PE_SOLVER_STATE_PAUSED;
     out->complete = solver->state == PE_SOLVER_STATE_COMPLETED;
+    out->memory_bytes = solver->memory_bytes;
+    out->memory_exhausted = solver->memory_exhausted;
     pthread_mutex_unlock(pe_solver_lifecycle_lock(solver));
     return PE_SOLVER_OK;
 }

@@ -52,6 +52,7 @@ typedef struct {
     int players;
     uint64_t iterations;
     int verbose;
+    uint64_t max_ram_bytes;
     int showdown_samples;
     double stack;
     double small_blind;
@@ -570,6 +571,10 @@ static void usage(FILE *stream)
         "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
         "  --exploitability-interval N  measure/print convergence every N iterations\n"
+        "  --max-ram MB                 stop cleanly when storage plus the game\n"
+        "                               adapter exceed MB (default: 70%% of RAM,\n"
+        "                               0 disables).  A run with no iteration cap\n"
+        "                               grows until something stops it.\n"
         "  --verbose                    emit the per-iteration debug counters\n"
 "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
@@ -590,6 +595,20 @@ static void usage(FILE *stream)
         "                              (366 flop classes) and is the one to use when the\n"
         "                              board has to be played.\n", stream);
 }
+/* A sampled run without an iteration cap grows its footprint for as long as
+ * it runs, so it needs a budget it did not ask for: without one the kernel
+ * ends the run, and everything the solve had is lost.  70% of physical RAM
+ * leaves room for the rest of the desktop; --max-ram overrides it and
+ * --max-ram 0 turns it off. */
+static uint64_t default_ram_budget_bytes(void)
+{
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    if (pages <= 0 || page_size <= 0)
+        return UINT64_C(4) * 1024u * 1024u * 1024u;
+    return (uint64_t)pages * (uint64_t)page_size / 10u * 7u;
+}
+
 static pe_solver_t *g_solver = NULL;
 static volatile sig_atomic_t g_stop_requested = 0;
 static pthread_t g_stop_watcher;
@@ -850,6 +869,7 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->players = 2;
     options->iterations = DEFAULT_ITERATIONS;
     options->verbose = 0;
+    options->max_ram_bytes = default_ram_budget_bytes();
     options->showdown_samples = DEFAULT_SHOWDOWN_SAMPLES;
     options->stack = DEFAULT_STACK;
     options->report_rows = DEFAULT_REPORT_ROWS;
@@ -882,6 +902,7 @@ options->checkpoint_interval =0u;
             value = argv[i + 1];
         if ((strcmp(arg, "--game") == 0 || range_option_index(arg) >= 0 ||
              strcmp(arg, "--iterations") == 0 || strcmp(arg, "--players") == 0 ||
+             strcmp(arg, "--max-ram") == 0 ||
              strcmp(arg, "--samples") == 0 || strcmp(arg, "--stack") == 0 ||
              strcmp(arg, "--sb") == 0 || strcmp(arg, "--bb") == 0 ||
              strcmp(arg, "--ante") == 0 || strcmp(arg, "--br-samples") == 0 ||
@@ -951,6 +972,11 @@ options->checkpoint_interval =0u;
         } else if (strcmp(arg, "--verbose") == 0) {
             options->verbose = 1;
             continue;
+        } else if (strcmp(arg, "--max-ram") == 0) {
+            uint64_t megabytes;
+            if (parse_u64(value, &megabytes) != 0)
+                return -1;
+            options->max_ram_bytes = megabytes * 1024u * 1024u;
         } else if (strcmp(arg, "--br-samples") == 0) {
             if (parse_u64(value, &options->br_samples) != 0 ||
                 options->br_samples == 0u || options->br_samples > UINT32_MAX)
@@ -1447,6 +1473,7 @@ int main(int argc, char **argv)
     config.problem.expected_combos = 1u;
     config.max_iterations = options.iterations;
     config.execution.big_blind = options.big_blind;
+    config.execution.max_ram_bytes = options.max_ram_bytes;
     config.target_exploitability_mbb = options.target_mbb;
     config.exploitability_interval = options.exploitability_interval;
     config.br_samples = (uint32_t)options.br_samples;
@@ -1549,10 +1576,15 @@ int main(int argc, char **argv)
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         printf("solver_phase=complete stop_reason=%s report=starting\n",
-               !progress.complete ? "stopped"
+               progress.memory_exhausted ? "memory_budget"
+               : !progress.complete ? "stopped"
                : options.target_mbb > 0.0 &&
                  metrics.exploitability_mbb_per_game <= options.target_mbb
                    ? "target" : "max_iterations");
+        if (progress.memory_exhausted)
+            printf("memory_budget_mb=%.1f held_mb=%.1f\n",
+                   (double)options.max_ram_bytes / (1024.0 * 1024.0),
+                   (double)progress.memory_bytes / (1024.0 * 1024.0));
         fflush(stdout);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,

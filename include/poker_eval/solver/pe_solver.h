@@ -126,6 +126,12 @@ struct pe_progress_t {
     int running;
     int paused;
     int complete;
+    /* Bytes held by storage plus the game adapter, as of the last heartbeat.
+       0 when the lane does not measure it. */
+    uint64_t memory_bytes;
+    /* Set when the solve stopped because memory_bytes crossed
+       execution.max_ram_bytes rather than because it finished. */
+    int memory_exhausted;
 };
 
 /** Identifies one infoset strategy query. */

@@ -51,6 +51,12 @@ typedef struct pe_external_game_t
                                        pe_chance_sample_t *out, void *user);
     const void *(*apply_chance)(const void *state, int outcome, void *user);
 
+    /* Optional: bytes the adapter itself holds, on top of the solver's own
+       storage.  A sampled lane discovers its footprint as it runs -- every
+       new board is a new infoset -- so an up-front estimate cannot bound it
+       and only the adapter knows what it has accumulated.  NULL reports 0. */
+    size_t (*footprint_bytes)(void *user);
+
     /* Optional lifetime hook for adapters whose apply_action/apply_chance
        allocate a temporary child.  Sampling adapters that own a per-deal
        arena can leave this NULL and reclaim the arena at the chance boundary. */
