@@ -84,6 +84,17 @@ typedef struct
      * All-or-nothing on purpose: a mix of complete and explicit ranges would
      * need per-choice completion checks that have no closed form. */
     int complete_ranges;
+    /* Board abstraction folded into the infoset key
+     * (pe_texture_filter_level_t).  0 = none: boards are told apart exactly,
+     * up to the suit isomorphism that is always applied.
+     *
+     * Above zero, boards that a level cannot tell apart share a strategy, so
+     * one sampled board answers for every board in its texture class -- the
+     * standard way a sampled solver covers a board space it cannot enumerate.
+     * Unlike the suit isomorphism this is an APPROXIMATION: two boards of the
+     * same class are not the same game, and the strategy they share is an
+     * average of both.  Off by default for that reason. */
+    int board_texture_level;
 } pe_preflop_allin_rules_t;
 
 typedef struct pe_preflop_allin_game_t pe_preflop_allin_game_t;

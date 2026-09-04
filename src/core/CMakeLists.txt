@@ -3,6 +3,15 @@
 # Core source files
 set(CORE_SOURCES
     deck.c
+    # Suit-permutation canonicalization: a pure card primitive (its only
+    # includes are its own header and <string.h>).  It lives here rather than
+    # in poker_engine because poker_solver needs it for the isomorphic
+    # infoset key, and engine->solver is the one-way dependency.
+    ../engine/solvers/cfr/board_canonical.c
+    # Board-texture ids, same reasoning: a pure card primitive (its only
+    # includes are its own header and libc) that poker_solver folds into the
+    # infoset key for the optional board abstraction.
+    ../engine/solvers/cfr/board_texture.c
     deck_std.c
     deck_joker.c
     deck_short.c

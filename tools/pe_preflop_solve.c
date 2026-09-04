@@ -39,6 +39,7 @@
 #define DEFAULT_ITERATIONS 10000u
 #define DEFAULT_SHOWDOWN_SAMPLES 128
 #define DEFAULT_STACK 100.0
+#define DEFAULT_REPORT_ROWS 2000u
 #define DEFAULT_SMALL_BLIND 0.5
 #define DEFAULT_BIG_BLIND 1.0
 #define DEFAULT_MIN_RAISE 1.0
@@ -72,6 +73,11 @@ typedef struct {
      * with the fixed --board, --pot and first actor). */
     const char *street;
     const char *board;
+    /* Hand rows printed in the report.  0 means every sampled infoset.  This
+     * used to be a hardcoded 180 shared across every node, so a tree with a
+     * couple of dozen decisions showed a handful of hands each. */
+    size_t report_rows;
+    const char *board_abstraction;
     double pot;
     int have_pot;
     int to_act;
@@ -279,6 +285,7 @@ static void print_strategy_report(const options_t *options,
     size_t solver_count = pe_solver_strategy_count(solver);
     report_desc_ref_t *refs;
     const pe_external_game_t *external = pe_preflop_allin_external(game);
+    size_t report_rows = options->report_rows;
     size_t emitted = 0u;
     char grid[13][13][8];
     for (int row = 0; row < 13; ++row)
@@ -377,7 +384,8 @@ static void print_strategy_report(const options_t *options,
     fflush(stdout);
     fflush(stdout);
     printf("HAND TABLE\nhand\tnode\tactor\tfrequencies\tEV by action\n");
-    for (size_t id = 0u; id < solver_count && emitted < 180u; ++id)
+    for (size_t id = 0u; id < solver_count &&
+                        (report_rows == 0u || emitted < report_rows); ++id)
     {
         uint64_t key = 0u;
         pe_strategy_query_t query;
@@ -397,6 +405,10 @@ static void print_strategy_report(const options_t *options,
             continue;
         printf("%s\t%d\tP%d\t", view.hand, view.tree_node_index,
                view.actor + 1);
+        /* The board of THIS sampled deal is appended below as a sixth
+         * column.  Without it a per-board filter has nothing to match on:
+         * every row of a preflop-rooted run looks board-less even though
+         * each was played out on its own runout. */
         for (uint16_t a = 0u; a < strategy.action_count; ++a)
             printf("%s%s=%.1f%%", a ? "," : "",
                    a < view.action_count ? view.actions[a] : "action",
@@ -408,6 +420,21 @@ static void print_strategy_report(const options_t *options,
         for (uint16_t a = 0u; a < strategy.action_count; ++a)
             printf("%s%s=pending", a ? "," : "",
                    a < view.action_count ? view.actions[a] : "action");
+        {
+            /* Compact, so the column matches the spelling --board takes and
+             * the Studio's board filter can compare them directly. */
+            char board_text[32];
+            char compact[32];
+            size_t out = 0u;
+            board_text[0] = '\0';
+            if (mask_popcount(state.board) > 0)
+                (void)mask_to_string(state.board, board_text, sizeof(board_text));
+            for (size_t i = 0u; board_text[i] && out + 1u < sizeof(compact); ++i)
+                if (board_text[i] != ' ')
+                    compact[out++] = board_text[i];
+            compact[out] = '\0';
+            printf("\t%s", out ? compact : "-");
+        }
         putchar('\n');
         fflush(stdout);
         printf("ev_update\t%s\t%d\tP%d\t", view.hand,
@@ -452,8 +479,10 @@ static void print_strategy_report(const options_t *options,
             putchar('\n');
         }
     }
-    if (emitted >= 180u)
-        printf("... report capped at 180 visible rows; the solve storage still contains all %zu infosets.\n", solver_count);
+    if (report_rows != 0u && emitted >= report_rows)
+        printf("... report capped at %zu visible rows (--report-rows); the solve "
+               "storage still contains all %zu infosets.\n",
+               report_rows, solver_count);
     printf("report_phase=complete rows=%zu\n", emitted);
     fflush(stdout);
     free(refs);
@@ -475,6 +504,13 @@ static void usage(FILE *stream)
         "  --allow-calls                allow calls before all-in\n"
         "  --postflop                   continue through flop, turn and river\n"
         "  --tree FILE                 import a Monker preflop tree and run it to showdown\n"
+        "  --board-abstraction LEVEL   merge boards a level cannot tell apart:\n"
+        "                              none (default, exact), small, medium, large.\n"
+        "                              Coarser levels let one sampled board answer for\n"
+        "                              its whole texture class, at the cost of averaging\n"
+        "                              the strategies of every board in that class.\n"
+        "  --report-rows N             hand rows printed in the report (default 2000,\n"
+        "                              0 = every sampled infoset)\n"
         "  --street NAME               root street: preflop (default), flop, turn or river.\n"
         "                              With a tree, the tree decisions are followed on every\n"
         "                              street the tree declares; other streets roll out.\n"
@@ -543,6 +579,21 @@ static void i_hash_str(uint64_t *hash, const char *text)
         i_hash_byte(hash, *p);
 }
 
+/* Board abstraction levels, in the vocabulary board_texture.h already uses.
+ * "none" keeps boards exact (the suit isomorphism still applies); the coarser
+ * levels merge boards a level cannot tell apart, so a sampled board answers
+ * for its whole class.  That is an approximation, hence opt-in. */
+static int parse_board_abstraction(const char *text)
+{
+    if (!text || !*text || strcmp(text, "none") == 0)
+        return PE_TEXTURE_FILTER_NONE;
+    if (strcmp(text, "small") == 0)   return PE_TEXTURE_FILTER_SMALL;
+    if (strcmp(text, "medium") == 0)  return PE_TEXTURE_FILTER_MEDIUM;
+    if (strcmp(text, "large") == 0)   return PE_TEXTURE_FILTER_LARGE;
+    if (strcmp(text, "perfect") == 0) return PE_TEXTURE_FILTER_PERFECT;
+    return -1;
+}
+
 /* Root street names for Lane B street trees: preflop keeps the classic
  * blind-posted root; flop/turn/river root the game at that street with
  * the fixed --board, --pot and first actor.  Returns 0..3 or -1. */
@@ -601,9 +652,55 @@ static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree)
         for (unsigned i = 0; i < sizeof(v); ++i)
             i_hash_byte(&h, ((const unsigned char *)&v)[i]);
     }
+    /* The tree's CONTENT, not just its path.  Editing a tree in place --
+     * changing a bet size, rewiring an action -- leaves the path identical,
+     * so without this a checkpoint full of regrets for the old betting was
+     * accepted for the new one and silently resumed onto a different spot. */
+    if (tree && tree->nodes)
+    {
+        i_hash_byte(&h, (unsigned char)(tree->node_count & 0xFF));
+        i_hash_byte(&h, (unsigned char)((tree->node_count >> 8) & 0xFF));
+        for (int n = 0; n < tree->node_count; ++n)
+        {
+            const mpf_tree_node_t *node = &tree->nodes[n];
+            i_hash_byte(&h, (unsigned char)node->type);
+            i_hash_byte(&h, (unsigned char)node->street);
+            i_hash_byte(&h, (unsigned char)(node->acting_player + 1));
+            i_hash_byte(&h, (unsigned char)node->use_pot_sizing);
+            i_hash_byte(&h, (unsigned char)node->action_count);
+            for (int a = 0; a < node->action_count; ++a)
+            {
+                i_hash_byte(&h, (unsigned char)node->actions[a].type);
+                i_hash_byte(&h, (unsigned char)(node->actions[a].size_index + 1));
+                i_hash_byte(&h, (unsigned char)(node->actions[a].next_index & 0xFF));
+                i_hash_byte(&h, (unsigned char)((node->actions[a].next_index >> 8) & 0xFF));
+            }
+            for (int b = 0; b < node->bet_size_count; ++b)
+            {
+                double size = node->bet_sizes[b];
+                for (unsigned i = 0; i < sizeof(size); ++i)
+                    i_hash_byte(&h, ((const unsigned char *)&size)[i]);
+            }
+        }
+    }
     return h;
 }
 
+
+/* Like parse_u64 but 0 is a meaningful value (--report-rows 0 = no cap). */
+static int parse_u64_allow_zero(const char *text, uint64_t *out)
+{
+    char *end = NULL;
+    unsigned long long value;
+    if (!text || !out || !*text)
+        return -1;
+    errno = 0;
+    value = strtoull(text, &end, 10);
+    if (errno || end == text || *end != '\0')
+        return -1;
+    *out = (uint64_t)value;
+    return 0;
+}
 
 static int parse_u64(const char *text, uint64_t *out)
 {
@@ -704,6 +801,7 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->iterations = DEFAULT_ITERATIONS;
     options->showdown_samples = DEFAULT_SHOWDOWN_SAMPLES;
     options->stack = DEFAULT_STACK;
+    options->report_rows = DEFAULT_REPORT_ROWS;
     options->small_blind = DEFAULT_SMALL_BLIND;
     options->big_blind = DEFAULT_BIG_BLIND;
     options->ante = 0.0;
@@ -756,6 +854,8 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--board") == 0 ||
              strcmp(arg, "--pot") == 0 ||
              strcmp(arg, "--to-act") == 0 ||
+             strcmp(arg, "--report-rows") == 0 ||
+             strcmp(arg, "--board-abstraction") == 0 ||
              strcmp(arg, "--checkpoint-interval") == 0) &&
             (!value || value[0] == '-')) {
             fprintf(stderr, "missing value for %s\n", arg);
@@ -821,6 +921,12 @@ options->checkpoint_interval =0u;
                 return -1;
         } else if (strcmp(arg, "--seed") == 0) {
             if (parse_u64(value, &options->seed) != 0) return -1;
+        } else if (strcmp(arg, "--board-abstraction") == 0) {
+            options->board_abstraction = value;
+        } else if (strcmp(arg, "--report-rows") == 0) {
+            uint64_t rows;
+            if (parse_u64_allow_zero(value, &rows) != 0) return -1;
+            options->report_rows = (size_t)rows;
         } else if (strcmp(arg, "--street") == 0) {
             options->street = value;
         } else if (strcmp(arg, "--board") == 0) {
@@ -1208,6 +1314,17 @@ int main(int argc, char **argv)
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
     rules.complete_ranges = complete_ranges;
+    {
+        int level = parse_board_abstraction(options.board_abstraction);
+        if (level < 0)
+        {
+            fprintf(stderr,
+                    "unknown --board-abstraction '%s' (want none, small, "
+                    "medium, large or perfect)\n", options.board_abstraction);
+            goto fail;
+        }
+        rules.board_texture_level = level;
+    }
     rules.root_street = root_street;
     rules.root_board = (uint64_t)board_mask;
     rules.root_pot = options.have_pot ? options.pot : 0.0;
@@ -1337,7 +1454,7 @@ int main(int argc, char **argv)
         printf("preflop_solver=lane-b algorithm=%s traversal=%s regret=%s policy=%s "
                "backend=%s backend_validated=1 cpu_threads=%d precision=%s simd_detected=%s "
                "simd_cfr=not-integrated dcfr_alpha=%.6g dcfr_beta=%.6g "
-               "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s street=%s board=%s\n",
+               "dcfr_gamma=%.6g lambda=%.6g game=%s players=%d postflop=%d tree=%s street=%s board=%s board_abstraction=%s\n",
                config.algorithm.preset == PE_PRESET_CUSTOM
                    ? "custom" : pe_preset_name(options.algorithm),
                pe_traversal_name(config.algorithm.traversal),
@@ -1352,7 +1469,8 @@ int main(int argc, char **argv)
                options.game, options.players, options.postflop_streets,
                tree ? options.tree : "none",
                options.street ? options.street : "preflop",
-               options.board ? options.board : "none");
+               options.board ? options.board : "none",
+               options.board_abstraction ? options.board_abstraction : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         printf("solver_phase=complete stop_reason=%s report=starting\n",

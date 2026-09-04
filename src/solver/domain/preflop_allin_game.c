@@ -8,6 +8,8 @@
  */
 
 #include <poker_eval/solver/pe_preflop_allin_game.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
@@ -478,6 +480,63 @@ static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
     ++game->desc_count;
 }
 
+/* Suit isomorphism for the infoset key.
+ *
+ * The key used to carry the raw 52-bit board, so Ks7d2c and Kh7s2d were two
+ * unrelated infosets even though they are the same game up to a renaming of
+ * the suits.  A sampled run then only ever had a strategy for the exact
+ * runouts it happened to deal, and asking for any other board returned
+ * nothing -- which is not how a solved tree is supposed to read.
+ *
+ * Canonicalising collapses the 22100 flops onto 1755 classes (and, preflop,
+ * the 1326 hole combos onto 169), so one sampled board answers for its whole
+ * isomorphism class.  This is an exact symmetry, not an abstraction: no
+ * strategic information is lost.
+ *
+ * Board and hole are canonicalised TOGETHER -- a hole card's suit matters
+ * only in relation to the board -- but hashed separately afterwards, because
+ * hashing the union alone would collide different splits of the same cards
+ * (board Ks7d2c + hole AhQh against board AhQhKs + hole 7d2c). */
+static void preflop_canonical_view(mask_t board, mask_t hole,
+                                   mask_t *out_board, mask_t *out_hole)
+{
+    mask_t all = board | hole;
+    mask_t canon = MASK_EMPTY;
+    int suit_perm[4];
+    int label_of[4];
+    int suit;
+    int card;
+
+    *out_board = board;
+    *out_hole = hole;
+    if (all == MASK_EMPTY ||
+        pe_board_canonicalize(all, (int)mask_popcount(all), &canon,
+                              suit_perm) != 0)
+        return;
+    for (suit = 0; suit < 4; ++suit)
+        label_of[suit] = -1;
+    /* suit_perm[label] = original suit; invert it. */
+    for (suit = 0; suit < 4; ++suit)
+        if (suit_perm[suit] >= 0 && suit_perm[suit] < 4)
+            label_of[suit_perm[suit]] = suit;
+
+    *out_board = MASK_EMPTY;
+    *out_hole = MASK_EMPTY;
+    for (card = 0; card < 52; ++card)
+    {
+        int rank = card % 13;
+        int relabelled;
+        suit = card / 13;
+        if (label_of[suit] < 0)
+            continue;   /* suit absent from board|hole, nothing to map */
+        relabelled = MODERN_MAKE_CARD(rank, label_of[suit]);
+        if (mask_is_set(board, card))
+            *out_board = mask_set(*out_board, relabelled);
+        if (mask_is_set(hole, card))
+            *out_hole = mask_set(*out_hole, relabelled);
+    }
+}
+
 static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
                                        void *user)
 {
@@ -488,9 +547,25 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
     uint64_t masks = 0u;
     int player;
 
+    mask_t canon_board;
+    mask_t canon_hole;
+
+    preflop_canonical_view(state->board,
+                           actor >= 0 ? state->holes[actor] : MASK_EMPTY,
+                           &canon_board, &canon_hole);
+
     hash = preflop_mix_u64(hash, (uint64_t)actor);
     hash = preflop_mix_u64(hash, (uint64_t)state->street);
-    hash = preflop_mix_u64(hash, (uint64_t)state->board);
+    /* With an abstraction level set, boards the level cannot tell apart share
+     * a key, so a sampled board answers for its whole texture class.  At
+     * level 0 the id is the canonical mask itself and nothing is merged. */
+    hash = preflop_mix_u64(
+        hash,
+        game->rules.board_texture_level > 0
+            ? pe_board_texture_id(canon_board,
+                                  (pe_texture_filter_level_t)
+                                      game->rules.board_texture_level)
+            : (uint64_t)canon_board);
     hash = preflop_mix_u64(hash, (uint64_t)betting->raises_made);
     for (player = 0; player < PE_PREFLOP_ALLIN_MAX_PLAYERS; ++player)
     {
@@ -507,7 +582,7 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
         hash = preflop_mix_u64(
             hash, preflop_quantize(betting->round_contrib[player]));
     if (actor >= 0)
-        hash = preflop_mix_u64(hash, (uint64_t)state->holes[actor]);
+        hash = preflop_mix_u64(hash, (uint64_t)canon_hole);
     preflop_record_desc(game, hash, state);
     return hash;
 }
