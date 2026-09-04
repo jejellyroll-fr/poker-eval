@@ -1,0 +1,566 @@
+{
+  "version": 1,
+  "root": "bb_first",
+  "betProfiles": [
+    {
+      "id": "pot",
+      "sizes": [
+        1.0
+      ],
+      "pot_sizing": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "bb_first",
+      "type": "player",
+      "street": "RIVER",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "sb_after_check"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "sb_facing_bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 63.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_after_check",
+      "type": "player",
+      "street": "RIVER",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "showdown_checked"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 0,
+        "first_to_act": 1,
+        "pot": 63.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_facing_bet",
+      "type": "player",
+      "street": "RIVER",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "bb_wins_bet"
+        },
+        {
+          "type": "call",
+          "next": "showdown_bet_called"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_raise"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 0,
+        "first_to_act": 1,
+        "pot": 126.0,
+        "to_call": 63.0,
+        "current_bet": 63.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          5.5
+        ],
+        "invested": [
+          0,
+          63.0
+        ],
+        "round_contrib": [
+          0,
+          63.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_bet",
+      "type": "player",
+      "street": "RIVER",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_bet"
+        },
+        {
+          "type": "call",
+          "next": "showdown_bet_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 126.0,
+        "to_call": 63.0,
+        "current_bet": 63.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          5.5,
+          68.5
+        ],
+        "invested": [
+          63.0,
+          0
+        ],
+        "round_contrib": [
+          63.0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_raise",
+      "type": "player",
+      "street": "RIVER",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_raise"
+        },
+        {
+          "type": "call",
+          "next": "showdown_raise_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 315.0,
+        "to_call": 126.0,
+        "current_bet": 126.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          -120.5,
+          5.5
+        ],
+        "invested": [
+          189.0,
+          63.0
+        ],
+        "round_contrib": [
+          189.0,
+          63.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_checked",
+      "type": "terminal",
+      "street": "RIVER",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 63.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_wins_bet",
+      "type": "terminal",
+      "street": "RIVER",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 126.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          0,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_bet",
+      "type": "terminal",
+      "street": "RIVER",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 126.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_bet_called",
+      "type": "terminal",
+      "street": "RIVER",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 189.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_raise",
+      "type": "terminal",
+      "street": "RIVER",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 315.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_raise_called",
+      "type": "terminal",
+      "street": "RIVER",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "RIVER",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 441.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0,
+          47
+        ],
+        "board_revealed": 5,
+        "stacks": [
+          68.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    }
+  ]
+}

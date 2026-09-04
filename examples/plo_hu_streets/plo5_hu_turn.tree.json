@@ -1,0 +1,555 @@
+{
+  "version": 1,
+  "root": "bb_first",
+  "betProfiles": [
+    {
+      "id": "pot",
+      "sizes": [
+        1.0
+      ],
+      "pot_sizing": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "bb_first",
+      "type": "player",
+      "street": "TURN",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "sb_after_check"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "sb_facing_bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 21.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_after_check",
+      "type": "player",
+      "street": "TURN",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "showdown_checked"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": 0,
+        "first_to_act": 1,
+        "pot": 21.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_facing_bet",
+      "type": "player",
+      "street": "TURN",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "bb_wins_bet"
+        },
+        {
+          "type": "call",
+          "next": "showdown_bet_called"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_raise"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": 0,
+        "first_to_act": 1,
+        "pot": 42.0,
+        "to_call": 21.0,
+        "current_bet": 21.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          68.5
+        ],
+        "invested": [
+          0,
+          21.0
+        ],
+        "round_contrib": [
+          0,
+          21.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_bet",
+      "type": "player",
+      "street": "TURN",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_bet"
+        },
+        {
+          "type": "call",
+          "next": "showdown_bet_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 42.0,
+        "to_call": 21.0,
+        "current_bet": 21.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          68.5,
+          89.5
+        ],
+        "invested": [
+          21.0,
+          0
+        ],
+        "round_contrib": [
+          21.0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_raise",
+      "type": "player",
+      "street": "TURN",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_raise"
+        },
+        {
+          "type": "call",
+          "next": "showdown_raise_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 105.0,
+        "to_call": 42.0,
+        "current_bet": 42.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          26.5,
+          68.5
+        ],
+        "invested": [
+          63.0,
+          21.0
+        ],
+        "round_contrib": [
+          63.0,
+          21.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_checked",
+      "type": "terminal",
+      "street": "TURN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 21.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_wins_bet",
+      "type": "terminal",
+      "street": "TURN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 42.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          0,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_bet",
+      "type": "terminal",
+      "street": "TURN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 42.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_bet_called",
+      "type": "terminal",
+      "street": "TURN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 63.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_raise",
+      "type": "terminal",
+      "street": "TURN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 105.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_raise_called",
+      "type": "terminal",
+      "street": "TURN",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "TURN",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 147.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28,
+          0
+        ],
+        "board_revealed": 4,
+        "stacks": [
+          89.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    }
+  ]
+}
