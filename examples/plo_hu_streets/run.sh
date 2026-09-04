@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Solve the heads-up PLO5/PLO6 street trees in this directory.
+# Solve the heads-up PLO5/PLO6 trees in this directory.
 #
-#   ./run.sh              # both variants, all four streets
+#   ./run.sh              # both variants, all four streets, one run each
 #   ./run.sh plo6 turn    # one variant, one street
+#   ./run.sh plo5 full    # the single preflop..river tree, one run
 #
-# Lane B follows the tree on the run's ROOT street only; later streets are
-# dealt and rolled out to showdown.  That is why this is four trees per
-# variant rather than one, and why each street is its own solver run.
+# Two shapes are provided.  The *_hu_full tree spans preflop through river in
+# one file, the way Monker Solver does it: the round-closing action of each
+# street wires straight to the first node of the next, so one run solves the
+# whole thing.  The per-street trees remain useful when you want to work one
+# street at a time with a chosen board and pot.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,7 +46,9 @@ solve_one() {
         --algorithm external-mccfr --backend cpu_ref --precision f64 --threads 1
         --range0 "100%" --range1 "100%"
     )
-    if [[ "${street}" != "preflop" ]]; then
+    # The full tree is rooted preflop and deals its own boards, so it takes
+    # neither --street nor --board nor --pot.
+    if [[ "${street}" != "preflop" && "${street}" != "full" ]]; then
         args+=(--street "${street}" --board "$(board_for "${street}")" --pot "$(pot_for "${street}")")
     fi
     echo "=== ${variant} ${street} ==="

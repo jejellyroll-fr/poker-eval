@@ -269,10 +269,110 @@ static void run_case(const root_case_t *c)
     printf("  %-6s root: OK (%zu observed decisions)\n", c->name, desc_count);
 }
 
+/* A single tree spanning two streets, Monker-style: the round-closing
+ * action of the flop wires straight to a turn player node.  The engine must
+ * deal the turn and resume AT THAT NODE.  Before this, any postflop chance
+ * node rolled out to showdown regardless of what the tree still had waiting,
+ * so only the root street was ever solved. */
+static const char *k_two_street_json =
+"{"
+"  \"version\": 1,"
+"  \"root\": \"flop_bb\","
+"  \"betProfiles\": [ { \"id\": \"pot\", \"sizes\": [1.0], \"pot_sizing\": true } ],"
+"  \"nodes\": ["
+"    { \"id\": \"flop_bb\", \"type\": \"player\", \"street\": \"FLOP\", \"player\": 1,"
+"      \"bet_profile\": \"pot\","
+"      \"actions\": [ { \"type\": \"call\", \"next\": \"flop_sb\" },"
+"                     { \"type\": \"raise\", \"size_index\": 0, \"next\": \"term_bet\" } ] },"
+"    { \"id\": \"flop_sb\", \"type\": \"player\", \"street\": \"FLOP\", \"player\": 0,"
+"      \"bet_profile\": \"pot\","
+"      \"actions\": [ { \"type\": \"call\", \"next\": \"turn_bb\" },"
+"                     { \"type\": \"raise\", \"size_index\": 0, \"next\": \"term_bet\" } ] },"
+"    { \"id\": \"turn_bb\", \"type\": \"player\", \"street\": \"TURN\", \"player\": 1,"
+"      \"bet_profile\": \"pot\","
+"      \"actions\": [ { \"type\": \"call\", \"next\": \"term_turn\" },"
+"                     { \"type\": \"raise\", \"size_index\": 0, \"next\": \"term_turn\" } ] },"
+"    { \"id\": \"term_bet\",  \"type\": \"terminal\", \"street\": \"FLOP\" },"
+"    { \"id\": \"term_turn\", \"type\": \"terminal\", \"street\": \"TURN\" }"
+"  ]"
+"}";
+
+static void run_two_street_case(void)
+{
+    mpf_tree_error_t tree_error;
+    mpf_tree_def_t *tree;
+    pe_preflop_allin_rules_t rules;
+    pe_range_t *ranges[2] = {NULL, NULL};
+    pe_preflop_allin_game_t *game;
+    pe_storage_t *storage = NULL;
+    StdDeck_CardMask board;
+    size_t desc_count;
+    int saw_flop_node = 0;
+    int saw_turn_node = 0;
+    const root_case_t *flop = &k_cases[0];
+
+    memset(&tree_error, 0, sizeof(tree_error));
+    tree = mpf_tree_load_json(k_two_street_json, strlen(k_two_street_json),
+                              &tree_error);
+    assert(tree != NULL);
+
+    board_cardmask(flop, &board);
+    assert(pe_solver_range_parse(game_holdem, "AA,KK,QQ,72o", board, &ranges[0]) ==
+           PE_SOLVER_OK);
+    assert(pe_solver_range_parse(game_holdem, "AA,KK,QQ,72o", board, &ranges[1]) ==
+           PE_SOLVER_OK);
+
+    memset(&rules, 0, sizeof(rules));
+    rules.variant = PE_PREFLOP_HOLDEM;
+    rules.player_count = 2;
+    rules.stacks[0] = 97.0;
+    rules.stacks[1] = 97.0;
+    rules.min_raise = 1.0;
+    rules.raise_cap = 4;
+    rules.allow_nonallin_call = 1;
+    rules.showdown_samples = 64;
+    rules.showdown_seed = 0x7EE5u;
+    rules.tree = tree;
+    rules.tree_showdown = 1;
+    rules.root_street = (int)PE_HOLDEM_FLOP;
+    rules.root_board = (uint64_t)cardmask_to_mask_t(board);
+    rules.root_pot = 6.0;
+    rules.root_to_act = 1;
+
+    game = pe_preflop_allin_game_create(&rules, ranges);
+    assert(game != NULL);
+    assert(run_solve(game, 600, 0xA11Eu, &storage) == 0);
+
+    desc_count = pe_preflop_allin_infodesc_count(game);
+    for (size_t index = 0u; index < desc_count; ++index)
+    {
+        pe_preflop_infodesc_view_t view;
+        if (pe_preflop_allin_infodesc_view_at(game, index, &view) != 0)
+            continue;
+        /* Node 2 is turn_bb: reaching it proves the tree survived the street
+         * change instead of being abandoned to a rollout. */
+        if (view.tree_node_index == 0 || view.tree_node_index == 1)
+            saw_flop_node = 1;
+        if (view.tree_node_index == 2)
+            saw_turn_node = 1;
+    }
+    assert(saw_flop_node);
+    assert(saw_turn_node);
+
+    pe_storage_destroy(storage);
+    pe_preflop_allin_game_destroy(game);
+    pe_range_free(ranges[0]);
+    pe_range_free(ranges[1]);
+    mpf_tree_free(tree);
+
+    printf("  two-street tree: OK (turn node entered from a flop root)\n");
+}
+
 int main(void)
 {
     printf("test_preflop_postflop_root\n");
     for (size_t i = 0u; i < sizeof(k_cases) / sizeof(k_cases[0]); ++i)
         run_case(&k_cases[i]);
+    run_two_street_case();
     return 0;
 }

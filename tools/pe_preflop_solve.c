@@ -1092,14 +1092,13 @@ int main(int argc, char **argv)
                     options.players, tree_header.street, tree_header.player_count);
             goto fail;
         }
-        /* The driver follows tree decisions on the run's root street;
-         * nodes from other streets are never entered (a tree-terminal
-         * node ends the round, later streets roll out).  A mixed-street
-         * tree therefore needs one run per street, each with its
-         * street-matching tree — say so loudly instead of solving
-         * partially in silence. */
+        /* A tree may span several streets: when the round-closing action of
+         * one street wires into a player node on the next, the board is dealt
+         * and the tree carries on there.  Later-street nodes are therefore
+         * fine.  Nodes on a street EARLIER than the root are the unreachable
+         * ones -- play never walks backwards. */
         {
-            uint32_t postflop_nodes = 0u;
+            uint32_t unreachable_nodes = 0u;
             char census[160];
             size_t census_used = 0u;
             uint32_t street_nodes[5] = {0u, 0u, 0u, 0u, 0u};
@@ -1109,8 +1108,8 @@ int main(int argc, char **argv)
                 for (int ni = 0; ni < tree->node_count; ++ni)
                 {
                     if (tree->nodes[ni].type == MPF_TREE_NODE_PLAYER &&
-                        (int)tree->nodes[ni].street > 0)
-                        ++postflop_nodes;
+                        (int)tree->nodes[ni].street < root_street)
+                        ++unreachable_nodes;
                     if (tree->nodes[ni].type == MPF_TREE_NODE_PLAYER &&
                         (int)tree->nodes[ni].street >= 0 &&
                         (int)tree->nodes[ni].street < 5)
@@ -1132,15 +1131,14 @@ int main(int argc, char **argv)
             printf("tree_streets=%s\n",
                    census[0] ? census : "none");
             fflush(stdout);
-            if (postflop_nodes > 0u && !options.postflop_streets &&
-                root_street == 0)
+            if (unreachable_nodes > 0u)
             {
                 fprintf(stderr,
-                        "warning: tree holds %u decision node(s) off the preflop "
-                        "root street; they are never entered (later streets roll "
-                        "out to showdown). Solve each street separately with its "
-                        "street-matching tree.\n",
-                        postflop_nodes);
+                        "warning: tree holds %u decision node(s) on a street "
+                        "before the %s root; play never walks backwards, so "
+                        "those are unreachable.\n",
+                        unreachable_nodes,
+                        options.street ? options.street : "preflop");
             }
         }
     }

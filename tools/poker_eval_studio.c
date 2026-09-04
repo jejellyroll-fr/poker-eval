@@ -4731,7 +4731,7 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
                         tree->node_count);
         textview_printf(app->strategy_view, "decision nodes by street      %s\n",
                         app->tree_street_summary[0] ? app->tree_street_summary : "?");
-        textview_printf(app->strategy_view, "solved streets                Lane B follows the run street's tree decisions; other streets are dealt and rolled out\n");
+        textview_printf(app->strategy_view, "solved streets                every street the tree wires into; past its last node the board is dealt and rolled out\n");
         textview_printf(app->strategy_view, "ranges                        %s\n",
                         ranges_present ? "embedded" : "external / defaults to 100%%");
         textview_printf(app->strategy_view, "board / runouts               %s\n",
@@ -7108,25 +7108,24 @@ static void i_on_solve(App *app, Event *event)
                 : (stop_mode == 2u)
                     ? "\nStop rule: manual only — runs until you click Stop run."
                     : "";
-            /* Lane B enters tree decisions only on the run's root street;
-             * nodes declared on any other street are never reached and the
-             * later streets are dealt and rolled out to showdown.  Say so
-             * rather than solving a fraction of the file in silence. */
+            /* A tree may span several streets: when the round-closing
+             * action of one street wires into a player node on the next, the
+             * board is dealt and the tree carries on there.  Only nodes on a
+             * street EARLIER than the root are unreachable -- play never
+             * walks backwards. */
             char scope_note[256];
             char root_note[192];
-            uint32_t off_street = 0u;
+            uint32_t unreachable = 0u;
             scope_note[0] = '\0';
-            for (uint32_t street = 0u; street < 5u; ++street)
-                if (street != header.street)
-                    off_street += app->tree_street_nodes[street];
-            if (off_street > 0u)
+            for (uint32_t street = 0u; street < header.street; ++street)
+                unreachable += app->tree_street_nodes[street];
+            if (unreachable > 0u)
             {
                 snprintf(scope_note, sizeof(scope_note),
-                         "\nSCOPE WARNING: this tree holds %u decision node(s) off the "
-                         "%s root street; they are never entered (later streets "
-                         "roll out to showdown). Solve each street separately with "
-                         "its street-matching tree.",
-                         off_street, street_name((int)header.street));
+                         "\nSCOPE WARNING: this tree holds %u decision node(s) on a "
+                         "street before the %s root; play never walks backwards, so "
+                         "those are unreachable.",
+                         unreachable, street_name((int)header.street));
             }
             if (header.street > 0u)
                 snprintf(root_note, sizeof(root_note),

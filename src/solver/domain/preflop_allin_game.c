@@ -952,7 +952,20 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
             return 0;
         }
     }
-    if (game->rules.tree_showdown &&
+    /* Does the tree carry on into the next street?  A single Monker-style
+     * tree spanning preflop..river wires the round-closing action of one
+     * street straight to a player node on the next one.  When it does, the
+     * chance node deals that street and betting resumes AT THAT NODE,
+     * instead of the rollout below.  Without this the tree was abandoned at
+     * the end of its root street and everything past it was dealt out to
+     * showdown, which is why a multi-street tree only ever solved its first
+     * street. */
+    const mpf_tree_node_t *tree_next = preflop_tree_node(game, source);
+    if (tree_next && (tree_next->type != MPF_TREE_NODE_PLAYER ||
+                      (int)tree_next->street != (int)source->street + 1))
+        tree_next = NULL;
+
+    if (!tree_next && game->rules.tree_showdown &&
         ((source->street != PE_HOLDEM_PREFLOP &&
           source->street != PE_HOLDEM_RIVER) ||
          (source->street == PE_HOLDEM_PREFLOP &&
@@ -989,7 +1002,10 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
         round.dead_cards = source->dead_cards;
         round.street = source->street;
         round.betting = source->betting;
-        first_to_act = preflop_first_actionable_player(&source->betting);
+        /* The tree names who is first on the new street; only fall back to
+         * the seating rule when it does not. */
+        first_to_act = tree_next ? tree_next->acting_player
+                                 : preflop_first_actionable_player(&source->betting);
         if (first_to_act < 0)
             first_to_act = 0;
         if (pe_holdem_round_advance(&round, &game->betting_rules, next_board,
@@ -1243,7 +1259,12 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         }
         game->root_betting.street = (pe_holdem_street_t)rules->root_street;
         game->root_betting.board = (mask_t)rules->root_board;
-        game->root_betting.dead_cards = (mask_t)rules->root_board;
+        /* dead_cards holds what is dead OFF the board -- the hole cards once
+         * they are dealt.  The board must NOT be in it: pe_holdem_round_advance
+         * rejects any transition whose board intersects dead_cards, which would
+         * make a tree that continues into the next street unplayable.  The deal
+         * sampler already has the board dead through its own init. */
+        game->root_betting.dead_cards = MASK_EMPTY;
     }
 
     game->ops.action_count = preflop_op_action_count;
