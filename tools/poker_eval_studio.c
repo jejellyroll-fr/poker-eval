@@ -9,6 +9,7 @@
  */
 #include <nappgui.h>
 
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_runtime.h>
@@ -60,7 +61,11 @@
 #define PCLOSE pclose
 #endif
 
-#define STRATEGY_TABLE_MAX_ROWS 600u
+/* The report emits up to --report-rows hand rows (the Studio asks for
+ * STUDIO_REPORT_ROWS).  Both this and solve_output must hold them, or the
+ * table shows a slice of the run and the grid looks nearly empty. */
+#define STRATEGY_TABLE_MAX_ROWS 4000u
+#define STUDIO_REPORT_ROWS 4000u
 #define STRATEGY_CAPTURE_CAPACITY 524288u
 #define MONKER_GRID_MAX_ROWS PE_MONKER_CLASS_COUNT
 /* "No iteration cap" ceiling for single-option stop modes (target-only,
@@ -147,6 +152,11 @@ struct _app_t
     Edit *dcfr_gamma_edit;
     Combo *backend_combo;
     Combo *precision_combo;
+    /* Board abstraction folded into the solver's infoset key.  Exact by
+     * default: the coarser levels let one sampled board answer for its whole
+     * texture class, which is how a sampled solver covers a board space it
+     * cannot enumerate, but the strategy they share is an average. */
+    Combo *board_abstraction_combo;
     Combo *stop_mode_combo;
     Label *runtime_label;
 
@@ -413,7 +423,21 @@ struct _app_t
 
     char table_cell_text[512];
     char solve_command[8192];
-    char solve_output[131072];
+    /* Rolling capture of the solver's stdout.  It keeps the TAIL, so it has
+     * to be large enough for the whole report: at 128 KB a run of a few
+     * thousand rows lost most of its hand table before it was ever parsed. */
+    char solve_output[4194304];
+    /* Cards picked in the RESULTS board matrix.  This is a VIEW filter -- a
+     * row is kept when its runout contains every selected card -- not the
+     * board of the spot to solve, which lives in board_edit.  Clicking the
+     * matrix used to write into board_edit, so it edited the Setup input and
+     * left the already-computed report untouched. */
+    char result_board_cards[64];
+
+    /* Reusable copy of the above for the render paths.  Owned by the app
+     * rather than malloc'd per call: i_solve_update runs ten times a second
+     * while a solve is live. */
+    char *report_scratch;
 
     /* Checkpoint / resume state.  When a solver run writes a checkpoint,
      * i_solve_end stores the file path here and the next "Resume" click
@@ -448,6 +472,16 @@ static void render_strategy_view(App *app, const char *output);
 static void render_current_strategy_view(App *app);
 static void i_on_result_filter(App *app, Event *event);
 static void refresh_result_filters(App *app, const char *output);
+static int result_line_board(const char *line, char *out, size_t capacity);
+
+/* Combo index to the --board-abstraction spelling the driver takes. */
+static const char *selected_board_abstraction(const App *app)
+{
+    static const char *names[] = {"none", "small", "medium", "large"};
+    uint32_t index = app && app->board_abstraction_combo
+        ? combo_get_selected(app->board_abstraction_combo) : 0u;
+    return index < 4u ? names[index] : "none";
+}
 static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tree);
 static void result_write_line(TextView *view, const char *line);
 static void i_on_strategy_table(App *app, Event *event);
@@ -1952,21 +1986,25 @@ static int strategy_matrix_position(const char *hand, const char *ranks,
         return 0;
     if (first == second)
     {
-        *row = first;
-        *column = second;
-    }
-    else if (first < second)
-    {
+        /* Pair: the diagonal. */
         *row = first;
         *column = second;
     }
     else
     {
-        *row = second;
-        *column = first;
+        /* Above the diagonal is suited, below is offsuit -- which the cell
+         * labels already assumed (row < column prints "s", row > column
+         * prints "o").  The suits were never read, so every hand was
+         * normalised to row < column: the offsuit half of the grid could not
+         * be reached at all, and each suited cell silently averaged the
+         * suited AND offsuit versions of its class together. */
+        int suited = tolower((unsigned char)hand[1]) ==
+                     tolower((unsigned char)hand[3]);
+        int high = first < second ? first : second;  /* smaller index = higher rank */
+        int low = first < second ? second : first;
+        *row = suited ? high : low;
+        *column = suited ? low : high;
     }
-    /* Rows above the diagonal are suited; rows below are offsuit.  Concrete
-     * cards are normalized to the same class regardless of input order. */
     return 1;
 }
 
@@ -2145,6 +2183,11 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
         {
             int primary = -1;
             double total = 0.0;
+            /* The cell is coloured by its dominant action, so the label has
+             * to be THAT action's share.  Printing `total` -- the sum over
+             * every action -- meant 100% in every populated cell once the
+             * class was averaged, and 200% before that. */
+            double primary_share = 0.0;
             real32_t x = (real32_t)left + (real32_t)column * cell;
             real32_t y = (real32_t)top + (real32_t)row * cell;
             char hand[8];
@@ -2157,6 +2200,8 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
             }
             if (total <= 0.0)
                 primary = -1;
+            else if (primary >= 0)
+                primary_share = values[row][column][primary] / total;
             draw_fill_color(ctx, primary >= 0 ? strategy_action_color(primary) :
                             color_rgb(39, 45, 53));
             draw_rndrect(ctx, ekFILL, x + 1.0f, y + 1.0f,
@@ -2171,7 +2216,8 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
             if (total > 0.0)
             {
                 char percentage[24];
-                snprintf(percentage, sizeof(percentage), "%.0f%%", total * 100.0);
+                snprintf(percentage, sizeof(percentage), "%.0f%%",
+                         primary_share * 100.0);
                 draw_text_color(ctx, color_rgb(190, 205, 215));
                 draw_text(ctx, percentage, x + cell * 0.5f,
                           y + cell * 0.70f);
@@ -3238,7 +3284,7 @@ static void i_on_draw_board_matrix(App *app, Event *event)
     real32_t height = params->height;
     static const char ranks[] = "AKQJT98765432";
     static const char suits[] = "shdc";
-    const char *board_text = app->board_edit ? edit_get_text(app->board_edit) : "";
+    const char *board_text = app->result_board_cards;
     real32_t pad_x = 4.0f;
     real32_t pad_y = 3.0f;
     real32_t card_w = (width - pad_x * 2.0f - 12.0f * 2.0f) / 13.0f;
@@ -3307,42 +3353,36 @@ static void i_on_click_board_matrix(App *app, Event *event)
     int s = (int)((p->y - pad_y) / (card_h + 2.0f));
     int max_cards = 5;
 
-    if (r >= 0 && r < 13 && s >= 0 && s < 4 && app->board_edit)
+    if (r >= 0 && r < 13 && s >= 0 && s < 4)
     {
+        /* Toggle the card in the RESULTS view filter.  Rows are kept when
+         * their runout contains every selected card, so a partial pick such
+         * as "Ah" means "every runout containing the ace of hearts" -- which
+         * is what a board matrix is for.  Up to five cards, one full board. */
         char card_str[4];
-        char current_board[128] = "";
-        char new_board[128] = "";
-        const char *txt = edit_get_text(app->board_edit);
+        char current[64];
+        char updated[64];
+        char *found;
         card_str[0] = ranks[r];
         card_str[1] = suits[s];
         card_str[2] = '\0';
-
-        if (txt && *txt && strncmp(txt, "No board", 8) != 0)
-            snprintf(current_board, sizeof(current_board), "%s", txt);
-
-        if (strstr(current_board, card_str) != NULL)
+        snprintf(current, sizeof(current), "%s", app->result_board_cards);
+        found = strstr(current, card_str);
+        if (found)
         {
-            /* Remove card */
-            char *found = strstr(current_board, card_str);
-            size_t len = strlen(card_str);
-            memmove(found, found + len, strlen(found + len) + 1);
-            snprintf(new_board, sizeof(new_board), "%s", current_board);
+            memmove(found, found + 2u, strlen(found + 2u) + 1u);
+            snprintf(updated, sizeof(updated), "%s", current);
         }
+        else if (card_count(current) < max_cards)
+            snprintf(updated, sizeof(updated), "%s%s", current, card_str);
         else
-        {
-            /* Add card */
-            if (app->setup_street_combo)
-                max_cards = street_cards(setup_street(app));
-            if (max_cards > 0 && card_count(current_board) < max_cards)
-                snprintf(new_board, sizeof(new_board), "%s%s", current_board, card_str);
-            else
-                snprintf(new_board, sizeof(new_board), "%s", current_board);
-        }
-        trim_text(new_board);
-        edit_text(app->board_edit, new_board);
-        if (app->board_edit_quick)
-            edit_text(app->board_edit_quick, new_board);
+            snprintf(updated, sizeof(updated), "%s", current);
+        snprintf(app->result_board_cards, sizeof(app->result_board_cards),
+                 "%s", updated);
         view_update(app->board_matrix_view);
+        /* The report is already computed; re-render it through the new
+         * filter.  Without this the click changed nothing on screen. */
+        render_current_strategy_view(app);
     }
 }
 
@@ -4701,6 +4741,9 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
         if (used == 0u)
             snprintf(street_text, sizeof(app->tree_street_summary), "none");
     }
+    /* A new tree is a new spot; card picks from the previous one would
+     * silently filter the new report down to nothing. */
+    app->result_board_cards[0] = '\0';
     app->tree_player_count = header->player_count >= 2u &&
                              header->player_count <= 6u
         ? header->player_count : 0u;
@@ -5093,12 +5136,26 @@ static void i_solve_copy_output(App *app, char *out, size_t capacity)
     bmutex_unlock(app->solve_mutex);
 }
 
+/* Reusable buffer holding a snapshot of the solver output, sized to
+ * solve_output.  NULL only if the one allocation failed. */
+static char *report_scratch(App *app)
+{
+    if (!app)
+        return NULL;
+    if (!app->report_scratch)
+        app->report_scratch = (char *)malloc(sizeof(app->solve_output));
+    return app->report_scratch;
+}
+
+/* The report can run to megabytes, so these copies use the shared scratch: a
+ * stack buffer big enough would blow the thread stack, and a small one would
+ * truncate the hand table exactly like solve_output used to. */
 static void render_current_strategy_view(App *app)
 {
-    char output[131072];
-    if (!app)
+    char *output = report_scratch(app);
+    if (!output)
         return;
-    i_solve_copy_output(app, output, sizeof(output));
+    i_solve_copy_output(app, output, sizeof(app->solve_output));
     render_strategy_view(app, output);
 }
 
@@ -5588,6 +5645,38 @@ static void refresh_result_filters(App *app, const char *output)
         result_combo_add_unique(app->board_filter, board);
         cursor = start + n;
     }
+    /* Runouts actually played, from the report rows' sixth column.  A
+     * preflop-rooted run deals a different board every iteration, so this is
+     * the only place those boards exist.  Capped: the combo is for picking a
+     * runout, not for listing thousands. */
+    {
+        const char *scan = strstr(output ? output : "", "HAND TABLE");
+        uint32_t added = 0u;
+        while (scan && added < 64u && (scan = strchr(scan, '\n')) != NULL)
+        {
+            char line[2048];
+            const char *end;
+            size_t n;
+            ++scan;
+            end = strchr(scan, '\n');
+            n = end ? (size_t)(end - scan) : strlen(scan);
+            if (n == 0u)
+                break;
+            if (n >= sizeof(line))
+                n = sizeof(line) - 1u;
+            memcpy(line, scan, n);
+            line[n] = '\0';
+            if (strncmp(line, "report_phase=", 13u) == 0)
+                break;
+            if (strncmp(line, "ev_update\t", 10u) != 0 &&
+                result_line_board(line, board, sizeof(board)))
+            {
+                result_combo_add_unique(app->board_filter, board);
+                ++added;
+            }
+            scan = end;
+        }
+    }
     combo_selected(app->board_filter, 0u);
 }
 
@@ -5624,6 +5713,111 @@ static int result_node_street(const App *app, int node_index)
         if (app->decision_steps[i].node_index == node_index)
             return app->decision_steps[i].street;
     return -1;
+}
+
+/* Board of one report row: its sixth tab-separated field, added so a
+ * per-board filter has something to match.  A row from an older report has
+ * only five fields and matches nothing, rather than matching everything. */
+static int result_line_board(const char *line, char *out, size_t capacity)
+{
+    const char *cursor = line;
+    int tabs = 0;
+    size_t used = 0u;
+    if (!line || !out || capacity == 0u)
+        return 0;
+    out[0] = '\0';
+    while (*cursor && tabs < 5)
+        if (*cursor++ == '\t')
+            ++tabs;
+    if (tabs < 5)
+        return 0;
+    while (*cursor && *cursor != '\n' && *cursor != '\t' &&
+           used + 1u < capacity)
+        out[used++] = *cursor++;
+    out[used] = '\0';
+    return used > 0u && strcmp(out, "-") != 0;
+}
+
+static int result_line_board_matches(const char *line, const char *board)
+{
+    char row_board[64];
+    if (!board || !*board)
+        return 1;
+    if (!result_line_board(line, row_board, sizeof(row_board)))
+        return 0;
+    return strcmp(row_board, board) == 0;
+}
+
+/* Text like "Ks7d2c" to a card mask; 0 cards on a malformed string. */
+static int board_text_to_mask(const char *text, mask_t *out)
+{
+    static const char ranks[] = "23456789TJQKA";
+    static const char suits[] = "hdcs";
+    int count = 0;
+    *out = MASK_EMPTY;
+    if (!text)
+        return 0;
+    while (text[0] && text[1])
+    {
+        const char *r = strchr(ranks, (char)toupper((unsigned char)text[0]));
+        const char *u = strchr(suits, (char)tolower((unsigned char)text[1]));
+        if (!r || !u)
+            return 0;
+        *out = mask_set(*out, MODERN_MAKE_CARD((int)(r - ranks), (int)(u - suits)));
+        ++count;
+        text += 2;
+    }
+    return count;
+}
+
+/* Does this row's runout match the cards picked in the board matrix?
+ *
+ * A complete pick -- as many cards as the row's board holds -- matches by
+ * SUIT ISOMORPHISM, not by spelling: Ks7d2c and Kh7s2d are the same board up
+ * to a renaming of the suits, and the solver now keys its infosets that way,
+ * so the view must read them the same way.  Without this a run answers only
+ * for the exact runouts it happened to deal.
+ *
+ * A partial pick keeps the literal "contains these cards" meaning, which is
+ * the useful reading of half a board and is not isomorphism-invariant
+ * anyway (there is no such thing as "the ace of hearts" up to suit
+ * renaming). */
+static int result_line_board_contains(const char *line, const char *cards)
+{
+    char row_board[64];
+    mask_t picked = MASK_EMPTY;
+    mask_t row_mask = MASK_EMPTY;
+    int picked_count;
+    int row_count;
+    size_t i;
+
+    if (!cards || !*cards)
+        return 1;
+    if (!result_line_board(line, row_board, sizeof(row_board)))
+        return 0;
+
+    picked_count = board_text_to_mask(cards, &picked);
+    row_count = board_text_to_mask(row_board, &row_mask);
+    if (picked_count > 0 && picked_count == row_count)
+    {
+        char picked_key[32];
+        char row_key[32];
+        if (pe_board_canonical_key(picked, picked_count,
+                                   picked_key, sizeof(picked_key)) == 0 &&
+            pe_board_canonical_key(row_mask, row_count,
+                                   row_key, sizeof(row_key)) == 0)
+            return strcmp(picked_key, row_key) == 0;
+    }
+    for (i = 0u; cards[i] && cards[i + 1u]; i += 2u)
+    {
+        char card[3];
+        card[0] = cards[i];
+        card[1] = cards[i + 1u];
+        card[2] = '\0';
+        if (strstr(row_board, card) == NULL)
+            return 0;
+    }
+    return 1;
 }
 
 static int result_scope_street(const App *app, const char *output)
@@ -6138,16 +6332,28 @@ static void render_strategy_view(App *app, const char *output)
                 cursor = end;
                 continue;
             }
-            fields = sscanf(line, "%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\t]\t%639[^\n]",
-                            hand, node, actor, frequencies, ev);
+            {
+                char row_board[64];
+                row_board[0] = '\0';
+                fields = sscanf(line,
+                                "%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\t]\t%639[^\t]\t%63[^\n]",
+                                hand, node, actor, frequencies, ev, row_board);
+                /* Six fields since the report gained a per-row board; five is
+                 * an older report, which simply has no board to filter on. */
+                if (fields >= 5)
+                    fields = 5;
+                trim_text(row_board);
+            }
             if (fields == 5 && strcmp(hand, "hand") != 0 && is_card_hand_text(hand))
             {
                 int row_node = atoi(node);
                 int row_street = result_node_street(app, row_node);
+                const char *row_board_text = strstr(line, "\t");
+                (void)row_board_text;
                 if ((street < 0 || row_street < 0 || street == row_street) &&
                     (step_node < 0 || row_node == step_node) &&
-                    (!board || strstr(line, board) != NULL ||
-                     row_street == 0 || row_street < 0))
+                    (!board || result_line_board_matches(line, board)) &&
+                    result_line_board_contains(line, app->result_board_cards))
                 {
                     pending_ev_row = (int)app->strategy_row_count;
                     strategy_table_add_row(app, line);
@@ -6168,7 +6374,25 @@ static void render_strategy_view(App *app, const char *output)
         }
     }
     if (!table_started)
-        result_write_line(app->strategy_view, "No per-hand rows match the selected step.");
+    {
+        /* Say WHY there is nothing, because the usual cause is not a solve
+         * that has not converged.  A preflop-rooted run deals a fresh runout
+         * every iteration, so pinning cards is brutally selective: one card
+         * appears in ~9.6% of deals, two in ~0.75%, three in ~0.045%.  Three
+         * picked cards leave a couple of rows out of four thousand. */
+        if (app->result_board_cards[0])
+            textview_printf(app->strategy_view,
+                            "No per-hand rows contain %s.\n"
+                            "This is a runout filter, not a convergence problem: each\n"
+                            "iteration deals its own board, so one pinned card matches\n"
+                            "about 9.6%% of deals, two about 0.75%% and three about 0.05%%.\n"
+                            "Pin fewer cards, or solve that exact flop directly with a\n"
+                            "flop-rooted tree (SETUP: BOARD + POT AT ROOT).\n",
+                            app->result_board_cards);
+        else
+            result_write_line(app->strategy_view,
+                              "No per-hand rows match the selected step.");
+    }
 
     sort_monker_hands(app);
     update_active_action_totals(app);
@@ -6189,14 +6413,17 @@ static void render_strategy_view(App *app, const char *output)
 
 static void i_on_result_filter(App *app, Event *event)
 {
-    char output[131072];
     if (app)
     {
+        char *output = report_scratch(app);
         uint32_t sel = combo_get_selected(app->step_filter);
         app->active_step_index = sel > 0u ? (int)sel - 1 : -1;
         update_responses_for_active_step(app);
-        i_solve_copy_output(app, output, sizeof(output));
-        render_strategy_view(app, output);
+        if (output)
+        {
+            i_solve_copy_output(app, output, sizeof(app->solve_output));
+            render_strategy_view(app, output);
+        }
     }
     unref(event);
 }
@@ -6490,7 +6717,10 @@ static uint32_t i_solve_main(App *app)
 
 static void i_solve_update(App *app)
 {
-    char output[64000];
+    /* These feed update_result_view, which builds the hand table.  A 64 KB
+     * stack copy silently kept only the tail of a multi-megabyte report, so
+     * the table showed a sliver of the run whatever the caps allowed. */
+    char *output;
     int running;
     int capturing = 0;
     size_t strat_len = 0u;
@@ -6509,7 +6739,10 @@ static void i_solve_update(App *app)
     if (running)
         ++app->solve_update_count;
     bmutex_unlock(app->solve_mutex);
-    i_solve_copy_output(app, output, sizeof(output));
+    output = report_scratch(app);
+    if (!output)
+        return;
+    i_solve_copy_output(app, output, sizeof(app->solve_output));
     update_result_view(app, output, running);
     update_strategy_view(app, output);
     if (running && capturing)
@@ -6550,7 +6783,7 @@ static void i_solve_update(App *app)
 
 static void i_solve_end(App *app, const uint32_t exit_code)
 {
-    char output[64000];
+    char *output;
     int cancelled;
     int has_checkpoint;
     if (!app)
@@ -6566,7 +6799,10 @@ static void i_solve_end(App *app, const uint32_t exit_code)
     /* NOTE: output must be copied and the result/strategy views refreshed
      * in every branch — otherwise the Results panel stays empty and the
      * status shows "No output from solver." even on exit_code=0. */
-    i_solve_copy_output(app, output, sizeof(output));
+    output = report_scratch(app);
+    if (!output)
+        return;
+    i_solve_copy_output(app, output, sizeof(app->solve_output));
     update_result_view(app, output, 0);
     update_strategy_view(app, output);
     /* Temporary end-of-run diagnostics: what did the views actually
@@ -7268,10 +7504,14 @@ static void i_on_solve(App *app, Event *event)
                                 " --iterations %" PRIu64 " --samples 1"
                                 " --br-samples 32 --target-mbb %.17g"
                                 " --exploitability-interval %" PRIu64
+                                " --report-rows %u"
+                                " --board-abstraction %s"
                                 "%s --threads %" PRIu64,
                                 runner, game_name(layout.game),
                                 header.player_count, tree, root_options,
                                 iterations, target_mbb, interval,
+                                (unsigned)STUDIO_REPORT_ROWS,
+                                selected_board_abstraction(app),
                                 algorithm_options, threads);
         for (uint32_t player = 0u; player < header.player_count; ++player)
         {
@@ -7346,7 +7586,7 @@ static void i_on_solve(App *app, Event *event)
         snprintf(config_text, sizeof(config_text),
                  "Lane B %s | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
-" | policy %s%s | SIMD %s",
+" | policy %s%s | SIMD %s | boards %s",
                   street_name((int)header.street),
                   pe_preset_name(algorithm), algorithm_axes,
                   stop_mode == 0u ? "iterations"
@@ -7357,7 +7597,8 @@ static void i_on_solve(App *app, Event *event)
                  pe_precision_name(precision), threads,
                  policy == PE_POLICY_COUNT ? "preset" : pe_policy_name(policy),
                  fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "",
-                 pe_runtime_simd_name(runtime.simd));
+                 pe_runtime_simd_name(runtime.simd),
+                 selected_board_abstraction(app));
         label_text(app->run_config, config_text);
         {
             const char *parallel_note = (backend == PE_COMPUTE_CPU_PAR)
@@ -7437,7 +7678,7 @@ static Panel *i_setup_panel(App *app)
     Panel *panel = panel_create();
     Panel *form_panel = panel_create();
     Layout *root = layout_create(1, 1);
-    Layout *layout = layout_create(2, 30);
+    Layout *layout = layout_create(2, 32);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
@@ -7456,6 +7697,7 @@ static Panel *i_setup_panel(App *app)
     Label *policy_label = label_create();
     Label *backend_label = label_create();
     Label *precision_label = label_create();
+    Label *abstraction_label = label_create();
     Label *lambda_label = label_create();
     Label *dcfr_alpha_label = label_create();
     Label *dcfr_beta_label = label_create();
@@ -7489,6 +7731,7 @@ static Panel *i_setup_panel(App *app)
     app->dcfr_gamma_edit = edit_create();
     app->backend_combo = combo_create();
     app->precision_combo = combo_create();
+    app->board_abstraction_combo = combo_create();
     app->stop_mode_combo = combo_create();
     app->board_label = board_label;
     app->setup_run_state = label_create();
@@ -7509,6 +7752,7 @@ static Panel *i_setup_panel(App *app)
     label_text(policy_label, "REGRET POLICY");
     label_text(backend_label, "COMPUTE BACKEND");
     label_text(precision_label, "PRECISION");
+    label_text(abstraction_label, "BOARD ABSTRACTION");
     label_text(lambda_label, "EXPONENTIAL LAMBDA");
     label_text(dcfr_alpha_label, "DCFR ALPHA");
     label_text(dcfr_beta_label, "DCFR BETA");
@@ -7568,6 +7812,13 @@ static Panel *i_setup_panel(App *app)
     combo_add_elem(app->precision_combo, "mixed", NULL);
     combo_add_elem(app->precision_combo, "fixed16", NULL);
     combo_selected(app->precision_combo, PE_PREC_F64);
+    /* Order is coarsest-merging first after "exact", matching how the levels
+     * actually behave: small merges most, large keeps the most detail. */
+    combo_add_elem(app->board_abstraction_combo, "None (exact boards)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Small (wet/dry only)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Medium (wet/dry + paired)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Large (texture class + ranks)", NULL);
+    combo_selected(app->board_abstraction_combo, 0u);
     button_text(browse_tree, "Browse...");
     button_text(browse_mkr, "Browse...");
     button_text(load, "Load and inspect tree");
@@ -7672,6 +7923,8 @@ static Panel *i_setup_panel(App *app)
     layout_label(layout, app->setup_run_progress, 1, 28);
     layout_progress(layout, app->setup_progress_bar, 0, 29);
     layout_label(layout, app->setup_run_metrics, 1, 29);
+    layout_label(layout, abstraction_label, 0, 30);
+    layout_combo(layout, app->board_abstraction_combo, 0, 31);
 
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
@@ -7691,6 +7944,7 @@ static Panel *i_setup_panel(App *app)
     layout_vmargin(layout, 22, 8);
     layout_vmargin(layout, 24, 8);
     layout_vmargin(layout, 26, 8);
+    layout_vmargin(layout, 29, 8);
     panel_layout(form_panel, layout);
     layout_panel(root, form_panel, 0, 0);
     layout_margin(root, 10.0f);
