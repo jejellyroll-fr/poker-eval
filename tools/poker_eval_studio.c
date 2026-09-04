@@ -5123,6 +5123,24 @@ static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
             continue;
         }
         *used += (size_t)written;
+        /* A tree may span several streets.  Without a marker the whole path
+         * read as one long preflop sequence, which is what made a working
+         * multi-street solve look stuck on the first street. */
+        {
+            int child = node->actions[action].next_index;
+            if (child >= 0 && child < tree->node_count)
+            {
+                int child_street = (int)tree->nodes[child].street;
+                if (child_street > (int)node->street && child_street <= 3)
+                {
+                    int extra = snprintf(history + *used, capacity - *used,
+                                         "-- %s --\n",
+                                         street_name_upper(child_street));
+                    if (extra > 0 && (size_t)extra < capacity - *used)
+                        *used += (size_t)extra;
+                }
+            }
+        }
         if (tree_history_dfs(tree, node->actions[action].next_index, target,
                              visited, depth + 1u, history, capacity, used))
         {
@@ -5141,17 +5159,27 @@ static void tree_history_for_node(const mpf_tree_def_t *tree, int target,
 {
     unsigned char *visited;
     size_t used;
+    int root;
     if (!history)
         return;
-    snprintf(history, 512u, "PREFLOP\n");
-    used = strlen(history);
+    history[0] = '\0';
     if (!tree || target < 0 || target >= tree->node_count)
+    {
+        snprintf(history, 512u, "PREFLOP\n");
         return;
+    }
+    root = (tree->root_index >= 0 && tree->root_index < tree->node_count)
+               ? tree->root_index : 0;
+    /* The heading is the street the tree is ROOTED at, not a fixed
+     * "PREFLOP": a flop or river tree starts where it starts. */
+    snprintf(history, 512u, "%s\n",
+             street_name_upper((int)tree->nodes[root].street));
+    used = strlen(history);
     visited = (unsigned char *)calloc((size_t)tree->node_count, sizeof(*visited));
     if (!visited)
         return;
-    (void)tree_history_dfs(tree, 0, target, visited, 0u, history, 512u, &used);
-        free(visited);
+    (void)tree_history_dfs(tree, root, target, visited, 0u, history, 512u, &used);
+    free(visited);
 }
 
 static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tree)
