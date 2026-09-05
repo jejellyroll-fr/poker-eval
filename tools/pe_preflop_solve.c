@@ -1456,6 +1456,29 @@ int main(int argc, char **argv)
             }
             printf("tree_streets=%s\n",
                    census[0] ? census : "none");
+            {
+                int streets_with_nodes = 0;
+                for (int street = 0; street < 5; ++street)
+                    streets_with_nodes += street_nodes[street] > 0u;
+                /* An exact board key on a multi-street tree has no bound:
+                 * every runout the solve has not seen yet becomes a new
+                 * infoset, for as long as the run lasts.  Measured on
+                 * nlhe_hu_full: "none" grows ~25 infosets per iteration and
+                 * never settles, while "large" reaches 75 801 infosets by
+                 * 500k iterations and 77 210 by 2M -- 1.9% more for four
+                 * times the work, i.e. the whole space, at constant memory.
+                 * Say so before the run rather than when it runs out. */
+                if (streets_with_nodes > 1 &&
+                    parse_board_abstraction(options.board_abstraction) == 0)
+                    printf("warning=unbounded_state_space streets=%d"
+                           " abstraction=none  A multi-street tree with an"
+                           " exact board key adds infosets for as long as it"
+                           " runs and can only end on the memory budget."
+                           "  --board-abstraction large bounds it (~77k"
+                           " infosets on this tree, reached by 500k"
+                           " iterations); detailed keeps ranks and bounds it"
+                           " far higher.\n", streets_with_nodes);
+            }
             fflush(stdout);
             if (unreachable_nodes > 0u)
             {

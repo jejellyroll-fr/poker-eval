@@ -1364,6 +1364,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     solver->stop_cause = PE_STOP_NONE;
     solver->memory_exhausted = 0;
     {
+        uint64_t memory_max_delta = 0u;
         uint64_t heartbeat_interval = solver->config.exploitability_interval;
         if (heartbeat_interval == 0u)
             heartbeat_interval = 16u;
@@ -1510,21 +1511,36 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         if (solver->config.execution.max_ram_bytes > 0u &&
             (iteration == 1u || iteration % heartbeat_interval == 0u))
         {
+            uint64_t previous = solver->memory_bytes;
             solver->memory_bytes = pe_solver_footprint_bytes(solver);
-            if (solver->memory_bytes >
+            /* Anticipate one more step of growth.  The tables double when they
+               rehash, so between two checks the footprint can jump by as much
+               as it already holds: measuring 11.4 GB against an 11.4 GB budget
+               and only then stopping had the run peak at 15.2 GB, which is the
+               OOM the budget exists to prevent.  Trip when another step the
+               size of the largest one so far would not fit. */
+            if (solver->memory_bytes > previous)
+            {
+                uint64_t delta = solver->memory_bytes - previous;
+                if (delta > memory_max_delta)
+                    memory_max_delta = delta;
+            }
+            if (solver->memory_bytes + memory_max_delta >
                 solver->config.execution.max_ram_bytes)
             {
                 solver->memory_exhausted = 1;
                 solver->stop_cause = PE_STOP_MEMORY_BUDGET;
                 pe_telemetry_emitf(
                     solver->deps.telemetry, PE_LOG_WARN, "solver", iteration,
-                    "memory budget reached: %.1f MB held, %.1f MB allowed;"
-                    " stopping at iteration %" PRIu64 " with the solve"
-                    " intact.  Raise the budget, cap the iterations, or use"
-                    " a coarser board abstraction.\n",
+                    "memory budget reached: %.1f MB held, %.1f MB allowed"
+                    " (largest step between checks %.1f MB, so the next one"
+                    " would not fit); stopping at iteration %" PRIu64 " with"
+                    " the solve intact.  Raise the budget, cap the iterations,"
+                    " or use a coarser board abstraction.\n",
                     (double)solver->memory_bytes / (1024.0 * 1024.0),
                     (double)solver->config.execution.max_ram_bytes /
                         (1024.0 * 1024.0),
+                    (double)memory_max_delta / (1024.0 * 1024.0),
                     iteration);
                 pe_telemetry_flush(solver->deps.telemetry);
                 pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
