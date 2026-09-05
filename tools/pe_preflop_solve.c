@@ -288,6 +288,21 @@ static double action_ev(const pe_external_game_t *external,
  * infosets with?  Exact suit isomorphism normally; the texture id when a
  * board abstraction is on, so a query reads the solve the same way the solve
  * wrote it. */
+/* Does this infoset carry a strategy, or is it still the uniform one regret
+ * matching starts from?  A sampled solve materialises an infoset the first
+ * time it is reached, so "exists" and "has data" are not the same thing. */
+static int strategy_has_data(const pe_strategy_view_t *strategy)
+{
+    double uniform;
+    if (!strategy || strategy->action_count == 0u)
+        return 0;
+    uniform = 1.0 / (double)strategy->action_count;
+    for (uint16_t a = 0u; a < strategy->action_count; ++a)
+        if (fabs(strategy->values[a * strategy->combo_count] - uniform) > 1e-6)
+            return 1;
+    return 0;
+}
+
 static int query_board_matches(mask_t a, mask_t b, int level)
 {
     int na = (int)mask_popcount(a);
@@ -487,6 +502,16 @@ static void print_strategy_report(const options_t *options,
             }
         }
     }
+    /* Two sweeps: rows that carry a strategy first, the untouched ones after.
+     *
+     * A postflop node in a multi-street solve has hundreds of thousands of
+     * infosets and a quota of a few hundred, and most of those infosets were
+     * visited once or not at all -- their strategy is still the uniform one
+     * regret matching starts from.  Taking the first N by id filled the grid
+     * with 50/50 cells that say nothing: at node 7, 165 of 338 rows.  Rows
+     * with data are what a reader wants; the rest only fill leftover quota. */
+    for (int sweep = 0; sweep < 2 && (querying || report_rows == 0u ||
+                                      emitted < report_rows); ++sweep)
     for (size_t id = 0u; id < solver_count &&
                         (querying || report_rows == 0u || emitted < report_rows); ++id)
     {
@@ -519,6 +544,11 @@ static void print_strategy_report(const options_t *options,
             continue;
         query.infoset = (uint32_t)id;
         if (pe_solver_strategy(solver, &query, &strategy) != PE_SOLVER_OK)
+            continue;
+        /* An infoset nobody reached still holds the uniform strategy.  Sweep 0
+         * takes everything else, sweep 1 takes these. */
+        if (!querying && report_rows > 0u &&
+            strategy_has_data(&strategy) != (sweep == 0))
             continue;
         ++node_emitted[row_node];
         printf("%s\t%d\tP%d\t", view.hand, view.tree_node_index,

@@ -2317,10 +2317,24 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
     }
     if (!has_values)
     {
+        /* An empty grid has two very different causes and they used to read
+         * the same.  A partial board (1 or 2 cards) is a FILTER over the
+         * sampled runouts, and a postflop node's rows sit on hundreds of
+         * different boards, so almost nothing ever matches two named cards.
+         * Saying "no result yet" there sends the user off to solve longer,
+         * which cannot help. */
+        int board_cards = card_count(app->result_board_cards);
         draw_text_color(ctx, color_rgb(150, 160, 170));
         draw_text_align(ctx, ekLEFT, ekCENTER);
-        draw_text(ctx, "No strategy result for the selected spot yet.",
-                  left + cell * (real32_t)count + 28.0f, 280.0f);
+        if (board_cards > 0 && board_cards < 3)
+            draw_text(ctx,
+                      "No sampled runout contains those cards.\n"
+                      "1 or 2 cards only filter what is shown; click 3 to 5\n"
+                      "to ask the solver for that exact board.",
+                      left + cell * (real32_t)count + 28.0f, 280.0f);
+        else
+            draw_text(ctx, "No strategy result for the selected spot yet.",
+                      left + cell * (real32_t)count + 28.0f, 280.0f);
     }
 }
 
