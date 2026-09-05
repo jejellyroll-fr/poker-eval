@@ -56,6 +56,8 @@ typedef struct {
     uint64_t iterations;
     int verbose;
     uint64_t max_ram_bytes;
+    uint64_t desc_limit_bytes;
+    int desc_limit_set;
     int showdown_samples;
     double stack;
     double small_blind;
@@ -690,13 +692,20 @@ static void usage(FILE *stream)
         "                               adapter exceed MB (default: 70%% of RAM,\n"
         "                               0 disables).  A run with no iteration cap\n"
         "                               grows until something stops it.\n"
+        , DEFAULT_ITERATIONS);
+    fputs(
+        "  --desc-limit MB              cap the human-readable description table\n"
+        "                               (default: a quarter of --max-ram).  It is\n"
+        "                               only used to print report rows, and at 448\n"
+        "                               bytes an infoset it was three quarters of a\n"
+        "                               long solve's memory.  0 = unbounded.\n"
         "  --verbose                    emit the per-iteration debug counters\n"
 "  --seed N                     deterministic RNG seed\n"
         "  --output FILE                write a JSON run report\n"
 "  --checkpoint FILE            save a v2 checkpoint (at completion and every --checkpoint-interval\\n"
         "  --resume FILE               load a v2 checkpoint and continue the solve\\n"
         "  --checkpoint-interval N     save a checkpoint every N iterations (0=off\\n"
-        "  --help                       show this help\n", DEFAULT_ITERATIONS);
+        "  --help                       show this help\n", stream);
     /* Split out: the single usage literal was over the 4095-char limit C99
      * guarantees, which -Woverlength-strings rejects. */
     fputs(
@@ -985,6 +994,8 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->iterations = DEFAULT_ITERATIONS;
     options->verbose = 0;
     options->max_ram_bytes = default_ram_budget_bytes();
+    options->desc_limit_bytes = 0u;
+    options->desc_limit_set = 0;
     options->showdown_samples = DEFAULT_SHOWDOWN_SAMPLES;
     options->stack = DEFAULT_STACK;
     options->report_rows = DEFAULT_REPORT_ROWS;
@@ -1018,6 +1029,7 @@ options->checkpoint_interval =0u;
         if ((strcmp(arg, "--game") == 0 || range_option_index(arg) >= 0 ||
              strcmp(arg, "--iterations") == 0 || strcmp(arg, "--players") == 0 ||
              strcmp(arg, "--max-ram") == 0 ||
+             strcmp(arg, "--desc-limit") == 0 ||
              strcmp(arg, "--samples") == 0 || strcmp(arg, "--stack") == 0 ||
              strcmp(arg, "--sb") == 0 || strcmp(arg, "--bb") == 0 ||
              strcmp(arg, "--ante") == 0 || strcmp(arg, "--br-samples") == 0 ||
@@ -1092,6 +1104,12 @@ options->checkpoint_interval =0u;
             if (parse_u64(value, &megabytes) != 0)
                 return -1;
             options->max_ram_bytes = megabytes * 1024u * 1024u;
+        } else if (strcmp(arg, "--desc-limit") == 0) {
+            uint64_t megabytes;
+            if (parse_u64(value, &megabytes) != 0)
+                return -1;
+            options->desc_limit_bytes = megabytes * 1024u * 1024u;
+            options->desc_limit_set = 1;
         } else if (strcmp(arg, "--br-samples") == 0) {
             if (parse_u64(value, &options->br_samples) != 0 ||
                 options->br_samples == 0u || options->br_samples > UINT32_MAX)
@@ -1549,6 +1567,18 @@ int main(int argc, char **argv)
     for (size_t i = 0u; i < sizeof(rules.raise_sizes) / sizeof(rules.raise_sizes[0]); ++i)
         rules.raise_sizes[i] = options.raise_sizes[i];
     game = pe_preflop_allin_game_create(&rules, ranges);
+    if (game)
+    {
+        /* Give the description table a quarter of the budget by default.  It
+         * serves the report only, and a report prints a few thousand rows;
+         * the solve's own regrets and average strategy should have the rest.
+         * Without the bound the table was 75% of a long solve's memory and
+         * the run hit the budget paying to describe rows nobody reads. */
+        uint64_t limit = options.desc_limit_set
+            ? options.desc_limit_bytes
+            : options.max_ram_bytes / 4u;
+        pe_preflop_allin_game_set_desc_limit(game, (size_t)limit);
+    }
     if (!game) {
         fprintf(stderr, "could not create preflop game\n");
         goto fail;
@@ -1690,6 +1720,8 @@ int main(int argc, char **argv)
                options.board_abstraction ? options.board_abstraction : "none");
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
+        double desc_bytes = (double)(uint64_t)
+            pe_preflop_allin_infodesc_bytes(game);
         /* The solver names the cause; "stopped" used to cover a caller stop,
          * a signal and a budget alike, which is no use to anyone watching a
          * run end on its own.  interrupted distinguishes a signal we received
@@ -1699,11 +1731,14 @@ int main(int argc, char **argv)
                    ? "interrupted"
                    : pe_stop_cause_name(progress.stop_cause));
         printf("stop_detail cause=%s interrupted=%d iteration=%" PRIu64
-               " held_mb=%.1f budget_mb=%.1f\n",
+               " held_mb=%.1f budget_mb=%.1f descriptions_mb=%.1f"
+               " descriptions_capped=%d\n",
                pe_stop_cause_name(progress.stop_cause), interrupted,
                progress.iteration,
                (double)progress.memory_bytes / (1024.0 * 1024.0),
-               (double)options.max_ram_bytes / (1024.0 * 1024.0));
+               (double)options.max_ram_bytes / (1024.0 * 1024.0),
+               desc_bytes / (1024.0 * 1024.0),
+               pe_preflop_allin_infodesc_limited(game));
         fflush(stdout);
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,

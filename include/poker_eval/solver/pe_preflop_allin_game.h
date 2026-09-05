@@ -136,6 +136,24 @@ int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game);
 void pe_preflop_allin_game_set_storage(pe_preflop_allin_game_t *game,
                                        pe_storage_t *storage);
 
+/* Bound the description table to `max_bytes` (0 = unbounded, the default).
+ *
+ * Descriptions exist only so a report can print human-readable rows, and a
+ * report prints a few thousand of them.  A sampled multi-street solve
+ * materialises tens of millions of infosets, and at 448 bytes each the table
+ * was three quarters of the solve's memory -- the run hit its memory budget
+ * paying for rows nobody would ever read.  Past the bound, recording stops
+ * and the solve carries on at full accuracy; the descriptions kept are the
+ * earliest, which are also the most-visited and so the ones worth reporting.
+ */
+void pe_preflop_allin_game_set_desc_limit(pe_preflop_allin_game_t *game,
+                                          size_t max_bytes);
+
+/* Bytes the description table holds, and whether the bound above stopped it
+ * from recording more. */
+size_t pe_preflop_allin_infodesc_bytes(const pe_preflop_allin_game_t *game);
+int pe_preflop_allin_infodesc_limited(const pe_preflop_allin_game_t *game);
+
 /* Betting-context description recorded the first time an infoset key is
  * produced, for human-readable exports. Stable until destroy. */
 size_t pe_preflop_allin_infodesc_count(const pe_preflop_allin_game_t *game);

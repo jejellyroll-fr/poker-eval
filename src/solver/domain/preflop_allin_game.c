@@ -85,6 +85,8 @@ struct pe_preflop_allin_game_t
      * the scan it replaced once the table stopped fitting in cache. */
     preflop_desc_slot_t *desc_index;
     size_t desc_index_mask;
+    size_t desc_limit_bytes;   /* 0 = unbounded */
+    int desc_limited;          /* set once the bound stopped a recording */
 };
 
 #define PREFLOP_DESC_CHUNK 1024u
@@ -133,16 +135,8 @@ static int preflop_desc_reserve(pe_preflop_allin_game_t *game, size_t index)
  * lands ~15% under RSS, the difference being allocator overhead and the fixed
  * cost of the tree and eval contexts.  A budget set against it should leave
  * headroom, which is why the default is a fraction of RAM and not all of it. */
-static size_t preflop_footprint_bytes(void *user)
+static size_t preflop_footprint_total(const pe_preflop_allin_game_t *game)
 {
-    /* The external game's `user` is the betting game (that is what
-     * pe_preflop_betting_game_init puts there); the allin game is one hop
-     * further, in its `user`.  Every other callback here arrives through the
-     * betting ops and is handed the allin game directly, which is why this
-     * one looks different. */
-    const pe_preflop_betting_game_t *betting_game = user;
-    const pe_preflop_allin_game_t *game =
-        betting_game ? betting_game->user : NULL;
     size_t total;
     if (!game)
         return 0u;
@@ -151,6 +145,17 @@ static size_t preflop_footprint_bytes(void *user)
     if (game->desc_index)
         total += (game->desc_index_mask + 1u) * sizeof(preflop_desc_slot_t);
     return total;
+}
+
+static size_t preflop_footprint_bytes(void *user)
+{
+    /* The external game's `user` is the betting game (that is what
+     * pe_preflop_betting_game_init puts there); the allin game is one hop
+     * further, in its `user`.  Every other callback here arrives through the
+     * betting ops and is handed the allin game directly, which is why this
+     * one looks different. */
+    const pe_preflop_betting_game_t *betting_game = user;
+    return preflop_footprint_total(betting_game ? betting_game->user : NULL);
 }
 
 static int tree_action_to_semantic(const mpf_tree_node_t *node, int index,
@@ -525,9 +530,17 @@ static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
     preflop_infodesc_t *desc;
     size_t slot;
     /* The slot stores the position as a uint32_t.  Nothing can reach four
-     * billion 1.3 KB descriptions, but stop recording rather than wrap. */
+     * billion descriptions, but stop recording rather than wrap. */
     if (game->desc_count >= UINT32_MAX - 1u)
         return;
+    /* Past the bound the solve keeps going at full accuracy; it just stops
+     * paying 448 bytes an infoset to describe rows no report will print. */
+    if (game->desc_limit_bytes > 0u &&
+        preflop_footprint_total(game) >= game->desc_limit_bytes)
+    {
+        game->desc_limited = 1;
+        return;
+    }
     if (!game->desc_index && preflop_desc_index_rebuild(game, 256u) != 0)
         return;
     slot = preflop_desc_slot(game, key);
@@ -1509,6 +1522,23 @@ void pe_preflop_allin_game_set_storage(pe_preflop_allin_game_t *game,
 {
     if (game)
         game->storage = storage;
+}
+
+void pe_preflop_allin_game_set_desc_limit(pe_preflop_allin_game_t *game,
+                                          size_t max_bytes)
+{
+    if (game)
+        game->desc_limit_bytes = max_bytes;
+}
+
+size_t pe_preflop_allin_infodesc_bytes(const pe_preflop_allin_game_t *game)
+{
+    return preflop_footprint_total(game);
+}
+
+int pe_preflop_allin_infodesc_limited(const pe_preflop_allin_game_t *game)
+{
+    return game ? game->desc_limited : 0;
 }
 
 size_t pe_preflop_allin_infodesc_count(const pe_preflop_allin_game_t *game)

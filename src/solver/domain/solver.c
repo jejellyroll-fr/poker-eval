@@ -1551,12 +1551,18 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     }
     {
         uint64_t held = pe_solver_footprint_bytes(solver);
+        uint64_t storage_bytes = 0u;
         solver->memory_bytes = held;
+        if (solver->storage && solver->storage->bytes && solver->storage_self)
+            storage_bytes = (uint64_t)solver->storage->bytes(solver->storage_self);
         pe_telemetry_emitf(
             solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
-            "solve_loop_end cause=%s iteration=%" PRIu64 " memory_mb=%.1f\n",
+            "solve_loop_end cause=%s iteration=%" PRIu64 " memory_mb=%.1f"
+            " storage_mb=%.1f adapter_mb=%.1f\n",
             pe_stop_cause_name(solver->stop_cause), iteration,
-            (double)held / (1024.0 * 1024.0));
+            (double)held / (1024.0 * 1024.0),
+            (double)storage_bytes / (1024.0 * 1024.0),
+            (double)(held - storage_bytes) / (1024.0 * 1024.0));
         pe_telemetry_flush(solver->deps.telemetry);
     }
     }
