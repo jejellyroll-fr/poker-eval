@@ -40,6 +40,9 @@
 
 #define DEFAULT_ITERATIONS 10000u
 #define DEFAULT_SHOWDOWN_SAMPLES 128
+/* Tree nodes the per-node row quota tracks; anything beyond shares the last
+ * bucket, which only costs those nodes a fair share between them. */
+#define PE_REPORT_MAX_NODES 512u
 #define DEFAULT_STACK 100.0
 #define DEFAULT_REPORT_ROWS 2000u
 #define DEFAULT_SMALL_BLIND 0.5
@@ -410,6 +413,80 @@ static void print_strategy_report(const options_t *options,
                options->board_abstraction ? options->board_abstraction : "none");
         fflush(stdout);
     }
+    /* Share the row budget between the tree's decision nodes instead of
+     * handing it out first-come-first-served.
+     *
+     * A multi-street solve at an exact board abstraction has millions of
+     * infosets, nearly all of them postflop -- one per board it ever sampled.
+     * Walking them in id order spent the whole budget on a handful of
+     * postflop nodes: on nlhe_hu_full at 100k iterations node 19 took 525 of
+     * the 4000 rows while the PREFLOP node, which has only 169 infosets in
+     * total, got 117 of them.  The Studio's preflop grid was therefore always
+     * missing a third of its hands, however long the solve ran.
+     *
+     * Each node gets an equal share, capped at what it actually has; whatever
+     * that leaves over is redistributed to the nodes that wanted more.  A
+     * small node is thus always emitted whole. */
+    int node_quota[PE_REPORT_MAX_NODES];
+    size_t node_emitted[PE_REPORT_MAX_NODES];
+    if (!querying && report_rows > 0u)
+    {
+        size_t node_have[PE_REPORT_MAX_NODES];
+        size_t nodes_present = 0u;
+        size_t budget = report_rows;
+        for (size_t n = 0u; n < PE_REPORT_MAX_NODES; ++n)
+        {
+            node_have[n] = 0u;
+            node_quota[n] = 0;
+            node_emitted[n] = 0u;
+        }
+        for (size_t id = 0u; id < solver_count; ++id)
+        {
+            uint64_t key = 0u;
+            size_t desc_index;
+            pe_preflop_betting_state_t state;
+            int node;
+            if (pe_solver_strategy_key_at(solver, (uint32_t)id, &key) != PE_SOLVER_OK)
+                continue;
+            if (pe_preflop_allin_infodesc_find(game, key, &desc_index) != 0 ||
+                pe_preflop_allin_infodesc_state_at(game, desc_index, &state) != 0)
+                continue;
+            node = state.tree_node_index;
+            if (node < 0 || node >= (int)PE_REPORT_MAX_NODES)
+                node = (int)PE_REPORT_MAX_NODES - 1;
+            if (node_have[node] == 0u)
+                ++nodes_present;
+            ++node_have[node];
+        }
+        /* Repeated equal shares: each round gives every still-hungry node the
+         * same slice, so nodes smaller than their share are satisfied whole
+         * and release the remainder to the others. */
+        while (budget > 0u && nodes_present > 0u)
+        {
+            size_t hungry = 0u;
+            size_t share;
+            for (size_t n = 0u; n < PE_REPORT_MAX_NODES; ++n)
+                if (node_have[n] > (size_t)node_quota[n])
+                    ++hungry;
+            if (hungry == 0u)
+                break;
+            share = budget / hungry;
+            if (share == 0u)
+                share = 1u;
+            for (size_t n = 0u; n < PE_REPORT_MAX_NODES && budget > 0u; ++n)
+            {
+                size_t want = node_have[n] - (size_t)node_quota[n];
+                size_t give;
+                if (node_have[n] <= (size_t)node_quota[n])
+                    continue;
+                give = want < share ? want : share;
+                if (give > budget)
+                    give = budget;
+                node_quota[n] += (int)give;
+                budget -= give;
+            }
+        }
+    }
     for (size_t id = 0u; id < solver_count &&
                         (querying || report_rows == 0u || emitted < report_rows); ++id)
     {
@@ -419,10 +496,17 @@ static void print_strategy_report(const options_t *options,
         pe_preflop_infodesc_view_t view;
         size_t desc_index;
         pe_preflop_betting_state_t state;
+        int row_node;
         if (pe_solver_strategy_key_at(solver, (uint32_t)id, &key) != PE_SOLVER_OK)
             continue;
         if (pe_preflop_allin_infodesc_find(game, key, &desc_index) != 0 ||
             pe_preflop_allin_infodesc_state_at(game, desc_index, &state) != 0)
+            continue;
+        row_node = state.tree_node_index;
+        if (row_node < 0 || row_node >= (int)PE_REPORT_MAX_NODES)
+            row_node = (int)PE_REPORT_MAX_NODES - 1;
+        if (!querying && report_rows > 0u &&
+            node_emitted[row_node] >= (size_t)node_quota[row_node])
             continue;
         /* Filter on the board BEFORE building the view: the view formats the
          * context line and every action label, and a query discards nearly
@@ -436,6 +520,7 @@ static void print_strategy_report(const options_t *options,
         query.infoset = (uint32_t)id;
         if (pe_solver_strategy(solver, &query, &strategy) != PE_SOLVER_OK)
             continue;
+        ++node_emitted[row_node];
         printf("%s\t%d\tP%d\t", view.hand, view.tree_node_index,
                view.actor + 1);
         /* The board of THIS sampled deal is appended below as a sixth

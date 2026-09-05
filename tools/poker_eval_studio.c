@@ -7011,10 +7011,21 @@ static void i_solve_update(App *app)
             /* Say WHY the run ended.  "SOLVE COMPLETE" alone reads as "it
              * finished", which is wrong for a run that was still going and
              * stopped on a budget, a signal or a traversal failure. */
+            /* The budget stop needs the way out, not just the reason: at an
+             * exact board abstraction the infoset space has no bound, so
+             * "run longer" is not one of the options. */
+            const char *remedy =
+                strcmp(app->solve_stop_reason, "memory_budget") == 0
+                    ? "Every unsampled board is a new infoset, so an exact"
+                      " (none) abstraction grows without bound.  Use a coarser"
+                      " BOARD ABSTRACTION, cap the iterations, or raise the"
+                      " budget.\n"
+                    : "";
             status(app,
                    "SOLVE COMPLETE — SOLVER HELD OPEN FOR QUERIES\n"
                    "Ended after %" PRIu64 " iterations, reason: %s.%s\n"
                    "%s\n"
+                   "%s"
                    "Click 3 to 5 cards in the BOARD MATRIX to ask the solver for that\n"
                    "exact board's hand table; fewer cards just filter what is shown.\n"
                    "Release solver (or Stop run) frees it and ends the session.",
@@ -7025,7 +7036,7 @@ static void i_solve_update(App *app)
                        ? "  WARNING: the report did not fit the capture buffer,"
                          " so the hand table below is a slice of it."
                        : "",
-                   app->solve_stop_detail);
+                   app->solve_stop_detail, remedy);
         }
     }
     else if (running && capturing)
