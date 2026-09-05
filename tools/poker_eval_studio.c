@@ -67,7 +67,14 @@
  * table shows a slice of the run and the grid looks nearly empty. */
 #define STRATEGY_TABLE_MAX_ROWS 4000u
 #define STUDIO_REPORT_ROWS 4000u
-#define STRATEGY_CAPTURE_CAPACITY 524288u
+/* Big enough for the report the Studio itself asks for.  It was a flat
+ * 524288, which a 4000-row table outgrows as soon as the EV column carries
+ * numbers instead of "pending" (~140 bytes a row, 550 KB): the capture
+ * stopped mid-table and the grid lost whatever came after, silently.  Derive
+ * it from the row cap so the two cannot drift apart again. */
+#define STRATEGY_ROW_MAX_BYTES 320u
+#define STRATEGY_CAPTURE_CAPACITY \
+    (STUDIO_REPORT_ROWS * STRATEGY_ROW_MAX_BYTES + 131072u)
 #define MONKER_GRID_MAX_ROWS PE_MONKER_CLASS_COUNT
 
 /* strategy_table_add_row writes strategy_rows[i] and monker_hands[i] with the
@@ -76,6 +83,11 @@
  * monker_hands silently; catch it at compile time instead. */
 typedef char pe_studio_row_cap_fits[
     (STRATEGY_TABLE_MAX_ROWS <= MONKER_GRID_MAX_ROWS) ? 1 : -1];
+/* And the capture must hold a full report, or the grid renders a slice of it
+ * with no sign that anything was lost. */
+typedef char pe_studio_capture_fits[
+    (STRATEGY_CAPTURE_CAPACITY >=
+     STUDIO_REPORT_ROWS * STRATEGY_ROW_MAX_BYTES) ? 1 : -1];
 /* "No iteration cap" ceiling for single-option stop modes (target-only,
  * manual-only).  The solver core rejects max_iterations==0 with no target,
  * so "run until target / manual stop" is encoded as this huge cap
@@ -354,6 +366,9 @@ struct _app_t
      * would fill the report buffer before a long preflop run reaches its
      * result phase. */
     size_t strategy_marker_probe_length;
+    /* Set when a report did not fit the capture, so the UI can say the table
+     * is a slice instead of presenting it as the whole thing. */
+    int strategy_capture_truncated;
     char strategy_marker_probe[sizeof("STRATEGY REPORT")];
 
     int telemetry_valid;
@@ -492,6 +507,7 @@ struct _app_t
     uint64_t solve_run_iterations;
     double solve_run_target;
     char solve_stop_reason[32];
+    char solve_stop_detail[192];
     /* Last end-of-run diagnostics line (see i_solve_end). */
     char solve_diag_line[320];
 };
@@ -6617,8 +6633,19 @@ static void i_solve_scan_line(App *app, const char *line)
             if (length > 0u)
                 snprintf(app->solve_stop_reason, sizeof(app->solve_stop_reason),
                          "%s", reason);
+            /* solve_run_iterations was declared and read in four places but
+             * never assigned, so every message that quoted it said "0
+             * iterations".  The last progress line is what the run reached. */
+            app->solve_run_iterations = app->telemetry_iteration;
         }
     }
+
+    /* The solver's stop_detail line carries the cause the loop itself named,
+     * plus the footprint it held.  Keep it whole: when a run ends on its own
+     * this single line is the answer to "why". */
+    if (strstr(line, "stop_detail ") != NULL)
+        snprintf(app->solve_stop_detail, sizeof(app->solve_stop_detail),
+                 "%s", line);
 
     /* The solver logs "checkpoint_saved=1 path=<file>" whenever it writes
      * a checkpoint.  Capture the file path so the Resume button can be
@@ -6688,8 +6715,15 @@ static void i_solve_append_output(App *app, const char *data, size_t length)
     bmutex_lock(app->solve_mutex);
     /* Capture only the report, never the potentially megabytes of telemetry
      * preceding it.  The marker can be split across two pipe reads, hence the
-     * short probe carried between calls. */
-    if (!app->strategy_capture_started)
+     * short probe carried between calls.
+     *
+     * The search runs on every chunk, not just until the first report.  Each
+     * board query prints a fresh "STRATEGY REPORT", and latching the capture
+     * on the first one appended every later report behind it: the window
+     * below takes the FIRST "HAND TABLE" it finds, so the grid kept showing
+     * the opening report while the buffer filled with answers nobody saw --
+     * and once it was full, every new one was dropped in silence.  Restarting
+     * at each marker keeps the latest report, which is the one on screen. */
     {
         char combined[sizeof(app->strategy_marker_probe) + 2048u];
         size_t prefix = app->strategy_marker_probe_length;
@@ -6720,7 +6754,36 @@ static void i_solve_append_output(App *app, const char *data, size_t length)
             app->strategy_output_length = captured;
             app->strategy_output[captured] = '\0';
             app->strategy_capture_started = 1;
+            app->strategy_capture_truncated = 0;
             app->strategy_marker_probe_length = 0u;
+        }
+        else if (app->strategy_capture_started)
+        {
+            if (app->strategy_output_length < sizeof(app->strategy_output) - 1u)
+            {
+                size_t remaining = sizeof(app->strategy_output) - 1u -
+                                   app->strategy_output_length;
+                size_t captured = length < remaining ? length : remaining;
+                memcpy(app->strategy_output + app->strategy_output_length,
+                       data, captured);
+                app->strategy_output_length += captured;
+                app->strategy_output[app->strategy_output_length] = '\0';
+                if (captured < length)
+                    app->strategy_capture_truncated = 1;
+            }
+            else
+                app->strategy_capture_truncated = 1;
+            /* A marker split across this chunk and the next still has to be
+             * found, so keep probing while capturing. */
+            {
+                size_t keep = combined_length < marker_length - 1u
+                    ? combined_length : marker_length - 1u;
+                if (keep > sizeof(app->strategy_marker_probe) - 1u)
+                    keep = sizeof(app->strategy_marker_probe) - 1u;
+                memcpy(app->strategy_marker_probe,
+                       combined + combined_length - keep, keep);
+                app->strategy_marker_probe_length = keep;
+            }
         }
         else
         {
@@ -6732,16 +6795,6 @@ static void i_solve_append_output(App *app, const char *data, size_t length)
                    combined + combined_length - keep, keep);
             app->strategy_marker_probe_length = keep;
         }
-    }
-    else if (app->strategy_output_length < sizeof(app->strategy_output) - 1u)
-    {
-        size_t remaining = sizeof(app->strategy_output) - 1u -
-                           app->strategy_output_length;
-        size_t captured = length < remaining ? length : remaining;
-        memcpy(app->strategy_output + app->strategy_output_length,
-               data, captured);
-        app->strategy_output_length += captured;
-        app->strategy_output[app->strategy_output_length] = '\0';
     }
     i_solve_scan_output(app, data, length);
     app->solve_output_total += length;
@@ -6950,11 +7003,30 @@ static void i_solve_update(App *app)
         button_text(app->solve_button, "Release solver");
         label_text(app->run_state, "READY FOR BOARD QUERIES");
         label_text(app->setup_run_state, "READY FOR BOARD QUERIES");
-        status(app,
-               "SOLVE COMPLETE — SOLVER HELD OPEN FOR QUERIES\n"
-               "Click 3 to 5 cards in the BOARD MATRIX to ask the solver for that\n"
-               "exact board's hand table; fewer cards just filter what is shown.\n"
-               "Release solver (or Stop run) frees it and ends the session.");
+        {
+            int truncated;
+            bmutex_lock(app->solve_mutex);
+            truncated = app->strategy_capture_truncated;
+            bmutex_unlock(app->solve_mutex);
+            /* Say WHY the run ended.  "SOLVE COMPLETE" alone reads as "it
+             * finished", which is wrong for a run that was still going and
+             * stopped on a budget, a signal or a traversal failure. */
+            status(app,
+                   "SOLVE COMPLETE — SOLVER HELD OPEN FOR QUERIES\n"
+                   "Ended after %" PRIu64 " iterations, reason: %s.%s\n"
+                   "%s\n"
+                   "Click 3 to 5 cards in the BOARD MATRIX to ask the solver for that\n"
+                   "exact board's hand table; fewer cards just filter what is shown.\n"
+                   "Release solver (or Stop run) frees it and ends the session.",
+                   app->solve_run_iterations,
+                   app->solve_stop_reason[0] ? app->solve_stop_reason
+                                             : "not reported",
+                   truncated
+                       ? "  WARNING: the report did not fit the capture buffer,"
+                         " so the hand table below is a slice of it."
+                       : "",
+                   app->solve_stop_detail);
+        }
     }
     else if (running && capturing)
     {
