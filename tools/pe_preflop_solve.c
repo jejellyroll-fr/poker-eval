@@ -1423,6 +1423,8 @@ int main(int argc, char **argv)
     memset(&tree_header, 0, sizeof(tree_header));
     int root_street = parse_street_name(options.street);
     mask_t board_mask = 0u;
+    int complete_ranges = 1;
+    int interrupted = 0;
     if (root_street < 0)
     {
         fprintf(stderr, "unknown --street '%s' (want preflop, flop, turn or river)\n",
@@ -1571,7 +1573,6 @@ int main(int argc, char **argv)
     /* All-or-nothing: the complete-range draw has no closed form for a deal
      * that mixes "any hand" with an explicit list, so one restricted range
      * puts every player back on the enumerated path. */
-    int complete_ranges = 1;
     for (int player = 0; player < options.players; ++player)
         if (!range_is_complete(options.range[player]))
             complete_ranges = 0;
@@ -1751,7 +1752,6 @@ int main(int argc, char **argv)
             printf("resumed_checkpoint=1 path=%s continuation_iteration=%" PRIu64 "\n", options.resume_path, p.iteration);
         }
     }
-    int interrupted = 0;
     if (status == PE_SOLVER_OK) {
         signal(SIGINT, i_on_signal);
         signal(SIGTERM, i_on_signal);
