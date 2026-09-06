@@ -20,6 +20,7 @@
 #include <poker_eval/range.h>
 #include <poker_eval/solver/pe_preflop_allin_game.h>
 #include <poker_eval/solver/pe_range.h>
+#include <poker_eval/solver/pe_rng.h>
 #include <poker_eval/solver/pe_storage.h>
 
 #include <assert.h>
@@ -196,6 +197,39 @@ static void run_case(const root_case_t *c)
 
     game = pe_preflop_allin_game_create(&rules, ranges);
     assert(game != NULL);
+
+    /* A complete-range caller is allowed to omit the range array entirely.
+     * This is the public contract used by the direct PLO5/PLO6 path. */
+    {
+        pe_preflop_allin_rules_t complete_rules = rules;
+        pe_preflop_allin_game_t *complete_game;
+        complete_rules.complete_ranges = 1;
+        complete_game = pe_preflop_allin_game_create(&complete_rules, NULL);
+        assert(complete_game != NULL);
+        pe_preflop_allin_game_destroy(complete_game);
+    }
+
+    /* The root pot is carried in betting.pot, not invested[].  Exercise the
+     * fold payoff after a 3 BB bet: the winner must receive 6 BB of the
+     * carried pot after returning the 3 BB bet, not zero. */
+    {
+        const pe_external_game_t *external = pe_preflop_allin_external(game);
+        pe_rng_t rng = pe_solver_rng_root(0xBEEF);
+        pe_chance_sample_t sample;
+        const void *dealt = external->sample_chance_child(
+            external->root, &rng, &sample, external->user);
+        const void *bet = dealt != NULL
+            ? external->apply_action(dealt, 1u, external->user) : NULL;
+        const void *fold = bet != NULL
+            ? external->apply_action(bet, 0u, external->user) : NULL;
+        assert(dealt != NULL && bet != NULL && fold != NULL);
+        assert(fabs(external->terminal_value(fold, 0, external->user) - 6.0) <
+               1e-9);
+        assert(fabs(external->terminal_value(fold, 1, external->user)) < 1e-9);
+        external->release_state(fold, external->user);
+        external->release_state(bet, external->user);
+        external->release_state(dealt, external->user);
+    }
     assert(run_solve(game, 400, 0xC0FFEEu, &storage) == 0);
     assert(storage != NULL);
     assert(pe_storage_count(storage) > 0u);

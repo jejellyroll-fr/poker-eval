@@ -849,12 +849,17 @@ static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
     eval_t values[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int level_count = 0;
     int players = betting->player_count;
+    double initial_pot = betting->pot;
+    int active_count = 0;
 
     for (int p = 0; p < players; ++p)
     {
         if (preflop_evaluate_board(game, state->holes[p], state->board,
                                    &values[p]) != 0)
             return 0.0;
+        initial_pot -= betting->invested[p];
+        if (betting->active[p])
+            ++active_count;
         if (betting->invested[p] > 0.0)
             levels[level_count++] = betting->invested[p];
     }
@@ -889,6 +894,14 @@ static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
                     values[p] == best)
                     payout[p] += pot / (double)winners;
     }
+    /* A postflop root carries money from earlier streets in betting.pot, but
+     * deliberately has zero invested[] entries: those contributions are not
+     * attributable to the current street.  Keep that main pot in the
+     * showdown rather than silently dropping it from every player's payoff. */
+    if (initial_pot > PREFLOP_EPSILON && active_count > 0)
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p])
+                payout[p] += initial_pot / (double)active_count;
     return payout[player] - betting->invested[player];
 }
 
@@ -901,13 +914,19 @@ static double preflop_sampled_sidepot_value(
     double payout[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
     int level_count = 0;
     int players = betting->player_count;
+    double initial_pot = betting->pot;
+    int active_count = 0;
 
     if (players < 1 || players > PE_PREFLOP_ALLIN_MAX_PLAYERS)
         return 0.0;
 
-    for (int p = 0; p < players; ++p)
+    for (int p = 0; p < players; ++p) {
+        initial_pot -= betting->invested[p];
+        if (betting->active[p])
+            ++active_count;
         if (betting->invested[p] > PREFLOP_EPSILON)
             levels[level_count++] = betting->invested[p];
+    }
     for (int i = 0; i < level_count; ++i)
         for (int j = i + 1; j < level_count; ++j)
             if (levels[j] < levels[i]) {
@@ -949,6 +968,10 @@ static double preflop_sampled_sidepot_value(
             return 0.0;
         }
     }
+    if (initial_pot > PREFLOP_EPSILON && active_count > 0)
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p])
+                payout[p] += initial_pot / (double)active_count;
     return payout[player] - betting->invested[player];
 }
 
@@ -957,14 +980,7 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
 {
     const pe_preflop_allin_game_t *game = user;
     const pe_betting_state_t *betting = &state->betting;
-    double contrib[PE_PREFLOP_ALLIN_MAX_PLAYERS];
-    double pot_total = 0.0;
-    int players = betting->player_count;
 
-    for (int p = 0; p < players; ++p) {
-        contrib[p] = betting->invested[p];
-        pot_total += contrib[p];
-    }
     if ((game->rules.postflop_streets || game->rules.tree_showdown) &&
         state->betting.terminal &&
         state->street == PE_HOLDEM_RIVER)
@@ -974,12 +990,12 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
         int winner = betting->winner;
         if (winner < 0)
             return 0.0; /* unreachable fold-out without a winner */
-        return player == winner ? pot_total - contrib[player] : -contrib[player];
+        /* betting.pot includes the pot carried into a postflop root, while
+         * invested[] only records money committed on the current street. */
+        return player == winner ? betting->pot - betting->invested[player]
+                                : -betting->invested[player];
     }
-    {
-        (void)pot_total;
-        return preflop_sampled_sidepot_value(game, state, player);
-    }
+    return preflop_sampled_sidepot_value(game, state, player);
 }
 
 static int preflop_is_terminal(const pe_preflop_betting_state_t *state,
@@ -1263,7 +1279,7 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int player;
 
-    if (!rules || !ranges || rules->player_count < 2 ||
+    if (!rules || rules->player_count < 2 ||
         rules->player_count > PE_PREFLOP_ALLIN_MAX_PLAYERS ||
         rules->variant < PE_PREFLOP_HOLDEM ||
         rules->variant > PE_PREFLOP_PLO6 ||

@@ -282,7 +282,8 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
 /** Run until a stop condition is met. Blocking. */
 pe_solver_status_t pe_solver_run(pe_solver_t *solver);
 
-/** Request a pause at the next safe point. Idempotent. */
+/** Request a pause at the next safe point. Idempotent; may block until the
+ * current iteration reaches that point. */
 pe_solver_status_t pe_solver_pause(pe_solver_t *solver);
 
 /** Resume a paused solve. Idempotent. */

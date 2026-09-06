@@ -737,6 +737,15 @@ static pe_solver_t *g_solver = NULL;
 static volatile sig_atomic_t g_stop_requested = 0;
 static pthread_t g_stop_watcher;
 
+typedef struct {
+    pe_solver_t *solver;
+    pe_solver_status_t status;
+    int done;
+    pthread_mutex_t lock;
+} solver_runner_t;
+
+static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree);
+
 /* A stop requested by SIGINT/SIGTERM only sets this flag (async-signal-safe) ;
  * a dedicated watcher thread calls pe_solver_stop() fromits own stack so the
  * solve thread never re-locks the lifecycle mutex from insidea signal handler(:, */
@@ -756,6 +765,49 @@ static void *i_stop_watcher(void *opaque)
     if (g_solver)
         pe_solver_stop(g_solver);
     return NULL;
+}
+
+static void *i_solver_runner(void *opaque)
+{
+    solver_runner_t *runner = opaque;
+    runner->status = pe_solver_run(runner->solver);
+    pthread_mutex_lock(&runner->lock);
+    runner->done = 1;
+    pthread_mutex_unlock(&runner->lock);
+    return NULL;
+}
+
+static int i_solver_runner_done(solver_runner_t *runner)
+{
+    int done;
+    pthread_mutex_lock(&runner->lock);
+    done = runner->done;
+    pthread_mutex_unlock(&runner->lock);
+    return done;
+}
+
+static int i_save_checkpoint(pe_solver_t *solver, const options_t *options,
+                             const mpf_tree_def_t *tree)
+{
+    pe_persist_target_t target;
+    pe_progress_t progress;
+
+    if (!solver || !options || !options->checkpoint_path)
+        return 0;
+    memset(&target, 0, sizeof(target));
+    target.path = options->checkpoint_path;
+    target.game_hash = spot_hash(options, tree);
+    target.tree_hash = target.game_hash;
+    if (pe_solver_save(solver, &target) != PE_SOLVER_OK)
+    {
+        fprintf(stderr, "checkpoint save failed\n");
+        return -1;
+    }
+    pe_solver_progress(solver, &progress);
+    printf("checkpoint_saved=1 path=%s iteration=%" PRIu64 "\n",
+           options->checkpoint_path, progress.iteration);
+    fflush(stdout);
+    return 1;
 }
 static void i_hash_byte(uint64_t *hash, unsigned char byte)
 {
@@ -1685,7 +1737,55 @@ int main(int argc, char **argv)
         }
         if (g_stop_requested && g_solver)
             pe_solver_stop(g_solver);
-        status = pe_solver_run(solver);
+        solver_runner_t runner = {solver, PE_SOLVER_ERR_EXECUTION, 0,
+                                  PTHREAD_MUTEX_INITIALIZER};
+        pthread_t solver_thread;
+        int solver_thread_started = pthread_create(
+            &solver_thread, NULL, i_solver_runner, &runner) == 0;
+        if (solver_thread_started)
+        {
+            uint64_t next_checkpoint = options.checkpoint_interval;
+            while (!i_solver_runner_done(&runner))
+            {
+                pe_progress_t p;
+                (void)pe_solver_progress(solver, &p);
+                if (options.checkpoint_path &&
+                    options.checkpoint_interval > 0u &&
+                    p.running && p.iteration >= next_checkpoint)
+                {
+                    /* pe_solver_pause returns only after the run loop has
+                       reached a safe iteration boundary, so persistence never
+                       races a storage update. */
+                    if (pe_solver_pause(solver) == PE_SOLVER_OK)
+                    {
+                        pe_progress_t checkpoint_progress;
+                        (void)pe_solver_progress(solver, &checkpoint_progress);
+                        (void)i_save_checkpoint(solver, &options, tree);
+                        next_checkpoint = checkpoint_progress.iteration +
+                                          options.checkpoint_interval;
+                        if (!i_solver_runner_done(&runner) && !g_stop_requested)
+                            (void)pe_solver_resume(solver);
+                    }
+                    else
+                        next_checkpoint = p.iteration +
+                                          options.checkpoint_interval;
+                }
+                /* Checkpoint cadence is iteration-based; keep the monitor
+                   responsive enough to observe fast solves while they remain
+                   active. */
+                usleep(1000);
+            }
+            pthread_join(solver_thread, NULL);
+            status = runner.status;
+        }
+        else
+        {
+            /* Preserve the original blocking fallback if the process cannot
+               create its monitor thread. Periodic checkpoints are best effort
+               in that unusual case, while the final checkpoint still works. */
+            status = pe_solver_run(solver);
+        }
+        pthread_mutex_destroy(&runner.lock);
         /* Capture the interrupt BEFORE the flag is reused below to stop the
          * watcher thread.  An interrupted solve must not go on to serve
          * queries: the user asked for the run to end. */
@@ -1693,20 +1793,7 @@ int main(int argc, char **argv)
         g_stop_requested = 1;
         if (g_stop_watcher)
             pthread_join(g_stop_watcher,NULL);
-        if (options.checkpoint_path && solver) {
-            pe_persist_target_t t;
-            memset(&t, 0, sizeof(t));
-            t.path = options.checkpoint_path;
-            t.game_hash = spot_hash(&options, tree);
-            t.tree_hash = t.game_hash;
-            if (pe_solver_save(solver, &t) == PE_SOLVER_OK) {
-                pe_progress_t p;
-                pe_solver_progress(solver, &p);
-                printf("checkpoint_saved=1 path=%s iteration=%" PRIu64 "\n", options.checkpoint_path, p.iteration);
-            } else {
-                fprintf(stderr, "checkpoint save failed\n");
-            }
-        }
+        (void)i_save_checkpoint(solver, &options, tree);
         g_solver = NULL;
     }
     if (solver)

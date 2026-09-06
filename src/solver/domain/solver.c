@@ -103,6 +103,9 @@ struct pe_solver_t {
     uint64_t memory_bytes;
     int memory_exhausted;
     pe_stop_cause_t stop_cause;
+    /* Set by the run loop after it has reached the iteration boundary at
+       which a pause request is safe for persistence. */
+    int pause_acknowledged;
     pthread_mutex_t lifecycle_lock;
     pthread_cond_t lifecycle_cond;
 };
@@ -160,6 +163,11 @@ static int pe_solver_wait_until_running(pe_solver_t *solver)
 {
     int running;
     pthread_mutex_lock(&solver->lifecycle_lock);
+    if (solver->state == PE_SOLVER_STATE_PAUSED)
+    {
+        solver->pause_acknowledged = 1;
+        pthread_cond_broadcast(&solver->lifecycle_cond);
+    }
     while (solver->state == PE_SOLVER_STATE_PAUSED)
         pthread_cond_wait(&solver->lifecycle_cond, &solver->lifecycle_lock);
     running = solver->state == PE_SOLVER_STATE_RUNNING;
@@ -1705,7 +1713,16 @@ pe_solver_status_t pe_solver_pause(pe_solver_t *solver)
     if (solver->state == PE_SOLVER_STATE_PAUSED)
         status = PE_SOLVER_OK;
     else if (solver->state == PE_SOLVER_STATE_RUNNING)
+    {
+        solver->pause_acknowledged = 0;
         solver->state = PE_SOLVER_STATE_PAUSED;
+        /* Do not let a checkpoint observe storage halfway through an
+           iteration. The run loop acknowledges only after its current
+           iteration has reached wait_until_running(). */
+        while (solver->runner_active && solver->state == PE_SOLVER_STATE_PAUSED &&
+               !solver->pause_acknowledged)
+            pthread_cond_wait(&solver->lifecycle_cond, &solver->lifecycle_lock);
+    }
     else
         status = PE_SOLVER_ERR_INVALID_STATE;
     pthread_cond_broadcast(&solver->lifecycle_cond);
@@ -1722,7 +1739,10 @@ pe_solver_status_t pe_solver_resume(pe_solver_t *solver)
     if (solver->state == PE_SOLVER_STATE_RUNNING)
         status = PE_SOLVER_OK;
     else if (solver->state == PE_SOLVER_STATE_PAUSED)
+    {
+        solver->pause_acknowledged = 0;
         solver->state = PE_SOLVER_STATE_RUNNING;
+    }
     else
         status = PE_SOLVER_ERR_INVALID_STATE;
     pthread_cond_broadcast(&solver->lifecycle_cond);
