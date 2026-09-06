@@ -9,6 +9,8 @@
  */
 #include <nappgui.h>
 
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_runtime.h>
@@ -60,9 +62,37 @@
 #define PCLOSE pclose
 #endif
 
-#define STRATEGY_TABLE_MAX_ROWS 600u
-#define STRATEGY_CAPTURE_CAPACITY 524288u
+/* The report emits up to --report-rows hand rows (the Studio asks for
+ * STUDIO_REPORT_ROWS).  Both this and solve_output must hold them, or the
+ * table shows a slice of the run and the grid looks nearly empty. */
+#define STRATEGY_TABLE_MAX_ROWS 4000u
+#define STUDIO_REPORT_ROWS 4000u
+/* Big enough for the report the Studio itself asks for.  It was a flat
+ * 524288, which a 4000-row table outgrows as soon as the EV column carries
+ * numbers instead of "pending" (~140 bytes a row, 550 KB): the capture
+ * stopped mid-table and the grid lost whatever came after, silently.  Derive
+ * it from the row cap so the two cannot drift apart again. */
+#define STRATEGY_ROW_MAX_BYTES 320u
+#define STRATEGY_CAPTURE_CAPACITY \
+    (STUDIO_REPORT_ROWS * STRATEGY_ROW_MAX_BYTES + 131072u)
 #define MONKER_GRID_MAX_ROWS PE_MONKER_CLASS_COUNT
+
+/* strategy_table_add_row writes strategy_rows[i] and monker_hands[i] with the
+ * same index, so the row cap must never exceed the grid array.  Raising
+ * STRATEGY_TABLE_MAX_ROWS past MONKER_GRID_MAX_ROWS would overflow
+ * monker_hands silently; catch it at compile time instead. */
+typedef char pe_studio_row_cap_fits[
+    (STRATEGY_TABLE_MAX_ROWS <= MONKER_GRID_MAX_ROWS) ? 1 : -1];
+/* And the capture must hold a full report, or the grid renders a slice of it
+ * with no sign that anything was lost. */
+typedef char pe_studio_capture_fits[
+    (STRATEGY_CAPTURE_CAPACITY >=
+     STUDIO_REPORT_ROWS * STRATEGY_ROW_MAX_BYTES) ? 1 : -1];
+/* "No iteration cap" ceiling for single-option stop modes (target-only,
+ * manual-only).  The solver core rejects max_iterations==0 with no target,
+ * so "run until target / manual stop" is encoded as this huge cap
+ * (~30 000 years at 1000 iter/s).  The UI renders it as infinity. */
+#define STUDIO_NO_ITER_CAP UINT64_C(1000000000000)
 #define STRATEGY_TABLE_ACTIONS MPF_TREE_ACTION_MAX
 #define STRATEGY_RESPONSE_ACTIONS 4u
 #define MAX_DECISION_STEPS 64u
@@ -100,6 +130,15 @@ typedef struct _monker_hand_entry_t
 typedef struct _decision_step_t
 {
     int node_index;
+    /* Street this node sits on.  A tree may span preflop..river, so the
+     * report's rows do NOT all belong to one street and cannot be filtered
+     * against a single scope street. */
+    int street;
+    /* Pot facing the actor at this node, read from the report's
+     * "step node=N ... pot=X" line.  The table widget used to draw a
+     * hardcoded "POT: 3.0 BB / PREFLOP" whatever was selected. */
+    double pot;
+    int has_pot;
     char id[32];
     int acting_player;
     uint32_t action_count;
@@ -133,7 +172,16 @@ struct _app_t
     Edit *dcfr_gamma_edit;
     Combo *backend_combo;
     Combo *precision_combo;
+    /* Board abstraction folded into the solver's infoset key.  Exact by
+     * default: the coarser levels let one sampled board answer for its whole
+     * texture class, which is how a sampled solver covers a board space it
+     * cannot enumerate, but the strategy they share is an average. */
+    Combo *board_abstraction_combo;
     Combo *stop_mode_combo;
+    Combo *spot_preset_combo;
+    Combo *convergence_combo;
+    Label *spot_preset_hint;
+    Edit *br_samples_edit;
     Label *runtime_label;
 
     /* Results Views & Widgets */
@@ -322,6 +370,9 @@ struct _app_t
      * would fill the report buffer before a long preflop run reaches its
      * result phase. */
     size_t strategy_marker_probe_length;
+    /* Set when a report did not fit the capture, so the UI can say the table
+     * is a slice instead of presenting it as the whole thing. */
+    int strategy_capture_truncated;
     char strategy_marker_probe[sizeof("STRATEGY REPORT")];
 
     int telemetry_valid;
@@ -343,10 +394,17 @@ struct _app_t
     time_t solve_started_at;
     uint64_t solve_update_count;
     uint32_t tree_node_count;
+    /* Player decision nodes past preflop (street > 0) in the loaded tree,
+     * plus the per-street census.  Lane B follows tree decisions on the
+     * run's street and rolls later streets out; nodes from any other
+     * street are never entered — surfaced as an explicit warning. */
+    uint32_t tree_street_nodes[5];
     /* The results table must follow the topology, not the last Setup
      * selection.  This is especially important when an external .mkr is
      * loaded directly: its tree may be 4-max while Setup still says 2. */
     uint32_t tree_player_count;
+    /* Per-street player-node census of the loaded tree (see read_tree). */
+    char tree_street_summary[128];
 
     /* Strategy Rows & Monker Hands */
     uint32_t strategy_row_count;
@@ -392,7 +450,70 @@ struct _app_t
 
     char table_cell_text[512];
     char solve_command[8192];
-    char solve_output[131072];
+    /* Rolling capture of the solver's stdout.  It keeps the TAIL, so it has
+     * to be large enough for the whole report: at 128 KB a run of a few
+     * thousand rows lost most of its hand table before it was ever parsed. */
+    char solve_output[4194304];
+    /* Cards picked in the RESULTS board matrix.  This is a VIEW filter -- a
+     * row is kept when its runout contains every selected card -- not the
+     * board of the spot to solve, which lives in board_edit.  Clicking the
+     * matrix used to write into board_edit, so it edited the Setup input and
+     * left the already-computed report untouched. */
+    char result_board_cards[64];
+
+    /* Board abstraction the CURRENT report was produced with
+     * (pe_texture_filter_level_t).  The view has to match runouts by the same
+     * rule the solver keyed them with: comparing exact canonical boards
+     * against a run that merged them by texture finds almost nothing. */
+    int solve_board_abstraction;
+
+    /* The solver stays alive after its report and answers "query <board>" on
+     * stdin.  It has to: the infoset DESCRIPTIONS (key -> hand/board/node)
+     * only exist in the process that played them -- a checkpoint stores
+     * strategies, not descriptions -- so a resumed process answers a board
+     * query with a fraction of the hands.  While serving, the run is
+     * finished for the user even though the process is still up. */
+    int solve_serving;
+    /* Bytes of solver output already folded into the views, and whether the
+     * serving UI has been applied for them.  While serving, the process never
+     * exits, so the 10 Hz update loop would otherwise re-copy and re-parse a
+     * multi-megabyte report forever -- which locks the interface up once the
+     * results are on screen. */
+    size_t solve_view_total;
+    int solve_view_serving_applied;
+
+    /* Reusable copy of the above for the render paths.  Owned by the app
+     * rather than malloc'd per call: i_solve_update runs ten times a second
+     * while a solve is live. */
+    char *report_scratch;
+
+    /* Checkpoint / resume state.  When a solver run writes a checkpoint,
+     * i_solve_end stores the file path here and the next "Resume" click
+     * reissues the same solve command with --resume <path>. */
+    int solve_checkpoint_available;
+    int solve_resume_mode;
+    int solve_terminate_sent;
+    char solve_checkpoint_path[1024];
+
+    /* Resolved backend and effective thread count of the current (or last)
+     * solve.  Captured at i_start_solve so the results view can show the
+     * values the solver actually used, not the user's raw input. */
+    int solve_has_resolved;
+    int solve_resolved_threads;
+    char solve_resolved_backend[64];
+
+    /* Stop-mode state of the current (or last) solve.  stop_mode mirrors
+     * the Setup combo: 0 = max iterations, 1 = exploitability target
+     * (iterations act as a per-run safety cap, extended on each Resume),
+     * 2 = run forever (manual stop).  stop_reason holds the solver's
+     * verdict ("target" / "max_iterations" / "" when unknown). */
+    uint32_t solve_stop_mode;
+    uint64_t solve_run_iterations;
+    double solve_run_target;
+    char solve_stop_reason[32];
+    char solve_stop_detail[192];
+    /* Last end-of-run diagnostics line (see i_solve_end). */
+    char solve_diag_line[320];
 };
 
 static void i_on_close(App *app, Event *event);
@@ -400,6 +521,56 @@ static void render_strategy_view(App *app, const char *output);
 static void render_current_strategy_view(App *app);
 static void i_on_result_filter(App *app, Event *event);
 static void refresh_result_filters(App *app, const char *output);
+static int result_line_board(const char *line, char *out, size_t capacity);
+
+/* Warning appended wherever exploitability is shown.  With boards merged,
+ * the best-response search only ever plays inside the abstraction, so the
+ * figure is the exploitability of the ABSTRACT game -- it says nothing about
+ * an opponent who tells the merged boards apart, and it drops toward zero as
+ * the abstraction gets coarser.  Measured: "small" puts all 22100 flops in 2
+ * classes, "medium" in 3, "large" in 7. */
+static const char *board_abstraction_caveat(const App *app)
+{
+    static const char *names[] = {"", " (detailed: 366 flop classes)",
+                                  " (large: 7 flop classes)",
+                                  " (medium: 3 flop classes)",
+                                  " (small: 2 flop classes)"};
+    int level = app ? app->solve_board_abstraction : 0;
+    if (level <= 0 || level > 4)
+        return "";
+    return names[level];
+}
+
+/* Write one command line to the live solver's stdin.  Returns 0 when it was
+ * handed over.  Only meaningful while the process is serving queries. */
+static int i_solve_send(App *app, const char *line)
+{
+    Proc *proc;
+    int serving;
+    uint32_t written = 0u;
+    perror_t error;
+    if (!app || !line || !*line)
+        return -1;
+    bmutex_lock(app->solve_mutex);
+    proc = app->solve_proc;
+    serving = app->solve_serving;
+    bmutex_unlock(app->solve_mutex);
+    if (!proc || !serving)
+        return -1;
+    if (!bproc_write(proc, (const byte_t *)line, (uint32_t)strlen(line),
+                     &written, &error))
+        return -1;
+    return 0;
+}
+
+/* Combo index to the --board-abstraction spelling the driver takes. */
+static const char *selected_board_abstraction(const App *app)
+{
+    static const char *names[] = {"none", "detailed", "large", "medium", "small"};
+    uint32_t index = app && app->board_abstraction_combo
+        ? combo_get_selected(app->board_abstraction_combo) : 0u;
+    return index < 5u ? names[index] : "none";
+}
 static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tree);
 static void result_write_line(TextView *view, const char *line);
 static void i_on_strategy_table(App *app, Event *event);
@@ -487,6 +658,14 @@ static const char *street_name(int street)
 {
     static const char *names[] = {"preflop", "flop", "turn", "river"};
     return street >= 0 && street < 4 ? names[street] : "unknown";
+}
+
+/* Same names in upper case, for status headings.  street_name() itself must
+ * stay lower case: it is passed verbatim to the driver's --street flag. */
+static const char *street_name_upper(int street)
+{
+    static const char *names[] = {"PREFLOP", "FLOP", "TURN", "RIVER"};
+    return street >= 0 && street < 4 ? names[street] : "UNKNOWN";
 }
 
 static const char *game_name(enum_game_t game)
@@ -1613,7 +1792,9 @@ static void i_on_tree_editor_setup(App *app, Event *event)
 
 static Panel *i_tree_editor_panel(App *app)
 {
-    Panel *panel = panel_create();
+    /* Same reason as SETUP: the control column is taller than a short
+     * display, and a clipped page has no way back. */
+    Panel *panel = panel_scroll(FALSE, TRUE);
     Layout *root = layout_create(2, 1);
     Layout *left = layout_create(1, 2);
     Layout *right = layout_create(1, 2);
@@ -1800,6 +1981,7 @@ static Panel *i_tree_editor_panel(App *app)
     layout_hsize(root, 1, 470.0f);
     layout_hmargin(root, 0, 12.0f);
     layout_margin(root, 12.0f);
+    panel_size(panel, s2df(1100, 900));
     panel_layout(panel, root);
     pe_tree_editor_init(&app->tree_editor, (int)selected_players(app),
                         MPF_STREET_PREFLOP);
@@ -1896,21 +2078,25 @@ static int strategy_matrix_position(const char *hand, const char *ranks,
         return 0;
     if (first == second)
     {
-        *row = first;
-        *column = second;
-    }
-    else if (first < second)
-    {
+        /* Pair: the diagonal. */
         *row = first;
         *column = second;
     }
     else
     {
-        *row = second;
-        *column = first;
+        /* Above the diagonal is suited, below is offsuit -- which the cell
+         * labels already assumed (row < column prints "s", row > column
+         * prints "o").  The suits were never read, so every hand was
+         * normalised to row < column: the offsuit half of the grid could not
+         * be reached at all, and each suited cell silently averaged the
+         * suited AND offsuit versions of its class together. */
+        int suited = tolower((unsigned char)hand[1]) ==
+                     tolower((unsigned char)hand[3]);
+        int high = first < second ? first : second;  /* smaller index = higher rank */
+        int low = first < second ? second : first;
+        *row = suited ? high : low;
+        *column = suited ? low : high;
     }
-    /* Rows above the diagonal are suited; rows below are offsuit.  Concrete
-     * cards are normalized to the same class regardless of input order. */
     return 1;
 }
 
@@ -2001,6 +2187,11 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
         ? "AKQJT9876" : "AKQJT98765432";
     int count = (int)strlen(ranks);
     double values[13][13][5] = {{{0.0}}};
+    /* Concrete deals per 13x13 class.  A class such as 87s holds several
+     * sampled combos and each contributes frequencies summing to 1, so the
+     * cell must average them.  Adding them straight up is what produced the
+     * impossible "200%" on any class with two sampled combos. */
+    int contributors[13][13] = {{0}};
     int left = 42;
     int top = 50;
     real32_t cell = (width - (real32_t)left - 270.0f) / (real32_t)count;
@@ -2040,6 +2231,7 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
                     entry->freqs[action];
                 has_values = 1;
             }
+            ++contributors[row][column];
         }
         else
         {
@@ -2053,8 +2245,17 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
                     entry->freqs[action];
                 has_values = 1;
             }
+            ++contributors[row][column];
         }
     }
+    /* Average the class: one row per sampled deal, so the mean strategy of
+     * the class.  Frequencies then sum to 1 per cell, as they must. */
+    for (int row = 0; row < 13; ++row)
+        for (int column = 0; column < 13; ++column)
+            if (contributors[row][column] > 1)
+                for (int action = 0; action < 5; ++action)
+                    values[row][column][action] /=
+                        (double)contributors[row][column];
 
     if (app->bold_font)
         draw_font(ctx, app->bold_font);
@@ -2074,6 +2275,11 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
         {
             int primary = -1;
             double total = 0.0;
+            /* The cell is coloured by its dominant action, so the label has
+             * to be THAT action's share.  Printing `total` -- the sum over
+             * every action -- meant 100% in every populated cell once the
+             * class was averaged, and 200% before that. */
+            double primary_share = 0.0;
             real32_t x = (real32_t)left + (real32_t)column * cell;
             real32_t y = (real32_t)top + (real32_t)row * cell;
             char hand[8];
@@ -2086,6 +2292,8 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
             }
             if (total <= 0.0)
                 primary = -1;
+            else if (primary >= 0)
+                primary_share = values[row][column][primary] / total;
             draw_fill_color(ctx, primary >= 0 ? strategy_action_color(primary) :
                             color_rgb(39, 45, 53));
             draw_rndrect(ctx, ekFILL, x + 1.0f, y + 1.0f,
@@ -2100,7 +2308,8 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
             if (total > 0.0)
             {
                 char percentage[24];
-                snprintf(percentage, sizeof(percentage), "%.0f%%", total * 100.0);
+                snprintf(percentage, sizeof(percentage), "%.0f%%",
+                         primary_share * 100.0);
                 draw_text_color(ctx, color_rgb(190, 205, 215));
                 draw_text(ctx, percentage, x + cell * 0.5f,
                           y + cell * 0.70f);
@@ -2115,10 +2324,24 @@ static void draw_strategy_action_matrix(App *app, DCtx *ctx,
     }
     if (!has_values)
     {
+        /* An empty grid has two very different causes and they used to read
+         * the same.  A partial board (1 or 2 cards) is a FILTER over the
+         * sampled runouts, and a postflop node's rows sit on hundreds of
+         * different boards, so almost nothing ever matches two named cards.
+         * Saying "no result yet" there sends the user off to solve longer,
+         * which cannot help. */
+        int board_cards = card_count(app->result_board_cards);
         draw_text_color(ctx, color_rgb(150, 160, 170));
         draw_text_align(ctx, ekLEFT, ekCENTER);
-        draw_text(ctx, "No strategy result for the selected spot yet.",
-                  left + cell * (real32_t)count + 28.0f, 280.0f);
+        if (board_cards > 0 && board_cards < 3)
+            draw_text(ctx,
+                      "No sampled runout contains those cards.\n"
+                      "1 or 2 cards only filter what is shown; click 3 to 5\n"
+                      "to ask the solver for that exact board.",
+                      left + cell * (real32_t)count + 28.0f, 280.0f);
+        else
+            draw_text(ctx, "No strategy result for the selected spot yet.",
+                      left + cell * (real32_t)count + 28.0f, 280.0f);
     }
 }
 
@@ -2446,7 +2669,7 @@ static void i_on_icm_spot_street_select(App *app, Event *event)
 
 static Panel *i_icm_spot_panel(App *app)
 {
-    Panel *panel = panel_create();
+    Panel *panel = panel_scroll(FALSE, TRUE);
     Layout *root = layout_create(1, 9);
     Layout *game_controls = layout_create(4, 1);
     Layout *spot_controls = layout_create(2, 3);
@@ -2628,6 +2851,7 @@ static Panel *i_icm_spot_panel(App *app)
     layout_vsize(root, 7, 86.0f);
     layout_vsize(root, 8, 132.0f);
     layout_margin(root, 10.0f);
+    panel_size(panel, s2df(900, 900));
     panel_layout(panel, root);
     icm_spot_update_context(app);
     return panel;
@@ -3167,7 +3391,7 @@ static void i_on_draw_board_matrix(App *app, Event *event)
     real32_t height = params->height;
     static const char ranks[] = "AKQJT98765432";
     static const char suits[] = "shdc";
-    const char *board_text = app->board_edit ? edit_get_text(app->board_edit) : "";
+    const char *board_text = app->result_board_cards;
     real32_t pad_x = 4.0f;
     real32_t pad_y = 3.0f;
     real32_t card_w = (width - pad_x * 2.0f - 12.0f * 2.0f) / 13.0f;
@@ -3236,42 +3460,55 @@ static void i_on_click_board_matrix(App *app, Event *event)
     int s = (int)((p->y - pad_y) / (card_h + 2.0f));
     int max_cards = 5;
 
-    if (r >= 0 && r < 13 && s >= 0 && s < 4 && app->board_edit)
+    if (r >= 0 && r < 13 && s >= 0 && s < 4)
     {
+        /* Toggle the card in the RESULTS view filter.  Rows are kept when
+         * their runout contains every selected card, so a partial pick such
+         * as "Ah" means "every runout containing the ace of hearts" -- which
+         * is what a board matrix is for.  Up to five cards, one full board. */
         char card_str[4];
-        char current_board[128] = "";
-        char new_board[128] = "";
-        const char *txt = edit_get_text(app->board_edit);
+        char current[64];
+        char updated[64];
+        char *found;
         card_str[0] = ranks[r];
         card_str[1] = suits[s];
         card_str[2] = '\0';
-
-        if (txt && *txt && strncmp(txt, "No board", 8) != 0)
-            snprintf(current_board, sizeof(current_board), "%s", txt);
-
-        if (strstr(current_board, card_str) != NULL)
+        snprintf(current, sizeof(current), "%s", app->result_board_cards);
+        found = strstr(current, card_str);
+        if (found)
         {
-            /* Remove card */
-            char *found = strstr(current_board, card_str);
-            size_t len = strlen(card_str);
-            memmove(found, found + len, strlen(found + len) + 1);
-            snprintf(new_board, sizeof(new_board), "%s", current_board);
+            memmove(found, found + 2u, strlen(found + 2u) + 1u);
+            snprintf(updated, sizeof(updated), "%s", current);
         }
+        else if (card_count(current) < max_cards)
+            snprintf(updated, sizeof(updated), "%s%s", current, card_str);
         else
-        {
-            /* Add card */
-            if (app->setup_street_combo)
-                max_cards = street_cards(setup_street(app));
-            if (max_cards > 0 && card_count(current_board) < max_cards)
-                snprintf(new_board, sizeof(new_board), "%s%s", current_board, card_str);
-            else
-                snprintf(new_board, sizeof(new_board), "%s", current_board);
-        }
-        trim_text(new_board);
-        edit_text(app->board_edit, new_board);
-        if (app->board_edit_quick)
-            edit_text(app->board_edit_quick, new_board);
+            snprintf(updated, sizeof(updated), "%s", current);
+        snprintf(app->result_board_cards, sizeof(app->result_board_cards),
+                 "%s", updated);
         view_update(app->board_matrix_view);
+        /* Ask the LIVE solver for this board rather than filtering the
+         * sampled report: the report holds at most --report-rows infosets,
+         * so most boards are simply absent from it.  A query walks every
+         * infoset the solve visited.  Only a complete board is a question
+         * the solver can answer; a partial pick stays a filter. */
+        {
+            int cards = card_count(app->result_board_cards);
+            if (cards >= 3 && cards <= 5)
+            {
+                char command[96];
+                snprintf(command, sizeof(command), "query %s\n",
+                         app->result_board_cards);
+                if (i_solve_send(app, command) == 0)
+                    status(app,
+                           "QUERYING %s\nAsking the running solver for this board's "
+                           "hand table.\nThe result replaces the sampled report below.",
+                           app->result_board_cards);
+            }
+        }
+        /* Re-render either way: with no live solver this is still a filter
+         * over whatever the report already holds. */
+        render_current_strategy_view(app);
     }
 }
 
@@ -3316,12 +3553,30 @@ static void i_on_draw_poker_table(App *app, Event *event)
         draw_font(ctx, app->bold_font);
     draw_text_color(ctx, color_rgb(240, 240, 240));
     draw_text_align(ctx, ekCENTER, ekCENTER);
-    draw_text(ctx, "POT: 3.0 BB", cx, cy - 8.0f);
+    {
+        /* Follow the selected decision step rather than a fixed preflop
+         * placeholder: on a tree spanning several streets the table has to
+         * say which one is on screen. */
+        const DecisionStep *active = NULL;
+        char pot_text[48];
+        const char *street_text = "PREFLOP";
+        if (app->active_step_index >= 0 &&
+            app->active_step_index < (int)app->decision_step_count)
+        {
+            active = &app->decision_steps[app->active_step_index];
+            street_text = street_name_upper(active->street);
+        }
+        if (active && active->has_pot)
+            snprintf(pot_text, sizeof(pot_text), "POT: %.2f BB", active->pot);
+        else
+            snprintf(pot_text, sizeof(pot_text), "POT: --");
+        draw_text(ctx, pot_text, cx, cy - 8.0f);
 
-    if (app->regular_font)
-        draw_font(ctx, app->regular_font);
-    draw_text_color(ctx, color_rgba(255, 255, 255, 180));
-    draw_text(ctx, "PREFLOP", cx, cy + 8.0f);
+        if (app->regular_font)
+            draw_font(ctx, app->regular_font);
+        draw_text_color(ctx, color_rgba(255, 255, 255, 180));
+        draw_text(ctx, street_text, cx, cy + 8.0f);
+    }
 
     /* Public cards remain visible in the table view as well as in the
        board matrix.  Preflop deliberately shows an empty board. */
@@ -4288,18 +4543,38 @@ static void update_result_view(App *app, const char *output, int running)
         double elapsed = app->solve_started_at != (time_t)0
             ? difftime(time(NULL), app->solve_started_at) : 0.0;
         progress_value(app->run_progress_bar, (real32_t)fraction);
-        snprintf(progress_text, sizeof(progress_text),
-                 "%s  |  iteration %" PRIu64 " / %" PRIu64
-                 "  |  %.1f%%",
-                 reporting ? "REPORTING" : running ? "RUNNING" : "LAST CHECK",
-                 iteration, total,
-                 fraction * 100.0);
-        snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64,
-                 iteration, total);
+        if (total >= STUDIO_NO_ITER_CAP)
+        {
+            /* Single-option stop modes (target-only / manual-only) carry
+             * no iteration cap: show infinity instead of the raw 1e12. */
+            snprintf(progress_text, sizeof(progress_text),
+                     "%s  |  iteration %" PRIu64 " / no cap"
+                     "  |  target %.2f mBB",
+                     reporting ? "REPORTING" : running ? "RUNNING" : "LAST CHECK",
+                     iteration, target);
+        }
+        else
+        {
+            snprintf(progress_text, sizeof(progress_text),
+                     "%s  |  iteration %" PRIu64 " / %" PRIu64
+                     "  |  %.1f%%",
+                     reporting ? "REPORTING" : running ? "RUNNING" : "LAST CHECK",
+                     iteration, total,
+                     fraction * 100.0);
+        }
+        if (total >= STUDIO_NO_ITER_CAP)
+            snprintf(text, sizeof(text), "%" PRIu64 " / no cap", iteration);
+        else
+            snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64,
+                     iteration, total);
         label_text(app->run_progress, text);
-        snprintf(text, sizeof(text), "%.1f%%", fraction * 100.0);
+        if (total >= STUDIO_NO_ITER_CAP)
+            snprintf(text, sizeof(text), "tgt %.2f", target);
+        else
+            snprintf(text, sizeof(text), "%.1f%%", fraction * 100.0);
         label_text(app->run_fraction, text);
-        snprintf(text, sizeof(text), "%.2f mBB", exploitability);
+        snprintf(text, sizeof(text), "%.2f mBB%s", exploitability,
+                 board_abstraction_caveat(app)[0] ? "  (abstract)" : "");
         label_text(app->run_metrics, text);
         snprintf(text, sizeof(text), reporting ? "REPORTING  %02d:%02d"
                  : running ? "RUNNING  %02d:%02d" : "LAST CHECK",
@@ -4309,14 +4584,20 @@ static void update_result_view(App *app, const char *output, int running)
         /* Left Stats Panel */
         if (app->lbl_status_val)
         {
-            snprintf(text, sizeof(text), "%s, %02d:%02d, 1 thread(s)",
+            int tcount = (app->solve_has_resolved && app->solve_resolved_threads > 0)
+                             ? app->solve_resolved_threads
+                             : 1;
+            snprintf(text, sizeof(text), "%s, %02d:%02d, %d thread(s)",
                      reporting ? "Reporting" : running ? "Running" : "Complete",
-                     (int)elapsed / 60, (int)elapsed % 60);
+                     (int)elapsed / 60, (int)elapsed % 60, tcount);
             label_text(app->lbl_status_val, text);
         }
         if (app->lbl_iterations_val)
         {
-            snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64, iteration, total);
+            if (total >= STUDIO_NO_ITER_CAP)
+                snprintf(text, sizeof(text), "%" PRIu64 " / no cap", iteration);
+            else
+                snprintf(text, sizeof(text), "%" PRIu64 " / %" PRIu64, iteration, total);
             label_text(app->lbl_iterations_val, text);
         }
         if (app->lbl_exploit_val)
@@ -4354,14 +4635,19 @@ static void update_result_view(App *app, const char *output, int running)
             label_text(app->setup_run_progress, progress_text);
         if (app->setup_run_metrics)
         {
+            const char *caveat = board_abstraction_caveat(app);
             if (target > 0.0)
                 snprintf(text, sizeof(text),
-                         "Empirical exploitability: %.2f mBB  |  stop target: %.2f mBB",
-                         exploitability, target);
+                         "Empirical exploitability: %.2f mBB  |  stop target: %.2f mBB%s%s",
+                         exploitability, target,
+                         caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
+                         caveat);
             else
                 snprintf(text, sizeof(text),
-                         "Empirical exploitability: %.2f mBB  |  stop target: disabled (max iterations)",
-                         exploitability);
+                         "Empirical exploitability: %.2f mBB  |  stop target: disabled (max iterations)%s%s",
+                         exploitability,
+                         caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
+                         caveat);
             label_text(app->setup_run_metrics, text);
         }
     }
@@ -4441,10 +4727,16 @@ static void update_result_view(App *app, const char *output, int running)
     }
     if (have_final)
     {
-        snprintf(text, sizeof(text),
-                 "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64,
-                 guarantee, mbb, raw, samples);
-        snprintf(progress_text, sizeof(progress_text), "%.2f mBB", mbb);
+        {
+            const char *caveat = board_abstraction_caveat(app);
+            snprintf(text, sizeof(text),
+                     "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64 "%s%s",
+                     guarantee, mbb, raw, samples,
+                     caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
+                     caveat);
+        }
+        snprintf(progress_text, sizeof(progress_text), "%.2f mBB%s", mbb,
+                 board_abstraction_caveat(app)[0] ? "  (abstract)" : "");
         label_text(app->run_metrics, progress_text);
         if (app->lbl_exploit_val)
             label_text(app->lbl_exploit_val, progress_text);
@@ -4549,6 +4841,47 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
         return -1;
     }
     app->tree_node_count = tree->node_count > 0 ? (uint32_t)tree->node_count : 0u;
+    {
+        /* Per-street census shown in TREE CONTEXT: proves what the file
+         * actually holds.  The binary Monker format stores a single
+         * street (all nodes inherit the header street); JSON trees may
+         * carry several.  Lane B follows the run street's decisions. */
+        uint32_t street_nodes[5] = {0u, 0u, 0u, 0u, 0u};
+        char *street_text = app->tree_street_summary;
+        size_t used = 0u;
+        static const char *names[5] = {"PRE", "FLOP", "TURN", "RIVER", "SHOWDOWN"};
+        if (tree->nodes && tree->node_count > 0)
+        {
+            for (int node_index = 0; node_index < tree->node_count; ++node_index)
+            {
+                const mpf_tree_node_t *node = &tree->nodes[node_index];
+                if (node->type == MPF_TREE_NODE_PLAYER &&
+                    (int)node->street >= 0 && (int)node->street < 5)
+                    ++street_nodes[(int)node->street];
+            }
+        }
+        /* Unconditional: loading a node-less tree must clear the previous
+         * tree's census, not inherit it. */
+        for (int street = 0; street < 5; ++street)
+            app->tree_street_nodes[street] = street_nodes[street];
+        street_text[0] = '\0';
+        for (int street = 0; street < 5; ++street)
+        {
+            if (street_nodes[street] == 0u)
+                continue;
+            used += (size_t)snprintf(street_text + used,
+                                     sizeof(app->tree_street_summary) - used,
+                                     "%s%s=%u", used ? " " : "",
+                                     names[street], street_nodes[street]);
+            if (used + 1u >= sizeof(app->tree_street_summary))
+                break;
+        }
+        if (used == 0u)
+            snprintf(street_text, sizeof(app->tree_street_summary), "none");
+    }
+    /* A new tree is a new spot; card picks from the previous one would
+     * silently filter the new report down to nothing. */
+    app->result_board_cards[0] = '\0';
     app->tree_player_count = header->player_count >= 2u &&
                              header->player_count <= 6u
         ? header->player_count : 0u;
@@ -4576,6 +4909,10 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
             edit_text(app->board_edit_quick, "");
         edit_text(app->range0_edit, "100%");
         edit_text(app->range1_edit, "100%");
+        /* Blinds build the preflop pot; a leftover postflop figure here
+         * would be silently ignored, so clear it. */
+        if (app->setup_pot_edit)
+            edit_text(app->setup_pot_edit, "");
     }
     else
     {
@@ -4583,6 +4920,8 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
             edit_text(app->range0_edit, "100%");
         if (!edit_get_text(app->range1_edit) || !*edit_get_text(app->range1_edit))
             edit_text(app->range1_edit, "100%");
+        if (app->setup_pot_edit)
+            edit_phtext(app->setup_pot_edit, "Required: pot in the middle at this node");
     }
     label_text(app->board_label, header->street == 0
                ? "BOARD / RUNOUT: automatic through river"
@@ -4613,6 +4952,9 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
                         street_name(header->street));
         textview_printf(app->strategy_view, "nodes                         %d\n",
                         tree->node_count);
+        textview_printf(app->strategy_view, "decision nodes by street      %s\n",
+                        app->tree_street_summary[0] ? app->tree_street_summary : "?");
+        textview_printf(app->strategy_view, "solved streets                every street the tree wires into; past its last node the board is dealt and rolled out\n");
         textview_printf(app->strategy_view, "ranges                        %s\n",
                         ranges_present ? "embedded" : "external / defaults to 100%%");
         textview_printf(app->strategy_view, "board / runouts               %s\n",
@@ -4622,14 +4964,16 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
                           "Run the spot to replace this context with the strategy table.");
     }
     status(app,
-           "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d\nRanges: %s\n\n%s",
+           "TREE READY\nGame: %s%s\nPlayers: %u\nStreet: %s\nNodes: %d (%s)\nRanges: %s\n\n%s",
            game_name(layout->game),
            ranges_present ? " (from tree)" : " (selected)",
            header->player_count, street_name(header->street), tree->node_count,
+           app->tree_street_summary[0] ? app->tree_street_summary : "?",
            ranges_present ? "embedded" : "not embedded; enter external ranges",
            header->street == 0
                ? "Preflop Lane B: ranges are sampled with card removal; public boards are dealt through river."
-               : "Enter the board cards for this tree street before Solve.");
+               : "Postflop Lane B: enter the board cards AND the pot at the root before Solve\n"
+                 "(there are no blinds postflop, and stacks are read as remaining).");
     mpf_tree_free(tree);
     pe_monker_range_set_free(&ranges);
     return 0;
@@ -4637,9 +4981,13 @@ static int read_tree(App *app, const char *path, pe_monker_tree_header_t *header
 
 static void i_on_tree(App *app, Event *event)
 {
-    const char_t *types[] = {"tree"};
-    const char_t *path = comwin_open_file(app->window, "Open Monker tree",
-                                          types, 1, NULL, NULL);
+    /* Both tree formats the loader accepts: the binary Monker .tree, and the
+     * JSON trees read by tree_path_is_json (.json, including .tree.json).
+     * Filtering on "tree" alone hid every JSON tree from this dialog and
+     * left typing the path as the only way in. */
+    const char_t *types[] = {"tree", "json"};
+    const char_t *path = comwin_open_file(app->window, "Open tree (.tree or .json)",
+                                          types, 2, NULL, NULL);
     if (path != NULL)
     {
         edit_text(app->tree_edit, path);
@@ -4772,31 +5120,149 @@ static const char *resolve_runner(const char *configured, const char *name)
     return PE_ACCESS(local_path, PE_X_OK) == 0 ? local_path : NULL;
 }
 
+/* spot_checkpoint_path derives a stable per-spot checkpoint file path
+ * from the source tree path: "<tree_dir>/<tree_basename>.ckpt" (or just
+ * "<basename>.ckpt" when the tree path has no directory), so the solver
+ * can write there during a normal run and the Studio can resume from it.
+ * Returns 0 on success, -1 if the path is too long. */
+static int spot_checkpoint_path(const char *tree_path, char *out, size_t capacity)
+{
+    const char *base;
+    const char *sep;
+    size_t base_len;
+    size_t dir_len;
+    if (!tree_path || !*tree_path || !out || capacity == 0u)
+        return -1;
+    sep = strrchr(tree_path, PE_PATH_SEPARATOR);
+    base = (sep != NULL) ? sep + 1 : tree_path;
+    dir_len = (sep != NULL) ? (size_t)(sep - tree_path) : 0u;
+    base_len = strlen(base);
+    /* Strip a trailing ".tree" if any. */
+    if (base_len > 5u &&
+        strcmp(base + base_len - 5u, ".tree") == 0)
+    {
+        base_len -= 5u;
+    }
+    if (base_len == 0u)
+    {
+        base = "spot";
+        base_len = 4u;
+    }
+    if (dir_len > 0u)
+    {
+        if (snprintf(out, capacity, "%.*s%c%.*s.ckpt",
+                     (int)dir_len, tree_path, PE_PATH_SEPARATOR,
+                     (int)base_len, base) >= (int)capacity)
+            return -1;
+    }
+    else if (snprintf(out, capacity, "%.*s.ckpt",
+                      (int)base_len, base) >= (int)capacity)
+    {
+        return -1;
+    }
+    return 0;
+}
+
+/* Appends at most n bytes from src to a NUL-terminated buffer,
+ * honouring capacity.  *used tracks the current length. */
+static void i_copy_append(char *out, size_t capacity, size_t *used,
+                          const char *src, size_t n)
+{
+    size_t room;
+    if (!out || capacity == 0u || !used || !src || n == 0u)
+        return;
+    if (*used + 1u >= capacity)
+        return;
+    room = capacity - 1u - *used;
+    if (n > room)
+        n = room;
+    memcpy(out + *used, src, n);
+    *used += n;
+    out[*used] = '\0';
+}
+
 static void i_solve_copy_output(App *app, char *out, size_t capacity)
 {
     size_t total, length, used = 0u;
     if (!app || !out || capacity == 0u)
         return;
     bmutex_lock(app->solve_mutex);
-    /* Prefer the preserved report prefix. It contains STRATEGY REPORT,
-     * DECISION STEPS and the first result rows needed to populate the UI. */
+    /* Assemble a render-friendly window instead of a dumb byte prefix.
+     * On multi-megabyte reports (e.g. plo4, 100k+ rows) the first 64KB
+     * hold only the header and DECISION STEPS: the HAND TABLE the grid
+     * needs starts far beyond, and the guarantee=/progress lines the
+     * stats need live before the report marker — so a prefix copy
+     * renders an empty Results panel after Stop.  The window below
+     * carries: synthetic progress + guarantee lines (rebuilt from the
+     * scanned telemetry/metrics), the report header, the first decision
+     * steps, then HAND TABLE rows until the budget runs out. */
     if (app->strategy_output_length > 0u)
     {
-        length = app->strategy_output_length < capacity - 1u
-            ? app->strategy_output_length : capacity - 1u;
-        memcpy(out, app->strategy_output, length);
-        used = length;
-        /* Add the newest tail when there is room, which keeps final metrics
-         * and launch errors visible without sacrificing the report prefix. */
-        total = strlen(app->solve_output);
-        if (used + 1u < capacity && total > 0u)
+        char line[256];
+        const char *cursor;
+        const char *end;
+        const char *hands;
+        size_t n;
+        unsigned steps = 0u;
+        int width;
+        out[0] = '\0';
+        used = 0u;
+        if (app->telemetry_valid)
         {
-            size_t tail = total < capacity - used - 1u
-                ? total : capacity - used - 1u;
-            memcpy(out + used, app->solve_output + total - tail, tail);
-            used += tail;
+            width = snprintf(line, sizeof(line),
+                             "progress iteration=%" PRIu64 " total=%" PRIu64
+                             " fraction=%f exploitability_mbb=%f target_mbb=%f\n",
+                             app->telemetry_iteration, app->telemetry_total,
+                             app->telemetry_fraction, app->telemetry_exploitability,
+                             app->telemetry_target);
+            if (width > 0)
+                i_copy_append(out, capacity, &used, line, (size_t)width);
         }
-        out[used] = '\0';
+        if (app->final_metrics_valid)
+        {
+            width = snprintf(line, sizeof(line),
+                             "guarantee=%s exploitability_raw=%f"
+                             " exploitability_mbb=%f br_samples=%" PRIu64 "\n",
+                             app->final_guarantee, app->final_raw,
+                             app->final_mbb, app->final_samples);
+            if (width > 0)
+                i_copy_append(out, capacity, &used, line, (size_t)width);
+        }
+        end = strchr(app->strategy_output, '\n');
+        n = end ? (size_t)(end - app->strategy_output) + 1u
+                : strlen(app->strategy_output);
+        i_copy_append(out, capacity, &used, app->strategy_output, n);
+        cursor = app->strategy_output;
+        while (steps < 96u && (cursor = strstr(cursor, "tree_step ")) != NULL)
+        {
+            end = strchr(cursor, '\n');
+            n = end ? (size_t)(end - cursor) + 1u : strlen(cursor);
+            if (used + n + 1u > capacity)
+                break;
+            i_copy_append(out, capacity, &used, cursor, n);
+            cursor += n;
+            ++steps;
+        }
+        hands = strstr(app->strategy_output, "HAND TABLE");
+        if (hands != NULL)
+        {
+            i_copy_append(out, capacity, &used, "HAND TABLE\n", 11u);
+            cursor = strchr(hands, '\n');
+            cursor = cursor ? cursor + 1u : NULL;
+            while (cursor && *cursor)
+            {
+                end = strchr(cursor, '\n');
+                n = end ? (size_t)(end - cursor) + 1u : strlen(cursor);
+                if (used + n + 1u > capacity)
+                    break;
+                i_copy_append(out, capacity, &used, cursor, n);
+                /* RANGE GRID ends the hand section; copying it is useless
+                 * for the grid and would eat the row budget. */
+                if (n >= 10u && strncmp(cursor, "RANGE GRID", 10u) == 0)
+                    break;
+                cursor = end ? end + 1u : NULL;
+            }
+        }
     }
     else
     {
@@ -4808,12 +5274,26 @@ static void i_solve_copy_output(App *app, char *out, size_t capacity)
     bmutex_unlock(app->solve_mutex);
 }
 
+/* Reusable buffer holding a snapshot of the solver output, sized to
+ * solve_output.  NULL only if the one allocation failed. */
+static char *report_scratch(App *app)
+{
+    if (!app)
+        return NULL;
+    if (!app->report_scratch)
+        app->report_scratch = (char *)malloc(sizeof(app->solve_output));
+    return app->report_scratch;
+}
+
+/* The report can run to megabytes, so these copies use the shared scratch: a
+ * stack buffer big enough would blow the thread stack, and a small one would
+ * truncate the hand table exactly like solve_output used to. */
 static void render_current_strategy_view(App *app)
 {
-    char output[131072];
-    if (!app)
+    char *output = report_scratch(app);
+    if (!output)
         return;
-    i_solve_copy_output(app, output, sizeof(output));
+    i_solve_copy_output(app, output, sizeof(app->solve_output));
     render_strategy_view(app, output);
 }
 
@@ -4847,17 +5327,79 @@ static int result_street(const App *app)
         ? -1 : (int)combo_get_selected(app->street_filter) - 1;
 }
 
+/* Money along one betting path.
+ *
+ * A node's pot is NOT a property of the node: these trees funnel several
+ * lines into the same next-street node, so turn_first sits in 2.00 after a
+ * checked flop and 4.64 after bet-call.  It is only well defined for a given
+ * path, which is why it is accumulated here, down the same walk that prints
+ * the decision history, rather than declared per node. */
+typedef struct
+{
+    double pot;
+    double contrib[2];   /* this round, per seat */
+    double bet;          /* highest contribution this round */
+    int street;
+} path_money_t;
+
+/* Both size conventions the engine uses, confirmed against a solve:
+ * a "chips" size is the increment ABOVE the call, a pot_sizing size is a
+ * fraction of the pot once the call is made. */
+static void path_money_apply(path_money_t *money, const mpf_tree_node_t *node,
+                             int action)
+{
+    int seat = node->acting_player >= 0 && node->acting_player < 2
+                   ? node->acting_player : 0;
+    double outstanding = money->bet - money->contrib[seat];
+    if (outstanding < 0.0)
+        outstanding = 0.0;
+    if (node->actions[action].type == MPF_TREE_ACTION_FOLD)
+        return;
+    if (node->actions[action].type == MPF_TREE_ACTION_CALL)
+    {
+        money->pot += outstanding;
+        money->contrib[seat] = money->bet;
+        return;
+    }
+    if (node->actions[action].type == MPF_TREE_ACTION_RAISE)
+    {
+        int index = node->actions[action].size_index;
+        double size = (index >= 0 && index < node->bet_size_count)
+                          ? node->bet_sizes[index] : 0.0;
+        double raise_by;
+        if (size < 0.0)           /* all-in / min-raise markers */
+            return;
+        raise_by = node->use_pot_sizing ? size * (money->pot + outstanding) : size;
+        money->pot += outstanding + raise_by;
+        money->contrib[seat] = money->bet + raise_by;
+        money->bet = money->contrib[seat];
+    }
+}
+
 static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
                             int target, unsigned char *visited,
                             uint32_t depth, char *history, size_t capacity,
-                            size_t *used)
+                            size_t *used, path_money_t *money,
+                            double *out_pot)
 {
     const mpf_tree_node_t *node;
     if (!tree || !visited || !history || !used || node_index < 0 ||
         node_index >= tree->node_count || depth > (uint32_t)tree->node_count)
         return 0;
+    if (node_index >= 0 && node_index < tree->node_count &&
+        (int)tree->nodes[node_index].street != money->street)
+    {
+        /* New street: the round's contributions reset, the pot carries. */
+        money->street = (int)tree->nodes[node_index].street;
+        money->contrib[0] = money->contrib[1] = 0.0;
+        money->bet = 0.0;
+    }
     if (node_index == target)
+    {
+        if (out_pot)
+            *out_pot = money->pot;
         return 1;
+    }
     if (visited[node_index])
         return 0;
     visited[node_index] = 1u;
@@ -4880,11 +5422,35 @@ static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
             continue;
         }
         *used += (size_t)written;
-        if (tree_history_dfs(tree, node->actions[action].next_index, target,
-                             visited, depth + 1u, history, capacity, used))
+        /* A tree may span several streets.  Without a marker the whole path
+         * read as one long preflop sequence, which is what made a working
+         * multi-street solve look stuck on the first street. */
         {
-            visited[node_index] = 0u;
-            return 1;
+            int child = node->actions[action].next_index;
+            if (child >= 0 && child < tree->node_count)
+            {
+                int child_street = (int)tree->nodes[child].street;
+                if (child_street > (int)node->street && child_street <= 3)
+                {
+                    int extra = snprintf(history + *used, capacity - *used,
+                                         "-- %s --\n",
+                                         street_name_upper(child_street));
+                    if (extra > 0 && (size_t)extra < capacity - *used)
+                        *used += (size_t)extra;
+                }
+            }
+        }
+        {
+            path_money_t saved = *money;
+            path_money_apply(money, node, action);
+            if (tree_history_dfs(tree, node->actions[action].next_index, target,
+                                 visited, depth + 1u, history, capacity, used,
+                                 money, out_pot))
+            {
+                visited[node_index] = 0u;
+                return 1;
+            }
+            *money = saved;
         }
         *used = previous;
         history[*used] = '\0';
@@ -4893,22 +5459,75 @@ static int tree_history_dfs(const mpf_tree_def_t *tree, int node_index,
     return 0;
 }
 
-static void tree_history_for_node(const mpf_tree_def_t *tree, int target,
-                                  char history[512])
+/* The pot the tree starts from: what the root node declares, else the POT AT
+ * ROOT field for a postflop tree, else the blinds the driver posts by default
+ * (pe-preflop-solve's DEFAULT_SMALL_BLIND + DEFAULT_BIG_BLIND). */
+static double tree_root_pot(const App *app, const mpf_tree_def_t *tree, int root)
+{
+    if (tree && root >= 0 && root < tree->node_count &&
+        tree->nodes[root].has_snapshot && tree->nodes[root].snapshot.has_pot)
+        return tree->nodes[root].snapshot.pot;
+    if (tree && root >= 0 && root < tree->node_count &&
+        (int)tree->nodes[root].street != 0)
+    {
+        double pot = 0.0;
+        if (app && app->setup_pot_edit &&
+            parse_ui_target(edit_get_text(app->setup_pot_edit), &pot) == 0 &&
+            pot > 0.0)
+            return pot;
+        return 0.0;
+    }
+    return 1.5;
+}
+
+static void tree_history_for_node(const App *app, const mpf_tree_def_t *tree,
+                                  int target, char history[512],
+                                  double *out_pot, int *out_has_pot)
 {
     unsigned char *visited;
     size_t used;
+    int root;
+    path_money_t money;
+    if (out_has_pot)
+        *out_has_pot = 0;
     if (!history)
         return;
-    snprintf(history, 512u, "PREFLOP\n");
-    used = strlen(history);
+    history[0] = '\0';
     if (!tree || target < 0 || target >= tree->node_count)
+    {
+        snprintf(history, 512u, "PREFLOP\n");
         return;
+    }
+    root = (tree->root_index >= 0 && tree->root_index < tree->node_count)
+               ? tree->root_index : 0;
+    /* The heading is the street the tree is ROOTED at, not a fixed
+     * "PREFLOP": a flop or river tree starts where it starts. */
+    snprintf(history, 512u, "%s\n",
+             street_name_upper((int)tree->nodes[root].street));
+    used = strlen(history);
     visited = (unsigned char *)calloc((size_t)tree->node_count, sizeof(*visited));
     if (!visited)
         return;
-    (void)tree_history_dfs(tree, 0, target, visited, 0u, history, 512u, &used);
-        free(visited);
+    memset(&money, 0, sizeof(money));
+    money.pot = tree_root_pot(app, tree, root);
+    money.street = (int)tree->nodes[root].street;
+    if (money.street == 0)
+    {
+        /* Heads-up blinds are already in the middle at the preflop root. */
+        money.contrib[0] = 0.5;
+        money.contrib[1] = 1.0;
+        money.bet = 1.0;
+    }
+    {
+        double pot = money.pot;
+        if (tree_history_dfs(tree, root, target, visited, 0u, history, 512u,
+                             &used, &money, &pot) && out_pot && out_has_pot)
+        {
+            *out_pot = pot;
+            *out_has_pot = money.pot > 0.0 || pot > 0.0;
+        }
+    }
+    free(visited);
 }
 
 static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tree)
@@ -4935,8 +5554,10 @@ static void populate_decision_steps_from_tree(App *app, const mpf_tree_def_t *tr
         step = &app->decision_steps[app->decision_step_count];
         memset(step, 0, sizeof(*step));
         step->node_index = node_index;
+        step->street = (int)node->street;
         step->acting_player = node->acting_player;
-        tree_history_for_node(tree, node_index, step->history);
+        tree_history_for_node(app, tree, node_index, step->history,
+                              &step->pot, &step->has_pot);
         for (int action = 0; action < node->action_count &&
              action < STRATEGY_TABLE_ACTIONS; ++action)
         {
@@ -5017,8 +5638,11 @@ static void refresh_result_filters(App *app, const char *output)
     combo_add_elem(app->street_filter, "Flop", NULL);
     combo_add_elem(app->street_filter, "Turn", NULL);
     combo_add_elem(app->street_filter, "River", NULL);
-    combo_selected(app->street_filter,
-                   output && strstr(output, "STRATEGY REPORT") != NULL ? 1u : 0u);
+    /* "All streets".  This used to jump to Preflop whenever a report was
+     * present, which was harmless only while every row was mislabelled
+     * preflop anyway.  Now that rows carry their real street, pinning the
+     * filter here hid every flop/turn/river row the moment a run finished. */
+    combo_selected(app->street_filter, 0u);
 
     output_has_steps = output && strstr(output, "tree_step ") != NULL;
     {
@@ -5075,7 +5699,8 @@ static void refresh_result_filters(App *app, const char *output)
                         if (!sep) break;
                     }
                 }
-                tree_history_for_node(app->mkr_tree, st->node_index, st->history);
+                tree_history_for_node(app, app->mkr_tree, st->node_index,
+                                      st->history, &st->pot, &st->has_pot);
 
                 {
                     size_t used = (size_t)snprintf(item, sizeof(item),
@@ -5107,6 +5732,32 @@ static void refresh_result_filters(App *app, const char *output)
             app->active_step_index = combo_count(app->step_filter) > 1u ? 0 : -1;
         }
     }
+    /* Pot per node, from the report's observed-decision lines
+     * ("step node=N actor=P1 hand=... pot=X to_call=Y ...").  The tree alone
+     * cannot supply it: the pot at a node depends on the betting path. */
+    cursor = output;
+    while (cursor && (cursor = strstr(cursor, "step node=")) != NULL)
+    {
+        const char *pot_field;
+        const char *line_end = strchr(cursor, '\n');
+        int node_index = atoi(cursor + 10);
+        /* "tree_step node=" also ends in "step node=" -- those lines carry
+         * no pot, and strstr below simply finds nothing in them. */
+        pot_field = strstr(cursor, "pot=");
+        if (pot_field && (!line_end || pot_field < line_end))
+        {
+            double value = atof(pot_field + 4);
+            for (uint32_t i = 0u; i < app->decision_step_count; ++i)
+                if (app->decision_steps[i].node_index == node_index &&
+                    !app->decision_steps[i].has_pot)
+                {
+                    app->decision_steps[i].pot = value;
+                    app->decision_steps[i].has_pot = 1;
+                    break;
+                }
+        }
+        cursor = line_end ? line_end + 1 : NULL;
+    }
     update_responses_for_active_step(app);
 
     combo_clear(app->board_filter);
@@ -5132,6 +5783,38 @@ static void refresh_result_filters(App *app, const char *output)
         result_combo_add_unique(app->board_filter, board);
         cursor = start + n;
     }
+    /* Runouts actually played, from the report rows' sixth column.  A
+     * preflop-rooted run deals a different board every iteration, so this is
+     * the only place those boards exist.  Capped: the combo is for picking a
+     * runout, not for listing thousands. */
+    {
+        const char *scan = strstr(output ? output : "", "HAND TABLE");
+        uint32_t added = 0u;
+        while (scan && added < 64u && (scan = strchr(scan, '\n')) != NULL)
+        {
+            char line[2048];
+            const char *end;
+            size_t n;
+            ++scan;
+            end = strchr(scan, '\n');
+            n = end ? (size_t)(end - scan) : strlen(scan);
+            if (n == 0u)
+                break;
+            if (n >= sizeof(line))
+                n = sizeof(line) - 1u;
+            memcpy(line, scan, n);
+            line[n] = '\0';
+            if (strncmp(line, "report_phase=", 13u) == 0)
+                break;
+            if (strncmp(line, "ev_update\t", 10u) != 0 &&
+                result_line_board(line, board, sizeof(board)))
+            {
+                result_combo_add_unique(app->board_filter, board);
+                ++added;
+            }
+            scan = end;
+        }
+    }
     combo_selected(app->board_filter, 0u);
 }
 
@@ -5154,6 +5837,133 @@ static int result_line_node(const char *line)
 {
     const char *node = line ? strstr(line, "node=") : NULL;
     return node ? atoi(node + 5) : -1;
+}
+
+/* Street of one report row, from the decision step that owns its node.
+ * The report's own header carries the run's ROOT street only, so a tree
+ * spanning several streets cannot be filtered against a single value: every
+ * flop/turn/river row would be judged preflop and dropped. */
+static int result_node_street(const App *app, int node_index)
+{
+    if (!app || node_index < 0)
+        return -1;
+    for (uint32_t i = 0u; i < app->decision_step_count; ++i)
+        if (app->decision_steps[i].node_index == node_index)
+            return app->decision_steps[i].street;
+    return -1;
+}
+
+/* Board of one report row: its sixth tab-separated field, added so a
+ * per-board filter has something to match.  A row from an older report has
+ * only five fields and matches nothing, rather than matching everything. */
+static int result_line_board(const char *line, char *out, size_t capacity)
+{
+    const char *cursor = line;
+    int tabs = 0;
+    size_t used = 0u;
+    if (!line || !out || capacity == 0u)
+        return 0;
+    out[0] = '\0';
+    while (*cursor && tabs < 5)
+        if (*cursor++ == '\t')
+            ++tabs;
+    if (tabs < 5)
+        return 0;
+    while (*cursor && *cursor != '\n' && *cursor != '\t' &&
+           used + 1u < capacity)
+        out[used++] = *cursor++;
+    out[used] = '\0';
+    return used > 0u && strcmp(out, "-") != 0;
+}
+
+static int result_line_board_matches(const char *line, const char *board)
+{
+    char row_board[64];
+    if (!board || !*board)
+        return 1;
+    if (!result_line_board(line, row_board, sizeof(row_board)))
+        return 0;
+    return strcmp(row_board, board) == 0;
+}
+
+/* Text like "Ks7d2c" to a card mask; 0 cards on a malformed string. */
+static int board_text_to_mask(const char *text, mask_t *out)
+{
+    static const char ranks[] = "23456789TJQKA";
+    static const char suits[] = "hdcs";
+    int count = 0;
+    *out = MASK_EMPTY;
+    if (!text)
+        return 0;
+    while (text[0] && text[1])
+    {
+        const char *r = strchr(ranks, (char)toupper((unsigned char)text[0]));
+        const char *u = strchr(suits, (char)tolower((unsigned char)text[1]));
+        if (!r || !u)
+            return 0;
+        *out = mask_set(*out, MODERN_MAKE_CARD((int)(r - ranks), (int)(u - suits)));
+        ++count;
+        text += 2;
+    }
+    return count;
+}
+
+/* Does this row's runout match the cards picked in the board matrix?
+ *
+ * A complete pick -- as many cards as the row's board holds -- matches by
+ * SUIT ISOMORPHISM, not by spelling: Ks7d2c and Kh7s2d are the same board up
+ * to a renaming of the suits, and the solver now keys its infosets that way,
+ * so the view must read them the same way.  Without this a run answers only
+ * for the exact runouts it happened to deal.
+ *
+ * A partial pick keeps the literal "contains these cards" meaning, which is
+ * the useful reading of half a board and is not isomorphism-invariant
+ * anyway (there is no such thing as "the ace of hearts" up to suit
+ * renaming). */
+static int result_line_board_contains(const char *line, const char *cards,
+                                     int level)
+{
+    char row_board[64];
+    mask_t picked = MASK_EMPTY;
+    mask_t row_mask = MASK_EMPTY;
+    int picked_count;
+    int row_count;
+    size_t i;
+
+    if (!cards || !*cards)
+        return 1;
+    if (!result_line_board(line, row_board, sizeof(row_board)))
+        return 0;
+
+    picked_count = board_text_to_mask(cards, &picked);
+    row_count = board_text_to_mask(row_board, &row_mask);
+    if (picked_count > 0 && picked_count == row_count)
+    {
+        char picked_key[32];
+        char row_key[32];
+        /* Match by whatever rule the run keyed its infosets with.  With an
+         * abstraction on, the solver merged boards by texture, so demanding
+         * an exact isomorphic board here would reject nearly every row of a
+         * report that does contain the answer. */
+        if (level > 0)
+            return pe_board_texture_id(picked, (pe_texture_filter_level_t)level) ==
+                   pe_board_texture_id(row_mask, (pe_texture_filter_level_t)level);
+        if (pe_board_canonical_key(picked, picked_count,
+                                   picked_key, sizeof(picked_key)) == 0 &&
+            pe_board_canonical_key(row_mask, row_count,
+                                   row_key, sizeof(row_key)) == 0)
+            return strcmp(picked_key, row_key) == 0;
+    }
+    for (i = 0u; cards[i] && cards[i + 1u]; i += 2u)
+    {
+        char card[3];
+        card[0] = cards[i];
+        card[1] = cards[i + 1u];
+        card[2] = '\0';
+        if (strstr(row_board, card) == NULL)
+            return 0;
+    }
+    return 1;
 }
 
 static int result_scope_street(const App *app, const char *output)
@@ -5346,37 +6156,47 @@ static void strategy_table_add_row(App *app, const char *line)
     app->monker_hand_count = app->strategy_row_count;
 }
 
-static void strategy_table_apply_ev_update(App *app, const char *line)
+/* Apply one ev_update to the row it belongs to.
+ *
+ * The report emits a hand row and its ev_update back to back, so the pairing
+ * is positional.  Matching by (hand, node, player) instead looked safe but
+ * was not: a hand is sampled at the same node many times over a run, and the
+ * search always stopped at the FIRST match, so every later occurrence kept
+ * its EV column on "pending" while the first row was overwritten again and
+ * again.  On a multi-street tree, where the same hand recurs at every node
+ * it reaches, that left most of the table blank. */
+static void strategy_table_apply_ev_update_at(App *app, uint32_t row_index,
+                                              const char *line)
 {
     char hand[128], node[32], actor[32], ev[640];
+    StrategyTableRow *row;
+    MonkerHandEntry *mhand;
     int fields;
-    if (!app || !line)
+    if (!app || !line || row_index >= app->strategy_row_count)
         return;
     fields = sscanf(line, "ev_update\t%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\n]",
                     hand, node, actor, ev);
     if (fields != 4)
         return;
-    for (uint32_t row_index = 0u; row_index < app->strategy_row_count; ++row_index)
-    {
-        StrategyTableRow *row = &app->strategy_rows[row_index];
-        if (strcmp(row->hand, hand) != 0 || strcmp(row->node, node) != 0 ||
-            strcmp(row->player, actor) != 0)
-            continue;
-        row->action_count = row->action_count > 0u ? row->action_count :
-                            parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
-        (void)parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
-        MonkerHandEntry *mhand = &app->monker_hands[row_index];
-        for (uint32_t action = 0u; action < row->action_count &&
-             action < STRATEGY_TABLE_ACTIONS; ++action)
-        {
-            char *end = NULL;
-            mhand->evs[action] = strtod(row->ev[action], &end);
-            if (end == row->ev[action] || (end && *end != '\0'))
-                mhand->evs[action] = 0.0;
-            snprintf(mhand->ev_strs[action], sizeof(mhand->ev_strs[action]),
-                     "%s", row->ev[action]);
-        }
+    row = &app->strategy_rows[row_index];
+    /* Still verify the pairing: a dropped or reordered line must not write
+     * one hand's equity onto another's. */
+    if (strcmp(row->hand, hand) != 0 || strcmp(row->node, node) != 0 ||
+        strcmp(row->player, actor) != 0)
         return;
+    row->action_count = row->action_count > 0u ? row->action_count :
+                        parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
+    (void)parse_action_tokens(ev, row->ev, STRATEGY_TABLE_ACTIONS, 0);
+    mhand = &app->monker_hands[row_index];
+    for (uint32_t action = 0u; action < row->action_count &&
+         action < STRATEGY_TABLE_ACTIONS; ++action)
+    {
+        char *end = NULL;
+        mhand->evs[action] = strtod(row->ev[action], &end);
+        if (end == row->ev[action] || (end && *end != '\0'))
+            mhand->evs[action] = 0.0;
+        snprintf(mhand->ev_strs[action], sizeof(mhand->ev_strs[action]),
+                 "%s", row->ev[action]);
     }
 }
 
@@ -5580,11 +6400,18 @@ static void render_strategy_view(App *app, const char *output)
         char line[2048];
         if (n >= sizeof(line)) n = sizeof(line) - 1u;
         memcpy(line, cursor, n); line[n] = '\0';
-        if ((street < 0 || street == scope_street) &&
-            (step_node < 0 || result_line_node(line) == step_node))
         {
-            result_write_line(app->strategy_view, line);
-            step_started = 1;
+            int line_node = result_line_node(line);
+            int line_street = result_node_street(app, line_node);
+            /* line_street < 0 means the node's street is unknown (steps
+             * rebuilt from the report carry no street).  Unknown must not
+             * mean preflop, or the rows vanish under a street filter. */
+            if ((street < 0 || line_street < 0 || street == line_street) &&
+                (step_node < 0 || line_node == step_node))
+            {
+                result_write_line(app->strategy_view, line);
+                step_started = 1;
+            }
         }
         cursor = end ? strstr(end + 1u, "tree_step ") : NULL;
     }
@@ -5619,6 +6446,10 @@ static void render_strategy_view(App *app, const char *output)
         result_write_line(app->strategy_view, "PER-HAND STRATEGY TABLE");
         result_write_line(app->strategy_view, "HAND         NODE  PLAYER  ACTION FREQUENCIES                 EV BY ACTION");
         cursor = strchr(cursor, '\n');
+        /* Row the next ev_update belongs to, or -1 when the hand row just
+         * seen was filtered out (its equity must not land on the row kept
+         * before it). */
+        int pending_ev_row = -1;
         while (cursor && *cursor && visible_rows < (int)STRATEGY_TABLE_MAX_ROWS)
         {
             const char *end = strchr(cursor + 1u, '\n');
@@ -5630,50 +6461,95 @@ static void render_strategy_view(App *app, const char *output)
             memcpy(line, cursor + 1u, n); line[n] = '\0';
             if (strncmp(line, "RANGE GRID", 10u) == 0)
                 break;
-            /* ev_update is consumed by strategy_table_apply_ev_update below;
-             * it must never become a visible hand row. The report emits it
-             * immediately after each hand row. */
-            if (strncmp(line, "ev_update\t", 10u) == 0 ||
-                strncmp(line, "report_phase=", 13u) == 0)
+            /* The report emits ev_update immediately after its hand row, so
+             * it is applied to that row rather than searched for. It must
+             * never become a visible row of its own. */
+            if (strncmp(line, "ev_update\t", 10u) == 0)
+            {
+                if (pending_ev_row >= 0)
+                    strategy_table_apply_ev_update_at(app, (uint32_t)pending_ev_row,
+                                                      line);
+                pending_ev_row = -1;
+                cursor = end;
+                continue;
+            }
+            if (strncmp(line, "report_phase=", 13u) == 0)
             {
                 cursor = end;
                 continue;
             }
-            fields = sscanf(line, "%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\t]\t%639[^\n]",
-                            hand, node, actor, frequencies, ev);
-            if (fields == 5 && strcmp(hand, "hand") != 0 &&
-                is_card_hand_text(hand) &&
-                (street < 0 || street == scope_street) &&
-                (step_node < 0 || atoi(node) == step_node) &&
-                (!board || strstr(line, board) != NULL || scope_street == 0))
             {
-                strategy_table_add_row(app, line);
-                ++visible_rows;
-                table_started = 1;
+                char row_board[64];
+                row_board[0] = '\0';
+                fields = sscanf(line,
+                                "%127[^\t]\t%31[^\t]\t%31[^\t]\t%639[^\t]\t%639[^\t]\t%63[^\n]",
+                                hand, node, actor, frequencies, ev, row_board);
+                /* Six fields since the report gained a per-row board; five is
+                 * an older report, which simply has no board to filter on. */
+                if (fields >= 5)
+                    fields = 5;
+                trim_text(row_board);
+            }
+            if (fields == 5 && strcmp(hand, "hand") != 0 && is_card_hand_text(hand))
+            {
+                int row_node = atoi(node);
+                int row_street = result_node_street(app, row_node);
+                const char *row_board_text = strstr(line, "\t");
+                (void)row_board_text;
+                if ((street < 0 || row_street < 0 || street == row_street) &&
+                    (step_node < 0 || row_node == step_node) &&
+                    (!board || result_line_board_matches(line, board)) &&
+                    result_line_board_contains(line, app->result_board_cards,
+                                               app->solve_board_abstraction))
+                {
+                    pending_ev_row = (int)app->strategy_row_count;
+                    strategy_table_add_row(app, line);
+                    if ((int)app->strategy_row_count == pending_ev_row)
+                        pending_ev_row = -1;   /* row was rejected */
+                    else
+                    {
+                        ++visible_rows;
+                        table_started = 1;
+                    }
+                }
+                else
+                {
+                    pending_ev_row = -1;
+                }
             }
             cursor = end;
         }
-
-        cursor = strstr(output, "ev_update\t");
-        while (cursor)
-        {
-            const char *end = strchr(cursor, '\n');
-            size_t n = end ? (size_t)(end - cursor) : strlen(cursor);
-            char line[2048];
-            if (n >= sizeof(line)) n = sizeof(line) - 1u;
-            memcpy(line, cursor, n);
-            line[n] = '\0';
-            strategy_table_apply_ev_update(app, line);
-            cursor = end ? strstr(end + 1u, "ev_update\t") : NULL;
-        }
     }
     if (!table_started)
-        result_write_line(app->strategy_view, "No per-hand rows match the selected step.");
+    {
+        /* Say WHY there is nothing, because the usual cause is not a solve
+         * that has not converged.  A preflop-rooted run deals a fresh runout
+         * every iteration, so pinning cards is brutally selective: one card
+         * appears in ~9.6% of deals, two in ~0.75%, three in ~0.045%.  Three
+         * picked cards leave a couple of rows out of four thousand. */
+        if (app->result_board_cards[0])
+            textview_printf(app->strategy_view,
+                            "No per-hand rows contain %s.\n"
+                            "This is a runout filter, not a convergence problem: each\n"
+                            "iteration deals its own board, so one pinned card matches\n"
+                            "about 9.6%% of deals, two about 0.75%% and three about 0.05%%.\n"
+                            "Pin fewer cards, or solve that exact flop directly with a\n"
+                            "flop-rooted tree (SETUP: BOARD + POT AT ROOT).\n",
+                            app->result_board_cards);
+        else
+            result_write_line(app->strategy_view,
+                              "No per-hand rows match the selected step.");
+    }
 
     sort_monker_hands(app);
     update_active_action_totals(app);
-    if (!app->mkr_loaded && app->monker_hand_count > 0u)
-        render_card_preview(app, app->monker_hands[0].hand);
+    /* Nothing is selected until the user clicks a row.  Previewing row 0 and
+     * leaving selected_hand_index at 0 made an arbitrary hand look chosen. */
+    if (!app->mkr_loaded)
+    {
+        app->selected_hand_index = -1;
+        render_card_preview(app, NULL);
+    }
     if (app->strategy_table)
         tableview_update(app->strategy_table);
     if (app->strategy_grid_view)
@@ -5684,14 +6560,17 @@ static void render_strategy_view(App *app, const char *output)
 
 static void i_on_result_filter(App *app, Event *event)
 {
-    char output[131072];
     if (app)
     {
+        char *output = report_scratch(app);
         uint32_t sel = combo_get_selected(app->step_filter);
         app->active_step_index = sel > 0u ? (int)sel - 1 : -1;
         update_responses_for_active_step(app);
-        i_solve_copy_output(app, output, sizeof(output));
-        render_strategy_view(app, output);
+        if (output)
+        {
+            i_solve_copy_output(app, output, sizeof(app->solve_output));
+            render_strategy_view(app, output);
+        }
     }
     unref(event);
 }
@@ -5709,6 +6588,23 @@ static void i_solve_scan_line(App *app, const char *line)
     uint64_t samples = 0u;
     if (!app || !line)
         return;
+    if (strncmp(line, "interactive=", 12u) == 0)
+    {
+        /* NO LOCKING HERE.  i_solve_scan_line is called with solve_mutex
+         * already held, and every other field it touches is written bare for
+         * that reason.  Taking the lock again deadlocked the reader thread
+         * while it HELD the mutex, so the UI thread blocked forever in
+         * i_solve_update and the whole window froze the instant this marker
+         * arrived -- that is, right after the results appeared.
+         *
+         * A stopped run serves too: with no iteration cap, stopping is the
+         * only way a run ever ends, so refusing to serve after a stop put
+         * board queries out of reach entirely. */
+        app->solve_serving = (line[12] == '1');
+        if (app->solve_serving)
+            app->solve_cancel_requested = 0;
+        return;
+    }
     if (sscanf(line,
                "progress iteration=%" SCNu64 " total=%" SCNu64
                " fraction=%lf exploitability_mbb=%lf target_mbb=%lf",
@@ -5734,6 +6630,77 @@ static void i_solve_scan_line(App *app, const char *line)
         app->final_raw = raw;
         app->final_mbb = mbb;
         app->final_samples = samples;
+    }
+
+    /* The solver prints "solver_phase=complete stop_reason=<target|
+     * max_iterations> report=starting" at the end of every run.  Capture
+     * the verdict so i_solve_end can tell "target reached" apart from
+     * "safety cap reached" in exploitability-target mode. */
+    {
+        const char *marker = "stop_reason=";
+        const char *found = strstr(line, marker);
+        if (found != NULL)
+        {
+            char reason[32];
+            size_t length = 0u;
+            found += strlen(marker);
+            while (found[length] != '\0' && found[length] != ' ' &&
+                   found[length] != '\n' && found[length] != '\r' &&
+                   length + 1u < sizeof(reason))
+            {
+                reason[length] = found[length];
+                ++length;
+            }
+            reason[length] = '\0';
+            if (length > 0u)
+                snprintf(app->solve_stop_reason, sizeof(app->solve_stop_reason),
+                         "%s", reason);
+            /* solve_run_iterations was declared and read in four places but
+             * never assigned, so every message that quoted it said "0
+             * iterations".  The last progress line is what the run reached. */
+            app->solve_run_iterations = app->telemetry_iteration;
+        }
+    }
+
+    /* The solver's stop_detail line carries the cause the loop itself named,
+     * plus the footprint it held.  Keep it whole: when a run ends on its own
+     * this single line is the answer to "why". */
+    if (strstr(line, "stop_detail ") != NULL)
+        snprintf(app->solve_stop_detail, sizeof(app->solve_stop_detail),
+                 "%s", line);
+
+    /* The solver logs "checkpoint_saved=1 path=<file>" whenever it writes
+     * a checkpoint.  Capture the file path so the Resume button can be
+     * offered without the user having to type anything. */
+    if (strstr(line, "checkpoint_saved=1") != NULL)
+    {
+        const char *path_eq = strstr(line, "path=");
+        if (path_eq != NULL)
+        {
+            const char *path_start = path_eq + 5u;
+            size_t path_len = 0u;
+            while (path_start[path_len] != '\0' &&
+                   path_start[path_len] != ' ' &&
+                   path_start[path_len] != '\n' &&
+                   path_start[path_len] != '\r' &&
+                   path_len + 1u < sizeof(app->solve_checkpoint_path))
+            {
+                app->solve_checkpoint_path[path_len] = path_start[path_len];
+                ++path_len;
+            }
+            if (path_len > 0u)
+            {
+                app->solve_checkpoint_path[path_len] = '\0';
+                app->solve_checkpoint_available = 1;
+            }
+        }
+        else
+        {
+            /* No path= field: the solver wrote to the --checkpoint path
+             * we passed in; trust the command-line contract and enable
+             * Resume whenever a checkpoint was emitted. */
+            app->solve_checkpoint_available = 1;
+        }
     }
 }
 
@@ -5770,8 +6737,15 @@ static void i_solve_append_output(App *app, const char *data, size_t length)
     bmutex_lock(app->solve_mutex);
     /* Capture only the report, never the potentially megabytes of telemetry
      * preceding it.  The marker can be split across two pipe reads, hence the
-     * short probe carried between calls. */
-    if (!app->strategy_capture_started)
+     * short probe carried between calls.
+     *
+     * The search runs on every chunk, not just until the first report.  Each
+     * board query prints a fresh "STRATEGY REPORT", and latching the capture
+     * on the first one appended every later report behind it: the window
+     * below takes the FIRST "HAND TABLE" it finds, so the grid kept showing
+     * the opening report while the buffer filled with answers nobody saw --
+     * and once it was full, every new one was dropped in silence.  Restarting
+     * at each marker keeps the latest report, which is the one on screen. */
     {
         char combined[sizeof(app->strategy_marker_probe) + 2048u];
         size_t prefix = app->strategy_marker_probe_length;
@@ -5802,7 +6776,36 @@ static void i_solve_append_output(App *app, const char *data, size_t length)
             app->strategy_output_length = captured;
             app->strategy_output[captured] = '\0';
             app->strategy_capture_started = 1;
+            app->strategy_capture_truncated = 0;
             app->strategy_marker_probe_length = 0u;
+        }
+        else if (app->strategy_capture_started)
+        {
+            if (app->strategy_output_length < sizeof(app->strategy_output) - 1u)
+            {
+                size_t remaining = sizeof(app->strategy_output) - 1u -
+                                   app->strategy_output_length;
+                size_t captured = length < remaining ? length : remaining;
+                memcpy(app->strategy_output + app->strategy_output_length,
+                       data, captured);
+                app->strategy_output_length += captured;
+                app->strategy_output[app->strategy_output_length] = '\0';
+                if (captured < length)
+                    app->strategy_capture_truncated = 1;
+            }
+            else
+                app->strategy_capture_truncated = 1;
+            /* A marker split across this chunk and the next still has to be
+             * found, so keep probing while capturing. */
+            {
+                size_t keep = combined_length < marker_length - 1u
+                    ? combined_length : marker_length - 1u;
+                if (keep > sizeof(app->strategy_marker_probe) - 1u)
+                    keep = sizeof(app->strategy_marker_probe) - 1u;
+                memcpy(app->strategy_marker_probe,
+                       combined + combined_length - keep, keep);
+                app->strategy_marker_probe_length = keep;
+            }
         }
         else
         {
@@ -5814,16 +6817,6 @@ static void i_solve_append_output(App *app, const char *data, size_t length)
                    combined + combined_length - keep, keep);
             app->strategy_marker_probe_length = keep;
         }
-    }
-    else if (app->strategy_output_length < sizeof(app->strategy_output) - 1u)
-    {
-        size_t remaining = sizeof(app->strategy_output) - 1u -
-                           app->strategy_output_length;
-        size_t captured = length < remaining ? length : remaining;
-        memcpy(app->strategy_output + app->strategy_output_length,
-               data, captured);
-        app->strategy_output_length += captured;
-        app->strategy_output[app->strategy_output_length] = '\0';
     }
     i_solve_scan_output(app, data, length);
     app->solve_output_total += length;
@@ -5850,18 +6843,56 @@ static void i_solve_request_stop(App *app)
     Proc *proc;
     if (!app)
         return;
+    /* A serving solver has already finished its work and is only waiting for
+     * queries: ask it to quit so it exits cleanly, rather than signalling it
+     * as though a solve were being interrupted. */
+    if (i_solve_send(app, "quit\n") == 0)
+    {
+        bmutex_lock(app->solve_mutex);
+        app->solve_serving = 0;
+    app->solve_view_total = 0u;
+    app->solve_view_serving_applied = 0;
+        bmutex_unlock(app->solve_mutex);
+        return;
+    }
+    int escalate;
+    /* Decide under the lock, act OUTSIDE it.  bproc_terminate and especially
+     * bproc_cancel touch the process and its pipes and can block; holding
+     * solve_mutex across them deadlocked all three parties: the reader thread
+     * waited for the mutex inside i_solve_append_output, so it stopped
+     * draining the pipe, so the solver blocked writing to a full pipe, so the
+     * process call never returned.  The UI froze with the solver asleep at
+     * 0% CPU. */
     bmutex_lock(app->solve_mutex);
     app->solve_cancel_requested = 1;
     proc = app->solve_proc;
-    if (proc)
-        (void)bproc_cancel(proc);
+    escalate = app->solve_terminate_sent;
+    if (proc && !escalate)
+        app->solve_terminate_sent = 1;
     bmutex_unlock(app->solve_mutex);
-    button_text(app->solve_button, "Stopping...");
+
+    /* First click: SIGTERM so the solver can flush a checkpoint and a partial
+     * report.  A subsequent click escalates when it has not exited yet. */
+    if (proc)
+    {
+        if (!escalate)
+            (void)bproc_terminate(proc);
+        else
+            (void)bproc_cancel(proc);
+    }
+    button_text(app->solve_button,
+                app->solve_terminate_sent ? "Force kill" : "Stopping...");
     if (app->setup_run_state)
         label_text(app->setup_run_state, "STOPPING");
     if (app->setup_run_progress)
-        label_text(app->setup_run_progress, "Waiting for the solver safe point...");
-    status(app, "STOPPING\nThe solver is being stopped at the current safe point...");
+        label_text(app->setup_run_progress,
+                   app->solve_terminate_sent
+                       ? "Waiting for safe point (force kill pending)..."
+                       : "Waiting for the solver safe point...");
+    status(app,
+           app->solve_terminate_sent
+               ? "STOPPING (force)\nThe solver did not exit gracefully; sending SIGKILL."
+               : "STOPPING\nThe solver is being stopped at the current safe point...");
 }
 
 static uint32_t i_solve_main(App *app)
@@ -5873,11 +6904,17 @@ static uint32_t i_solve_main(App *app)
     uint32_t exit_code = 1u;
 
     proc = bproc_exec(app->solve_command, &error);
-    bmutex_lock(app->solve_mutex);
-    app->solve_proc = proc;
-    if (proc && app->solve_cancel_requested)
-        (void)bproc_cancel(proc);
-    bmutex_unlock(app->solve_mutex);
+    {
+        /* Same rule here: never call into the process while holding the
+         * mutex the reader thread needs. */
+        int cancel_now;
+        bmutex_lock(app->solve_mutex);
+        app->solve_proc = proc;
+        cancel_now = proc && app->solve_cancel_requested;
+        bmutex_unlock(app->solve_mutex);
+        if (cancel_now)
+            (void)bproc_cancel(proc);
+    }
     if (!proc)
     {
         i_solve_append_output(app, "Could not launch solver process.\n", 34u);
@@ -5905,8 +6942,13 @@ static uint32_t i_solve_main(App *app)
 
 static void i_solve_update(App *app)
 {
-    char output[64000];
+    /* These feed update_result_view, which builds the hand table.  A 64 KB
+     * stack copy silently kept only the tail of a multi-megabyte report, so
+     * the table showed a sliver of the run whatever the caps allowed. */
+    char *output;
     int running;
+    int capturing = 0;
+    size_t strat_len = 0u;
     uint64_t iteration = 0u;
     uint64_t total = 0u;
     double fraction = 0.0;
@@ -5915,47 +6957,291 @@ static void i_solve_update(App *app)
     int report_phase = 0;
     if (!app)
         return;
+    int serving;
     bmutex_lock(app->solve_mutex);
     running = app->solve_running;
+    serving = app->solve_serving;
+    capturing = app->strategy_capture_started;
+    strat_len = app->strategy_output_length;
     if (running)
         ++app->solve_update_count;
     bmutex_unlock(app->solve_mutex);
-    i_solve_copy_output(app, output, sizeof(output));
-    update_result_view(app, output, running);
-    update_strategy_view(app, output);
-    if (running && last_progress_line(output, &iteration, &total, &fraction,
+    /* The process is still up to answer board queries, but the solve itself
+     * is over: present it as finished so the user is not left staring at a
+     * progress bar that will never move again. */
+    if (serving)
+        running = 0;
+    /* Nothing new from a process that is only waiting for queries: there is
+     * nothing to redraw, and redrawing anyway is what froze the UI. */
+    {
+        size_t total;
+        bmutex_lock(app->solve_mutex);
+        total = app->solve_output_total;
+        bmutex_unlock(app->solve_mutex);
+        if (serving && total == app->solve_view_total &&
+            app->solve_view_serving_applied)
+            return;
+        app->solve_view_total = total;
+    }
+    output = report_scratch(app);
+    if (!output)
+        return;
+    {
+        /* Tick profiling for the UI freeze hunt.  Only slow ticks are
+         * reported, so the log stays readable; set PE_STUDIO_TICK_LOG=all to
+         * see every one. */
+        const char *tick_log = getenv("PE_STUDIO_TICK_LOG");
+        clock_t t0 = tick_log ? clock() : 0;
+        clock_t t1, t2, t3;
+        i_solve_copy_output(app, output, sizeof(app->solve_output));
+        t1 = tick_log ? clock() : 0;
+        update_result_view(app, output, running);
+        t2 = tick_log ? clock() : 0;
+        update_strategy_view(app, output);
+        t3 = tick_log ? clock() : 0;
+        if (tick_log)
+        {
+            double copy_ms = 1000.0 * (double)(t1 - t0) / CLOCKS_PER_SEC;
+            double result_ms = 1000.0 * (double)(t2 - t1) / CLOCKS_PER_SEC;
+            double strat_ms = 1000.0 * (double)(t3 - t2) / CLOCKS_PER_SEC;
+            double total_ms = copy_ms + result_ms + strat_ms;
+            if (total_ms > 50.0 || strcmp(tick_log, "all") == 0)
+            {
+                fprintf(stdout,
+                        "TICK serving=%d running=%d bytes=%zu copy=%.1fms "
+                        "result=%.1fms strategy=%.1fms total=%.1fms\n",
+                        serving, running, app->solve_view_total,
+                        copy_ms, result_ms, strat_ms, total_ms);
+                fflush(stdout);
+            }
+        }
+    }
+    if (serving)
+    {
+        app->solve_view_serving_applied = 1;
+        /* The button still stops the process, so it must not read "Solve
+         * this spot": while serving, solve_running is set and a click goes
+         * to the stop path. */
+        button_text(app->solve_button, "Release solver");
+        label_text(app->run_state, "READY FOR BOARD QUERIES");
+        label_text(app->setup_run_state, "READY FOR BOARD QUERIES");
+        {
+            int truncated;
+            bmutex_lock(app->solve_mutex);
+            truncated = app->strategy_capture_truncated;
+            bmutex_unlock(app->solve_mutex);
+            /* Say WHY the run ended.  "SOLVE COMPLETE" alone reads as "it
+             * finished", which is wrong for a run that was still going and
+             * stopped on a budget, a signal or a traversal failure. */
+            /* The budget stop needs the way out, not just the reason: at an
+             * exact board abstraction the infoset space has no bound, so
+             * "run longer" is not one of the options. */
+            const char *remedy =
+                strcmp(app->solve_stop_reason, "memory_budget") == 0
+                    ? "Every unsampled board is a new infoset, so an exact"
+                      " (none) abstraction grows without bound.  Use a coarser"
+                      " BOARD ABSTRACTION, cap the iterations, or raise the"
+                      " budget.\n"
+                    : "";
+            status(app,
+                   "SOLVE COMPLETE — SOLVER HELD OPEN FOR QUERIES\n"
+                   "Ended after %" PRIu64 " iterations, reason: %s.%s\n"
+                   "%s\n"
+                   "%s"
+                   "Click 3 to 5 cards in the BOARD MATRIX to ask the solver for that\n"
+                   "exact board's hand table; fewer cards just filter what is shown.\n"
+                   "Release solver (or Stop run) frees it and ends the session.",
+                   app->solve_run_iterations,
+                   app->solve_stop_reason[0] ? app->solve_stop_reason
+                                             : "not reported",
+                   truncated
+                       ? "  WARNING: the report did not fit the capture buffer,"
+                         " so the hand table below is a slice of it."
+                       : "",
+                   app->solve_stop_detail, remedy);
+        }
+    }
+    else if (running && capturing)
+    {
+        /* The solver stopped iterating and is streaming the per-hand
+         * report (empirical EVs are slow: seconds per row on big plo
+         * trees).  Say so explicitly — otherwise the run looks hung and
+         * the user clicks Stop again, SIGKILLing the report mid-write
+         * and leaving an empty grid (the #1 cause of "no results"). */
+        status(app,
+               "REPORTING\nstrategy report streaming (%.1f KB received)\n"
+               "The grid fills in live. Please wait — do NOT click Stop "
+               "again, it would kill the report.",
+               (double)strat_len / 1024.0);
+    }
+    else if (running && last_progress_line(output, &iteration, &total, &fraction,
                                       &exploitability, &target))
     {
-        report_phase = total > 0u && iteration >= total;
-        status(app,
-               "%s\niteration=%" PRIu64 "/%" PRIu64
-               " (%.1f%%)\nexploitability=%.2f mBB\n\n"
-               "%s",
-               report_phase ? "REPORTING" : "SOLVING",
-               iteration, total, fraction * 100.0, exploitability,
-               report_phase ? "Solver stopped; materialising the result table."
-                            : "Live result table is updating. Click Stop solve to interrupt.");
+        report_phase = total > 0u && total < STUDIO_NO_ITER_CAP && iteration >= total;
+        if (total >= STUDIO_NO_ITER_CAP)
+            status(app,
+                   "%s\niteration=%" PRIu64 " (no cap)\nexploitability=%.2f mBB / target=%.2f mBB\n\n"
+                   "%s",
+                   report_phase ? "REPORTING" : "SOLVING",
+                   iteration, exploitability, target,
+                   "Live result table is updating. Click Stop solve to interrupt.");
+        else
+            status(app,
+                   "%s\niteration=%" PRIu64 "/%" PRIu64
+                   " (%.1f%%)\nexploitability=%.2f mBB\n\n"
+                   "%s",
+                   report_phase ? "REPORTING" : "SOLVING",
+                   iteration, total, fraction * 100.0, exploitability,
+                   report_phase ? "Solver stopped; materialising the result table."
+                                : "Live result table is updating. Click Stop solve to interrupt.");
     }
 }
 
 static void i_solve_end(App *app, const uint32_t exit_code)
 {
-    char output[64000];
+    char *output;
     int cancelled;
+    int has_checkpoint;
     if (!app)
         return;
     bmutex_lock(app->solve_mutex);
     cancelled = app->solve_cancel_requested;
+    has_checkpoint = app->solve_checkpoint_available;
     app->solve_running = 0;
     app->solve_cancel_requested = 0;
+    app->solve_terminate_sent = 0;
+    app->solve_serving = 0;
+    app->solve_resume_mode = 0;
     bmutex_unlock(app->solve_mutex);
-    button_text(app->solve_button, "Solve this spot");
-    i_solve_copy_output(app, output, sizeof(output));
+    /* NOTE: output must be copied and the result/strategy views refreshed
+     * in every branch — otherwise the Results panel stays empty and the
+     * status shows "No output from solver." even on exit_code=0. */
+    output = report_scratch(app);
+    if (!output)
+        return;
+    i_solve_copy_output(app, output, sizeof(app->solve_output));
     update_result_view(app, output, 0);
     update_strategy_view(app, output);
-    status(app, "%s\nexit_code=%u\n%s",
-           cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
-           exit_code, output[0] ? output : "No output from solver.");
+    /* Temporary end-of-run diagnostics: what did the views actually
+     * receive?  Written to the status and dumped to
+     * /tmp/studio_last_output.txt for post-mortem analysis. */
+    {
+        char diag[320];
+        char gg[32] = "";
+        double raw = 0.0, mbb = 0.0, df = 0.0, de = 0.0, dg = 0.0;
+        uint64_t di = 0u, dt = 0u, ds = 0u;
+        size_t out_len, strat_len, solve_len;
+        int tv, fv, hp, hf;
+        FILE *dump;
+        bmutex_lock(app->solve_mutex);
+        strat_len = app->strategy_output_length;
+        solve_len = strlen(app->solve_output);
+        tv = app->telemetry_valid;
+        fv = app->final_metrics_valid;
+        bmutex_unlock(app->solve_mutex);
+        out_len = strlen(output);
+        hp = last_progress_line(output, &di, &dt, &df, &de, &dg);
+        hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds);
+        dump = fopen("/tmp/studio_last_output.txt", "w");
+        if (dump)
+        {
+            fwrite(output, 1u, out_len, dump);
+            fclose(dump);
+        }
+        snprintf(diag, sizeof(diag),
+                 "[diag out=%zu strat=%zu solve=%zu tv=%d fv=%d prog=%d final=%d "
+                 "reason=%s mode=%u rows=%u hands=%u]",
+                 out_len, strat_len, solve_len, tv, fv, hp, hf,
+                 app->solve_stop_reason, app->solve_stop_mode,
+                 app->strategy_row_count, app->monker_hand_count);
+        snprintf(app->solve_diag_line, sizeof(app->solve_diag_line), "%s", diag);
+    }
+    /* A checkpoint is only worth offering as "Resume" when continuing is
+     * meaningful.  A clean finish at the requested stop condition (mode 0
+     * max reached, or mode 1 target reached) would resume into a no-op —
+     * re-running an already-satisfied command — so fall back to a fresh
+     * solve there.  Resume stays for: manual stops, and mode-1 runs that
+     * hit the per-run iteration cap before reaching the target. */
+    if (!cancelled && has_checkpoint)
+    {
+        if ((app->solve_stop_mode == 0u &&
+             strcmp(app->solve_stop_reason, "max_iterations") == 0) ||
+            (app->solve_stop_mode == 1u &&
+             strcmp(app->solve_stop_reason, "target") == 0))
+        {
+            bmutex_lock(app->solve_mutex);
+            app->solve_checkpoint_available = 0;
+            bmutex_unlock(app->solve_mutex);
+            has_checkpoint = 0;
+        }
+    }
+    if (has_checkpoint && app->solve_checkpoint_path[0] != '\0' &&
+        (cancelled || app->solve_stop_mode == 1u || app->solve_stop_mode == 2u ||
+         app->solve_stop_reason[0] == '\0'))
+    {
+        if (!cancelled && app->solve_stop_mode == 1u &&
+            strcmp(app->solve_stop_reason, "max_iterations") == 0)
+        {
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "TARGET NOT REACHED\nexit_code=%u\nExploitability %.2f mBB is still above the %.2f mBB target after %" PRIu64 " iterations.\nClick \"Resume this spot\" to continue toward the target.\nCheckpoint: %s\n%s",
+                   exit_code, app->final_mbb, app->solve_run_target,
+                   app->solve_run_iterations, app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.");
+        }
+        else if (!cancelled &&
+                 strcmp(app->solve_stop_reason, "error") == 0)
+        {
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "SOLVE ENDED ON A TRAVERSAL ERROR\nexit_code=%u\nA sampled traversal returned a non-finite value after %" PRIu64 " iterations and the run ended there.  What the solve had is kept.\nThe solver's last lines below say at which iteration.\nCheckpoint: %s\n%s",
+                   exit_code, app->solve_run_iterations,
+                   app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.");
+        }
+        else if (!cancelled &&
+                 strcmp(app->solve_stop_reason, "memory_budget") == 0)
+        {
+            /* A run with no iteration cap grows its state space for as long
+             * as it runs.  It used to be the kernel that ended those, with
+             * everything lost; now the solver stops itself first and the
+             * checkpoint is on disk. */
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "MEMORY BUDGET REACHED\nexit_code=%u\nThe solve stopped itself after %" PRIu64 " iterations rather than be killed for memory; the strategy, the report and the checkpoint are intact.\nTo go further: use a coarser BOARD ABSTRACTION (it bounds how many infosets exist at all), cap the iterations, or raise the budget.\nCheckpoint: %s\n%s",
+                   exit_code, app->solve_run_iterations,
+                   app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.");
+        }
+        else
+        {
+            button_text(app->solve_button, "Resume this spot");
+            status(app, "%s\nexit_code=%u\nA checkpoint was saved to %s; click \"Resume this spot\" to continue, or change Setup / delete the .ckpt for a fresh solve.\n%s\n%s",
+                   cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
+                   exit_code, app->solve_checkpoint_path,
+                   output[0] ? output : "No output from solver.",
+                   app->solve_diag_line);
+        }
+    }
+    else
+    {
+        if (!cancelled && app->solve_stop_mode == 1u &&
+            strcmp(app->solve_stop_reason, "target") == 0)
+        {
+            char reached_line[128];
+            snprintf(reached_line, sizeof(reached_line),
+                     "TARGET REACHED: exploitability %.2f mBB <= target %.2f mBB.\n",
+                     app->final_mbb, app->solve_run_target);
+            button_text(app->solve_button, "Solve this spot");
+            status(app, "SOLVE RESULT\n%s\nexit_code=%u\n%s",
+                   reached_line, exit_code,
+                   output[0] ? output : "No output from solver.");
+        }
+        else
+        {
+            button_text(app->solve_button, "Solve this spot");
+            status(app, "%s\nexit_code=%u\n%s",
+                   cancelled ? "SOLVE STOPPED" : exit_code == 0u ? "SOLVE RESULT" : "SOLVE ERROR",
+                   exit_code, output[0] ? output : "No output from solver.");
+        }
+    }
 }
 
 static int i_start_solve(App *app, const char *command)
@@ -5969,7 +7255,10 @@ static int i_start_solve(App *app, const char *command)
         bmutex_unlock(app->solve_mutex);
         return -1;
     }
-    snprintf(app->solve_command, sizeof(app->solve_command), "%s", command);
+    /* snprintf with overlapping src/dst is UB; the Resume path used to
+     * call i_start_solve(app, app->solve_command). Guard it. */
+    if ((const void *)command != (const void *)app->solve_command)
+        snprintf(app->solve_command, sizeof(app->solve_command), "%s", command);
     app->solve_output[0] = '\0';
     app->solve_output_total = 0u;
     app->solve_line_length = 0u;
@@ -5990,6 +7279,7 @@ static int i_start_solve(App *app, const char *command)
     app->final_raw = 0.0;
     app->final_mbb = 0.0;
     app->final_samples = 0u;
+    app->solve_stop_reason[0] = '\0';
     app->player_evs_valid = 0;
     for (uint32_t player = 0u; player < MAX_PLAYERS_DISPLAY; ++player)
     {
@@ -5999,6 +7289,17 @@ static int i_start_solve(App *app, const char *command)
             label_text(app->lbl_player_evs[player], "—");
     }
     app->solve_cancel_requested = 0;
+    app->solve_terminate_sent = 0;
+    /* A fresh run replaces any prior checkpoint for this spot unless the
+     * caller is resuming from it.  In resume mode keep the path as a
+     * fallback until the solver re-emits checkpoint_saved=1; the flag is
+     * consumed here so the *next* fresh run starts clean. */
+    if (!app->solve_resume_mode)
+    {
+        app->solve_checkpoint_available = 0;
+        app->solve_checkpoint_path[0] = '\0';
+    }
+    app->solve_resume_mode = 0;
     app->solve_running = 1;
     app->solve_started_at = time(NULL);
     app->solve_update_count = 0u;
@@ -6017,6 +7318,45 @@ static int i_start_solve(App *app, const char *command)
     panel_visible_layout(app->pages, 1u);
     panel_update(app->pages);
     osapp_task(app, .10f, i_solve_main, i_solve_update, i_solve_end, App);
+    return 0;
+}
+
+/* i_rewrite_iterations replaces the first "--iterations <digits>" token in
+ * cmd with "--iterations <value>".  Returns 0 on success, -1 when the
+ * token is missing or the buffer is too small.  Used by Resume in
+ * exploitability-target mode to extend the safety cap so the continued
+ * run actually performs new iterations toward the target instead of
+ * exiting immediately (already at max). */
+static int i_rewrite_iterations(char *cmd, size_t capacity, uint64_t value)
+{
+    const char *flag = " --iterations ";
+    char *found;
+    char *digits;
+    char *end;
+    char replacement[64];
+    size_t head_len, tail_len, repl_len;
+    int repl;
+    if (!cmd || capacity == 0u)
+        return -1;
+    found = strstr(cmd, flag);
+    if (!found)
+        return -1;
+    digits = found + strlen(flag);
+    end = digits;
+    while (*end >= '0' && *end <= '9')
+        ++end;
+    if (end == digits)
+        return -1;
+    repl = snprintf(replacement, sizeof(replacement), " --iterations %" PRIu64, value);
+    if (repl <= 0 || (size_t)repl >= sizeof(replacement))
+        return -1;
+    repl_len = (size_t)repl;
+    head_len = (size_t)(found - cmd);
+    tail_len = strlen(end);
+    if (head_len + repl_len + tail_len + 1u > capacity)
+        return -1;
+    memmove(cmd + head_len + repl_len, end, tail_len + 1u);
+    memcpy(cmd + head_len, replacement, repl_len);
     return 0;
 }
 
@@ -6090,8 +7430,7 @@ static void i_on_solve(App *app, Event *event)
 {
     pe_monker_tree_header_t header;
     pe_monker_combo_layout_t layout;
-    char tree[2048], board[256], runner[2048], mkr[2048];
-    char range0[4200], range1[4200];
+    char tree[2048], board[256], runner[2048];
     char command[8192];
     size_t used = 0u;
     int board_cards;
@@ -6106,6 +7445,7 @@ static void i_on_solve(App *app, Event *event)
     const char *interval_text;
     uint64_t iterations;
     uint64_t interval;
+    uint64_t br_samples;
     double target_mbb;
     uint32_t stop_mode;
     pe_algorithm_preset_t algorithm;
@@ -6131,6 +7471,109 @@ static void i_on_solve(App *app, Event *event)
         return;
     }
     bmutex_unlock(app->solve_mutex);
+
+    /* The same button is reused for "Solve this spot" (fresh run) and
+     * "Resume this spot" (continue from the saved checkpoint).  When a
+     * checkpoint is available, re-issue the last solve command with
+     * --resume <ckpt> appended (before the trailing " 2>&1").
+     * Escape hatches for a fresh solve: switching to a different tree
+     * (different derived .ckpt) or deleting the .ckpt file falls through
+     * to the fresh path below. */
+    if (app->solve_checkpoint_available && app->solve_checkpoint_path[0] != '\0' &&
+        app->solve_command[0] != '\0')
+    {
+        char resume_cmd[8192];
+        char resume_quoted[1100];
+        const char *suffix = " 2>&1";
+        size_t base_len;
+        {
+            char expected_ckpt[1024];
+            int fresh_needed = 0;
+            if (tree_path && *tree_path &&
+                spot_checkpoint_path(tree_path, expected_ckpt,
+                                     sizeof(expected_ckpt)) == 0 &&
+                strcmp(expected_ckpt, app->solve_checkpoint_path) != 0)
+            {
+                fresh_needed = 1;
+            }
+            if (!fresh_needed)
+            {
+                FILE *probe = fopen(app->solve_checkpoint_path, "rb");
+                if (probe)
+                    fclose(probe);
+                else
+                    fresh_needed = 1;
+            }
+            if (fresh_needed)
+            {
+                bmutex_lock(app->solve_mutex);
+                app->solve_checkpoint_available = 0;
+                app->solve_checkpoint_path[0] = '\0';
+                app->solve_resume_mode = 0;
+                bmutex_unlock(app->solve_mutex);
+            }
+            else
+            {
+                snprintf(resume_cmd, sizeof(resume_cmd), "%s", app->solve_command);
+        base_len = strlen(resume_cmd);
+        {
+            size_t suffix_len = strlen(suffix);
+            if (base_len >= suffix_len &&
+                strcmp(resume_cmd + base_len - suffix_len, suffix) == 0)
+            {
+                resume_cmd[base_len - suffix_len] = '\0';
+                base_len -= suffix_len;
+            }
+        }
+        /* Don't stack --resume flags if the stored command already has one. */
+        if (strstr(resume_cmd, "--resume") == NULL &&
+            quote_argument(app->solve_checkpoint_path, resume_quoted,
+                           sizeof(resume_quoted)) == 0 &&
+            strlen(resume_cmd) + strlen(resume_quoted) + 32u < sizeof(resume_cmd))
+        {
+            snprintf(resume_cmd + strlen(resume_cmd),
+                     sizeof(resume_cmd) - strlen(resume_cmd),
+                     " --resume %s%s", resume_quoted, suffix);
+        }
+        else if (strstr(resume_cmd, "--resume") == NULL)
+        {
+            status(app, "SOLVE ERROR\nCheckpoint path is too long.");
+            unref(event);
+            return;
+        }
+        else if (strlen(resume_cmd) + strlen(suffix) + 1u < sizeof(resume_cmd))
+        {
+            snprintf(resume_cmd + strlen(resume_cmd),
+                     sizeof(resume_cmd) - strlen(resume_cmd), "%s", suffix);
+        }
+        /* Exploitability-target mode: runs carry no iteration cap
+         * (STUDIO_NO_ITER_CAP), so normally there is nothing to extend.
+         * Only extend when the stored cap is a legacy finite value from
+         * an older build; otherwise resume verbatim toward the target. */
+        if (app->solve_stop_mode == 1u && app->solve_run_iterations > 0u &&
+            app->solve_run_iterations < STUDIO_NO_ITER_CAP)
+        {
+            uint64_t extended = app->solve_run_iterations * 2u;
+            if (extended < app->solve_run_iterations || extended > STUDIO_NO_ITER_CAP)
+                extended = STUDIO_NO_ITER_CAP;
+            if (i_rewrite_iterations(resume_cmd, sizeof(resume_cmd), extended) == 0)
+                app->solve_run_iterations = extended;
+        }
+        app->solve_resume_mode = 1;
+        snprintf(app->solve_command, sizeof(app->solve_command), "%s", resume_cmd);
+        if (app->solve_stop_mode == 1u)
+            status(app, "RESUMING\nReissuing last solve command with --resume %s.\nContinues toward %.2f mBB (no iteration cap).",
+                   app->solve_checkpoint_path, app->solve_run_target);
+        else
+            status(app, "RESUMING\nReissuing last solve command with --resume %s.",
+                   app->solve_checkpoint_path);
+        if (i_start_solve(app, resume_cmd) != 0)
+            status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
+        unref(event);
+        return;
+            }
+        }
+    }
 
     if (!tree_path || !*tree_path || read_tree(app, tree_path, &header, &layout) != 0)
     {
@@ -6184,22 +7627,63 @@ static void i_on_solve(App *app, Event *event)
         unref(event);
         return;
     }
-    if (parse_ui_u64(iterations_text, &iterations) != 0 ||
-        parse_ui_u64(interval_text, &interval) != 0 ||
-        (stop_mode == 1u && (parse_ui_target(target_text, &target_mbb) != 0 ||
-                             target_mbb <= 0.0)))
+    /* The combo lists every preset the library knows, and the sampled driver
+     * refuses the full-tree ones outright.  Saying so here beats launching a
+     * process that exits with an error the user has to go and read. */
+    if (strcmp(algorithm_scope_name(algorithm), "Lane B sampled") != 0 &&
+        algorithm != PE_PRESET_CUSTOM)
     {
-        status(app, "SOLVE BLOCKED\nSet valid numeric values for max iterations,\nstop target mBB and convergence interval.");
+        status(app, "SOLVE BLOCKED\n%s is a %s preset and this driver is the\n"
+                    "sampled one; it will refuse the run.  Pick a Lane B\n"
+                    "sampled algorithm (external-mccfr is the reference).",
+               pe_preset_name(algorithm), algorithm_scope_name(algorithm));
         unref(event);
         return;
     }
-    if (stop_mode == 0u)
+    if (parse_ui_u64(iterations_text, &iterations) != 0 ||
+        parse_ui_u64(interval_text, &interval) != 0 ||
+        parse_ui_u64(edit_get_text(app->br_samples_edit), &br_samples) != 0 ||
+        (stop_mode == 1u && (parse_ui_target(target_text, &target_mbb) != 0 ||
+                             target_mbb <= 0.0)))
+    {
+        status(app, "SOLVE BLOCKED\nSet valid numeric values for max iterations,\nBR samples, stop target mBB and convergence interval.");
+        unref(event);
+        return;
+    }
+    /* The empirical BR is a sampled lower bound: too few rollouts and it
+     * simply fails to find the exploit, so an exploitability target is met
+     * long before the strategy deserves it.  Measured on a flop root, 1 mBB:
+     * 34k iterations at 32 samples, 325k at 256, 2.4M at 1024. */
+    if (stop_mode == 1u && br_samples < 64u)
+    {
+        status(app, "SOLVE BLOCKED\nAn exploitability target needs at least 64 BR samples.\n"
+                    "At 32 the estimate misses the exploit and the target is\n"
+                    "reported reached about ten times too early.");
+        unref(event);
+        return;
+    }
+    if (stop_mode != 1u)
         target_mbb = 0.0;
-    if (header.street == 0)
+    if (stop_mode != 0u)
+    {
+        /* Single stop option at a time: target-only (mode 1) and
+         * manual-only (mode 2) carry no iteration cap.  The core rejects
+         * max_iterations==0, so encode "no cap" as STUDIO_NO_ITER_CAP;
+         * the progress views render it as infinity. */
+        iterations = STUDIO_NO_ITER_CAP;
+    }
+    /* Lane B drives preflop AND flop/turn/river roots through the same
+     * sampled solver: pe-preflop-solve takes --street/--board/--pot to root
+     * the game at a street instead of at the blinds.  Everything else on
+     * this path (algorithm, backend, precision, stop rule, checkpoints)
+     * behaves identically on every street. */
+    if (header.street <= 3u)
     {
         pe_runtime_capabilities_t runtime;
         const pe_runtime_backend_info_t *info;
         char backend_display[96];
+        char root_options[512];
+        double root_pot = 0.0;
         const char *configured_runner = usable_optional_path(runner_path)
             ? runner_path : "pe-preflop-solve";
         if (strcmp(configured_runner, "pe-vector-sim") == 0)
@@ -6214,17 +7698,65 @@ static void i_on_solve(App *app, Event *event)
         if (header.player_count < 2u || header.player_count > 6u ||
             usable_optional_path(mkr_path))
         {
-            status(app, "SOLVE BLOCKED\nPreflop Lane B supports 2..6 players and solves the tree from ranges; .mkr import is not used by this path.");
+            status(app, "SOLVE BLOCKED\nLane B supports 2..6 players and solves the tree from ranges; .mkr import is not used by this path.");
             unref(event);
             return;
+        }
+        /* Postflop root: the board is the spot, and the pot is an input the
+         * tree cannot supply (the binary Monker header only carries
+         * committed chips at street zero, and clears them afterwards). */
+        root_options[0] = '\0';
+        if (header.street > 0u)
+        {
+            board_cards = card_count(board_text);
+            if (board_cards != street_cards((int)header.street))
+            {
+                status(app,
+                       "SOLVE BLOCKED\nExpected %d board cards for %s, received %d.",
+                       street_cards((int)header.street),
+                       street_name((int)header.street), board_cards);
+                unref(event);
+                return;
+            }
+            if (parse_ui_target(app->setup_pot_edit
+                                    ? edit_get_text(app->setup_pot_edit) : "",
+                                &root_pot) != 0 || root_pot <= 0.0)
+            {
+                status(app,
+                       "SOLVE BLOCKED\nA %s root needs POT AT ROOT (BB): there are no\n"
+                       "blinds to post postflop, so the money already in the middle\n"
+                       "must be entered.",
+                       street_name((int)header.street));
+                unref(event);
+                return;
+            }
+            if (quote_argument(board_text, board, sizeof(board)) != 0)
+            {
+                status(app, "SOLVE ERROR\nBoard text is too long.");
+                unref(event);
+                return;
+            }
+            /* first_to_act comes from the tree header; -1 means "unspecified"
+             * and the solver defaults to seat 0. */
+            (void)snprintf(root_options, sizeof(root_options),
+                           " --street %s --board %s --pot %.17g",
+                           street_name((int)header.street), board, root_pot);
+            if (header.first_to_act >= 0 &&
+                header.first_to_act < (int)header.player_count)
+            {
+                size_t root_len = strlen(root_options);
+                (void)snprintf(root_options + root_len,
+                               sizeof(root_options) - root_len,
+                               " --to-act %d", header.first_to_act);
+            }
         }
         if (!preflop_algorithm_supported_ui(algorithm))
         {
             status(app,
                    "SOLVE BLOCKED\n"
-                   "Lane B preflop currently supports sampled presets only:\n"
+                   "Lane B currently supports sampled presets only:\n"
                    "external-mccfr, external-dcfr, outcome-mccfr, external-ecfr.\n"
-                   "'%s' is a full-tree/experimental preset and has no preflop adapter yet.",
+                   "'%s' is a full-tree/experimental preset and has no Lane B adapter yet.",
                    pe_preset_name(algorithm));
             unref(event);
             return;
@@ -6237,12 +7769,37 @@ static void i_on_solve(App *app, Event *event)
         }
         if (backend == PE_COMPUTE_AUTO)
         {
-            backend = pe_runtime_recommended_backend(&runtime);
-            if (backend == PE_COMPUTE_AUTO)
+            /* For the external-sampling preflop driver the host loop is
+             * single-threaded.  Honour the user's thread count rather than
+             * always picking the backend with the highest measured
+             * single-kernel rate (which is a poor predictor for this driver
+             * on small preflop ranges).
+             *
+             *   threads == 1  -> cpu_ref (OpenMP pool stays dormant, no
+             *                    per-batch parallel-for overhead).
+             *   threads  > 1  -> cpu_par when available so the thread count
+             *                    the user typed is actually used by the
+             *                    per-batch kernels. */
+            const pe_runtime_backend_info_t *ref = &runtime.backends[PE_COMPUTE_CPU_REF];
+            const pe_runtime_backend_info_t *par = &runtime.backends[PE_COMPUTE_CPU_PAR];
+            if (threads > 1u && par->runtime_available && par->validated)
             {
-                status(app, "SOLVE BLOCKED\nNo validated CPU/GPU backend is available.");
-                unref(event);
-                return;
+                backend = PE_COMPUTE_CPU_PAR;
+            }
+            else if (ref->runtime_available && ref->validated)
+            {
+                backend = PE_COMPUTE_CPU_REF;
+                threads = 1u;
+            }
+            else
+            {
+                backend = pe_runtime_recommended_backend(&runtime);
+                if (backend == PE_COMPUTE_AUTO)
+                {
+                    status(app, "SOLVE BLOCKED\nNo validated CPU/GPU backend is available.");
+                    unref(event);
+                    return;
+                }
             }
         }
         info = &runtime.backends[backend];
@@ -6250,6 +7807,21 @@ static void i_on_solve(App *app, Event *event)
         {
             status(app, "SOLVE BLOCKED\nBackend %s is not usable: %s",
                    pe_compute_kind_name(backend), info->reason);
+            unref(event);
+            return;
+        }
+        /* The cpu_ref adapter enforces a single thread (cpu_threads must be 0
+         * or 1).  If the user explicitly picked cpu_ref with threads > 1,
+         * block the run with a clear message rather than silently clamping
+         * (silent clamps make the field look ignored).  The user can either
+         * lower CPU threads or switch the backend combo to cpu_par / auto. */
+        if (backend == PE_COMPUTE_CPU_REF && threads > 1u)
+        {
+            status(app,
+                   "SOLVE BLOCKED\nBackend %s is single-threaded; CPU threads is %" PRIu64
+                   " but cpu_ref can only use 1.\n"
+                   "Switch the backend combo to cpu_par (or auto) to use more than one CPU thread.",
+                   pe_compute_kind_name(backend), threads);
             unref(event);
             return;
         }
@@ -6294,14 +7866,19 @@ static void i_on_solve(App *app, Event *event)
                            dcfr_alpha, dcfr_beta, dcfr_gamma);
         }
         used = (size_t)snprintf(command, sizeof(command),
-                                "%s --game %s --players %u --tree %s"
+                                "%s --game %s --players %u --tree %s%s"
                                 " --iterations %" PRIu64 " --samples 1"
-                                " --br-samples 32 --target-mbb %.17g"
+                                " --br-samples %" PRIu64 " --target-mbb %.17g"
                                 " --exploitability-interval %" PRIu64
+                                " --report-rows %u"
+                                " --board-abstraction %s"
+                                " --interactive"
                                 "%s --threads %" PRIu64,
                                 runner, game_name(layout.game),
-                                header.player_count, tree, iterations,
-                                target_mbb, interval,
+                                header.player_count, tree, root_options,
+                                iterations, br_samples, target_mbb, interval,
+                                (unsigned)STUDIO_REPORT_ROWS,
+                                selected_board_abstraction(app),
                                 algorithm_options, threads);
         for (uint32_t player = 0u; player < header.player_count; ++player)
         {
@@ -6320,132 +7897,329 @@ static void i_on_solve(App *app, Event *event)
             used += (size_t)snprintf(command + used, sizeof(command) - used,
                                      " --range%u %s", player, range);
         }
+
+        /* Append --checkpoint <spot>.ckpt (and --resume if applicable).
+         * The solver writes its checkpoint next to the tree so a stopped
+         * run can be resumed without losing the math state. */
+        {
+            char ckpt_path[1024];
+            char ckpt_quoted[1100];
+            if (spot_checkpoint_path(tree_path, ckpt_path, sizeof(ckpt_path)) != 0)
+            {
+                status(app, "SOLVE ERROR\nCould not derive a checkpoint path for this spot.");
+                unref(event);
+                return;
+            }
+            if (quote_argument(ckpt_path, ckpt_quoted, sizeof(ckpt_quoted)) != 0)
+            {
+                status(app, "SOLVE ERROR\nCheckpoint path is too long.");
+                unref(event);
+                return;
+            }
+            used += (size_t)snprintf(command + used, sizeof(command) - used,
+                                     " --checkpoint %s", ckpt_quoted);
+            if (app->solve_resume_mode && app->solve_checkpoint_available &&
+                app->solve_checkpoint_path[0] != '\0')
+            {
+                char resume_quoted[1100];
+                if (quote_argument(app->solve_checkpoint_path, resume_quoted,
+                                   sizeof(resume_quoted)) == 0)
+                {
+                    used += (size_t)snprintf(command + used, sizeof(command) - used,
+                                             " --resume %s", resume_quoted);
+                }
+            }
+        }
+
         (void)snprintf(command + strlen(command), sizeof(command) - strlen(command),
                        " 2>&1");
+
+        /* Set OMP_NUM_THREADS for the spawned shell so any parallel region
+         * (per-batch kernel, terminal-eval microbench, future host-side
+         * parallel sampling) honors the user-selected thread count.  We
+         * prepend it because the inner solver is launched by /bin/bash -c. */
+        {
+            /* "exec env VAR=..." makes the shell REPLACE itself with the
+             * solver.  Without it bash keeps running as a parent (the
+             * trailing redirection stops it from exec-ing on its own), so
+             * bproc_terminate signalled bash and left the solver orphaned:
+             * it kept writing to the pipe, the reader never saw EOF, and the
+             * run stayed "running" forever with no way back. */
+            char env_prefix[64];
+            int prefix_len = snprintf(env_prefix, sizeof(env_prefix),
+                                      "exec env OMP_NUM_THREADS=%" PRIu64 " ",
+                                      threads);
+            size_t cmd_len = strlen(command);
+            if (prefix_len > 0 && (size_t)prefix_len + cmd_len + 1u < sizeof(command))
+            {
+                memmove(command + prefix_len, command, cmd_len + 1u);
+                memcpy(command, env_prefix, (size_t)prefix_len);
+            }
+        }
         snprintf(config_text, sizeof(config_text),
-                 "Lane B preflop | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
+                 "Lane B %s | algorithm %s | %s | stop: %s | target %.2f mBB | max %" PRIu64
                  " | check every %" PRIu64 " | %s / %s / %s / %" PRIu64 " threads"
-                 " | policy %s%s | SIMD %s",
-                 pe_preset_name(algorithm), algorithm_axes,
-                 stop_mode == 0u ? "iterations" : "exploitability",
-                 target_mbb, iterations, interval,
+" | policy %s%s | SIMD %s | boards %s",
+                  street_name((int)header.street),
+                  pe_preset_name(algorithm), algorithm_axes,
+                  stop_mode == 0u ? "iterations"
+                  : stop_mode == 1u ? "exploitability only (no iteration cap)"
+                  : "manual only (no cap, no target)",
+                  target_mbb, iterations, interval,
                  pe_preset_name(algorithm), backend_display,
                  pe_precision_name(precision), threads,
                  policy == PE_POLICY_COUNT ? "preset" : pe_policy_name(policy),
                  fabs(exponential_lambda - 1.0) > 1e-15 ? " (custom lambda)" : "",
-                 pe_runtime_simd_name(runtime.simd));
+                 pe_runtime_simd_name(runtime.simd),
+                 selected_board_abstraction(app));
         label_text(app->run_config, config_text);
-        status(app, "SOLVING PREFLOP\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\nSIMD detected: %s (CFR traversal scalar)\nEmpty ranges are 100%%; boards are dealt through river.",
-               command, pe_preset_name(algorithm), algorithm_axes,
-               backend_display, pe_runtime_simd_name(runtime.simd));
+        {
+            const char *parallel_note = (backend == PE_COMPUTE_CPU_PAR)
+                ? "OpenMP parallel regions run with the user-selected thread count;\n"
+                  "note: the external-sampling host loop is single-threaded (only per-batch\n"
+                  "kernels are parallel)."
+                : "The external-sampling host loop is single-threaded; per-batch kernels\n"
+                  "are scalar.  Pick cpu_par from the backend combo and increase CPU threads\n"
+                  "if you want OpenMP inside the per-batch kernels (only profitable on\n"
+                  "larger batches).";
+            const char *stop_note = (stop_mode == 1u)
+                ? "\nStop rule: exploitability target ONLY (no iteration cap) —\n"
+                  "runs until empirical exploitability <= target or you click Stop run."
+                : (stop_mode == 2u)
+                    ? "\nStop rule: manual only — runs until you click Stop run."
+                    : "";
+            /* A tree may span several streets: when the round-closing
+             * action of one street wires into a player node on the next, the
+             * board is dealt and the tree carries on there.  Only nodes on a
+             * street EARLIER than the root are unreachable -- play never
+             * walks backwards. */
+            char scope_note[256];
+            char root_note[192];
+            uint32_t unreachable = 0u;
+            scope_note[0] = '\0';
+            for (uint32_t street = 0u; street < header.street; ++street)
+                unreachable += app->tree_street_nodes[street];
+            if (unreachable > 0u)
+            {
+                snprintf(scope_note, sizeof(scope_note),
+                         "\nSCOPE WARNING: this tree holds %u decision node(s) on a "
+                         "street before the %s root; play never walks backwards, so "
+                         "those are unreachable.",
+                         unreachable, street_name((int)header.street));
+            }
+            if (header.street > 0u)
+                snprintf(root_note, sizeof(root_note),
+                         "Board %s is dead; pot %.2f BB and the stacks are taken as "
+                         "remaining (no blinds postflop). Later streets are dealt "
+                         "through river.",
+                         board_text && *board_text ? board_text : "(none)", root_pot);
+            else
+                snprintf(root_note, sizeof(root_note),
+                         "Empty ranges are 100%%; boards are dealt through river.");
+            status(app,
+                   "SOLVING %s\n%s\n\nAlgorithm: %s\nAxes: %s\nBackend: %s\n"
+                   "SIMD detected: %s (CFR traversal scalar)\nOMP_NUM_THREADS=%" PRIu64 "\n"
+                   "%s%s%s\n%s",
+                   street_name_upper((int)header.street),
+                   command, pe_preset_name(algorithm), algorithm_axes,
+                   backend_display, pe_runtime_simd_name(runtime.simd),
+                   threads, parallel_note, stop_note, scope_note, root_note);
+        }
+        app->solve_has_resolved = 1;
+        app->solve_board_abstraction = (int)combo_get_selected(
+            app->board_abstraction_combo);
+        app->solve_resolved_threads = (int)threads;
+        snprintf(app->solve_resolved_backend, sizeof(app->solve_resolved_backend),
+                 "%s", pe_compute_kind_name(backend));
+        app->solve_stop_mode = stop_mode;
+        app->solve_run_iterations = iterations;
+        app->solve_run_target = target_mbb;
         if (i_start_solve(app, command) != 0)
             status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
         unref(event);
         return;
     }
-    board_cards = card_count(board_text);
-    if (board_cards != street_cards(header.street))
-    {
-        status(app, "SOLVE BLOCKED\nExpected %d board cards for %s, received %d.",
-               street_cards(header.street), street_name(header.street), board_cards);
-        unref(event);
-        return;
-    }
-    if (header.street != 3)
-    {
-        status(app, "SOLVE BLOCKED\nVector CPU currently consumes river tree spots.\nUse Legacy CFR for %s trees.",
-               street_name(header.street));
-        unref(event);
-        return;
-    }
-    /* pe-vector-sim is a terminal evaluator/tree-path replay, not a CFR
-     * runner. Keep the setup controls honest for postflop trees: an
-     * explicitly requested GPU backend or non-reference precision cannot be
-     * silently ignored by the command. */
-    if (backend != PE_COMPUTE_AUTO && backend != PE_COMPUTE_CPU_REF)
-    {
-        status(app, "SOLVE BLOCKED\nPostflop vector evaluation currently uses CPU reference only.\n"
-               "CUDA/OpenCL are available for the sampled preflop solver when validated.");
-        unref(event);
-        return;
-    }
-    if (precision != PE_PREC_F64)
-    {
-        status(app, "SOLVE BLOCKED\nPostflop vector evaluation currently uses f64.\n"
-               "Select f64 or use the sampled preflop solver for alternate precision.");
-        unref(event);
-        return;
-    }
-    if (layout.combo_count == 0u && header.player_count != 2u)
-    {
-        status(app, "SOLVE BLOCKED\nThis native vector screen needs one external range per player; current tree has %u players.",
-               header.player_count);
-        unref(event);
-        return;
-    }
-    {
-        const char *configured_runner = usable_optional_path(runner_path) &&
-            strcmp(runner_path, "pe-preflop-solve") != 0
-            ? runner_path : "pe-vector-sim";
-        const char *resolved_runner = resolve_runner(configured_runner,
-                                                     "pe-vector-sim");
-        if (!resolved_runner)
-        {
-            status(app, "SOLVE ERROR\nCould not find pe-vector-sim next to Studio, in build/tools or in build-studio/tools.\nBuild the solver tools before starting a postflop run.");
-            unref(event);
-            return;
-        }
-        if (quote_argument(tree_path, tree, sizeof(tree)) != 0 ||
-            quote_argument(board_text, board, sizeof(board)) != 0 ||
-            quote_argument(resolved_runner, runner, sizeof(runner)) != 0)
-        {
-            status(app, "SOLVE ERROR\nPath is too long.");
-            unref(event);
-            return;
-        }
-    }
-    used = (size_t)snprintf(command, sizeof(command),
-                            "%s --game %s --board %s --players %u --tree %s",
-                            runner, game_name(layout.game), board,
-                            header.player_count, tree);
-    if (layout.combo_count == 0u)
-    {
-        if (!range0_text || !*range0_text || !range1_text || !*range1_text ||
-            quote_argument(range0_text, range0, sizeof(range0)) != 0 ||
-            quote_argument(range1_text, range1, sizeof(range1)) != 0)
-        {
-            status(app, "SOLVE BLOCKED\nEnter both external ranges for this rangeless tree.");
-            unref(event);
-            return;
-        }
-        used += (size_t)snprintf(command + used, sizeof(command) - used,
-                                 " --range0 %s --range1 %s", range0, range1);
-    }
-    if (usable_optional_path(mkr_path) && quote_argument(mkr_path, mkr, sizeof(mkr)) == 0)
-        (void)snprintf(command + used, sizeof(command) - used, " --mkr %s", mkr);
-    (void)snprintf(command + strlen(command), sizeof(command) - strlen(command), " 2>&1");
-    snprintf(config_text, sizeof(config_text),
-             "Postflop vector terminal | engine vector-terminal | CPU reference"
-             " | f64 | SIMD detected automatically | CFR controls not applicable");
-    label_text(app->run_config, config_text);
-    status(app, "EVALUATING POSTFLOP\n%s\n\nThis path replays the tree and evaluates terminal equities; it does not run CFR.", command);
-    if (i_start_solve(app, command) != 0)
-        status(app, "SOLVE ERROR\nCould not start the asynchronous solver task.");
+    /* Streets past river do not exist: the header is malformed or the
+     * file is not a spot tree. */
+    status(app,
+           "SOLVE BLOCKED\nThis tree declares street %u, which is not a\n"
+           "playable root (expected preflop, flop, turn or river).",
+           header.street);
     unref(event);
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Spot presets
+ *
+ * The settings that make a run work depend on what is being solved, and the
+ * dependency is not obvious from the controls.  Every number below was
+ * measured on this branch rather than chosen:
+ *
+ *   preflop-only tree      676 infosets.  Exact boards are bounded here, so
+ *                          "none" is both correct and finite.
+ *   single-street root     4 704 infosets on a flop root.  Also bounded, and
+ *                          this is the only shape that reaches a 1 mBB
+ *                          empirical target -- at 325k iterations with 256 BR
+ *                          samples.
+ *   4-street tree, large   77 801 infosets at 500k iterations, 77 210 at 2M:
+ *                          the whole space, at constant memory.  At 2M the
+ *                          median top action is 83-92% on every node, preflop
+ *                          and postflop, with almost no untouched infosets.
+ *   4-street tree, detailed 2 365 389 infosets at 500k and 4 168 559 at 2M --
+ *                          still growing, so it needs the memory budget and
+ *                          keeps board ranks in exchange.
+ *   4-street tree, none    ~25 new infosets per iteration, for ever.  It can
+ *                          only ever end on the memory budget, which is why
+ *                          no preset selects it.
+ * ------------------------------------------------------------------ */
+enum {
+    SPOT_PRESET_CUSTOM = 0,
+    SPOT_PRESET_PREFLOP,
+    SPOT_PRESET_ONE_STREET,
+    SPOT_PRESET_FULL_BOUNDED,
+    SPOT_PRESET_FULL_RANKS
+};
+
+static void i_on_spot_preset(App *app, Event *event)
+{
+    uint32_t choice;
+    if (!app || !app->spot_preset_combo)
+    {
+        unref(event);
+        return;
+    }
+    choice = combo_get_selected(app->spot_preset_combo);
+    /* A spot preset sets what the SHAPE of the tree decides -- the board key
+     * and the algorithm -- and nothing about when to stop.  How far to run is
+     * the CONVERGENCE combo beside it, because that is a judgement about the
+     * answer wanted, not about the spot.
+     *
+     * The algorithm is external-mccfr in every case, and that is a measured
+     * choice rather than a default.  On a flop root at 256 BR samples the
+     * empirical exploitability was, in mBB:
+     *
+     *              100k it.   200k it.   400k it.
+     *   mccfr        510.5      453.8       85.1
+     *   ecfr         297.8      297.8      113.4
+     *   dcfr         808.2      850.8      141.8
+     *   outcome     2325.5 at 200k -- three to eight times worse throughout
+     *
+     * and on the bounded full tree at 300k: dcfr 5423, ecfr 6101, mccfr 6158.
+     * Apart from outcome-mccfr, which is plainly bad, the spread is inside
+     * the estimator's own noise, so no preset claims a per-spot winner: they
+     * select the reference sampled algorithm, the best of them at the longest
+     * horizon measured, and leave the combo free. */
+    combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
+    switch (choice)
+    {
+    case SPOT_PRESET_PREFLOP:
+        combo_selected(app->board_abstraction_combo, 0u);   /* none: exact */
+        label_text(app->spot_preset_hint,
+                   "676 infosets: exact boards are finite here, so nothing is merged.");
+        break;
+    case SPOT_PRESET_ONE_STREET:
+        combo_selected(app->board_abstraction_combo, 0u);   /* none: exact */
+        label_text(app->spot_preset_hint,
+                   "4 704 infosets on a flop root: exact and finite, and the only\n"
+                   "shape that reaches 1 mBB.  Needs BOARD and POT AT ROOT.");
+        break;
+    case SPOT_PRESET_FULL_BOUNDED:
+        combo_selected(app->board_abstraction_combo, 2u);   /* large */
+        label_text(app->spot_preset_hint,
+                   "77k infosets, whole space by 500k iterations, constant memory.\n"
+                   "At 2M every node reads 83-92%, preflop and postflop.");
+        break;
+    case SPOT_PRESET_FULL_RANKS:
+        combo_selected(app->board_abstraction_combo, 1u);   /* detailed */
+        label_text(app->spot_preset_hint,
+                   "Keeps board ranks: 4.2M infosets at 2M iterations and still\n"
+                   "growing, so it runs against the memory budget.");
+        break;
+    case SPOT_PRESET_CUSTOM:
+    default:
+        label_text(app->spot_preset_hint,
+                   "Nothing changed.  A 4-street tree with exact boards is the one\n"
+                   "combination that cannot finish: it only ends on memory.");
+        break;
+    }
+    unref(event);
+    setup_update_context(app);
+}
+
+enum {
+    CONVERGENCE_CUSTOM = 0,
+    CONVERGENCE_QUICK,
+    CONVERGENCE_STANDARD,
+    CONVERGENCE_DEEP,
+    CONVERGENCE_TARGET,
+    CONVERGENCE_MANUAL
+};
+
+/* How far to run, kept apart from what is being run.  The iteration counts
+ * are the ones the measurements above are quoted at, so a preset and its
+ * hint always describe the same run. */
+static void i_on_convergence_preset(App *app, Event *event)
+{
+    uint32_t choice;
+    if (!app || !app->convergence_combo)
+    {
+        unref(event);
+        return;
+    }
+    choice = combo_get_selected(app->convergence_combo);
+    switch (choice)
+    {
+    case CONVERGENCE_QUICK:
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "100000");
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_STANDARD:
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "500000");
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_DEEP:
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "2000000");
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_TARGET:
+        combo_selected(app->stop_mode_combo, 1u);
+        edit_text(app->target_edit, "1.0");
+        edit_text(app->interval_edit, "256");
+        edit_text(app->br_samples_edit, "256");
+        break;
+    case CONVERGENCE_MANUAL:
+        combo_selected(app->stop_mode_combo, 2u);
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_CUSTOM:
+    default:
+        break;
+    }
+    unref(event);
+    setup_update_context(app);
 }
 
 static Panel *i_setup_panel(App *app)
 {
-    Panel *panel = panel_create();
+    /* The form is taller than any window it is likely to open in -- 34 rows of
+     * controls -- so the outer panel scrolls.  Without it the rows past the
+     * window's height simply could not be reached: the panel sized itself to
+     * its content and the content was clipped. */
+    Panel *panel = panel_scroll(FALSE, TRUE);
     Panel *form_panel = panel_create();
     Layout *root = layout_create(1, 1);
-    Layout *layout = layout_create(2, 30);
+    Layout *layout = layout_create(2, 35);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
     Label *tree_label = label_create();
     Label *mkr_label = label_create();
     Label *board_label = label_create();
+    Label *pot_label = label_create();
     Label *range0_label = label_create();
     Label *range1_label = label_create();
     Label *runner_label = label_create();
@@ -6457,6 +8231,10 @@ static Panel *i_setup_panel(App *app)
     Label *policy_label = label_create();
     Label *backend_label = label_create();
     Label *precision_label = label_create();
+    Label *abstraction_label = label_create();
+    Label *preset_label = label_create();
+    Label *convergence_label = label_create();
+    Label *br_samples_label = label_create();
     Label *lambda_label = label_create();
     Label *dcfr_alpha_label = label_create();
     Label *dcfr_beta_label = label_create();
@@ -6474,6 +8252,7 @@ static Panel *i_setup_panel(App *app)
     app->tree_edit = edit_create();
     app->mkr_edit = edit_create();
     app->board_edit = edit_create();
+    app->setup_pot_edit = edit_create();
     app->range0_edit = edit_create();
     app->range1_edit = edit_create();
     app->runner_edit = edit_create();
@@ -6489,7 +8268,12 @@ static Panel *i_setup_panel(App *app)
     app->dcfr_gamma_edit = edit_create();
     app->backend_combo = combo_create();
     app->precision_combo = combo_create();
+    app->board_abstraction_combo = combo_create();
     app->stop_mode_combo = combo_create();
+    app->spot_preset_combo = combo_create();
+    app->convergence_combo = combo_create();
+    app->spot_preset_hint = label_create();
+    app->br_samples_edit = edit_create();
     app->board_label = board_label;
     app->setup_run_state = label_create();
     app->setup_run_progress = label_create();
@@ -6501,6 +8285,7 @@ static Panel *i_setup_panel(App *app)
     label_text(tree_label, ".TREE");
     label_text(mkr_label, ".MKR (optional)");
     label_text(board_label, "BOARD (tree street)");
+    label_text(pot_label, "POT AT ROOT (BB, postflop trees)");
     label_text(range0_label, "RANGE PLAYER 1");
     label_text(range1_label, "RANGE PLAYER 2");
     label_text(runner_label, "SOLVER DRIVER");
@@ -6508,6 +8293,7 @@ static Panel *i_setup_panel(App *app)
     label_text(policy_label, "REGRET POLICY");
     label_text(backend_label, "COMPUTE BACKEND");
     label_text(precision_label, "PRECISION");
+    label_text(abstraction_label, "BOARD ABSTRACTION");
     label_text(lambda_label, "EXPONENTIAL LAMBDA");
     label_text(dcfr_alpha_label, "DCFR ALPHA");
     label_text(dcfr_beta_label, "DCFR BETA");
@@ -6517,6 +8303,10 @@ static Panel *i_setup_panel(App *app)
     label_text(target_label, "EXPLOITABILITY TARGET (mBB)");
     label_text(interval_label, "CONVERGENCE CHECK EVERY");
     label_text(condition_label, "STOP CONDITION");
+    label_text(preset_label, "SPOT PRESET (what is being solved)");
+    label_text(convergence_label, "CONVERGENCE (how far to run)");
+    label_text(br_samples_label, "BR SAMPLES (target accuracy)");
+    label_multiline(app->spot_preset_hint, TRUE);
     combo_add_elem(app->game_combo, "Hold'em", NULL);
     combo_add_elem(app->game_combo, "Short Deck NL", NULL);
     combo_add_elem(app->game_combo, "PLO4", NULL);
@@ -6567,13 +8357,48 @@ static Panel *i_setup_panel(App *app)
     combo_add_elem(app->precision_combo, "mixed", NULL);
     combo_add_elem(app->precision_combo, "fixed16", NULL);
     combo_selected(app->precision_combo, PE_PREC_F64);
+    /* Ordered finest first, so the useful choice sits next to "exact".
+     * small/medium/large ignore board ranks entirely -- 2, 3 and 7 classes
+     * for all 22100 flops -- so they merge a king-high board with a nine-high
+     * one.  Detailed keeps the ranks (366 flop classes) and is the level to
+     * pick when the board has to be played. */
+    combo_add_elem(app->board_abstraction_combo, "None (exact boards)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Detailed (366 flop classes)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Large (7 classes, no ranks)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Medium (3 classes, no ranks)", NULL);
+    combo_add_elem(app->board_abstraction_combo, "Small (2 classes, no ranks)", NULL);
+    combo_selected(app->board_abstraction_combo, 0u);
     button_text(browse_tree, "Browse...");
     button_text(browse_mkr, "Browse...");
     button_text(load, "Load and inspect tree");
     button_text(solve, "Solve this spot");
     button_text(stop, "Stop run");
+    combo_add_elem(app->spot_preset_combo, "Custom (leave settings alone)", NULL);
+    combo_add_elem(app->spot_preset_combo, "Preflop only - exact boards", NULL);
+    combo_add_elem(app->spot_preset_combo,
+                   "One street (flop/turn/river root) - exact", NULL);
+    combo_add_elem(app->spot_preset_combo,
+                   "Full tree, 4 streets - bounded (large)", NULL);
+    combo_add_elem(app->spot_preset_combo,
+                   "Full tree, 4 streets - rank-aware (detailed)", NULL);
+    combo_selected(app->spot_preset_combo, 0u);
+    combo_OnSelect(app->spot_preset_combo, listener(app, i_on_spot_preset, App));
+    combo_add_elem(app->convergence_combo, "Custom (leave settings alone)", NULL);
+    combo_add_elem(app->convergence_combo, "Quick look - 100k iterations", NULL);
+    combo_add_elem(app->convergence_combo, "Standard - 500k iterations", NULL);
+    combo_add_elem(app->convergence_combo, "Deep - 2M iterations", NULL);
+    combo_add_elem(app->convergence_combo,
+                   "Until 1 mBB (one-street roots only)", NULL);
+    combo_add_elem(app->convergence_combo, "Until I stop it", NULL);
+    combo_selected(app->convergence_combo, 0u);
+    combo_OnSelect(app->convergence_combo,
+                   listener(app, i_on_convergence_preset, App));
+    label_text(app->spot_preset_hint,
+               "Pick the shape of the spot and the settings that suit it are\n"
+               "applied; every number in the hints was measured, not guessed.");
     combo_add_elem(app->stop_mode_combo, "Max iterations (hard stop)", NULL);
     combo_add_elem(app->stop_mode_combo, "Exploitability target (mBB)", NULL);
+    combo_add_elem(app->stop_mode_combo, "Run forever (manual stop)", NULL);
     /* A new desktop run must finish deterministically unless the user opts
      * into a target-based run. A 1 mBB target is not expected to be reached by
      * the empirical Lane B estimate on a fresh tree, which previously left
@@ -6582,6 +8407,10 @@ static Panel *i_setup_panel(App *app)
     edit_phtext(app->tree_edit, "/path/to/spot.tree");
     edit_phtext(app->mkr_edit, "/path/to/strategy.mkr");
     edit_phtext(app->board_edit, "No board (preflop: automatic)");
+    /* Postflop roots carry no blinds: the money already in the middle is
+     * an input, and the binary Monker header only stores committed chips
+     * at street zero. Preflop runs ignore it (blinds build the pot). */
+    edit_phtext(app->setup_pot_edit, "Preflop: unused (blinds build the pot)");
     edit_phtext(app->range0_edit, "100%");
     edit_phtext(app->range1_edit, "100%");
     edit_text(app->runner_edit, "pe-preflop-solve");
@@ -6609,81 +8438,102 @@ static Panel *i_setup_panel(App *app)
                    listener(app, i_on_setup_state_change, App));
     edit_OnChange(app->board_edit,
                   listener(app, i_on_setup_state_change, App));
+    edit_OnChange(app->setup_pot_edit,
+                  listener(app, i_on_setup_state_change, App));
     layout_label(layout, title, 0, 0);
-    layout_label(layout, game_label, 0, 1);
-    layout_combo(layout, app->game_combo, 0, 2);
-    layout_label(layout, players_label, 1, 1);
-    layout_combo(layout, app->players_combo, 1, 2);
-    layout_label(layout, tree_label, 0, 3);
-    layout_edit(layout, app->tree_edit, 0, 4);
-    layout_button(layout, browse_tree, 1, 4);
-    layout_label(layout, mkr_label, 0, 5);
-    layout_edit(layout, app->mkr_edit, 0, 6);
-    layout_button(layout, browse_mkr, 1, 6);
-    layout_label(layout, board_label, 0, 7);
-    layout_edit(layout, app->board_edit, 0, 8);
-    layout_label(layout, range0_label, 0, 9);
-    layout_edit(layout, app->range0_edit, 0, 10);
-    layout_label(layout, range1_label, 1, 9);
-    layout_edit(layout, app->range1_edit, 1, 10);
-    layout_label(layout, algorithm_label, 0, 11);
-    layout_label(layout, backend_label, 1, 11);
-    layout_combo(layout, app->algorithm_combo, 0, 12);
-    layout_combo(layout, app->backend_combo, 1, 12);
-    layout_label(layout, precision_label, 0, 13);
-    layout_label(layout, threads_label, 1, 13);
-    layout_combo(layout, app->precision_combo, 0, 14);
-    layout_edit(layout, app->threads_edit, 1, 14);
-    layout_label(layout, policy_label, 0, 15);
-    layout_label(layout, lambda_label, 1, 15);
-    layout_combo(layout, app->policy_combo, 0, 16);
-    layout_edit(layout, app->lambda_edit, 1, 16);
-    layout_label(layout, dcfr_alpha_label, 0, 17);
-    layout_label(layout, dcfr_beta_label, 1, 17);
-    layout_edit(layout, app->dcfr_alpha_edit, 0, 18);
-    layout_edit(layout, app->dcfr_beta_edit, 1, 18);
-    layout_label(layout, dcfr_gamma_label, 0, 19);
-    layout_edit(layout, app->dcfr_gamma_edit, 0, 20);
-    layout_label(layout, runner_label, 1, 19);
-    layout_edit(layout, app->runner_edit, 1, 20);
-    layout_button(layout, load, 0, 21);
-    layout_button(layout, solve, 1, 21);
-    layout_label(layout, iterations_label, 0, 22);
-    layout_label(layout, condition_label, 1, 22);
-    layout_edit(layout, app->iterations_edit, 0, 23);
-    layout_combo(layout, app->stop_mode_combo, 1, 23);
-    layout_label(layout, target_label, 0, 24);
-    layout_label(layout, interval_label, 1, 24);
-    layout_edit(layout, app->target_edit, 0, 25);
-    layout_edit(layout, app->interval_edit, 1, 25);
-    layout_button(layout, stop, 1, 26);
-    layout_label(layout, app->runtime_label, 0, 27);
-    layout_label(layout, app->setup_run_state, 0, 28);
-    layout_label(layout, app->setup_run_progress, 1, 28);
-    layout_progress(layout, app->setup_progress_bar, 0, 29);
-    layout_label(layout, app->setup_run_metrics, 1, 29);
+    /* The preset comes first: it decides whether the run can finish at
+     * all, so it belongs above the controls it sets rather than under
+     * them. */
+    layout_label(layout, preset_label, 0, 1);
+    layout_label(layout, convergence_label, 1, 1);
+    layout_combo(layout, app->spot_preset_combo, 0, 2);
+    layout_combo(layout, app->convergence_combo, 1, 2);
+    layout_label(layout, app->spot_preset_hint, 0, 3);
+    layout_label(layout, game_label, 0, 4);
+    layout_combo(layout, app->game_combo, 0, 5);
+    layout_label(layout, players_label, 1, 4);
+    layout_combo(layout, app->players_combo, 1, 5);
+    layout_label(layout, tree_label, 0, 6);
+    layout_edit(layout, app->tree_edit, 0, 7);
+    layout_button(layout, browse_tree, 1, 7);
+    layout_label(layout, mkr_label, 0, 8);
+    layout_edit(layout, app->mkr_edit, 0, 9);
+    layout_button(layout, browse_mkr, 1, 9);
+    layout_label(layout, board_label, 0, 10);
+    layout_edit(layout, app->board_edit, 0, 11);
+    layout_label(layout, pot_label, 1, 10);
+    layout_edit(layout, app->setup_pot_edit, 1, 11);
+    layout_label(layout, range0_label, 0, 12);
+    layout_edit(layout, app->range0_edit, 0, 13);
+    layout_label(layout, range1_label, 1, 12);
+    layout_edit(layout, app->range1_edit, 1, 13);
+    layout_label(layout, algorithm_label, 0, 14);
+    layout_label(layout, backend_label, 1, 14);
+    layout_combo(layout, app->algorithm_combo, 0, 15);
+    layout_combo(layout, app->backend_combo, 1, 15);
+    layout_label(layout, precision_label, 0, 16);
+    layout_label(layout, threads_label, 1, 16);
+    layout_combo(layout, app->precision_combo, 0, 17);
+    layout_edit(layout, app->threads_edit, 1, 17);
+    layout_label(layout, policy_label, 0, 18);
+    layout_label(layout, lambda_label, 1, 18);
+    layout_combo(layout, app->policy_combo, 0, 19);
+    layout_edit(layout, app->lambda_edit, 1, 19);
+    layout_label(layout, dcfr_alpha_label, 0, 20);
+    layout_label(layout, dcfr_beta_label, 1, 20);
+    layout_edit(layout, app->dcfr_alpha_edit, 0, 21);
+    layout_edit(layout, app->dcfr_beta_edit, 1, 21);
+    layout_label(layout, dcfr_gamma_label, 0, 22);
+    layout_edit(layout, app->dcfr_gamma_edit, 0, 23);
+    layout_label(layout, runner_label, 1, 22);
+    layout_edit(layout, app->runner_edit, 1, 23);
+    layout_button(layout, load, 0, 24);
+    layout_button(layout, solve, 1, 24);
+    layout_label(layout, iterations_label, 0, 25);
+    layout_label(layout, condition_label, 1, 25);
+    layout_edit(layout, app->iterations_edit, 0, 26);
+    layout_combo(layout, app->stop_mode_combo, 1, 26);
+    layout_label(layout, target_label, 0, 27);
+    layout_label(layout, interval_label, 1, 27);
+    layout_edit(layout, app->target_edit, 0, 28);
+    layout_edit(layout, app->interval_edit, 1, 28);
+    layout_button(layout, stop, 1, 29);
+    layout_label(layout, app->runtime_label, 0, 30);
+    layout_label(layout, app->setup_run_state, 0, 31);
+    layout_label(layout, app->setup_run_progress, 1, 31);
+    layout_progress(layout, app->setup_progress_bar, 0, 32);
+    layout_label(layout, app->setup_run_metrics, 1, 32);
+    layout_label(layout, abstraction_label, 0, 33);
+    layout_label(layout, br_samples_label, 1, 33);
+    layout_combo(layout, app->board_abstraction_combo, 0, 34);
+    layout_edit(layout, app->br_samples_edit, 1, 34);
 
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
     layout_hmargin(layout, 0, 8);
     layout_vmargin(layout, 0, 8);
-    layout_vmargin(layout, 2, 8);
-    layout_vmargin(layout, 4, 8);
-    layout_vmargin(layout, 6, 8);
-    layout_vmargin(layout, 8, 8);
-    layout_vmargin(layout, 10, 8);
-    layout_vmargin(layout, 12, 8);
-    layout_vmargin(layout, 14, 8);
-    layout_vmargin(layout, 16, 8);
-    layout_vmargin(layout, 18, 8);
-    layout_vmargin(layout, 20, 8);
-    layout_vmargin(layout, 22, 8);
-    layout_vmargin(layout, 24, 8);
-    layout_vmargin(layout, 26, 8);
+    layout_vmargin(layout, 5, 8);
+    layout_vmargin(layout, 7, 8);
+    layout_vmargin(layout, 9, 8);
+    layout_vmargin(layout, 11, 8);
+    layout_vmargin(layout, 13, 8);
+    layout_vmargin(layout, 15, 8);
+    layout_vmargin(layout, 17, 8);
+    layout_vmargin(layout, 19, 8);
+    layout_vmargin(layout, 21, 8);
+    layout_vmargin(layout, 23, 8);
+    layout_vmargin(layout, 25, 8);
+    layout_vmargin(layout, 27, 8);
+    layout_vmargin(layout, 29, 8);
+    layout_vmargin(layout, 32, 8);
+    layout_vmargin(layout, 3, 8);
     panel_layout(form_panel, layout);
     layout_panel(root, form_panel, 0, 0);
     layout_margin(root, 10.0f);
+    /* Viewport for the scroller: the content keeps its natural height and
+     * the panel shows this much of it at a time. */
+    panel_size(panel, s2df(700, 900));
     panel_layout(panel, root);
     return panel;
 }
@@ -8189,10 +10039,31 @@ static App *i_create(void)
     window_panel(app->window, root);
     window_title(app->window, "poker-eval Studio");
     window_origin(app->window, v2df(100, 60));
-    /* SETUP contains the table, board matrix and up to eight seat rows.  The
-     * previous 1440x920 default was shorter than that layout and macOS could
-     * receive negative control origins while switching pages. */
-    window_client_size(app->window, s2df(1660, 1200));
+    /* SETUP contains the table, board matrix and up to eight seat rows, so the
+     * window wants to be tall -- but asking for more than the display has puts
+     * the bottom of every page off-screen where nothing can reach it, which is
+     * not a size the user can fix by dragging.  Ask for the layout's size,
+     * take the screen's when that is smaller, and leave room for the menu bar
+     * and dock; the pages scroll for whatever still does not fit. */
+    {
+        S2Df screen = gui_resolution();
+        real32_t width = 1660.0f;
+        real32_t height = 1200.0f;
+        real32_t max_width = screen.width > 0.0f ? screen.width - 80.0f : width;
+        real32_t max_height = screen.height > 0.0f ? screen.height - 160.0f
+                                                   : height;
+        if (max_width > 800.0f && width > max_width)
+            width = max_width;
+        if (max_height > 600.0f && height > max_height)
+            height = max_height;
+        window_client_size(app->window, s2df(width, height));
+        /* Worth a line in the log: a window that opens partly off-screen is
+         * indistinguishable from a layout bug until you know what the display
+         * reported. */
+        log_printf("display %.0fx%.0f -> window %.0fx%.0f",
+                   (double)screen.width, (double)screen.height,
+                   (double)width, (double)height);
+    }
     window_OnClose(app->window, listener(app, i_on_close, App));
     window_show(app->window);
     return app;

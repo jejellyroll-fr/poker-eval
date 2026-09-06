@@ -1,6 +1,11 @@
 # Prerequisites
 *.d
 
+# Solver runtime artifacts (checkpoints next to trees / CWD)
+*.ckpt
+# The Studio's Tree Builder writes its working tree to the CWD on save.
+/poker_eval_tree.json
+
 # Object files
 *.o
 *.ko
@@ -58,6 +63,8 @@ build/
 build-studio/
 build-coverage/
 build-omp/
+build-asan/
+build-ubsan/
 Testing/
 nul
 

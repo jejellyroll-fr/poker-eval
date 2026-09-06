@@ -1,0 +1,580 @@
+{
+  "version": 1,
+  "root": "sb_open",
+  "betProfiles": [
+    {
+      "id": "pot",
+      "sizes": [
+        1.0
+      ],
+      "pot_sizing": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "sb_open",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "bb_wins_walk"
+        },
+        {
+          "type": "call",
+          "next": "bb_option"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_raise"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": 0,
+        "first_to_act": 0,
+        "pot": 1.5,
+        "to_call": 1.0,
+        "current_bet": 1.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.5,
+          99.0
+        ],
+        "invested": [
+          0.5,
+          1.0
+        ],
+        "round_contrib": [
+          0.5,
+          1.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "bb_option",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "limped_pot"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "sb_facing_raise"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": 1,
+        "first_to_act": 0,
+        "pot": 2.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.0,
+          99.0
+        ],
+        "invested": [
+          1.0,
+          1.0
+        ],
+        "round_contrib": [
+          1.0,
+          1.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_raise",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_open"
+        },
+        {
+          "type": "call",
+          "next": "raise_called"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "sb_facing_3bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": 1,
+        "first_to_act": 0,
+        "pot": 5.0,
+        "to_call": 2.5,
+        "current_bet": 2.5,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          96.5,
+          99.0
+        ],
+        "invested": [
+          3.5,
+          1.0
+        ],
+        "round_contrib": [
+          3.5,
+          1.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_facing_raise",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "bb_wins_iso"
+        },
+        {
+          "type": "call",
+          "next": "iso_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": 0,
+        "first_to_act": 0,
+        "pot": 5.0,
+        "to_call": 3.0,
+        "current_bet": 3.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.0,
+          96.0
+        ],
+        "invested": [
+          1.0,
+          4.0
+        ],
+        "round_contrib": [
+          1.0,
+          4.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_facing_3bet",
+      "type": "player",
+      "street": "PREFLOP",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "bb_wins_3bet"
+        },
+        {
+          "type": "call",
+          "next": "three_bet_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": 0,
+        "first_to_act": 0,
+        "pot": 15.0,
+        "to_call": 8.0,
+        "current_bet": 8.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          96.5,
+          88.0
+        ],
+        "invested": [
+          3.5,
+          12.0
+        ],
+        "round_contrib": [
+          3.5,
+          12.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_wins_walk",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 1.5,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.5,
+          99.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          0,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "limped_pot",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 2.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.0,
+          99.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_open",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 5.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.5,
+          99.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "raise_called",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 7.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_wins_iso",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 5.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.5,
+          99.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          0,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "iso_called",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 8.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          96.0,
+          96.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_wins_3bet",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 15.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          99.5,
+          99.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          0,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "three_bet_called",
+      "type": "terminal",
+      "street": "PREFLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "PREFLOP",
+        "to_act": -1,
+        "first_to_act": 0,
+        "pot": 24.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [],
+        "board_revealed": 0,
+        "stacks": [
+          88.0,
+          88.0
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    }
+  ]
+}

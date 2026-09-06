@@ -60,6 +60,41 @@ typedef struct
     /* Showdown resolution. */
     int showdown_samples; /* sampled boards per called terminal */
     uint64_t showdown_seed;
+    /* Postflop root (Lane B street trees).  root_street == 0 (preflop)
+     * preserves the classic blind-posted root.  A nonzero street (flop /
+     * turn / river) roots the game there with the fixed board, pot and
+     * first actor below: blinds are ignored, stacks are taken as-is
+     * (remaining stacks), and hole cards are sampled per iteration with
+     * the board dead.  Tree decisions are followed on every street the
+     * tree declares; later streets roll out to showdown. */
+    int root_street;
+    uint64_t root_board; /* card mask of the fixed flop/turn/river board */
+    double root_pot;
+    int root_to_act; /* seating index to act first, -1 = seat 0 */
+    /* Every player holds the complete range ("any hand").  The `ranges`
+     * argument to pe_preflop_allin_game_create is then ignored and may be
+     * NULL: deals are drawn straight from the live deck.
+     *
+     * This is what makes 5- and 6-card Omaha solvable.  A full PLO6 range is
+     * C(52,6) = 20,358,520 combos -- 326 MB per player to store, and the
+     * enumerated proposal walks that list once per player per drawn deal.
+     * The complete-range draw is O(hole_cards) and yields the same
+     * distribution and the same importance weight.
+     *
+     * All-or-nothing on purpose: a mix of complete and explicit ranges would
+     * need per-choice completion checks that have no closed form. */
+    int complete_ranges;
+    /* Board abstraction folded into the infoset key
+     * (pe_texture_filter_level_t).  0 = none: boards are told apart exactly,
+     * up to the suit isomorphism that is always applied.
+     *
+     * Above zero, boards that a level cannot tell apart share a strategy, so
+     * one sampled board answers for every board in its texture class -- the
+     * standard way a sampled solver covers a board space it cannot enumerate.
+     * Unlike the suit isomorphism this is an APPROXIMATION: two boards of the
+     * same class are not the same game, and the strategy they share is an
+     * average of both.  Off by default for that reason. */
+    int board_texture_level;
 } pe_preflop_allin_rules_t;
 
 typedef struct pe_preflop_allin_game_t pe_preflop_allin_game_t;
@@ -101,12 +136,37 @@ int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game);
 void pe_preflop_allin_game_set_storage(pe_preflop_allin_game_t *game,
                                        pe_storage_t *storage);
 
+/* Bound the description table to `max_bytes` (0 = unbounded, the default).
+ *
+ * Descriptions exist only so a report can print human-readable rows, and a
+ * report prints a few thousand of them.  A sampled multi-street solve
+ * materialises tens of millions of infosets, and at 448 bytes each the table
+ * was three quarters of the solve's memory -- the run hit its memory budget
+ * paying for rows nobody would ever read.  Past the bound, recording stops
+ * and the solve carries on at full accuracy; the descriptions kept are the
+ * earliest, which are also the most-visited and so the ones worth reporting.
+ */
+void pe_preflop_allin_game_set_desc_limit(pe_preflop_allin_game_t *game,
+                                          size_t max_bytes);
+
+/* Bytes the description table holds, and whether the bound above stopped it
+ * from recording more. */
+size_t pe_preflop_allin_infodesc_bytes(const pe_preflop_allin_game_t *game);
+int pe_preflop_allin_infodesc_limited(const pe_preflop_allin_game_t *game);
+
 /* Betting-context description recorded the first time an infoset key is
  * produced, for human-readable exports. Stable until destroy. */
 size_t pe_preflop_allin_infodesc_count(const pe_preflop_allin_game_t *game);
 int pe_preflop_allin_infodesc_at(const pe_preflop_allin_game_t *game,
                                  size_t index, uint64_t *out_key,
                                  char *out_text, size_t text_capacity);
+
+/* Index of the description recorded for `key`, or -1 when the key was never
+ * seen.  The game already maintains the key -> index map that recording needs,
+ * so a reader has no reason to scan the descriptions itself: a report that did
+ * was quadratic in the number of infosets, which on a long solve is millions. */
+int pe_preflop_allin_infodesc_find(const pe_preflop_allin_game_t *game,
+                                   uint64_t key, size_t *out_index);
 
 int pe_preflop_allin_infodesc_view_at(
     const pe_preflop_allin_game_t *game, size_t index,

@@ -1,0 +1,544 @@
+{
+  "version": 1,
+  "root": "bb_first",
+  "betProfiles": [
+    {
+      "id": "pot",
+      "sizes": [
+        1.0
+      ],
+      "pot_sizing": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "bb_first",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "sb_after_check"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "sb_facing_bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 7.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_after_check",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "call",
+          "next": "showdown_checked"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_bet"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": 0,
+        "first_to_act": 1,
+        "pot": 7.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "id": "sb_facing_bet",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "bb_wins_bet"
+        },
+        {
+          "type": "call",
+          "next": "showdown_bet_called"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "bb_facing_raise"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": 0,
+        "first_to_act": 1,
+        "pot": 14.0,
+        "to_call": 7.0,
+        "current_bet": 7.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          89.5
+        ],
+        "invested": [
+          0,
+          7.0
+        ],
+        "round_contrib": [
+          0,
+          7.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_bet",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_bet"
+        },
+        {
+          "type": "call",
+          "next": "showdown_bet_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 14.0,
+        "to_call": 7.0,
+        "current_bet": 7.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          89.5,
+          96.5
+        ],
+        "invested": [
+          7.0,
+          0
+        ],
+        "round_contrib": [
+          7.0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_facing_raise",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "pot",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "sb_wins_raise"
+        },
+        {
+          "type": "call",
+          "next": "showdown_raise_called"
+        }
+      ],
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": 1,
+        "first_to_act": 1,
+        "pot": 35.0,
+        "to_call": 14.0,
+        "current_bet": 14.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          75.5,
+          89.5
+        ],
+        "invested": [
+          21.0,
+          7.0
+        ],
+        "round_contrib": [
+          21.0,
+          7.0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_checked",
+      "type": "terminal",
+      "street": "FLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 7.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "bb_wins_bet",
+      "type": "terminal",
+      "street": "FLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 14.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          0,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_bet",
+      "type": "terminal",
+      "street": "FLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 14.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_bet_called",
+      "type": "terminal",
+      "street": "FLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 21.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "sb_wins_raise",
+      "type": "terminal",
+      "street": "FLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 35.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          0
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "showdown_raise_called",
+      "type": "terminal",
+      "street": "FLOP",
+      "snapshot": {
+        "defined": true,
+        "num_players": 2,
+        "street": "FLOP",
+        "to_act": -1,
+        "first_to_act": 1,
+        "pot": 49.0,
+        "to_call": 0.0,
+        "current_bet": 0.0,
+        "raises_made": 0,
+        "board": [
+          50,
+          20,
+          28
+        ],
+        "board_revealed": 3,
+        "stacks": [
+          96.5,
+          96.5
+        ],
+        "invested": [
+          0,
+          0
+        ],
+        "round_contrib": [
+          0,
+          0
+        ],
+        "active": [
+          1,
+          1
+        ],
+        "acted": [
+          1,
+          1
+        ]
+      }
+    }
+  ]
+}

@@ -8,6 +8,8 @@
  */
 
 #include <poker_eval/solver/pe_preflop_allin_game.h>
+#include <poker_eval/engine/solvers/cfr/board_canonical.h>
+#include <poker_eval/engine/solvers/cfr/board_texture.h>
 
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 
@@ -30,20 +32,24 @@
 #define PREFLOP_MAX_ACTIONS 16
 #define PREFLOP_DESC_TEXT 192
 
+/* A description holds only what cannot be recomputed.  The context line, the
+ * hand string and the action labels used to be stored here as well, 1216 of
+ * the record's 1728 bytes, and every one of them is a formatting of `state`
+ * that preflop_desc_format below reproduces on demand.  An uncapped run
+ * materialises tens of millions of these, so the strings were most of the
+ * solver's memory -- paid on every infoset the solve ever sees, to serve the
+ * handful of rows a report actually prints. */
 typedef struct
 {
     uint64_t key;
-    char text[PREFLOP_DESC_TEXT];
     pe_preflop_betting_state_t state;
-    int actor;
-    int tree_node_index;
-    double pot;
-    double to_call;
-    char hand[32];
-    uint16_t action_count;
-    char actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS]
-                 [PE_PREFLOP_ALLIN_MAX_ACTION_LABEL];
 } preflop_infodesc_t;
+
+typedef struct
+{
+    uint64_t key;
+    uint32_t index; /* desc_count + 1; 0 marks the slot empty */
+} preflop_desc_slot_t;
 
 struct pe_preflop_allin_game_t
 {
@@ -61,10 +67,96 @@ struct pe_preflop_allin_game_t
     pe_external_game_t external;
     pe_storage_t *storage;
     EvalContext *eval_ctx;
-    preflop_infodesc_t *descs;
+    /* Descriptions live in fixed-size chunks rather than one array.  A
+     * description is ~1.3 KB and a long solve materialises millions of them,
+     * so doubling a single block meant repeatedly copying gigabytes; the
+     * chunks never move. */
+    preflop_infodesc_t **desc_chunks;
+    size_t desc_chunk_count;
     size_t desc_count;
-    size_t desc_capacity;
+    /* Open-addressed key -> desc_index+1 map (slot == 0 means empty).
+     * Without it preflop_record_desc scanned every description already
+     * recorded on every infoset visit, which is quadratic in the number of
+     * infosets and was the dominant cost of a long solve.
+     *
+     * The slot carries its own copy of the key.  Probing through the
+     * descriptions instead would read one 1.3 KB record per probe, scattered
+     * over gigabytes: a cache and TLB miss each time, which cost more than
+     * the scan it replaced once the table stopped fitting in cache. */
+    preflop_desc_slot_t *desc_index;
+    size_t desc_index_mask;
+    size_t desc_limit_bytes;   /* 0 = unbounded */
+    int desc_limited;          /* set once the bound stopped a recording */
 };
+
+#define PREFLOP_DESC_CHUNK 1024u
+
+static preflop_infodesc_t *preflop_desc_at(const pe_preflop_allin_game_t *game,
+                                           size_t index)
+{
+    return &game->desc_chunks[index / PREFLOP_DESC_CHUNK]
+                             [index % PREFLOP_DESC_CHUNK];
+}
+
+/* Make room for description `index`, allocating a chunk when it starts one. */
+static int preflop_desc_reserve(pe_preflop_allin_game_t *game, size_t index)
+{
+    size_t chunk = index / PREFLOP_DESC_CHUNK;
+    if (chunk < game->desc_chunk_count && game->desc_chunks[chunk])
+        return 0;
+    if (chunk >= game->desc_chunk_count)
+    {
+        size_t capacity = game->desc_chunk_count ? game->desc_chunk_count * 2u
+                                                 : 16u;
+        preflop_infodesc_t **grown;
+        while (capacity <= chunk)
+            capacity *= 2u;
+        grown = (preflop_infodesc_t **)realloc(
+            game->desc_chunks, capacity * sizeof(*grown));
+        if (!grown)
+            return -1;
+        game->desc_chunks = grown;
+        for (size_t i = game->desc_chunk_count; i < capacity; ++i)
+            game->desc_chunks[i] = NULL;
+        game->desc_chunk_count = capacity;
+    }
+    if (!game->desc_chunks[chunk])
+    {
+        game->desc_chunks[chunk] = (preflop_infodesc_t *)calloc(
+            PREFLOP_DESC_CHUNK, sizeof(preflop_infodesc_t));
+        if (!game->desc_chunks[chunk])
+            return -1;
+    }
+    return 0;
+}
+
+/* Descriptions plus the map that indexes them.  This counts what the game
+ * asked for, not what the allocator took: measured against a real solve it
+ * lands ~15% under RSS, the difference being allocator overhead and the fixed
+ * cost of the tree and eval contexts.  A budget set against it should leave
+ * headroom, which is why the default is a fraction of RAM and not all of it. */
+static size_t preflop_footprint_total(const pe_preflop_allin_game_t *game)
+{
+    size_t total;
+    if (!game)
+        return 0u;
+    total = game->desc_count * sizeof(preflop_infodesc_t);
+    total += game->desc_chunk_count * sizeof(preflop_infodesc_t *);
+    if (game->desc_index)
+        total += (game->desc_index_mask + 1u) * sizeof(preflop_desc_slot_t);
+    return total;
+}
+
+static size_t preflop_footprint_bytes(void *user)
+{
+    /* The external game's `user` is the betting game (that is what
+     * pe_preflop_betting_game_init puts there); the allin game is one hop
+     * further, in its `user`.  Every other callback here arrives through the
+     * betting ops and is handed the allin game directly, which is why this
+     * one looks different. */
+    const pe_preflop_betting_game_t *betting_game = user;
+    return preflop_footprint_total(betting_game ? betting_game->user : NULL);
+}
 
 static int tree_action_to_semantic(const mpf_tree_node_t *node, int index,
                                    pe_action_t *out)
@@ -114,6 +206,47 @@ static int tree_action_to_semantic(const mpf_tree_node_t *node, int index,
     default:
         return -1;
     }
+}
+
+/* Tree action semantics depend on the betting state it is played in.
+ *
+ * Monker-style trees name the aggressive edge "raise" and the passive one
+ * "call" on every street, but the betting state machine distinguishes
+ * bet/check (nothing outstanding) from raise/call (a live bet).  Preflop
+ * the big blind always leaves something to call, so only CALL -> CHECK ever
+ * fired; a flop/turn/river root opens with to_call == 0, where an unmapped
+ * "raise" is rejected as illegal and the node collapses to a single check.
+ * Translate both edges here so the tree means the same thing on any street.
+ *
+ * Note the two conversions read different quantities, matching what
+ * pe_betting_action_is_legal() checks: CHECK is about this player's own
+ * outstanding amount, BET about whether anyone has bet this round at all. */
+static int tree_action_to_semantic_in_state(const mpf_tree_node_t *node,
+                                            int index,
+                                            const pe_betting_state_t *betting,
+                                            pe_action_t *out)
+{
+    int actor;
+    double contribution;
+    double outstanding;
+
+    if (tree_action_to_semantic(node, index, out) != 0)
+        return -1;
+    if (!betting)
+        return 0;
+    actor = betting->to_act;
+    contribution = actor >= 0 ? betting->round_contrib[actor] : 0.0;
+    outstanding = betting->to_call > contribution
+                      ? betting->to_call - contribution : 0.0;
+    if (out->kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
+        out->kind = PE_ACTION_CHECK;
+    else if (out->kind == PE_ACTION_RAISE && betting->to_call <= PREFLOP_EPSILON)
+    {
+        out->kind = PE_ACTION_BET;
+        out->amount_kind = PE_AMOUNT_CHIPS;
+        out->amount = out->amount;
+    }
+    return 0;
 }
 
 static const mpf_tree_node_t *preflop_tree_node(
@@ -187,30 +320,37 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
     uint16_t i;
     int index;
 
-    if (game->rules.tree && state->street == PE_HOLDEM_PREFLOP &&
-        state->tree_node_index >= 0)
+    /* Tree-bound enumeration.  The tree is followed on whatever street
+     * its nodes declare (single-street Monker files carry one street;
+     * JSON trees may carry several): a node only constrains states on
+     * its own street.  Preflop mismatch keeps the legacy empty action
+     * set; off-tree postflop states fall through to generic betting. */
+    if (game->rules.tree && state->tree_node_index >= 0)
     {
         const mpf_tree_node_t *node = preflop_tree_node(game, state);
-        uint16_t kept = 0u;
-        if (!node || node->type != MPF_TREE_NODE_PLAYER ||
-            node->acting_player != betting->to_act)
-            return 0u;
-        for (index = 0; index < node->action_count && kept < max_actions; ++index)
+        if (node && node->type == MPF_TREE_NODE_PLAYER &&
+            node->acting_player == betting->to_act &&
+            (int)node->street == (int)state->street)
         {
-            pe_action_t candidate;
-            if (tree_action_to_semantic(node, index, &candidate) != 0)
-                continue;
-            if (candidate.kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
-                candidate.kind = PE_ACTION_CHECK;
-            if (pe_betting_action_is_legal(betting, &game->betting_rules,
-                                           &candidate) == PE_BETTING_OK)
+            uint16_t kept = 0u;
+            for (index = 0; index < node->action_count && kept < max_actions; ++index)
             {
-                if (out)
-                    out[kept] = candidate;
-                ++kept;
+                pe_action_t candidate;
+                if (tree_action_to_semantic_in_state(node, index, betting,
+                                                     &candidate) != 0)
+                    continue;
+                if (pe_betting_action_is_legal(betting, &game->betting_rules,
+                                               &candidate) == PE_BETTING_OK)
+                {
+                    if (out)
+                        out[kept] = candidate;
+                    ++kept;
+                }
             }
+            return kept;
         }
-        return kept;
+        if ((int)state->street == (int)PE_HOLDEM_PREFLOP)
+            return 0u;
     }
 
     if (betting->terminal || betting->round_complete || betting->to_act < 0)
@@ -347,91 +487,143 @@ static int tree_action_matches(const pe_action_t *wanted,
  * Infset identity and descriptions
  * ------------------------------------------------------------------ */
 
+/* The description table is keyed by the same 64-bit infoset key the storage
+ * uses, so a plain open-addressed map over it is enough: the key is already
+ * well mixed and needs no further hashing beyond the mask. */
+static size_t preflop_desc_slot(const pe_preflop_allin_game_t *game,
+                                uint64_t key)
+{
+    size_t slot = (size_t)key & game->desc_index_mask;
+    while (game->desc_index[slot].index != 0u &&
+           game->desc_index[slot].key != key)
+        slot = (slot + 1u) & game->desc_index_mask;
+    return slot;
+}
+
+/* Rebuild the map at `slots` entries.  Returns -1 and leaves the old map in
+ * place on allocation failure; the caller then keeps the descriptions it has
+ * rather than losing them. */
+static int preflop_desc_index_rebuild(pe_preflop_allin_game_t *game,
+                                      size_t slots)
+{
+    preflop_desc_slot_t *table =
+        (preflop_desc_slot_t *)calloc(slots, sizeof(*table));
+    preflop_desc_slot_t *old = game->desc_index;
+    size_t old_slots = old ? game->desc_index_mask + 1u : 0u;
+    if (!table)
+        return -1;
+    game->desc_index = table;
+    game->desc_index_mask = slots - 1u;
+    for (size_t i = 0u; i < old_slots; ++i)
+    {
+        size_t slot;
+        if (old[i].index == 0u)
+            continue;
+        slot = (size_t)old[i].key & game->desc_index_mask;
+        while (game->desc_index[slot].index != 0u)
+            slot = (slot + 1u) & game->desc_index_mask;
+        game->desc_index[slot] = old[i];
+    }
+    free(old);
+    return 0;
+}
+
 static void preflop_record_desc(pe_preflop_allin_game_t *game, uint64_t key,
                                 const pe_preflop_betting_state_t *state)
 {
-    const pe_betting_state_t *betting = &state->betting;
-    pe_action_t actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS];
-    uint16_t action_count;
-    size_t i;
-    for (i = 0u; i < game->desc_count; ++i)
-        if (game->descs[i].key == key)
+    preflop_infodesc_t *desc;
+    size_t slot;
+    /* The slot stores the position as a uint32_t.  Nothing can reach four
+     * billion descriptions, but stop recording rather than wrap. */
+    if (game->desc_count >= UINT32_MAX - 1u)
+        return;
+    /* Past the bound the solve keeps going at full accuracy; it just stops
+     * paying 448 bytes an infoset to describe rows no report will print. */
+    if (game->desc_limit_bytes > 0u &&
+        preflop_footprint_total(game) >= game->desc_limit_bytes)
+    {
+        game->desc_limited = 1;
+        return;
+    }
+    if (!game->desc_index && preflop_desc_index_rebuild(game, 256u) != 0)
+        return;
+    slot = preflop_desc_slot(game, key);
+    if (game->desc_index[slot].index != 0u)
+        return;
+    if (preflop_desc_reserve(game, game->desc_count) != 0)
+        return;
+    /* Keep the map under a 70% load factor, matching the storage table.  The
+     * rebuild invalidates `slot`, so take it again afterwards. */
+    if ((game->desc_count + 1u) * 10u > (game->desc_index_mask + 1u) * 7u)
+    {
+        if (preflop_desc_index_rebuild(game,
+                                       (game->desc_index_mask + 1u) * 2u) != 0)
             return;
-    if (game->desc_count == game->desc_capacity)
-    {
-        size_t capacity = game->desc_capacity ? game->desc_capacity * 2u : 64u;
-        preflop_infodesc_t *grown =
-            realloc(game->descs, capacity * sizeof(*grown));
-        if (!grown)
-            return;
-        game->descs = grown;
-        game->desc_capacity = capacity;
+        slot = preflop_desc_slot(game, key);
     }
-    game->descs[game->desc_count].key = key;
-    game->descs[game->desc_count].state = *state;
-    game->descs[game->desc_count].actor = betting->to_act;
-    game->descs[game->desc_count].tree_node_index = state->tree_node_index;
-    game->descs[game->desc_count].pot = betting->pot;
-    game->descs[game->desc_count].to_call = betting->to_call;
-    game->descs[game->desc_count].hand[0] = '\0';
-    if (betting->to_act >= 0 && betting->to_act < betting->player_count)
-    {
-        size_t used = 0u;
-        const mask_t hand = state->holes[betting->to_act];
-        const char suit_chars[] = "cdhs";
-        for (int card = 0; card < 52 && used + 2u < sizeof(game->descs[game->desc_count].hand); ++card)
-        {
-            if (!mask_is_set(hand, card))
-                continue;
-            game->descs[game->desc_count].hand[used++] =
-                StdDeck_rankChars[MODERN_GET_RANK(card)];
-            game->descs[game->desc_count].hand[used++] =
-                suit_chars[MODERN_GET_SUIT(card)];
-        }
-        game->descs[game->desc_count].hand[used] = '\0';
-    }
-    action_count = preflop_enumerate(game, state, actions,
-                                      PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS);
-    game->descs[game->desc_count].action_count = action_count;
-    for (uint16_t action = 0u; action < action_count; ++action)
-    {
-        const pe_action_t *a = &actions[action];
-        char *label = game->descs[game->desc_count].actions[action];
-        if (a->kind == PE_ACTION_RAISE)
-        {
-            if (a->amount_kind == PE_AMOUNT_POT_FRACTION)
-                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL,
-                         "RAISE %.0f%% POT", a->amount * 100.0);
-            else if (a->amount_kind == PE_AMOUNT_MINIMUM)
-                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "MIN-RAISE");
-            else
-                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL,
-                         "RAISE %.2f", a->amount);
-        }
-        else
-            snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
-                     pe_action_kind_string(a->kind));
-    }
-    snprintf(game->descs[game->desc_count].text, PREFLOP_DESC_TEXT,
-             "P%d hand=%s node=%d pot=%.1f tocall=%.1f bet=%.1f raises=%d actions=", betting->to_act,
-             game->descs[game->desc_count].hand, state->tree_node_index,
-             betting->pot, betting->to_call, betting->current_bet,
-             (int)betting->raises_made);
-    {
-        size_t used = strnlen(game->descs[game->desc_count].text,
-                              PREFLOP_DESC_TEXT);
-        for (uint16_t action = 0u; action < action_count && used + 2u < PREFLOP_DESC_TEXT; ++action)
-        {
-            int written = snprintf(game->descs[game->desc_count].text + used,
-                                   PREFLOP_DESC_TEXT - used, "%s%s",
-                                   action ? "|" : "",
-                                   game->descs[game->desc_count].actions[action]);
-            if (written < 0 || (size_t)written >= PREFLOP_DESC_TEXT - used)
-                break;
-            used += (size_t)written;
-        }
-    }
+    game->desc_index[slot].key = key;
+    game->desc_index[slot].index = (uint32_t)(game->desc_count + 1u);
+    desc = preflop_desc_at(game, game->desc_count);
+    desc->key = key;
+    desc->state = *state;
     ++game->desc_count;
+}
+
+/* Suit isomorphism for the infoset key.
+ *
+ * The key used to carry the raw 52-bit board, so Ks7d2c and Kh7s2d were two
+ * unrelated infosets even though they are the same game up to a renaming of
+ * the suits.  A sampled run then only ever had a strategy for the exact
+ * runouts it happened to deal, and asking for any other board returned
+ * nothing -- which is not how a solved tree is supposed to read.
+ *
+ * Canonicalising collapses the 22100 flops onto 1755 classes (and, preflop,
+ * the 1326 hole combos onto 169), so one sampled board answers for its whole
+ * isomorphism class.  This is an exact symmetry, not an abstraction: no
+ * strategic information is lost.
+ *
+ * Board and hole are canonicalised TOGETHER -- a hole card's suit matters
+ * only in relation to the board -- but hashed separately afterwards, because
+ * hashing the union alone would collide different splits of the same cards
+ * (board Ks7d2c + hole AhQh against board AhQhKs + hole 7d2c). */
+static void preflop_canonical_view(mask_t board, mask_t hole,
+                                   mask_t *out_board, mask_t *out_hole)
+{
+    mask_t all = board | hole;
+    mask_t canon = MASK_EMPTY;
+    int suit_perm[4];
+    int label_of[4];
+    int suit;
+    int card;
+
+    *out_board = board;
+    *out_hole = hole;
+    if (all == MASK_EMPTY ||
+        pe_board_canonicalize(all, (int)mask_popcount(all), &canon,
+                              suit_perm) != 0)
+        return;
+    for (suit = 0; suit < 4; ++suit)
+        label_of[suit] = -1;
+    /* suit_perm[label] = original suit; invert it. */
+    for (suit = 0; suit < 4; ++suit)
+        if (suit_perm[suit] >= 0 && suit_perm[suit] < 4)
+            label_of[suit_perm[suit]] = suit;
+
+    *out_board = MASK_EMPTY;
+    *out_hole = MASK_EMPTY;
+    for (card = 0; card < 52; ++card)
+    {
+        int rank = card % 13;
+        int relabelled;
+        suit = card / 13;
+        if (label_of[suit] < 0)
+            continue;   /* suit absent from board|hole, nothing to map */
+        relabelled = MODERN_MAKE_CARD(rank, label_of[suit]);
+        if (mask_is_set(board, card))
+            *out_board = mask_set(*out_board, relabelled);
+        if (mask_is_set(hole, card))
+            *out_hole = mask_set(*out_hole, relabelled);
+    }
 }
 
 static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
@@ -444,9 +636,33 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
     uint64_t masks = 0u;
     int player;
 
+    const int abstracted = game->rules.board_texture_level > 0;
+    mask_t canon_board = MASK_EMPTY;
+    mask_t canon_hole = MASK_EMPTY;
+
+    /* Canonicalising searches all 24 suit permutations, and it was the single
+     * most expensive thing in a solve.  It is only needed when the board is
+     * exact: every field pe_board_texture_id reads (texture class, suit
+     * count, ranks, gaps) is already invariant under a suit permutation, so
+     * an abstracted key gets the same id from the raw board.  Below, the
+     * hole is canonicalised on its own instead. */
+    if (!abstracted)
+        preflop_canonical_view(state->board,
+                               actor >= 0 ? state->holes[actor] : MASK_EMPTY,
+                               &canon_board, &canon_hole);
+
     hash = preflop_mix_u64(hash, (uint64_t)actor);
     hash = preflop_mix_u64(hash, (uint64_t)state->street);
-    hash = preflop_mix_u64(hash, (uint64_t)state->board);
+    /* With an abstraction level set, boards the level cannot tell apart share
+     * a key, so a sampled board answers for its whole texture class.  At
+     * level 0 the id is the canonical mask itself and nothing is merged. */
+    hash = preflop_mix_u64(
+        hash,
+        abstracted
+            ? pe_board_texture_id(state->board,
+                                  (pe_texture_filter_level_t)
+                                      game->rules.board_texture_level)
+            : (uint64_t)canon_board);
     hash = preflop_mix_u64(hash, (uint64_t)betting->raises_made);
     for (player = 0; player < PE_PREFLOP_ALLIN_MAX_PLAYERS; ++player)
     {
@@ -463,7 +679,25 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
         hash = preflop_mix_u64(
             hash, preflop_quantize(betting->round_contrib[player]));
     if (actor >= 0)
-        hash = preflop_mix_u64(hash, (uint64_t)state->holes[actor]);
+    {
+        /* With a board abstraction on, the hole must be canonicalised on its
+         * OWN, not jointly with the board.  Joint canonicalisation ties the
+         * hand's suit labels to the concrete board, so two boards the
+         * abstraction has merged still produced different keys for the same
+         * hand and the merge barely happened: DETAILED classes are 32x larger
+         * than an isomorphism class yet cut infosets by only 11%.  Merging
+         * boards while refusing to merge the hands that sit on them is not a
+         * coherent abstraction. */
+        mask_t hole_key = canon_hole;
+        if (abstracted)
+        {
+            mask_t hole_only_board;
+            preflop_canonical_view(state->board, state->holes[actor],
+                                   &hole_only_board, &hole_key);
+            (void)hole_only_board;
+        }
+        hash = preflop_mix_u64(hash, (uint64_t)hole_key);
+    }
     preflop_record_desc(game, hash, state);
     return hash;
 }
@@ -619,12 +853,17 @@ static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
     eval_t values[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int level_count = 0;
     int players = betting->player_count;
+    double initial_pot = betting->pot;
+    int active_count = 0;
 
     for (int p = 0; p < players; ++p)
     {
         if (preflop_evaluate_board(game, state->holes[p], state->board,
                                    &values[p]) != 0)
             return 0.0;
+        initial_pot -= betting->invested[p];
+        if (betting->active[p])
+            ++active_count;
         if (betting->invested[p] > 0.0)
             levels[level_count++] = betting->invested[p];
     }
@@ -659,6 +898,23 @@ static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
                     values[p] == best)
                     payout[p] += pot / (double)winners;
     }
+    /* A postflop root carries money from earlier streets in betting.pot, but
+     * deliberately has zero invested[] entries: those contributions are not
+     * attributable to the current street.  Keep that main pot in the
+     * showdown rather than silently dropping it from every player's payoff. */
+    if (initial_pot > PREFLOP_EPSILON && active_count > 0)
+    {
+        int winners = 0;
+        eval_t best = EVAL_INVALID;
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p]) {
+                if (values[p] > best) { best = values[p]; winners = 1; }
+                else if (values[p] == best) ++winners;
+            }
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p] && values[p] == best && winners > 0)
+                payout[p] += initial_pot / (double)winners;
+    }
     return payout[player] - betting->invested[player];
 }
 
@@ -671,13 +927,19 @@ static double preflop_sampled_sidepot_value(
     double payout[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
     int level_count = 0;
     int players = betting->player_count;
+    double initial_pot = betting->pot;
+    int active_count = 0;
 
     if (players < 1 || players > PE_PREFLOP_ALLIN_MAX_PLAYERS)
         return 0.0;
 
-    for (int p = 0; p < players; ++p)
+    for (int p = 0; p < players; ++p) {
+        initial_pot -= betting->invested[p];
+        if (betting->active[p])
+            ++active_count;
         if (betting->invested[p] > PREFLOP_EPSILON)
             levels[level_count++] = betting->invested[p];
+    }
     for (int i = 0; i < level_count; ++i)
         for (int j = i + 1; j < level_count; ++j)
             if (levels[j] < levels[i]) {
@@ -719,6 +981,10 @@ static double preflop_sampled_sidepot_value(
             return 0.0;
         }
     }
+    if (initial_pot > PREFLOP_EPSILON && active_count > 0)
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p])
+                payout[p] += initial_pot / (double)active_count;
     return payout[player] - betting->invested[player];
 }
 
@@ -727,14 +993,7 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
 {
     const pe_preflop_allin_game_t *game = user;
     const pe_betting_state_t *betting = &state->betting;
-    double contrib[PE_PREFLOP_ALLIN_MAX_PLAYERS];
-    double pot_total = 0.0;
-    int players = betting->player_count;
 
-    for (int p = 0; p < players; ++p) {
-        contrib[p] = betting->invested[p];
-        pot_total += contrib[p];
-    }
     if ((game->rules.postflop_streets || game->rules.tree_showdown) &&
         state->betting.terminal &&
         state->street == PE_HOLDEM_RIVER)
@@ -744,12 +1003,12 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
         int winner = betting->winner;
         if (winner < 0)
             return 0.0; /* unreachable fold-out without a winner */
-        return player == winner ? pot_total - contrib[player] : -contrib[player];
+        /* betting.pot includes the pot carried into a postflop root, while
+         * invested[] only records money committed on the current street. */
+        return player == winner ? betting->pot - betting->invested[player]
+                                : -betting->invested[player];
     }
-    {
-        (void)pot_total;
-        return preflop_sampled_sidepot_value(game, state, player);
-    }
+    return preflop_sampled_sidepot_value(game, state, player);
 }
 
 static int preflop_is_terminal(const pe_preflop_betting_state_t *state,
@@ -770,26 +1029,25 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
     pe_preflop_allin_game_t *game = user;
     if (!game || !child)
         return 0;
-    if (game->rules.tree && source->street == PE_HOLDEM_PREFLOP &&
-        source->tree_node_index >= 0)
+    /* Tree-bound transitions on any street the tree declares.  A node
+     * only constrains states on its own street: anything else behaves
+     * exactly like an unmapped node (legacy path below), which is what
+     * turns a tree-terminal preflop node into an automatic
+     * flop/turn/river rollout. */
+    if (game->rules.tree && source->tree_node_index >= 0)
     {
         const mpf_tree_node_t *node = preflop_tree_node(game, source);
         int next_index = -1;
+        if (node && (int)node->street != (int)source->street)
+            node = NULL;
         if (node)
         {
             for (int i = 0; i < node->action_count; ++i)
             {
                 pe_action_t candidate;
-                if (tree_action_to_semantic(node, i, &candidate) != 0)
+                if (tree_action_to_semantic_in_state(node, i, &source->betting,
+                                                     &candidate) != 0)
                     continue;
-                int actor = source->betting.to_act;
-                double contribution = actor >= 0
-                    ? source->betting.round_contrib[actor] : 0.0;
-                double outstanding = source->betting.to_call > contribution
-                    ? source->betting.to_call - contribution : 0.0;
-                if (candidate.kind == PE_ACTION_CALL &&
-                    outstanding <= PREFLOP_EPSILON)
-                    candidate.kind = PE_ACTION_CHECK;
                 if (tree_action_matches(action, &candidate))
                 {
                     next_index = node->actions[i].next_index;
@@ -797,15 +1055,28 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
                 }
             }
         }
-        child->tree_node_index = next_index;
-        if (game->rules.tree_showdown && !child->betting.terminal &&
+        child->tree_node_index = (node != NULL) ? next_index : -1;
+        if (node != NULL && game->rules.tree_showdown && !child->betting.terminal &&
             (next_index < 0 || next_index >= game->rules.tree->node_count ||
              game->rules.tree->nodes[next_index].type == MPF_TREE_NODE_TERMINAL))
         {
             child->betting.round_complete = 1;
             child->betting.to_act = -1;
-            child->is_chance = 1;
             child->tree_node_index = -1;
+            /* Off the river there is a street left to deal, so the tree
+             * terminal becomes a chance node that rolls out.  On the river
+             * the board is already complete: it is the showdown itself, and
+             * marking it a chance node sent preflop_chance_child looking for
+             * a sixth board card, which fails the whole traversal. */
+            if (source->street == PE_HOLDEM_RIVER)
+            {
+                child->betting.terminal = 1;
+                child->is_chance = 0;
+            }
+            else
+            {
+                child->is_chance = 1;
+            }
             return 0;
         }
     }
@@ -862,7 +1133,54 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
     pe_preflop_allin_game_t *game = user;
     if (!source || !rng || !sample || !child || !game)
         return -1;
-    if (game->rules.tree_showdown &&
+    /* Root deal FIRST, on any street: hole cards are empty exactly until
+     * the first deal.  The board-dealing branch below assumes dealt holes
+     * (it advances a finished round to the next street); reaching it with
+     * empty holes used to deal a turn card over an undealt flop root, so
+     * postflop roots played out empty-handed with zero decisions. */
+    {
+        int holes_empty = 1;
+        for (int p = 0; p < game->rules.player_count; ++p)
+        {
+            if (source->holes[p] != MASK_EMPTY)
+            {
+                holes_empty = 0;
+                break;
+            }
+        }
+        if (holes_empty)
+        {
+            pe_preflop_deal_sample_t deal;
+            if (pe_preflop_deal_sampler_sample(&game->sampler, rng, &deal) != 0)
+                return -1;
+            child->betting = source->betting;
+            child->is_chance = 0;
+            for (int p = 0; p < game->rules.player_count; ++p)
+                child->holes[p] = deal.holes[p];
+            child->board = source->board;
+            child->dead_cards = source->dead_cards;
+            for (int p = 0; p < game->rules.player_count; ++p)
+                child->dead_cards |= deal.holes[p];
+            child->street = source->street;
+            sample->outcome = 0;
+            sample->importance_ratio = deal.importance_ratio;
+            return 0;
+        }
+    }
+    /* Does the tree carry on into the next street?  A single Monker-style
+     * tree spanning preflop..river wires the round-closing action of one
+     * street straight to a player node on the next one.  When it does, the
+     * chance node deals that street and betting resumes AT THAT NODE,
+     * instead of the rollout below.  Without this the tree was abandoned at
+     * the end of its root street and everything past it was dealt out to
+     * showdown, which is why a multi-street tree only ever solved its first
+     * street. */
+    const mpf_tree_node_t *tree_next = preflop_tree_node(game, source);
+    if (tree_next && (tree_next->type != MPF_TREE_NODE_PLAYER ||
+                      (int)tree_next->street != (int)source->street + 1))
+        tree_next = NULL;
+
+    if (!tree_next && game->rules.tree_showdown &&
         ((source->street != PE_HOLDEM_PREFLOP &&
           source->street != PE_HOLDEM_RIVER) ||
          (source->street == PE_HOLDEM_PREFLOP &&
@@ -884,24 +1202,7 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
         sample->importance_ratio = 1.0;
         return 0;
     }
-    if (source->street == PE_HOLDEM_PREFLOP && source->dead_cards == MASK_EMPTY)
-    {
-        pe_preflop_deal_sample_t deal;
-        if (pe_preflop_deal_sampler_sample(&game->sampler, rng, &deal) != 0)
-            return -1;
-        child->betting = source->betting;
-        child->is_chance = 0;
-        for (int p = 0; p < game->rules.player_count; ++p)
-            child->holes[p] = deal.holes[p];
-        child->board = MASK_EMPTY;
-        child->dead_cards = MASK_EMPTY;
-        for (int p = 0; p < game->rules.player_count; ++p)
-            child->dead_cards |= deal.holes[p];
-        child->street = PE_HOLDEM_PREFLOP;
-        sample->outcome = 0;
-        sample->importance_ratio = deal.importance_ratio;
-        return 0;
-    }
+    /* Generic round advance (holes already dealt): draw the next board. */
     {
         mask_t next_board;
         pe_holdem_round_state_t round;
@@ -916,7 +1217,10 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
         round.dead_cards = source->dead_cards;
         round.street = source->street;
         round.betting = source->betting;
-        first_to_act = preflop_first_actionable_player(&source->betting);
+        /* The tree names who is first on the new street; only fall back to
+         * the seating rule when it does not. */
+        first_to_act = tree_next ? tree_next->acting_player
+                                 : preflop_first_actionable_player(&source->betting);
         if (first_to_act < 0)
             first_to_act = 0;
         if (pe_holdem_round_advance(&round, &game->betting_rules, next_board,
@@ -988,22 +1292,44 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int player;
 
-    if (!rules || !ranges || rules->player_count < 2 ||
+    if (!rules || rules->player_count < 2 ||
         rules->player_count > PE_PREFLOP_ALLIN_MAX_PLAYERS ||
         rules->variant < PE_PREFLOP_HOLDEM ||
         rules->variant > PE_PREFLOP_PLO6 ||
         rules->showdown_samples <= 0 ||
-        !(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
-        rules->big_blind < rules->small_blind ||
-        !(rules->ante >= 0.0) || rules->ante > DBL_MAX ||
-        rules->ante >= rules->big_blind ||
+        rules->root_street < 0 || rules->root_street > (int)PE_HOLDEM_RIVER ||
         rules->raise_count < 0 || rules->raise_count > PE_PREFLOP_ALLIN_MAX_RAISE_SIZES ||
         !(rules->min_raise > 0.0))
         return NULL;
+    /* Forced bets are only meaningful at a preflop root: a flop/turn/river
+     * root posts nothing and takes its pot from rules->root_pot, so a caller
+     * rooting there must not be made to invent blind values it ignores. */
+    if (rules->root_street == 0)
+    {
+        if (!(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
+            rules->big_blind < rules->small_blind ||
+            !(rules->ante >= 0.0) || rules->ante > DBL_MAX ||
+            rules->ante >= rules->big_blind)
+            return NULL;
+    }
+    else if (!(rules->root_pot > 0.0) ||
+             mask_popcount((mask_t)rules->root_board) !=
+                 (rules->root_street == (int)PE_HOLDEM_FLOP ? 3u :
+                  rules->root_street == (int)PE_HOLDEM_TURN ? 4u : 5u))
+    {
+        /* A postflop root without a pot, or with a board that does not match
+         * its street, would silently solve a different spot than asked. */
+        return NULL;
+    }
     for (player = 0; player < rules->player_count; ++player)
     {
-        if (!ranges[player] || !ranges[player]->combos ||
-            ranges[player]->count == 0 || !(rules->stacks[player] > 0.0))
+        if (!(rules->stacks[player] > 0.0))
+            return NULL;
+        /* Complete ranges carry no combo list to validate. */
+        if (rules->complete_ranges)
+            continue;
+        if (!ranges || !ranges[player] || !ranges[player]->combos ||
+            ranges[player]->count == 0)
             return NULL;
     }
 
@@ -1013,8 +1339,10 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->rules = *rules;
     game->ranges = ranges;
 
-    /* Convert prepared ranges to mask-based combos for the deal sampler. */
-    for (player = 0; player < rules->player_count; ++player)
+    /* Convert prepared ranges to mask-based combos for the deal sampler.
+     * Skipped entirely for complete ranges: there is no list to build. */
+    for (player = 0; !rules->complete_ranges && player < rules->player_count;
+         ++player)
     {
         pe_range_view_t view = pe_solver_range_view(ranges[player]);
         unsigned required_cards = rules->variant == PE_PREFLOP_HOLDEM ? 2u :
@@ -1062,13 +1390,16 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         }
     }
 
+    /* NULL ranges tell the sampler every player holds any hand. */
     if ((rules->variant == PE_PREFLOP_HOLDEM &&
          pe_preflop_deal_sampler_init_holdem(
-             &game->sampler, MASK_EMPTY, game->holdem_ranges,
+             &game->sampler, (mask_t)rules->root_board,
+             rules->complete_ranges ? NULL : game->holdem_ranges,
              (uint8_t)rules->player_count) != 0) ||
         (rules->variant != PE_PREFLOP_HOLDEM &&
          pe_preflop_deal_sampler_init_omaha(
-             &game->sampler, MASK_EMPTY, game->omaha_ranges,
+             &game->sampler, (mask_t)rules->root_board,
+             rules->complete_ranges ? NULL : game->omaha_ranges,
              (uint8_t)rules->player_count,
              rules->variant == PE_PREFLOP_PLO4 ? 4u :
              rules->variant == PE_PREFLOP_PLO5 ? 5u : 6u) != 0))
@@ -1122,6 +1453,35 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     for (player = 0; player < rules->player_count; ++player)
         game->root_betting.betting.pot += posts[player];
 
+    if (rules->root_street != 0)
+    {
+        /* Postflop root (Lane B street trees): throw away the blind-posted
+         * root above — no blinds here, stacks as-is (remaining), fixed
+         * board dead from the start, given pot and first actor. */
+        int to_act = rules->root_to_act >= 0 &&
+                     rules->root_to_act < rules->player_count
+                         ? rules->root_to_act : 0;
+        for (player = 0; player < rules->player_count; ++player)
+            stacks_after[player] = rules->stacks[player];
+        if (pe_betting_state_init(&game->root_betting.betting,
+                                  &game->betting_rules,
+                                  stacks_after, (uint8_t)rules->player_count,
+                                  to_act, rules->root_pot,
+                                  0.0) != PE_BETTING_OK)
+        {
+            pe_preflop_allin_game_destroy(game);
+            return NULL;
+        }
+        game->root_betting.street = (pe_holdem_street_t)rules->root_street;
+        game->root_betting.board = (mask_t)rules->root_board;
+        /* dead_cards holds what is dead OFF the board -- the hole cards once
+         * they are dealt.  The board must NOT be in it: pe_holdem_round_advance
+         * rejects any transition whose board intersects dead_cards, which would
+         * make a tree that continues into the next street unplayable.  The deal
+         * sampler already has the board dead through its own init. */
+        game->root_betting.dead_cards = MASK_EMPTY;
+    }
+
     game->ops.action_count = preflop_op_action_count;
     game->ops.action_at = preflop_op_action_at;
     game->ops.infoset_key = preflop_op_infoset_key;
@@ -1140,6 +1500,7 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
 
     game->external = *pe_preflop_betting_external(&game->betting_game);
     game->external.action_probability = preflop_action_probability;
+    game->external.footprint_bytes = preflop_footprint_bytes;
 
     {
         EvalConfig config = rules->variant == PE_PREFLOP_HOLDEM
@@ -1167,7 +1528,10 @@ void pe_preflop_allin_game_destroy(pe_preflop_allin_game_t *game)
         free(game->holdem_combo_owned[player]);
         free(game->omaha_combo_owned[player]);
     }
-    free(game->descs);
+    for (size_t chunk = 0u; chunk < game->desc_chunk_count; ++chunk)
+        free(game->desc_chunks[chunk]);
+    free(game->desc_chunks);
+    free(game->desc_index);
     free(game);
 }
 
@@ -1189,20 +1553,128 @@ void pe_preflop_allin_game_set_storage(pe_preflop_allin_game_t *game,
         game->storage = storage;
 }
 
+void pe_preflop_allin_game_set_desc_limit(pe_preflop_allin_game_t *game,
+                                          size_t max_bytes)
+{
+    if (game)
+        game->desc_limit_bytes = max_bytes;
+}
+
+size_t pe_preflop_allin_infodesc_bytes(const pe_preflop_allin_game_t *game)
+{
+    return preflop_footprint_total(game);
+}
+
+int pe_preflop_allin_infodesc_limited(const pe_preflop_allin_game_t *game)
+{
+    return game ? game->desc_limited : 0;
+}
+
 size_t pe_preflop_allin_infodesc_count(const pe_preflop_allin_game_t *game)
 {
     return game ? game->desc_count : 0u;
+}
+
+/* Rebuild the human-readable form of one description.  This is the other half
+ * of preflop_record_desc: it stores the state, this formats it.  Doing it here
+ * costs one call per row a report prints instead of 1.2 KB per infoset the
+ * solve ever visits. */
+static void preflop_desc_format(const pe_preflop_allin_game_t *game,
+                                const preflop_infodesc_t *desc,
+                                pe_preflop_infodesc_view_t *out)
+{
+    const pe_betting_state_t *betting = &desc->state.betting;
+    pe_action_t actions[PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS];
+    uint16_t action_count;
+    size_t used;
+
+    memset(out, 0, sizeof(*out));
+    out->key = desc->key;
+    out->actor = betting->to_act;
+    out->tree_node_index = desc->state.tree_node_index;
+    out->pot = betting->pot;
+    out->to_call = betting->to_call;
+
+    if (betting->to_act >= 0 && betting->to_act < betting->player_count)
+    {
+        const mask_t hand = desc->state.holes[betting->to_act];
+        const char suit_chars[] = "cdhs";
+        used = 0u;
+        for (int card = 0; card < 52 && used + 2u < sizeof(out->hand); ++card)
+        {
+            if (!mask_is_set(hand, card))
+                continue;
+            out->hand[used++] = StdDeck_rankChars[MODERN_GET_RANK(card)];
+            out->hand[used++] = suit_chars[MODERN_GET_SUIT(card)];
+        }
+        out->hand[used] = '\0';
+    }
+
+    action_count = preflop_enumerate(game, &desc->state, actions,
+                                     PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS);
+    out->action_count = action_count;
+    for (uint16_t action = 0u; action < action_count; ++action)
+    {
+        const pe_action_t *a = &actions[action];
+        char *label = out->actions[action];
+        if (a->kind == PE_ACTION_RAISE)
+        {
+            if (a->amount_kind == PE_AMOUNT_POT_FRACTION)
+                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL,
+                         "RAISE %.0f%% POT", a->amount * 100.0);
+            else if (a->amount_kind == PE_AMOUNT_MINIMUM)
+                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "MIN-RAISE");
+            else
+                snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL,
+                         "RAISE %.2f", a->amount);
+        }
+        else
+            snprintf(label, PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
+                     pe_action_kind_string(a->kind));
+    }
+
+    snprintf(out->context, sizeof(out->context),
+             "P%d hand=%s node=%d pot=%.1f tocall=%.1f bet=%.1f raises=%d actions=",
+             betting->to_act, out->hand, desc->state.tree_node_index,
+             betting->pot, betting->to_call, betting->current_bet,
+             (int)betting->raises_made);
+    used = strnlen(out->context, sizeof(out->context));
+    for (uint16_t action = 0u;
+         action < action_count && used + 2u < sizeof(out->context); ++action)
+    {
+        int written = snprintf(out->context + used,
+                               sizeof(out->context) - used, "%s%s",
+                               action ? "|" : "", out->actions[action]);
+        if (written < 0 || (size_t)written >= sizeof(out->context) - used)
+            break;
+        used += (size_t)written;
+    }
 }
 
 int pe_preflop_allin_infodesc_at(const pe_preflop_allin_game_t *game,
                                  size_t index, uint64_t *out_key, char *out_text,
                                  size_t text_capacity)
 {
+    pe_preflop_infodesc_view_t view;
     if (!game || index >= game->desc_count || !out_key || !out_text ||
         text_capacity == 0u)
         return -1;
-    *out_key = game->descs[index].key;
-    snprintf(out_text, text_capacity, "%s", game->descs[index].text);
+    preflop_desc_format(game, preflop_desc_at(game, index), &view);
+    *out_key = view.key;
+    snprintf(out_text, text_capacity, "%s", view.context);
+    return 0;
+}
+
+int pe_preflop_allin_infodesc_find(const pe_preflop_allin_game_t *game,
+                                   uint64_t key, size_t *out_index)
+{
+    size_t slot;
+    if (!game || !out_index || !game->desc_index)
+        return -1;
+    slot = preflop_desc_slot(game, key);
+    if (game->desc_index[slot].index == 0u)
+        return -1;
+    *out_index = (size_t)game->desc_index[slot].index - 1u;
     return 0;
 }
 
@@ -1212,20 +1684,9 @@ int pe_preflop_allin_infodesc_view_at(
 {
     if (!game || !out || index >= game->desc_count)
         return -1;
-    memset(out, 0, sizeof(*out));
-    out->key = game->descs[index].key;
-    out->actor = game->descs[index].actor;
-    out->tree_node_index = game->descs[index].tree_node_index;
-    out->pot = game->descs[index].pot;
-    out->to_call = game->descs[index].to_call;
-    snprintf(out->hand, sizeof(out->hand), "%s", game->descs[index].hand);
-    snprintf(out->context, sizeof(out->context), "%s", game->descs[index].text);
-    out->action_count = game->descs[index].action_count;
+    preflop_desc_format(game, preflop_desc_at(game, index), out);
     if (out->action_count > PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS)
         out->action_count = PE_PREFLOP_ALLIN_MAX_DESC_ACTIONS;
-    for (uint16_t action = 0u; action < out->action_count; ++action)
-        snprintf(out->actions[action], PE_PREFLOP_ALLIN_MAX_ACTION_LABEL, "%s",
-                 game->descs[index].actions[action]);
     return 0;
 }
 
@@ -1235,6 +1696,6 @@ int pe_preflop_allin_infodesc_state_at(
 {
     if (!game || !out || index >= game->desc_count)
         return -1;
-    *out = game->descs[index].state;
+    *out = preflop_desc_at(game, index)->state;
     return 0;
 }

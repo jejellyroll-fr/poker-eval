@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "root": "flop_first",
+  "betProfiles": [
+    {
+      "id": "cbet",
+      "sizes": [
+        0.66
+      ],
+      "pot_sizing": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "flop_first",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "flop_second"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "flop_second_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "flop_second",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "call",
+          "next": "showdown"
+        },
+        {
+          "type": "raise",
+          "size_index": 0,
+          "next": "flop_first_vs_bet"
+        }
+      ]
+    },
+    {
+      "id": "flop_second_vs_bet",
+      "type": "player",
+      "street": "FLOP",
+      "player": 0,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "flop_first_wins"
+        },
+        {
+          "type": "call",
+          "next": "showdown"
+        }
+      ]
+    },
+    {
+      "id": "flop_first_vs_bet",
+      "type": "player",
+      "street": "FLOP",
+      "player": 1,
+      "bet_profile": "cbet",
+      "actions": [
+        {
+          "type": "fold",
+          "next": "flop_second_wins"
+        },
+        {
+          "type": "call",
+          "next": "showdown"
+        }
+      ]
+    },
+    {
+      "id": "flop_first_wins",
+      "type": "terminal",
+      "street": "FLOP"
+    },
+    {
+      "id": "flop_second_wins",
+      "type": "terminal",
+      "street": "FLOP"
+    },
+    {
+      "id": "showdown",
+      "type": "terminal",
+      "street": "FLOP"
+    }
+  ]
+}

@@ -28,7 +28,7 @@ static int mpf_debug_enabled(void)
     } while (0)
 
 #define MPF_TREE_VERSION_CURRENT 1
-#define MPF_TREE_MAX_TOKENS 8192
+#define MPF_TREE_MAX_TOKENS (1 << 20)
 
 typedef struct
 {
@@ -1495,8 +1495,10 @@ mpf_tree_opponent_model_t *mpf_tree_parse_opponent_model(const char *json,
     }
     jsmn_parser parser;
     jsmn_init(&parser);
-    jsmntok_t tokens[MPF_TREE_MAX_TOKENS];
-    int parsed = jsmn_parse(&parser, json, len, tokens, MPF_TREE_MAX_TOKENS);
+    /* NOTE: stack-allocated on purpose with its own small cap — the tree
+     * loader below uses heap doubling up to MPF_TREE_MAX_TOKENS. */
+    jsmntok_t tokens[8192];
+    int parsed = jsmn_parse(&parser, json, len, tokens, 8192u);
     if (parsed < 0)
     {
         mpf_tree_error(err, "failed to parse opponent model json");

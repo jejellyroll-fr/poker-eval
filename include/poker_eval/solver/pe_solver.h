@@ -119,6 +119,20 @@ struct pe_metrics_t {
 };
 
 /** Snapshot of lifecycle progress; values are stable for one call. */
+/** Why a solve loop ended.  See pe_progress_t::stop_cause. */
+typedef enum {
+    PE_STOP_NONE = 0,        /**< Still running, or never run. */
+    PE_STOP_ITERATIONS,      /**< Reached config.max_iterations. */
+    PE_STOP_TARGET,          /**< Reached the exploitability target. */
+    PE_STOP_REQUESTED,       /**< pe_solver_stop() -- caller, or a signal. */
+    PE_STOP_PAUSED,          /**< Left the loop paused. */
+    PE_STOP_MEMORY_BUDGET,   /**< Footprint crossed execution.max_ram_bytes. */
+    PE_STOP_ERROR            /**< A traversal or compute step failed. */
+} pe_stop_cause_t;
+
+/** Name for a stop cause, for logs and UI.  Never NULL. */
+const char *pe_stop_cause_name(pe_stop_cause_t cause);
+
 struct pe_progress_t {
     uint64_t iteration;
     uint64_t total_iterations;
@@ -126,6 +140,17 @@ struct pe_progress_t {
     int running;
     int paused;
     int complete;
+    /* Bytes held by storage plus the game adapter, as of the last heartbeat.
+       0 when the lane does not measure it. */
+    uint64_t memory_bytes;
+    /* Set when the solve stopped because memory_bytes crossed
+       execution.max_ram_bytes rather than because it finished. */
+    int memory_exhausted;
+    /* Why the loop last ended.  A run that ends early can do so for several
+       unrelated reasons -- the caller asked, a signal arrived, the budget was
+       reached -- and reporting them all as "stopped" leaves a user watching a
+       solve end on its own with nothing to go on. */
+    pe_stop_cause_t stop_cause;
 };
 
 /** Identifies one infoset strategy query. */
@@ -257,7 +282,8 @@ pe_solver_status_t pe_solver_plan(const pe_solver_t *solver,
 /** Run until a stop condition is met. Blocking. */
 pe_solver_status_t pe_solver_run(pe_solver_t *solver);
 
-/** Request a pause at the next safe point. Idempotent. */
+/** Request a pause at the next safe point. Idempotent; may block until the
+ * current iteration reaches that point. */
 pe_solver_status_t pe_solver_pause(pe_solver_t *solver);
 
 /** Resume a paused solve. Idempotent. */

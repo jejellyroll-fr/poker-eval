@@ -282,6 +282,54 @@ if(NOT ENABLE_OPENMP)
     set(OpenMP_FOUND FALSE)
 endif()
 
+# Apple's Clang (shipped with Xcode) does not ship a libomp runtime, and
+# CMake's built-in FindOpenMP module only probes the compiler's default search
+# paths.  On macOS (especially Apple Silicon), users typically install OpenMP
+# via Homebrew or MacPorts; detect those locations and feed OpenMP_ROOT to the
+# finder so the build picks up the available runtime automatically.
+#
+# Order of precedence:
+#   1. User-provided cache/env override (OpenMP_ROOT, OMP_PREFIX, -DOpenMP_ROOT=...)
+#   2. Homebrew arm64: /opt/homebrew/opt/libomp
+#   3. Homebrew x86_64: /usr/local/opt/libomp
+#   4. Homebrew llvm:  /opt/homebrew/opt/llvm   (lib/libomp.dylib)
+#   5. MacPorts:       /opt/local/lib/libomp.dylib (incl. arm64)
+#   6. System:         /usr/lib/libomp.dylib
+if(APPLE AND NOT OpenMP_FOUND AND ENABLE_OPENMP)
+    set(_pe_omp_search_paths
+        "$ENV{OpenMP_ROOT}"
+        "$ENV{OMP_PREFIX}"
+        "/opt/homebrew/opt/libomp"
+        "/opt/homebrew/opt/llvm"
+        "/usr/local/opt/libomp"
+        "/usr/local/opt/llvm"
+        "/opt/local"
+        "/usr/lib")
+    foreach(_pe_omp_root IN LISTS _pe_omp_search_paths)
+        if(_pe_omp_root AND EXISTS "${_pe_omp_root}")
+            set(_pe_omp_lib_candidates
+                "${_pe_omp_root}/lib/libomp.dylib"
+                "${_pe_omp_root}/lib/libomp.a"
+                "${_pe_omp_root}/libomp/lib/libomp.dylib")
+            foreach(_pe_omp_lib IN LISTS _pe_omp_lib_candidates)
+                if(EXISTS "${_pe_omp_lib}")
+                    message(STATUS "OpenMP runtime detected at ${_pe_omp_lib}; retrying find_package(OpenMP) with OpenMP_ROOT=${_pe_omp_root}")
+                    set(OpenMP_ROOT "${_pe_omp_root}" CACHE STRING "OpenMP install root" FORCE)
+                    unset(OpenMP_C_FOUND CACHE)
+                    unset(OpenMP_CXX_FOUND CACHE)
+                    find_package(OpenMP)
+                    if(OpenMP_C_FOUND)
+                        break()
+                    endif()
+                endif()
+            endforeach()
+        endif()
+        if(OpenMP_C_FOUND)
+            break()
+        endif()
+    endforeach()
+endif()
+
 if(ENABLE_OPENMP AND OpenMP_FOUND)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" AND NOT OpenMP_C_FLAGS MATCHES "-Xclang")
         message(WARNING "Disabling OpenMP: no native ARM64 libomp detected. Set ENABLE_OPENMP=OFF to silence this warning.")
@@ -292,7 +340,7 @@ if(ENABLE_OPENMP AND OpenMP_FOUND)
 endif()
 
 if(NOT OpenMP_FOUND)
-    message(WARNING "OpenMP not available, multithreaded features will be disabled")
+    message(STATUS "OpenMP not available; building single-threaded (cpu_par adapter will be unavailable)")
 endif()
 
 # Single source of truth for OpenMP usage. Subdirectories must test this rather
@@ -690,6 +738,9 @@ message(STATUS "    LTO:             ${ENABLE_LTO}")
 message(STATUS "    Coverage:        ${ENABLE_COVERAGE}")
 message(STATUS "    Sanitizers:      ${ENABLE_SANITIZERS}")
 message(STATUS "    OpenMP:          ${OpenMP_FOUND}")
+    if(OpenMP_FOUND AND APPLE)
+        message(STATUS "    OpenMP runtime:  ${OpenMP_C_LIBRARIES} (flags=${OpenMP_C_FLAGS})")
+    endif()
 message(STATUS "")
 message(STATUS "  SIMD Capabilities:")
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i686)")

@@ -49,6 +49,7 @@ typedef enum pe_texture_filter_level_e
     PE_TEXTURE_FILTER_SMALL,       /* wet/dry axis only */
     PE_TEXTURE_FILTER_MEDIUM,      /* wet/dry + pairedness */
     PE_TEXTURE_FILTER_LARGE,       /* coarse texture class */
+    PE_TEXTURE_FILTER_DETAILED,    /* texture class + board ranks */
     PE_TEXTURE_FILTER_PERFECT,     /* no merging (full granularity) */
     PE_TEXTURE_FILTER_COUNT
 } pe_texture_filter_level_t;
@@ -147,13 +148,23 @@ const char *pe_board_texture_class_name(pe_board_texture_class_t cls);
  * Two boards collide to the same id (and therefore the same abstract node)
  * when they are indistinguishable under the given level:
  *   - PERFECT/NONE : the raw board mask itself (no merging).
- *   - LARGE        : coarse texture class + paired rank + high-card rank.
+ *   - DETAILED     : texture class, suit structure, high card, paired rank,
+ *                    connectivity and broadway count.
+ *   - LARGE        : coarse texture class + suit count.
  *   - MEDIUM       : wet/dry axis + pairedness only.
  *   - SMALL        : wet/dry axis only.
  *
+ * SMALL, MEDIUM and LARGE ignore board RANKS entirely, so Ks7d2c and 9s5d2c
+ * share an id under all three.  They cover the board space at the cost of
+ * telling almost nothing apart -- measured over every flop, they yield 2, 3
+ * and 7 classes for all 22100 boards.  DETAILED is the level to use when the
+ * ranks matter, which for postflop play is nearly always.
+ *
  * The returned id is stable and cheap to compute; it is meant to fold into a
  * CFR infoset key so that texture-differentiated boards share a node when the
- * solver's node abstraction requests coarser granularity.
+ * solver's node abstraction requests coarser granularity.  It stays under 32
+ * bits at every level, which the multiway adapter relies on when it packs the
+ * id beside a strength bucket.
  */
 uint64_t pe_board_texture_id(mask_t board,
                              pe_texture_filter_level_t level);
