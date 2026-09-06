@@ -1,0 +1,700 @@
+#!/usr/bin/env python3
+"""Reproducible cross-variant solver benchmark runner.
+
+Uses the product-facing pe-preflop-solve binary as the single source of
+solver semantics.  The runner adds stable case definitions, timing, telemetry
+parsing, per-street strategy coverage and reproducibility fingerprints without
+introducing a second solver/report implementation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+from typing import Any
+
+SCHEMA = "pe-solver-benchmark/v1"
+SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
+STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
+
+RE_ITERATIONS = re.compile(r"^iterations=(\d+)\s+complete=(\d+)\s+infosets=(\d+)$")
+RE_GUARANTEE = re.compile(
+    r"^guarantee=(\S+)\s+exploitability_raw=([^\s]+)\s+"
+    r"exploitability_mbb=([^\s]+)\s+br_samples=(\d+)$"
+)
+RE_LOOP_END = re.compile(
+    r"solve_loop_end cause=(\S+)\s+iteration=(\d+)\s+"
+    r"memory_mb=([0-9.]+)\s+storage_mb=([0-9.]+)\s+adapter_mb=([0-9.]+)"
+)
+RE_STOP_DETAIL = re.compile(
+    r"^stop_detail cause=(\S+)\s+interrupted=(\d+)\s+iteration=(\d+)\s+"
+    r"held_mb=([0-9.]+)\s+budget_mb=([0-9.]+)\s+"
+    r"descriptions_mb=([0-9.]+)\s+descriptions_capped=(\d+)$"
+)
+RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
+RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
+RE_REPORT_PHASE = re.compile(r"^report_phase=complete rows=(\d+)$")
+RE_ACTION_PERCENT = re.compile(r"(?:^|,)[^=]+=([-+]?[0-9]+(?:\.[0-9]+)?)%")
+
+MB = 1024 * 1024
+
+
+def _float(text: str | None) -> float | None:
+    if text is None:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def load_manifest(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as stream:
+        data = json.load(stream)
+    if data.get("schema") != "pe-solver-benchmark-cases/v1":
+        raise ValueError(f"unsupported manifest schema in {path}")
+    if not isinstance(data.get("cases"), list):
+        raise ValueError("manifest must contain a cases array")
+    return data
+
+
+def resolve_solver(args: argparse.Namespace, root: Path) -> Path:
+    if args.solver:
+        candidate = Path(args.solver)
+    else:
+        suffix = ".exe" if os.name == "nt" else ""
+        candidate = Path(args.build_dir) / "tools" / f"pe-preflop-solve{suffix}"
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    if not candidate.exists():
+        raise FileNotFoundError(
+            f"solver not found: {candidate}\n"
+            "Build it with: cmake --build build --target pe-preflop-solve"
+        )
+    return candidate
+
+
+def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bool:
+    if names:
+        return case.get("id") in names
+    tags = set(case.get("tags", []))
+    return bool(tags & suites)
+
+
+def tree_nodes(tree_path: Path) -> tuple[dict[int, str], dict[str, int]]:
+    with tree_path.open("r", encoding="utf-8") as stream:
+        tree = json.load(stream)
+    by_index: dict[int, str] = {}
+    decisions = {street: 0 for street in STREETS}
+    for index, node in enumerate(tree.get("nodes", [])):
+        if node.get("type") != "player":
+            continue
+        street = str(node.get("street", "")).upper()
+        if street in decisions:
+            by_index[index] = street
+            decisions[street] += 1
+    return by_index, decisions
+
+
+def build_command(
+    solver: Path,
+    root: Path,
+    raw_report: Path,
+    case: dict[str, Any],
+    defaults: dict[str, Any],
+    iteration_override: int | None,
+) -> list[str]:
+    def setting(name: str, fallback: Any = None) -> Any:
+        return case.get(name, defaults.get(name, fallback))
+
+    iterations = iteration_override or int(setting("iterations", 2000))
+    command = [
+        str(solver),
+        "--game", str(case["game"]),
+        "--players", str(setting("players", 2)),
+        "--iterations", str(iterations),
+        "--samples", str(setting("showdown_samples", 1)),
+        "--br-samples", str(setting("br_samples", 16)),
+        "--exploitability-interval", str(setting("exploitability_interval", iterations)),
+        "--algorithm", str(setting("algorithm", "external-mccfr")),
+        "--backend", str(setting("backend", "cpu_ref")),
+        "--precision", str(setting("precision", "f64")),
+        "--threads", str(setting("threads", 1)),
+        "--target-mbb", "0",
+        "--seed", str(setting("seed", 20260906)),
+        "--max-ram", str(setting("max_ram_mb", 512)),
+        "--desc-limit", str(setting("desc_limit_mb", 64)),
+        "--report-rows", str(setting("report_rows", 0)),
+        "--output", str(raw_report),
+    ]
+    ranges = case.get("ranges", defaults.get("ranges", ["100%", "100%"]))
+    for player, range_text in enumerate(ranges):
+        command.extend((f"--range{player}", str(range_text)))
+
+    tree = root / case["tree"]
+    command.extend(("--tree", str(tree.resolve())))
+
+    street = case.get("street")
+    if street and street != "preflop":
+        command.extend(("--street", street))
+        command.extend(("--board", str(case["board"])))
+        command.extend(("--pot", str(case["pot"])))
+    if case.get("to_act") is not None:
+        command.extend(("--to-act", str(case["to_act"])))
+    abstraction = case.get("board_abstraction")
+    if abstraction:
+        command.extend(("--board-abstraction", abstraction))
+    return command
+
+
+def is_uniform_strategy(action_field: str) -> bool:
+    values = [float(match) for match in RE_ACTION_PERCENT.findall(action_field)]
+    if not values:
+        return False
+    expected = 100.0 / len(values)
+    return max(abs(value - expected) for value in values) <= 0.11
+
+
+def parse_strategy_rows(
+    stdout: str, node_streets: dict[int, str]
+) -> tuple[dict[str, dict[str, Any]], str]:
+    street_data = {
+        street: {
+            "strategy_rows": 0,
+            "uniform_rows": 0,
+            "non_uniform_rows": 0,
+            "unique_nodes_with_rows": 0,
+            "unique_boards": 0,
+        }
+        for street in STREETS
+    }
+    nodes_seen = {street: set() for street in STREETS}
+    boards_seen = {street: set() for street in STREETS}
+    fingerprint_rows: list[str] = []
+
+    for line in stdout.splitlines():
+        if line.startswith("ev_update\t"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 6:
+            continue
+        try:
+            node_index = int(fields[1])
+        except ValueError:
+            continue
+        street = node_streets.get(node_index)
+        if street not in street_data:
+            continue
+        action_field = fields[3]
+        if "%" not in action_field or "=" not in action_field:
+            continue
+        board = fields[5].strip()
+        data = street_data[street]
+        data["strategy_rows"] += 1
+        if is_uniform_strategy(action_field):
+            data["uniform_rows"] += 1
+        else:
+            data["non_uniform_rows"] += 1
+        nodes_seen[street].add(node_index)
+        if board and board != "-":
+            boards_seen[street].add(board)
+        fingerprint_rows.append(
+            f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
+            f"{action_field}\t{board}"
+        )
+
+    for street in STREETS:
+        street_data[street]["unique_nodes_with_rows"] = len(nodes_seen[street])
+        street_data[street]["unique_boards"] = len(boards_seen[street])
+    digest = hashlib.sha256(
+        ("\n".join(sorted(fingerprint_rows)) + "\n").encode("utf-8")
+    ).hexdigest()
+    return street_data, digest
+
+
+def parse_stdout(
+    stdout: str,
+    tree_decisions: dict[str, int],
+    node_streets: dict[int, str],
+    elapsed_seconds: float,
+    requested_iterations: int,
+    report_rows_requested: int,
+) -> dict[str, Any]:
+    actual_iterations = None
+    complete = None
+    infosets = None
+    guarantee = None
+    exploitability_raw = None
+    exploitability_mbb = None
+    br_samples = None
+    stop_cause = None
+    final_memory_mb = None
+    storage_mb = None
+    adapter_mb = None
+    descriptions_mb = None
+    descriptions_capped = None
+    report_rows_emitted = None
+    tree_census = None
+
+    for line in stdout.splitlines():
+        match = RE_ITERATIONS.match(line)
+        if match:
+            actual_iterations = int(match.group(1))
+            complete = bool(int(match.group(2)))
+            infosets = int(match.group(3))
+            continue
+        match = RE_GUARANTEE.match(line)
+        if match:
+            guarantee = match.group(1)
+            exploitability_raw = _float(match.group(2))
+            exploitability_mbb = _float(match.group(3))
+            br_samples = int(match.group(4))
+            continue
+        match = RE_LOOP_END.search(line)
+        if match:
+            stop_cause = match.group(1)
+            final_memory_mb = float(match.group(3))
+            storage_mb = float(match.group(4))
+            adapter_mb = float(match.group(5))
+            continue
+        match = RE_STOP_DETAIL.match(line)
+        if match:
+            stop_cause = stop_cause or match.group(1)
+            final_memory_mb = final_memory_mb if final_memory_mb is not None else float(match.group(4))
+            descriptions_mb = float(match.group(6))
+            descriptions_capped = bool(int(match.group(7)))
+            continue
+        match = RE_TREE_STREETS.match(line)
+        if match:
+            tree_census = match.group(1)
+            continue
+        match = RE_REPORT_PHASE.match(line)
+        if match:
+            report_rows_emitted = int(match.group(1))
+
+    measured_memory = [float(value) for value in RE_MEMORY.findall(stdout)]
+    peak_measured_memory_mb = max(measured_memory) if measured_memory else final_memory_mb
+    per_street, fingerprint = parse_strategy_rows(stdout, node_streets)
+    total_rows = sum(v["strategy_rows"] for v in per_street.values())
+    total_non_uniform = sum(v["non_uniform_rows"] for v in per_street.values())
+
+    for street, data in per_street.items():
+        data["decision_nodes"] = tree_decisions.get(street, 0)
+        nodes = data["decision_nodes"]
+        data["decision_node_coverage"] = (
+            data["unique_nodes_with_rows"] / nodes if nodes else None
+        )
+        data["materialized_infoset_share"] = (
+            data["strategy_rows"] / total_rows if total_rows else 0.0
+        )
+        data["non_uniform_share"] = (
+            data["non_uniform_rows"] / total_non_uniform if total_non_uniform else 0.0
+        )
+
+    iterations_for_rate = actual_iterations or requested_iterations
+    iterations_per_second = (
+        iterations_for_rate / elapsed_seconds if elapsed_seconds > 0 else None
+    )
+    final_memory_bytes = (
+        int(round(final_memory_mb * MB)) if final_memory_mb is not None else None
+    )
+    storage_bytes = int(round(storage_mb * MB)) if storage_mb is not None else None
+    adapter_bytes = int(round(adapter_mb * MB)) if adapter_mb is not None else None
+    descriptions_bytes = (
+        int(round(descriptions_mb * MB)) if descriptions_mb is not None else None
+    )
+
+    return {
+        "requested_iterations": requested_iterations,
+        "actual_iterations": actual_iterations,
+        "complete": complete,
+        "stop_cause": stop_cause,
+        "elapsed_seconds": elapsed_seconds,
+        "iterations_per_second": iterations_per_second,
+        "infosets": infosets,
+        "infosets_per_1k_iterations": (
+            infosets * 1000.0 / actual_iterations
+            if infosets is not None and actual_iterations
+            else None
+        ),
+        "memory": {
+            "peak_measured_bytes": (
+                int(round(peak_measured_memory_mb * MB))
+                if peak_measured_memory_mb is not None
+                else None
+            ),
+            "final_bytes": final_memory_bytes,
+            "storage_bytes": storage_bytes,
+            "adapter_bytes": adapter_bytes,
+            "descriptions_bytes": descriptions_bytes,
+            "bytes_per_infoset": (
+                final_memory_bytes / infosets
+                if final_memory_bytes is not None and infosets
+                else None
+            ),
+            "storage_bytes_per_infoset": (
+                storage_bytes / infosets
+                if storage_bytes is not None and infosets
+                else None
+            ),
+            "descriptions_capped": descriptions_capped,
+        },
+        "metrics": {
+            "guarantee": guarantee,
+            "exploitability_raw": exploitability_raw,
+            "exploitability_mbb_per_game": exploitability_mbb,
+            "br_samples": br_samples,
+        },
+        "report": {
+            "requested_rows": report_rows_requested,
+            "emitted_rows": report_rows_emitted,
+            "exhaustive_requested": report_rows_requested == 0,
+            "exhaustive": report_rows_requested == 0 and not bool(descriptions_capped),
+            "strategy_fingerprint_sha256": fingerprint,
+        },
+        "tree_streets": tree_census,
+        "per_street": per_street,
+        "sampled_private_deals": None,
+    }
+
+
+def validate_result(result: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    if result["process"]["returncode"] != 0:
+        failures.append(f"solver exited {result['process']['returncode']}")
+        return failures
+    metrics = result["benchmark"]
+    if metrics["actual_iterations"] != metrics["requested_iterations"]:
+        failures.append(
+            f"iterations {metrics['actual_iterations']} != requested "
+            f"{metrics['requested_iterations']}"
+        )
+    if metrics["stop_cause"] != "max_iterations":
+        failures.append(f"stop_cause={metrics['stop_cause']!r}, expected max_iterations")
+    if not metrics["infosets"] or metrics["infosets"] <= 0:
+        failures.append("no infosets were materialized")
+    if metrics["report"]["emitted_rows"] is None:
+        failures.append("missing completed strategy report")
+    required_streets = result["case"].get("expect_streets", [])
+    for street in required_streets:
+        normalized = street.upper()
+        data = metrics["per_street"].get(normalized)
+        if not data or data["decision_nodes"] <= 0:
+            failures.append(f"tree has no {normalized} decision node")
+        if result["case"].get("expect_strategy_rows", True):
+            if not data or data["strategy_rows"] <= 0:
+                failures.append(f"no reported strategy row on {normalized}")
+    return failures
+
+
+def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
+    benchmark = result["benchmark"]
+    return {
+        "actual_iterations": benchmark["actual_iterations"],
+        "infosets": benchmark["infosets"],
+        "stop_cause": benchmark["stop_cause"],
+        "guarantee": benchmark["metrics"]["guarantee"],
+        "exploitability_raw": benchmark["metrics"]["exploitability_raw"],
+        "exploitability_mbb_per_game": benchmark["metrics"]["exploitability_mbb_per_game"],
+        "strategy_fingerprint_sha256": benchmark["report"]["strategy_fingerprint_sha256"],
+        "per_street_rows": {
+            street: {
+                "strategy_rows": values["strategy_rows"],
+                "uniform_rows": values["uniform_rows"],
+                "non_uniform_rows": values["non_uniform_rows"],
+                "unique_nodes_with_rows": values["unique_nodes_with_rows"],
+            }
+            for street, values in benchmark["per_street"].items()
+        },
+    }
+
+
+def run_once(
+    solver: Path,
+    root: Path,
+    out_dir: Path,
+    case: dict[str, Any],
+    defaults: dict[str, Any],
+    iteration_override: int | None,
+    repetition: int,
+) -> dict[str, Any]:
+    case_dir = out_dir / case["id"] / f"run-{repetition}"
+    case_dir.mkdir(parents=True, exist_ok=True)
+    raw_report = case_dir / "solver-report.json"
+    stdout_path = case_dir / "stdout.log"
+    stderr_path = case_dir / "stderr.log"
+    tree_path = (root / case["tree"]).resolve()
+    node_streets, decisions = tree_nodes(tree_path)
+    command = build_command(
+        solver, root, raw_report, case, defaults, iteration_override
+    )
+    requested_iterations = iteration_override or int(
+        case.get("iterations", defaults.get("iterations", 2000))
+    )
+    report_rows = int(case.get("report_rows", defaults.get("report_rows", 0)))
+
+    started = time.perf_counter_ns()
+    completed = subprocess.run(
+        command,
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    elapsed = (time.perf_counter_ns() - started) / 1_000_000_000.0
+    stdout_path.write_text(completed.stdout, encoding="utf-8")
+    stderr_path.write_text(completed.stderr, encoding="utf-8")
+
+    native_report: dict[str, Any] | None = None
+    if raw_report.exists():
+        try:
+            native_report = json.loads(raw_report.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            native_report = None
+
+    benchmark = parse_stdout(
+        completed.stdout,
+        decisions,
+        node_streets,
+        elapsed,
+        requested_iterations,
+        report_rows,
+    )
+    result = {
+        "schema": SCHEMA,
+        "case": case,
+        "command": command,
+        "process": {
+            "returncode": completed.returncode,
+            "stdout": str(stdout_path.relative_to(out_dir)),
+            "stderr": str(stderr_path.relative_to(out_dir)),
+            "solver_report": (
+                str(raw_report.relative_to(out_dir)) if raw_report.exists() else None
+            ),
+        },
+        "native_solver_report": native_report,
+        "benchmark": benchmark,
+    }
+    result["validation_failures"] = validate_result(result)
+    result_path = case_dir / "benchmark.json"
+    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return result
+
+
+def write_summary(out_dir: Path, results: list[dict[str, Any]], repro: dict[str, Any]) -> None:
+    summary = {
+        "schema": SUMMARY_SCHEMA,
+        "results": [
+            {
+                "case": result["case"]["id"],
+                "returncode": result["process"]["returncode"],
+                "validation_failures": result["validation_failures"],
+                "benchmark": result["benchmark"],
+            }
+            for result in results
+        ],
+        "reproducibility": repro,
+    }
+    (out_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    fields = [
+        "case", "game", "street", "iterations", "seconds", "iterations_per_second",
+        "infosets", "infosets_per_1k_iterations", "peak_measured_bytes",
+        "final_memory_bytes", "storage_bytes", "adapter_bytes",
+        "bytes_per_infoset", "exploitability_mbb", "stop_cause",
+        "preflop_rows", "flop_rows", "turn_rows", "river_rows",
+        "strategy_fingerprint_sha256", "valid",
+    ]
+    with (out_dir / "summary.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for result in results:
+            b = result["benchmark"]
+            writer.writerow({
+                "case": result["case"]["id"],
+                "game": result["case"]["game"],
+                "street": result["case"].get("street", "full"),
+                "iterations": b["actual_iterations"],
+                "seconds": f"{b['elapsed_seconds']:.9f}",
+                "iterations_per_second": b["iterations_per_second"],
+                "infosets": b["infosets"],
+                "infosets_per_1k_iterations": b["infosets_per_1k_iterations"],
+                "peak_measured_bytes": b["memory"]["peak_measured_bytes"],
+                "final_memory_bytes": b["memory"]["final_bytes"],
+                "storage_bytes": b["memory"]["storage_bytes"],
+                "adapter_bytes": b["memory"]["adapter_bytes"],
+                "bytes_per_infoset": b["memory"]["bytes_per_infoset"],
+                "exploitability_mbb": b["metrics"]["exploitability_mbb_per_game"],
+                "stop_cause": b["stop_cause"],
+                "preflop_rows": b["per_street"]["PREFLOP"]["strategy_rows"],
+                "flop_rows": b["per_street"]["FLOP"]["strategy_rows"],
+                "turn_rows": b["per_street"]["TURN"]["strategy_rows"],
+                "river_rows": b["per_street"]["RIVER"]["strategy_rows"],
+                "strategy_fingerprint_sha256": b["report"]["strategy_fingerprint_sha256"],
+                "valid": not result["validation_failures"],
+            })
+
+
+def main() -> int:
+    root = repo_root()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--manifest",
+        default=str(root / "benchmarks" / "solver" / "cases.json"),
+        help="benchmark case manifest",
+    )
+    parser.add_argument("--suite", action="append", default=[], help="case tag to run")
+    parser.add_argument("--case", action="append", default=[], help="exact case id to run")
+    parser.add_argument("--solver", help="path to pe-preflop-solve")
+    parser.add_argument("--build-dir", default="build", help="build directory")
+    parser.add_argument(
+        "--output-dir",
+        default=str(root / "build" / "solver-benchmarks"),
+        help="result directory",
+    )
+    parser.add_argument("--iterations", type=int, help="override iterations for every selected case")
+    parser.add_argument("--repeat", type=int, default=1, help="number of runs per case")
+    parser.add_argument(
+        "--check-reproducibility",
+        action="store_true",
+        help="compare deterministic fields across repetitions",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="return non-zero on validation/reproducibility failures",
+    )
+    parser.add_argument("--list", action="store_true", help="list selected cases and exit")
+    args = parser.parse_args()
+
+    if args.iterations is not None and args.iterations <= 0:
+        parser.error("--iterations must be > 0")
+    if args.repeat <= 0:
+        parser.error("--repeat must be > 0")
+    if args.check_reproducibility and args.repeat < 2:
+        parser.error("--check-reproducibility requires --repeat >= 2")
+
+    manifest_path = Path(args.manifest)
+    if not manifest_path.is_absolute():
+        manifest_path = (root / manifest_path).resolve()
+    manifest = load_manifest(manifest_path)
+    suites = set(args.suite or ["smoke"])
+    names = set(args.case)
+    cases = [
+        case for case in manifest["cases"]
+        if case_selected(case, suites, names)
+    ]
+    if not cases:
+        parser.error("no benchmark cases selected")
+
+    if args.list:
+        for case in cases:
+            print(f"{case['id']}: {case['game']} {case.get('street', 'full')}")
+        return 0
+
+    solver = resolve_solver(args, root)
+    out_dir = Path(args.output_dir)
+    if not out_dir.is_absolute():
+        out_dir = (root / out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    selected = {
+        "schema": "pe-solver-benchmark-selection/v1",
+        "manifest": str(manifest_path),
+        "solver": str(solver),
+        "suites": sorted(suites),
+        "cases": [case["id"] for case in cases],
+        "iteration_override": args.iterations,
+        "repeat": args.repeat,
+    }
+    (out_dir / "selection.json").write_text(
+        json.dumps(selected, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    results: list[dict[str, Any]] = []
+    by_case: dict[str, list[dict[str, Any]]] = {}
+    for case in cases:
+        for repetition in range(1, args.repeat + 1):
+            print(
+                f"[benchmark] {case['id']} run {repetition}/{args.repeat}",
+                flush=True,
+            )
+            result = run_once(
+                solver,
+                root,
+                out_dir,
+                case,
+                manifest.get("defaults", {}),
+                args.iterations,
+                repetition,
+            )
+            results.append(result)
+            by_case.setdefault(case["id"], []).append(result)
+            b = result["benchmark"]
+            print(
+                f"  iterations={b['actual_iterations']} infosets={b['infosets']} "
+                f"seconds={b['elapsed_seconds']:.3f} "
+                f"ips={b['iterations_per_second'] or 0:.1f} "
+                f"stop={b['stop_cause']} valid={not result['validation_failures']}",
+                flush=True,
+            )
+
+    repro: dict[str, Any] = {}
+    repro_failures: list[str] = []
+    if args.check_reproducibility:
+        for case_id, case_runs in by_case.items():
+            views = [stable_reproducibility_view(result) for result in case_runs]
+            reference = views[0]
+            mismatches = [
+                index + 1 for index, view in enumerate(views[1:], start=1)
+                if view != reference
+            ]
+            passed = not mismatches
+            repro[case_id] = {
+                "passed": passed,
+                "runs": len(views),
+                "mismatching_runs": mismatches,
+                "reference": reference,
+            }
+            if not passed:
+                repro_failures.append(
+                    f"{case_id}: deterministic fields differ in runs {mismatches}"
+                )
+
+    write_summary(out_dir, results, repro)
+    validation_failures = [
+        f"{result['case']['id']}: {failure}"
+        for result in results
+        for failure in result["validation_failures"]
+    ]
+    all_failures = validation_failures + repro_failures
+    if all_failures:
+        print("\nFailures:", file=sys.stderr)
+        for failure in all_failures:
+            print(f"  - {failure}", file=sys.stderr)
+    print(f"\nResults: {out_dir}")
+    if args.strict and all_failures:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
