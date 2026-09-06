@@ -1792,7 +1792,9 @@ static void i_on_tree_editor_setup(App *app, Event *event)
 
 static Panel *i_tree_editor_panel(App *app)
 {
-    Panel *panel = panel_create();
+    /* Same reason as SETUP: the control column is taller than a short
+     * display, and a clipped page has no way back. */
+    Panel *panel = panel_scroll(FALSE, TRUE);
     Layout *root = layout_create(2, 1);
     Layout *left = layout_create(1, 2);
     Layout *right = layout_create(1, 2);
@@ -1979,6 +1981,7 @@ static Panel *i_tree_editor_panel(App *app)
     layout_hsize(root, 1, 470.0f);
     layout_hmargin(root, 0, 12.0f);
     layout_margin(root, 12.0f);
+    panel_size(panel, s2df(1100, 900));
     panel_layout(panel, root);
     pe_tree_editor_init(&app->tree_editor, (int)selected_players(app),
                         MPF_STREET_PREFLOP);
@@ -2666,7 +2669,7 @@ static void i_on_icm_spot_street_select(App *app, Event *event)
 
 static Panel *i_icm_spot_panel(App *app)
 {
-    Panel *panel = panel_create();
+    Panel *panel = panel_scroll(FALSE, TRUE);
     Layout *root = layout_create(1, 9);
     Layout *game_controls = layout_create(4, 1);
     Layout *spot_controls = layout_create(2, 3);
@@ -2848,6 +2851,7 @@ static Panel *i_icm_spot_panel(App *app)
     layout_vsize(root, 7, 86.0f);
     layout_vsize(root, 8, 132.0f);
     layout_margin(root, 10.0f);
+    panel_size(panel, s2df(900, 900));
     panel_layout(panel, root);
     icm_spot_update_context(app);
     return panel;
@@ -8201,7 +8205,11 @@ static void i_on_convergence_preset(App *app, Event *event)
 
 static Panel *i_setup_panel(App *app)
 {
-    Panel *panel = panel_create();
+    /* The form is taller than any window it is likely to open in -- 34 rows of
+     * controls -- so the outer panel scrolls.  Without it the rows past the
+     * window's height simply could not be reached: the panel sized itself to
+     * its content and the content was clipped. */
+    Panel *panel = panel_scroll(FALSE, TRUE);
     Panel *form_panel = panel_create();
     Layout *root = layout_create(1, 1);
     Layout *layout = layout_create(2, 34);
@@ -8523,6 +8531,9 @@ static Panel *i_setup_panel(App *app)
     panel_layout(form_panel, layout);
     layout_panel(root, form_panel, 0, 0);
     layout_margin(root, 10.0f);
+    /* Viewport for the scroller: the content keeps its natural height and
+     * the panel shows this much of it at a time. */
+    panel_size(panel, s2df(700, 900));
     panel_layout(panel, root);
     return panel;
 }
@@ -10028,10 +10039,31 @@ static App *i_create(void)
     window_panel(app->window, root);
     window_title(app->window, "poker-eval Studio");
     window_origin(app->window, v2df(100, 60));
-    /* SETUP contains the table, board matrix and up to eight seat rows.  The
-     * previous 1440x920 default was shorter than that layout and macOS could
-     * receive negative control origins while switching pages. */
-    window_client_size(app->window, s2df(1660, 1200));
+    /* SETUP contains the table, board matrix and up to eight seat rows, so the
+     * window wants to be tall -- but asking for more than the display has puts
+     * the bottom of every page off-screen where nothing can reach it, which is
+     * not a size the user can fix by dragging.  Ask for the layout's size,
+     * take the screen's when that is smaller, and leave room for the menu bar
+     * and dock; the pages scroll for whatever still does not fit. */
+    {
+        S2Df screen = gui_resolution();
+        real32_t width = 1660.0f;
+        real32_t height = 1200.0f;
+        real32_t max_width = screen.width > 0.0f ? screen.width - 80.0f : width;
+        real32_t max_height = screen.height > 0.0f ? screen.height - 160.0f
+                                                   : height;
+        if (max_width > 800.0f && width > max_width)
+            width = max_width;
+        if (max_height > 600.0f && height > max_height)
+            height = max_height;
+        window_client_size(app->window, s2df(width, height));
+        /* Worth a line in the log: a window that opens partly off-screen is
+         * indistinguishable from a layout bug until you know what the display
+         * reported. */
+        log_printf("display %.0fx%.0f -> window %.0fx%.0f",
+                   (double)screen.width, (double)screen.height,
+                   (double)width, (double)height);
+    }
     window_OnClose(app->window, listener(app, i_on_close, App));
     window_show(app->window);
     return app;
