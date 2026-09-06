@@ -179,6 +179,7 @@ struct _app_t
     Combo *board_abstraction_combo;
     Combo *stop_mode_combo;
     Combo *spot_preset_combo;
+    Combo *convergence_combo;
     Label *spot_preset_hint;
     Edit *br_samples_edit;
     Label *runtime_label;
@@ -7622,6 +7623,19 @@ static void i_on_solve(App *app, Event *event)
         unref(event);
         return;
     }
+    /* The combo lists every preset the library knows, and the sampled driver
+     * refuses the full-tree ones outright.  Saying so here beats launching a
+     * process that exits with an error the user has to go and read. */
+    if (strcmp(algorithm_scope_name(algorithm), "Lane B sampled") != 0 &&
+        algorithm != PE_PRESET_CUSTOM)
+    {
+        status(app, "SOLVE BLOCKED\n%s is a %s preset and this driver is the\n"
+                    "sampled one; it will refuse the run.  Pick a Lane B\n"
+                    "sampled algorithm (external-mccfr is the reference).",
+               pe_preset_name(algorithm), algorithm_scope_name(algorithm));
+        unref(event);
+        return;
+    }
     if (parse_ui_u64(iterations_text, &iterations) != 0 ||
         parse_ui_u64(interval_text, &interval) != 0 ||
         parse_ui_u64(edit_get_text(app->br_samples_edit), &br_samples) != 0 ||
@@ -8072,62 +8086,113 @@ static void i_on_spot_preset(App *app, Event *event)
         return;
     }
     choice = combo_get_selected(app->spot_preset_combo);
+    /* A spot preset sets what the SHAPE of the tree decides -- the board key
+     * and the algorithm -- and nothing about when to stop.  How far to run is
+     * the CONVERGENCE combo beside it, because that is a judgement about the
+     * answer wanted, not about the spot.
+     *
+     * The algorithm is external-mccfr in every case, and that is a measured
+     * choice rather than a default.  On a flop root at 256 BR samples the
+     * empirical exploitability was, in mBB:
+     *
+     *              100k it.   200k it.   400k it.
+     *   mccfr        510.5      453.8       85.1
+     *   ecfr         297.8      297.8      113.4
+     *   dcfr         808.2      850.8      141.8
+     *   outcome     2325.5 at 200k -- three to eight times worse throughout
+     *
+     * and on the bounded full tree at 300k: dcfr 5423, ecfr 6101, mccfr 6158.
+     * Apart from outcome-mccfr, which is plainly bad, the spread is inside
+     * the estimator's own noise, so no preset claims a per-spot winner: they
+     * select the reference sampled algorithm, the best of them at the longest
+     * horizon measured, and leave the combo free. */
+    combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
     switch (choice)
     {
     case SPOT_PRESET_PREFLOP:
         combo_selected(app->board_abstraction_combo, 0u);   /* none: exact */
-        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
-        combo_selected(app->stop_mode_combo, 0u);           /* max iterations */
-        edit_text(app->iterations_edit, "1000000");
-        edit_text(app->interval_edit, "4096");
-        edit_text(app->br_samples_edit, "256");
         label_text(app->spot_preset_hint,
-                   "676 infosets: exact boards are finite here, so nothing is\n"
-                   "merged and the run ends on the iteration count.");
+                   "676 infosets: exact boards are finite here, so nothing is merged.");
         break;
     case SPOT_PRESET_ONE_STREET:
         combo_selected(app->board_abstraction_combo, 0u);   /* none: exact */
-        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
-        combo_selected(app->stop_mode_combo, 1u);           /* target */
-        edit_text(app->target_edit, "1.0");
-        edit_text(app->interval_edit, "256");
-    /* 32 made the exploitability target fire ten times too early: the
-     * empirical BR needs samples to find the exploit at all, and on a flop
-     * root a 1 mBB target was "reached" at 34k iterations with 32 samples
-     * against 325k with 256. */
-    edit_text(app->br_samples_edit, "256");
-        edit_text(app->br_samples_edit, "256");
         label_text(app->spot_preset_hint,
-                   "4 704 infosets on a flop root: exact and finite.  Reaches\n"
-                   "1 mBB at ~325k iterations.  Needs BOARD and POT AT ROOT.");
+                   "4 704 infosets on a flop root: exact and finite, and the only\n"
+                   "shape that reaches 1 mBB.  Needs BOARD and POT AT ROOT.");
         break;
     case SPOT_PRESET_FULL_BOUNDED:
         combo_selected(app->board_abstraction_combo, 2u);   /* large */
-        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
-        combo_selected(app->stop_mode_combo, 0u);           /* max iterations */
-        edit_text(app->iterations_edit, "2000000");
-        edit_text(app->interval_edit, "4096");
-        edit_text(app->br_samples_edit, "256");
         label_text(app->spot_preset_hint,
-                   "77k infosets, reached by 500k iterations and stable after:\n"
-                   "constant memory, and at 2M every node reads 83-92%.");
+                   "77k infosets, whole space by 500k iterations, constant memory.\n"
+                   "At 2M every node reads 83-92%, preflop and postflop.");
         break;
     case SPOT_PRESET_FULL_RANKS:
         combo_selected(app->board_abstraction_combo, 1u);   /* detailed */
-        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
-        combo_selected(app->stop_mode_combo, 0u);
-        edit_text(app->iterations_edit, "2000000");
-        edit_text(app->interval_edit, "4096");
-        edit_text(app->br_samples_edit, "256");
         label_text(app->spot_preset_hint,
                    "Keeps board ranks: 4.2M infosets at 2M iterations and still\n"
-                   "growing, so watch the memory budget.  Slower to converge.");
+                   "growing, so it runs against the memory budget.");
         break;
     case SPOT_PRESET_CUSTOM:
     default:
         label_text(app->spot_preset_hint,
-                   "Nothing changed.  A 4-street tree with exact boards is the\n"
-                   "one combination that cannot finish: it only ends on memory.");
+                   "Nothing changed.  A 4-street tree with exact boards is the one\n"
+                   "combination that cannot finish: it only ends on memory.");
+        break;
+    }
+    unref(event);
+    setup_update_context(app);
+}
+
+enum {
+    CONVERGENCE_CUSTOM = 0,
+    CONVERGENCE_QUICK,
+    CONVERGENCE_STANDARD,
+    CONVERGENCE_DEEP,
+    CONVERGENCE_TARGET,
+    CONVERGENCE_MANUAL
+};
+
+/* How far to run, kept apart from what is being run.  The iteration counts
+ * are the ones the measurements above are quoted at, so a preset and its
+ * hint always describe the same run. */
+static void i_on_convergence_preset(App *app, Event *event)
+{
+    uint32_t choice;
+    if (!app || !app->convergence_combo)
+    {
+        unref(event);
+        return;
+    }
+    choice = combo_get_selected(app->convergence_combo);
+    switch (choice)
+    {
+    case CONVERGENCE_QUICK:
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "100000");
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_STANDARD:
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "500000");
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_DEEP:
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "2000000");
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_TARGET:
+        combo_selected(app->stop_mode_combo, 1u);
+        edit_text(app->target_edit, "1.0");
+        edit_text(app->interval_edit, "256");
+        edit_text(app->br_samples_edit, "256");
+        break;
+    case CONVERGENCE_MANUAL:
+        combo_selected(app->stop_mode_combo, 2u);
+        edit_text(app->interval_edit, "4096");
+        break;
+    case CONVERGENCE_CUSTOM:
+    default:
         break;
     }
     unref(event);
@@ -8139,7 +8204,7 @@ static Panel *i_setup_panel(App *app)
     Panel *panel = panel_create();
     Panel *form_panel = panel_create();
     Layout *root = layout_create(1, 1);
-    Layout *layout = layout_create(2, 35);
+    Layout *layout = layout_create(2, 34);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
@@ -8160,6 +8225,7 @@ static Panel *i_setup_panel(App *app)
     Label *precision_label = label_create();
     Label *abstraction_label = label_create();
     Label *preset_label = label_create();
+    Label *convergence_label = label_create();
     Label *br_samples_label = label_create();
     Label *lambda_label = label_create();
     Label *dcfr_alpha_label = label_create();
@@ -8197,6 +8263,7 @@ static Panel *i_setup_panel(App *app)
     app->board_abstraction_combo = combo_create();
     app->stop_mode_combo = combo_create();
     app->spot_preset_combo = combo_create();
+    app->convergence_combo = combo_create();
     app->spot_preset_hint = label_create();
     app->br_samples_edit = edit_create();
     app->board_label = board_label;
@@ -8228,7 +8295,8 @@ static Panel *i_setup_panel(App *app)
     label_text(target_label, "EXPLOITABILITY TARGET (mBB)");
     label_text(interval_label, "CONVERGENCE CHECK EVERY");
     label_text(condition_label, "STOP CONDITION");
-    label_text(preset_label, "SPOT PRESET");
+    label_text(preset_label, "SPOT PRESET (what is being solved)");
+    label_text(convergence_label, "CONVERGENCE (how far to run)");
     label_text(br_samples_label, "BR SAMPLES (target accuracy)");
     label_multiline(app->spot_preset_hint, TRUE);
     combo_add_elem(app->game_combo, "Hold'em", NULL);
@@ -8307,6 +8375,16 @@ static Panel *i_setup_panel(App *app)
                    "Full tree, 4 streets - rank-aware (detailed)", NULL);
     combo_selected(app->spot_preset_combo, 0u);
     combo_OnSelect(app->spot_preset_combo, listener(app, i_on_spot_preset, App));
+    combo_add_elem(app->convergence_combo, "Custom (leave settings alone)", NULL);
+    combo_add_elem(app->convergence_combo, "Quick look - 100k iterations", NULL);
+    combo_add_elem(app->convergence_combo, "Standard - 500k iterations", NULL);
+    combo_add_elem(app->convergence_combo, "Deep - 2M iterations", NULL);
+    combo_add_elem(app->convergence_combo,
+                   "Until 1 mBB (one-street roots only)", NULL);
+    combo_add_elem(app->convergence_combo, "Until I stop it", NULL);
+    combo_selected(app->convergence_combo, 0u);
+    combo_OnSelect(app->convergence_combo,
+                   listener(app, i_on_convergence_preset, App));
     label_text(app->spot_preset_hint,
                "Pick the shape of the spot and the settings that suit it are\n"
                "applied; every number in the hints was measured, not guessed.");
@@ -8355,74 +8433,78 @@ static Panel *i_setup_panel(App *app)
     edit_OnChange(app->setup_pot_edit,
                   listener(app, i_on_setup_state_change, App));
     layout_label(layout, title, 0, 0);
-    layout_label(layout, game_label, 0, 1);
-    layout_combo(layout, app->game_combo, 0, 2);
-    layout_label(layout, players_label, 1, 1);
-    layout_combo(layout, app->players_combo, 1, 2);
-    layout_label(layout, tree_label, 0, 3);
-    layout_edit(layout, app->tree_edit, 0, 4);
-    layout_button(layout, browse_tree, 1, 4);
-    layout_label(layout, mkr_label, 0, 5);
-    layout_edit(layout, app->mkr_edit, 0, 6);
-    layout_button(layout, browse_mkr, 1, 6);
-    layout_label(layout, board_label, 0, 7);
-    layout_edit(layout, app->board_edit, 0, 8);
-    layout_label(layout, pot_label, 1, 7);
-    layout_edit(layout, app->setup_pot_edit, 1, 8);
-    layout_label(layout, range0_label, 0, 9);
-    layout_edit(layout, app->range0_edit, 0, 10);
-    layout_label(layout, range1_label, 1, 9);
-    layout_edit(layout, app->range1_edit, 1, 10);
-    layout_label(layout, algorithm_label, 0, 11);
-    layout_label(layout, backend_label, 1, 11);
-    layout_combo(layout, app->algorithm_combo, 0, 12);
-    layout_combo(layout, app->backend_combo, 1, 12);
-    layout_label(layout, precision_label, 0, 13);
-    layout_label(layout, threads_label, 1, 13);
-    layout_combo(layout, app->precision_combo, 0, 14);
-    layout_edit(layout, app->threads_edit, 1, 14);
-    layout_label(layout, policy_label, 0, 15);
-    layout_label(layout, lambda_label, 1, 15);
-    layout_combo(layout, app->policy_combo, 0, 16);
-    layout_edit(layout, app->lambda_edit, 1, 16);
-    layout_label(layout, dcfr_alpha_label, 0, 17);
-    layout_label(layout, dcfr_beta_label, 1, 17);
-    layout_edit(layout, app->dcfr_alpha_edit, 0, 18);
-    layout_edit(layout, app->dcfr_beta_edit, 1, 18);
-    layout_label(layout, dcfr_gamma_label, 0, 19);
-    layout_edit(layout, app->dcfr_gamma_edit, 0, 20);
-    layout_label(layout, runner_label, 1, 19);
-    layout_edit(layout, app->runner_edit, 1, 20);
-    layout_button(layout, load, 0, 21);
-    layout_button(layout, solve, 1, 21);
-    layout_label(layout, iterations_label, 0, 22);
-    layout_label(layout, condition_label, 1, 22);
-    layout_edit(layout, app->iterations_edit, 0, 23);
-    layout_combo(layout, app->stop_mode_combo, 1, 23);
-    layout_label(layout, target_label, 0, 24);
-    layout_label(layout, interval_label, 1, 24);
-    layout_edit(layout, app->target_edit, 0, 25);
-    layout_edit(layout, app->interval_edit, 1, 25);
-    layout_button(layout, stop, 1, 26);
-    layout_label(layout, app->runtime_label, 0, 27);
-    layout_label(layout, app->setup_run_state, 0, 28);
-    layout_label(layout, app->setup_run_progress, 1, 28);
-    layout_progress(layout, app->setup_progress_bar, 0, 29);
-    layout_label(layout, app->setup_run_metrics, 1, 29);
-    layout_label(layout, abstraction_label, 0, 30);
-    layout_label(layout, preset_label, 1, 30);
-    layout_combo(layout, app->board_abstraction_combo, 0, 31);
-    layout_combo(layout, app->spot_preset_combo, 1, 31);
-    layout_label(layout, br_samples_label, 0, 32);
-    layout_edit(layout, app->br_samples_edit, 0, 33);
-    layout_label(layout, app->spot_preset_hint, 1, 32);
+    /* The preset comes first: it decides whether the run can finish at
+     * all, so it belongs above the controls it sets rather than under
+     * them. */
+    layout_label(layout, preset_label, 0, 1);
+    layout_label(layout, convergence_label, 1, 1);
+    layout_combo(layout, app->spot_preset_combo, 0, 2);
+    layout_combo(layout, app->convergence_combo, 1, 2);
+    layout_label(layout, app->spot_preset_hint, 0, 3);
+    layout_label(layout, game_label, 0, 3);
+    layout_combo(layout, app->game_combo, 0, 4);
+    layout_label(layout, players_label, 1, 3);
+    layout_combo(layout, app->players_combo, 1, 4);
+    layout_label(layout, tree_label, 0, 5);
+    layout_edit(layout, app->tree_edit, 0, 6);
+    layout_button(layout, browse_tree, 1, 6);
+    layout_label(layout, mkr_label, 0, 7);
+    layout_edit(layout, app->mkr_edit, 0, 8);
+    layout_button(layout, browse_mkr, 1, 8);
+    layout_label(layout, board_label, 0, 9);
+    layout_edit(layout, app->board_edit, 0, 10);
+    layout_label(layout, pot_label, 1, 9);
+    layout_edit(layout, app->setup_pot_edit, 1, 10);
+    layout_label(layout, range0_label, 0, 11);
+    layout_edit(layout, app->range0_edit, 0, 12);
+    layout_label(layout, range1_label, 1, 11);
+    layout_edit(layout, app->range1_edit, 1, 12);
+    layout_label(layout, algorithm_label, 0, 13);
+    layout_label(layout, backend_label, 1, 13);
+    layout_combo(layout, app->algorithm_combo, 0, 14);
+    layout_combo(layout, app->backend_combo, 1, 14);
+    layout_label(layout, precision_label, 0, 15);
+    layout_label(layout, threads_label, 1, 15);
+    layout_combo(layout, app->precision_combo, 0, 16);
+    layout_edit(layout, app->threads_edit, 1, 16);
+    layout_label(layout, policy_label, 0, 17);
+    layout_label(layout, lambda_label, 1, 17);
+    layout_combo(layout, app->policy_combo, 0, 18);
+    layout_edit(layout, app->lambda_edit, 1, 18);
+    layout_label(layout, dcfr_alpha_label, 0, 19);
+    layout_label(layout, dcfr_beta_label, 1, 19);
+    layout_edit(layout, app->dcfr_alpha_edit, 0, 20);
+    layout_edit(layout, app->dcfr_beta_edit, 1, 20);
+    layout_label(layout, dcfr_gamma_label, 0, 21);
+    layout_edit(layout, app->dcfr_gamma_edit, 0, 22);
+    layout_label(layout, runner_label, 1, 21);
+    layout_edit(layout, app->runner_edit, 1, 22);
+    layout_button(layout, load, 0, 23);
+    layout_button(layout, solve, 1, 23);
+    layout_label(layout, iterations_label, 0, 24);
+    layout_label(layout, condition_label, 1, 24);
+    layout_edit(layout, app->iterations_edit, 0, 25);
+    layout_combo(layout, app->stop_mode_combo, 1, 25);
+    layout_label(layout, target_label, 0, 26);
+    layout_label(layout, interval_label, 1, 26);
+    layout_edit(layout, app->target_edit, 0, 27);
+    layout_edit(layout, app->interval_edit, 1, 27);
+    layout_button(layout, stop, 1, 28);
+    layout_label(layout, app->runtime_label, 0, 29);
+    layout_label(layout, app->setup_run_state, 0, 30);
+    layout_label(layout, app->setup_run_progress, 1, 30);
+    layout_progress(layout, app->setup_progress_bar, 0, 31);
+    layout_label(layout, app->setup_run_metrics, 1, 31);
+    layout_label(layout, abstraction_label, 0, 32);
+    layout_label(layout, br_samples_label, 1, 32);
+    layout_combo(layout, app->board_abstraction_combo, 0, 33);
+    layout_edit(layout, app->br_samples_edit, 1, 33);
 
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
     layout_margin(layout, 12);
     layout_hmargin(layout, 0, 8);
     layout_vmargin(layout, 0, 8);
-    layout_vmargin(layout, 2, 8);
     layout_vmargin(layout, 4, 8);
     layout_vmargin(layout, 6, 8);
     layout_vmargin(layout, 8, 8);
@@ -8435,9 +8517,9 @@ static Panel *i_setup_panel(App *app)
     layout_vmargin(layout, 22, 8);
     layout_vmargin(layout, 24, 8);
     layout_vmargin(layout, 26, 8);
-    layout_vmargin(layout, 29, 8);
+    layout_vmargin(layout, 28, 8);
     layout_vmargin(layout, 31, 8);
-    layout_vmargin(layout, 33, 8);
+    layout_vmargin(layout, 3, 8);
     panel_layout(form_panel, layout);
     layout_panel(root, form_panel, 0, 0);
     layout_margin(root, 10.0f);
