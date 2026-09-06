@@ -1815,7 +1815,7 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         int state = pe_solver_state(solver);
         if (state != PE_SOLVER_STATE_COMPLETED &&
             state != PE_SOLVER_STATE_PAUSED &&
-            state != PE_SOLVER_STATE_STOPPED)
+            !(state == PE_SOLVER_STATE_STOPPED && solver->pause_acknowledged))
             return PE_SOLVER_ERR_INVALID_STATE;
     }
     if (solver->storage == NULL || solver->storage->shape == NULL ||

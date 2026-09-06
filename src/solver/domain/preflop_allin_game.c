@@ -241,7 +241,11 @@ static int tree_action_to_semantic_in_state(const mpf_tree_node_t *node,
     if (out->kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
         out->kind = PE_ACTION_CHECK;
     else if (out->kind == PE_ACTION_RAISE && betting->to_call <= PREFLOP_EPSILON)
+    {
         out->kind = PE_ACTION_BET;
+        out->amount_kind = PE_AMOUNT_CHIPS;
+        out->amount = out->amount;
+    }
     return 0;
 }
 
@@ -688,7 +692,7 @@ static uint64_t preflop_op_infoset_key(const pe_preflop_betting_state_t *state,
         if (abstracted)
         {
             mask_t hole_only_board;
-            preflop_canonical_view(MASK_EMPTY, state->holes[actor],
+            preflop_canonical_view(state->board, state->holes[actor],
                                    &hole_only_board, &hole_key);
             (void)hole_only_board;
         }
@@ -899,9 +903,18 @@ static double preflop_known_board_value(const pe_preflop_allin_game_t *game,
      * attributable to the current street.  Keep that main pot in the
      * showdown rather than silently dropping it from every player's payoff. */
     if (initial_pot > PREFLOP_EPSILON && active_count > 0)
+    {
+        int winners = 0;
+        eval_t best = EVAL_INVALID;
         for (int p = 0; p < players; ++p)
-            if (betting->active[p])
-                payout[p] += initial_pot / (double)active_count;
+            if (betting->active[p]) {
+                if (values[p] > best) { best = values[p]; winners = 1; }
+                else if (values[p] == best) ++winners;
+            }
+        for (int p = 0; p < players; ++p)
+            if (betting->active[p] && values[p] == best && winners > 0)
+                payout[p] += initial_pot / (double)winners;
+    }
     return payout[player] - betting->invested[player];
 }
 
