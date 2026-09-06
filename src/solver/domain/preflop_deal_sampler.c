@@ -54,7 +54,7 @@ int pe_preflop_deal_sampler_init_holdem(
     out->hole_cards = 2u;
     out->ranges = ranges;
     /* NULL ranges: every player holds any hand (see complete_ranges). */
-    out->complete_ranges = ranges ? 0u : 1u;
+    out->complete_ranges = (uint8_t)(ranges == NULL);
     if (!ranges && !complete_deal_fits(out)) return -1;
     return 0;
 }
@@ -78,7 +78,7 @@ int pe_preflop_deal_sampler_init_omaha(
     out->player_count = player_count;
     out->hole_cards = hole_cards;
     out->ranges = ranges;
-    out->complete_ranges = ranges ? 0u : 1u;
+    out->complete_ranges = (uint8_t)(ranges == NULL);
     if (!ranges && !complete_deal_fits(out)) return -1;
     return 0;
 }

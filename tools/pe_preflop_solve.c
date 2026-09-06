@@ -8,6 +8,7 @@
  */
 
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/pthread_compat.h>
 #include <poker_eval/range.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 #include <poker_eval/solver/pe_preflop_allin_game.h>
@@ -29,12 +30,14 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
-#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <time.h>
 #include <unistd.h>
+#endif
 
 #include "../src/solver/domain/finite_double.h"
 
@@ -726,11 +729,32 @@ static void usage(FILE *stream)
  * --max-ram 0 turns it off. */
 static uint64_t default_ram_budget_bytes(void)
 {
+#if defined(_WIN32)
+    MEMORYSTATUSEX memory = {0};
+    memory.dwLength = sizeof(memory);
+    if (GlobalMemoryStatusEx(&memory))
+        return (uint64_t)memory.ullTotalPhys / 10u * 7u;
+    return UINT64_C(4) * 1024u * 1024u * 1024u;
+#else
     long pages = sysconf(_SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGE_SIZE);
     if (pages <= 0 || page_size <= 0)
         return UINT64_C(4) * 1024u * 1024u * 1024u;
     return (uint64_t)pages * (uint64_t)page_size / 10u * 7u;
+#endif
+}
+
+static void i_sleep_ms(unsigned milliseconds)
+{
+#if defined(_WIN32)
+    Sleep((DWORD)milliseconds);
+#else
+    struct timespec delay;
+    delay.tv_sec = (time_t)(milliseconds / 1000u);
+    delay.tv_nsec = (long)(milliseconds % 1000u) * 1000000L;
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR)
+        ;
+#endif
 }
 
 static pe_solver_t *g_solver = NULL;
@@ -761,7 +785,7 @@ static void *i_stop_watcher(void *opaque)
     /* Poll a stop request; call pe_solver_stop from a thread distinct from
      * the solving thread.  Short sleep keeps the latency around one iteration. */
     while (g_stop_requested == 0)
-        usleep(50000);
+        i_sleep_ms(50u);
     if (g_solver)
         pe_solver_stop(g_solver);
     return NULL;
@@ -1732,22 +1756,24 @@ int main(int argc, char **argv)
         signal(SIGINT, i_on_signal);
         signal(SIGTERM, i_on_signal);
         g_stop_requested = 0;
-        if (pthread_create(&g_stop_watcher,NULL,i_stop_watcher,NULL) !=0){
-            g_stop_watcher = (pthread_t)0;
-        }
+        int stop_watcher_started = pthread_create(
+            &g_stop_watcher, NULL, i_stop_watcher, NULL) == 0;
         if (g_stop_requested && g_solver)
             pe_solver_stop(g_solver);
-        solver_runner_t runner = {solver, PE_SOLVER_ERR_EXECUTION, 0,
-                                  PTHREAD_MUTEX_INITIALIZER};
+        solver_runner_t runner;
+        memset(&runner, 0, sizeof(runner));
+        runner.solver = solver;
+        runner.status = PE_SOLVER_ERR_EXECUTION;
+        int runner_lock_initialized = pthread_mutex_init(&runner.lock, NULL) == 0;
         pthread_t solver_thread;
-        int solver_thread_started = pthread_create(
+        int solver_thread_started = runner_lock_initialized && pthread_create(
             &solver_thread, NULL, i_solver_runner, &runner) == 0;
         if (solver_thread_started)
         {
             uint64_t next_checkpoint = options.checkpoint_interval;
             while (!i_solver_runner_done(&runner))
             {
-                pe_progress_t p;
+                pe_progress_t p = {0};
                 (void)pe_solver_progress(solver, &p);
                 if (options.checkpoint_path &&
                     options.checkpoint_interval > 0u &&
@@ -1773,7 +1799,7 @@ int main(int argc, char **argv)
                 /* Checkpoint cadence is iteration-based; keep the monitor
                    responsive enough to observe fast solves while they remain
                    active. */
-                usleep(1000);
+                i_sleep_ms(1u);
             }
             pthread_join(solver_thread, NULL);
             status = runner.status;
@@ -1785,13 +1811,14 @@ int main(int argc, char **argv)
                in that unusual case, while the final checkpoint still works. */
             status = pe_solver_run(solver);
         }
-        pthread_mutex_destroy(&runner.lock);
+        if (runner_lock_initialized)
+            pthread_mutex_destroy(&runner.lock);
         /* Capture the interrupt BEFORE the flag is reused below to stop the
          * watcher thread.  An interrupted solve must not go on to serve
          * queries: the user asked for the run to end. */
         interrupted = g_stop_requested != 0;
         g_stop_requested = 1;
-        if (g_stop_watcher)
+        if (stop_watcher_started)
             pthread_join(g_stop_watcher,NULL);
         (void)i_save_checkpoint(solver, &options, tree);
         g_solver = NULL;
@@ -1870,9 +1897,16 @@ int main(int argc, char **argv)
             fflush(stdout);
             while (fgets(line, sizeof(line), stdin))
             {
-                size_t len = strlen(line);
-                while (len > 0u && (line[len - 1u] == '\n' || line[len - 1u] == '\r'))
-                    line[--len] = '\0';
+                for (size_t i = 0u; i < sizeof(line); ++i)
+                {
+                    if (line[i] == '\0')
+                        break;
+                    if (line[i] == '\n' || line[i] == '\r')
+                    {
+                        line[i] = '\0';
+                        break;
+                    }
+                }
                 if (strcmp(line, "quit") == 0)
                     break;
                 if (strncmp(line, "query ", 6u) == 0 && line[6])
