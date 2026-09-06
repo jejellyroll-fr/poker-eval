@@ -178,6 +178,9 @@ struct _app_t
      * cannot enumerate, but the strategy they share is an average. */
     Combo *board_abstraction_combo;
     Combo *stop_mode_combo;
+    Combo *spot_preset_combo;
+    Label *spot_preset_hint;
+    Edit *br_samples_edit;
     Label *runtime_label;
 
     /* Results Views & Widgets */
@@ -7437,6 +7440,7 @@ static void i_on_solve(App *app, Event *event)
     const char *interval_text;
     uint64_t iterations;
     uint64_t interval;
+    uint64_t br_samples;
     double target_mbb;
     uint32_t stop_mode;
     pe_algorithm_preset_t algorithm;
@@ -7620,10 +7624,23 @@ static void i_on_solve(App *app, Event *event)
     }
     if (parse_ui_u64(iterations_text, &iterations) != 0 ||
         parse_ui_u64(interval_text, &interval) != 0 ||
+        parse_ui_u64(edit_get_text(app->br_samples_edit), &br_samples) != 0 ||
         (stop_mode == 1u && (parse_ui_target(target_text, &target_mbb) != 0 ||
                              target_mbb <= 0.0)))
     {
-        status(app, "SOLVE BLOCKED\nSet valid numeric values for max iterations,\nstop target mBB and convergence interval.");
+        status(app, "SOLVE BLOCKED\nSet valid numeric values for max iterations,\nBR samples, stop target mBB and convergence interval.");
+        unref(event);
+        return;
+    }
+    /* The empirical BR is a sampled lower bound: too few rollouts and it
+     * simply fails to find the exploit, so an exploitability target is met
+     * long before the strategy deserves it.  Measured on a flop root, 1 mBB:
+     * 34k iterations at 32 samples, 325k at 256, 2.4M at 1024. */
+    if (stop_mode == 1u && br_samples < 64u)
+    {
+        status(app, "SOLVE BLOCKED\nAn exploitability target needs at least 64 BR samples.\n"
+                    "At 32 the estimate misses the exploit and the target is\n"
+                    "reported reached about ten times too early.");
         unref(event);
         return;
     }
@@ -7833,7 +7850,7 @@ static void i_on_solve(App *app, Event *event)
         used = (size_t)snprintf(command, sizeof(command),
                                 "%s --game %s --players %u --tree %s%s"
                                 " --iterations %" PRIu64 " --samples 1"
-                                " --br-samples 32 --target-mbb %.17g"
+                                " --br-samples %" PRIu64 " --target-mbb %.17g"
                                 " --exploitability-interval %" PRIu64
                                 " --report-rows %u"
                                 " --board-abstraction %s"
@@ -7841,7 +7858,7 @@ static void i_on_solve(App *app, Event *event)
                                 "%s --threads %" PRIu64,
                                 runner, game_name(layout.game),
                                 header.player_count, tree, root_options,
-                                iterations, target_mbb, interval,
+                                iterations, br_samples, target_mbb, interval,
                                 (unsigned)STUDIO_REPORT_ROWS,
                                 selected_board_abstraction(app),
                                 algorithm_options, threads);
@@ -8013,12 +8030,116 @@ static void i_on_solve(App *app, Event *event)
     unref(event);
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Spot presets
+ *
+ * The settings that make a run work depend on what is being solved, and the
+ * dependency is not obvious from the controls.  Every number below was
+ * measured on this branch rather than chosen:
+ *
+ *   preflop-only tree      676 infosets.  Exact boards are bounded here, so
+ *                          "none" is both correct and finite.
+ *   single-street root     4 704 infosets on a flop root.  Also bounded, and
+ *                          this is the only shape that reaches a 1 mBB
+ *                          empirical target -- at 325k iterations with 256 BR
+ *                          samples.
+ *   4-street tree, large   77 801 infosets at 500k iterations, 77 210 at 2M:
+ *                          the whole space, at constant memory.  At 2M the
+ *                          median top action is 83-92% on every node, preflop
+ *                          and postflop, with almost no untouched infosets.
+ *   4-street tree, detailed 2 365 389 infosets at 500k and 4 168 559 at 2M --
+ *                          still growing, so it needs the memory budget and
+ *                          keeps board ranks in exchange.
+ *   4-street tree, none    ~25 new infosets per iteration, for ever.  It can
+ *                          only ever end on the memory budget, which is why
+ *                          no preset selects it.
+ * ------------------------------------------------------------------ */
+enum {
+    SPOT_PRESET_CUSTOM = 0,
+    SPOT_PRESET_PREFLOP,
+    SPOT_PRESET_ONE_STREET,
+    SPOT_PRESET_FULL_BOUNDED,
+    SPOT_PRESET_FULL_RANKS
+};
+
+static void i_on_spot_preset(App *app, Event *event)
+{
+    uint32_t choice;
+    if (!app || !app->spot_preset_combo)
+    {
+        unref(event);
+        return;
+    }
+    choice = combo_get_selected(app->spot_preset_combo);
+    switch (choice)
+    {
+    case SPOT_PRESET_PREFLOP:
+        combo_selected(app->board_abstraction_combo, 0u);   /* none: exact */
+        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
+        combo_selected(app->stop_mode_combo, 0u);           /* max iterations */
+        edit_text(app->iterations_edit, "1000000");
+        edit_text(app->interval_edit, "4096");
+        edit_text(app->br_samples_edit, "256");
+        label_text(app->spot_preset_hint,
+                   "676 infosets: exact boards are finite here, so nothing is\n"
+                   "merged and the run ends on the iteration count.");
+        break;
+    case SPOT_PRESET_ONE_STREET:
+        combo_selected(app->board_abstraction_combo, 0u);   /* none: exact */
+        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
+        combo_selected(app->stop_mode_combo, 1u);           /* target */
+        edit_text(app->target_edit, "1.0");
+        edit_text(app->interval_edit, "256");
+    /* 32 made the exploitability target fire ten times too early: the
+     * empirical BR needs samples to find the exploit at all, and on a flop
+     * root a 1 mBB target was "reached" at 34k iterations with 32 samples
+     * against 325k with 256. */
+    edit_text(app->br_samples_edit, "256");
+        edit_text(app->br_samples_edit, "256");
+        label_text(app->spot_preset_hint,
+                   "4 704 infosets on a flop root: exact and finite.  Reaches\n"
+                   "1 mBB at ~325k iterations.  Needs BOARD and POT AT ROOT.");
+        break;
+    case SPOT_PRESET_FULL_BOUNDED:
+        combo_selected(app->board_abstraction_combo, 2u);   /* large */
+        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
+        combo_selected(app->stop_mode_combo, 0u);           /* max iterations */
+        edit_text(app->iterations_edit, "2000000");
+        edit_text(app->interval_edit, "4096");
+        edit_text(app->br_samples_edit, "256");
+        label_text(app->spot_preset_hint,
+                   "77k infosets, reached by 500k iterations and stable after:\n"
+                   "constant memory, and at 2M every node reads 83-92%.");
+        break;
+    case SPOT_PRESET_FULL_RANKS:
+        combo_selected(app->board_abstraction_combo, 1u);   /* detailed */
+        combo_selected(app->algorithm_combo, PE_PRESET_EXTERNAL_MCCFR);
+        combo_selected(app->stop_mode_combo, 0u);
+        edit_text(app->iterations_edit, "2000000");
+        edit_text(app->interval_edit, "4096");
+        edit_text(app->br_samples_edit, "256");
+        label_text(app->spot_preset_hint,
+                   "Keeps board ranks: 4.2M infosets at 2M iterations and still\n"
+                   "growing, so watch the memory budget.  Slower to converge.");
+        break;
+    case SPOT_PRESET_CUSTOM:
+    default:
+        label_text(app->spot_preset_hint,
+                   "Nothing changed.  A 4-street tree with exact boards is the\n"
+                   "one combination that cannot finish: it only ends on memory.");
+        break;
+    }
+    unref(event);
+    setup_update_context(app);
+}
+
 static Panel *i_setup_panel(App *app)
 {
     Panel *panel = panel_create();
     Panel *form_panel = panel_create();
     Layout *root = layout_create(1, 1);
-    Layout *layout = layout_create(2, 32);
+    Layout *layout = layout_create(2, 35);
     Label *title = label_create();
     Label *game_label = label_create();
     Label *players_label = label_create();
@@ -8038,6 +8159,8 @@ static Panel *i_setup_panel(App *app)
     Label *backend_label = label_create();
     Label *precision_label = label_create();
     Label *abstraction_label = label_create();
+    Label *preset_label = label_create();
+    Label *br_samples_label = label_create();
     Label *lambda_label = label_create();
     Label *dcfr_alpha_label = label_create();
     Label *dcfr_beta_label = label_create();
@@ -8073,6 +8196,9 @@ static Panel *i_setup_panel(App *app)
     app->precision_combo = combo_create();
     app->board_abstraction_combo = combo_create();
     app->stop_mode_combo = combo_create();
+    app->spot_preset_combo = combo_create();
+    app->spot_preset_hint = label_create();
+    app->br_samples_edit = edit_create();
     app->board_label = board_label;
     app->setup_run_state = label_create();
     app->setup_run_progress = label_create();
@@ -8102,6 +8228,9 @@ static Panel *i_setup_panel(App *app)
     label_text(target_label, "EXPLOITABILITY TARGET (mBB)");
     label_text(interval_label, "CONVERGENCE CHECK EVERY");
     label_text(condition_label, "STOP CONDITION");
+    label_text(preset_label, "SPOT PRESET");
+    label_text(br_samples_label, "BR SAMPLES (target accuracy)");
+    label_multiline(app->spot_preset_hint, TRUE);
     combo_add_elem(app->game_combo, "Hold'em", NULL);
     combo_add_elem(app->game_combo, "Short Deck NL", NULL);
     combo_add_elem(app->game_combo, "PLO4", NULL);
@@ -8168,6 +8297,19 @@ static Panel *i_setup_panel(App *app)
     button_text(load, "Load and inspect tree");
     button_text(solve, "Solve this spot");
     button_text(stop, "Stop run");
+    combo_add_elem(app->spot_preset_combo, "Custom (leave settings alone)", NULL);
+    combo_add_elem(app->spot_preset_combo, "Preflop only - exact boards", NULL);
+    combo_add_elem(app->spot_preset_combo,
+                   "One street (flop/turn/river root) - exact", NULL);
+    combo_add_elem(app->spot_preset_combo,
+                   "Full tree, 4 streets - bounded (large)", NULL);
+    combo_add_elem(app->spot_preset_combo,
+                   "Full tree, 4 streets - rank-aware (detailed)", NULL);
+    combo_selected(app->spot_preset_combo, 0u);
+    combo_OnSelect(app->spot_preset_combo, listener(app, i_on_spot_preset, App));
+    label_text(app->spot_preset_hint,
+               "Pick the shape of the spot and the settings that suit it are\n"
+               "applied; every number in the hints was measured, not guessed.");
     combo_add_elem(app->stop_mode_combo, "Max iterations (hard stop)", NULL);
     combo_add_elem(app->stop_mode_combo, "Exploitability target (mBB)", NULL);
     combo_add_elem(app->stop_mode_combo, "Run forever (manual stop)", NULL);
@@ -8268,7 +8410,12 @@ static Panel *i_setup_panel(App *app)
     layout_progress(layout, app->setup_progress_bar, 0, 29);
     layout_label(layout, app->setup_run_metrics, 1, 29);
     layout_label(layout, abstraction_label, 0, 30);
+    layout_label(layout, preset_label, 1, 30);
     layout_combo(layout, app->board_abstraction_combo, 0, 31);
+    layout_combo(layout, app->spot_preset_combo, 1, 31);
+    layout_label(layout, br_samples_label, 0, 32);
+    layout_edit(layout, app->br_samples_edit, 0, 33);
+    layout_label(layout, app->spot_preset_hint, 1, 32);
 
     layout_hsize(layout, 0, 460);
     layout_hsize(layout, 1, 150);
@@ -8289,6 +8436,8 @@ static Panel *i_setup_panel(App *app)
     layout_vmargin(layout, 24, 8);
     layout_vmargin(layout, 26, 8);
     layout_vmargin(layout, 29, 8);
+    layout_vmargin(layout, 31, 8);
+    layout_vmargin(layout, 33, 8);
     panel_layout(form_panel, layout);
     layout_panel(root, form_panel, 0, 0);
     layout_margin(root, 10.0f);
