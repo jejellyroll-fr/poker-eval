@@ -86,7 +86,8 @@ class TelemetryParsingTests(unittest.TestCase):
             stdout,
             {street: 0 for street in bench.STREETS},
             {},
-            elapsed_seconds=2.0,
+            process_elapsed_seconds=7.18,
+            solve_elapsed_seconds=0.60,
             requested_iterations=10000,
             report_rows_requested=0,
         )
@@ -102,8 +103,42 @@ class TelemetryParsingTests(unittest.TestCase):
             60.0 * bench.MB / 5829,
         )
 
+    def test_throughput_uses_solve_time_not_full_process_time(self) -> None:
+        stdout = "\n".join(
+            [
+                "iterations=10000 complete=1 infosets=100",
+                (
+                    "solve_loop_end cause=max_iterations iteration=10000 "
+                    "memory_mb=10.0 storage_mb=6.0 adapter_mb=4.0"
+                ),
+                "report_phase=starting rows=100 infosets=100",
+                "report_phase=complete rows=200",
+            ]
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=7.18,
+            solve_elapsed_seconds=0.50,
+            requested_iterations=10000,
+            report_rows_requested=0,
+        )
+
+        self.assertEqual(parsed["elapsed_seconds"], 7.18)
+        self.assertEqual(parsed["solve_elapsed_seconds"], 0.50)
+        self.assertAlmostEqual(parsed["post_solve_elapsed_seconds"], 6.68)
+        self.assertAlmostEqual(parsed["iterations_per_second"], 20000.0)
+        self.assertNotAlmostEqual(
+            parsed["iterations_per_second"], 10000.0 / 7.18
+        )
+
 
 class ValidationTests(unittest.TestCase):
+    def _valid_timing(self) -> dict[str, float]:
+        return {"solve_elapsed_seconds": 0.1}
+
     def test_expected_full_tree_street_requires_materialized_rows(self) -> None:
         per_street = {
             street: {"decision_nodes": 1, "strategy_rows": 1}
@@ -118,6 +153,7 @@ class ValidationTests(unittest.TestCase):
                 "requested_iterations": 64,
                 "stop_cause": "max_iterations",
                 "infosets": 10,
+                **self._valid_timing(),
                 "report": {"emitted_rows": 20},
                 "per_street": per_street,
             },
@@ -139,6 +175,7 @@ class ValidationTests(unittest.TestCase):
                 "requested_iterations": 64,
                 "stop_cause": "max_iterations",
                 "infosets": None,
+                **self._valid_timing(),
                 "report": {"emitted_rows": 0},
                 "per_street": {},
             },
@@ -147,6 +184,25 @@ class ValidationTests(unittest.TestCase):
         failures = bench.validate_result(result)
 
         self.assertIn("missing solver strategy count from report start", failures)
+
+    def test_missing_solve_timing_markers_is_rejected(self) -> None:
+        result = {
+            "process": {"returncode": 0},
+            "case": {"expect_streets": []},
+            "benchmark": {
+                "actual_iterations": 64,
+                "requested_iterations": 64,
+                "stop_cause": "max_iterations",
+                "infosets": 10,
+                "solve_elapsed_seconds": None,
+                "report": {"emitted_rows": 1},
+                "per_street": {},
+            },
+        }
+
+        failures = bench.validate_result(result)
+
+        self.assertIn("missing solver timing markers", failures)
 
 
 if __name__ == "__main__":
