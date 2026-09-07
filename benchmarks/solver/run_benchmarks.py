@@ -295,7 +295,7 @@ def parse_stdout(
     adapter_mb = None
     descriptions_mb = None
     descriptions_capped = None
-    report_rows_emitted = None
+    reporter_emitted_entries = None
     tree_census = None
 
     for line in stdout.splitlines():
@@ -339,7 +339,10 @@ def parse_stdout(
             continue
         match = RE_REPORT_COMPLETE.match(line)
         if match:
-            report_rows_emitted = int(match.group(1))
+            # The product reporter currently includes OBSERVED DECISIONS in
+            # this counter. Keep it only as diagnostic completion telemetry;
+            # benchmark emitted_rows is derived from parsed HAND TABLE rows.
+            reporter_emitted_entries = int(match.group(1))
 
     measured_memory = [float(value) for value in RE_MEMORY.findall(stdout)]
     peak_measured_memory_mb = (
@@ -443,10 +446,18 @@ def parse_stdout(
         },
         "report": {
             "requested_rows": report_rows_requested,
-            "emitted_rows": report_rows_emitted,
+            # Actual strategy rows printed in the HAND TABLE, before the
+            # exhaustive duplicate-sweep normalization used for coverage.
+            "emitted_rows": row_details["raw_strategy_rows"],
+            # Product reporter diagnostic: currently also counts OBSERVED
+            # DECISIONS, so it must not be published as strategy-row count.
+            "reporter_emitted_entries": reporter_emitted_entries,
+            "completed": reporter_emitted_entries is not None,
             "exhaustive_requested": report_rows_requested == 0,
             "exhaustive": (
-                report_rows_requested == 0 and not bool(descriptions_capped)
+                report_rows_requested == 0
+                and not bool(descriptions_capped)
+                and reporter_emitted_entries is not None
             ),
             "strategy_fingerprint_sha256": fingerprint,
             **row_details,
@@ -481,7 +492,7 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append("missing solver strategy count from report start")
     elif metrics["infosets"] <= 0:
         failures.append("no infosets were materialized")
-    if metrics["report"]["emitted_rows"] is None:
+    if not metrics["report"].get("completed", False):
         failures.append("missing completed strategy report")
 
     required_streets = result["case"].get("expect_streets", [])
