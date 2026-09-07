@@ -64,8 +64,7 @@
       "game": "holdem",
       "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
       "board_abstraction": "large",
-      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"],
-      "expect_strategy_rows": false
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
     },
     {
       "id": "plo4_preflop",
