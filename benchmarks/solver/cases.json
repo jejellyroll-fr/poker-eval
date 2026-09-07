@@ -110,8 +110,7 @@
       "game": "plo4",
       "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
       "board_abstraction": "large",
-      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"],
-      "expect_strategy_rows": false
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
     },
     {
       "id": "plo5_preflop",
@@ -157,8 +156,7 @@
       "game": "plo5",
       "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
       "board_abstraction": "large",
-      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"],
-      "expect_strategy_rows": false
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
     },
     {
       "id": "plo6_preflop",
@@ -204,8 +202,7 @@
       "game": "plo6",
       "tree": "examples/plo_hu_streets/plo6_hu_full.tree.json",
       "board_abstraction": "large",
-      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"],
-      "expect_strategy_rows": false
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
     }
   ]
 }
