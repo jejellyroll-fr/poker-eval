@@ -12,6 +12,9 @@ on:
       - 'include/poker_eval/solver/**'
       - 'src/engine/solvers/cfr/**'
       - 'include/poker_eval/engine/solvers/cfr/**'
+      - 'src/core/**'
+      - 'include/poker_eval/core/**'
+      - 'include/poker_eval/games/**'
       - '.github/workflows/solver-benchmark-smoke.yml'
   workflow_dispatch:
 
