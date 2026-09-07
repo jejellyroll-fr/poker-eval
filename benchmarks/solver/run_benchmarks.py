@@ -25,6 +25,8 @@ from typing import Any
 SCHEMA = "pe-solver-benchmark/v1"
 SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
+SOLVE_START_MARKER = "solver created"
+SOLVE_END_PREFIX = "solver_phase=complete "
 
 # The final "infosets" field on this legacy line is the description-table
 # count, not necessarily the solver's retained strategy count when --desc-limit
@@ -274,7 +276,8 @@ def parse_stdout(
     stdout: str,
     tree_decisions: dict[str, int],
     node_streets: dict[int, str],
-    elapsed_seconds: float,
+    process_elapsed_seconds: float,
+    solve_elapsed_seconds: float | None,
     requested_iterations: int,
     report_rows_requested: int,
 ) -> dict[str, Any]:
@@ -367,7 +370,9 @@ def parse_stdout(
 
     iterations_for_rate = actual_iterations or requested_iterations
     iterations_per_second = (
-        iterations_for_rate / elapsed_seconds if elapsed_seconds > 0 else None
+        iterations_for_rate / solve_elapsed_seconds
+        if solve_elapsed_seconds is not None and solve_elapsed_seconds > 0
+        else None
     )
     final_memory_bytes = (
         int(round(final_memory_mb * MB)) if final_memory_mb is not None else None
@@ -387,7 +392,17 @@ def parse_stdout(
         "actual_iterations": actual_iterations,
         "complete": complete,
         "stop_cause": stop_cause,
-        "elapsed_seconds": elapsed_seconds,
+        # Full subprocess wall time is retained for report/CLI cost analysis.
+        "elapsed_seconds": process_elapsed_seconds,
+        # Throughput is based only on the solver lifetime, from the existing
+        # "solver created" telemetry marker to the CLI's explicit
+        # "solver_phase=complete ... report=starting" boundary.
+        "solve_elapsed_seconds": solve_elapsed_seconds,
+        "post_solve_elapsed_seconds": (
+            max(0.0, process_elapsed_seconds - solve_elapsed_seconds)
+            if solve_elapsed_seconds is not None
+            else None
+        ),
         "iterations_per_second": iterations_per_second,
         # The public benchmark "infosets" metric is the solver strategy count.
         "infosets": solver_infosets,
@@ -458,6 +473,10 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append(
             f"stop_cause={metrics['stop_cause']!r}, expected max_iterations"
         )
+    if metrics["solve_elapsed_seconds"] is None:
+        failures.append("missing solver timing markers")
+    elif metrics["solve_elapsed_seconds"] <= 0:
+        failures.append("non-positive solve elapsed time")
     if metrics["infosets"] is None:
         failures.append("missing solver strategy count from report start")
     elif metrics["infosets"] <= 0:
@@ -504,6 +523,63 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def run_process_with_solve_timing(
+    command: list[str], root: Path, stderr_path: Path
+) -> tuple[int, str, float, float | None]:
+    """Run the CLI while timestamping the solver/report boundary.
+
+    pe-preflop-solve already emits an unbuffered "solver created" line and an
+    explicit "solver_phase=complete ... report=starting" line. Reading stdout
+    as it arrives lets the benchmark measure the solver lifetime without
+    changing product solver semantics or charging exhaustive report rollouts to
+    iterations/second.
+    """
+    process_started_ns = time.perf_counter_ns()
+    solve_started_ns: int | None = None
+    solve_ended_ns: int | None = None
+    stdout_lines: list[str] = []
+
+    with stderr_path.open("w", encoding="utf-8") as stderr_stream:
+        process = subprocess.Popen(
+            command,
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=stderr_stream,
+            bufsize=1,
+        )
+        if process.stdout is None:
+            raise RuntimeError("failed to capture solver stdout")
+        for line in process.stdout:
+            observed_ns = time.perf_counter_ns()
+            stdout_lines.append(line)
+            stripped = line.strip()
+            if solve_started_ns is None and stripped == SOLVE_START_MARKER:
+                solve_started_ns = observed_ns
+            if solve_ended_ns is None and stripped.startswith(SOLVE_END_PREFIX):
+                solve_ended_ns = observed_ns
+        process.stdout.close()
+        returncode = process.wait()
+
+    process_ended_ns = time.perf_counter_ns()
+    process_elapsed_seconds = (
+        process_ended_ns - process_started_ns
+    ) / 1_000_000_000.0
+    solve_elapsed_seconds = (
+        (solve_ended_ns - solve_started_ns) / 1_000_000_000.0
+        if solve_started_ns is not None
+        and solve_ended_ns is not None
+        and solve_ended_ns >= solve_started_ns
+        else None
+    )
+    return (
+        returncode,
+        "".join(stdout_lines),
+        process_elapsed_seconds,
+        solve_elapsed_seconds,
+    )
+
+
 def run_once(
     solver: Path,
     root: Path,
@@ -528,18 +604,10 @@ def run_once(
     )
     report_rows = int(case.get("report_rows", defaults.get("report_rows", 0)))
 
-    started = time.perf_counter_ns()
-    completed = subprocess.run(
-        command,
-        cwd=root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    returncode, stdout, process_elapsed, solve_elapsed = run_process_with_solve_timing(
+        command, root, stderr_path
     )
-    elapsed = (time.perf_counter_ns() - started) / 1_000_000_000.0
-    stdout_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    stdout_path.write_text(stdout, encoding="utf-8")
 
     native_report: dict[str, Any] | None = None
     if raw_report.exists():
@@ -549,10 +617,11 @@ def run_once(
             native_report = None
 
     benchmark = parse_stdout(
-        completed.stdout,
+        stdout,
         decisions,
         node_streets,
-        elapsed,
+        process_elapsed,
+        solve_elapsed,
         requested_iterations,
         report_rows,
     )
@@ -561,7 +630,7 @@ def run_once(
         "case": case,
         "command": command,
         "process": {
-            "returncode": completed.returncode,
+            "returncode": returncode,
             "stdout": str(stdout_path.relative_to(out_dir)),
             "stderr": str(stderr_path.relative_to(out_dir)),
             "solver_report": (
@@ -600,11 +669,11 @@ def write_summary(
     )
 
     fields = [
-        "case", "game", "street", "iterations", "seconds",
-        "iterations_per_second", "infosets", "description_infosets",
-        "infosets_per_1k_iterations", "peak_measured_bytes",
-        "final_memory_bytes", "storage_bytes", "adapter_bytes",
-        "bytes_per_infoset", "exploitability_mbb", "stop_cause",
+        "case", "game", "street", "iterations", "solve_seconds",
+        "process_seconds", "post_solve_seconds", "iterations_per_second",
+        "infosets", "description_infosets", "infosets_per_1k_iterations",
+        "peak_measured_bytes", "final_memory_bytes", "storage_bytes",
+        "adapter_bytes", "bytes_per_infoset", "exploitability_mbb", "stop_cause",
         "preflop_rows", "flop_rows", "turn_rows", "river_rows",
         "strategy_fingerprint_sha256", "valid",
     ]
@@ -620,7 +689,9 @@ def write_summary(
                 "game": result["case"]["game"],
                 "street": result["case"].get("street", "full"),
                 "iterations": b["actual_iterations"],
-                "seconds": f"{b['elapsed_seconds']:.9f}",
+                "solve_seconds": b["solve_elapsed_seconds"],
+                "process_seconds": f"{b['elapsed_seconds']:.9f}",
+                "post_solve_seconds": b["post_solve_elapsed_seconds"],
                 "iterations_per_second": b["iterations_per_second"],
                 "infosets": b["infosets"],
                 "description_infosets": b["description_infosets"],
@@ -743,7 +814,8 @@ def main() -> int:
             b = result["benchmark"]
             print(
                 f"  iterations={b['actual_iterations']} infosets={b['infosets']} "
-                f"seconds={b['elapsed_seconds']:.3f} "
+                f"solve_seconds={b['solve_elapsed_seconds'] or 0:.3f} "
+                f"process_seconds={b['elapsed_seconds']:.3f} "
                 f"ips={b['iterations_per_second'] or 0:.1f} "
                 f"stop={b['stop_cause']} "
                 f"valid={not result['validation_failures']}",
