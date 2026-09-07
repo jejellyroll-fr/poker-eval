@@ -186,6 +186,7 @@ def parse_strategy_rows(
     nodes_seen = {street: set() for street in STREETS}
     boards_seen = {street: set() for street in STREETS}
     fingerprint_rows: list[str] = []
+    seen_rows: set[str] = set()
 
     for line in stdout.splitlines():
         if line.startswith("ev_update\t"):
@@ -204,6 +205,18 @@ def parse_strategy_rows(
         if "%" not in action_field or "=" not in action_field:
             continue
         board = fields[5].strip()
+        fingerprint_row = (
+            f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
+            f"{action_field}\t{board}"
+        )
+        # With --report-rows 0 the solver currently runs both report sweeps
+        # without their usual data/uniform filter, so each strategy line is
+        # emitted twice.  Count/hash a materialized strategy only once.  Keying
+        # on the complete stable row makes this safe for capped reports too.
+        if fingerprint_row in seen_rows:
+            continue
+        seen_rows.add(fingerprint_row)
+
         data = street_data[street]
         data["strategy_rows"] += 1
         if is_uniform_strategy(action_field):
@@ -213,10 +226,7 @@ def parse_strategy_rows(
         nodes_seen[street].add(node_index)
         if board and board != "-":
             boards_seen[street].add(board)
-        fingerprint_rows.append(
-            f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
-            f"{action_field}\t{board}"
-        )
+        fingerprint_rows.append(fingerprint_row)
 
     for street in STREETS:
         street_data[street]["unique_nodes_with_rows"] = len(nodes_seen[street])
