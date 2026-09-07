@@ -131,10 +131,24 @@ build/solver-benchmarks/
 
 ### Performance
 
-- wall-clock seconds;
-- iterations/second;
+The runner records three separate wall-clock measurements:
+
+- `solve_elapsed_seconds`: from the existing unbuffered `solver created`
+  telemetry marker until `solver_phase=complete ... report=starting`;
+- `elapsed_seconds`: the complete CLI subprocess lifetime, including strategy
+  report generation, per-action EV display rollouts, JSON output and cleanup;
+- `post_solve_elapsed_seconds`: the difference between those two values, useful
+  for spotting report/materialisation cost.
+
+`iterations_per_second` is derived **only from `solve_elapsed_seconds`**. An
+exhaustive `--report-rows 0` run can spend much longer walking and rendering
+strategy rows than solving; that report work must not depress solver
+throughput or make variants with more visible infosets look artificially slow.
+
+The performance output also records:
+
 - actual/requested iterations;
-- infosets;
+- solver infosets;
 - infosets per 1,000 iterations.
 
 ### Memory
@@ -199,6 +213,7 @@ The job fails when:
 - the solver exits non-zero;
 - the requested iteration budget is not reached;
 - the stop cause is not `max_iterations`;
+- the solver timing markers are missing;
 - no infoset is materialized;
 - a required street is absent;
 - deterministic fingerprints/metrics differ between repetitions.
