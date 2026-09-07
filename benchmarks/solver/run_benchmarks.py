@@ -2,7 +2,7 @@
 """Reproducible cross-variant solver benchmark runner.
 
 Uses the product-facing pe-preflop-solve binary as the single source of
-solver semantics.  The runner adds stable case definitions, timing, telemetry
+solver semantics. The runner adds stable case definitions, timing, telemetry
 parsing, per-street strategy coverage and reproducibility fingerprints without
 introducing a second solver/report implementation.
 """
@@ -26,6 +26,9 @@ SCHEMA = "pe-solver-benchmark/v1"
 SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 
+# The final "infosets" field on this legacy line is the description-table
+# count, not necessarily the solver's retained strategy count when --desc-limit
+# caps descriptions.
 RE_ITERATIONS = re.compile(r"^iterations=(\d+)\s+complete=(\d+)\s+infosets=(\d+)$")
 RE_GUARANTEE = re.compile(
     r"^guarantee=(\S+)\s+exploitability_raw=([^\s]+)\s+"
@@ -42,7 +45,8 @@ RE_STOP_DETAIL = re.compile(
 )
 RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
 RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
-RE_REPORT_PHASE = re.compile(r"^report_phase=complete rows=(\d+)$")
+RE_REPORT_START = re.compile(r"^report_phase=starting rows=(\d+)\s+infosets=(\d+)$")
+RE_REPORT_COMPLETE = re.compile(r"^report_phase=complete rows=(\d+)$")
 RE_ACTION_PERCENT = re.compile(r"(?:^|,)[^=]+=([-+]?[0-9]+(?:\.[0-9]+)?)%")
 
 MB = 1024 * 1024
@@ -92,8 +96,7 @@ def resolve_solver(args: argparse.Namespace, root: Path) -> Path:
 def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bool:
     if names:
         return case.get("id") in names
-    tags = set(case.get("tags", []))
-    return bool(tags & suites)
+    return bool(set(case.get("tags", [])) & suites)
 
 
 def tree_nodes(tree_path: Path) -> tuple[dict[int, str], dict[str, int]]:
@@ -170,9 +173,59 @@ def is_uniform_strategy(action_field: str) -> bool:
     return max(abs(value - expected) for value in values) <= 0.11
 
 
-def parse_strategy_rows(
+def _strategy_rows(
     stdout: str, node_streets: dict[int, str]
-) -> tuple[dict[str, dict[str, Any]], str]:
+) -> list[tuple[str, int, str, str]]:
+    rows: list[tuple[str, int, str, str]] = []
+    for line in stdout.splitlines():
+        if line.startswith("ev_update\t"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 6:
+            continue
+        try:
+            node_index = int(fields[1])
+        except ValueError:
+            continue
+        street = node_streets.get(node_index)
+        if street not in STREETS:
+            continue
+        action_field = fields[3]
+        if "%" not in action_field or "=" not in action_field:
+            continue
+        board = fields[5].strip()
+        stable = (
+            f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
+            f"{action_field}\t{board}"
+        )
+        rows.append((stable, node_index, action_field, board))
+    return rows
+
+
+def parse_strategy_rows(
+    stdout: str,
+    node_streets: dict[int, str],
+    *,
+    exhaustive_report: bool = False,
+) -> tuple[dict[str, dict[str, Any]], str, dict[str, Any]]:
+    """Parse visible strategy rows without destroying real multiplicity.
+
+    With --report-rows 0 the current solver executes both report sweeps with
+    filtering disabled, so the complete sequence is emitted twice. Remove only
+    that known whole-sweep duplication. Distinct solver infosets that happen to
+    render to the same stable row remain distinct entries and therefore remain
+    represented in counts and in the reproducibility hash.
+    """
+    rows = _strategy_rows(stdout, node_streets)
+    raw_rows = len(rows)
+    duplicate_sweep_removed = False
+
+    if exhaustive_report and raw_rows > 0 and raw_rows % 2 == 0:
+        half = raw_rows // 2
+        if rows[:half] == rows[half:]:
+            rows = rows[:half]
+            duplicate_sweep_removed = True
+
     street_data = {
         street: {
             "strategy_rows": 0,
@@ -186,37 +239,9 @@ def parse_strategy_rows(
     nodes_seen = {street: set() for street in STREETS}
     boards_seen = {street: set() for street in STREETS}
     fingerprint_rows: list[str] = []
-    seen_rows: set[str] = set()
 
-    for line in stdout.splitlines():
-        if line.startswith("ev_update\t"):
-            continue
-        fields = line.split("\t")
-        if len(fields) < 6:
-            continue
-        try:
-            node_index = int(fields[1])
-        except ValueError:
-            continue
-        street = node_streets.get(node_index)
-        if street not in street_data:
-            continue
-        action_field = fields[3]
-        if "%" not in action_field or "=" not in action_field:
-            continue
-        board = fields[5].strip()
-        fingerprint_row = (
-            f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
-            f"{action_field}\t{board}"
-        )
-        # With --report-rows 0 the solver currently runs both report sweeps
-        # without their usual data/uniform filter, so each strategy line is
-        # emitted twice.  Count/hash a materialized strategy only once.  Keying
-        # on the complete stable row makes this safe for capped reports too.
-        if fingerprint_row in seen_rows:
-            continue
-        seen_rows.add(fingerprint_row)
-
+    for stable, node_index, action_field, board in rows:
+        street = node_streets[node_index]
         data = street_data[street]
         data["strategy_rows"] += 1
         if is_uniform_strategy(action_field):
@@ -226,15 +251,23 @@ def parse_strategy_rows(
         nodes_seen[street].add(node_index)
         if board and board != "-":
             boards_seen[street].add(board)
-        fingerprint_rows.append(fingerprint_row)
+        fingerprint_rows.append(stable)
 
     for street in STREETS:
         street_data[street]["unique_nodes_with_rows"] = len(nodes_seen[street])
         street_data[street]["unique_boards"] = len(boards_seen[street])
+
+    # sorted(list) intentionally retains duplicates: multiplicity is part of
+    # the deterministic result and must affect the fingerprint.
     digest = hashlib.sha256(
         ("\n".join(sorted(fingerprint_rows)) + "\n").encode("utf-8")
     ).hexdigest()
-    return street_data, digest
+    details = {
+        "raw_strategy_rows": raw_rows,
+        "normalized_strategy_rows": len(rows),
+        "duplicate_exhaustive_sweep_removed": duplicate_sweep_removed,
+    }
+    return street_data, digest, details
 
 
 def parse_stdout(
@@ -247,7 +280,8 @@ def parse_stdout(
 ) -> dict[str, Any]:
     actual_iterations = None
     complete = None
-    infosets = None
+    description_infosets = None
+    solver_infosets = None
     guarantee = None
     exploitability_raw = None
     exploitability_mbb = None
@@ -266,7 +300,13 @@ def parse_stdout(
         if match:
             actual_iterations = int(match.group(1))
             complete = bool(int(match.group(2)))
-            infosets = int(match.group(3))
+            # This is pe_preflop_allin_infodesc_count(), not solver storage.
+            description_infosets = int(match.group(3))
+            continue
+        match = RE_REPORT_START.match(line)
+        if match:
+            solver_infosets = int(match.group(1))
+            description_infosets = int(match.group(2))
             continue
         match = RE_GUARANTEE.match(line)
         if match:
@@ -285,7 +325,8 @@ def parse_stdout(
         match = RE_STOP_DETAIL.match(line)
         if match:
             stop_cause = stop_cause or match.group(1)
-            final_memory_mb = final_memory_mb if final_memory_mb is not None else float(match.group(4))
+            if final_memory_mb is None:
+                final_memory_mb = float(match.group(4))
             descriptions_mb = float(match.group(6))
             descriptions_capped = bool(int(match.group(7)))
             continue
@@ -293,13 +334,19 @@ def parse_stdout(
         if match:
             tree_census = match.group(1)
             continue
-        match = RE_REPORT_PHASE.match(line)
+        match = RE_REPORT_COMPLETE.match(line)
         if match:
             report_rows_emitted = int(match.group(1))
 
     measured_memory = [float(value) for value in RE_MEMORY.findall(stdout)]
-    peak_measured_memory_mb = max(measured_memory) if measured_memory else final_memory_mb
-    per_street, fingerprint = parse_strategy_rows(stdout, node_streets)
+    peak_measured_memory_mb = (
+        max(measured_memory) if measured_memory else final_memory_mb
+    )
+    per_street, fingerprint, row_details = parse_strategy_rows(
+        stdout,
+        node_streets,
+        exhaustive_report=report_rows_requested == 0,
+    )
     total_rows = sum(v["strategy_rows"] for v in per_street.values())
     total_non_uniform = sum(v["non_uniform_rows"] for v in per_street.values())
 
@@ -313,7 +360,9 @@ def parse_stdout(
             data["strategy_rows"] / total_rows if total_rows else 0.0
         )
         data["non_uniform_share"] = (
-            data["non_uniform_rows"] / total_non_uniform if total_non_uniform else 0.0
+            data["non_uniform_rows"] / total_non_uniform
+            if total_non_uniform
+            else 0.0
         )
 
     iterations_for_rate = actual_iterations or requested_iterations
@@ -323,8 +372,12 @@ def parse_stdout(
     final_memory_bytes = (
         int(round(final_memory_mb * MB)) if final_memory_mb is not None else None
     )
-    storage_bytes = int(round(storage_mb * MB)) if storage_mb is not None else None
-    adapter_bytes = int(round(adapter_mb * MB)) if adapter_mb is not None else None
+    storage_bytes = (
+        int(round(storage_mb * MB)) if storage_mb is not None else None
+    )
+    adapter_bytes = (
+        int(round(adapter_mb * MB)) if adapter_mb is not None else None
+    )
     descriptions_bytes = (
         int(round(descriptions_mb * MB)) if descriptions_mb is not None else None
     )
@@ -336,10 +389,13 @@ def parse_stdout(
         "stop_cause": stop_cause,
         "elapsed_seconds": elapsed_seconds,
         "iterations_per_second": iterations_per_second,
-        "infosets": infosets,
+        # The public benchmark "infosets" metric is the solver strategy count.
+        "infosets": solver_infosets,
+        # Keep the description count separately because it can be capped.
+        "description_infosets": description_infosets,
         "infosets_per_1k_iterations": (
-            infosets * 1000.0 / actual_iterations
-            if infosets is not None and actual_iterations
+            solver_infosets * 1000.0 / actual_iterations
+            if solver_infosets is not None and actual_iterations
             else None
         ),
         "memory": {
@@ -353,13 +409,13 @@ def parse_stdout(
             "adapter_bytes": adapter_bytes,
             "descriptions_bytes": descriptions_bytes,
             "bytes_per_infoset": (
-                final_memory_bytes / infosets
-                if final_memory_bytes is not None and infosets
+                final_memory_bytes / solver_infosets
+                if final_memory_bytes is not None and solver_infosets
                 else None
             ),
             "storage_bytes_per_infoset": (
-                storage_bytes / infosets
-                if storage_bytes is not None and infosets
+                storage_bytes / solver_infosets
+                if storage_bytes is not None and solver_infosets
                 else None
             ),
             "descriptions_capped": descriptions_capped,
@@ -374,8 +430,11 @@ def parse_stdout(
             "requested_rows": report_rows_requested,
             "emitted_rows": report_rows_emitted,
             "exhaustive_requested": report_rows_requested == 0,
-            "exhaustive": report_rows_requested == 0 and not bool(descriptions_capped),
+            "exhaustive": (
+                report_rows_requested == 0 and not bool(descriptions_capped)
+            ),
             "strategy_fingerprint_sha256": fingerprint,
+            **row_details,
         },
         "tree_streets": tree_census,
         "per_street": per_street,
@@ -388,6 +447,7 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     if result["process"]["returncode"] != 0:
         failures.append(f"solver exited {result['process']['returncode']}")
         return failures
+
     metrics = result["benchmark"]
     if metrics["actual_iterations"] != metrics["requested_iterations"]:
         failures.append(
@@ -395,11 +455,16 @@ def validate_result(result: dict[str, Any]) -> list[str]:
             f"{metrics['requested_iterations']}"
         )
     if metrics["stop_cause"] != "max_iterations":
-        failures.append(f"stop_cause={metrics['stop_cause']!r}, expected max_iterations")
-    if not metrics["infosets"] or metrics["infosets"] <= 0:
+        failures.append(
+            f"stop_cause={metrics['stop_cause']!r}, expected max_iterations"
+        )
+    if metrics["infosets"] is None:
+        failures.append("missing solver strategy count from report start")
+    elif metrics["infosets"] <= 0:
         failures.append("no infosets were materialized")
     if metrics["report"]["emitted_rows"] is None:
         failures.append("missing completed strategy report")
+
     required_streets = result["case"].get("expect_streets", [])
     for street in required_streets:
         normalized = street.upper()
@@ -417,11 +482,16 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "actual_iterations": benchmark["actual_iterations"],
         "infosets": benchmark["infosets"],
+        "description_infosets": benchmark["description_infosets"],
         "stop_cause": benchmark["stop_cause"],
         "guarantee": benchmark["metrics"]["guarantee"],
         "exploitability_raw": benchmark["metrics"]["exploitability_raw"],
-        "exploitability_mbb_per_game": benchmark["metrics"]["exploitability_mbb_per_game"],
-        "strategy_fingerprint_sha256": benchmark["report"]["strategy_fingerprint_sha256"],
+        "exploitability_mbb_per_game": benchmark["metrics"][
+            "exploitability_mbb_per_game"
+        ],
+        "strategy_fingerprint_sha256": benchmark["report"][
+            "strategy_fingerprint_sha256"
+        ],
         "per_street_rows": {
             street: {
                 "strategy_rows": values["strategy_rows"],
@@ -503,11 +573,15 @@ def run_once(
     }
     result["validation_failures"] = validate_result(result)
     result_path = case_dir / "benchmark.json"
-    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    result_path.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return result
 
 
-def write_summary(out_dir: Path, results: list[dict[str, Any]], repro: dict[str, Any]) -> None:
+def write_summary(
+    out_dir: Path, results: list[dict[str, Any]], repro: dict[str, Any]
+) -> None:
     summary = {
         "schema": SUMMARY_SCHEMA,
         "results": [
@@ -526,14 +600,17 @@ def write_summary(out_dir: Path, results: list[dict[str, Any]], repro: dict[str,
     )
 
     fields = [
-        "case", "game", "street", "iterations", "seconds", "iterations_per_second",
-        "infosets", "infosets_per_1k_iterations", "peak_measured_bytes",
+        "case", "game", "street", "iterations", "seconds",
+        "iterations_per_second", "infosets", "description_infosets",
+        "infosets_per_1k_iterations", "peak_measured_bytes",
         "final_memory_bytes", "storage_bytes", "adapter_bytes",
         "bytes_per_infoset", "exploitability_mbb", "stop_cause",
         "preflop_rows", "flop_rows", "turn_rows", "river_rows",
         "strategy_fingerprint_sha256", "valid",
     ]
-    with (out_dir / "summary.csv").open("w", newline="", encoding="utf-8") as stream:
+    with (out_dir / "summary.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for result in results:
@@ -546,6 +623,7 @@ def write_summary(out_dir: Path, results: list[dict[str, Any]], repro: dict[str,
                 "seconds": f"{b['elapsed_seconds']:.9f}",
                 "iterations_per_second": b["iterations_per_second"],
                 "infosets": b["infosets"],
+                "description_infosets": b["description_infosets"],
                 "infosets_per_1k_iterations": b["infosets_per_1k_iterations"],
                 "peak_measured_bytes": b["memory"]["peak_measured_bytes"],
                 "final_memory_bytes": b["memory"]["final_bytes"],
@@ -558,7 +636,9 @@ def write_summary(out_dir: Path, results: list[dict[str, Any]], repro: dict[str,
                 "flop_rows": b["per_street"]["FLOP"]["strategy_rows"],
                 "turn_rows": b["per_street"]["TURN"]["strategy_rows"],
                 "river_rows": b["per_street"]["RIVER"]["strategy_rows"],
-                "strategy_fingerprint_sha256": b["report"]["strategy_fingerprint_sha256"],
+                "strategy_fingerprint_sha256": b["report"][
+                    "strategy_fingerprint_sha256"
+                ],
                 "valid": not result["validation_failures"],
             })
 
@@ -580,7 +660,9 @@ def main() -> int:
         default=str(root / "build" / "solver-benchmarks"),
         help="result directory",
     )
-    parser.add_argument("--iterations", type=int, help="override iterations for every selected case")
+    parser.add_argument(
+        "--iterations", type=int, help="override iterations for every selected case"
+    )
     parser.add_argument("--repeat", type=int, default=1, help="number of runs per case")
     parser.add_argument(
         "--check-reproducibility",
@@ -663,7 +745,8 @@ def main() -> int:
                 f"  iterations={b['actual_iterations']} infosets={b['infosets']} "
                 f"seconds={b['elapsed_seconds']:.3f} "
                 f"ips={b['iterations_per_second'] or 0:.1f} "
-                f"stop={b['stop_cause']} valid={not result['validation_failures']}",
+                f"stop={b['stop_cause']} "
+                f"valid={not result['validation_failures']}",
                 flush=True,
             )
 
@@ -674,7 +757,8 @@ def main() -> int:
             views = [stable_reproducibility_view(result) for result in case_runs]
             reference = views[0]
             mismatches = [
-                index + 1 for index, view in enumerate(views[1:], start=1)
+                index + 1
+                for index, view in enumerate(views[1:], start=1)
                 if view != reference
             ]
             passed = not mismatches
