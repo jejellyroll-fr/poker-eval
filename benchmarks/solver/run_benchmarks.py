@@ -303,7 +303,6 @@ def parse_stdout(
         if match:
             actual_iterations = int(match.group(1))
             complete = bool(int(match.group(2)))
-            # This is pe_preflop_allin_infodesc_count(), not solver storage.
             description_infosets = int(match.group(3))
             continue
         match = RE_REPORT_START.match(line)
@@ -339,19 +338,12 @@ def parse_stdout(
             continue
         match = RE_REPORT_COMPLETE.match(line)
         if match:
-            # The product reporter currently includes OBSERVED DECISIONS in
-            # this counter. Keep it only as diagnostic completion telemetry;
-            # benchmark emitted_rows is derived from parsed HAND TABLE rows.
             reporter_emitted_entries = int(match.group(1))
 
     measured_memory = [float(value) for value in RE_MEMORY.findall(stdout)]
-    peak_measured_memory_mb = (
-        max(measured_memory) if measured_memory else final_memory_mb
-    )
+    peak_measured_memory_mb = max(measured_memory) if measured_memory else final_memory_mb
     per_street, fingerprint, row_details = parse_strategy_rows(
-        stdout,
-        node_streets,
-        exhaustive_report=report_rows_requested == 0,
+        stdout, node_streets, exhaustive_report=report_rows_requested == 0
     )
     total_rows = sum(v["strategy_rows"] for v in per_street.values())
     total_non_uniform = sum(v["non_uniform_rows"] for v in per_street.values())
@@ -366,9 +358,7 @@ def parse_stdout(
             data["strategy_rows"] / total_rows if total_rows else 0.0
         )
         data["non_uniform_share"] = (
-            data["non_uniform_rows"] / total_non_uniform
-            if total_non_uniform
-            else 0.0
+            data["non_uniform_rows"] / total_non_uniform if total_non_uniform else 0.0
         )
 
     iterations_for_rate = actual_iterations or requested_iterations
@@ -377,50 +367,33 @@ def parse_stdout(
         if solve_elapsed_seconds is not None and solve_elapsed_seconds > 0
         else None
     )
-    final_memory_bytes = (
-        int(round(final_memory_mb * MB)) if final_memory_mb is not None else None
-    )
-    storage_bytes = (
-        int(round(storage_mb * MB)) if storage_mb is not None else None
-    )
-    adapter_bytes = (
-        int(round(adapter_mb * MB)) if adapter_mb is not None else None
-    )
-    descriptions_bytes = (
-        int(round(descriptions_mb * MB)) if descriptions_mb is not None else None
-    )
+    final_memory_bytes = int(round(final_memory_mb * MB)) if final_memory_mb is not None else None
+    storage_bytes = int(round(storage_mb * MB)) if storage_mb is not None else None
+    adapter_bytes = int(round(adapter_mb * MB)) if adapter_mb is not None else None
+    descriptions_bytes = int(round(descriptions_mb * MB)) if descriptions_mb is not None else None
 
     return {
         "requested_iterations": requested_iterations,
         "actual_iterations": actual_iterations,
         "complete": complete,
         "stop_cause": stop_cause,
-        # Full subprocess wall time is retained for report/CLI cost analysis.
         "elapsed_seconds": process_elapsed_seconds,
-        # Throughput is based only on the solver lifetime, from the existing
-        # "solver created" telemetry marker to the CLI's explicit
-        # "solver_phase=complete ... report=starting" boundary.
         "solve_elapsed_seconds": solve_elapsed_seconds,
         "post_solve_elapsed_seconds": (
             max(0.0, process_elapsed_seconds - solve_elapsed_seconds)
-            if solve_elapsed_seconds is not None
-            else None
+            if solve_elapsed_seconds is not None else None
         ),
         "iterations_per_second": iterations_per_second,
-        # The public benchmark "infosets" metric is the solver strategy count.
         "infosets": solver_infosets,
-        # Keep the description count separately because it can be capped.
         "description_infosets": description_infosets,
         "infosets_per_1k_iterations": (
             solver_infosets * 1000.0 / actual_iterations
-            if solver_infosets is not None and actual_iterations
-            else None
+            if solver_infosets is not None and actual_iterations else None
         ),
         "memory": {
             "peak_measured_bytes": (
                 int(round(peak_measured_memory_mb * MB))
-                if peak_measured_memory_mb is not None
-                else None
+                if peak_measured_memory_mb is not None else None
             ),
             "final_bytes": final_memory_bytes,
             "storage_bytes": storage_bytes,
@@ -428,13 +401,11 @@ def parse_stdout(
             "descriptions_bytes": descriptions_bytes,
             "bytes_per_infoset": (
                 final_memory_bytes / solver_infosets
-                if final_memory_bytes is not None and solver_infosets
-                else None
+                if final_memory_bytes is not None and solver_infosets else None
             ),
             "storage_bytes_per_infoset": (
                 storage_bytes / solver_infosets
-                if storage_bytes is not None and solver_infosets
-                else None
+                if storage_bytes is not None and solver_infosets else None
             ),
             "descriptions_capped": descriptions_capped,
         },
@@ -446,11 +417,7 @@ def parse_stdout(
         },
         "report": {
             "requested_rows": report_rows_requested,
-            # Actual strategy rows printed in the HAND TABLE, before the
-            # exhaustive duplicate-sweep normalization used for coverage.
             "emitted_rows": row_details["raw_strategy_rows"],
-            # Product reporter diagnostic: currently also counts OBSERVED
-            # DECISIONS, so it must not be published as strategy-row count.
             "reporter_emitted_entries": reporter_emitted_entries,
             "completed": reporter_emitted_entries is not None,
             "exhaustive_requested": report_rows_requested == 0,
@@ -473,7 +440,6 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     if result["process"]["returncode"] != 0:
         failures.append(f"solver exited {result['process']['returncode']}")
         return failures
-
     metrics = result["benchmark"]
     if metrics["actual_iterations"] != metrics["requested_iterations"]:
         failures.append(
@@ -481,9 +447,7 @@ def validate_result(result: dict[str, Any]) -> list[str]:
             f"{metrics['requested_iterations']}"
         )
     if metrics["stop_cause"] != "max_iterations":
-        failures.append(
-            f"stop_cause={metrics['stop_cause']!r}, expected max_iterations"
-        )
+        failures.append(f"stop_cause={metrics['stop_cause']!r}, expected max_iterations")
     if metrics["solve_elapsed_seconds"] is None:
         failures.append("missing solver timing markers")
     elif metrics["solve_elapsed_seconds"] <= 0:
@@ -494,7 +458,6 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append("no infosets were materialized")
     if not metrics["report"].get("completed", False):
         failures.append("missing completed strategy report")
-
     required_streets = result["case"].get("expect_streets", [])
     for street in required_streets:
         normalized = street.upper()
@@ -516,12 +479,8 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
         "stop_cause": benchmark["stop_cause"],
         "guarantee": benchmark["metrics"]["guarantee"],
         "exploitability_raw": benchmark["metrics"]["exploitability_raw"],
-        "exploitability_mbb_per_game": benchmark["metrics"][
-            "exploitability_mbb_per_game"
-        ],
-        "strategy_fingerprint_sha256": benchmark["report"][
-            "strategy_fingerprint_sha256"
-        ],
+        "exploitability_mbb_per_game": benchmark["metrics"]["exploitability_mbb_per_game"],
+        "strategy_fingerprint_sha256": benchmark["report"]["strategy_fingerprint_sha256"],
         "per_street_rows": {
             street: {
                 "strategy_rows": values["strategy_rows"],
@@ -537,27 +496,14 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
 def run_process_with_solve_timing(
     command: list[str], root: Path, stderr_path: Path
 ) -> tuple[int, str, float, float | None]:
-    """Run the CLI while timestamping the solver/report boundary.
-
-    pe-preflop-solve already emits an unbuffered "solver created" line and an
-    explicit "solver_phase=complete ... report=starting" line. Reading stdout
-    as it arrives lets the benchmark measure the solver lifetime without
-    changing product solver semantics or charging exhaustive report rollouts to
-    iterations/second.
-    """
     process_started_ns = time.perf_counter_ns()
     solve_started_ns: int | None = None
     solve_ended_ns: int | None = None
     stdout_lines: list[str] = []
-
     with stderr_path.open("w", encoding="utf-8") as stderr_stream:
         process = subprocess.Popen(
-            command,
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=stderr_stream,
-            bufsize=1,
+            command, cwd=root, text=True, stdout=subprocess.PIPE,
+            stderr=stderr_stream, bufsize=1,
         )
         if process.stdout is None:
             raise RuntimeError("failed to capture solver stdout")
@@ -571,24 +517,14 @@ def run_process_with_solve_timing(
                 solve_ended_ns = observed_ns
         process.stdout.close()
         returncode = process.wait()
-
     process_ended_ns = time.perf_counter_ns()
-    process_elapsed_seconds = (
-        process_ended_ns - process_started_ns
-    ) / 1_000_000_000.0
+    process_elapsed_seconds = (process_ended_ns - process_started_ns) / 1_000_000_000.0
     solve_elapsed_seconds = (
         (solve_ended_ns - solve_started_ns) / 1_000_000_000.0
-        if solve_started_ns is not None
-        and solve_ended_ns is not None
-        and solve_ended_ns >= solve_started_ns
-        else None
+        if solve_started_ns is not None and solve_ended_ns is not None
+        and solve_ended_ns >= solve_started_ns else None
     )
-    return (
-        returncode,
-        "".join(stdout_lines),
-        process_elapsed_seconds,
-        solve_elapsed_seconds,
-    )
+    return returncode, "".join(stdout_lines), process_elapsed_seconds, solve_elapsed_seconds
 
 
 def run_once(
@@ -605,16 +541,19 @@ def run_once(
     raw_report = case_dir / "solver-report.json"
     stdout_path = case_dir / "stdout.log"
     stderr_path = case_dir / "stderr.log"
+    result_path = case_dir / "benchmark.json"
+    for stale_path in (raw_report, stdout_path, stderr_path, result_path):
+        try:
+            stale_path.unlink()
+        except FileNotFoundError:
+            pass
     tree_path = (root / case["tree"]).resolve()
     node_streets, decisions = tree_nodes(tree_path)
-    command = build_command(
-        solver, root, raw_report, case, defaults, iteration_override
-    )
+    command = build_command(solver, root, raw_report, case, defaults, iteration_override)
     requested_iterations = iteration_override or int(
         case.get("iterations", defaults.get("iterations", 2000))
     )
     report_rows = int(case.get("report_rows", defaults.get("report_rows", 0)))
-
     returncode, stdout, process_elapsed, solve_elapsed = run_process_with_solve_timing(
         command, root, stderr_path
     )
@@ -628,13 +567,8 @@ def run_once(
             native_report = None
 
     benchmark = parse_stdout(
-        stdout,
-        decisions,
-        node_streets,
-        process_elapsed,
-        solve_elapsed,
-        requested_iterations,
-        report_rows,
+        stdout, decisions, node_streets, process_elapsed, solve_elapsed,
+        requested_iterations, report_rows,
     )
     result = {
         "schema": SCHEMA,
@@ -644,18 +578,13 @@ def run_once(
             "returncode": returncode,
             "stdout": str(stdout_path.relative_to(out_dir)),
             "stderr": str(stderr_path.relative_to(out_dir)),
-            "solver_report": (
-                str(raw_report.relative_to(out_dir)) if raw_report.exists() else None
-            ),
+            "solver_report": str(raw_report.relative_to(out_dir)) if raw_report.exists() else None,
         },
         "native_solver_report": native_report,
         "benchmark": benchmark,
     }
     result["validation_failures"] = validate_result(result)
-    result_path = case_dir / "benchmark.json"
-    result_path.write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result
 
 
@@ -688,9 +617,7 @@ def write_summary(
         "preflop_rows", "flop_rows", "turn_rows", "river_rows",
         "strategy_fingerprint_sha256", "valid",
     ]
-    with (out_dir / "summary.csv").open(
-        "w", newline="", encoding="utf-8"
-    ) as stream:
+    with (out_dir / "summary.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for result in results:
@@ -718,9 +645,7 @@ def write_summary(
                 "flop_rows": b["per_street"]["FLOP"]["strategy_rows"],
                 "turn_rows": b["per_street"]["TURN"]["strategy_rows"],
                 "river_rows": b["per_street"]["RIVER"]["strategy_rows"],
-                "strategy_fingerprint_sha256": b["report"][
-                    "strategy_fingerprint_sha256"
-                ],
+                "strategy_fingerprint_sha256": b["report"]["strategy_fingerprint_sha256"],
                 "valid": not result["validation_failures"],
             })
 
@@ -729,8 +654,7 @@ def main() -> int:
     root = repo_root()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--manifest",
-        default=str(root / "benchmarks" / "solver" / "cases.json"),
+        "--manifest", default=str(root / "benchmarks" / "solver" / "cases.json"),
         help="benchmark case manifest",
     )
     parser.add_argument("--suite", action="append", default=[], help="case tag to run")
@@ -738,22 +662,17 @@ def main() -> int:
     parser.add_argument("--solver", help="path to pe-preflop-solve")
     parser.add_argument("--build-dir", default="build", help="build directory")
     parser.add_argument(
-        "--output-dir",
-        default=str(root / "build" / "solver-benchmarks"),
+        "--output-dir", default=str(root / "build" / "solver-benchmarks"),
         help="result directory",
     )
-    parser.add_argument(
-        "--iterations", type=int, help="override iterations for every selected case"
-    )
+    parser.add_argument("--iterations", type=int, help="override iterations for every selected case")
     parser.add_argument("--repeat", type=int, default=1, help="number of runs per case")
     parser.add_argument(
-        "--check-reproducibility",
-        action="store_true",
+        "--check-reproducibility", action="store_true",
         help="compare deterministic fields across repetitions",
     )
     parser.add_argument(
-        "--strict",
-        action="store_true",
+        "--strict", action="store_true",
         help="return non-zero on validation/reproducibility failures",
     )
     parser.add_argument("--list", action="store_true", help="list selected cases and exit")
@@ -772,10 +691,7 @@ def main() -> int:
     manifest = load_manifest(manifest_path)
     suites = set(args.suite or ["smoke"])
     names = set(args.case)
-    cases = [
-        case for case in manifest["cases"]
-        if case_selected(case, suites, names)
-    ]
+    cases = [case for case in manifest["cases"] if case_selected(case, suites, names)]
     if not cases:
         parser.error("no benchmark cases selected")
 
@@ -807,18 +723,10 @@ def main() -> int:
     by_case: dict[str, list[dict[str, Any]]] = {}
     for case in cases:
         for repetition in range(1, args.repeat + 1):
-            print(
-                f"[benchmark] {case['id']} run {repetition}/{args.repeat}",
-                flush=True,
-            )
+            print(f"[benchmark] {case['id']} run {repetition}/{args.repeat}", flush=True)
             result = run_once(
-                solver,
-                root,
-                out_dir,
-                case,
-                manifest.get("defaults", {}),
-                args.iterations,
-                repetition,
+                solver, root, out_dir, case, manifest.get("defaults", {}),
+                args.iterations, repetition,
             )
             results.append(result)
             by_case.setdefault(case["id"], []).append(result)
@@ -828,8 +736,7 @@ def main() -> int:
                 f"solve_seconds={b['solve_elapsed_seconds'] or 0:.3f} "
                 f"process_seconds={b['elapsed_seconds']:.3f} "
                 f"ips={b['iterations_per_second'] or 0:.1f} "
-                f"stop={b['stop_cause']} "
-                f"valid={not result['validation_failures']}",
+                f"stop={b['stop_cause']} valid={not result['validation_failures']}",
                 flush=True,
             )
 
@@ -840,8 +747,7 @@ def main() -> int:
             views = [stable_reproducibility_view(result) for result in case_runs]
             reference = views[0]
             mismatches = [
-                index + 1
-                for index, view in enumerate(views[1:], start=1)
+                index + 1 for index, view in enumerate(views[1:], start=1)
                 if view != reference
             ]
             passed = not mismatches
@@ -859,8 +765,7 @@ def main() -> int:
     write_summary(out_dir, results, repro)
     validation_failures = [
         f"{result['case']['id']}: {failure}"
-        for result in results
-        for failure in result["validation_failures"]
+        for result in results for failure in result["validation_failures"]
     ]
     all_failures = validation_failures + repro_failures
     if all_failures:
