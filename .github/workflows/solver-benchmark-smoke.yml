@@ -19,6 +19,9 @@ on:
       - 'include/poker_eval/core/**'
       - 'include/poker_eval/games/**'
       - 'include/poker_eval/deck/**'
+      - 'src/range/**'
+      - 'include/poker_eval/range/**'
+      - 'include/poker_eval/range.h'
       - '.github/workflows/solver-benchmark-smoke.yml'
   workflow_dispatch:
 
