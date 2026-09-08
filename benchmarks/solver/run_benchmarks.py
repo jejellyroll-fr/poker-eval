@@ -26,7 +26,6 @@ SCHEMA = "pe-solver-benchmark/v1"
 SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 SOLVE_START_MARKER = "solver created"
-SOLVE_END_PREFIX = "solver_phase=complete "
 
 # The final "infosets" field on this legacy line is the description-table
 # count, not necessarily the solver's retained strategy count when --desc-limit
@@ -531,7 +530,10 @@ def run_process_with_solve_timing(
             stripped = line.strip()
             if solve_started_ns is None and stripped == SOLVE_START_MARKER:
                 solve_started_ns = observed_ns
-            if solve_ended_ns is None and stripped.startswith(SOLVE_END_PREFIX):
+            # The solver emits solve_loop_end before the CLI stops/joins its
+            # watcher thread. Timestamp that solver-owned boundary so short
+            # runs do not include watcher shutdown latency in throughput.
+            if solve_ended_ns is None and RE_LOOP_END.search(stripped):
                 solve_ended_ns = observed_ns
         process.stdout.close()
         returncode = process.wait()
