@@ -385,6 +385,24 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("missing exploitability_mbb telemetry", failures)
         self.assertIn("missing br_samples telemetry", failures)
 
+    def test_exhaustive_request_missing_description_cap_telemetry_is_rejected(self) -> None:
+        report = {
+            "emitted_rows": 10,
+            "completed": True,
+            "exhaustive_requested": True,
+            "exhaustive": False,
+            "normalized_strategy_rows": 10,
+        }
+        result = self._result(report=report)
+        result["benchmark"]["memory"]["descriptions_capped"] = None
+
+        failures = bench.validate_result(result)
+
+        self.assertIn(
+            "missing description cap telemetry for exhaustive report",
+            failures,
+        )
+
     def test_missing_native_report_is_rejected(self) -> None:
         process = self._valid_process()
         process["solver_report"] = None
