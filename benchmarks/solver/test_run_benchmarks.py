@@ -194,6 +194,58 @@ class TelemetryParsingTests(unittest.TestCase):
         self.assertEqual(parsed["report"]["reporter_emitted_entries"], 3)
         self.assertTrue(parsed["report"]["completed"])
 
+    def test_exhaustive_report_requires_one_normalized_row_per_solver_infoset(self) -> None:
+        row1 = (
+            "AhAs\t7\tP1\tCALL=50.0%,RAISE=50.0%\t"
+            "CALL=pending,RAISE=pending\tKs7d2c"
+        )
+        row2 = (
+            "KhKd\t7\tP1\tCALL=25.0%,RAISE=75.0%\t"
+            "CALL=pending,RAISE=pending\tKs7d2c"
+        )
+        one_sweep = f"{row1}\n{row2}"
+        stdout = "\n".join(
+            [
+                "iterations=64 complete=1 infosets=3",
+                (
+                    "solve_loop_end cause=max_iterations iteration=64 "
+                    "memory_mb=1.0 storage_mb=0.5 adapter_mb=0.5"
+                ),
+                (
+                    "stop_detail cause=max_iterations interrupted=0 "
+                    "iteration=64 held_mb=1.0 budget_mb=512.0 "
+                    "descriptions_mb=0.1 descriptions_capped=0"
+                ),
+                "report_phase=starting rows=3 infosets=3",
+                one_sweep,
+                one_sweep,
+                "report_phase=complete rows=5",
+            ]
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 1 if street == "FLOP" else 0 for street in bench.STREETS},
+            {7: "FLOP"},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.25,
+            requested_iterations=64,
+            report_rows_requested=0,
+        )
+
+        self.assertEqual(parsed["infosets"], 3)
+        self.assertEqual(parsed["report"]["normalized_strategy_rows"], 2)
+        self.assertFalse(parsed["report"]["exhaustive"])
+        result = {
+            "process": {"returncode": 0},
+            "case": {"expect_streets": []},
+            "benchmark": parsed,
+        }
+        self.assertIn(
+            "incomplete exhaustive strategy report: normalized_rows=2 solver_infosets=3",
+            bench.validate_result(result),
+        )
+
 
 class ValidationTests(unittest.TestCase):
     def _valid_timing(self) -> dict[str, float]:
