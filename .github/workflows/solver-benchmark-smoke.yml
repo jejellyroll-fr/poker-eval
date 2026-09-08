@@ -44,7 +44,7 @@ jobs:
       - name: Validate benchmark runner
         run: |
           python3 -m py_compile benchmarks/solver/run_benchmarks.py
-          python3 benchmarks/solver/test_run_benchmarks.py
+          python3 -m unittest discover -s benchmarks/solver -p 'test_*.py'
           python3 benchmarks/solver/run_benchmarks.py --suite smoke --list
 
       - name: Run deterministic structural smoke corpus twice
