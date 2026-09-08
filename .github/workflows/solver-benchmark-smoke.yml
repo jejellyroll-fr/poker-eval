@@ -15,6 +15,7 @@ on:
       - 'src/core/**'
       - 'include/poker_eval/core/**'
       - 'include/poker_eval/games/**'
+      - 'include/poker_eval/deck/**'
       - '.github/workflows/solver-benchmark-smoke.yml'
   workflow_dispatch:
 
@@ -46,7 +47,7 @@ jobs:
           python3 benchmarks/solver/test_run_benchmarks.py
           python3 benchmarks/solver/run_benchmarks.py --suite smoke --list
 
-      - name: Run deterministic smoke corpus twice
+      - name: Run deterministic structural smoke corpus twice
         run: |
           python3 benchmarks/solver/run_benchmarks.py \
             --suite smoke \
@@ -57,10 +58,24 @@ jobs:
             --check-reproducibility \
             --strict
 
+      - name: Run learned-policy smoke twice
+        run: |
+          python3 benchmarks/solver/run_benchmarks.py \
+            --case holdem_flop \
+            --solver build/tools/pe-preflop-solve \
+            --output-dir build/solver-benchmarks-learned \
+            --iterations 10000 \
+            --min-non-uniform-rows 1 \
+            --repeat 2 \
+            --check-reproducibility \
+            --strict
+
       - name: Upload benchmark evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: solver-benchmark-smoke
-          path: build/solver-benchmarks
+          path: |
+            build/solver-benchmarks
+            build/solver-benchmarks-learned
           if-no-files-found: warn
