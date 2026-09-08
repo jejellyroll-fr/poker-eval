@@ -17,6 +17,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -24,8 +25,10 @@ from typing import Any
 
 SCHEMA = "pe-solver-benchmark/v1"
 SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
+NATIVE_REPORT_SCHEMA = "pe-preflop-solve/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 SOLVE_START_MARKER = "solver created"
+MANAGED_SUMMARY_FILES = ("selection.json", "summary.json", "summary.csv")
 
 # The final "infosets" field on this legacy line is the description-table
 # count, not necessarily the solver's retained strategy count when --desc-limit
@@ -98,6 +101,32 @@ def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bo
     if names:
         return case.get("id") in names
     return bool(set(case.get("tags", [])) & suites)
+
+
+def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> None:
+    """Remove evidence managed by this corpus before starting a new selection.
+
+    Reusing --output-dir with fewer cases or repetitions must not leave stale
+    benchmark runs beside current evidence. Only known corpus case directories
+    and aggregate files are removed; unrelated user files are preserved.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name in MANAGED_SUMMARY_FILES:
+        path = out_dir / name
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    for case in manifest_cases:
+        case_id = str(case.get("id", ""))
+        if not case_id or Path(case_id).name != case_id:
+            raise ValueError(f"unsafe benchmark case id: {case_id!r}")
+        case_path = out_dir / case_id
+        if case_path.is_dir():
+            shutil.rmtree(case_path)
+        elif case_path.exists():
+            case_path.unlink()
 
 
 def tree_nodes(tree_path: Path) -> tuple[dict[int, str], dict[str, int]]:
@@ -441,9 +470,25 @@ def parse_stdout(
 
 def validate_result(result: dict[str, Any]) -> list[str]:
     failures: list[str] = []
-    if result["process"]["returncode"] != 0:
-        failures.append(f"solver exited {result['process']['returncode']}")
+    process = result["process"]
+    if process["returncode"] != 0:
+        failures.append(f"solver exited {process['returncode']}")
         return failures
+
+    if process.get("solver_report") is None:
+        failures.append("missing native solver report")
+    else:
+        native_report = result.get("native_solver_report")
+        if not isinstance(native_report, dict):
+            detail = process.get("solver_report_error")
+            suffix = f": {detail}" if detail else ""
+            failures.append(f"invalid native solver report JSON{suffix}")
+        elif native_report.get("schema") != NATIVE_REPORT_SCHEMA:
+            failures.append(
+                f"native solver report schema={native_report.get('schema')!r}, "
+                f"expected {NATIVE_REPORT_SCHEMA}"
+            )
+
     metrics = result["benchmark"]
     if metrics["actual_iterations"] != metrics["requested_iterations"]:
         failures.append(
@@ -460,6 +505,17 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append("missing solver strategy count from report start")
     elif metrics["infosets"] <= 0:
         failures.append("no infosets were materialized")
+
+    convergence = metrics.get("metrics", {})
+    if not convergence.get("guarantee"):
+        failures.append("missing convergence guarantee telemetry")
+    if convergence.get("exploitability_raw") is None:
+        failures.append("missing exploitability_raw telemetry")
+    if convergence.get("exploitability_mbb_per_game") is None:
+        failures.append("missing exploitability_mbb telemetry")
+    if convergence.get("br_samples") is None:
+        failures.append("missing br_samples telemetry")
+
     report = metrics["report"]
     if not report.get("completed", False):
         failures.append("missing completed strategy report")
@@ -580,11 +636,16 @@ def run_once(
     stdout_path.write_text(stdout, encoding="utf-8")
 
     native_report: dict[str, Any] | None = None
+    native_report_error: str | None = None
     if raw_report.exists():
         try:
-            native_report = json.loads(raw_report.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            native_report = None
+            decoded = json.loads(raw_report.read_text(encoding="utf-8"))
+            if isinstance(decoded, dict):
+                native_report = decoded
+            else:
+                native_report_error = "top-level JSON value is not an object"
+        except (json.JSONDecodeError, OSError) as exc:
+            native_report_error = str(exc)
 
     benchmark = parse_stdout(
         stdout, decisions, node_streets, process_elapsed, solve_elapsed,
@@ -599,6 +660,7 @@ def run_once(
             "stdout": str(stdout_path.relative_to(out_dir)),
             "stderr": str(stderr_path.relative_to(out_dir)),
             "solver_report": str(raw_report.relative_to(out_dir)) if raw_report.exists() else None,
+            "solver_report_error": native_report_error,
         },
         "native_solver_report": native_report,
         "benchmark": benchmark,
@@ -724,7 +786,7 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     if not out_dir.is_absolute():
         out_dir = (root / out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    prepare_output_dir(out_dir, manifest["cases"])
 
     selected = {
         "schema": "pe-solver-benchmark-selection/v1",
