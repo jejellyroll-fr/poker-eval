@@ -347,6 +347,15 @@ def parse_stdout(
     )
     total_rows = sum(v["strategy_rows"] for v in per_street.values())
     total_non_uniform = sum(v["non_uniform_rows"] for v in per_street.values())
+    normalized_strategy_rows = row_details["normalized_strategy_rows"]
+    report_completed = reporter_emitted_entries is not None
+    report_exhaustive = (
+        report_rows_requested == 0
+        and descriptions_capped is False
+        and report_completed
+        and solver_infosets is not None
+        and normalized_strategy_rows == solver_infosets
+    )
 
     for street, data in per_street.items():
         data["decision_nodes"] = tree_decisions.get(street, 0)
@@ -419,13 +428,9 @@ def parse_stdout(
             "requested_rows": report_rows_requested,
             "emitted_rows": row_details["raw_strategy_rows"],
             "reporter_emitted_entries": reporter_emitted_entries,
-            "completed": reporter_emitted_entries is not None,
+            "completed": report_completed,
             "exhaustive_requested": report_rows_requested == 0,
-            "exhaustive": (
-                report_rows_requested == 0
-                and not bool(descriptions_capped)
-                and reporter_emitted_entries is not None
-            ),
+            "exhaustive": report_exhaustive,
             "strategy_fingerprint_sha256": fingerprint,
             **row_details,
         },
@@ -456,8 +461,21 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append("missing solver strategy count from report start")
     elif metrics["infosets"] <= 0:
         failures.append("no infosets were materialized")
-    if not metrics["report"].get("completed", False):
+    report = metrics["report"]
+    if not report.get("completed", False):
         failures.append("missing completed strategy report")
+    if (
+        report.get("exhaustive_requested", False)
+        and metrics.get("memory", {}).get("descriptions_capped") is False
+        and report.get("completed", False)
+        and metrics["infosets"] is not None
+        and not report.get("exhaustive", False)
+    ):
+        failures.append(
+            "incomplete exhaustive strategy report: "
+            f"normalized_rows={report.get('normalized_strategy_rows')} "
+            f"solver_infosets={metrics['infosets']}"
+        )
     required_streets = result["case"].get("expect_streets", [])
     for street in required_streets:
         normalized = street.upper()
