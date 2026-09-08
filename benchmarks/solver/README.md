@@ -150,11 +150,16 @@ build/solver-benchmarks/
 The runner records three separate wall-clock measurements:
 
 - `solve_elapsed_seconds`: from the existing unbuffered `solver created`
-  telemetry marker until `solver_phase=complete ... report=starting`;
-- `elapsed_seconds`: the complete CLI subprocess lifetime, including strategy
-  report generation, per-action EV display rollouts, JSON output and cleanup;
+  telemetry marker until the solver-owned `solve_loop_end` telemetry event;
+- `elapsed_seconds`: the complete CLI subprocess lifetime, including watcher
+  shutdown, strategy report generation, per-action EV display rollouts, JSON
+  output and cleanup;
 - `post_solve_elapsed_seconds`: the difference between those two values, useful
-  for spotting report/materialisation cost.
+  for spotting CLI/watch/report/materialisation cost.
+
+Using `solve_loop_end` deliberately excludes the CLI's stop-watcher shutdown
+latency. On very short solves that latency can be tens of milliseconds and
+would otherwise dominate the measured solve time.
 
 `iterations_per_second` is derived **only from `solve_elapsed_seconds`**. An
 exhaustive `--report-rows 0` run can spend much longer walking and rendering
