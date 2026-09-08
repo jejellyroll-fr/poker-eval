@@ -519,9 +519,12 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     report = metrics["report"]
     if not report.get("completed", False):
         failures.append("missing completed strategy report")
+    descriptions_capped = metrics.get("memory", {}).get("descriptions_capped")
+    if report.get("exhaustive_requested", False) and descriptions_capped is None:
+        failures.append("missing description cap telemetry for exhaustive report")
     if (
         report.get("exhaustive_requested", False)
-        and metrics.get("memory", {}).get("descriptions_capped") is False
+        and descriptions_capped is False
         and report.get("completed", False)
         and metrics["infosets"] is not None
         and not report.get("exhaustive", False)
