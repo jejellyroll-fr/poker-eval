@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -74,6 +75,37 @@ class ManifestTests(unittest.TestCase):
                 by_id[case_id]["expect_streets"],
                 ["PREFLOP", "FLOP", "TURN", "RIVER"],
             )
+
+
+class OutputPreparationTests(unittest.TestCase):
+    def test_prunes_managed_case_runs_but_preserves_unrelated_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            manifest_cases = [{"id": "holdem_flop"}, {"id": "plo6_full"}]
+
+            for case_id, repetition in (("holdem_flop", 1), ("plo6_full", 3)):
+                run_dir = out_dir / case_id / f"run-{repetition}"
+                run_dir.mkdir(parents=True)
+                (run_dir / "benchmark.json").write_text("stale", encoding="utf-8")
+                (run_dir / "solver-report.json").write_text("stale", encoding="utf-8")
+
+            for name in bench.MANAGED_SUMMARY_FILES:
+                (out_dir / name).write_text("stale", encoding="utf-8")
+
+            unrelated_file = out_dir / "notes.txt"
+            unrelated_file.write_text("keep me", encoding="utf-8")
+            unrelated_dir = out_dir / "manual-baseline"
+            unrelated_dir.mkdir()
+            (unrelated_dir / "notes.txt").write_text("keep me too", encoding="utf-8")
+
+            bench.prepare_output_dir(out_dir, manifest_cases)
+
+            self.assertFalse((out_dir / "holdem_flop").exists())
+            self.assertFalse((out_dir / "plo6_full").exists())
+            for name in bench.MANAGED_SUMMARY_FILES:
+                self.assertFalse((out_dir / name).exists())
+            self.assertEqual(unrelated_file.read_text(encoding="utf-8"), "keep me")
+            self.assertTrue(unrelated_dir.is_dir())
 
 
 class TelemetryParsingTests(unittest.TestCase):
@@ -251,8 +283,56 @@ class ValidationTests(unittest.TestCase):
     def _valid_timing(self) -> dict[str, float]:
         return {"solve_elapsed_seconds": 0.1}
 
+    def _valid_convergence(self) -> dict[str, object]:
+        return {
+            "guarantee": "empirical",
+            "exploitability_raw": 1.0,
+            "exploitability_mbb_per_game": 2.0,
+            "br_samples": 16,
+        }
+
     def _completed_report(self, emitted_rows: int) -> dict[str, object]:
         return {"emitted_rows": emitted_rows, "completed": True}
+
+    def _valid_process(self) -> dict[str, object]:
+        return {
+            "returncode": 0,
+            "solver_report": "case/run-1/solver-report.json",
+            "solver_report_error": None,
+        }
+
+    def _valid_native_report(self) -> dict[str, str]:
+        return {"schema": bench.NATIVE_REPORT_SCHEMA}
+
+    def _result(
+        self,
+        *,
+        process: dict[str, object] | None = None,
+        native_report: object | None = None,
+        metrics: dict[str, object] | None = None,
+        infosets: int | None = 10,
+        report: dict[str, object] | None = None,
+        per_street: dict[str, dict[str, int]] | None = None,
+        expect_streets: list[str] | None = None,
+    ) -> dict[str, object]:
+        return {
+            "process": process or self._valid_process(),
+            "native_solver_report": (
+                self._valid_native_report() if native_report is None else native_report
+            ),
+            "case": {"expect_streets": expect_streets or []},
+            "benchmark": {
+                "actual_iterations": 64,
+                "requested_iterations": 64,
+                "stop_cause": "max_iterations",
+                "infosets": infosets,
+                **self._valid_timing(),
+                "metrics": metrics or self._valid_convergence(),
+                "memory": {"descriptions_capped": True},
+                "report": report or self._completed_report(1),
+                "per_street": per_street or {},
+            },
+        }
 
     def test_expected_full_tree_street_requires_materialized_rows(self) -> None:
         per_street = {
@@ -260,19 +340,11 @@ class ValidationTests(unittest.TestCase):
             for street in bench.STREETS
         }
         per_street["RIVER"]["strategy_rows"] = 0
-        result = {
-            "process": {"returncode": 0},
-            "case": {"expect_streets": list(bench.STREETS)},
-            "benchmark": {
-                "actual_iterations": 64,
-                "requested_iterations": 64,
-                "stop_cause": "max_iterations",
-                "infosets": 10,
-                **self._valid_timing(),
-                "report": self._completed_report(20),
-                "per_street": per_street,
-            },
-        }
+        result = self._result(
+            per_street=per_street,
+            expect_streets=list(bench.STREETS),
+            report=self._completed_report(20),
+        )
 
         failures = bench.validate_result(result)
 
@@ -282,61 +354,64 @@ class ValidationTests(unittest.TestCase):
         self.assertNotIn("no reported strategy row on TURN", failures)
 
     def test_missing_report_start_solver_count_is_rejected(self) -> None:
-        result = {
-            "process": {"returncode": 0},
-            "case": {"expect_streets": []},
-            "benchmark": {
-                "actual_iterations": 64,
-                "requested_iterations": 64,
-                "stop_cause": "max_iterations",
-                "infosets": None,
-                **self._valid_timing(),
-                "report": self._completed_report(0),
-                "per_street": {},
-            },
-        }
-
-        failures = bench.validate_result(result)
-
+        failures = bench.validate_result(self._result(infosets=None))
         self.assertIn("missing solver strategy count from report start", failures)
 
     def test_missing_solve_timing_markers_is_rejected(self) -> None:
-        result = {
-            "process": {"returncode": 0},
-            "case": {"expect_streets": []},
-            "benchmark": {
-                "actual_iterations": 64,
-                "requested_iterations": 64,
-                "stop_cause": "max_iterations",
-                "infosets": 10,
-                "solve_elapsed_seconds": None,
-                "report": self._completed_report(1),
-                "per_street": {},
-            },
-        }
-
+        result = self._result()
+        result["benchmark"]["solve_elapsed_seconds"] = None
         failures = bench.validate_result(result)
-
         self.assertIn("missing solver timing markers", failures)
 
     def test_missing_report_complete_marker_is_rejected(self) -> None:
-        result = {
-            "process": {"returncode": 0},
-            "case": {"expect_streets": []},
-            "benchmark": {
-                "actual_iterations": 64,
-                "requested_iterations": 64,
-                "stop_cause": "max_iterations",
-                "infosets": 10,
-                **self._valid_timing(),
-                "report": {"emitted_rows": 2, "completed": False},
-                "per_street": {},
-            },
-        }
-
-        failures = bench.validate_result(result)
-
+        failures = bench.validate_result(
+            self._result(report={"emitted_rows": 2, "completed": False})
+        )
         self.assertIn("missing completed strategy report", failures)
+
+    def test_missing_convergence_telemetry_is_rejected(self) -> None:
+        failures = bench.validate_result(
+            self._result(
+                metrics={
+                    "guarantee": None,
+                    "exploitability_raw": None,
+                    "exploitability_mbb_per_game": None,
+                    "br_samples": None,
+                }
+            )
+        )
+        self.assertIn("missing convergence guarantee telemetry", failures)
+        self.assertIn("missing exploitability_raw telemetry", failures)
+        self.assertIn("missing exploitability_mbb telemetry", failures)
+        self.assertIn("missing br_samples telemetry", failures)
+
+    def test_missing_native_report_is_rejected(self) -> None:
+        process = self._valid_process()
+        process["solver_report"] = None
+        failures = bench.validate_result(
+            self._result(process=process, native_report={"schema": bench.NATIVE_REPORT_SCHEMA})
+        )
+        self.assertIn("missing native solver report", failures)
+
+    def test_malformed_native_report_is_rejected(self) -> None:
+        process = self._valid_process()
+        process["solver_report_error"] = "Expecting value"
+        failures = bench.validate_result(
+            self._result(process=process, native_report=False)
+        )
+        self.assertIn(
+            "invalid native solver report JSON: Expecting value",
+            failures,
+        )
+
+    def test_wrong_native_report_schema_is_rejected(self) -> None:
+        failures = bench.validate_result(
+            self._result(native_report={"schema": "unexpected/v9"})
+        )
+        self.assertIn(
+            "native solver report schema='unexpected/v9', expected pe-preflop-solve/v1",
+            failures,
+        )
 
 
 if __name__ == "__main__":
