@@ -24,7 +24,7 @@ cmake -S . -B build \
 cmake --build build --target pe-preflop-solve --parallel
 ```
 
-Run the small CI smoke suite:
+Run the small cross-variant structural smoke suite:
 
 ```bash
 python3 benchmarks/solver/run_benchmarks.py \
@@ -34,6 +34,22 @@ python3 benchmarks/solver/run_benchmarks.py \
   --check-reproducibility \
   --strict
 ```
+
+Run the longer Hold'em learning probe used by CI:
+
+```bash
+python3 benchmarks/solver/run_benchmarks.py \
+  --case holdem_flop \
+  --iterations 10000 \
+  --repeat 2 \
+  --check-reproducibility \
+  --strict
+```
+
+CI additionally requires every learning-probe run to contain at least one
+`non_uniform_rows` entry, so a deterministic regression that leaves every
+strategy at the initial uniform policy cannot pass merely by reproducing the
+same broken result twice.
 
 Run the whole cross-variant corpus with its checked-in iteration budget:
 
@@ -187,10 +203,21 @@ For each of preflop/flop/turn/river the runner records:
 - share of materialized infosets;
 - share of non-uniform rows.
 
-With `report_rows=0` and an uncapped description table, the strategy report is
-requested exhaustively. A non-uniform row is a practical signal that the
-infoset moved away from regret matching's initial uniform policy; it is not
-mislabelled as an exact traversal-visit count.
+With `report_rows=0` the report is *requested* exhaustively. The result is only
+published as `exhaustive=true` when all of the following hold:
+
+- the description table was not capped;
+- the reporter emitted its completion marker;
+- the normalized hand-table row count exactly equals the solver's retained
+  strategy/infoset count from `report_phase=starting`.
+
+`--strict` rejects an uncapped exhaustive request when those cardinalities do
+not match. This prevents a deterministic reporter/parser regression from
+silently publishing incomplete street coverage as exhaustive.
+
+A non-uniform row is a practical signal that the infoset moved away from regret
+matching's initial uniform policy; it is not mislabelled as an exact
+traversal-visit count.
 
 The next sampling-policy work can add raw per-street visit/update counters to
 the solver telemetry. This corpus already gives it stable cases, exact inputs
@@ -206,7 +233,10 @@ number.
 ## CI policy
 
 `.github/workflows/solver-benchmark-smoke.yml` builds only the product solver
-and runs the smoke subset twice at a small fixed iteration budget.
+and runs two complementary checks:
+
+- the five-case cross-variant structural smoke twice at 64 iterations;
+- a deterministic `holdem_flop` learning probe twice at 10,000 iterations.
 
 The job fails when:
 
@@ -216,7 +246,10 @@ The job fails when:
 - the solver timing markers are missing;
 - no infoset is materialized;
 - a required street is absent;
-- deterministic fingerprints/metrics differ between repetitions.
+- an uncapped exhaustive report does not contain one normalized row per solver
+  infoset;
+- deterministic fingerprints/metrics differ between repetitions;
+- the learning probe still contains zero non-uniform strategy rows.
 
 It does **not** gate on wall-clock speed because shared GitHub runners are not
 performance-identical. Longer performance qualification remains a manual
