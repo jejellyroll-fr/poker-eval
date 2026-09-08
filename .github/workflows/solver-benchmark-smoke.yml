@@ -65,10 +65,30 @@ jobs:
             --solver build/tools/pe-preflop-solve \
             --output-dir build/solver-benchmarks-learned \
             --iterations 10000 \
-            --min-non-uniform-rows 1 \
             --repeat 2 \
             --check-reproducibility \
             --strict
+
+      - name: Verify learned-policy smoke updated strategy
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(
+              Path("build/solver-benchmarks-learned/summary.json").read_text()
+          )
+          for result in summary["results"]:
+              per_street = result["benchmark"]["per_street"]
+              learned_rows = sum(
+                  street["non_uniform_rows"] for street in per_street.values()
+              )
+              if learned_rows <= 0:
+                  raise SystemExit(
+                      f"{result['case']}: 10000 iterations produced no non-uniform strategy rows"
+                  )
+              print(f"{result['case']}: learned non-uniform rows={learned_rows}")
+          PY
 
       - name: Upload benchmark evidence
         if: always()
