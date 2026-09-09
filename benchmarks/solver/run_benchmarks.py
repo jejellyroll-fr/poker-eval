@@ -119,6 +119,19 @@ def safe_case_id(case: dict[str, Any]) -> str:
     return case_id
 
 
+def validate_manifest_case_ids(manifest_cases: list[dict[str, Any]]) -> list[str]:
+    """Validate case ids once and reject aliases that would share evidence."""
+    case_ids: list[str] = []
+    seen: set[str] = set()
+    for case in manifest_cases:
+        case_id = safe_case_id(case)
+        if case_id in seen:
+            raise ValueError(f"duplicate benchmark case id: {case_id!r}")
+        seen.add(case_id)
+        case_ids.append(case_id)
+    return case_ids
+
+
 def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> None:
     """Remove evidence managed by this corpus before starting a new selection.
 
@@ -128,9 +141,9 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
     """
     # Validate every manifest id before performing any cleanup. This prevents a
     # malformed custom manifest from turning `out_dir / case_id` into a parent
-    # or nested path and also avoids partially cleaning valid cases before an
-    # unsafe id later in the manifest is discovered.
-    case_ids = [safe_case_id(case) for case in manifest_cases]
+    # or nested path, prevents duplicate cases from sharing evidence, and also
+    # avoids partially cleaning valid cases before a bad id is discovered.
+    case_ids = validate_manifest_case_ids(manifest_cases)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_SUMMARY_FILES:
@@ -419,10 +432,12 @@ def parse_stdout(
             data["non_uniform_rows"] / total_non_uniform if total_non_uniform else 0.0
         )
 
-    iterations_for_rate = actual_iterations or requested_iterations
     iterations_per_second = (
-        iterations_for_rate / solve_elapsed_seconds
-        if solve_elapsed_seconds is not None and solve_elapsed_seconds > 0
+        actual_iterations / solve_elapsed_seconds
+        if actual_iterations is not None
+        and actual_iterations > 0
+        and solve_elapsed_seconds is not None
+        and solve_elapsed_seconds > 0
         else None
     )
     final_memory_bytes = int(round(final_memory_mb * MB)) if final_memory_mb is not None else None
@@ -796,6 +811,7 @@ def main() -> int:
     if not manifest_path.is_absolute():
         manifest_path = (root / manifest_path).resolve()
     manifest = load_manifest(manifest_path)
+    validate_manifest_case_ids(manifest["cases"])
     suites = set(args.suite or ["smoke"])
     names = set(args.case)
     cases = [case for case in manifest["cases"] if case_selected(case, suites, names)]
@@ -838,11 +854,13 @@ def main() -> int:
             results.append(result)
             by_case.setdefault(case["id"], []).append(result)
             b = result["benchmark"]
+            ips = b["iterations_per_second"]
+            ips_text = f"{ips:.1f}" if ips is not None else "n/a"
             print(
                 f"  iterations={b['actual_iterations']} infosets={b['infosets']} "
                 f"solve_seconds={b['solve_elapsed_seconds'] or 0:.3f} "
                 f"process_seconds={b['elapsed_seconds']:.3f} "
-                f"ips={b['iterations_per_second'] or 0:.1f} "
+                f"ips={ips_text} "
                 f"stop={b['stop_cause']} valid={not result['validation_failures']}",
                 flush=True,
             )
