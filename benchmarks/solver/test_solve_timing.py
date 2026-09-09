@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression coverage for solve-only wall-clock timing."""
+"""Regression coverage for solve-only and post-solve wall-clock timing."""
 
 from __future__ import annotations
 
@@ -65,18 +65,27 @@ class SolveTimingTests(unittest.TestCase):
                 "perf_counter_ns",
                 side_effect=lambda: next(timestamps),
             ):
-                returncode, stdout, process_elapsed, solve_elapsed = (
-                    bench.run_process_with_solve_timing(
-                        ["fake-solver"], Path(tmpdir), stderr_path
-                    )
+                (
+                    returncode,
+                    stdout,
+                    process_elapsed,
+                    solve_elapsed,
+                    post_solve_elapsed,
+                ) = bench.run_process_with_solve_timing(
+                    ["fake-solver"], Path(tmpdir), stderr_path
                 )
 
         self.assertEqual(returncode, 0)
         self.assertIn("solve_loop_end", stdout)
         self.assertAlmostEqual(process_elapsed, 0.060)
         self.assertAlmostEqual(solve_elapsed, 0.006)
-        # If the old solver_phase=complete marker were still used, this would
-        # be roughly 0.051 seconds instead of 0.006 seconds.
+        self.assertAlmostEqual(post_solve_elapsed, 0.048)
+        # Startup occupies the first 6 ms and must not be included in either
+        # solve_elapsed or post_solve_elapsed. If post-solve were computed as
+        # process_elapsed - solve_elapsed, it would be 54 ms instead of 48 ms.
+        self.assertNotAlmostEqual(post_solve_elapsed, 0.054)
+        # If the old solver_phase=complete marker were still used, solve time
+        # would be roughly 0.051 seconds instead of 0.006 seconds.
         self.assertLess(solve_elapsed, 0.020)
 
 
