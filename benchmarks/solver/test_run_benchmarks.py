@@ -133,6 +133,27 @@ class OutputPreparationTests(unittest.TestCase):
                 self.assertEqual(summary.read_text(encoding="utf-8"), "keep summary")
                 self.assertEqual(parent_sentinel.read_text(encoding="utf-8"), "keep parent")
 
+    def test_rejects_duplicate_case_ids_before_any_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            managed_dir = out_dir / "holdem_flop"
+            managed_dir.mkdir()
+            sentinel = managed_dir / "benchmark.json"
+            sentinel.write_text("keep managed evidence", encoding="utf-8")
+            summary = out_dir / "summary.json"
+            summary.write_text("keep summary", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError, "duplicate benchmark case id: 'holdem_flop'"
+            ):
+                bench.prepare_output_dir(
+                    out_dir,
+                    [{"id": "holdem_flop"}, {"id": "holdem_flop"}],
+                )
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep managed evidence")
+            self.assertEqual(summary.read_text(encoding="utf-8"), "keep summary")
+
 
 class TelemetryParsingTests(unittest.TestCase):
     def test_solver_strategy_count_wins_over_capped_description_count(self) -> None:
@@ -208,6 +229,32 @@ class TelemetryParsingTests(unittest.TestCase):
         self.assertNotAlmostEqual(
             parsed["iterations_per_second"], 10000.0 / 7.18
         )
+
+    def test_throughput_is_null_without_positive_actual_iterations(self) -> None:
+        for iteration_line in (None, "iterations=0 complete=0 infosets=0"):
+            with self.subTest(iteration_line=iteration_line):
+                lines = [
+                    (
+                        "solve_loop_end cause=max_iterations iteration=10000 "
+                        "memory_mb=10.0 storage_mb=6.0 adapter_mb=4.0"
+                    ),
+                    "report_phase=starting rows=100 infosets=100",
+                    "report_phase=complete rows=200",
+                ]
+                if iteration_line is not None:
+                    lines.insert(0, iteration_line)
+
+                parsed = bench.parse_stdout(
+                    "\n".join(lines),
+                    {street: 0 for street in bench.STREETS},
+                    {},
+                    process_elapsed_seconds=7.18,
+                    solve_elapsed_seconds=0.50,
+                    requested_iterations=10000,
+                    report_rows_requested=0,
+                )
+
+                self.assertIsNone(parsed["iterations_per_second"])
 
     def test_emitted_rows_come_from_hand_table_not_reporter_counter(self) -> None:
         row1 = (
