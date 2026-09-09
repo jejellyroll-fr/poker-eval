@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Regression coverage for strategy-frequency and output-name validation."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import run_benchmarks as bench
+
+
+class StrategyFrequencyValidationTests(unittest.TestCase):
+    def test_invalid_frequencies_are_not_counted_as_learning(self) -> None:
+        nan_row = (
+            "AhAs\t7\tP1\tCALL=nan%,RAISE=nan%\t"
+            "CALL=pending,RAISE=pending\tKs7d2c"
+        )
+        zero_sum_row = (
+            "KhKd\t7\tP1\tCALL=0.0%,RAISE=0.0%\t"
+            "CALL=pending,RAISE=pending\tKs7d2c"
+        )
+
+        data, _, details = bench.parse_strategy_rows(
+            f"{nan_row}\n{zero_sum_row}\n",
+            {7: "FLOP"},
+            exhaustive_report=False,
+        )
+
+        self.assertEqual(data["FLOP"]["strategy_rows"], 2)
+        self.assertEqual(data["FLOP"]["uniform_rows"], 0)
+        self.assertEqual(data["FLOP"]["non_uniform_rows"], 0)
+        self.assertEqual(data["FLOP"]["invalid_strategy_rows"], 2)
+        self.assertEqual(details["invalid_strategy_rows"], 2)
+
+    def test_validator_rejects_invalid_strategy_frequencies(self) -> None:
+        row = (
+            "AhAs\t7\tP1\tCALL=nan%,RAISE=nan%\t"
+            "CALL=pending,RAISE=pending\tKs7d2c"
+        )
+        stdout = "\n".join(
+            [
+                "iterations=64 complete=1 infosets=1",
+                (
+                    "solve_loop_end cause=max_iterations iteration=64 "
+                    "memory_mb=1.0 storage_mb=0.5 adapter_mb=0.5"
+                ),
+                (
+                    "guarantee=empirical exploitability_raw=1.0 "
+                    "exploitability_mbb=2.0 br_samples=16"
+                ),
+                "report_phase=starting rows=1 infosets=1",
+                row,
+                "report_phase=complete rows=1",
+            ]
+        )
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 1 if street == "FLOP" else 0 for street in bench.STREETS},
+            {7: "FLOP"},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.25,
+            requested_iterations=64,
+            report_rows_requested=10,
+        )
+        result = {
+            "process": {
+                "returncode": 0,
+                "solver_report": "case/run-1/solver-report.json",
+                "solver_report_error": None,
+            },
+            "native_solver_report": {"schema": bench.NATIVE_REPORT_SCHEMA},
+            "case": {"expect_streets": ["FLOP"]},
+            "benchmark": parsed,
+        }
+
+        self.assertEqual(parsed["per_street"]["FLOP"]["non_uniform_rows"], 0)
+        self.assertEqual(parsed["report"]["invalid_strategy_rows"], 1)
+        self.assertIn(
+            "invalid strategy frequencies in 1 row(s)",
+            bench.validate_result(result),
+        )
+
+    def test_rounded_probability_distribution_is_accepted(self) -> None:
+        values = bench.strategy_frequencies("CHECK=33.3%,CALL=33.3%,RAISE=33.4%")
+        self.assertEqual(values, [33.3, 33.3, 33.4])
+
+
+class ReservedOutputNameTests(unittest.TestCase):
+    def test_aggregate_output_names_are_rejected_before_cleanup(self) -> None:
+        for case_id in bench.MANAGED_SUMMARY_FILES:
+            with self.subTest(case_id=case_id), tempfile.TemporaryDirectory() as tmp:
+                out_dir = Path(tmp)
+                managed_dir = out_dir / "holdem_flop"
+                managed_dir.mkdir()
+                sentinel = managed_dir / "benchmark.json"
+                sentinel.write_text("keep managed evidence", encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, "unsafe benchmark case id"):
+                    bench.prepare_output_dir(
+                        out_dir,
+                        [{"id": "holdem_flop"}, {"id": case_id}],
+                    )
+
+                self.assertEqual(
+                    sentinel.read_text(encoding="utf-8"),
+                    "keep managed evidence",
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
