@@ -26,6 +26,7 @@ from typing import Any
 SCHEMA = "pe-solver-benchmark/v1"
 SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
 NATIVE_REPORT_SCHEMA = "pe-preflop-solve/v1"
+SELECTION_SCHEMA = "pe-solver-benchmark-selection/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 SOLVE_START_MARKER = "solver created"
 MANAGED_SUMMARY_FILES = ("selection.json", "summary.json", "summary.csv")
@@ -132,18 +133,47 @@ def validate_manifest_case_ids(manifest_cases: list[dict[str, Any]]) -> list[str
     return case_ids
 
 
+def previous_selection_case_ids(out_dir: Path) -> list[str]:
+    """Return safe case ids recorded by a prior runner selection, if readable."""
+    selection_path = out_dir / "selection.json"
+    try:
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(selection, dict) or selection.get("schema") != SELECTION_SCHEMA:
+        return []
+    raw_cases = selection.get("cases")
+    if not isinstance(raw_cases, list):
+        return []
+
+    case_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_case_id in raw_cases:
+        try:
+            case_id = safe_case_id({"id": raw_case_id})
+        except ValueError:
+            # A stale or edited selection must never turn cleanup into an
+            # arbitrary path deletion. Ignore unsafe historical entries.
+            continue
+        if case_id not in seen:
+            seen.add(case_id)
+            case_ids.append(case_id)
+    return case_ids
+
+
 def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> None:
     """Remove evidence managed by this corpus before starting a new selection.
 
-    Reusing --output-dir with fewer cases or repetitions must not leave stale
-    benchmark runs beside current evidence. Only known corpus case directories
-    and aggregate files are removed; unrelated user files are preserved.
+    Reusing --output-dir with fewer cases, repetitions, or a different manifest
+    must not leave stale benchmark runs beside current evidence. Current-manifest
+    case ids and safe ids recorded by the previous selection are removed; unrelated
+    user files are preserved.
     """
-    # Validate every manifest id before performing any cleanup. This prevents a
-    # malformed custom manifest from turning `out_dir / case_id` into a parent
-    # or nested path, prevents duplicate cases from sharing evidence, and also
-    # avoids partially cleaning valid cases before a bad id is discovered.
-    case_ids = validate_manifest_case_ids(manifest_cases)
+    # Validate every current manifest id before performing any cleanup. This
+    # prevents malformed or duplicate ids from partially deleting prior evidence.
+    current_case_ids = validate_manifest_case_ids(manifest_cases)
+    previous_case_ids = previous_selection_case_ids(out_dir)
+    managed_case_ids = list(dict.fromkeys([*current_case_ids, *previous_case_ids]))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_SUMMARY_FILES:
@@ -153,7 +183,7 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
         except FileNotFoundError:
             pass
 
-    for case_id in case_ids:
+    for case_id in managed_case_ids:
         case_path = out_dir / case_id
         if case_path.is_symlink():
             case_path.unlink()
@@ -342,6 +372,7 @@ def parse_stdout(
     solve_elapsed_seconds: float | None,
     requested_iterations: int,
     report_rows_requested: int,
+    post_solve_elapsed_seconds: float | None = None,
 ) -> dict[str, Any]:
     actual_iterations = None
     complete = None
@@ -452,10 +483,7 @@ def parse_stdout(
         "stop_cause": stop_cause,
         "elapsed_seconds": process_elapsed_seconds,
         "solve_elapsed_seconds": solve_elapsed_seconds,
-        "post_solve_elapsed_seconds": (
-            max(0.0, process_elapsed_seconds - solve_elapsed_seconds)
-            if solve_elapsed_seconds is not None else None
-        ),
+        "post_solve_elapsed_seconds": post_solve_elapsed_seconds,
         "iterations_per_second": iterations_per_second,
         "infosets": solver_infosets,
         "description_infosets": description_infosets,
@@ -607,7 +635,7 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
 
 def run_process_with_solve_timing(
     command: list[str], root: Path, stderr_path: Path
-) -> tuple[int, str, float, float | None]:
+) -> tuple[int, str, float, float | None, float | None]:
     process_started_ns = time.perf_counter_ns()
     solve_started_ns: int | None = None
     solve_ended_ns: int | None = None
@@ -639,7 +667,18 @@ def run_process_with_solve_timing(
         if solve_started_ns is not None and solve_ended_ns is not None
         and solve_ended_ns >= solve_started_ns else None
     )
-    return returncode, "".join(stdout_lines), process_elapsed_seconds, solve_elapsed_seconds
+    post_solve_elapsed_seconds = (
+        (process_ended_ns - solve_ended_ns) / 1_000_000_000.0
+        if solve_ended_ns is not None and process_ended_ns >= solve_ended_ns
+        else None
+    )
+    return (
+        returncode,
+        "".join(stdout_lines),
+        process_elapsed_seconds,
+        solve_elapsed_seconds,
+        post_solve_elapsed_seconds,
+    )
 
 
 def run_once(
@@ -670,9 +709,13 @@ def run_once(
         case.get("iterations", defaults.get("iterations", 2000))
     )
     report_rows = int(case.get("report_rows", defaults.get("report_rows", 0)))
-    returncode, stdout, process_elapsed, solve_elapsed = run_process_with_solve_timing(
-        command, root, stderr_path
-    )
+    (
+        returncode,
+        stdout,
+        process_elapsed,
+        solve_elapsed,
+        post_solve_elapsed,
+    ) = run_process_with_solve_timing(command, root, stderr_path)
     stdout_path.write_text(stdout, encoding="utf-8")
 
     native_report: dict[str, Any] | None = None
@@ -688,8 +731,14 @@ def run_once(
             native_report_error = str(exc)
 
     benchmark = parse_stdout(
-        stdout, decisions, node_streets, process_elapsed, solve_elapsed,
-        requested_iterations, report_rows,
+        stdout,
+        decisions,
+        node_streets,
+        process_elapsed,
+        solve_elapsed,
+        requested_iterations,
+        report_rows,
+        post_solve_elapsed_seconds=post_solve_elapsed,
     )
     result = {
         "schema": SCHEMA,
@@ -830,7 +879,7 @@ def main() -> int:
     prepare_output_dir(out_dir, manifest["cases"])
 
     selected = {
-        "schema": "pe-solver-benchmark-selection/v1",
+        "schema": SELECTION_SCHEMA,
         "manifest": str(manifest_path),
         "solver": str(solver),
         "suites": sorted(suites),
