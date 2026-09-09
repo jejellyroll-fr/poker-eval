@@ -30,6 +30,7 @@ SELECTION_SCHEMA = "pe-solver-benchmark-selection/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 SOLVE_START_MARKER = "solver created"
 MANAGED_SUMMARY_FILES = ("selection.json", "summary.json", "summary.csv")
+ACTION_PERCENT_SUM_TOLERANCE = 0.51
 
 # The final "infosets" field on this legacy line is the description-table
 # count, not necessarily the solver's retained strategy count when --desc-limit
@@ -52,7 +53,6 @@ RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
 RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
 RE_REPORT_START = re.compile(r"^report_phase=starting rows=(\d+)\s+infosets=(\d+)$")
 RE_REPORT_COMPLETE = re.compile(r"^report_phase=complete rows=(\d+)$")
-RE_ACTION_PERCENT = re.compile(r"(?:^|,)[^=]+=([-+]?[0-9]+(?:\.[0-9]+)?)%")
 
 MB = 1024 * 1024
 
@@ -111,6 +111,7 @@ def safe_case_id(case: dict[str, Any]) -> str:
         not isinstance(case_id, str)
         or not case_id
         or case_id in {".", ".."}
+        or case_id in MANAGED_SUMMARY_FILES
         or "/" in case_id
         or "\\" in case_id
         or Path(case_id).is_absolute()
@@ -259,12 +260,31 @@ def build_command(
     return command
 
 
-def is_uniform_strategy(action_field: str) -> bool:
-    values = [float(match) for match in RE_ACTION_PERCENT.findall(action_field)]
-    if not values:
-        return False
+def strategy_frequencies(action_field: str) -> list[float] | None:
+    """Parse a rendered strategy into a finite percentage distribution."""
+    values: list[float] = []
+    for token in action_field.split(","):
+        action, separator, raw_percent = token.partition("=")
+        raw_percent = raw_percent.strip()
+        if not separator or not action.strip() or not raw_percent.endswith("%"):
+            return None
+        value = _float(raw_percent[:-1])
+        if value is None or value < 0.0 or value > 100.0:
+            return None
+        values.append(value)
+    if not values or abs(sum(values) - 100.0) > ACTION_PERCENT_SUM_TOLERANCE:
+        return None
+    return values
+
+
+def _is_uniform_frequencies(values: list[float]) -> bool:
     expected = 100.0 / len(values)
     return max(abs(value - expected) for value in values) <= 0.11
+
+
+def is_uniform_strategy(action_field: str) -> bool:
+    values = strategy_frequencies(action_field)
+    return values is not None and _is_uniform_frequencies(values)
 
 
 def _strategy_rows(
@@ -325,6 +345,7 @@ def parse_strategy_rows(
             "strategy_rows": 0,
             "uniform_rows": 0,
             "non_uniform_rows": 0,
+            "invalid_strategy_rows": 0,
             "unique_nodes_with_rows": 0,
             "unique_boards": 0,
         }
@@ -333,12 +354,17 @@ def parse_strategy_rows(
     nodes_seen = {street: set() for street in STREETS}
     boards_seen = {street: set() for street in STREETS}
     fingerprint_rows: list[str] = []
+    invalid_strategy_rows = 0
 
     for stable, node_index, action_field, board in rows:
         street = node_streets[node_index]
         data = street_data[street]
         data["strategy_rows"] += 1
-        if is_uniform_strategy(action_field):
+        frequencies = strategy_frequencies(action_field)
+        if frequencies is None:
+            data["invalid_strategy_rows"] += 1
+            invalid_strategy_rows += 1
+        elif _is_uniform_frequencies(frequencies):
             data["uniform_rows"] += 1
         else:
             data["non_uniform_rows"] += 1
@@ -359,6 +385,7 @@ def parse_strategy_rows(
     details = {
         "raw_strategy_rows": raw_rows,
         "normalized_strategy_rows": len(rows),
+        "invalid_strategy_rows": invalid_strategy_rows,
         "duplicate_exhaustive_sweep_removed": duplicate_sweep_removed,
     }
     return street_data, digest, details
@@ -583,6 +610,11 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     report = metrics["report"]
     if not report.get("completed", False):
         failures.append("missing completed strategy report")
+    invalid_strategy_rows = report.get("invalid_strategy_rows", 0)
+    if invalid_strategy_rows:
+        failures.append(
+            f"invalid strategy frequencies in {invalid_strategy_rows} row(s)"
+        )
     descriptions_capped = metrics.get("memory", {}).get("descriptions_capped")
     if report.get("exhaustive_requested", False) and descriptions_capped is None:
         failures.append("missing description cap telemetry for exhaustive report")
