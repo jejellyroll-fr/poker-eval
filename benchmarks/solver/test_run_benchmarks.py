@@ -107,6 +107,33 @@ class OutputPreparationTests(unittest.TestCase):
             self.assertEqual(unrelated_file.read_text(encoding="utf-8"), "keep me")
             self.assertTrue(unrelated_dir.is_dir())
 
+    def test_prunes_previous_selection_when_manifest_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            old_run = out_dir / "foo" / "run-1"
+            old_run.mkdir(parents=True)
+            (old_run / "benchmark.json").write_text("old", encoding="utf-8")
+            new_run = out_dir / "bar" / "run-1"
+            new_run.mkdir(parents=True)
+            (new_run / "benchmark.json").write_text("new stale", encoding="utf-8")
+            unrelated = out_dir / "manual-baseline"
+            unrelated.mkdir()
+
+            (out_dir / "selection.json").write_text(
+                "{\n"
+                f'  "schema": "{bench.SELECTION_SCHEMA}",\n'
+                '  "cases": ["foo"]\n'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            bench.prepare_output_dir(out_dir, [{"id": "bar"}])
+
+            self.assertFalse((out_dir / "foo").exists())
+            self.assertFalse((out_dir / "bar").exists())
+            self.assertFalse((out_dir / "selection.json").exists())
+            self.assertTrue(unrelated.is_dir())
+
     def test_rejects_unsafe_case_ids_before_any_cleanup(self) -> None:
         unsafe_ids = (".", "..", "nested/case", r"nested\case", "/absolute")
         for unsafe_id in unsafe_ids:
@@ -220,11 +247,12 @@ class TelemetryParsingTests(unittest.TestCase):
             solve_elapsed_seconds=0.50,
             requested_iterations=10000,
             report_rows_requested=0,
+            post_solve_elapsed_seconds=1.25,
         )
 
         self.assertEqual(parsed["elapsed_seconds"], 7.18)
         self.assertEqual(parsed["solve_elapsed_seconds"], 0.50)
-        self.assertAlmostEqual(parsed["post_solve_elapsed_seconds"], 6.68)
+        self.assertAlmostEqual(parsed["post_solve_elapsed_seconds"], 1.25)
         self.assertAlmostEqual(parsed["iterations_per_second"], 20000.0)
         self.assertNotAlmostEqual(
             parsed["iterations_per_second"], 10000.0 / 7.18
