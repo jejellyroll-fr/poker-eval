@@ -103,6 +103,22 @@ def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bo
     return bool(set(case.get("tags", [])) & suites)
 
 
+def safe_case_id(case: dict[str, Any]) -> str:
+    """Return a case id that is safe to use as one output-directory component."""
+    case_id = case.get("id")
+    if (
+        not isinstance(case_id, str)
+        or not case_id
+        or case_id in {".", ".."}
+        or "/" in case_id
+        or "\\" in case_id
+        or Path(case_id).is_absolute()
+        or Path(case_id).name != case_id
+    ):
+        raise ValueError(f"unsafe benchmark case id: {case_id!r}")
+    return case_id
+
+
 def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> None:
     """Remove evidence managed by this corpus before starting a new selection.
 
@@ -110,6 +126,12 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
     benchmark runs beside current evidence. Only known corpus case directories
     and aggregate files are removed; unrelated user files are preserved.
     """
+    # Validate every manifest id before performing any cleanup. This prevents a
+    # malformed custom manifest from turning `out_dir / case_id` into a parent
+    # or nested path and also avoids partially cleaning valid cases before an
+    # unsafe id later in the manifest is discovered.
+    case_ids = [safe_case_id(case) for case in manifest_cases]
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_SUMMARY_FILES:
         path = out_dir / name
@@ -118,12 +140,11 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
         except FileNotFoundError:
             pass
 
-    for case in manifest_cases:
-        case_id = str(case.get("id", ""))
-        if not case_id or Path(case_id).name != case_id:
-            raise ValueError(f"unsafe benchmark case id: {case_id!r}")
+    for case_id in case_ids:
         case_path = out_dir / case_id
-        if case_path.is_dir():
+        if case_path.is_symlink():
+            case_path.unlink()
+        elif case_path.is_dir():
             shutil.rmtree(case_path)
         elif case_path.exists():
             case_path.unlink()
@@ -615,7 +636,8 @@ def run_once(
     iteration_override: int | None,
     repetition: int,
 ) -> dict[str, Any]:
-    case_dir = out_dir / case["id"] / f"run-{repetition}"
+    case_id = safe_case_id(case)
+    case_dir = out_dir / case_id / f"run-{repetition}"
     case_dir.mkdir(parents=True, exist_ok=True)
     raw_report = case_dir / "solver-report.json"
     stdout_path = case_dir / "stdout.log"
