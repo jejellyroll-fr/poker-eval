@@ -22,6 +22,9 @@ on:
       - 'src/range/**'
       - 'include/poker_eval/range/**'
       - 'include/poker_eval/range.h'
+      - 'src/equity/**'
+      - 'include/poker_eval/equity/**'
+      - 'include/poker_eval/equity.h'
       - '.github/workflows/solver-benchmark-smoke.yml'
   workflow_dispatch:
 
