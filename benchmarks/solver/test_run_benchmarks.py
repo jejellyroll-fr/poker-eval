@@ -107,6 +107,32 @@ class OutputPreparationTests(unittest.TestCase):
             self.assertEqual(unrelated_file.read_text(encoding="utf-8"), "keep me")
             self.assertTrue(unrelated_dir.is_dir())
 
+    def test_rejects_unsafe_case_ids_before_any_cleanup(self) -> None:
+        unsafe_ids = (".", "..", "nested/case", r"nested\case", "/absolute")
+        for unsafe_id in unsafe_ids:
+            with self.subTest(case_id=unsafe_id), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                out_dir = parent / "results"
+                out_dir.mkdir()
+                managed_dir = out_dir / "holdem_flop"
+                managed_dir.mkdir()
+                sentinel = managed_dir / "benchmark.json"
+                sentinel.write_text("keep managed evidence", encoding="utf-8")
+                summary = out_dir / "summary.json"
+                summary.write_text("keep summary", encoding="utf-8")
+                parent_sentinel = parent / "parent-sentinel.txt"
+                parent_sentinel.write_text("keep parent", encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, "unsafe benchmark case id"):
+                    bench.prepare_output_dir(
+                        out_dir,
+                        [{"id": "holdem_flop"}, {"id": unsafe_id}],
+                    )
+
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep managed evidence")
+                self.assertEqual(summary.read_text(encoding="utf-8"), "keep summary")
+                self.assertEqual(parent_sentinel.read_text(encoding="utf-8"), "keep parent")
+
 
 class TelemetryParsingTests(unittest.TestCase):
     def test_solver_strategy_count_wins_over_capped_description_count(self) -> None:
