@@ -22,6 +22,7 @@ on:
       - 'src/range/**'
       - 'include/poker_eval/range/**'
       - 'include/poker_eval/range.h'
+      - 'include/poker_eval/distributions/**'
       - 'src/equity/**'
       - 'include/poker_eval/equity/**'
       - 'include/poker_eval/equity.h'
