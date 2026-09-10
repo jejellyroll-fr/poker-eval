@@ -30,6 +30,7 @@ SELECTION_SCHEMA = "pe-solver-benchmark-selection/v1"
 STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 SOLVE_START_MARKER = "solver created"
 MANAGED_SUMMARY_FILES = ("selection.json", "summary.json", "summary.csv")
+MANAGED_SUMMARY_CASEFOLDS = frozenset(name.casefold() for name in MANAGED_SUMMARY_FILES)
 ACTION_PERCENT_SUM_TOLERANCE = 0.51
 
 # The final "infosets" field on this legacy line is the description-table
@@ -111,7 +112,7 @@ def safe_case_id(case: dict[str, Any]) -> str:
         not isinstance(case_id, str)
         or not case_id
         or case_id in {".", ".."}
-        or case_id in MANAGED_SUMMARY_FILES
+        or case_id.casefold() in MANAGED_SUMMARY_CASEFOLDS
         or "/" in case_id
         or "\\" in case_id
         or Path(case_id).is_absolute()
@@ -127,9 +128,10 @@ def validate_manifest_case_ids(manifest_cases: list[dict[str, Any]]) -> list[str
     seen: set[str] = set()
     for case in manifest_cases:
         case_id = safe_case_id(case)
-        if case_id in seen:
+        case_key = case_id.casefold()
+        if case_key in seen:
             raise ValueError(f"duplicate benchmark case id: {case_id!r}")
-        seen.add(case_id)
+        seen.add(case_key)
         case_ids.append(case_id)
     return case_ids
 
@@ -156,8 +158,9 @@ def previous_selection_case_ids(out_dir: Path) -> list[str]:
             # A stale or edited selection must never turn cleanup into an
             # arbitrary path deletion. Ignore unsafe historical entries.
             continue
-        if case_id not in seen:
-            seen.add(case_id)
+        case_key = case_id.casefold()
+        if case_key not in seen:
+            seen.add(case_key)
             case_ids.append(case_id)
     return case_ids
 
@@ -174,7 +177,13 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
     # prevents malformed or duplicate ids from partially deleting prior evidence.
     current_case_ids = validate_manifest_case_ids(manifest_cases)
     previous_case_ids = previous_selection_case_ids(out_dir)
-    managed_case_ids = list(dict.fromkeys([*current_case_ids, *previous_case_ids]))
+    managed_case_ids: list[str] = []
+    managed_case_keys: set[str] = set()
+    for case_id in [*current_case_ids, *previous_case_ids]:
+        case_key = case_id.casefold()
+        if case_key not in managed_case_keys:
+            managed_case_keys.add(case_key)
+            managed_case_ids.append(case_id)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_SUMMARY_FILES:
