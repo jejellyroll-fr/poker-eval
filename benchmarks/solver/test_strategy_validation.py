@@ -90,8 +90,13 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
 
 
 class ReservedOutputNameTests(unittest.TestCase):
-    def test_aggregate_output_names_are_rejected_before_cleanup(self) -> None:
-        for case_id in bench.MANAGED_SUMMARY_FILES:
+    def test_aggregate_output_names_are_rejected_case_insensitively_before_cleanup(self) -> None:
+        reserved_variants = [
+            name
+            for managed in bench.MANAGED_SUMMARY_FILES
+            for name in (managed, managed.upper(), managed.title())
+        ]
+        for case_id in reserved_variants:
             with self.subTest(case_id=case_id), tempfile.TemporaryDirectory() as tmp:
                 out_dir = Path(tmp)
                 managed_dir = out_dir / "holdem_flop"
@@ -109,6 +114,25 @@ class ReservedOutputNameTests(unittest.TestCase):
                     sentinel.read_text(encoding="utf-8"),
                     "keep managed evidence",
                 )
+
+    def test_case_ids_that_differ_only_by_case_are_rejected_before_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            managed_dir = out_dir / "holdem_flop"
+            managed_dir.mkdir()
+            sentinel = managed_dir / "benchmark.json"
+            sentinel.write_text("keep managed evidence", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "duplicate benchmark case id"):
+                bench.prepare_output_dir(
+                    out_dir,
+                    [{"id": "foo"}, {"id": "FOO"}],
+                )
+
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"),
+                "keep managed evidence",
+            )
 
 
 if __name__ == "__main__":
