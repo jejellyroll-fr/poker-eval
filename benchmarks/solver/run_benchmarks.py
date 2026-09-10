@@ -149,6 +149,10 @@ def previous_selection_case_ids(out_dir: Path) -> list[str]:
     if not isinstance(raw_cases, list):
         return []
 
+    # Keep distinct historical spellings. On a case-sensitive filesystem an
+    # old `Foo` directory and a new/current `foo` directory are different paths
+    # and both must be cleaned. Current manifests are still validated with a
+    # case-folded uniqueness key so new evidence cannot create such aliases.
     case_ids: list[str] = []
     seen: set[str] = set()
     for raw_case_id in raw_cases:
@@ -158,9 +162,8 @@ def previous_selection_case_ids(out_dir: Path) -> list[str]:
             # A stale or edited selection must never turn cleanup into an
             # arbitrary path deletion. Ignore unsafe historical entries.
             continue
-        case_key = case_id.casefold()
-        if case_key not in seen:
-            seen.add(case_key)
+        if case_id not in seen:
+            seen.add(case_id)
             case_ids.append(case_id)
     return case_ids
 
@@ -177,13 +180,10 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
     # prevents malformed or duplicate ids from partially deleting prior evidence.
     current_case_ids = validate_manifest_case_ids(manifest_cases)
     previous_case_ids = previous_selection_case_ids(out_dir)
-    managed_case_ids: list[str] = []
-    managed_case_keys: set[str] = set()
-    for case_id in [*current_case_ids, *previous_case_ids]:
-        case_key = case_id.casefold()
-        if case_key not in managed_case_keys:
-            managed_case_keys.add(case_key)
-            managed_case_ids.append(case_id)
+    # Deduplicate only exact path spellings here. Case-fold deduplication would
+    # suppress a historical `Foo` path when the current manifest uses `foo` on
+    # case-sensitive filesystems, leaving stale benchmark evidence behind.
+    managed_case_ids = list(dict.fromkeys([*current_case_ids, *previous_case_ids]))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_SUMMARY_FILES:
@@ -613,8 +613,16 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append("missing exploitability_raw telemetry")
     if convergence.get("exploitability_mbb_per_game") is None:
         failures.append("missing exploitability_mbb telemetry")
-    if convergence.get("br_samples") is None:
+    reported_br_samples = convergence.get("br_samples")
+    requested_br_samples = convergence.get("requested_br_samples")
+    if reported_br_samples is None:
         failures.append("missing br_samples telemetry")
+    if requested_br_samples is None:
+        failures.append("missing requested br_samples configuration")
+    elif reported_br_samples is not None and reported_br_samples != requested_br_samples:
+        failures.append(
+            f"br_samples {reported_br_samples} != requested {requested_br_samples}"
+        )
 
     report = metrics["report"]
     if not report.get("completed", False):
@@ -661,6 +669,8 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
         "guarantee": benchmark["metrics"]["guarantee"],
         "exploitability_raw": benchmark["metrics"]["exploitability_raw"],
         "exploitability_mbb_per_game": benchmark["metrics"]["exploitability_mbb_per_game"],
+        "requested_br_samples": benchmark["metrics"].get("requested_br_samples"),
+        "br_samples": benchmark["metrics"]["br_samples"],
         "strategy_fingerprint_sha256": benchmark["report"]["strategy_fingerprint_sha256"],
         "per_street_rows": {
             street: {
@@ -749,6 +759,7 @@ def run_once(
     requested_iterations = iteration_override or int(
         case.get("iterations", defaults.get("iterations", 2000))
     )
+    requested_br_samples = int(case.get("br_samples", defaults.get("br_samples", 16)))
     report_rows = int(case.get("report_rows", defaults.get("report_rows", 0)))
     (
         returncode,
@@ -781,6 +792,7 @@ def run_once(
         report_rows,
         post_solve_elapsed_seconds=post_solve_elapsed,
     )
+    benchmark["metrics"]["requested_br_samples"] = requested_br_samples
     result = {
         "schema": SCHEMA,
         "case": case,
@@ -825,7 +837,8 @@ def write_summary(
         "process_seconds", "post_solve_seconds", "iterations_per_second",
         "infosets", "description_infosets", "infosets_per_1k_iterations",
         "peak_measured_bytes", "final_memory_bytes", "storage_bytes",
-        "adapter_bytes", "bytes_per_infoset", "exploitability_mbb", "stop_cause",
+        "adapter_bytes", "bytes_per_infoset", "exploitability_mbb",
+        "br_samples_requested", "br_samples_reported", "stop_cause",
         "preflop_rows", "flop_rows", "turn_rows", "river_rows",
         "strategy_fingerprint_sha256", "valid",
     ]
@@ -852,6 +865,8 @@ def write_summary(
                 "adapter_bytes": b["memory"]["adapter_bytes"],
                 "bytes_per_infoset": b["memory"]["bytes_per_infoset"],
                 "exploitability_mbb": b["metrics"]["exploitability_mbb_per_game"],
+                "br_samples_requested": b["metrics"].get("requested_br_samples"),
+                "br_samples_reported": b["metrics"]["br_samples"],
                 "stop_cause": b["stop_cause"],
                 "preflop_rows": b["per_street"]["PREFLOP"]["strategy_rows"],
                 "flop_rows": b["per_street"]["FLOP"]["strategy_rows"],
