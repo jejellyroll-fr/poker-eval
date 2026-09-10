@@ -23,6 +23,8 @@ import sys
 import time
 from typing import Any
 
+from native_report_validation import validate_native_report
+
 SCHEMA = "pe-solver-benchmark/v1"
 SUMMARY_SCHEMA = "pe-solver-benchmark-summary/v1"
 NATIVE_REPORT_SCHEMA = "pe-preflop-solve/v1"
@@ -588,6 +590,8 @@ def validate_result(result: dict[str, Any]) -> list[str]:
                 f"native solver report schema={native_report.get('schema')!r}, "
                 f"expected {NATIVE_REPORT_SCHEMA}"
             )
+        else:
+            failures.extend(validate_native_report(native_report, result))
 
     metrics = result["benchmark"]
     if metrics["actual_iterations"] != metrics["requested_iterations"]:
