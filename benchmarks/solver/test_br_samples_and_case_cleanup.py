@@ -36,6 +36,36 @@ class CasefoldCleanupTests(unittest.TestCase):
             self.assertFalse((out_dir / "foo").exists())
             self.assertFalse((out_dir / "selection.json").exists())
 
+    def test_first_run_refuses_unowned_case_directory_without_deleting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            unrelated = out_dir / "tools"
+            unrelated.mkdir()
+            sentinel = unrelated / "pe-preflop-solve"
+            sentinel.write_text("keep solver", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError, "refusing to overwrite unowned benchmark output path"
+            ):
+                bench.prepare_output_dir(out_dir, [{"id": "tools"}])
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep solver")
+
+    def test_first_run_refuses_unowned_aggregate_file_without_deleting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            summary = out_dir / "summary.json"
+            summary.write_text("keep unrelated summary", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError, "refusing to overwrite unowned benchmark output path"
+            ):
+                bench.prepare_output_dir(out_dir, [{"id": "holdem_flop"}])
+
+            self.assertEqual(
+                summary.read_text(encoding="utf-8"), "keep unrelated summary"
+            )
+
 
 class BrSampleContractTests(unittest.TestCase):
     def _result(self, *, requested: int, reported: int) -> dict[str, object]:
@@ -76,6 +106,15 @@ class BrSampleContractTests(unittest.TestCase):
         self.assertNotIn("missing br_samples telemetry", failures)
         self.assertNotIn("missing requested br_samples configuration", failures)
         self.assertFalse(any(failure.startswith("br_samples ") for failure in failures))
+
+
+    def test_unspecified_guarantee_is_rejected(self) -> None:
+        result = self._result(requested=16, reported=16)
+        result["benchmark"]["metrics"]["guarantee"] = "unspecified"
+
+        failures = bench.validate_result(result)
+
+        self.assertIn("unspecified convergence guarantee telemetry", failures)
 
     def test_reproducibility_view_records_requested_and_reported_br_samples(self) -> None:
         result = self._result(requested=16, reported=16)
