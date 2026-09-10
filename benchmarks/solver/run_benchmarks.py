@@ -171,38 +171,64 @@ def previous_selection_case_ids(out_dir: Path) -> list[str]:
 
 
 def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> None:
-    """Remove evidence managed by this corpus before starting a new selection.
+    """Remove only evidence owned by a prior benchmark selection.
 
-    Reusing --output-dir with fewer cases, repetitions, or a different manifest
-    must not leave stale benchmark runs beside current evidence. Current-manifest
-    case ids and safe ids recorded by the previous selection are removed; unrelated
-    user files are preserved.
+    A first run may point --output-dir at a directory that already contains
+    unrelated files or directories whose names happen to match case ids. Without
+    prior selection metadata those paths are not ours to delete or overwrite.
+    Once a valid prior selection records case ownership, current and historical
+    case spellings can be pruned safely before the next run.
     """
     # Validate every current manifest id before performing any cleanup. This
     # prevents malformed or duplicate ids from partially deleting prior evidence.
     current_case_ids = validate_manifest_case_ids(manifest_cases)
     previous_case_ids = previous_selection_case_ids(out_dir)
-    # Deduplicate only exact path spellings here. Case-fold deduplication would
-    # suppress a historical `Foo` path when the current manifest uses `foo` on
-    # case-sensitive filesystems, leaving stale benchmark evidence behind.
-    managed_case_ids = list(dict.fromkeys([*current_case_ids, *previous_case_ids]))
+    prior_selection_owned = bool(previous_case_ids)
+
+    if prior_selection_owned:
+        # Deduplicate only exact path spellings here. Case-fold deduplication would
+        # suppress a historical `Foo` path when the current manifest uses `foo`
+        # on case-sensitive filesystems, leaving stale benchmark evidence behind.
+        managed_case_ids = list(
+            dict.fromkeys([*current_case_ids, *previous_case_ids])
+        )
+    else:
+        managed_case_ids = []
+        # With no trustworthy previous selection, preserve colliding user data
+        # instead of guessing that it belongs to this runner. Refuse the run so
+        # main() cannot subsequently overwrite aggregate files or create evidence
+        # inside an unrelated case directory such as build/tools.
+        collisions = [
+            *(out_dir / name for name in MANAGED_SUMMARY_FILES),
+            *(out_dir / case_id for case_id in current_case_ids),
+        ]
+        collisions = [
+            path for path in collisions if path.exists() or path.is_symlink()
+        ]
+        if collisions:
+            rendered = ", ".join(str(path) for path in collisions)
+            raise ValueError(
+                "refusing to overwrite unowned benchmark output path(s) "
+                f"without prior selection metadata: {rendered}"
+            )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name in MANAGED_SUMMARY_FILES:
-        path = out_dir / name
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+    if prior_selection_owned:
+        for name in MANAGED_SUMMARY_FILES:
+            path = out_dir / name
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
-    for case_id in managed_case_ids:
-        case_path = out_dir / case_id
-        if case_path.is_symlink():
-            case_path.unlink()
-        elif case_path.is_dir():
-            shutil.rmtree(case_path)
-        elif case_path.exists():
-            case_path.unlink()
+        for case_id in managed_case_ids:
+            case_path = out_dir / case_id
+            if case_path.is_symlink():
+                case_path.unlink()
+            elif case_path.is_dir():
+                shutil.rmtree(case_path)
+            elif case_path.exists():
+                case_path.unlink()
 
 
 def tree_nodes(tree_path: Path) -> tuple[dict[int, str], dict[str, int]]:
@@ -611,8 +637,11 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append("no infosets were materialized")
 
     convergence = metrics.get("metrics", {})
-    if not convergence.get("guarantee"):
+    guarantee = convergence.get("guarantee")
+    if not guarantee:
         failures.append("missing convergence guarantee telemetry")
+    elif guarantee == "unspecified":
+        failures.append("unspecified convergence guarantee telemetry")
     if convergence.get("exploitability_raw") is None:
         failures.append("missing exploitability_raw telemetry")
     if convergence.get("exploitability_mbb_per_game") is None:
