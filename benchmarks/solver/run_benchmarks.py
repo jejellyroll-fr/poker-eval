@@ -33,6 +33,12 @@ STREETS = ("PREFLOP", "FLOP", "TURN", "RIVER")
 SOLVE_START_MARKER = "solver created"
 MANAGED_SUMMARY_FILES = ("selection.json", "summary.json", "summary.csv")
 MANAGED_SUMMARY_CASEFOLDS = frozenset(name.casefold() for name in MANAGED_SUMMARY_FILES)
+WINDOWS_INVALID_CASE_CHARS = frozenset('<>:"/\\|?*')
+WINDOWS_RESERVED_CASE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 ACTION_PERCENT_SUM_TOLERANCE = 0.51
 
 # The final "infosets" field on this legacy line is the description-table
@@ -108,17 +114,21 @@ def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bo
 
 
 def safe_case_id(case: dict[str, Any]) -> str:
-    """Return a case id that is safe to use as one output-directory component."""
+    """Return a case id safe as one portable output-directory component."""
     case_id = case.get("id")
+    if not isinstance(case_id, str) or not case_id:
+        raise ValueError(f"unsafe benchmark case id: {case_id!r}")
+
+    windows_device_stem = case_id.split(".", 1)[0].casefold()
+    has_windows_invalid_char = any(
+        ord(char) < 32 or char in WINDOWS_INVALID_CASE_CHARS for char in case_id
+    )
     if (
-        not isinstance(case_id, str)
-        or not case_id
-        or case_id in {".", ".."}
+        case_id in {".", ".."}
         or case_id.casefold() in MANAGED_SUMMARY_CASEFOLDS
-        or "\x00" in case_id
         or case_id.rstrip(" .") != case_id
-        or "/" in case_id
-        or "\\" in case_id
+        or windows_device_stem in WINDOWS_RESERVED_CASE_NAMES
+        or has_windows_invalid_char
         or Path(case_id).is_absolute()
         or Path(case_id).name != case_id
     ):
