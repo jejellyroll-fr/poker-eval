@@ -202,6 +202,18 @@ class OutputPreparationTests(unittest.TestCase):
             "foo.",
             "foo ",
             "foo. ",
+            "CON",
+            "nul.txt",
+            "Com1",
+            "LPT9.log",
+            "foo:bar",
+            "foo?bar",
+            "foo*bar",
+            'foo"bar',
+            "foo|bar",
+            "foo<bar",
+            "foo>bar",
+            "control\x1fchar",
         )
         for unsafe_id in unsafe_ids:
             with self.subTest(case_id=unsafe_id), tempfile.TemporaryDirectory() as tmp:
