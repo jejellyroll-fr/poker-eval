@@ -144,9 +144,6 @@ class OutputPreparationTests(unittest.TestCase):
             old_run = out_dir / "foo" / "run-1"
             old_run.mkdir(parents=True)
             (old_run / "benchmark.json").write_text("old", encoding="utf-8")
-            new_run = out_dir / "bar" / "run-1"
-            new_run.mkdir(parents=True)
-            (new_run / "benchmark.json").write_text("new stale", encoding="utf-8")
             unrelated = out_dir / "manual-baseline"
             unrelated.mkdir()
 
@@ -165,8 +162,47 @@ class OutputPreparationTests(unittest.TestCase):
             self.assertFalse((out_dir / "selection.json").exists())
             self.assertTrue(unrelated.is_dir())
 
+    def test_manifest_switch_refuses_existing_unowned_new_case_before_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            old_run = out_dir / "foo" / "run-1"
+            old_run.mkdir(parents=True)
+            old_sentinel = old_run / "benchmark.json"
+            old_sentinel.write_text("owned old evidence", encoding="utf-8")
+            unrelated = out_dir / "tools"
+            unrelated.mkdir()
+            unrelated_sentinel = unrelated / "pe-preflop-solve"
+            unrelated_sentinel.write_text("keep solver", encoding="utf-8")
+            selection = out_dir / "selection.json"
+            selection.write_text(
+                "{\n"
+                f'  "schema": "{bench.SELECTION_SCHEMA}",\n'
+                '  "cases": ["foo"]\n'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "refusing to overwrite unowned benchmark output path"
+            ):
+                bench.prepare_output_dir(out_dir, [{"id": "tools"}])
+
+            self.assertEqual(old_sentinel.read_text(encoding="utf-8"), "owned old evidence")
+            self.assertEqual(unrelated_sentinel.read_text(encoding="utf-8"), "keep solver")
+            self.assertTrue(selection.exists())
+
     def test_rejects_unsafe_case_ids_before_any_cleanup(self) -> None:
-        unsafe_ids = (".", "..", "nested/case", r"nested\case", "/absolute", "\x00")
+        unsafe_ids = (
+            ".",
+            "..",
+            "nested/case",
+            r"nested\case",
+            "/absolute",
+            "\x00",
+            "foo.",
+            "foo ",
+            "foo. ",
+        )
         for unsafe_id in unsafe_ids:
             with self.subTest(case_id=unsafe_id), tempfile.TemporaryDirectory() as tmp:
                 parent = Path(tmp)
