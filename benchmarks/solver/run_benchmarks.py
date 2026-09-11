@@ -116,6 +116,7 @@ def safe_case_id(case: dict[str, Any]) -> str:
         or case_id in {".", ".."}
         or case_id.casefold() in MANAGED_SUMMARY_CASEFOLDS
         or "\x00" in case_id
+        or case_id.rstrip(" .") != case_id
         or "/" in case_id
         or "\\" in case_id
         or Path(case_id).is_absolute()
@@ -187,18 +188,38 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
     prior_selection_owned = bool(previous_case_ids)
 
     if prior_selection_owned:
-        # Deduplicate only exact path spellings here. Case-fold deduplication would
-        # suppress a historical `Foo` path when the current manifest uses `foo`
-        # on case-sensitive filesystems, leaving stale benchmark evidence behind.
+        previous_keys = {case_id.casefold() for case_id in previous_case_ids}
+        # Prior metadata owns only the case ids it recorded. A current spelling
+        # that is case-insensitively equivalent (old `Foo`, current `foo`) is
+        # the same logical case and both spellings are safe to prune on a
+        # case-sensitive filesystem. Newly introduced ids are not owned yet.
         managed_case_ids = list(
-            dict.fromkeys([*current_case_ids, *previous_case_ids])
+            dict.fromkeys(
+                [
+                    *previous_case_ids,
+                    *(
+                        case_id
+                        for case_id in current_case_ids
+                        if case_id.casefold() in previous_keys
+                    ),
+                ]
+            )
         )
+        unowned_current_ids = [
+            case_id
+            for case_id in current_case_ids
+            if case_id.casefold() not in previous_keys
+        ]
+        collisions = [
+            out_dir / case_id
+            for case_id in unowned_current_ids
+            if (out_dir / case_id).exists() or (out_dir / case_id).is_symlink()
+        ]
     else:
         managed_case_ids = []
         # With no trustworthy previous selection, preserve colliding user data
-        # instead of guessing that it belongs to this runner. Refuse the run so
-        # main() cannot subsequently overwrite aggregate files or create evidence
-        # inside an unrelated case directory such as build/tools.
+        # instead of guessing that it belongs to this runner. Aggregate names
+        # are unowned too on first use.
         collisions = [
             *(out_dir / name for name in MANAGED_SUMMARY_FILES),
             *(out_dir / case_id for case_id in current_case_ids),
@@ -206,12 +227,16 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
         collisions = [
             path for path in collisions if path.exists() or path.is_symlink()
         ]
-        if collisions:
-            rendered = ", ".join(str(path) for path in collisions)
-            raise ValueError(
-                "refusing to overwrite unowned benchmark output path(s) "
-                f"without prior selection metadata: {rendered}"
-            )
+
+    # Refuse before deleting anything so a manifest switch cannot partially
+    # clean prior evidence and then discover that a newly introduced case id
+    # collides with unrelated user data (for example build/tools).
+    if collisions:
+        rendered = ", ".join(str(path) for path in collisions)
+        raise ValueError(
+            "refusing to overwrite unowned benchmark output path(s): "
+            f"{rendered}"
+        )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     if prior_selection_owned:
