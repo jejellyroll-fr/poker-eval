@@ -71,6 +71,24 @@ class StrategyRowParsingTests(unittest.TestCase):
             bench.board_identity("4cKs9d"),
         )
 
+    def test_strategy_rows_count_missing_board_context(self) -> None:
+        with_board = (
+            "AhAs\t7\tP1\tCALL=50.0%,RAISE=50.0%\t"
+            "CALL=pending,RAISE=pending\tKs9d4c"
+        )
+        boardless = (
+            "KhKd\t7\tP1\tCALL=25.0%,RAISE=75.0%\t"
+            "CALL=pending,RAISE=pending\t-"
+        )
+
+        data, _, _ = bench.parse_strategy_rows(
+            f"{with_board}\n{boardless}\n", {7: "FLOP"}, exhaustive_report=False
+        )
+
+        self.assertEqual(data["FLOP"]["strategy_rows"], 2)
+        self.assertEqual(data["FLOP"]["missing_board_rows"], 1)
+        self.assertEqual(data["FLOP"]["observed_boards"], ["Ks9d4c"])
+
     def test_non_exhaustive_report_keeps_repeated_rendered_rows(self) -> None:
         row = (
             "AhAs\t7\tP1\tCALL=50.0%,RAISE=50.0%\t"
@@ -551,6 +569,28 @@ class ValidationTests(unittest.TestCase):
 
         self.assertFalse(
             any("reported board(s)" in failure for failure in failures),
+            failures,
+        )
+
+    def test_fixed_board_rejects_boardless_strategy_rows(self) -> None:
+        result = self._result(
+            per_street={
+                "FLOP": {
+                    "decision_nodes": 1,
+                    "strategy_rows": 2,
+                    "missing_board_rows": 1,
+                    "observed_boards": ["Ks9d4c"],
+                }
+            },
+            expect_streets=["FLOP"],
+            report=self._completed_report(2),
+        )
+        result["case"]["board"] = "Ks9d4c"
+
+        failures = bench.validate_result(result)
+
+        self.assertIn(
+            "missing board context in 1 strategy row(s) on FLOP; expected Ks9d4c",
             failures,
         )
 
