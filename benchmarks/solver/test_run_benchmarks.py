@@ -47,6 +47,30 @@ class StrategyRowParsingTests(unittest.TestCase):
         self.assertTrue(actual_details["duplicate_exhaustive_sweep_removed"])
         self.assertEqual(expected_details["normalized_strategy_rows"], 3)
 
+    def test_strategy_rows_preserve_observed_board_identities(self) -> None:
+        row1 = (
+            "AhAs\t7\tP1\tCALL=50.0%,RAISE=50.0%\t"
+            "CALL=pending,RAISE=pending\tKs9d4c"
+        )
+        row2 = (
+            "KhKd\t7\tP1\tCALL=25.0%,RAISE=75.0%\t"
+            "CALL=pending,RAISE=pending\t4cKs9d"
+        )
+
+        data, _, _ = bench.parse_strategy_rows(
+            f"{row1}\n{row2}\n", {7: "FLOP"}, exhaustive_report=False
+        )
+
+        self.assertEqual(data["FLOP"]["unique_boards"], 2)
+        self.assertEqual(
+            data["FLOP"]["observed_boards"],
+            ["4cKs9d", "Ks9d4c"],
+        )
+        self.assertEqual(
+            bench.board_identity("Ks9d4c"),
+            bench.board_identity("4cKs9d"),
+        )
+
     def test_non_exhaustive_report_keeps_repeated_rendered_rows(self) -> None:
         row = (
             "AhAs\t7\tP1\tCALL=50.0%,RAISE=50.0%\t"
@@ -142,7 +166,7 @@ class OutputPreparationTests(unittest.TestCase):
             self.assertTrue(unrelated.is_dir())
 
     def test_rejects_unsafe_case_ids_before_any_cleanup(self) -> None:
-        unsafe_ids = (".", "..", "nested/case", r"nested\case", "/absolute")
+        unsafe_ids = (".", "..", "nested/case", r"nested\case", "/absolute", "\x00")
         for unsafe_id in unsafe_ids:
             with self.subTest(case_id=unsafe_id), tempfile.TemporaryDirectory() as tmp:
                 parent = Path(tmp)
@@ -460,6 +484,48 @@ class ValidationTests(unittest.TestCase):
         self.assertNotIn("no reported strategy row on PREFLOP", failures)
         self.assertNotIn("no reported strategy row on FLOP", failures)
         self.assertNotIn("no reported strategy row on TURN", failures)
+
+    def test_fixed_board_accepts_equivalent_card_order(self) -> None:
+        result = self._result(
+            per_street={
+                "FLOP": {
+                    "decision_nodes": 1,
+                    "strategy_rows": 2,
+                    "observed_boards": ["4cKs9d"],
+                }
+            },
+            expect_streets=["FLOP"],
+            report=self._completed_report(2),
+        )
+        result["case"]["board"] = "Ks9d4c"
+
+        failures = bench.validate_result(result)
+
+        self.assertFalse(
+            any("reported board(s)" in failure for failure in failures),
+            failures,
+        )
+
+    def test_fixed_board_rejects_wrong_reported_board(self) -> None:
+        result = self._result(
+            per_street={
+                "FLOP": {
+                    "decision_nodes": 1,
+                    "strategy_rows": 1,
+                    "observed_boards": ["As9d4c"],
+                }
+            },
+            expect_streets=["FLOP"],
+            report=self._completed_report(1),
+        )
+        result["case"]["board"] = "Ks9d4c"
+
+        failures = bench.validate_result(result)
+
+        self.assertIn(
+            "reported board(s) on FLOP do not match configured Ks9d4c: ['As9d4c']",
+            failures,
+        )
 
     def test_missing_report_start_solver_count_is_rejected(self) -> None:
         failures = bench.validate_result(self._result(infosets=None))
