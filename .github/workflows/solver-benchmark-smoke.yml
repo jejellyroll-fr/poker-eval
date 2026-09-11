@@ -20,6 +20,7 @@ on:
       - 'src/games/**'
       - 'include/poker_eval/games/**'
       - 'src/utils/**'
+      - 'include/poker_eval/utils/**'
       - 'include/poker_eval/deck/**'
       - 'src/range/**'
       - 'include/poker_eval/range/**'
