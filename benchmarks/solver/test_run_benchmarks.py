@@ -89,7 +89,14 @@ class OutputPreparationTests(unittest.TestCase):
                 (run_dir / "benchmark.json").write_text("stale", encoding="utf-8")
                 (run_dir / "solver-report.json").write_text("stale", encoding="utf-8")
 
-            for name in bench.MANAGED_SUMMARY_FILES:
+            (out_dir / "selection.json").write_text(
+                "{\n"
+                f'  "schema": "{bench.SELECTION_SCHEMA}",\n'
+                '  "cases": ["holdem_flop", "plo6_full"]\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            for name in ("summary.json", "summary.csv"):
                 (out_dir / name).write_text("stale", encoding="utf-8")
 
             unrelated_file = out_dir / "notes.txt"
