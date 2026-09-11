@@ -437,6 +437,7 @@ def parse_strategy_rows(
             "uniform_rows": 0,
             "non_uniform_rows": 0,
             "invalid_strategy_rows": 0,
+            "missing_board_rows": 0,
             "unique_nodes_with_rows": 0,
             "unique_boards": 0,
             "observed_boards": [],
@@ -463,6 +464,8 @@ def parse_strategy_rows(
         nodes_seen[street].add(node_index)
         if board and board != "-":
             boards_seen[street].add(board)
+        else:
+            data["missing_board_rows"] += 1
         fingerprint_rows.append(stable)
 
     for street in STREETS:
@@ -752,6 +755,12 @@ def validate_result(result: dict[str, Any]) -> list[str]:
             if not data or data["strategy_rows"] <= 0:
                 failures.append(f"no reported strategy row on {normalized}")
         if configured_board is not None and data and data.get("strategy_rows", 0) > 0:
+            missing_board_rows = data.get("missing_board_rows", 0)
+            if missing_board_rows:
+                failures.append(
+                    f"missing board context in {missing_board_rows} strategy row(s) "
+                    f"on {normalized}; expected {configured_board}"
+                )
             observed_boards = data.get("observed_boards", [])
             if not observed_boards:
                 failures.append(
@@ -790,6 +799,7 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
                 "strategy_rows": values["strategy_rows"],
                 "uniform_rows": values["uniform_rows"],
                 "non_uniform_rows": values["non_uniform_rows"],
+                "missing_board_rows": values.get("missing_board_rows", 0),
                 "unique_nodes_with_rows": values["unique_nodes_with_rows"],
                 "observed_boards": values.get("observed_boards", []),
             }
