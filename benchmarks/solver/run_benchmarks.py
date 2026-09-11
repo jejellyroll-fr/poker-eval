@@ -115,6 +115,7 @@ def safe_case_id(case: dict[str, Any]) -> str:
         or not case_id
         or case_id in {".", ".."}
         or case_id.casefold() in MANAGED_SUMMARY_CASEFOLDS
+        or "\x00" in case_id
         or "/" in case_id
         or "\\" in case_id
         or Path(case_id).is_absolute()
@@ -324,6 +325,24 @@ def is_uniform_strategy(action_field: str) -> bool:
     return values is not None and _is_uniform_frequencies(values)
 
 
+def board_identity(board_text: str) -> tuple[str, ...] | None:
+    """Return an order-independent normalized card identity for a compact board."""
+    compact = "".join(board_text.split())
+    if not compact or compact == "-" or len(compact) % 2 != 0:
+        return None
+    cards: list[str] = []
+    for index in range(0, len(compact), 2):
+        rank = compact[index].upper()
+        suit = compact[index + 1].lower()
+        if rank not in "23456789TJQKA" or suit not in "cdhs":
+            return None
+        card = rank + suit
+        if card in cards:
+            return None
+        cards.append(card)
+    return tuple(sorted(cards))
+
+
 def _strategy_rows(
     stdout: str, node_streets: dict[int, str]
 ) -> list[tuple[str, int, str, str]]:
@@ -385,6 +404,7 @@ def parse_strategy_rows(
             "invalid_strategy_rows": 0,
             "unique_nodes_with_rows": 0,
             "unique_boards": 0,
+            "observed_boards": [],
         }
         for street in STREETS
     }
@@ -413,6 +433,7 @@ def parse_strategy_rows(
     for street in STREETS:
         street_data[street]["unique_nodes_with_rows"] = len(nodes_seen[street])
         street_data[street]["unique_boards"] = len(boards_seen[street])
+        street_data[street]["observed_boards"] = sorted(boards_seen[street])
 
     # sorted(list) intentionally retains duplicates: multiplicity is part of
     # the deterministic result and must affect the fingerprint.
@@ -681,6 +702,12 @@ def validate_result(result: dict[str, Any]) -> list[str]:
             f"solver_infosets={metrics['infosets']}"
         )
     required_streets = result["case"].get("expect_streets", [])
+    configured_board = result["case"].get("board")
+    expected_board_identity = (
+        board_identity(str(configured_board)) if configured_board is not None else None
+    )
+    if configured_board is not None and expected_board_identity is None:
+        failures.append(f"invalid configured board {configured_board!r}")
     for street in required_streets:
         normalized = street.upper()
         data = metrics["per_street"].get(normalized)
@@ -689,6 +716,24 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         if result["case"].get("expect_strategy_rows", True):
             if not data or data["strategy_rows"] <= 0:
                 failures.append(f"no reported strategy row on {normalized}")
+        if configured_board is not None and data and data.get("strategy_rows", 0) > 0:
+            observed_boards = data.get("observed_boards", [])
+            if not observed_boards:
+                failures.append(
+                    f"no observed board identity on {normalized}; "
+                    f"expected {configured_board}"
+                )
+            else:
+                mismatches = [
+                    board
+                    for board in observed_boards
+                    if board_identity(str(board)) != expected_board_identity
+                ]
+                if mismatches:
+                    failures.append(
+                        f"reported board(s) on {normalized} do not match configured "
+                        f"{configured_board}: {mismatches}"
+                    )
     return failures
 
 
@@ -711,6 +756,7 @@ def stable_reproducibility_view(result: dict[str, Any]) -> dict[str, Any]:
                 "uniform_rows": values["uniform_rows"],
                 "non_uniform_rows": values["non_uniform_rows"],
                 "unique_nodes_with_rows": values["unique_nodes_with_rows"],
+                "observed_boards": values.get("observed_boards", []),
             }
             for street, values in benchmark["per_street"].items()
         },
