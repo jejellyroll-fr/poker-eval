@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 from typing import Any
 
 from native_report_validation import validate_native_report
@@ -56,7 +57,7 @@ RE_LOOP_END = re.compile(
 RE_STOP_DETAIL = re.compile(
     r"^stop_detail cause=(\S+)\s+interrupted=(\d+)\s+iteration=(\d+)\s+"
     r"held_mb=([0-9.]+)\s+budget_mb=([0-9.]+)\s+"
-    r"descriptions_mb=([0-9.]+)\s+descriptions_capped=(\d+)$"
+    r"descriptions_mb=([0-9.]+)\s+descriptions_capped=([01])$"
 )
 RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
 RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
@@ -118,6 +119,7 @@ def safe_case_id(case: dict[str, Any]) -> str:
     case_id = case.get("id")
     if not isinstance(case_id, str) or not case_id:
         raise ValueError(f"unsafe benchmark case id: {case_id!r}")
+    case_id = unicodedata.normalize("NFC", case_id)
 
     windows_device_stem = case_id.split(".", 1)[0].casefold()
     has_windows_invalid_char = any(
@@ -142,7 +144,7 @@ def validate_manifest_case_ids(manifest_cases: list[dict[str, Any]]) -> list[str
     seen: set[str] = set()
     for case in manifest_cases:
         case_id = safe_case_id(case)
-        case_key = case_id.casefold()
+        case_key = unicodedata.normalize("NFC", case_id).casefold()
         if case_key in seen:
             raise ValueError(f"duplicate benchmark case id: {case_id!r}")
         seen.add(case_key)
@@ -267,10 +269,13 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
                 case_path.unlink()
 
 
-def tree_nodes(tree_path: Path) -> tuple[dict[int, str], dict[str, int]]:
+def tree_nodes(
+    tree_path: Path,
+) -> tuple[dict[int, str], dict[int, str], dict[str, int]]:
     with tree_path.open("r", encoding="utf-8") as stream:
         tree = json.load(stream)
     by_index: dict[int, str] = {}
+    actors: dict[int, str] = {}
     decisions = {street: 0 for street in STREETS}
     for index, node in enumerate(tree.get("nodes", [])):
         if node.get("type") != "player":
@@ -278,8 +283,14 @@ def tree_nodes(tree_path: Path) -> tuple[dict[int, str], dict[str, int]]:
         street = str(node.get("street", "")).upper()
         if street in decisions:
             by_index[index] = street
+            player = node.get("player")
+            actors[index] = (
+                f"P{player + 1}"
+                if isinstance(player, int) and not isinstance(player, bool) and player >= 0
+                else ""
+            )
             decisions[street] += 1
-    return by_index, decisions
+    return by_index, actors, decisions
 
 
 def build_command(
@@ -379,9 +390,12 @@ def board_identity(board_text: str) -> tuple[str, ...] | None:
 
 
 def _strategy_rows(
-    stdout: str, node_streets: dict[int, str]
-) -> list[tuple[str, int, str, str]]:
+    stdout: str,
+    node_streets: dict[int, str],
+    node_actors: dict[int, str] | None = None,
+) -> tuple[list[tuple[str, int, str, str]], int]:
     rows: list[tuple[str, int, str, str]] = []
+    actor_mismatch_rows = 0
     for line in stdout.splitlines():
         if line.startswith("ev_update\t"):
             continue
@@ -395,6 +409,10 @@ def _strategy_rows(
         street = node_streets.get(node_index)
         if street not in STREETS:
             continue
+        actor = fields[2].strip()
+        if node_actors is not None and actor != node_actors.get(node_index):
+            actor_mismatch_rows += 1
+            continue
         action_field = fields[3]
         if "%" not in action_field or "=" not in action_field:
             continue
@@ -404,7 +422,7 @@ def _strategy_rows(
             f"{action_field}\t{board}"
         )
         rows.append((stable, node_index, action_field, board))
-    return rows
+    return rows, actor_mismatch_rows
 
 
 def parse_strategy_rows(
@@ -412,6 +430,7 @@ def parse_strategy_rows(
     node_streets: dict[int, str],
     *,
     exhaustive_report: bool = False,
+    node_actors: dict[int, str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], str, dict[str, Any]]:
     """Parse visible strategy rows without destroying real multiplicity.
 
@@ -421,7 +440,7 @@ def parse_strategy_rows(
     render to the same stable row remain distinct entries and therefore remain
     represented in counts and in the reproducibility hash.
     """
-    rows = _strategy_rows(stdout, node_streets)
+    rows, actor_mismatch_rows = _strategy_rows(stdout, node_streets, node_actors)
     raw_rows = len(rows)
     duplicate_sweep_removed = False
 
@@ -482,6 +501,7 @@ def parse_strategy_rows(
         "raw_strategy_rows": raw_rows,
         "normalized_strategy_rows": len(rows),
         "invalid_strategy_rows": invalid_strategy_rows,
+        "actor_mismatch_rows": actor_mismatch_rows,
         "duplicate_exhaustive_sweep_removed": duplicate_sweep_removed,
     }
     return street_data, digest, details
@@ -496,6 +516,7 @@ def parse_stdout(
     requested_iterations: int,
     report_rows_requested: int,
     post_solve_elapsed_seconds: float | None = None,
+    node_actors: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     actual_iterations = None
     complete = None
@@ -559,7 +580,10 @@ def parse_stdout(
     measured_memory = [float(value) for value in RE_MEMORY.findall(stdout)]
     peak_measured_memory_mb = max(measured_memory) if measured_memory else final_memory_mb
     per_street, fingerprint, row_details = parse_strategy_rows(
-        stdout, node_streets, exhaustive_report=report_rows_requested == 0
+        stdout,
+        node_streets,
+        exhaustive_report=report_rows_requested == 0,
+        node_actors=node_actors,
     )
     total_rows = sum(v["strategy_rows"] for v in per_street.values())
     total_non_uniform = sum(v["non_uniform_rows"] for v in per_street.values())
@@ -724,6 +748,9 @@ def validate_result(result: dict[str, Any]) -> list[str]:
         failures.append(
             f"invalid strategy frequencies in {invalid_strategy_rows} row(s)"
         )
+    actor_mismatch_rows = report.get("actor_mismatch_rows", 0)
+    if actor_mismatch_rows:
+        failures.append(f"invalid strategy actors in {actor_mismatch_rows} row(s)")
     descriptions_capped = metrics.get("memory", {}).get("descriptions_capped")
     if report.get("exhaustive_requested", False) and descriptions_capped is None:
         failures.append("missing description cap telemetry for exhaustive report")
@@ -878,7 +905,7 @@ def run_once(
         except FileNotFoundError:
             pass
     tree_path = (root / case["tree"]).resolve()
-    node_streets, decisions = tree_nodes(tree_path)
+    node_streets, node_actors, decisions = tree_nodes(tree_path)
     command = build_command(solver, root, raw_report, case, defaults, iteration_override)
     requested_iterations = iteration_override or int(
         case.get("iterations", defaults.get("iterations", 2000))
@@ -915,6 +942,7 @@ def run_once(
         requested_iterations,
         report_rows,
         post_solve_elapsed_seconds=post_solve_elapsed,
+        node_actors=node_actors,
     )
     benchmark["metrics"]["requested_br_samples"] = requested_br_samples
     result = {
@@ -1056,7 +1084,7 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     if not out_dir.is_absolute():
         out_dir = (root / out_dir).resolve()
-    prepare_output_dir(out_dir, manifest["cases"])
+    prepare_output_dir(out_dir, cases)
 
     selected = {
         "schema": SELECTION_SCHEMA,

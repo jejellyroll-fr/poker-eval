@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -120,6 +121,53 @@ class ManifestTests(unittest.TestCase):
 
 
 class OutputPreparationTests(unittest.TestCase):
+    def test_only_selected_cases_are_checked_for_output_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            manifest_path = parent / "manifest.json"
+            out_dir = parent / "results"
+            out_dir.mkdir()
+            unrelated = out_dir / "tools"
+            unrelated.mkdir()
+            sentinel = unrelated / "keep.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+            manifest_path.write_text(
+                '{\n'
+                '  "schema": "pe-solver-benchmark-cases/v1",\n'
+                '  "cases": [\n'
+                '    {"id": "foo", "tags": ["smoke"], "game": "holdem"},\n'
+                '    {"id": "tools", "tags": ["standard"], "game": "holdem"}\n'
+                '  ]\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            result = {
+                "case": {"id": "foo", "game": "holdem"},
+                "process": {"returncode": 0},
+                "benchmark": {
+                    "actual_iterations": 1,
+                    "infosets": 1,
+                    "solve_elapsed_seconds": 0.1,
+                    "elapsed_seconds": 0.1,
+                    "iterations_per_second": 10.0,
+                    "stop_cause": "max_iterations",
+                },
+                "validation_failures": [],
+            }
+
+            argv = [
+                "run_benchmarks.py",
+                "--manifest", str(manifest_path),
+                "--output-dir", str(out_dir),
+            ]
+            with mock.patch.object(bench, "resolve_solver", return_value=parent / "solver"), \
+                    mock.patch.object(bench, "run_once", return_value=result), \
+                    mock.patch.object(bench, "write_summary"):
+                with mock.patch.object(sys, "argv", argv):
+                    self.assertEqual(bench.main(), 0)
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
     def test_prunes_managed_case_runs_but_preserves_unrelated_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
@@ -280,6 +328,25 @@ class OutputPreparationTests(unittest.TestCase):
 
 
 class TelemetryParsingTests(unittest.TestCase):
+    def test_non_boolean_description_cap_telemetry_is_unknown(self) -> None:
+        stdout = (
+            "stop_detail cause=max_iterations interrupted=0 iteration=64 "
+            "held_mb=1.0 budget_mb=512.0 descriptions_mb=0.1 "
+            "descriptions_capped=2"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.25,
+            requested_iterations=64,
+            report_rows_requested=0,
+        )
+
+        self.assertIsNone(parsed["memory"]["descriptions_capped"])
+
     def test_solver_strategy_count_wins_over_capped_description_count(self) -> None:
         stdout = "\n".join(
             [

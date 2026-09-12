@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import tempfile
+import unicodedata
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -14,6 +15,31 @@ import run_benchmarks as bench
 
 
 class StrategyFrequencyValidationTests(unittest.TestCase):
+    def test_strategy_rows_reject_actor_mismatches_from_tree(self) -> None:
+        row = (
+            "AhAs\t7\tP2\tCALL=50.0%,RAISE=50.0%\t"
+            "CALL=pending,RAISE=pending\tKs7d2c"
+        )
+
+        data, _, details = bench.parse_strategy_rows(
+            row,
+            {7: "FLOP"},
+            node_actors={7: "P1"},
+        )
+
+        self.assertEqual(data["FLOP"]["strategy_rows"], 0)
+        self.assertEqual(details["actor_mismatch_rows"], 1)
+
+    def test_tree_player_is_converted_to_report_actor_label(self) -> None:
+        node_streets, node_actors, decisions = bench.tree_nodes(
+            Path(__file__).parents[2] / "poker_eval_tree.json"
+        )
+
+        self.assertEqual(node_streets[0], "PREFLOP")
+        self.assertEqual(node_actors[0], "P1")
+        self.assertEqual(node_actors[3], "P2")
+        self.assertEqual(decisions["PREFLOP"], 4)
+
     def test_invalid_frequencies_are_not_counted_as_learning(self) -> None:
         nan_row = (
             "AhAs\t7\tP1\tCALL=nan%,RAISE=nan%\t"
@@ -133,6 +159,18 @@ class ReservedOutputNameTests(unittest.TestCase):
                 sentinel.read_text(encoding="utf-8"),
                 "keep managed evidence",
             )
+
+    def test_case_ids_that_differ_only_by_unicode_normalization_are_rejected(self) -> None:
+        composed = "caf\N{LATIN SMALL LETTER E WITH ACUTE}"
+        decomposed = unicodedata.normalize("NFD", composed)
+
+        with self.assertRaisesRegex(ValueError, "duplicate benchmark case id"):
+            bench.validate_manifest_case_ids([
+                {"id": composed},
+                {"id": decomposed},
+            ])
+
+        self.assertEqual(bench.safe_case_id({"id": decomposed}), composed)
 
 
 if __name__ == "__main__":
