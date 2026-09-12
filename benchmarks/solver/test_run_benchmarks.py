@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -131,18 +133,20 @@ class OutputPreparationTests(unittest.TestCase):
             unrelated.mkdir()
             sentinel = unrelated / "keep.txt"
             sentinel.write_text("keep", encoding="utf-8")
+            composed = "caf\N{LATIN SMALL LETTER E WITH ACUTE}"
+            decomposed = unicodedata.normalize("NFD", composed)
             manifest_path.write_text(
-                '{\n'
-                '  "schema": "pe-solver-benchmark-cases/v1",\n'
-                '  "cases": [\n'
-                '    {"id": "foo", "tags": ["smoke"], "game": "holdem"},\n'
-                '    {"id": "tools", "tags": ["standard"], "game": "holdem"}\n'
-                '  ]\n'
-                '}\n',
+                json.dumps({
+                    "schema": "pe-solver-benchmark-cases/v1",
+                    "cases": [
+                        {"id": decomposed, "tags": ["smoke"], "game": "holdem"},
+                        {"id": "tools", "tags": ["standard"], "game": "holdem"},
+                    ],
+                }),
                 encoding="utf-8",
             )
             result = {
-                "case": {"id": "foo", "game": "holdem"},
+                "case": {"id": decomposed, "game": "holdem"},
                 "process": {"returncode": 0},
                 "benchmark": {
                     "actual_iterations": 1,
@@ -167,6 +171,10 @@ class OutputPreparationTests(unittest.TestCase):
                     self.assertEqual(bench.main(), 0)
 
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+            selected = json.loads(
+                (out_dir / "selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(selected["cases"], [composed])
 
     def test_prunes_managed_case_runs_but_preserves_unrelated_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

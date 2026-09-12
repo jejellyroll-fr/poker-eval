@@ -129,6 +129,10 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
         values = bench.strategy_frequencies("CHECK=33.3%,CALL=33.3%,RAISE=33.4%")
         self.assertEqual(values, [33.3, 33.3, 33.4])
 
+    def test_duplicate_action_labels_are_rejected(self) -> None:
+        self.assertIsNone(bench.strategy_frequencies("CALL=20.0%,CALL=80.0%"))
+        self.assertIsNone(bench.strategy_frequencies("CALL=20.0%,call=80.0%"))
+
 
 class ReservedOutputNameTests(unittest.TestCase):
     def test_aggregate_output_names_are_rejected_case_insensitively_before_cleanup(self) -> None:

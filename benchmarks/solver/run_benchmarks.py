@@ -365,11 +365,20 @@ def build_command(
 def strategy_frequencies(action_field: str) -> list[float] | None:
     """Parse a rendered strategy into a finite percentage distribution."""
     values: list[float] = []
+    seen_actions: set[str] = set()
     for token in action_field.split(","):
         action, separator, raw_percent = token.partition("=")
+        action = action.strip()
         raw_percent = raw_percent.strip()
-        if not separator or not action.strip() or not raw_percent.endswith("%"):
+        action_key = action.casefold()
+        if (
+            not separator
+            or not action
+            or action_key in seen_actions
+            or not raw_percent.endswith("%")
+        ):
             return None
+        seen_actions.add(action_key)
         value = _float(raw_percent[:-1])
         if value is None or value < 0.0 or value > 100.0:
             return None
@@ -1088,10 +1097,15 @@ def main() -> int:
     if not manifest_path.is_absolute():
         manifest_path = (root / manifest_path).resolve()
     manifest = load_manifest(manifest_path)
-    validate_manifest_case_ids(manifest["cases"])
+    manifest_case_ids = validate_manifest_case_ids(manifest["cases"])
     suites = set(args.suite or ["smoke"])
     names = set(args.case)
     cases = [case for case in manifest["cases"] if case_selected(case, suites, names)]
+    selected_case_ids = [
+        manifest_case_ids[index]
+        for index, case in enumerate(manifest["cases"])
+        if case_selected(case, suites, names)
+    ]
     if not cases:
         parser.error("no benchmark cases selected")
 
@@ -1111,7 +1125,7 @@ def main() -> int:
         "manifest": str(manifest_path),
         "solver": str(solver),
         "suites": sorted(suites),
-        "cases": [case["id"] for case in cases],
+        "cases": selected_case_ids,
         "iteration_override": args.iterations,
         "repeat": args.repeat,
     }
