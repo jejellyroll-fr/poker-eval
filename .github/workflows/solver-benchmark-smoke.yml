@@ -1,0 +1,115 @@
+name: Solver benchmark smoke
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'benchmarks/solver/**'
+      - 'examples/nlhe_hu/**'
+      - 'examples/plo_hu_streets/**'
+      - 'tools/pe_preflop_solve.c'
+      - 'CMakeLists.txt'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/solver/**'
+      - 'include/poker_eval/solver/**'
+      - 'src/engine/solvers/cfr/**'
+      - 'include/poker_eval/engine/solvers/cfr/**'
+      - 'src/core/**'
+      - 'include/poker_eval/core/**'
+      - 'src/games/**'
+      - 'include/poker_eval/games/**'
+      - 'src/utils/**'
+      - 'include/poker_eval/utils/**'
+      - 'include/poker_eval/deck/**'
+      - 'src/range/**'
+      - 'include/poker_eval/range/**'
+      - 'include/poker_eval/range.h'
+      - 'src/distributions/**'
+      - 'include/poker_eval/distributions/**'
+      - 'src/equity/**'
+      - 'include/poker_eval/equity/**'
+      - 'include/poker_eval/equity.h'
+      - '.github/workflows/solver-benchmark-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  benchmark-smoke:
+    name: Cross-variant deterministic smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure solver-only build
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF
+
+      - name: Build product solver
+        run: cmake --build build --target pe-preflop-solve --parallel
+
+      - name: Validate benchmark runner
+        run: |
+          python3 -m py_compile benchmarks/solver/run_benchmarks.py
+          python3 -m unittest discover -s benchmarks/solver -p 'test_*.py'
+          python3 benchmarks/solver/run_benchmarks.py --suite smoke --list
+
+      - name: Run deterministic structural smoke corpus twice
+        run: |
+          python3 benchmarks/solver/run_benchmarks.py \
+            --suite smoke \
+            --solver build/tools/pe-preflop-solve \
+            --output-dir build/solver-benchmarks \
+            --iterations 64 \
+            --repeat 2 \
+            --check-reproducibility \
+            --strict
+
+      - name: Run learned-policy smoke twice
+        run: |
+          python3 benchmarks/solver/run_benchmarks.py \
+            --case holdem_flop \
+            --solver build/tools/pe-preflop-solve \
+            --output-dir build/solver-benchmarks-learned \
+            --iterations 10000 \
+            --repeat 2 \
+            --check-reproducibility \
+            --strict
+
+      - name: Verify learned-policy smoke updated strategy
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(
+              Path("build/solver-benchmarks-learned/summary.json").read_text()
+          )
+          for result in summary["results"]:
+              per_street = result["benchmark"]["per_street"]
+              learned_rows = sum(
+                  street["non_uniform_rows"] for street in per_street.values()
+              )
+              if learned_rows <= 0:
+                  raise SystemExit(
+                      f"{result['case']}: 10000 iterations produced no non-uniform strategy rows"
+                  )
+              print(f"{result['case']}: learned non-uniform rows={learned_rows}")
+          PY
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: solver-benchmark-smoke
+          path: |
+            build/solver-benchmarks
+            build/solver-benchmarks-learned
+          if-no-files-found: warn
