@@ -32,13 +32,28 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
 
     def test_tree_player_is_converted_to_report_actor_label(self) -> None:
         node_streets, node_actors, decisions = bench.tree_nodes(
-            Path(__file__).parents[2] / "poker_eval_tree.json"
+            Path(__file__).parents[2]
+            / "examples"
+            / "plo_hu_streets"
+            / "plo5_hu_flop.tree.json"
         )
 
-        self.assertEqual(node_streets[0], "PREFLOP")
-        self.assertEqual(node_actors[0], "P1")
+        self.assertEqual(node_streets[0], "FLOP")
+        self.assertEqual(node_actors[0], "P2")
         self.assertEqual(node_actors[3], "P2")
-        self.assertEqual(decisions["PREFLOP"], 4)
+        self.assertEqual(decisions["FLOP"], 5)
+
+    def test_root_to_act_override_changes_only_effective_root_actor(self) -> None:
+        _, node_actors, _ = bench.tree_nodes(
+            Path(__file__).parents[2]
+            / "examples"
+            / "plo_hu_streets"
+            / "plo5_hu_flop.tree.json",
+            root_to_act=0,
+        )
+
+        self.assertEqual(node_actors[0], "P1")
+        self.assertEqual(node_actors[1], "P1")
 
     def test_invalid_frequencies_are_not_counted_as_learning(self) -> None:
         nan_row = (

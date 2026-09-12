@@ -114,13 +114,7 @@ def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bo
     return bool(set(case.get("tags", [])) & suites)
 
 
-def safe_case_id(case: dict[str, Any]) -> str:
-    """Return a case id safe as one portable output-directory component."""
-    case_id = case.get("id")
-    if not isinstance(case_id, str) or not case_id:
-        raise ValueError(f"unsafe benchmark case id: {case_id!r}")
-    case_id = unicodedata.normalize("NFC", case_id)
-
+def _validate_safe_case_id(case_id: str) -> str:
     windows_device_stem = case_id.split(".", 1)[0].casefold()
     has_windows_invalid_char = any(
         ord(char) < 32 or char in WINDOWS_INVALID_CASE_CHARS for char in case_id
@@ -138,13 +132,26 @@ def safe_case_id(case: dict[str, Any]) -> str:
     return case_id
 
 
+def safe_case_id(case: dict[str, Any]) -> str:
+    """Return a case id safe as one portable output-directory component."""
+    case_id = case.get("id")
+    if not isinstance(case_id, str) or not case_id:
+        raise ValueError(f"unsafe benchmark case id: {case_id!r}")
+    case_id = unicodedata.normalize("NFC", case_id)
+    return _validate_safe_case_id(case_id)
+
+
+def _case_id_key(case_id: str) -> str:
+    return unicodedata.normalize("NFC", case_id).casefold()
+
+
 def validate_manifest_case_ids(manifest_cases: list[dict[str, Any]]) -> list[str]:
     """Validate case ids once and reject aliases that would share evidence."""
     case_ids: list[str] = []
     seen: set[str] = set()
     for case in manifest_cases:
         case_id = safe_case_id(case)
-        case_key = unicodedata.normalize("NFC", case_id).casefold()
+        case_key = _case_id_key(case_id)
         if case_key in seen:
             raise ValueError(f"duplicate benchmark case id: {case_id!r}")
         seen.add(case_key)
@@ -173,7 +180,12 @@ def previous_selection_case_ids(out_dir: Path) -> list[str]:
     seen: set[str] = set()
     for raw_case_id in raw_cases:
         try:
-            case_id = safe_case_id({"id": raw_case_id})
+            if not isinstance(raw_case_id, str) or not raw_case_id:
+                raise ValueError
+            # Validate the historical spelling, but do not normalize it: on a
+            # case-sensitive filesystem its exact spelling identifies the
+            # directory that must be removed.
+            case_id = _validate_safe_case_id(raw_case_id)
         except ValueError:
             # A stale or edited selection must never turn cleanup into an
             # arbitrary path deletion. Ignore unsafe historical entries.
@@ -200,7 +212,7 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
     prior_selection_owned = bool(previous_case_ids)
 
     if prior_selection_owned:
-        previous_keys = {case_id.casefold() for case_id in previous_case_ids}
+        previous_keys = {_case_id_key(case_id) for case_id in previous_case_ids}
         # Prior metadata owns only the case ids it recorded. A current spelling
         # that is case-insensitively equivalent (old `Foo`, current `foo`) is
         # the same logical case and both spellings are safe to prune on a
@@ -212,7 +224,7 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
                     *(
                         case_id
                         for case_id in current_case_ids
-                        if case_id.casefold() in previous_keys
+                        if _case_id_key(case_id) in previous_keys
                     ),
                 ]
             )
@@ -220,7 +232,7 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
         unowned_current_ids = [
             case_id
             for case_id in current_case_ids
-            if case_id.casefold() not in previous_keys
+            if _case_id_key(case_id) not in previous_keys
         ]
         collisions = [
             out_dir / case_id
@@ -271,19 +283,25 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
 
 def tree_nodes(
     tree_path: Path,
+    root_to_act: int | None = None,
 ) -> tuple[dict[int, str], dict[int, str], dict[str, int]]:
     with tree_path.open("r", encoding="utf-8") as stream:
         tree = json.load(stream)
     by_index: dict[int, str] = {}
     actors: dict[int, str] = {}
     decisions = {street: 0 for street in STREETS}
+    root_id = tree.get("root")
     for index, node in enumerate(tree.get("nodes", [])):
         if node.get("type") != "player":
             continue
         street = str(node.get("street", "")).upper()
         if street in decisions:
             by_index[index] = street
-            player = node.get("player")
+            player = (
+                root_to_act
+                if root_to_act is not None and node.get("id") == root_id
+                else node.get("player")
+            )
             actors[index] = (
                 f"P{player + 1}"
                 if isinstance(player, int) and not isinstance(player, bool) and player >= 0
@@ -905,7 +923,9 @@ def run_once(
         except FileNotFoundError:
             pass
     tree_path = (root / case["tree"]).resolve()
-    node_streets, node_actors, decisions = tree_nodes(tree_path)
+    node_streets, node_actors, decisions = tree_nodes(
+        tree_path, root_to_act=case.get("to_act")
+    )
     command = build_command(solver, root, raw_report, case, defaults, iteration_override)
     requested_iterations = iteration_override or int(
         case.get("iterations", defaults.get("iterations", 2000))
