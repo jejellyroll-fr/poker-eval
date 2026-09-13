@@ -110,7 +110,11 @@ def resolve_solver(args: argparse.Namespace, root: Path) -> Path:
 
 def case_selected(case: dict[str, Any], suites: set[str], names: set[str]) -> bool:
     if names:
-        return case.get("id") in names
+        case_id = case.get("id")
+        return (
+            isinstance(case_id, str)
+            and any(_case_id_key(case_id) == _case_id_key(name) for name in names)
+        )
     return bool(set(case.get("tags", [])) & suites)
 
 
@@ -284,11 +288,17 @@ def prepare_output_dir(out_dir: Path, manifest_cases: list[dict[str, Any]]) -> N
 def tree_nodes(
     tree_path: Path,
     root_to_act: int | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[str, int]]:
+) -> tuple[
+    dict[int, str],
+    dict[int, str],
+    dict[int, frozenset[str]],
+    dict[str, int],
+]:
     with tree_path.open("r", encoding="utf-8") as stream:
         tree = json.load(stream)
     by_index: dict[int, str] = {}
     actors: dict[int, str] = {}
+    actions: dict[int, frozenset[str]] = {}
     decisions = {street: 0 for street in STREETS}
     root_id = tree.get("root")
     for index, node in enumerate(tree.get("nodes", [])):
@@ -307,8 +317,39 @@ def tree_nodes(
                 if isinstance(player, int) and not isinstance(player, bool) and player >= 0
                 else ""
             )
+            action_kinds: set[str] = set()
+            for action in node.get("actions", []):
+                action_type = str(action.get("type", "")).casefold()
+                if action_type == "fold":
+                    action_kinds.add("fold")
+                elif action_type == "call":
+                    action_kinds.add("passive")
+                elif action_type == "raise":
+                    size_index = action.get("size_index")
+                    bet_sizes = node.get("bet_sizes", [])
+                    if not bet_sizes and node.get("bet_profile"):
+                        profiles = tree.get("betProfiles", [])
+                        profile = next(
+                            (
+                                item for item in profiles
+                                if item.get("id") == node.get("bet_profile")
+                            ),
+                            {},
+                        )
+                        bet_sizes = profile.get("sizes", [])
+                    if (
+                        isinstance(size_index, int)
+                        and 0 <= size_index < len(bet_sizes)
+                        and abs(float(bet_sizes[size_index]) + 1.0) < 1e-9
+                    ):
+                        action_kinds.add("all-in")
+                    else:
+                        action_kinds.add("aggressive")
+                else:
+                    action_kinds.add(action_type)
+            actions[index] = frozenset(action_kinds)
             decisions[street] += 1
-    return by_index, actors, decisions
+    return by_index, actors, actions, decisions
 
 
 def build_command(
@@ -388,6 +429,30 @@ def strategy_frequencies(action_field: str) -> list[float] | None:
     return values
 
 
+def _strategy_action_kinds(action_field: str) -> list[str] | None:
+    kinds: list[str] = []
+    for token in action_field.split(","):
+        action, separator, _ = token.partition("=")
+        action = action.strip().casefold()
+        if not separator or not action:
+            return None
+        if action.startswith("fold"):
+            kinds.append("fold")
+        elif action.startswith("call") or action.startswith("check"):
+            kinds.append("passive")
+        elif action.startswith("all-in") or action.startswith("all in"):
+            kinds.append("all-in")
+        elif (
+            action.startswith("raise")
+            or action.startswith("bet")
+            or action.startswith("min-raise")
+        ):
+            kinds.append("aggressive")
+        else:
+            kinds.append(action)
+    return kinds
+
+
 def _is_uniform_frequencies(values: list[float]) -> bool:
     expected = 100.0 / len(values)
     return max(abs(value - expected) for value in values) <= 0.11
@@ -420,9 +485,11 @@ def _strategy_rows(
     stdout: str,
     node_streets: dict[int, str],
     node_actors: dict[int, str] | None = None,
-) -> tuple[list[tuple[str, int, str, str]], int]:
+    node_actions: dict[int, frozenset[str]] | None = None,
+) -> tuple[list[tuple[str, int, str, str]], int, int]:
     rows: list[tuple[str, int, str, str]] = []
     actor_mismatch_rows = 0
+    action_mismatch_rows = 0
     for line in stdout.splitlines():
         if line.startswith("ev_update\t"):
             continue
@@ -443,13 +510,20 @@ def _strategy_rows(
         action_field = fields[3]
         if "%" not in action_field or "=" not in action_field:
             continue
+        action_kinds = _strategy_action_kinds(action_field)
+        if action_kinds is None:
+            continue
         board = fields[5].strip()
+        expected_actions = node_actions.get(node_index) if node_actions is not None else None
+        if node_actions is not None and frozenset(action_kinds) != expected_actions:
+            action_mismatch_rows += 1
+            continue
         stable = (
             f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
             f"{action_field}\t{board}"
         )
         rows.append((stable, node_index, action_field, board))
-    return rows, actor_mismatch_rows
+    return rows, actor_mismatch_rows, action_mismatch_rows
 
 
 def parse_strategy_rows(
@@ -458,6 +532,7 @@ def parse_strategy_rows(
     *,
     exhaustive_report: bool = False,
     node_actors: dict[int, str] | None = None,
+    node_actions: dict[int, frozenset[str]] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], str, dict[str, Any]]:
     """Parse visible strategy rows without destroying real multiplicity.
 
@@ -467,7 +542,9 @@ def parse_strategy_rows(
     render to the same stable row remain distinct entries and therefore remain
     represented in counts and in the reproducibility hash.
     """
-    rows, actor_mismatch_rows = _strategy_rows(stdout, node_streets, node_actors)
+    rows, actor_mismatch_rows, action_mismatch_rows = _strategy_rows(
+        stdout, node_streets, node_actors, node_actions
+    )
     raw_rows = len(rows)
     duplicate_sweep_removed = False
 
@@ -529,6 +606,7 @@ def parse_strategy_rows(
         "normalized_strategy_rows": len(rows),
         "invalid_strategy_rows": invalid_strategy_rows,
         "actor_mismatch_rows": actor_mismatch_rows,
+        "action_mismatch_rows": action_mismatch_rows,
         "duplicate_exhaustive_sweep_removed": duplicate_sweep_removed,
     }
     return street_data, digest, details
@@ -544,6 +622,7 @@ def parse_stdout(
     report_rows_requested: int,
     post_solve_elapsed_seconds: float | None = None,
     node_actors: dict[int, str] | None = None,
+    node_actions: dict[int, frozenset[str]] | None = None,
 ) -> dict[str, Any]:
     actual_iterations = None
     complete = None
@@ -611,6 +690,7 @@ def parse_stdout(
         node_streets,
         exhaustive_report=report_rows_requested == 0,
         node_actors=node_actors,
+        node_actions=node_actions,
     )
     total_rows = sum(v["strategy_rows"] for v in per_street.values())
     total_non_uniform = sum(v["non_uniform_rows"] for v in per_street.values())
@@ -778,6 +858,9 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     actor_mismatch_rows = report.get("actor_mismatch_rows", 0)
     if actor_mismatch_rows:
         failures.append(f"invalid strategy actors in {actor_mismatch_rows} row(s)")
+    action_mismatch_rows = report.get("action_mismatch_rows", 0)
+    if action_mismatch_rows:
+        failures.append(f"invalid strategy actions in {action_mismatch_rows} row(s)")
     descriptions_capped = metrics.get("memory", {}).get("descriptions_capped")
     if report.get("exhaustive_requested", False) and descriptions_capped is None:
         failures.append("missing description cap telemetry for exhaustive report")
@@ -932,7 +1015,7 @@ def run_once(
         except FileNotFoundError:
             pass
     tree_path = (root / case["tree"]).resolve()
-    node_streets, node_actors, decisions = tree_nodes(
+    node_streets, node_actors, node_actions, decisions = tree_nodes(
         tree_path, root_to_act=case.get("to_act")
     )
     command = build_command(solver, root, raw_report, case, defaults, iteration_override)
@@ -972,6 +1055,7 @@ def run_once(
         report_rows,
         post_solve_elapsed_seconds=post_solve_elapsed,
         node_actors=node_actors,
+        node_actions=node_actions,
     )
     benchmark["metrics"]["requested_br_samples"] = requested_br_samples
     result = {
@@ -1100,6 +1184,16 @@ def main() -> int:
     manifest_case_ids = validate_manifest_case_ids(manifest["cases"])
     suites = set(args.suite or ["smoke"])
     names = set(args.case)
+    if names:
+        manifest_case_keys = {_case_id_key(case_id) for case_id in manifest_case_ids}
+        unmatched_names = sorted(
+            name for name in names if _case_id_key(name) not in manifest_case_keys
+        )
+        if unmatched_names:
+            parser.error(
+                "unknown benchmark case selector(s): "
+                + ", ".join(repr(name) for name in unmatched_names)
+            )
     cases = [case for case in manifest["cases"] if case_selected(case, suites, names)]
     selected_case_ids = [
         manifest_case_ids[index]

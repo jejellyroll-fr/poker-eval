@@ -121,6 +121,19 @@ class ManifestTests(unittest.TestCase):
                 ["PREFLOP", "FLOP", "TURN", "RIVER"],
             )
 
+    def test_unknown_explicit_case_selector_is_rejected(self) -> None:
+        argv = [
+            "run_benchmarks.py",
+            "--case", "holdem_flop",
+            "--case", "typo",
+            "--list",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            with self.assertRaises(SystemExit) as raised:
+                bench.main()
+
+        self.assertEqual(raised.exception.code, 2)
+
 
 class OutputPreparationTests(unittest.TestCase):
     def test_only_selected_cases_are_checked_for_output_collisions(self) -> None:

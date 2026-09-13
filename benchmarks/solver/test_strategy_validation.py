@@ -30,8 +30,24 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
         self.assertEqual(data["FLOP"]["strategy_rows"], 0)
         self.assertEqual(details["actor_mismatch_rows"], 1)
 
+    def test_strategy_rows_reject_actions_not_declared_by_tree_node(self) -> None:
+        row = (
+            "AhAs\t7\tP1\tCALL=20.0%,BOGUS=80.0%\t"
+            "CALL=pending,BOGUS=pending\tKs7d2c"
+        )
+
+        data, _, details = bench.parse_strategy_rows(
+            row,
+            {7: "FLOP"},
+            node_actors={7: "P1"},
+            node_actions={7: frozenset({"passive", "aggressive"})},
+        )
+
+        self.assertEqual(data["FLOP"]["strategy_rows"], 0)
+        self.assertEqual(details["action_mismatch_rows"], 1)
+
     def test_tree_player_is_converted_to_report_actor_label(self) -> None:
-        node_streets, node_actors, decisions = bench.tree_nodes(
+        node_streets, node_actors, _, decisions = bench.tree_nodes(
             Path(__file__).parents[2]
             / "examples"
             / "plo_hu_streets"
@@ -44,7 +60,7 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
         self.assertEqual(decisions["FLOP"], 5)
 
     def test_root_to_act_override_changes_only_effective_root_actor(self) -> None:
-        _, node_actors, _ = bench.tree_nodes(
+        _, node_actors, _, _ = bench.tree_nodes(
             Path(__file__).parents[2]
             / "examples"
             / "plo_hu_streets"
