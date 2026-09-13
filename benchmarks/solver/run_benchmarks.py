@@ -61,6 +61,9 @@ RE_STOP_DETAIL = re.compile(
 )
 RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
 RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
+RE_STEP = re.compile(
+    r"^step node=(\d+) actor=(P\d+) hand=([^\s]+).* actions=(.*)$"
+)
 RE_REPORT_START = re.compile(r"^report_phase=starting rows=(\d+)\s+infosets=(\d+)$")
 RE_REPORT_COMPLETE = re.compile(r"^report_phase=complete rows=(\d+)$")
 
@@ -429,27 +432,31 @@ def strategy_frequencies(action_field: str) -> list[float] | None:
     return values
 
 
+def _strategy_action_kind(action: str) -> str:
+    action = action.strip().casefold()
+    if action.startswith("fold"):
+        return "fold"
+    if action.startswith("call") or action.startswith("check"):
+        return "passive"
+    if action.startswith("all-in") or action.startswith("all in"):
+        return "all-in"
+    if (
+        action.startswith("raise")
+        or action.startswith("bet")
+        or action.startswith("min-raise")
+    ):
+        return "aggressive"
+    return action
+
+
 def _strategy_action_kinds(action_field: str) -> list[str] | None:
     kinds: list[str] = []
     for token in action_field.split(","):
         action, separator, _ = token.partition("=")
-        action = action.strip().casefold()
+        action = action.strip()
         if not separator or not action:
             return None
-        if action.startswith("fold"):
-            kinds.append("fold")
-        elif action.startswith("call") or action.startswith("check"):
-            kinds.append("passive")
-        elif action.startswith("all-in") or action.startswith("all in"):
-            kinds.append("all-in")
-        elif (
-            action.startswith("raise")
-            or action.startswith("bet")
-            or action.startswith("min-raise")
-        ):
-            kinds.append("aggressive")
-        else:
-            kinds.append(action)
+        kinds.append(_strategy_action_kind(action))
     return kinds
 
 
@@ -490,6 +497,13 @@ def _strategy_rows(
     rows: list[tuple[str, int, str, str]] = []
     actor_mismatch_rows = 0
     action_mismatch_rows = 0
+    runtime_actions: dict[tuple[int, str, str], frozenset[str]] = {}
+    for line in stdout.splitlines():
+        match = RE_STEP.match(line)
+        if match:
+            runtime_actions[(int(match.group(1)), match.group(2), match.group(3))] = (
+                frozenset(_strategy_action_kind(action) for action in match.group(4).split("|") if action)
+            )
     for line in stdout.splitlines():
         if line.startswith("ev_update\t"):
             continue
@@ -514,10 +528,16 @@ def _strategy_rows(
         if action_kinds is None:
             continue
         board = fields[5].strip()
-        expected_actions = node_actions.get(node_index) if node_actions is not None else None
-        if node_actions is not None and frozenset(action_kinds) != expected_actions:
-            action_mismatch_rows += 1
-            continue
+        observed_actions = runtime_actions.get((node_index, actor, fields[0]))
+        if observed_actions is not None:
+            if frozenset(action_kinds) != observed_actions:
+                action_mismatch_rows += 1
+                continue
+        elif node_actions is not None:
+            static_actions = node_actions.get(node_index, frozenset())
+            if not frozenset(action_kinds).issubset(static_actions):
+                action_mismatch_rows += 1
+                continue
         stable = (
             f"{street}\t{fields[0]}\t{node_index}\t{fields[2]}\t"
             f"{action_field}\t{board}"

@@ -46,6 +46,23 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
         self.assertEqual(data["FLOP"]["strategy_rows"], 0)
         self.assertEqual(details["action_mismatch_rows"], 1)
 
+    def test_runtime_action_subset_is_allowed_when_static_tree_has_more_actions(self) -> None:
+        row = (
+            "AhAs\t7\tP1\tCHECK=100.0%\t"
+            "CHECK=pending\tKs7d2c"
+        )
+        step = "step node=7 actor=P1 hand=AhAs pot=7.00 to_call=0.00 actions=CHECK"
+
+        data, _, details = bench.parse_strategy_rows(
+            f"{step}\n{row}",
+            {7: "FLOP"},
+            node_actors={7: "P1"},
+            node_actions={7: frozenset({"passive", "aggressive"})},
+        )
+
+        self.assertEqual(data["FLOP"]["strategy_rows"], 1)
+        self.assertEqual(details["action_mismatch_rows"], 0)
+
     def test_tree_player_is_converted_to_report_actor_label(self) -> None:
         node_streets, node_actors, _, decisions = bench.tree_nodes(
             Path(__file__).parents[2]
