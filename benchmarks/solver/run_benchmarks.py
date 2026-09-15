@@ -497,11 +497,15 @@ def _strategy_rows(
     rows: list[tuple[str, int, str, str]] = []
     actor_mismatch_rows = 0
     action_mismatch_rows = 0
-    runtime_actions: dict[tuple[int, str, str], frozenset[str]] = {}
+    # The solver deduplicates step entries on (node, actor) with a single
+    # representative hand, so keying by hand would leave every other hand row
+    # at the node without runtime evidence. The action set is node-level, so
+    # all rows at the same (node, actor) must match it exactly.
+    runtime_actions: dict[tuple[int, str], frozenset[str]] = {}
     for line in stdout.splitlines():
         match = RE_STEP.match(line)
         if match:
-            runtime_actions[(int(match.group(1)), match.group(2), match.group(3))] = (
+            runtime_actions[(int(match.group(1)), match.group(2))] = (
                 frozenset(_strategy_action_kind(action) for action in match.group(4).split("|") if action)
             )
     for line in stdout.splitlines():
@@ -528,7 +532,7 @@ def _strategy_rows(
         if action_kinds is None:
             continue
         board = fields[5].strip()
-        observed_actions = runtime_actions.get((node_index, actor, fields[0]))
+        observed_actions = runtime_actions.get((node_index, actor))
         if observed_actions is not None:
             if frozenset(action_kinds) != observed_actions:
                 action_mismatch_rows += 1
