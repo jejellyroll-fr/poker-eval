@@ -18,6 +18,7 @@ extern "C" {
 #define PE_BR_ERR_BUDGET             (-2) /* exact traversal left its budget */
 #define PE_BR_ERR_CHANCE_NOT_ENUMERABLE (-3) /* exact BR, no chance_outcome_count */
 #define PE_BR_ERR_TRAVERSAL          (-4) /* depth exceeded or bad policy */
+#define PE_BR_ERR_INFOSET_DEPTH      (-5) /* one infoset spans tree depths */
 #define PE_BR_OK                     0
 
 typedef struct {
@@ -75,6 +76,9 @@ int pe_external_best_response_sampled(const pe_external_game_t *game,
  * every opponent decision is taken under the full behavioral strategy and the
  * BR player maximises over all legal actions. The traversal is exhaustive, so
  * the reported br_gap is a ground-truth value, not an estimate.
+ * Each BR-player infoset must occur at one tree depth; otherwise the exact
+ * entry point returns PE_BR_ERR_INFOSET_DEPTH. AUTO falls back to sampling
+ * for that unsupported shape.
  *
  * Resource guards: the traversal aborts with PE_BR_ERR_BUDGET once
  * config->max_br_nodes states have been visited or config->max_br_time_ms of

@@ -1,4 +1,5 @@
 #include <poker_eval/solver/pe_external_best_response.h>
+#include <poker_eval/core/time_compat.h>
 
 #include "finite_double.h"
 
@@ -175,6 +176,20 @@ static long long now_ms(void)
     return (long long)ts.tv_sec * 1000ll + ts.tv_nsec / 1000000ll;
 }
 
+static int exact_check_time(exact_context_t *ctx, int force)
+{
+    if (ctx->deadline_ms < 0) return 0;
+    if (!force && ++ctx->next_time_check < (int)PE_BR_TIME_CHECK_INTERVAL)
+        return 0;
+    ctx->next_time_check = 0;
+    if (now_ms() > ctx->deadline_ms)
+    {
+        ctx->budget_exceeded = 1;
+        return 1;
+    }
+    return 0;
+}
+
 /* Returns non-zero when the traversal must abort with PE_BR_ERR_BUDGET. */
 static int exact_charge(exact_context_t *ctx)
 {
@@ -185,16 +200,7 @@ static int exact_charge(exact_context_t *ctx)
         ctx->budget_exceeded = 1;
         return 1;
     }
-    if (ctx->deadline_ms >= 0 && ++ctx->next_time_check >=
-            (int)PE_BR_TIME_CHECK_INTERVAL)
-    {
-        ctx->next_time_check = 0;
-        if (now_ms() > ctx->deadline_ms)
-        {
-            ctx->budget_exceeded = 1;
-            return 1;
-        }
-    }
+    if (exact_check_time(ctx, 0)) return 1;
     return 0;
 }
 
@@ -215,7 +221,85 @@ typedef struct {
     size_t count;
     size_t capacity;
     uint16_t max_depth;
+    struct exact_infoset_depth *infoset_depths;
+    size_t infoset_depth_capacity;
+    size_t infoset_depth_count;
+    int infoset_depth_error;
 } exact_tree_t;
+
+typedef struct exact_infoset_depth {
+    uint64_t key;
+    uint16_t min_depth;
+    uint16_t max_depth;
+    unsigned char used;
+} exact_infoset_depth_t;
+
+static size_t exact_infoset_hash(uint64_t key)
+{
+    key ^= key >> 30;
+    key *= UINT64_C(0xbf58476d1ce4e5b9);
+    key ^= key >> 27;
+    key *= UINT64_C(0x94d049bb133111eb);
+    return (size_t)(key ^ (key >> 31));
+}
+
+static int exact_infoset_depth_reserve(exact_tree_t *tree, size_t needed)
+{
+    size_t old_capacity = tree->infoset_depth_capacity;
+    size_t capacity = old_capacity ? old_capacity : 256u;
+    exact_infoset_depth_t *entries;
+    size_t i;
+
+    while (needed * 10u >= capacity * 7u)
+    {
+        if (capacity > SIZE_MAX / 2u) return -1;
+        capacity *= 2u;
+    }
+    if (capacity == old_capacity) return 0;
+    entries = (exact_infoset_depth_t *)calloc(capacity, sizeof(*entries));
+    if (!entries) return -1;
+    for (i = 0u; i < old_capacity; ++i)
+        if (tree->infoset_depths[i].used)
+        {
+            size_t slot = exact_infoset_hash(
+                tree->infoset_depths[i].key) & (capacity - 1u);
+            while (entries[slot].used)
+                slot = (slot + 1u) & (capacity - 1u);
+            entries[slot] = tree->infoset_depths[i];
+        }
+    free(tree->infoset_depths);
+    tree->infoset_depths = entries;
+    tree->infoset_depth_capacity = capacity;
+    return 0;
+}
+
+static int exact_record_infoset_depth(exact_tree_t *tree, uint64_t key,
+                                      uint16_t depth)
+{
+    size_t slot;
+    if (exact_infoset_depth_reserve(tree, tree->infoset_depth_count + 1u) != 0)
+        return -1;
+    slot = exact_infoset_hash(key) & (tree->infoset_depth_capacity - 1u);
+    while (tree->infoset_depths[slot].used)
+    {
+        exact_infoset_depth_t *entry = &tree->infoset_depths[slot];
+        if (entry->key == key)
+        {
+            if (entry->min_depth != depth || entry->max_depth != depth)
+                tree->infoset_depth_error = 1;
+            if (depth < entry->min_depth) entry->min_depth = depth;
+            if (depth > entry->max_depth) entry->max_depth = depth;
+            return 0;
+        }
+        slot = (slot + 1u) & (tree->infoset_depth_capacity - 1u);
+    }
+    tree->infoset_depths[slot].used = 1u;
+    tree->infoset_depths[slot].key = key;
+    tree->infoset_depths[slot].min_depth = depth;
+    tree->infoset_depths[slot].max_depth = depth;
+    ++tree->infoset_depth_count;
+    return 0;
+}
 
 /* Behavioral probability of one action at an opponent (or policy) state. */
 static int exact_action_probability(exact_context_t *ctx, const void *state,
@@ -253,6 +337,7 @@ static void exact_tree_destroy(exact_tree_t *tree, const pe_external_game_t *gam
         free((void *)node->child_states);
     }
     free(tree->nodes);
+    free(tree->infoset_depths);
     memset(tree, 0, sizeof(*tree));
 }
 
@@ -317,6 +402,12 @@ static int exact_tree_build(exact_context_t *ctx, exact_tree_t *tree,
         outcomes = ctx->game->chance_outcome_count(state, ctx->game->user);
         if (outcomes == 0u)
             return -1;
+        if (ctx->max_nodes &&
+            (uint64_t)outcomes > ctx->max_nodes - ctx->nodes)
+        {
+            ctx->budget_exceeded = 1;
+            return -1;
+        }
         node->child_count = outcomes;
         child_count = node->child_count;
         node->children = (uint32_t *)calloc(outcomes, sizeof(uint32_t));
@@ -345,6 +436,12 @@ static int exact_tree_build(exact_context_t *ctx, exact_tree_t *tree,
             return -1;
         node->child_count = node->actions;
         child_count = node->child_count;
+        if (ctx->max_nodes &&
+            (uint64_t)child_count > ctx->max_nodes - ctx->nodes)
+        {
+            ctx->budget_exceeded = 1;
+            return -1;
+        }
         node->children = (uint32_t *)calloc(node->child_count,
                                             sizeof(uint32_t));
         node->child_states = (const void **)calloc(node->child_count,
@@ -355,6 +452,9 @@ static int exact_tree_build(exact_context_t *ctx, exact_tree_t *tree,
         if (ctx->game->infoset_key)
             node->infoset_key = ctx->game->infoset_key(state,
                                                        ctx->game->user);
+        if (ctx->game->infoset_key && node->actor == (int)ctx->br_player &&
+            exact_record_infoset_depth(tree, node->infoset_key, depth) != 0)
+            return -1;
         for (c = 0u; c < child_count; ++c)
         {
             child_states[c] = ctx->game->apply_action(
@@ -375,6 +475,7 @@ static int exact_policy_values(exact_context_t *ctx, const exact_tree_t *tree,
     size_t i;
     for (i = tree->count; i-- > 0u;)
     {
+        if (exact_check_time(ctx, 0)) return -1;
         const exact_node_t *node = &tree->nodes[i];
         double total = 0.0;
         uint32_t c;
@@ -385,13 +486,17 @@ static int exact_policy_values(exact_context_t *ctx, const exact_tree_t *tree,
         else if (node->actor < 0)
         {
             for (c = 0u; c < node->child_count; ++c)
+            {
+                if (exact_check_time(ctx, 0)) return -1;
                 total += values[node->children[c]];
+            }
             values[i] = total / (double)node->child_count;
         }
         else
         {
             for (c = 0u; c < node->child_count; ++c)
             {
+                if (exact_check_time(ctx, 0)) return -1;
                 double p;
                 if (exact_action_probability(ctx, node->state, node->actions,
                                               (uint16_t)c, &p) != 0)
@@ -401,6 +506,7 @@ static int exact_policy_values(exact_context_t *ctx, const exact_tree_t *tree,
             values[i] = total;
         }
     }
+    if (exact_check_time(ctx, 1)) return -1;
     return pe_finite_double(values[0]) ? 0 : -1;
 }
 
@@ -411,6 +517,7 @@ static int exact_reach_values(exact_context_t *ctx, const exact_tree_t *tree,
     reach[0] = 1.0;
     for (i = 0u; i < tree->count; ++i)
     {
+        if (exact_check_time(ctx, 0)) return -1;
         const exact_node_t *node = &tree->nodes[i];
         uint32_t c;
         if (node->terminal) continue;
@@ -418,12 +525,16 @@ static int exact_reach_values(exact_context_t *ctx, const exact_tree_t *tree,
         {
             double p = 1.0 / (double)node->child_count;
             for (c = 0u; c < node->child_count; ++c)
+            {
+                if (exact_check_time(ctx, 0)) return -1;
                 reach[node->children[c]] = reach[i] * p;
+            }
         }
         else
         {
             for (c = 0u; c < node->child_count; ++c)
             {
+                if (exact_check_time(ctx, 0)) return -1;
                 double p = 1.0;
                 if (node->actor != (int)ctx->br_player &&
                     exact_action_probability(ctx, node->state, node->actions,
@@ -461,15 +572,29 @@ static int exact_best_response_values(exact_context_t *ctx,
         return -1;
     }
     for (i = 0u; i < tree->count; ++i)
+    {
+        if (exact_check_time(ctx, 0))
+        {
+            free(reach);
+            free(processed);
+            return -1;
+        }
         if (tree->nodes[i].terminal)
             values[i] = ctx->game->terminal_value(tree->nodes[i].state,
                                                    ctx->br_player,
                                                    ctx->game->user);
+    }
 
     for (depth = (int)tree->max_depth; depth >= 0; --depth)
     {
         for (i = 0u; i < tree->count; ++i)
         {
+            if (exact_check_time(ctx, 0))
+            {
+                free(reach);
+                free(processed);
+                return -1;
+            }
             const exact_node_t *node = &tree->nodes[i];
             double total = 0.0;
             uint32_t c;
@@ -479,13 +604,27 @@ static int exact_best_response_values(exact_context_t *ctx,
             if (node->actor < 0)
             {
                 for (c = 0u; c < node->child_count; ++c)
+                {
+                    if (exact_check_time(ctx, 0))
+                    {
+                        free(reach);
+                        free(processed);
+                        return -1;
+                    }
                     total += values[node->children[c]];
+                }
                 values[i] = total / (double)node->child_count;
             }
             else
             {
                 for (c = 0u; c < node->child_count; ++c)
                 {
+                    if (exact_check_time(ctx, 0))
+                    {
+                        free(reach);
+                        free(processed);
+                        return -1;
+                    }
                     double p;
                     if (exact_action_probability(ctx, node->state,
                                                   node->actions,
@@ -503,6 +642,12 @@ static int exact_best_response_values(exact_context_t *ctx,
 
         for (i = 0u; i < tree->count; ++i)
         {
+            if (exact_check_time(ctx, 0))
+            {
+                free(reach);
+                free(processed);
+                return -1;
+            }
             const exact_node_t *node = &tree->nodes[i];
             double scores[PE_EXTERNAL_MAX_ACTIONS] = {0.0};
             uint64_t key;
@@ -517,6 +662,12 @@ static int exact_best_response_values(exact_context_t *ctx,
             actions = node->actions;
             for (j = i; j < tree->count; ++j)
             {
+                if (exact_check_time(ctx, 0))
+                {
+                    free(reach);
+                    free(processed);
+                    return -1;
+                }
                 const exact_node_t *member = &tree->nodes[j];
                 uint64_t member_key = ctx->game->infoset_key
                     ? member->infoset_key : (uint64_t)j;
@@ -532,12 +683,26 @@ static int exact_best_response_values(exact_context_t *ctx,
                 }
                 processed[j] = 1u;
                 for (c = 0u; c < actions; ++c)
+                {
+                    if (exact_check_time(ctx, 0))
+                    {
+                        free(reach);
+                        free(processed);
+                        return -1;
+                    }
                     scores[c] += reach[j] * values[member->children[c]];
+                }
             }
             for (c = 1u; c < actions; ++c)
                 if (scores[c] > scores[best]) best = (uint16_t)c;
             for (j = i; j < tree->count; ++j)
             {
+                if (exact_check_time(ctx, 0))
+                {
+                    free(reach);
+                    free(processed);
+                    return -1;
+                }
                 const exact_node_t *member = &tree->nodes[j];
                 uint64_t member_key = ctx->game->infoset_key
                     ? member->infoset_key : (uint64_t)j;
@@ -548,13 +713,27 @@ static int exact_best_response_values(exact_context_t *ctx,
             }
         }
         for (i = 0u; i < tree->count; ++i)
+        {
+            if (exact_check_time(ctx, 0))
+            {
+                free(reach);
+                free(processed);
+                return -1;
+            }
             if ((int)tree->nodes[i].depth == depth &&
                 !pe_finite_double(values[i]))
-        {
-            free(reach);
-            free(processed);
-            return -1;
+            {
+                free(reach);
+                free(processed);
+                return -1;
+            }
         }
+    }
+    if (exact_check_time(ctx, 1))
+    {
+        free(reach);
+        free(processed);
+        return -1;
     }
     free(reach);
     free(processed);
@@ -604,12 +783,19 @@ int pe_external_best_response_exact(const pe_external_game_t *game,
     rc = exact_tree_build(&ctx, &tree, game->root, 0u, &root_index);
     if (rc != 0)
     {
+        int infoset_depth_error = tree.infoset_depth_error;
         exact_tree_destroy(&tree, game);
-        return ctx.budget_exceeded ? PE_BR_ERR_BUDGET
+        return infoset_depth_error ? PE_BR_ERR_INFOSET_DEPTH
+             : ctx.budget_exceeded ? PE_BR_ERR_BUDGET
              : ctx.chance_not_enumerable ? PE_BR_ERR_CHANCE_NOT_ENUMERABLE
              : PE_BR_ERR_TRAVERSAL;
     }
     (void)root_index;
+    if (tree.infoset_depth_error)
+    {
+        exact_tree_destroy(&tree, game);
+        return PE_BR_ERR_INFOSET_DEPTH;
+    }
     policy_values = (double *)calloc(tree.count, sizeof(*policy_values));
     br_values = (double *)calloc(tree.count, sizeof(*br_values));
     if (!policy_values || !br_values)
@@ -625,7 +811,7 @@ int pe_external_best_response_exact(const pe_external_game_t *game,
         free(policy_values);
         free(br_values);
         exact_tree_destroy(&tree, game);
-        return PE_BR_ERR_TRAVERSAL;
+        return ctx.budget_exceeded ? PE_BR_ERR_BUDGET : PE_BR_ERR_TRAVERSAL;
     }
     policy = policy_values[0];
     br = br_values[0];
@@ -698,7 +884,8 @@ int pe_external_best_response(const pe_external_game_t *game,
        for an exact measurement. Budget refusals and non-enumerable chance are
        the expected reasons; anything else is a hard game error. */
     if (exact_status != PE_BR_ERR_BUDGET &&
-        exact_status != PE_BR_ERR_CHANCE_NOT_ENUMERABLE)
+        exact_status != PE_BR_ERR_CHANCE_NOT_ENUMERABLE &&
+        exact_status != PE_BR_ERR_INFOSET_DEPTH)
         return exact_status;
     {
         int sampled_status;

@@ -48,7 +48,8 @@ ACTION_PERCENT_SUM_TOLERANCE = 0.51
 RE_ITERATIONS = re.compile(r"^iterations=(\d+)\s+complete=(\d+)\s+infosets=(\d+)$")
 RE_GUARANTEE = re.compile(
     r"^guarantee=(\S+)\s+exploitability_raw=([^\s]+)\s+"
-    r"exploitability_mbb=([^\s]+)\s+br_samples=(\d+)$"
+    r"exploitability_mbb=([^\s]+)\s+br_samples=(\d+)"
+    r"(?:\s+br_mode=(\S+))?$"
 )
 RE_LOOP_END = re.compile(
     r"solve_loop_end cause=(\S+)\s+iteration=(\d+)\s+"
@@ -669,6 +670,7 @@ def parse_stdout(
     exploitability_raw = None
     exploitability_mbb = None
     br_samples = None
+    br_mode = None
     stop_cause = None
     final_memory_mb = None
     storage_mb = None
@@ -697,6 +699,7 @@ def parse_stdout(
             exploitability_raw = _float(match.group(2))
             exploitability_mbb = _float(match.group(3))
             br_samples = int(match.group(4))
+            br_mode = match.group(5)
             continue
         match = RE_LOOP_END.search(line)
         if match:
@@ -824,6 +827,7 @@ def parse_stdout(
             "exploitability_raw": exploitability_raw,
             "exploitability_mbb_per_game": exploitability_mbb,
             "br_samples": br_samples,
+            "br_mode": br_mode,
         },
         "report": {
             "requested_rows": report_rows_requested,
