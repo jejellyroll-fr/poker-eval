@@ -944,6 +944,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 pe_solver_set_state(solver, PE_SOLVER_STATE_STOPPED);
                 return PE_SOLVER_ERR_EXECUTION;
             }
+            solver->metrics.br_mode = PE_BR_EXACT;
             solver->metrics_available = 1;
             target_reached = reached;
         }
@@ -1151,12 +1152,21 @@ static double sampled_terminal_value(const void *state, int player, void *user)
     return adapter->base->terminal_value(state, player, adapter->base->user);
 }
 
+/* Issue #233: exact BR needs deterministic chance enumeration, forwarded to
+   the game the caller injected. */
+static uint32_t sampled_chance_outcome_count(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->chance_outcome_count(state, adapter->base->user);
+}
+
 static pe_solver_status_t pe_solver_sampled_measure_br(
     pe_solver_t *solver, const pe_external_game_t *sampled_game,
     uint64_t iteration, int *target_reached)
 {
     pe_external_br_config_t br_config = pe_external_br_config_default();
     double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
+    pe_br_mode_t measured_mode = PE_BR_SAMPLED;
     uint8_t player;
     int reached = 0;
 
@@ -1167,19 +1177,35 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
         ? 256u
         : solver->config.br_samples;
     br_config.seed = solver->config.seed ^ iteration;
+    /* Issue #233: the configured mode decides between a deterministic exact
+       traversal and the sampled estimate. EXACT either measures or fails
+       loudly; AUTO may fall back to sampled but then reports the sampled
+       mode, so an exact claim is never made on sampled numbers. */
+    br_config.mode = solver->config.br_mode;
     for (player = 0u; player < sampled_game->player_count; ++player)
     {
         pe_external_br_result_t br_result;
-        if (pe_external_best_response_sampled(sampled_game, player,
-                                              &br_config, &br_result) != 0)
+        if (pe_external_best_response(sampled_game, player,
+                                      &br_config, &br_result) != 0)
             return PE_SOLVER_ERR_EXECUTION;
         gaps[player] = br_result.br_gap;
+        if (player == 0u)
+            measured_mode = br_result.mode;
+        else if (measured_mode != br_result.mode)
+            measured_mode = PE_BR_SAMPLED;
     }
     if (pe_best_response_metrics_from_multiway(
             sampled_game->player_count, 1, gaps, 0.0, 0.0,
             solver->config.execution.big_blind, &solver->metrics) != PE_SOLVER_OK)
         return PE_SOLVER_ERR_EXECUTION;
-    solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
+    solver->metrics.br_mode = measured_mode;
+    if (measured_mode == PE_BR_EXACT)
+        solver->metrics.guarantee =
+            sampled_game->player_count == 2u
+                ? PE_GUARANTEE_NASH
+                : PE_GUARANTEE_NO_REGRET_ONLY;
+    else
+        solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
     solver->metrics_available = 1;
     /* A zero target means "run to the iteration budget", not "disable
        telemetry".  Keep measuring and publishing the empirical BR at the
@@ -1194,12 +1220,14 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
     pe_telemetry_emitf(
         solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
         "progress iteration=%" PRIu64 " total=%" PRIu64
-        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f\n",
+        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f"
+        " br_mode=%s\n",
         iteration, solver->config.max_iterations,
         solver->config.max_iterations > 0u
             ? (double)iteration / (double)solver->config.max_iterations : 0.0,
         solver->metrics.exploitability_mbb_per_game,
-        solver->config.target_exploitability_mbb);
+        solver->config.target_exploitability_mbb,
+        pe_br_mode_name(solver->metrics.br_mode));
     pe_telemetry_flush(solver->deps.telemetry);
     return PE_SOLVER_OK;
 }
@@ -1248,13 +1276,16 @@ static void pe_solver_sampled_emit_heartbeat(
     pe_telemetry_emitf(
         solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
         "progress iteration=%" PRIu64 " total=%" PRIu64
-        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f\n",
+        " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f"
+        " br_mode=%s\n",
         iteration, solver->config.max_iterations,
         solver->config.max_iterations > 0u
             ? (double)iteration / (double)solver->config.max_iterations : 0.0,
         solver->metrics_available
             ? solver->metrics.exploitability_mbb_per_game : 0.0,
-        solver->config.target_exploitability_mbb);
+        solver->config.target_exploitability_mbb,
+        solver->metrics_available
+            ? pe_br_mode_name(solver->metrics.br_mode) : "unmeasured");
     pe_telemetry_flush(solver->deps.telemetry);
 }
 
@@ -1368,6 +1399,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         ? sampled_chance_child : NULL;
     sampled_game.apply_chance = game->apply_chance ? sampled_apply_chance : NULL;
     sampled_game.street_of = sampled_street_of;
+    sampled_game.chance_outcome_count = game->chance_outcome_count
+        ? sampled_chance_outcome_count : NULL;
 
     if (use_outcome)
         rc = pe_outcome_sampling_ctx_init(

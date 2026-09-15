@@ -93,6 +93,10 @@ pe_solver_config_t pe_solver_config_default(void)
     cfg.target_exploitability_mbb = 0.0;
     cfg.exploitability_interval = 0;
     cfg.br_samples = 0;
+    /* Issue #233: the default keeps the historical behaviour — every BR
+       measurement is a sampled estimate. Opt in to PE_BR_EXACT or PE_BR_AUTO
+       when the game is small enough to traverse. */
+    cfg.br_mode = PE_BR_SAMPLED;
 
     return cfg;
 }

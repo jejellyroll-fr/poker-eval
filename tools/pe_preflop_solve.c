@@ -12,6 +12,7 @@
 #include <poker_eval/range.h>
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 #include <poker_eval/solver/pe_preflop_allin_game.h>
+#include <poker_eval/solver/pe_external_best_response.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_range.h>
 #include <poker_eval/solver/pe_solver.h>
@@ -1357,7 +1358,8 @@ static void write_report(const char *path, const options_t *options,
         "\"allow_nonallin_call\":%s,\"postflop_streets\":%s,\"br_samples\":%" PRIu64 ",\"infosets\":%zu,"
         "\"progress\":{\"iteration\":%" PRIu64 ",\"complete\":%s},"
         "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
-        "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g}}\n",
+        "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g,"
+        "\"br_mode\":\"%s\"}}\n",
         options->game, options->players, pe_preset_name(options->algorithm),
         pe_compute_kind_name(options->backend),
         pe_precision_name(options->precision), pe_runtime_simd_name(detected_simd),
@@ -1369,7 +1371,8 @@ static void write_report(const char *path, const options_t *options,
         infosets,
         progress->iteration, progress->complete ? "true" : "false",
         guarantee_name(metrics->guarantee), metrics->exploitability_raw,
-        metrics->exploitability_mbb_per_game, options->big_blind);
+        metrics->exploitability_mbb_per_game, options->big_blind,
+        pe_br_mode_name(metrics->br_mode));
     fclose(file);
 }
 
@@ -1932,9 +1935,10 @@ int main(int argc, char **argv)
                desc_bytes / (1024.0 * 1024.0),
                pe_preflop_allin_infodesc_limited(game));
         fflush(stdout);
-        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 "\n",
+        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 " br_mode=%s\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
-               metrics.exploitability_mbb_per_game, options.br_samples);
+               metrics.exploitability_mbb_per_game, options.br_samples,
+               pe_br_mode_name(metrics.br_mode));
         print_strategy_report(&options, game, solver, tree);
         /* Serve after an interrupt too.  Stopping a run is the normal way to
          * say "that is enough, let me look at it" -- and with an iteration

@@ -105,6 +105,23 @@ typedef enum {
     PE_GUARANTEE_EMPIRICAL
 } pe_guarantee_t;
 
+/**
+ * How a best-response measurement was, or must be, computed (issue #233).
+ *
+ * EXACT enumerates the game tree deterministically and carries a mathematical
+ * guarantee. SAMPLED estimates the value from random trajectories and always
+ * reports PE_GUARANTEE_EMPIRICAL. AUTO lets the measurement layer choose:
+ * exact when the tree fits the configured budget, otherwise sampled. A result
+ * always records the mode that was actually used, so an AUTO fallback can
+ * never be presented as an exact result.
+ */
+typedef enum {
+    /* Zero preserves the historical zero-initialised/positional default. */
+    PE_BR_SAMPLED = 0,
+    PE_BR_EXACT,
+    PE_BR_AUTO
+} pe_br_mode_t;
+
 /* BR-03/05 metrics are available before the full API-01 lifecycle is wired. */
 struct pe_metrics_t {
     double exploitability_raw;
@@ -116,6 +133,10 @@ struct pe_metrics_t {
     double br_gap[PE_SOLVER_MAX_PLAYERS];
     double cce_gap;
     double utility_imbalance;
+
+    /* Issue #233: which measurement path produced the metrics above.
+       PE_BR_SAMPLED whenever any sampled estimate contributed. */
+    pe_br_mode_t br_mode;
 };
 
 /** Snapshot of lifecycle progress; values are stable for one call. */

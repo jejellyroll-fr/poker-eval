@@ -303,6 +303,14 @@ struct pe_solver_config_t {
        exploitability_interval: the latter controls *when* a check runs, not
        how expensive the check is. */
     uint32_t br_samples;
+
+    /* Issue #233: how each BR check is measured. PE_BR_SAMPLED (the default)
+       estimates from trajectories. PE_BR_EXACT traverses the tree
+       deterministically and requires the external adapter to enumerate
+       chance; when it cannot, the check fails with PE_SOLVER_ERR_EXECUTION
+       instead of silently sampling. PE_BR_AUTO tries exact first and falls
+       back to sampled, with the mode actually used reported on the metrics. */
+    pe_br_mode_t br_mode;
 };
 
 /* ------------------------------------------------------------------ *
