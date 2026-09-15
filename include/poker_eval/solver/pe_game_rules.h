@@ -22,6 +22,7 @@
 
 #include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/solver/pe_chance.h>
+#include <poker_eval/solver/pe_storage_port.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,11 @@ typedef struct pe_chance_sample_t
 {
     int outcome;             /* outcome index, as get_chance_outcomes() counts */
     double importance_ratio; /* p_reference / p_actual, 1.0 when uniform */
+    /* Street the deal moves the game INTO (pe_holdem_street_t indexing, 0..3),
+     * PE_STREET_UNKNOWN when the sampler does not say.  Purely advisory: the
+     * sampled traversal reads it to steer per-street sampling work (ISS-232)
+     * and a sampler that leaves it unknown is always treated standard. */
+    int8_t street;
 } pe_chance_sample_t;
 
 /**

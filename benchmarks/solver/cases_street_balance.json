@@ -1,0 +1,40 @@
+{
+  "schema": "pe-solver-benchmark-cases/v1",
+  "description": "ISS-232 comparison suite: PE_SAMPLING_STANDARD vs PE_SAMPLING_STREET_BALANCED on the same full preflop-to-river tree, with identical seed, ranges, abstraction and memory budget. The street-balanced twin carries the same id suffixed _balanced so runs can be paired per street. Run with --cases from benchmarks/solver.",
+  "defaults": {
+    "players": 2,
+    "iterations": 2000,
+    "showdown_samples": 1,
+    "br_samples": 16,
+    "algorithm": "external-mccfr",
+    "backend": "cpu_ref",
+    "precision": "f64",
+    "threads": 1,
+    "seed": 20260906,
+    "max_ram_mb": 512,
+    "desc_limit_mb": 64,
+    "report_rows": 0,
+    "ranges": ["100%", "100%"]
+  },
+  "cases": [
+    {
+      "id": "holdem_full_std",
+      "tags": ["street-balance"],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "sampling_policy": "standard",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "holdem_full_balanced",
+      "tags": ["street-balance"],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "sampling_policy": "street-balanced",
+      "street_replicates": [1, 2, 4, 8],
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    }
+  ]
+}

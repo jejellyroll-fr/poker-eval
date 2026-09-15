@@ -403,6 +403,19 @@ def build_command(
     abstraction = case.get("board_abstraction")
     if abstraction:
         command.extend(("--board-abstraction", abstraction))
+    # ISS-232: per-case sampling policy. `sampling_policy` selects how chance
+    # draws distribute traversal work across streets; `street_replicates` is
+    # its preflop..river draw table. Both are optional and default to the
+    # solver's standard behaviour.
+    sampling_policy = case.get("sampling_policy")
+    if sampling_policy:
+        command.extend(("--sampling-policy", str(sampling_policy)))
+    street_replicates = case.get("street_replicates")
+    if street_replicates:
+        command.extend((
+            "--street-replicates",
+            ",".join(str(int(replicates)) for replicates in street_replicates),
+        ))
     return command
 
 
@@ -664,6 +677,7 @@ def parse_stdout(
     descriptions_capped = None
     reporter_emitted_entries = None
     tree_census = None
+    street_stats: dict[str, dict[str, Any]] = {}
 
     for line in stdout.splitlines():
         match = RE_ITERATIONS.match(line)
@@ -702,6 +716,23 @@ def parse_stdout(
         match = RE_TREE_STREETS.match(line)
         if match:
             tree_census = match.group(1)
+            continue
+        if line.startswith("street_stats "):
+            # ISS-232: per-street traversal accounting emitted at solve end.
+            fields = dict(
+                token.split("=", 1) for token in line.split()[1:] if "=" in token
+            )
+            street = fields.get("street")
+            if street:
+                counters: dict[str, Any] = {}
+                for name in ("visits", "updates", "chance_samples",
+                             "unique_infosets", "uniform_rows"):
+                    try:
+                        counters[name] = int(fields[name])
+                    except (KeyError, ValueError):
+                        counters[name] = None
+                counters["policy"] = fields.get("policy")
+                street_stats[street] = counters
             continue
         match = RE_REPORT_COMPLETE.match(line)
         if match:
@@ -806,6 +837,7 @@ def parse_stdout(
         },
         "tree_streets": tree_census,
         "per_street": per_street,
+        "street_stats": street_stats,
         "sampled_private_deals": None,
     }
 

@@ -1058,6 +1058,14 @@ static const void *sampled_chance_child(const void *state, pe_rng_t *rng,
         state, rng, out, adapter->base->user);
 }
 
+static int8_t sampled_street_of(const void *state, void *user)
+{
+    pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
+    return adapter->base->street_of
+        ? adapter->base->street_of(state, adapter->base->user)
+        : PE_STREET_UNKNOWN;
+}
+
 static double sampled_action_probability(const void *state, uint64_t key,
                                          uint16_t action, void *user)
 {
@@ -1071,8 +1079,15 @@ static double sampled_action_probability(const void *state, uint64_t key,
     if (actions == 0u || action >= actions || !adapter->storage->resolve ||
         !adapter->storage->values_const)
         return 0.0;
-    id = adapter->storage->resolve(adapter->storage_self, key, actions, 1u,
-                                   PE_STREET_UNKNOWN);
+    /* Resolve with this state's real street: this callback runs before the
+       traversal resolves the same key, so a miss here CREATES the infoset —
+       and creating it with PE_STREET_UNKNOWN would leave it uncounted by
+       every per-street statistic (ISS-232). */
+    id = adapter->storage->resolve(
+        adapter->storage_self, key, actions, 1u,
+        adapter->base->street_of
+            ? adapter->base->street_of(state, adapter->base->user)
+            : PE_STREET_UNKNOWN);
     if (id == PE_INFOSET_ID_INVALID)
         return 0.0;
     regrets = adapter->storage->values_const(adapter->storage_self, id,
@@ -1352,6 +1367,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     sampled_game.sample_chance_child = game->sample_chance_child
         ? sampled_chance_child : NULL;
     sampled_game.apply_chance = game->apply_chance ? sampled_apply_chance : NULL;
+    sampled_game.street_of = sampled_street_of;
 
     if (use_outcome)
         rc = pe_outcome_sampling_ctx_init(
@@ -1367,7 +1383,13 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         compute_ops->destroy(compute_self);
         return PE_SOLVER_ERR_EXECUTION;
     }
-
+    /* ISS-232: the sampling policy is an external-sampling axis. The outcome
+       sampler owns its whole trajectory, so a per-chance-node work table has
+       no place to act there and the config is ignored for it. */
+    if (!use_outcome)
+        pe_external_sampling_set_policy(
+            &external, solver->config.algorithm.sampling_policy,
+            solver->config.algorithm.street_replicates);
     pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
     solver->stop_cause = PE_STOP_NONE;
     solver->memory_exhausted = 0;
@@ -1587,6 +1609,90 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             (double)held / (1024.0 * 1024.0),
             (double)storage_bytes / (1024.0 * 1024.0),
             (double)(held - storage_bytes) / (1024.0 * 1024.0));
+        pe_telemetry_flush(solver->deps.telemetry);
+    }
+    /* ISS-232: per-street traversal accounting. Visits, updates and chance
+       draws accumulate in the external ctx; infoset counts and uniform-row
+       counts come from one storage sweep, keyed on the street each infoset
+       was resolved with. Emitted so a street-balanced run can be compared
+       against standard under the same budget. */
+    if (!use_outcome)
+    {
+        static const char *const street_names[PE_SAMPLING_STREET_COUNT] = {
+            "preflop", "flop", "turn", "river"
+        };
+        size_t unique_infosets[PE_SAMPLING_STREET_COUNT] = {0};
+        size_t uniform_rows[PE_SAMPLING_STREET_COUNT] = {0};
+        if (solver->storage && solver->storage->count && solver->storage->shape &&
+            solver->storage_self)
+        {
+            size_t infoset_count = solver->storage->count(solver->storage_self);
+            for (size_t next_id = 0; next_id < infoset_count; ++next_id)
+            {
+                pe_infoset_id_t id = (pe_infoset_id_t)next_id;
+                uint16_t actions = 0u, combos = 0u;
+                int8_t street = PE_STREET_UNKNOWN;
+                const double *average;
+                if (solver->storage->shape(solver->storage_self, id,
+                                           &actions, &combos, &street) != 0)
+                    continue;
+                if (street < 0 || street >= PE_SAMPLING_STREET_COUNT)
+                    continue;
+                unique_infosets[street]++;
+                if (!solver->storage->values_const || actions == 0u)
+                    continue;
+                average = solver->storage->values_const(
+                    solver->storage_self, id, PE_VALUES_AVERAGE, NULL);
+                if (!average)
+                    continue;
+                {
+                    double total = 0.0;
+                    int uniform = 1;
+                    for (uint16_t a = 0u; a < actions; ++a)
+                    {
+                        if (!finite_double(average[a]))
+                        {
+                            uniform = 0;
+                            break;
+                        }
+                        total += average[a];
+                    }
+                    /* An untouched average span (all zeros) is the unvisited
+                       uniform start; a touched one counts as uniform only
+                       when its normalised distribution is uniform. */
+                    if (uniform && total > 0.0)
+                    {
+                        double target = 1.0 / (double)actions;
+                        for (uint16_t a = 0u; a < actions; ++a)
+                            if (fabs(average[a] / total - target) > 1e-6)
+                            {
+                                uniform = 0;
+                                break;
+                            }
+                    }
+                    if (uniform)
+                        uniform_rows[street]++;
+                }
+            }
+        }
+        for (int street = 0; street < PE_SAMPLING_STREET_COUNT; ++street)
+        {
+            /* %zu is not portable across the supported printf targets
+               (MinGW) — cast to uint64_t and use PRIu64, as elsewhere. */
+            pe_telemetry_emitf(
+                solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+                "street_stats street=%s policy=%s visits=%" PRIu64
+                " updates=%" PRIu64
+                " chance_samples=%" PRIu64 " unique_infosets=%" PRIu64
+                " uniform_rows=%" PRIu64 "\n",
+                street_names[street],
+                pe_sampling_policy_name(external.policy),
+                (uint64_t)external.visits_by_street[street],
+                (uint64_t)external.updates_by_street[street],
+                (uint64_t)external.chance_samples_by_street[street],
+                (uint64_t)unique_infosets[street],
+                (uint64_t)uniform_rows[street]);
+        }
         pe_telemetry_flush(solver->deps.telemetry);
     }
     }

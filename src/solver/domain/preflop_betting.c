@@ -138,7 +138,19 @@ static const void *sample_chance_child(const void *state, pe_rng_t *rng,
         sample.importance_ratio = deal.importance_ratio;
     }
     *out = sample;
+    /* Tag the street the deal moved the game into: the sampled traversal's
+     * per-street work policy (ISS-232) steers on this, and the per-street
+     * statistics key on it.  Every path through chance_child leaves child
+     * carrying the post-deal street. */
+    out->street = (int8_t)child->street;
     return child;
+}
+
+static int8_t street_of(const void *state, void *user)
+{
+    const pe_preflop_betting_state_t *current = state;
+    (void)user;
+    return current ? (int8_t)current->street : (int8_t)PE_STREET_UNKNOWN;
 }
 
 static void release_state(const void *state, void *user)
@@ -190,6 +202,7 @@ int pe_preflop_betting_game_init(
     out->game.apply_action = apply_action;
     out->game.terminal_value = terminal_value;
     out->game.sample_chance_child = sample_chance_child;
+    out->game.street_of = street_of;
     out->game.release_state = release_state;
     return 0;
 }

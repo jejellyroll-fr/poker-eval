@@ -224,9 +224,26 @@ A non-uniform row is a practical signal that the infoset moved away from regret
 matching's initial uniform policy; it is not mislabelled as an exact
 traversal-visit count.
 
-The next sampling-policy work can add raw per-street visit/update counters to
-the solver telemetry. This corpus already gives it stable cases, exact inputs
-and before/after state-coverage measurements.
+### Sampling policies (ISS-232)
+
+The solver now exposes a sampling-policy axis (`--sampling-policy`,
+`--street-replicates`) and emits `street_stats street=... visits=... updates=...
+chance_samples=... unique_infosets=... uniform_rows=...` telemetry at the end of
+every external-sampling solve; the runner parses it into
+`benchmark.street_stats`. `cases_street_balance.json` holds standard vs
+street-balanced twins of the full-tree case (same tree, seed, ranges,
+abstraction and memory budget) so the per-street effect of a policy can be
+measured under an equal iteration budget:
+
+```
+python3 run_benchmarks.py --manifest cases_street_balance.json --output-dir <dir>
+```
+
+`PE_SAMPLING_STREET_BALANCED` replicates a chance draw into street *s*
+`street_replicates[s]` times per visit and returns the mean of the replicates,
+which is the unbiasedness correction: each replicate is an independent unbiased
+trajectory, so deep streets receive that factor more useful updates per
+iteration while the game being solved is unchanged.
 
 ### Private-deal count
 
