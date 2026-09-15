@@ -1,0 +1,208 @@
+{
+  "schema": "pe-solver-benchmark-cases/v1",
+  "description": "Deterministic solver benchmark corpus for issue #231. Tree files are reused from examples; game semantics come from --game.",
+  "defaults": {
+    "players": 2,
+    "iterations": 2000,
+    "showdown_samples": 1,
+    "br_samples": 16,
+    "algorithm": "external-mccfr",
+    "backend": "cpu_ref",
+    "precision": "f64",
+    "threads": 1,
+    "seed": 20260906,
+    "max_ram_mb": 512,
+    "desc_limit_mb": 64,
+    "report_rows": 0,
+    "ranges": [
+      "100%",
+      "100%"
+    ]
+  },
+  "cases": [
+    {
+      "id": "holdem_preflop",
+      "tags": ["standard"],
+      "game": "holdem",
+      "street": "preflop",
+      "tree": "examples/plo_hu_streets/plo5_hu_preflop.tree.json",
+      "expect_streets": ["PREFLOP"]
+    },
+    {
+      "id": "holdem_flop",
+      "tags": ["standard", "smoke"],
+      "game": "holdem",
+      "street": "flop",
+      "tree": "examples/plo_hu_streets/plo5_hu_flop.tree.json",
+      "board": "Ks9d4c",
+      "pot": 7,
+      "expect_streets": ["FLOP"]
+    },
+    {
+      "id": "holdem_turn",
+      "tags": ["standard"],
+      "game": "holdem",
+      "street": "turn",
+      "tree": "examples/plo_hu_streets/plo5_hu_turn.tree.json",
+      "board": "Ks9d4c2h",
+      "pot": 21,
+      "expect_streets": ["TURN"]
+    },
+    {
+      "id": "holdem_river",
+      "tags": ["standard"],
+      "game": "holdem",
+      "street": "river",
+      "tree": "examples/plo_hu_streets/plo5_hu_river.tree.json",
+      "board": "Ks9d4c2hTs",
+      "pot": 63,
+      "expect_streets": ["RIVER"]
+    },
+    {
+      "id": "holdem_full",
+      "tags": ["standard", "smoke"],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo4_preflop",
+      "tags": ["standard"],
+      "game": "plo4",
+      "street": "preflop",
+      "tree": "examples/plo_hu_streets/plo5_hu_preflop.tree.json",
+      "expect_streets": ["PREFLOP"]
+    },
+    {
+      "id": "plo4_flop",
+      "tags": ["standard", "smoke"],
+      "game": "plo4",
+      "street": "flop",
+      "tree": "examples/plo_hu_streets/plo5_hu_flop.tree.json",
+      "board": "Ks9d4c",
+      "pot": 7,
+      "expect_streets": ["FLOP"]
+    },
+    {
+      "id": "plo4_turn",
+      "tags": ["standard"],
+      "game": "plo4",
+      "street": "turn",
+      "tree": "examples/plo_hu_streets/plo5_hu_turn.tree.json",
+      "board": "Ks9d4c2h",
+      "pot": 21,
+      "expect_streets": ["TURN"]
+    },
+    {
+      "id": "plo4_river",
+      "tags": ["standard"],
+      "game": "plo4",
+      "street": "river",
+      "tree": "examples/plo_hu_streets/plo5_hu_river.tree.json",
+      "board": "Ks9d4c2hTs",
+      "pot": 63,
+      "expect_streets": ["RIVER"]
+    },
+    {
+      "id": "plo4_full",
+      "tags": ["standard"],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo5_preflop",
+      "tags": ["standard"],
+      "game": "plo5",
+      "street": "preflop",
+      "tree": "examples/plo_hu_streets/plo5_hu_preflop.tree.json",
+      "expect_streets": ["PREFLOP"]
+    },
+    {
+      "id": "plo5_flop",
+      "tags": ["standard", "smoke"],
+      "game": "plo5",
+      "street": "flop",
+      "tree": "examples/plo_hu_streets/plo5_hu_flop.tree.json",
+      "board": "Ks9d4c",
+      "pot": 7,
+      "expect_streets": ["FLOP"]
+    },
+    {
+      "id": "plo5_turn",
+      "tags": ["standard"],
+      "game": "plo5",
+      "street": "turn",
+      "tree": "examples/plo_hu_streets/plo5_hu_turn.tree.json",
+      "board": "Ks9d4c2h",
+      "pot": 21,
+      "expect_streets": ["TURN"]
+    },
+    {
+      "id": "plo5_river",
+      "tags": ["standard"],
+      "game": "plo5",
+      "street": "river",
+      "tree": "examples/plo_hu_streets/plo5_hu_river.tree.json",
+      "board": "Ks9d4c2hTs",
+      "pot": 63,
+      "expect_streets": ["RIVER"]
+    },
+    {
+      "id": "plo5_full",
+      "tags": ["standard"],
+      "game": "plo5",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo6_preflop",
+      "tags": ["standard"],
+      "game": "plo6",
+      "street": "preflop",
+      "tree": "examples/plo_hu_streets/plo6_hu_preflop.tree.json",
+      "expect_streets": ["PREFLOP"]
+    },
+    {
+      "id": "plo6_flop",
+      "tags": ["standard", "smoke"],
+      "game": "plo6",
+      "street": "flop",
+      "tree": "examples/plo_hu_streets/plo6_hu_flop.tree.json",
+      "board": "Ks9d4c",
+      "pot": 7,
+      "expect_streets": ["FLOP"]
+    },
+    {
+      "id": "plo6_turn",
+      "tags": ["standard"],
+      "game": "plo6",
+      "street": "turn",
+      "tree": "examples/plo_hu_streets/plo6_hu_turn.tree.json",
+      "board": "Ks9d4c2h",
+      "pot": 21,
+      "expect_streets": ["TURN"]
+    },
+    {
+      "id": "plo6_river",
+      "tags": ["standard"],
+      "game": "plo6",
+      "street": "river",
+      "tree": "examples/plo_hu_streets/plo6_hu_river.tree.json",
+      "board": "Ks9d4c2hTs",
+      "pot": 63,
+      "expect_streets": ["RIVER"]
+    },
+    {
+      "id": "plo6_full",
+      "tags": ["standard"],
+      "game": "plo6",
+      "tree": "examples/plo_hu_streets/plo6_hu_full.tree.json",
+      "board_abstraction": "large",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    }
+  ]
+}
