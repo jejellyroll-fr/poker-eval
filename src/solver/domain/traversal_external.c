@@ -136,6 +136,12 @@ static double external_visit(pe_external_sampling_ctx_t *ctx,
     {
         pe_chance_sample_t sample;
         const void *child;
+        /* Legacy adapters only fill outcome/importance_ratio; the street tag
+         * must start unknown so a policy reading it before the first callback
+         * falls back to the standard single draw instead of an arbitrary
+         * replicate quota (ISS-232 review). */
+        memset(&sample, 0, sizeof(sample));
+        sample.street = PE_STREET_UNKNOWN;
         int sampled = game->sample_chance_with_user
             ? game->sample_chance_with_user(state, &ctx->rng, &sample,
                                             game->user)

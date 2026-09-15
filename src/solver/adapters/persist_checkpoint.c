@@ -178,6 +178,11 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->algorithm.exponential_lambda);
     HASH_FIELD(config->algorithm.averaging_delay);
     HASH_FIELD(config->algorithm.outcome_epsilon);
+    /* The sampling policy changes the update distribution itself, so it is
+       mathematical state, not execution policy: a standard-sampled checkpoint
+       must refuse to resume under street-balanced sampling (ISS-232). */
+    HASH_FIELD(config->algorithm.sampling_policy);
+    HASH_FIELD(config->algorithm.street_replicates);
     HASH_FIELD(config->problem.expected_infosets);
     HASH_FIELD(config->problem.expected_actions);
     HASH_FIELD(config->problem.expected_combos);

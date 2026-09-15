@@ -1718,11 +1718,17 @@ int main(int argc, char **argv)
 
     config = pe_solver_config_default();
     config.algorithm.preset = options.algorithm;
+    /* The solver skips the policy for outcome sampling (it owns the whole
+       trajectory), so accepting the flag there would archive a run whose
+       metadata claims an effect it does not have. Restrict to the external
+       presets where pe_external_sampling_set_policy actually runs. */
     if (options.sampling_policy != PE_SAMPLING_STANDARD &&
-        !preflop_algorithm_supported(options.algorithm)) {
+        options.algorithm != PE_PRESET_EXTERNAL_MCCFR &&
+        options.algorithm != PE_PRESET_EXTERNAL_DCFR &&
+        options.algorithm != PE_PRESET_EXTERNAL_ECFR) {
         fprintf(stderr,
-                "--sampling-policy applies only to sampled algorithms "
-                "(external-mccfr and friends)\n");
+                "--sampling-policy applies only to external-sampling "
+                "algorithms (external-mccfr, external-dcfr, external-ecfr)\n");
         goto fail;
     }
     config.algorithm.sampling_policy = options.sampling_policy;

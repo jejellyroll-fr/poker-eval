@@ -1677,16 +1677,21 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         }
         for (int street = 0; street < PE_SAMPLING_STREET_COUNT; ++street)
         {
+            /* %zu is not portable across the supported printf targets
+               (MinGW) — cast to uint64_t and use PRIu64, as elsewhere. */
             pe_telemetry_emitf(
                 solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
-                "street_stats street=%s policy=%s visits=%zu updates=%zu"
-                " chance_samples=%zu unique_infosets=%zu uniform_rows=%zu\n",
+                "street_stats street=%s policy=%s visits=%" PRIu64
+                " updates=%" PRIu64
+                " chance_samples=%" PRIu64 " unique_infosets=%" PRIu64
+                " uniform_rows=%" PRIu64 "\n",
                 street_names[street],
                 pe_sampling_policy_name(external.policy),
-                external.visits_by_street[street],
-                external.updates_by_street[street],
-                external.chance_samples_by_street[street],
-                unique_infosets[street], uniform_rows[street]);
+                (uint64_t)external.visits_by_street[street],
+                (uint64_t)external.updates_by_street[street],
+                (uint64_t)external.chance_samples_by_street[street],
+                (uint64_t)unique_infosets[street],
+                (uint64_t)uniform_rows[street]);
         }
         pe_telemetry_flush(solver->deps.telemetry);
     }
