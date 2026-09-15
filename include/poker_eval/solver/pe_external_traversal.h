@@ -67,6 +67,15 @@ typedef struct pe_external_game_t
        allocate a temporary child.  Sampling adapters that own a per-deal
        arena can leave this NULL and reclaim the arena at the chance boundary. */
     void (*release_state)(const void *state, void *user);
+
+    /* Issue #233: number of chance outcomes at a chance node, for exact
+       (deterministic) traversal.  apply_chance(state, outcome, user) with
+       outcome in [0, count) must then reproduce every child exactly once.
+       Outcomes are weighted uniformly, so an adapter with non-equiprobable
+       events must expose one outcome per elementary outcome.  NULL means the
+       adapter cannot enumerate chance; exact BR then refuses the game with an
+       explicit error instead of silently sampling. */
+    uint32_t (*chance_outcome_count)(const void *state, void *user);
 } pe_external_game_t;
 
 typedef struct
