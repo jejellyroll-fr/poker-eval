@@ -6,6 +6,7 @@
 #include <poker_eval/solver/pe_batch.h>
 #include <poker_eval/solver/pe_capabilities.h>
 #include <poker_eval/solver/pe_game_rules.h>
+#include <poker_eval/solver/pe_sampling_policy.h>
 #include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_traversal.h>
 
@@ -57,6 +58,11 @@ typedef struct pe_external_game_t
        and only the adapter knows what it has accumulated.  NULL reports 0. */
     size_t (*footprint_bytes)(void *user);
 
+    /* Optional street tag of a PLAYER state (pe_holdem_street_t indexing,
+       negative for "unknown").  Feeds the per-street traversal statistics;
+       NULL means the adapter does not report streets. */
+    int8_t (*street_of)(const void *state, void *user);
+
     /* Optional lifetime hook for adapters whose apply_action/apply_chance
        allocate a temporary child.  Sampling adapters that own a per-deal
        arena can leave this NULL and reclaim the arena at the chance boundary. */
@@ -74,6 +80,16 @@ typedef struct
     size_t visited_nodes;
     size_t terminal_nodes;
     size_t sampled_chance_nodes;
+    /* ISS-232: sampling policy and its per-street work table. The default
+       (STANDARD, all replicates 1) is bit-identical to the pre-policy
+       traversal, so existing callers change nothing by ignoring it. */
+    pe_sampling_policy_t policy;
+    uint16_t chance_replicates[PE_SAMPLING_STREET_COUNT];
+    /* Cumulative per-street traversal statistics, reset by ctx_init. Streets
+       the adapter does not tag are not counted. */
+    size_t visits_by_street[PE_SAMPLING_STREET_COUNT];
+    size_t updates_by_street[PE_SAMPLING_STREET_COUNT];
+    size_t chance_samples_by_street[PE_SAMPLING_STREET_COUNT];
     int initialized;
 } pe_external_sampling_ctx_t;
 
@@ -84,6 +100,13 @@ int pe_external_sampling_ctx_init(pe_external_sampling_ctx_t *ctx,
                                   int updating_player,
                                   uint64_t seed);
 void pe_external_sampling_ctx_destroy(pe_external_sampling_ctx_t *ctx);
+
+/* Select the sampling policy. `street_replicates` is a
+   PE_SAMPLING_STREET_COUNT table of replicate counts per street; NULL or a
+   zero entry means one. Only PE_SAMPLING_STREET_BALANCED reads the table. */
+void pe_external_sampling_set_policy(pe_external_sampling_ctx_t *ctx,
+                                     pe_sampling_policy_t policy,
+                                     const uint16_t *street_replicates);
 
 /* Run one external-sampling iteration for ctx->updating_player. */
 int pe_external_sampling_run(pe_external_sampling_ctx_t *ctx,

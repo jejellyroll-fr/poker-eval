@@ -21,6 +21,7 @@
 #ifndef POKER_EVAL_PE_SOLVER_CONFIG_H
 #define POKER_EVAL_PE_SOLVER_CONFIG_H
 
+#include <poker_eval/solver/pe_sampling_policy.h>
 #include <poker_eval/solver/pe_solver.h>
 
 #include <stddef.h>
@@ -204,6 +205,17 @@ typedef struct {
 
     /* Exploration of PE_TRAVERSAL_OUTCOME_SAMPLING, in [0, 1]. */
     double outcome_epsilon;
+
+    /* Lane B, external sampling only: how chance draws distribute traversal
+     * work across streets (ISS-232). STANDARD keeps one draw per chance
+     * visit. STREET_BALANCED draws a chance node street_replicates[] times
+     * per visit and returns their mean — the unbiasedness correction — so
+     * deep streets receive that factor more useful updates per iteration.
+     * Read by PE_TRAVERSAL_EXTERNAL_SAMPLING; ignored elsewhere. */
+    pe_sampling_policy_t sampling_policy;
+    /* Per-street replicate table (pe_holdem_street_t indexing). 0 means 1;
+       only meaningful when sampling_policy is PE_SAMPLING_STREET_BALANCED. */
+    uint16_t street_replicates[PE_SAMPLING_STREET_COUNT];
 } pe_algorithm_config_t;
 
 /* ------------------------------------------------------------------ *

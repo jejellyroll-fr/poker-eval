@@ -349,6 +349,52 @@ class OutputPreparationTests(unittest.TestCase):
 
 
 class TelemetryParsingTests(unittest.TestCase):
+    def test_street_stats_are_parsed_per_street(self) -> None:
+        stdout = "\n".join(
+            [
+                "iterations=100 complete=1 infosets=10",
+                (
+                    "solve_loop_end cause=max_iterations iteration=100 "
+                    "memory_mb=1.0 storage_mb=0.5 adapter_mb=0.5"
+                ),
+                (
+                    "street_stats street=preflop policy=standard visits=300 "
+                    "updates=300 chance_samples=100 unique_infosets=50 "
+                    "uniform_rows=48"
+                ),
+                (
+                    "street_stats street=river policy=street-balanced "
+                    "visits=6400 updates=3200 chance_samples=3200 "
+                    "unique_infosets=900 uniform_rows=900"
+                ),
+            ]
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.25,
+            requested_iterations=100,
+            report_rows_requested=0,
+        )
+
+        self.assertEqual(parsed["street_stats"]["preflop"], {
+            "policy": "standard",
+            "visits": 300,
+            "updates": 300,
+            "chance_samples": 100,
+            "unique_infosets": 50,
+            "uniform_rows": 48,
+        })
+        self.assertEqual(
+            parsed["street_stats"]["river"]["chance_samples"], 3200
+        )
+        # Streets without a street_stats line are simply absent.
+        self.assertNotIn("flop", parsed["street_stats"])
+        self.assertNotIn("turn", parsed["street_stats"])
+
     def test_non_boolean_description_cap_telemetry_is_unknown(self) -> None:
         stdout = (
             "stop_detail cause=max_iterations interrupted=0 iteration=64 "
@@ -779,6 +825,43 @@ class ValidationTests(unittest.TestCase):
         self.assertIn(
             "native solver report schema='unexpected/v9', expected pe-preflop-solve/v1",
             failures,
+        )
+
+
+class SamplingPolicyCommandTests(unittest.TestCase):
+    """ISS-232: the runner forwards per-case sampling policy settings."""
+
+    def _build(self, case: dict) -> list[str]:
+        return bench.build_command(
+            Path("/tmp/pe-preflop-solve"),
+            Path("/repo"),
+            Path("/tmp/report.json"),
+            case,
+            {},
+            iteration_override=None,
+        )
+
+    def test_standard_case_omits_policy_flags(self) -> None:
+        command = self._build({"game": "holdem", "tree": "t.json"})
+        self.assertNotIn("--sampling-policy", command)
+        self.assertNotIn("--street-replicates", command)
+
+    def test_policy_and_replicates_are_forwarded(self) -> None:
+        command = self._build(
+            {
+                "game": "holdem",
+                "tree": "t.json",
+                "sampling_policy": "street-balanced",
+                "street_replicates": [1, 2, 4, 8],
+            }
+        )
+        self.assertIn("--sampling-policy", command)
+        self.assertEqual(
+            command[command.index("--sampling-policy") + 1], "street-balanced"
+        )
+        self.assertIn("--street-replicates", command)
+        self.assertEqual(
+            command[command.index("--street-replicates") + 1], "1,2,4,8"
         )
 
 

@@ -110,6 +110,8 @@ typedef struct {
     int have_to_act;
     pe_algorithm_preset_t algorithm;
     pe_policy_mode_t policy;
+    pe_sampling_policy_t sampling_policy;
+    uint16_t street_replicates[PE_SAMPLING_STREET_COUNT];
     double exponential_lambda;
     double dcfr_alpha;
     double dcfr_beta;
@@ -680,6 +682,9 @@ static void usage(FILE *stream)
         "                               (full-tree cfr/cfr+/dcfr presets are\n"
         "                               rejected by this sampled driver)\n"
         "  --policy NAME                regret-matching or exponential\n"
+        "  --sampling-policy NAME       standard (default) or street-balanced\n"
+        "  --street-replicates A,B,C,D  chance draws per visit, preflop..river\n"
+        "                               (street-balanced only; 0 keeps 1)\n"
         "  --lambda X                   exponential policy temperature (> 0)\n"
         "  --alpha X                   DCFR positive-regret discount exponent (>= 0)\n"
         "  --beta X                    DCFR negative-regret discount exponent (>= 0)\n"
@@ -1086,6 +1091,9 @@ options->checkpoint_interval =0u;
     options->seed = UINT64_C(0x50455f5052464c42);
     options->algorithm = PE_PRESET_EXTERNAL_MCCFR;
     options->policy = PE_POLICY_COUNT;
+    options->sampling_policy = PE_SAMPLING_STANDARD;
+    for (int street = 0; street < PE_SAMPLING_STREET_COUNT; ++street)
+        options->street_replicates[street] = 0u;
     options->exponential_lambda = 1.0;
     options->dcfr_alpha = 1.5;
     options->dcfr_beta = 0.0;
@@ -1114,6 +1122,8 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--tree") == 0 ||
              strcmp(arg, "--algorithm") == 0 ||
              strcmp(arg, "--policy") == 0 ||
+             strcmp(arg, "--sampling-policy") == 0 ||
+             strcmp(arg, "--street-replicates") == 0 ||
              strcmp(arg, "--lambda") == 0 ||
              strcmp(arg, "--alpha") == 0 ||
              strcmp(arg, "--beta") == 0 ||
@@ -1242,6 +1252,28 @@ options->checkpoint_interval =0u;
         } else if (strcmp(arg, "--policy") == 0) {
             options->policy = pe_policy_from_name(value);
             if (options->policy == PE_POLICY_COUNT) return -1;
+        } else if (strcmp(arg, "--sampling-policy") == 0) {
+            if (pe_sampling_policy_parse(value, &options->sampling_policy) != 0) {
+                fprintf(stderr, "unknown sampling policy: %s\n", value);
+                return -1;
+            }
+        } else if (strcmp(arg, "--street-replicates") == 0) {
+            /* "1,2,4,8": chance draws per visit, preflop..river. A street left
+               at 0 (or the table truncated) keeps the standard single draw. */
+            int street = 0;
+            const char *cursor = value;
+            while (street < PE_SAMPLING_STREET_COUNT && *cursor) {
+                char *end = NULL;
+                long parsed = strtol(cursor, &end, 10);
+                if (end == cursor || parsed < 0 || parsed > UINT16_MAX)
+                    return -1;
+                options->street_replicates[street++] = (uint16_t)parsed;
+                cursor = *end == ',' ? end + 1 : end;
+            }
+            if (*cursor || street == 0) {
+                fprintf(stderr, "invalid street replicate table: %s\n", value);
+                return -1;
+            }
         } else if (strcmp(arg, "--lambda") == 0) {
             if (parse_positive_double(value, &options->exponential_lambda) != 0)
                 return -1;
@@ -1686,6 +1718,17 @@ int main(int argc, char **argv)
 
     config = pe_solver_config_default();
     config.algorithm.preset = options.algorithm;
+    if (options.sampling_policy != PE_SAMPLING_STANDARD &&
+        !preflop_algorithm_supported(options.algorithm)) {
+        fprintf(stderr,
+                "--sampling-policy applies only to sampled algorithms "
+                "(external-mccfr and friends)\n");
+        goto fail;
+    }
+    config.algorithm.sampling_policy = options.sampling_policy;
+    for (int street = 0; street < PE_SAMPLING_STREET_COUNT; ++street)
+        config.algorithm.street_replicates[street] =
+            options.street_replicates[street];
     if (options.policy != PE_POLICY_COUNT ||
         fabs(options.exponential_lambda - 1.0) > 1e-15 ||
         options.have_dcfr_alpha || options.have_dcfr_beta || options.have_dcfr_gamma) {
@@ -1855,6 +1898,12 @@ int main(int argc, char **argv)
                options.street ? options.street : "preflop",
                options.board ? options.board : "none",
                options.board_abstraction ? options.board_abstraction : "none");
+        printf("sampling_policy=%s street_replicates=%u,%u,%u,%u\n",
+               pe_sampling_policy_name(config.algorithm.sampling_policy),
+               config.algorithm.street_replicates[0],
+               config.algorithm.street_replicates[1],
+               config.algorithm.street_replicates[2],
+               config.algorithm.street_replicates[3]);
         printf("iterations=%" PRIu64 " complete=%d infosets=%zu\n",
                progress.iteration, progress.complete, infosets);
         double desc_bytes = (double)(uint64_t)

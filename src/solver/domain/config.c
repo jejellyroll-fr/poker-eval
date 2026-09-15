@@ -49,6 +49,10 @@ pe_solver_config_t pe_solver_config_default(void)
     /* Standard outcome-sampling exploration. */
     cfg.algorithm.outcome_epsilon = 0.6;
 
+    /* Reference sampling policy: one chance draw per visit, every street
+       (street_replicates stays zero, which the policy reads as one). */
+    cfg.algorithm.sampling_policy = PE_SAMPLING_STANDARD;
+
     /* Every stage on the reference backend. Named explicitly rather than left
        at AUTO so the default plan is fully determined before the resolver
        runs — the reference path must not depend on what hardware is present. */
