@@ -75,6 +75,8 @@ typedef struct {
     uint64_t br_samples;
     uint64_t exploitability_interval;
     double target_mbb;
+    double target_nash_conv_mbb;
+    double target_max_br_gap_mbb;
     uint64_t seed;
     const char *output;
     const char *tree;
@@ -696,6 +698,9 @@ static void usage(FILE *stream)
         "  --show-capabilities          print detected CPU/SIMD/backend capabilities\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
         "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
+        "  --target-nash-conv-mbb N     stop when NashConv <= N mBB/game\n"
+        "  --target-max-br-gap-mbb N    stop when the worst player's BR gap\n"
+        "                               <= N mBB/game\n"
         "  --exploitability-interval N  measure/print convergence every N iterations\n"
         "  --max-ram MB                 stop cleanly when storage plus the game\n"
         "                               adapter exceed MB (default: 70%% of RAM,\n"
@@ -923,6 +928,16 @@ static uint64_t spot_hash(const options_t *options, const mpf_tree_def_t *tree)
             i_hash_byte(&h, ((const unsigned char *)&v)[i]);
     }
     {
+        double v = options->target_nash_conv_mbb;
+        for (unsigned i = 0; i < sizeof(v); ++i)
+            i_hash_byte(&h, ((const unsigned char *)&v)[i]);
+    }
+    {
+        double v = options->target_max_br_gap_mbb;
+        for (unsigned i = 0; i < sizeof(v); ++i)
+            i_hash_byte(&h, ((const unsigned char *)&v)[i]);
+    }
+    {
         double v = options->have_pot ? options->pot : 0.0;
         for (unsigned i = 0; i < sizeof(v); ++i)
             i_hash_byte(&h, ((const unsigned char *)&v)[i]);
@@ -1089,6 +1104,8 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->exploitability_interval = 256u;
 options->checkpoint_interval =0u;
     options->target_mbb = 1.0;
+    options->target_nash_conv_mbb = 0.0;
+    options->target_max_br_gap_mbb = 0.0;
     options->seed = UINT64_C(0x50455f5052464c42);
     options->algorithm = PE_PRESET_EXTERNAL_MCCFR;
     options->policy = PE_POLICY_COUNT;
@@ -1133,6 +1150,8 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--precision") == 0 ||
              strcmp(arg, "--threads") == 0 ||
              strcmp(arg, "--target-mbb") == 0 ||
+             strcmp(arg, "--target-nash-conv-mbb") == 0 ||
+             strcmp(arg, "--target-max-br-gap-mbb") == 0 ||
              strcmp(arg, "--exploitability-interval") == 0 ||
              strcmp(arg, "--checkpoint") == 0 ||
              strcmp(arg, "--resume") == 0 ||
@@ -1209,6 +1228,18 @@ options->checkpoint_interval =0u;
             if (errno || end == value || *end != '\0' || target < 0.0)
                 return -1;
             options->target_mbb = target;
+        } else if (strcmp(arg, "--target-nash-conv-mbb") == 0 ||
+                   strcmp(arg, "--target-max-br-gap-mbb") == 0) {
+            char *end = NULL;
+            double target;
+            errno = 0;
+            target = strtod(value, &end);
+            if (errno || end == value || *end != '\0' || target < 0.0)
+                return -1;
+            if (arg[9] == 'n')
+                options->target_nash_conv_mbb = target;
+            else
+                options->target_max_br_gap_mbb = target;
         } else if (strcmp(arg, "--exploitability-interval") == 0) {
             if (parse_u64(value, &options->exploitability_interval) != 0 ||
                 options->exploitability_interval == 0u)
@@ -1359,7 +1390,12 @@ static void write_report(const char *path, const options_t *options,
         "\"progress\":{\"iteration\":%" PRIu64 ",\"complete\":%s},"
         "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
         "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g,"
-        "\"br_mode\":\"%s\"}}\n",
+        "\"br_mode\":\"%s\","
+        "\"nash_conv\":%.17g,\"nash_conv_unit\":\"%s\","
+        "\"nash_conv_mbb_per_game\":%.17g,"
+        "\"max_br_gap\":%.17g,\"mean_br_gap\":%.17g,"
+        "\"sample_count\":%" PRIu64 ",\"seed\":%" PRIu64
+        ",\"measurement_iteration\":%" PRIu64 "}}\n",
         options->game, options->players, pe_preset_name(options->algorithm),
         pe_compute_kind_name(options->backend),
         pe_precision_name(options->precision), pe_runtime_simd_name(detected_simd),
@@ -1372,7 +1408,11 @@ static void write_report(const char *path, const options_t *options,
         progress->iteration, progress->complete ? "true" : "false",
         guarantee_name(metrics->guarantee), metrics->exploitability_raw,
         metrics->exploitability_mbb_per_game, options->big_blind,
-        pe_br_mode_name(metrics->br_mode));
+        pe_br_mode_name(metrics->br_mode),
+        metrics->nash_conv, pe_metric_unit_name(metrics->nash_conv_unit),
+        metrics->nash_conv_mbb_per_game,
+        metrics->max_br_gap, metrics->mean_br_gap,
+        metrics->sample_count, metrics->seed, metrics->measurement_iteration);
     fclose(file);
 }
 
@@ -1772,6 +1812,8 @@ int main(int argc, char **argv)
     config.execution.big_blind = options.big_blind;
     config.execution.max_ram_bytes = options.max_ram_bytes;
     config.target_exploitability_mbb = options.target_mbb;
+    config.target_nash_conv_mbb = options.target_nash_conv_mbb;
+    config.target_max_br_gap_mbb = options.target_max_br_gap_mbb;
     config.exploitability_interval = options.exploitability_interval;
     config.br_samples = (uint32_t)options.br_samples;
     config.seed = options.seed;
@@ -1935,10 +1977,21 @@ int main(int argc, char **argv)
                desc_bytes / (1024.0 * 1024.0),
                pe_preflop_allin_infodesc_limited(game));
         fflush(stdout);
-        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 " br_mode=%s\n",
+        /* Issue #234: the trailing fields extend, never reorder, the
+           "guarantee=" line: the Studio parses the fixed prefix. */
+        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 " br_mode=%s"
+               " nash_conv_raw=%.6f nash_conv_mbb=%.6f max_br_gap_mbb=%.6f mean_br_gap_mbb=%.6f"
+               " unit=%s measurement_iteration=%" PRIu64 " sample_count=%" PRIu64 "\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
                metrics.exploitability_mbb_per_game, options.br_samples,
-               pe_br_mode_name(metrics.br_mode));
+               pe_br_mode_name(metrics.br_mode),
+               metrics.nash_conv, metrics.nash_conv_mbb_per_game,
+               metrics.big_blind > 0.0
+                   ? metrics.max_br_gap / metrics.big_blind * 1000.0 : 0.0,
+               metrics.big_blind > 0.0
+                   ? metrics.mean_br_gap / metrics.big_blind * 1000.0 : 0.0,
+               pe_metric_unit_name(metrics.nash_conv_unit),
+               metrics.measurement_iteration, metrics.sample_count);
         print_strategy_report(&options, game, solver, tree);
         /* Serve after an interrupt too.  Stopping a run is the normal way to
          * say "that is enough, let me look at it" -- and with an iteration

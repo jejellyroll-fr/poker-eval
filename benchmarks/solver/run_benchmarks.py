@@ -49,7 +49,12 @@ RE_ITERATIONS = re.compile(r"^iterations=(\d+)\s+complete=(\d+)\s+infosets=(\d+)
 RE_GUARANTEE = re.compile(
     r"^guarantee=(\S+)\s+exploitability_raw=([^\s]+)\s+"
     r"exploitability_mbb=([^\s]+)\s+br_samples=(\d+)"
-    r"(?:\s+br_mode=(\S+))?$"
+    r"(?:\s+br_mode=(\S+))?"
+    # Issue #234: pe_preflop_solve appends the named convergence aggregates
+    # after br_mode; tolerate lines from both older and newer solvers.
+    r"(?:\s+nash_conv_raw=(\S+)\s+nash_conv_mbb=(\S+)"
+    r"\s+max_br_gap_mbb=(\S+)\s+mean_br_gap_mbb=(\S+)\s+unit=(\S+)"
+    r"\s+measurement_iteration=(\d+)\s+sample_count=(\d+))?$"
 )
 RE_LOOP_END = re.compile(
     r"solve_loop_end cause=(\S+)\s+iteration=(\d+)\s+"

@@ -4434,10 +4434,15 @@ static int last_progress_line(const char *output, uint64_t *iteration,
 
 static int last_result_line(const char *output, char *guarantee,
                             size_t guarantee_capacity, double *raw,
-                            double *mbb, uint64_t *samples)
+                            double *mbb, uint64_t *samples,
+                            char *br_mode, size_t br_mode_capacity,
+                            double *nash_conv_mbb, double *max_br_gap_mbb)
 {
     const char *cursor;
     const char *found = NULL;
+    const char *mode_field;
+    const char *nc_field;
+    const char *gap_field;
     if (!output || !guarantee || guarantee_capacity == 0u)
         return 0;
     cursor = output;
@@ -4452,6 +4457,30 @@ static int last_result_line(const char *output, char *guarantee,
                          guarantee, raw, mbb, samples) != 4)
         return 0;
     guarantee[guarantee_capacity - 1u] = '\0';
+    /* Issue #234: the extended fields appended by pe_preflop_solve are
+       optional -- an older solver line still parses. */
+    mode_field = found ? strstr(found, " br_mode=") : NULL;
+    nc_field = found ? strstr(found, " nash_conv_mbb=") : NULL;
+    gap_field = found ? strstr(found, " max_br_gap_mbb=") : NULL;
+    if (br_mode && br_mode_capacity > 0u)
+    {
+        br_mode[0] = '\0';
+        if (mode_field &&
+            sscanf(mode_field, " br_mode=%31s", br_mode) == 1)
+            br_mode[br_mode_capacity - 1u] = '\0';
+    }
+    if (nash_conv_mbb)
+    {
+        *nash_conv_mbb = 0.0;
+        if (nc_field)
+            (void)sscanf(nc_field, " nash_conv_mbb=%lf", nash_conv_mbb);
+    }
+    if (max_br_gap_mbb)
+    {
+        *max_br_gap_mbb = 0.0;
+        if (gap_field)
+            (void)sscanf(gap_field, " max_br_gap_mbb=%lf", max_br_gap_mbb);
+    }
     return 1;
 }
 
@@ -4492,6 +4521,9 @@ static void update_result_view(App *app, const char *output, int running)
     double raw = 0.0;
     double mbb = 0.0;
     char guarantee[32] = "not measured";
+    char br_mode[32] = "";
+    double nash_conv_mbb = 0.0;
+    double max_br_gap_mbb = 0.0;
     char progress_text[256];
     char text[256];
     int telemetry_valid;
@@ -4716,7 +4748,8 @@ static void update_result_view(App *app, const char *output, int running)
     }
 
     have_final = last_result_line(output, guarantee, sizeof(guarantee), &raw, &mbb,
-                                  &samples);
+                                  &samples, br_mode, sizeof(br_mode),
+                                  &nash_conv_mbb, &max_br_gap_mbb);
     if (!have_final && final_metrics_valid)
     {
         snprintf(guarantee, sizeof(guarantee), "%s", final_guarantee);
@@ -4729,9 +4762,16 @@ static void update_result_view(App *app, const char *output, int running)
     {
         {
             const char *caveat = board_abstraction_caveat(app);
+            /* Issue #234: show the metric type (br_mode) and the worst
+               player's gap next to the aggregate, so a small sum cannot
+               hide one badly exploitable player. */
             snprintf(text, sizeof(text),
-                     "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64 "%s%s",
-                     guarantee, mbb, raw, samples,
+                     "Final: %s  |  mode %s  |  %.2f mBB  |  raw %.5f  |  "
+                     "max gap %.2f mBB  |  NashConv %.2f mBB  |  "
+                     "BR samples %" PRIu64 "%s%s",
+                     guarantee,
+                     br_mode[0] ? br_mode : "unmeasured",
+                     mbb, raw, max_br_gap_mbb, nash_conv_mbb, samples,
                      caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
                      caveat);
         }
@@ -7141,7 +7181,8 @@ static void i_solve_end(App *app, const uint32_t exit_code)
         bmutex_unlock(app->solve_mutex);
         out_len = strlen(output);
         hp = last_progress_line(output, &di, &dt, &df, &de, &dg);
-        hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds);
+        hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds,
+                              NULL, 0u, NULL, NULL);
         dump = fopen("/tmp/studio_last_output.txt", "w");
         if (dump)
         {

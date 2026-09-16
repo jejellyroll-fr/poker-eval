@@ -1000,9 +1000,27 @@ pe_solver_status_t pe_best_response_metrics_from_raw(
         return PE_SOLVER_ERR_INVALID_CONFIG;
     memset(out_metrics, 0, sizeof(*out_metrics));
     out_metrics->exploitability_raw = raw_value;
-    out_metrics->big_blind = big_blind;
     out_metrics->exploitability_mbb_per_game = raw_value / big_blind * 1000.0;
+    out_metrics->big_blind = big_blind;
+    /* Issue #234: the same aggregate under its public name, in chips/game. */
+    out_metrics->nash_conv = raw_value;
+    out_metrics->nash_conv_unit = PE_METRIC_UNIT_CHIPS_PER_GAME;
+    out_metrics->nash_conv_bb_per_game = raw_value / big_blind;
+    out_metrics->nash_conv_mbb_per_game = raw_value / big_blind * 1000.0;
+    /* A single scalar measurement has no per-player decomposition: max and
+       mean stay 0 rather than pretending a decomposition exists. */
     return PE_SOLVER_OK;
+}
+
+const char *pe_metric_unit_name(pe_metric_unit_t unit)
+{
+    switch (unit)
+    {
+    case PE_METRIC_UNIT_CHIPS_PER_GAME: return "chips/game";
+    case PE_METRIC_UNIT_BB_PER_GAME:    return "bb/game";
+    case PE_METRIC_UNIT_MBB_PER_GAME:   return "mbb/game";
+    default:                            return "chips/game";
+    }
 }
 
 pe_solver_status_t pe_best_response_guarantee_for_game(
@@ -1030,6 +1048,7 @@ pe_solver_status_t pe_best_response_metrics_from_multiway(
 {
     pe_guarantee_t guarantee;
     double total = 0.0;
+    double maximum = 0.0;
     uint8_t player;
 
     if (!out_metrics || !br_gaps)
@@ -1046,6 +1065,8 @@ pe_solver_status_t pe_best_response_metrics_from_multiway(
         if (!pe_finite_double(br_gaps[player]) || br_gaps[player] < 0.0)
             return PE_SOLVER_ERR_INVALID_CONFIG;
         total += br_gaps[player];
+        if (br_gaps[player] > maximum)
+            maximum = br_gaps[player];
     if (!pe_finite_double(total))
             return PE_SOLVER_ERR_INVALID_CONFIG;
     }
@@ -1060,6 +1081,16 @@ pe_solver_status_t pe_best_response_metrics_from_multiway(
         out_metrics->br_gap[player] = br_gaps[player];
     out_metrics->cce_gap = cce_gap;
     out_metrics->utility_imbalance = utility_imbalance;
+    /* Issue #234: named aggregates. nash_conv is the multiway NashConv (the
+       sum of unilateral BR gains); max/mean keep a single exploitable
+       player from hiding inside the sum. */
+    out_metrics->nash_conv = total;
+    out_metrics->nash_conv_unit = PE_METRIC_UNIT_CHIPS_PER_GAME;
+    out_metrics->nash_conv_bb_per_game = total / big_blind;
+    out_metrics->nash_conv_mbb_per_game = total / big_blind * 1000.0;
+    out_metrics->max_br_gap = maximum;
+    out_metrics->mean_br_gap = num_players > 0u
+        ? total / (double)num_players : 0.0;
     return PE_SOLVER_OK;
 }
 

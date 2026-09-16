@@ -370,7 +370,23 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     "target_exploitability_mbb must be finite and non-negative, got %f",
                     cfg->target_exploitability_mbb);
 
-    if (cfg->target_exploitability_mbb > 0.0 &&
+    if (!(cfg->target_nash_conv_mbb <= DBL_MAX) ||
+        !(cfg->target_nash_conv_mbb >= -DBL_MAX) ||
+        cfg->target_nash_conv_mbb < 0.0)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "target_nash_conv_mbb must be finite and non-negative, got %f",
+                    cfg->target_nash_conv_mbb);
+
+    if (!(cfg->target_max_br_gap_mbb <= DBL_MAX) ||
+        !(cfg->target_max_br_gap_mbb >= -DBL_MAX) ||
+        cfg->target_max_br_gap_mbb < 0.0)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "target_max_br_gap_mbb must be finite and non-negative, got %f",
+                    cfg->target_max_br_gap_mbb);
+
+    if ((cfg->target_exploitability_mbb > 0.0 ||
+         cfg->target_nash_conv_mbb > 0.0 ||
+         cfg->target_max_br_gap_mbb > 0.0) &&
         cfg->exploitability_interval == 0)
         pe_diag_add(diag, PE_VALID_ERROR,
                     "exploitability_interval must be positive when an exploitability "
@@ -378,7 +394,8 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
 
     if (cfg->max_iterations == 0 &&
         !(cfg->target_exploitability_mbb > 0.0) &&
-        !(cfg->target_exploitability_mbb < 0.0))
+        !(cfg->target_nash_conv_mbb > 0.0) &&
+        !(cfg->target_max_br_gap_mbb > 0.0))
         pe_diag_add(diag, PE_VALID_ERROR,
                     "at least one stop condition is required: max_iterations or "
                     "target_exploitability_mbb");

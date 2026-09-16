@@ -317,6 +317,91 @@ static void k3_init(k3_adapter_t *adapter)
     adapter->vector.terminal_values = k3_v_terminal_values;
 }
 
+/* Issue #234: a deliberately asymmetric policy. Player 0 always folds (the
+ * weakest possible play: they forfeit every pot they could have won with the
+ * best card), players 1 and 2 play uniform stay/fold. The infoset key
+ * encodes the acting turn in bits 4-5 and the folded bitmask in bits 6-8,
+ * so the callback can tell which player's decision it is answering for and
+ * how many actions are legal (a forced stay when both others folded). */
+static int k3_asym_strategy(const void *state, uint64_t infoset,
+                            uint16_t action, pe_value_vec_t *out, void *user)
+{
+    int turn = (int)((infoset >> 4) & 3);
+    int folded = (int)((infoset >> 6) & 7);
+    int folded_count = ((folded >> 0) & 1) + ((folded >> 1) & 1) +
+                       ((folded >> 2) & 1);
+    (void)state;
+    (void)user;
+    if (!out || out->n != 1 || action > 1u)
+        return -1;
+    if (folded_count == 2)
+    {
+        /* Single legal action: the forced stay must take probability 1. */
+        out->v[0] = action == 0u ? 1.0 : 0.0;
+        return 0;
+    }
+    out->v[0] = (turn == 0) ? (action == 1u ? 1.0 : 0.0)
+                            : (action == 0u ? 0.5 : 0.5);
+    return 0;
+}
+
+static void test_asymmetric_multiway_metrics(void)
+{
+    k3_adapter_t adapter;
+    pe_best_response_vector_config_t config;
+    pe_exploitability_vector_result_t exploitability;
+    pe_metrics_t metrics;
+    double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
+    double total = 0.0;
+    uint8_t player;
+
+    k3_init(&adapter);
+    CHECK(adapter.storage != NULL, "asymmetric Kuhn 3p storage allocation");
+    if (!adapter.storage)
+        return;
+    adapter.vector.strategy = k3_asym_strategy;
+    config = pe_best_response_vector_config_default();
+    CHECK(pe_exploitability_vector(&adapter.vector, &config,
+                                   &exploitability) == PE_SOLVER_OK,
+          "asymmetric Kuhn 3p exploitability failed");
+    CHECK(exploitability.converged,
+          "asymmetric Kuhn 3p best responses did not converge");
+    /* Player 0 always folds, so they always pay their ante and never win:
+       their policy value is exactly -1. */
+    CHECK(fabs(exploitability.policy_value[0] - (-1.0)) <= 1e-12,
+          "always-fold player must be worth exactly -1, got %.17g",
+          exploitability.policy_value[0]);
+    for (player = 0u; player < 3u; ++player)
+    {
+        CHECK(exploitability.br_gap[player] >= 0.0,
+              "BR gap must stay non-negative");
+        gaps[player] = exploitability.br_gap[player];
+        total += gaps[player];
+    }
+    CHECK(gaps[0] > gaps[1] && gaps[1] > gaps[2],
+          "the always-fold player must be by far the most exploitable: "
+          "gaps %.6f / %.6f / %.6f", gaps[0], gaps[1], gaps[2]);
+    CHECK(fabs(exploitability.exploitability_raw - total) <= 1e-12,
+          "vector exploitability must equal the gap sum");
+
+    CHECK(pe_best_response_metrics_from_multiway(
+              3u, 1, gaps, 0.0, 0.0, 2.0, &metrics) == PE_SOLVER_OK,
+          "asymmetric metrics snapshot failed");
+    CHECK(fabs(metrics.nash_conv - total) <= 1e-12,
+          "nash_conv must match the measured gap sum");
+    CHECK(fabs(metrics.max_br_gap - gaps[0]) <= 1e-12,
+          "max_br_gap must identify the always-fold player");
+    CHECK(fabs(metrics.mean_br_gap - total / 3.0) <= 1e-12,
+          "mean_br_gap must divide the sum by the player count");
+    CHECK(metrics.guarantee == PE_GUARANTEE_NO_REGRET_ONLY,
+          "a 3-player zero-sum measurement is a no-regret diagnostic");
+    CHECK(metrics.num_players == 3u &&
+              fabs(metrics.br_gap[0] - gaps[0]) <= 1e-12 &&
+              fabs(metrics.br_gap[2] - gaps[2]) <= 1e-12,
+          "per-player gaps must be retained for multiplayer measurements");
+    cfr_storage_destroy(adapter.storage);
+}
+
 int main(void)
 {
     k3_adapter_t adapter;
@@ -340,6 +425,7 @@ int main(void)
           "Kuhn 3p vector/scalar mismatch: %.17g vs %.17g", result.value,
           scalar_value);
     cfr_storage_destroy(adapter.storage);
+    test_asymmetric_multiway_metrics();
     if (failures)
         return 1;
     puts("test_best_response_ii_multiway: Kuhn 3p parity passed");

@@ -296,6 +296,14 @@ struct pe_solver_config_t {
 
     /* BR-04: zero disables the exploitability stop condition. */
     double target_exploitability_mbb;
+    /* Issue #234: additional multiplayer stopping criteria, in mbb/game.
+       Zero disables each. A stop fires when every enabled (non-zero) target
+       is satisfied by the last BR measurement. When the measurement is
+       sampled (br_mode PE_BR_SAMPLED) reaching a target is an empirical
+       observation, never a guarantee of equilibrium. Requires
+       execution.big_blind > 0. */
+    double target_nash_conv_mbb;
+    double target_max_br_gap_mbb;
     uint64_t exploitability_interval;
 
     /* Number of sampled trajectories used by each empirical BR check. Zero
