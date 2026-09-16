@@ -8,6 +8,7 @@ can jump directly to the topic you need.
 |-------|---------|--------|
 | CFR Tree Format | Reference for predefined-tree JSON (profiles, nodes, validation) | planned — use `mpf_tree.h` and `mpf_run_with_metrics --help` |
 | CFR Metrics | Runtime metrics API, snapshots, examples | planned — CLI/API exist, standalone guide absent |
+| Multiplayer Convergence Metrics | NashConv, per-player BR gaps, units, guarantees, sampling metadata (issue #234) | ✅ — see `convergence_metrics.md` |
 | CFR Export Results | Post-run result exports (JSON / CSV) | planned — see `mpf_dump_results` |
 | CFR Performance | Perf counters & instrumentation tips | planned |
 | CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | planned — see `examples/4way_postflop/` |

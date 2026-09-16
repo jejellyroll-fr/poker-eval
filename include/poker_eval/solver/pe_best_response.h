@@ -93,8 +93,17 @@ pe_solver_status_t pe_best_response_guarantee_for_game(
  * Build a multiway metrics snapshot from per-player unilateral gains.
  *
  * `br_gaps` contains one non-negative raw-currency gain per player. The raw
- * exploitability is their sum (the multiway NashConv); CCE and utility
- * imbalance are reported alongside it in the same raw currency.
+ * exploitability is their sum (the multiway NashConv, also reported as
+ * `nash_conv` in chips/game with bb/game and mbb/game conversions);
+ * `max_br_gap` and `mean_br_gap` summarise the per-player decomposition.
+ * CCE and utility imbalance are reported alongside it in the same raw
+ * currency: `cce_gap` is a caller-supplied coarse-correlated-equilibrium
+ * deviation gain and `utility_imbalance` a caller-supplied measure of how
+ * far realised utilities are from balanced; both must be non-negative and
+ * are 0.0 when the caller does not measure them. Sampling metadata
+ * (sample_count, seed, measurement_iteration, standard_error,
+ * confidence_interval_95) is left zeroed here: fill it from the measurement
+ * that produced `br_gaps`.
  */
 pe_solver_status_t pe_best_response_metrics_from_multiway(
     uint8_t num_players, int is_zero_sum, const double *br_gaps,

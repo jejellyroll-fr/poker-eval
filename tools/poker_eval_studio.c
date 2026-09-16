@@ -388,6 +388,11 @@ struct _app_t
     double final_raw;
     double final_mbb;
     uint64_t final_samples;
+    /* Issue #234: appended solver fields, cached so the synthetic
+       guarantee= line stays parseable by last_result_line(). */
+    char final_br_mode[32];
+    double final_nash_conv_mbb;
+    double final_max_br_gap_mbb;
 
     size_t strategy_source_length;
     uint64_t strategy_source_hash;
@@ -4434,10 +4439,15 @@ static int last_progress_line(const char *output, uint64_t *iteration,
 
 static int last_result_line(const char *output, char *guarantee,
                             size_t guarantee_capacity, double *raw,
-                            double *mbb, uint64_t *samples)
+                            double *mbb, uint64_t *samples,
+                            char *br_mode, size_t br_mode_capacity,
+                            double *nash_conv_mbb, double *max_br_gap_mbb)
 {
     const char *cursor;
     const char *found = NULL;
+    const char *mode_field;
+    const char *nc_field;
+    const char *gap_field;
     if (!output || !guarantee || guarantee_capacity == 0u)
         return 0;
     cursor = output;
@@ -4452,6 +4462,30 @@ static int last_result_line(const char *output, char *guarantee,
                          guarantee, raw, mbb, samples) != 4)
         return 0;
     guarantee[guarantee_capacity - 1u] = '\0';
+    /* Issue #234: the extended fields appended by pe_preflop_solve are
+       optional -- an older solver line still parses. */
+    mode_field = found ? strstr(found, " br_mode=") : NULL;
+    nc_field = found ? strstr(found, " nash_conv_mbb=") : NULL;
+    gap_field = found ? strstr(found, " max_br_gap_mbb=") : NULL;
+    if (br_mode && br_mode_capacity > 0u)
+    {
+        br_mode[0] = '\0';
+        if (mode_field &&
+            sscanf(mode_field, " br_mode=%31s", br_mode) == 1)
+            br_mode[br_mode_capacity - 1u] = '\0';
+    }
+    if (nash_conv_mbb)
+    {
+        *nash_conv_mbb = 0.0;
+        if (nc_field)
+            (void)sscanf(nc_field, " nash_conv_mbb=%lf", nash_conv_mbb);
+    }
+    if (max_br_gap_mbb)
+    {
+        *max_br_gap_mbb = 0.0;
+        if (gap_field)
+            (void)sscanf(gap_field, " max_br_gap_mbb=%lf", max_br_gap_mbb);
+    }
     return 1;
 }
 
@@ -4492,6 +4526,9 @@ static void update_result_view(App *app, const char *output, int running)
     double raw = 0.0;
     double mbb = 0.0;
     char guarantee[32] = "not measured";
+    char br_mode[32] = "";
+    double nash_conv_mbb = 0.0;
+    double max_br_gap_mbb = 0.0;
     char progress_text[256];
     char text[256];
     int telemetry_valid;
@@ -4505,6 +4542,9 @@ static void update_result_view(App *app, const char *output, int running)
     double final_raw;
     double final_mbb;
     uint64_t final_samples;
+    char final_br_mode[32];
+    double final_nash_conv_mbb;
+    double final_max_br_gap_mbb;
     int have_progress;
     int have_final;
     int reporting = 0;
@@ -4524,6 +4564,9 @@ static void update_result_view(App *app, const char *output, int running)
     final_raw = app->final_raw;
     final_mbb = app->final_mbb;
     final_samples = app->final_samples;
+    snprintf(final_br_mode, sizeof(final_br_mode), "%s", app->final_br_mode);
+    final_nash_conv_mbb = app->final_nash_conv_mbb;
+    final_max_br_gap_mbb = app->final_max_br_gap_mbb;
     bmutex_unlock(app->solve_mutex);
 
     have_progress = last_progress_line(output, &iteration, &total, &fraction,
@@ -4716,22 +4759,35 @@ static void update_result_view(App *app, const char *output, int running)
     }
 
     have_final = last_result_line(output, guarantee, sizeof(guarantee), &raw, &mbb,
-                                  &samples);
+                                  &samples, br_mode, sizeof(br_mode),
+                                  &nash_conv_mbb, &max_br_gap_mbb);
     if (!have_final && final_metrics_valid)
     {
         snprintf(guarantee, sizeof(guarantee), "%s", final_guarantee);
         raw = final_raw;
         mbb = final_mbb;
         samples = final_samples;
+        /* Issue #234: the cached aggregates keep the summary honest when
+           the raw output window no longer carries the guarantee= line. */
+        snprintf(br_mode, sizeof(br_mode), "%s", final_br_mode);
+        nash_conv_mbb = final_nash_conv_mbb;
+        max_br_gap_mbb = final_max_br_gap_mbb;
         have_final = 1;
     }
     if (have_final)
     {
         {
             const char *caveat = board_abstraction_caveat(app);
+            /* Issue #234: show the metric type (br_mode) and the worst
+               player's gap next to the aggregate, so a small sum cannot
+               hide one badly exploitable player. */
             snprintf(text, sizeof(text),
-                     "Final: %s  |  %.2f mBB  |  raw %.5f  |  BR samples %" PRIu64 "%s%s",
-                     guarantee, mbb, raw, samples,
+                     "Final: %s  |  mode %s  |  %.2f mBB  |  raw %.5f  |  "
+                     "max gap %.2f mBB  |  NashConv %.2f mBB  |  "
+                     "BR samples %" PRIu64 "%s%s",
+                     guarantee,
+                     br_mode[0] ? br_mode : "unmeasured",
+                     mbb, raw, max_br_gap_mbb, nash_conv_mbb, samples,
                      caveat[0] ? "  |  MEASURED INSIDE THE BOARD ABSTRACTION" : "",
                      caveat);
         }
@@ -5220,11 +5276,22 @@ static void i_solve_copy_output(App *app, char *out, size_t capacity)
         }
         if (app->final_metrics_valid)
         {
+            /* Issue #234: re-emit the appended solver fields so
+               last_result_line() sees the mode and the aggregates even
+               when the raw output was replaced by the report window. */
+            char extended[128];
+            extended[0] = '\0';
+            if (app->final_br_mode[0])
+                snprintf(extended, sizeof(extended),
+                         " br_mode=%s nash_conv_mbb=%f max_br_gap_mbb=%f",
+                         app->final_br_mode, app->final_nash_conv_mbb,
+                         app->final_max_br_gap_mbb);
             width = snprintf(line, sizeof(line),
                              "guarantee=%s exploitability_raw=%f"
-                             " exploitability_mbb=%f br_samples=%" PRIu64 "\n",
+                             " exploitability_mbb=%f br_samples=%" PRIu64
+                             "%s\n",
                              app->final_guarantee, app->final_raw,
-                             app->final_mbb, app->final_samples);
+                             app->final_mbb, app->final_samples, extended);
             if (width > 0)
                 i_copy_append(out, capacity, &used, line, (size_t)width);
         }
@@ -6625,11 +6692,29 @@ static void i_solve_scan_line(App *app, const char *line)
                " exploitability_mbb=%lf br_samples=%" SCNu64,
                guarantee, &raw, &mbb, &samples) == 4)
     {
+        /* Issue #234: cache the appended aggregates too, so the synthetic
+           guarantee= line rebuilt by i_solve_copy_output keeps carrying
+           them after the raw output window has been replaced. */
+        const char *mode_field = strstr(line, " br_mode=");
+        const char *nc_field = strstr(line, " nash_conv_mbb=");
+        const char *gap_field = strstr(line, " max_br_gap_mbb=");
         app->final_metrics_valid = 1;
         snprintf(app->final_guarantee, sizeof(app->final_guarantee), "%s", guarantee);
         app->final_raw = raw;
         app->final_mbb = mbb;
         app->final_samples = samples;
+        app->final_br_mode[0] = '\0';
+        app->final_nash_conv_mbb = 0.0;
+        app->final_max_br_gap_mbb = 0.0;
+        if (mode_field &&
+            sscanf(mode_field, " br_mode=%31s", app->final_br_mode) != 1)
+            app->final_br_mode[0] = '\0';
+        if (nc_field)
+            (void)sscanf(nc_field, " nash_conv_mbb=%lf",
+                         &app->final_nash_conv_mbb);
+        if (gap_field)
+            (void)sscanf(gap_field, " max_br_gap_mbb=%lf",
+                         &app->final_max_br_gap_mbb);
     }
 
     /* The solver prints "solver_phase=complete stop_reason=<target|
@@ -7141,7 +7226,8 @@ static void i_solve_end(App *app, const uint32_t exit_code)
         bmutex_unlock(app->solve_mutex);
         out_len = strlen(output);
         hp = last_progress_line(output, &di, &dt, &df, &de, &dg);
-        hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds);
+        hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds,
+                              NULL, 0u, NULL, NULL);
         dump = fopen("/tmp/studio_last_output.txt", "w");
         if (dump)
         {

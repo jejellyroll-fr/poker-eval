@@ -969,6 +969,54 @@ static void test_multiway_guarantee_contract(void)
           "negative CCE gap must be rejected");
 }
 
+static void test_multiway_asymmetric_aggregates(void)
+{
+    /* Issue #234: an asymmetric game — one player far more exploitable than
+       the others. The sum must not hide the dominant gap, the unit must be
+       stated, and the normalised variants must follow the documented
+       conversions. */
+    const double gaps[3] = {1.0, 0.5, 100.0};
+    pe_metrics_t metrics;
+
+    CHECK(pe_best_response_metrics_from_multiway(
+              3u, 1, gaps, 0.0, 0.0, 2.0, &metrics) == PE_SOLVER_OK,
+          "asymmetric multiway metrics aggregation failed");
+    CHECK(fabs(metrics.nash_conv - 101.5) <= 1e-12,
+          "nash_conv must be the sum of unilateral gaps, got %.17g",
+          metrics.nash_conv);
+    CHECK(fabs(metrics.exploitability_raw - metrics.nash_conv) <= 1e-12,
+          "exploitability_raw must alias nash_conv");
+    CHECK(metrics.nash_conv_unit == PE_METRIC_UNIT_CHIPS_PER_GAME,
+          "raw aggregate must declare chips/game");
+    CHECK(fabs(metrics.nash_conv_bb_per_game - 50.75) <= 1e-12,
+          "bb/game conversion incorrect: %.17g", metrics.nash_conv_bb_per_game);
+    CHECK(fabs(metrics.nash_conv_mbb_per_game - 50750.0) <= 1e-9,
+          "mbb/game conversion incorrect: %.17g",
+          metrics.nash_conv_mbb_per_game);
+    CHECK(fabs(metrics.max_br_gap - 100.0) <= 1e-12,
+          "max_br_gap must surface the dominant player, got %.17g",
+          metrics.max_br_gap);
+    CHECK(fabs(metrics.mean_br_gap - 101.5 / 3.0) <= 1e-12,
+          "mean_br_gap incorrect: %.17g", metrics.mean_br_gap);
+    CHECK(metrics.max_br_gap > 50.0 * metrics.br_gap[0] &&
+              metrics.max_br_gap > 50.0 * metrics.br_gap[1],
+          "the dominant gap must not be hidable in the aggregate");
+    CHECK(strcmp(pe_metric_unit_name(PE_METRIC_UNIT_CHIPS_PER_GAME),
+                 "chips/game") == 0 &&
+              strcmp(pe_metric_unit_name(PE_METRIC_UNIT_BB_PER_GAME),
+                     "bb/game") == 0 &&
+              strcmp(pe_metric_unit_name(PE_METRIC_UNIT_MBB_PER_GAME),
+                     "mbb/game") == 0,
+          "metric unit names are part of the public output");
+    /* A scalar measurement has no per-player decomposition to report. */
+    CHECK(pe_best_response_metrics_from_raw(0.5, 1.0, &metrics) ==
+              PE_SOLVER_OK &&
+              fabs(metrics.nash_conv - 0.5) <= 1e-15 &&
+              metrics.nash_conv_unit == PE_METRIC_UNIT_CHIPS_PER_GAME &&
+              fabs(metrics.nash_conv_mbb_per_game - 500.0) <= 1e-9,
+          "raw conversion must fill the named aggregate fields");
+}
+
 static void test_exploitability_target(void)
 {
     int reached = -1;
@@ -1015,6 +1063,7 @@ int main(void)
     test_combo_specific_best_response_and_policy_reach();
     test_exploitability_metrics();
     test_multiway_guarantee_contract();
+    test_multiway_asymmetric_aggregates();
     test_exploitability_target();
     test_rejects_infinite_tolerance();
     if (failures != 0)

@@ -181,8 +181,11 @@ static int run_vector_backend(cfr_game_t *legacy, int iterations,
                progress.fraction, progress.complete,
                (unsigned long long)progress.iteration);
     if (solver && pe_solver_metrics(solver, &metrics) == PE_SOLVER_OK)
-        printf("v3_exploitability=%.6f guarantee=%d\n",
-               metrics.exploitability_mbb_per_game, (int)metrics.guarantee);
+        printf("v3_exploitability=%.6f guarantee=%d"
+               " nash_conv=%.6f nash_conv_unit=%s max_br_gap=%.6f mean_br_gap=%.6f\n",
+               metrics.exploitability_mbb_per_game, (int)metrics.guarantee,
+               metrics.nash_conv, pe_metric_unit_name(metrics.nash_conv_unit),
+               metrics.max_br_gap, metrics.mean_br_gap);
     if (solver) pe_solver_destroy(solver);
     if (adapter_ready) pe_legacy_vector_adapter_destroy(&adapter);
     return status == PE_SOLVER_OK ? 0 : -1;
@@ -1819,9 +1822,15 @@ int main(int argc, char **argv)
                    lane_progress.fraction, lane_progress.complete,
                    (unsigned long long)lane_progress.iteration);
         if (lane_solver && pe_solver_metrics(lane_solver, &lane_metrics) == PE_SOLVER_OK)
-            printf("lane_b_br_guarantee=%d exploitability_mbb=%.6f\n",
+            printf("lane_b_br_guarantee=%d exploitability_mbb=%.6f"
+                   " nash_conv_mbb=%.6f max_br_gap_mbb=%.6f sample_count=%llu\n",
                    (int)lane_metrics.guarantee,
-                   lane_metrics.exploitability_mbb_per_game);
+                   lane_metrics.exploitability_mbb_per_game,
+                   lane_metrics.nash_conv_mbb_per_game,
+                   lane_metrics.big_blind > 0.0
+                       ? lane_metrics.max_br_gap / lane_metrics.big_blind * 1000.0
+                       : 0.0,
+                   (unsigned long long)lane_metrics.sample_count);
         if (benchmark_json_path)
         {
             FILE *benchmark_file = fopen(benchmark_json_path, "w");

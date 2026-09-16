@@ -91,6 +91,10 @@ pe_solver_config_t pe_solver_config_default(void)
        that a caller who forgets to set a stop condition gets a run that ends. */
     cfg.max_iterations = 1000;
     cfg.target_exploitability_mbb = 0.0;
+    /* Issue #234: the multiplayer targets default to disabled, like the
+       exploitability target. */
+    cfg.target_nash_conv_mbb = 0.0;
+    cfg.target_max_br_gap_mbb = 0.0;
     cfg.exploitability_interval = 0;
     cfg.br_samples = 0;
     /* Issue #233: the default keeps the historical behaviour — every BR

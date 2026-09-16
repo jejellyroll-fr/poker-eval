@@ -345,5 +345,57 @@ int main(void)
             pe_solver_destroy(solver);
         }
     }
+    {
+        /* Issue #234: the worst-player target stops the loop too, and the
+           measurement metadata stamps the iteration that produced it. */
+        static char gap_target_root;
+        pe_solver_config_t gap_config = pe_solver_config_default();
+        pe_solver_deps_t deps = pe_solver_deps_default();
+        pe_vector_game_t game;
+        pe_progress_t gap_progress;
+        pe_metrics_t gap_metrics;
+
+        memset(&game, 0, sizeof(game));
+        game.root = &gap_target_root;
+        game.user = &gap_target_root;
+        game.player_count = 2u;
+        game.combo_count = 1u;
+        game.is_terminal = terminal_one_step;
+        game.acting_player = acting_root;
+        game.action_count = actions_one_step;
+        game.infoset_key = key_one_step;
+        game.apply_action = apply_one_step;
+        game.terminal_values = values_one_step;
+        gap_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        gap_config.max_iterations = 0u;
+        gap_config.target_max_br_gap_mbb = 600.0;
+        gap_config.exploitability_interval = 1u;
+        gap_config.problem.expected_infosets = 1u;
+        gap_config.problem.expected_actions = 2u;
+        gap_config.problem.expected_combos = 1u;
+        deps.vector_game = &game;
+        solver = pe_solver_create(&gap_config, &deps);
+        CHECK(solver != NULL, "gap-target solver creation failed");
+        if (solver != NULL)
+        {
+            CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
+                  "max-br-gap target run failed");
+            CHECK(pe_solver_progress(solver, &gap_progress) == PE_SOLVER_OK &&
+                      gap_progress.complete && gap_progress.iteration == 1u,
+                  "max-br-gap stop did not complete at iteration one");
+            CHECK(pe_solver_metrics(solver, &gap_metrics) == PE_SOLVER_OK &&
+                      gap_metrics.max_br_gap > 0.0 &&
+                      gap_metrics.max_br_gap / gap_metrics.big_blind * 1000.0 <=
+                          600.0 &&
+                      gap_metrics.measurement_iteration == 1u &&
+                      gap_metrics.sample_count == 0u &&
+                      gap_metrics.br_mode == PE_BR_EXACT,
+                  "gap-target metrics were not recorded "
+                  "(max=%g iter=%llu)",
+                  gap_metrics.max_br_gap,
+                  (unsigned long long)gap_metrics.measurement_iteration);
+            pe_solver_destroy(solver);
+        }
+    }
     return failures != 0;
 }

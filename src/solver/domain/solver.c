@@ -441,6 +441,55 @@ static void pe_solver_apply_runtime_backends(const pe_solver_t *solver,
     }
 }
 
+/* Issue #234: the exploitability stop condition is one of three targets.
+   Every enabled (non-zero) target is expressed in mbb/game and must be
+   satisfied by the same BR measurement before the loop stops early. */
+static int pe_solver_any_target(const pe_solver_t *solver)
+{
+    return solver != NULL &&
+           (solver->config.target_exploitability_mbb > 0.0 ||
+            solver->config.target_nash_conv_mbb > 0.0 ||
+            solver->config.target_max_br_gap_mbb > 0.0);
+}
+
+static pe_solver_status_t pe_solver_targets_reached(
+    const pe_solver_t *solver, const pe_metrics_t *metrics, int *out_reached)
+{
+    int reached = 1;
+
+    if (!solver || !metrics || !out_reached)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    if (!pe_solver_any_target(solver))
+    {
+        /* Measurement-only checks must never stop a solve that disabled
+           every target. */
+        *out_reached = 0;
+        return PE_SOLVER_OK;
+    }
+    if (solver->config.target_exploitability_mbb > 0.0 &&
+        (pe_best_response_target_reached(
+             metrics->exploitability_mbb_per_game,
+             solver->config.target_exploitability_mbb,
+             out_reached) != PE_SOLVER_OK || !*out_reached))
+        reached = 0;
+    if (reached && solver->config.target_nash_conv_mbb > 0.0 &&
+        (pe_best_response_target_reached(
+             metrics->nash_conv_mbb_per_game,
+             solver->config.target_nash_conv_mbb,
+             out_reached) != PE_SOLVER_OK || !*out_reached))
+        reached = 0;
+    if (reached && solver->config.target_max_br_gap_mbb > 0.0)
+    {
+        double measured = metrics->max_br_gap / metrics->big_blind * 1000.0;
+        if (pe_best_response_target_reached(
+                measured, solver->config.target_max_br_gap_mbb,
+                out_reached) != PE_SOLVER_OK || !*out_reached)
+            reached = 0;
+    }
+    *out_reached = reached;
+    return PE_SOLVER_OK;
+}
+
 static pe_valid_severity_t pe_solver_resolve_plan(
     const pe_solver_t *solver, pe_execution_plan_t *out_plan,
     pe_diagnostics_t *out_diag)
@@ -466,7 +515,7 @@ pe_solver_status_t pe_solver_validate(const pe_solver_t *solver,
     if (solver == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
 
-    if (solver->config.target_exploitability_mbb > 0.0 &&
+    if (pe_solver_any_target(solver) &&
         (!finite_double(solver->config.execution.big_blind) ||
          solver->config.execution.big_blind <= 0.0))
         return PE_SOLVER_ERR_INVALID_CONFIG;
@@ -739,8 +788,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     uint64_t iteration;
     uint64_t completed_iterations;
     int target_reached = 0;
-    const int target_enabled =
-        solver->config.target_exploitability_mbb > 0.0;
+    const int target_enabled = pe_solver_any_target(solver);
     int rc;
 
     if (solver->deps.vector_game == NULL ||
@@ -933,10 +981,8 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                     measured_game.player_count, 1, gaps, 0.0,
                     0.0, solver->config.execution.big_blind,
                     &solver->metrics) != PE_SOLVER_OK ||
-                (target_enabled && pe_best_response_target_reached(
-                    solver->metrics.exploitability_mbb_per_game,
-                    solver->config.target_exploitability_mbb,
-                    &reached) != PE_SOLVER_OK))
+                pe_solver_targets_reached(solver, &solver->metrics,
+                                          &reached) != PE_SOLVER_OK)
             {
                 pe_update_batch_destroy(&batch);
                 pe_traversal_ctx_destroy(&traversal);
@@ -945,6 +991,11 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 return PE_SOLVER_ERR_EXECUTION;
             }
             solver->metrics.br_mode = PE_BR_EXACT;
+            /* Issue #234: an exact measurement draws no trajectories; the
+               iteration stamp records when the measurement was taken. */
+            solver->metrics.sample_count = 0;
+            solver->metrics.seed = 0;
+            solver->metrics.measurement_iteration = iteration;
             solver->metrics_available = 1;
             target_reached = reached;
         }
@@ -1166,6 +1217,7 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
 {
     pe_external_br_config_t br_config = pe_external_br_config_default();
     double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
+    uint64_t sample_count = 0u;
     pe_br_mode_t measured_mode = PE_BR_SAMPLED;
     uint8_t player;
     int reached = 0;
@@ -1189,6 +1241,11 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
                                       &br_config, &br_result) != 0)
             return PE_SOLVER_ERR_EXECUTION;
         gaps[player] = br_result.br_gap;
+        /* Issue #234: keep the sampling metadata of the measurement. The
+           policy value is re-evaluated once per player's BR, so its
+           trajectories are counted each time. */
+        sample_count += (uint64_t)br_result.policy_samples +
+                        (uint64_t)br_result.br_samples;
         if (player == 0u)
             measured_mode = br_result.mode;
         else if (measured_mode != br_result.mode)
@@ -1206,15 +1263,19 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
                 : PE_GUARANTEE_NO_REGRET_ONLY;
     else
         solver->metrics.guarantee = PE_GUARANTEE_EMPIRICAL;
+    solver->metrics.sample_count = sample_count;
+    solver->metrics.seed = br_config.seed;
+    solver->metrics.measurement_iteration = iteration;
+    /* standard_error / confidence_interval_95 stay 0: the sampled BR does
+       not expose per-trajectory payoffs, so no honest interval can be
+       derived here. Zero means "not computed", never "no error". */
     solver->metrics_available = 1;
     /* A zero target means "run to the iteration budget", not "disable
        telemetry".  Keep measuring and publishing the empirical BR at the
-       configured interval, but only evaluate early stopping when the caller
-       selected an exploitability target. */
-    if (solver->config.target_exploitability_mbb > 0.0 &&
-        pe_best_response_target_reached(
-            solver->metrics.exploitability_mbb_per_game,
-            solver->config.target_exploitability_mbb, &reached) != PE_SOLVER_OK)
+       configured interval; pe_solver_targets_reached only reports a stop
+       when the caller selected at least one target. */
+    if (pe_solver_targets_reached(solver, &solver->metrics, &reached) !=
+        PE_SOLVER_OK)
         return PE_SOLVER_ERR_EXECUTION;
     *target_reached = reached;
     pe_telemetry_emitf(
@@ -1307,8 +1368,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     pe_external_game_t sampled_game;
     uint64_t iteration;
     int use_outcome = plan->traversal == PE_TRAVERSAL_OUTCOME_SAMPLING;
-    const int target_enabled =
-        solver->config.target_exploitability_mbb > 0.0;
+    const int target_enabled = pe_solver_any_target(solver);
     int target_reached = 0;
     int rc;
 

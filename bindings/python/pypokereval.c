@@ -3091,13 +3091,30 @@ static PyObject *py_solver_v3_metrics(PyObject *self, PyObject *args)
         return NULL;
     for (player = 0u; player < metrics.num_players; ++player)
         PyList_SET_ITEM(gaps, player, PyFloat_FromDouble(metrics.br_gap[player]));
-    result = Py_BuildValue("{s:d,s:d,s:d,s:i,s:i,s:O}",
-                           "exploitability_raw", metrics.exploitability_raw,
-                           "exploitability_mbb_per_game",
-                           metrics.exploitability_mbb_per_game,
-                           "big_blind", metrics.big_blind, "guarantee",
-                           (int)metrics.guarantee, "players", metrics.num_players,
-                           "br_gap", gaps);
+    /* Issue #234: named convergence aggregates and sampling metadata. */
+    result = Py_BuildValue(
+        "{s:d,s:d,s:d,s:i,s:i,s:O,"
+        "s:d,s:i,s:d,s:d,s:d,s:d,"
+        "s:K,s:K,s:K,s:d,s:d}",
+        "exploitability_raw", metrics.exploitability_raw,
+        "exploitability_mbb_per_game",
+        metrics.exploitability_mbb_per_game,
+        "big_blind", metrics.big_blind, "guarantee",
+        (int)metrics.guarantee, "players", metrics.num_players,
+        "br_gap", gaps,
+        "nash_conv", metrics.nash_conv,
+        "nash_conv_unit", (int)metrics.nash_conv_unit,
+        "nash_conv_bb_per_game", metrics.nash_conv_bb_per_game,
+        "nash_conv_mbb_per_game", metrics.nash_conv_mbb_per_game,
+        "max_br_gap", metrics.max_br_gap,
+        "mean_br_gap", metrics.mean_br_gap,
+        "sample_count",
+        (unsigned long long)metrics.sample_count,
+        "seed", (unsigned long long)metrics.seed,
+        "measurement_iteration",
+        (unsigned long long)metrics.measurement_iteration,
+        "standard_error", metrics.standard_error,
+        "confidence_interval_95", metrics.confidence_interval_95);
     Py_DECREF(gaps);
     return result;
 }

@@ -93,6 +93,23 @@ typedef struct pe_persist_source_t  pe_persist_source_t;
 #define PE_SOLVER_MAX_PLAYERS 8u
 
 /**
+ * Unit of a raw-currency convergence metric (issue #234).
+ *
+ * Every metric that leaves the API states its unit. Raw values are expressed
+ * in the game's own currency (chips per game); normalized variants are
+ * derived from execution.big_blind.
+ */
+typedef enum {
+    PE_METRIC_UNIT_CHIPS_PER_GAME = 0,
+    PE_METRIC_UNIT_BB_PER_GAME,
+    PE_METRIC_UNIT_MBB_PER_GAME
+} pe_metric_unit_t;
+
+/** Stable name of a metric unit, for logs and UI
+ *  ("chips/game", "bb/game", "mbb/game"). Never NULL. */
+const char *pe_metric_unit_name(pe_metric_unit_t unit);
+
+/**
  * What a reported exploitability measurement actually guarantees.
  *
  * UNSPECIFIED is intentional: a raw BR conversion has no game topology from
@@ -122,7 +139,32 @@ typedef enum {
     PE_BR_AUTO
 } pe_br_mode_t;
 
-/* BR-03/05 metrics are available before the full API-01 lifecycle is wired. */
+/* BR-03/05 metrics are available before the full API-01 lifecycle is wired.
+ *
+ * Issue #234: the multiplayer convergence model. The primary aggregate is
+ * nash_conv, the NashConv of the profile:
+ *
+ *     NashConv(sigma) = sum_i [ u_i(BR_i(sigma_-i), sigma_-i) - u_i(sigma) ]
+ *
+ * i.e. the sum of the per-player unilateral best-response gains (br_gap).
+ * Units and normalization:
+ *
+ *   - nash_conv, max_br_gap, mean_br_gap and the per-player br_gap entries
+ *     are raw values in the game's currency per game; their unit is
+ *     nash_conv_unit (always PE_METRIC_UNIT_CHIPS_PER_GAME today).
+ *   - nash_conv_bb_per_game  = nash_conv / big_blind
+ *   - nash_conv_mbb_per_game = nash_conv / big_blind * 1000
+ *
+ * exploitability_raw / exploitability_mbb_per_game are kept for ABI
+ * compatibility and always equal nash_conv / nash_conv_mbb_per_game.
+ *
+ * Exact vs sampled: a result is a ground-truth measurement only when
+ * br_mode == PE_BR_EXACT (guarantee NASH for two-player zero-sum, or
+ * NO_REGRET_ONLY for multiway zero-sum). Whenever br_mode is
+ * PE_BR_SAMPLED every value here is an empirical estimate and the
+ * sampling metadata below applies; a low sampled value alone must never
+ * be read as an equilibrium guarantee.
+ */
 struct pe_metrics_t {
     double exploitability_raw;
     double exploitability_mbb_per_game;
@@ -137,6 +179,30 @@ struct pe_metrics_t {
     /* Issue #233: which measurement path produced the metrics above.
        PE_BR_SAMPLED whenever any sampled estimate contributed. */
     pe_br_mode_t br_mode;
+
+    /* Issue #234: named convergence aggregates. nash_conv is the sum of the
+       unilateral BR gaps (the multiway NashConv); max/mean_br_gap guard
+       against the aggregate hiding one badly exploitable player. */
+    double nash_conv;
+    pe_metric_unit_t nash_conv_unit;
+    double nash_conv_bb_per_game;
+    double nash_conv_mbb_per_game;
+    double max_br_gap;
+    double mean_br_gap;
+
+    /* Issue #234: sampling metadata, meaningful when br_mode is
+       PE_BR_SAMPLED. sample_count is the total number of trajectories the
+       measurement drew, seed the RNG stream it used, and
+       measurement_iteration the solve iteration at which the measurement
+       was taken. standard_error and confidence_interval_95 are the
+       standard error and the 95% half-width of nash_conv in its raw unit;
+       0 means "not computed" -- it is NOT a claim of zero error. On an
+       exact measurement sample_count, seed and both statistics are 0. */
+    uint64_t sample_count;
+    uint64_t seed;
+    uint64_t measurement_iteration;
+    double standard_error;
+    double confidence_interval_95;
 };
 
 /** Snapshot of lifecycle progress; values are stable for one call. */
