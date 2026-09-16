@@ -676,6 +676,13 @@ def parse_stdout(
     exploitability_mbb = None
     br_samples = None
     br_mode = None
+    nash_conv_raw = None
+    nash_conv_mbb = None
+    max_br_gap_mbb = None
+    mean_br_gap_mbb = None
+    metric_unit = None
+    measurement_iteration = None
+    reported_sample_count = None
     stop_cause = None
     final_memory_mb = None
     storage_mb = None
@@ -705,6 +712,19 @@ def parse_stdout(
             exploitability_mbb = _float(match.group(3))
             br_samples = int(match.group(4))
             br_mode = match.group(5)
+            # Issue #234: the solver appends the named convergence
+            # aggregates and sampling metadata; groups 6-12 carry them.
+            nash_conv_raw = _float(match.group(6)) if match.group(6) else None
+            nash_conv_mbb = _float(match.group(7)) if match.group(7) else None
+            max_br_gap_mbb = _float(match.group(8)) if match.group(8) else None
+            mean_br_gap_mbb = _float(match.group(9)) if match.group(9) else None
+            metric_unit = match.group(10)
+            measurement_iteration = (
+                int(match.group(11)) if match.group(11) else None
+            )
+            reported_sample_count = (
+                int(match.group(12)) if match.group(12) else None
+            )
             continue
         match = RE_LOOP_END.search(line)
         if match:
@@ -833,6 +853,15 @@ def parse_stdout(
             "exploitability_mbb_per_game": exploitability_mbb,
             "br_samples": br_samples,
             "br_mode": br_mode,
+            # Issue #234: named convergence aggregates and sampling
+            # metadata, when the solver line carries them.
+            "nash_conv": nash_conv_raw,
+            "nash_conv_mbb_per_game": nash_conv_mbb,
+            "max_br_gap_mbb": max_br_gap_mbb,
+            "mean_br_gap_mbb": mean_br_gap_mbb,
+            "metric_unit": metric_unit,
+            "measurement_iteration": measurement_iteration,
+            "sample_count": reported_sample_count,
         },
         "report": {
             "requested_rows": report_rows_requested,

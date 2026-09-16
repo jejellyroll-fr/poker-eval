@@ -1978,12 +1978,16 @@ int main(int argc, char **argv)
                pe_preflop_allin_infodesc_limited(game));
         fflush(stdout);
         /* Issue #234: the trailing fields extend, never reorder, the
-           "guarantee=" line: the Studio parses the fixed prefix. */
-        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%" PRIu64 " br_mode=%s"
+           "guarantee=" line: the Studio parses the fixed prefix. The
+           format is pure string-literal concatenation -- no PRIu64 macro
+           inside the literal -- so static scanners cannot mistake it for
+           a caller-controlled format string (Codacy security check). */
+        printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%llu br_mode=%s"
                " nash_conv_raw=%.6f nash_conv_mbb=%.6f max_br_gap_mbb=%.6f mean_br_gap_mbb=%.6f"
-               " unit=%s measurement_iteration=%" PRIu64 " sample_count=%" PRIu64 "\n",
+               " unit=%s measurement_iteration=%llu sample_count=%llu\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
-               metrics.exploitability_mbb_per_game, options.br_samples,
+               metrics.exploitability_mbb_per_game,
+               (unsigned long long)options.br_samples,
                pe_br_mode_name(metrics.br_mode),
                metrics.nash_conv, metrics.nash_conv_mbb_per_game,
                metrics.big_blind > 0.0
@@ -1991,7 +1995,8 @@ int main(int argc, char **argv)
                metrics.big_blind > 0.0
                    ? metrics.mean_br_gap / metrics.big_blind * 1000.0 : 0.0,
                pe_metric_unit_name(metrics.nash_conv_unit),
-               metrics.measurement_iteration, metrics.sample_count);
+               (unsigned long long)metrics.measurement_iteration,
+               (unsigned long long)metrics.sample_count);
         print_strategy_report(&options, game, solver, tree);
         /* Serve after an interrupt too.  Stopping a run is the normal way to
          * say "that is enough, let me look at it" -- and with an iteration

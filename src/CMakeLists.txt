@@ -210,6 +210,19 @@ foreach(module IN LISTS POKER_EVAL_MODULES)
     endif()
 endforeach()
 
+# Issue #234 (Codex review): the solver's public structs pe_solver_config_t
+# and pe_metrics_t grew (named convergence aggregates, sampling metadata),
+# which changes the layout a caller compiled against poker_solver SOVERSION
+# 1 expects; pe_solver_config_default() would write past the old caller's
+# buffer and pe_solver_metrics() would overflow its output struct. Bump the
+# solver's SOVERSION so the loader refuses that mix instead of corrupting
+# memory. The solver ABI now versions independently of the package version.
+if(BUILD_SHARED_LIBS)
+    set_target_properties(poker_solver PROPERTIES
+        VERSION 2.0.0
+        SOVERSION 2)
+endif()
+
 # Create a combined interface library that includes all modules
 add_library(poker_eval_modular INTERFACE)
 
