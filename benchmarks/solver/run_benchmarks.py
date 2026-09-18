@@ -59,7 +59,11 @@ RE_GUARANTEE = re.compile(
     # after br_mode; tolerate lines from both older and newer solvers.
     r"(?:\s+nash_conv_raw=(\S+)\s+nash_conv_mbb=(\S+)"
     r"\s+max_br_gap_mbb=(\S+)\s+mean_br_gap_mbb=(\S+)\s+unit=(\S+)"
-    r"\s+measurement_iteration=(\d+)\s+sample_count=(\d+))?$"
+    r"\s+measurement_iteration=(\d+)\s+sample_count=(\d+)"
+    # Issue #249: the solver now states whether the convergence block was
+    # measured at all, so a budget stop's zeros are not read as a measurement.
+    # Optional, because lines from older solvers stop at sample_count.
+    r"(?:\s+metrics_available=([01]))?)?$"
 )
 RE_LOOP_END = re.compile(
     r"solve_loop_end cause=(\S+)\s+iteration=(\d+)\s+"
@@ -710,6 +714,7 @@ def parse_stdout(
     metric_unit = None
     measurement_iteration = None
     reported_sample_count = None
+    metrics_available = None
     stop_cause = None
     final_memory_mb = None
     storage_mb = None
@@ -752,6 +757,12 @@ def parse_stdout(
             )
             reported_sample_count = (
                 int(match.group(12)) if match.group(12) else None
+            )
+            # Issue #249: group 13 is the solver's own statement about whether
+            # the convergence block was measured. None means the line came
+            # from a solver older than the marker.
+            metrics_available = (
+                bool(int(match.group(13))) if match.group(13) else None
             )
             continue
         match = RE_MEMORY_LINE.match(line)
@@ -917,6 +928,11 @@ def parse_stdout(
             "metric_unit": metric_unit,
             "measurement_iteration": measurement_iteration,
             "sample_count": reported_sample_count,
+            # Issue #249: the solver's own statement about whether the
+            # convergence block was measured. None means the binary predates
+            # the marker, which the validator treats as "unknown", not as a
+            # measurement.
+            "metrics_available": metrics_available,
         },
         "report": {
             "requested_rows": report_rows_requested,
@@ -939,8 +955,12 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     # A case runs to its iteration cap unless it declares another clean stop.
     # `memory_budget` (issue #247) stops early by design, so such a case is
-    # also allowed to end with an incomplete progress flag and an
-    # `unspecified` guarantee: it never reached convergence on purpose.
+    # also allowed to end with an incomplete progress flag, and (issue #249)
+    # with the solver reporting that the convergence block was never measured
+    # -- it stopped before the first measurement could be taken. The
+    # `progress is not complete` relaxation is inherent to an early stop and
+    # stays; the guarantee-name relaxation it used to carry is gone, replaced
+    # by the solver's own `metrics_available` statement.
     expected_stop_cause = str(
         result["case"].get("expected_stop_cause", DEFAULT_STOP_CAUSE)
     )
@@ -1001,8 +1021,23 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     guarantee = convergence.get("guarantee")
     if not guarantee:
         failures.append("missing convergence guarantee telemetry")
-    elif guarantee == "unspecified" and not allow_incomplete:
-        failures.append("unspecified convergence guarantee telemetry")
+    else:
+        # Issue #249: the solver now states outright whether the convergence
+        # block was measured, so this no longer has to be *inferred* from the
+        # guarantee name. The inference was wrong in both directions: a budget
+        # stop reports `unspecified` because the block was never measured, but
+        # pe_best_response_metrics_from_raw() legitimately leaves it
+        # `unspecified` on a real measurement with no game topology to infer
+        # from. Checking the solver's own statement is exact where the name was
+        # only a proxy, so it is the statement that is now enforced.
+        metrics_available = convergence.get("metrics_available")
+        if metrics_available is None:
+            # A binary older than the marker gives no statement to check, so
+            # the guarantee name stays the only signal: keep the previous rule.
+            if guarantee == "unspecified" and not allow_incomplete:
+                failures.append("unspecified convergence guarantee telemetry")
+        elif metrics_available is False and not allow_incomplete:
+            failures.append("convergence metrics were not measured")
     if convergence.get("exploitability_raw") is None:
         failures.append("missing exploitability_raw telemetry")
     if convergence.get("exploitability_mbb_per_game") is None:
