@@ -53,6 +53,50 @@ static const void *apply_game(const void *state, uint16_t action, void *user)
     return NULL;
 }
 
+/* One-step stub for the deep round-trip: P0 acts once with two actions and
+ * pays 0.0 versus 1.0, so the traversal trains asymmetric regrets. */
+static int deep_terminal(const void *state, void *user)
+{
+    return state != user;
+}
+
+static uint16_t deep_actions(const void *state, void *user)
+{
+    return state == user ? 2u : 0u;
+}
+
+static uint64_t deep_key(const void *state, void *user)
+{
+    (void)state;
+    (void)user;
+    return 0x1234u;
+}
+
+static const void *deep_apply(const void *state, uint16_t action, void *user)
+{
+    return state == user
+        ? (const void *)((const char *)user + 1 + action)
+        : NULL;
+}
+
+static int deep_values(const void *state, const pe_reach_vec_t *reach,
+                       pe_value_vec_t *out_values, uint8_t players, void *user)
+{
+    size_t combo;
+    double value;
+    (void)reach;
+    (void)user;
+    if (!state || !out_values || players != 2u)
+        return -1;
+    value = state == (const void *)((const char *)user + 1) ? 0.0 : 1.0;
+    for (combo = 0u; combo < out_values[0].n; ++combo)
+    {
+        out_values[0].v[combo] = value;
+        out_values[1].v[combo] = -value;
+    }
+    return 0;
+}
+
 #define CHECK(condition, ...)                                      \
     do                                                             \
     {                                                              \
@@ -300,6 +344,103 @@ int main(void)
                   "(run=%d progress=%d iteration=%llu complete=%d)",
                   (int)run_status, (int)progress_status,
                   (unsigned long long)progress.iteration, progress.complete);
+            pe_solver_destroy(resumed);
+        }
+    }
+
+    /* Save/load over a RECOMPUTE_DEEP solver (ISS-235). Deep drops the
+       recomputable decoded spans at every iteration boundary, flushing them
+       byte-exact into the resident compact arrays first, so a checkpoint
+       serializes the retained layer. The strategy views a resumed solver
+       renders must match the views the deep run rendered, bit for bit. */
+    {
+        static char deep_root;
+        pe_solver_config_t deep_config = pe_solver_config_default();
+        pe_solver_deps_t deep_deps = pe_solver_deps_default();
+        pe_vector_game_t deep_game;
+        pe_solver_t *deep;
+        pe_solver_t *resumed;
+        pe_strategy_query_t deep_query = {0u};
+        pe_strategy_view_t deep_view;
+        pe_progress_t restored_progress;
+        double rendered[2] = {0.0, 0.0};
+
+        memset(&deep_game, 0, sizeof(deep_game));
+        deep_game.root = &deep_root;
+        deep_game.user = &deep_root;
+        deep_game.player_count = 2u;
+        deep_game.combo_count = 1u;
+        deep_game.is_terminal = deep_terminal;
+        deep_game.acting_player = acting_game;
+        deep_game.action_count = deep_actions;
+        deep_game.infoset_key = deep_key;
+        deep_game.apply_action = deep_apply;
+        deep_game.terminal_values = deep_values;
+        deep_config.algorithm.traversal = PE_TRAVERSAL_FULL_VECTOR;
+        deep_config.execution.precision = PE_PREC_F32;
+        deep_config.execution.storage_policy = PE_STORAGE_RECOMPUTE_DEEP;
+        deep_config.max_iterations = 2u;
+        deep_config.problem.expected_infosets = 1u;
+        deep_config.problem.expected_actions = 2u;
+        deep_config.problem.expected_combos = 1u;
+        deep_deps.vector_game = &deep_game;
+        deep_deps.persist = persist;
+
+        deep = pe_solver_create(&deep_config, &deep_deps);
+        CHECK(deep != NULL && pe_solver_run(deep) == PE_SOLVER_OK,
+              "deep solver did not complete");
+        if (deep)
+        {
+            CHECK(pe_solver_strategy(deep, &deep_query, &deep_view) ==
+                      PE_SOLVER_OK &&
+                      deep_view.count == 2u && deep_view.values != NULL,
+                  "deep run rendered no strategy view");
+            if (deep_view.count == 2u && deep_view.values)
+            {
+                /* The one-step stub trains asymmetric regrets, so the solved
+                   view must not have collapsed to the initial uniform policy. */
+                rendered[0] = deep_view.values[0];
+                rendered[1] = deep_view.values[1];
+                CHECK(fabs(rendered[0] - 0.5) > 1e-12 || fabs(rendered[1] - 0.5) > 1e-12,
+                      "deep strategy view collapsed to uniform (%.17g/%.17g)",
+                      rendered[0], rendered[1]);
+            }
+            CHECK(pe_solver_save(deep, &target) == PE_SOLVER_OK,
+                  "deep solver save API failed");
+            pe_solver_destroy(deep);
+        }
+        resumed = pe_solver_create(&deep_config, &deep_deps);
+        CHECK(resumed != NULL, "deep resume creation failed");
+        if (resumed)
+        {
+            pe_solver_status_t load_status = pe_solver_load(resumed, &source);
+            CHECK(load_status == PE_SOLVER_OK, "deep solver load API failed (%d)",
+                  (int)load_status);
+            if (load_status == PE_SOLVER_OK)
+            {
+                pe_strategy_view_t restored;
+                /* Views require a completed iteration count, and the restored
+                   count already equals the configured limit, so the resume
+                   trains nothing: the rendered view is pure restored state. */
+                CHECK(pe_solver_run(resumed) == PE_SOLVER_OK &&
+                          pe_solver_progress(resumed, &restored_progress) ==
+                              PE_SOLVER_OK &&
+                          restored_progress.complete,
+                      "resumed deep solver did not complete");
+                CHECK(pe_solver_strategy(resumed, &deep_query, &restored) ==
+                          PE_SOLVER_OK &&
+                          restored.count == 2u && restored.values != NULL,
+                      "resumed deep solver rendered no strategy view");
+                if (restored.count == 2u && restored.values)
+                {
+                    CHECK(fabs(restored.values[0] - rendered[0]) < 1e-15 &&
+                              fabs(restored.values[1] - rendered[1]) < 1e-15,
+                          "restored deep strategy views differ (%.17g/%.17g vs "
+                          "%.17g/%.17g)",
+                          restored.values[0], restored.values[1],
+                          rendered[0], rendered[1]);
+                }
+            }
             pe_solver_destroy(resumed);
         }
     }
