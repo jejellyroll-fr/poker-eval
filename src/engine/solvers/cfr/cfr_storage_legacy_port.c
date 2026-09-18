@@ -308,6 +308,10 @@ static const pe_storage_ops_t k_legacy_ops = {
     NULL,
     /* Issue #235: the legacy hash storage cannot yet attribute its memory;
      * metrics queried through this port carry zeros rather than a guess. */
+    NULL,
+    /* Issue #235 (phase 6): the legacy storage holds no derived layer, so it
+     * cannot honour a storage tier either; a tier is a documented no-op for
+     * this adapter. */
     NULL
 };
 

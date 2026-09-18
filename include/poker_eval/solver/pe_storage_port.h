@@ -24,6 +24,8 @@
 #ifndef POKER_EVAL_PE_STORAGE_PORT_H
 #define POKER_EVAL_PE_STORAGE_PORT_H
 
+#include <poker_eval/solver/pe_storage_policy.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -134,6 +136,35 @@ typedef struct pe_storage_memory_report_t
 
     /** storage_bytes / total_slots; 0 when no slot exists. */
     double bytes_per_strategy_slot;
+
+    /* ISS-235 (phase 6): retained vs recomputable, separately.
+     *
+     * retained_strategy_bytes is the convergence-critical layer: hash index,
+     * metadata, resident regret and strategy sums, FIXED16 scales. Dropped
+     * only with the storage itself.
+     *
+     * recomputable_strategy_bytes is the derived layer: decoded double
+     * staging spans a compact representation keeps beside the compact
+     * arrays. Re-decoding is byte-exact, so a solver pass may drop it at an
+     * iteration boundary without changing any result.
+     */
+    size_t retained_strategy_bytes;
+    size_t recomputable_strategy_bytes;
+
+    /* Solver-driven drop accounting (solver passes, ISS-235 phase 6).
+     *
+     * evict_calls     Solver passes that dropped recomputable state.
+     * evicted_bytes   Recomputable bytes dropped across those passes
+     *                 (cumulative; a span evicted twice counts twice).
+     * remat_calls     Re-materialisations of spans a previous pass dropped.
+     * remat_time_ms   Wall clock spent re-materialising and re-decoding,
+     *                 measured in the drop accessors. The measurable CPU
+     *                 cost of the trade; includes no busy time.
+     */
+    uint64_t evict_calls;
+    uint64_t evicted_bytes;
+    uint64_t remat_calls;
+    double remat_time_ms;
 } pe_storage_memory_report_t;
 
 /**
@@ -245,6 +276,25 @@ typedef struct pe_storage_ops_t
      * Fills *out and returns 0 on success, -1 otherwise.
      */
     int (*memory_report)(const void *self, pe_storage_memory_report_t *out);
+
+    /**
+     * Optional recomputable-state drop (issue #235, phase 6).
+     *
+     * A solver pass that has just applied an iteration may drop the derived
+     * double staging spans of infosets acting at or beyond `min_street`
+     * (streets tagged unknown always pass), after flushing them byte-exact
+     * into the resident compact arrays. Dropped spans re-materialise on the
+     * next access.
+     *
+     * Convergence-critical data is never touched, and a span a caller still
+     * holds a pointer to is never dropped: pass = when no pointer is held,
+     * which an iteration boundary guarantees.
+     *
+     * NULL when the adapter holds no derived layer (or will not honour the
+     * policy); the policy is then a documented no-op for that adapter.
+     * Returns 0 on success, -1 otherwise.
+     */
+    int (*drop_recomputable)(void *self, int min_street);
 } pe_storage_ops_t;
 
 /** Whether an adapter serves a value array. */

@@ -93,16 +93,99 @@ results, and the separation makes that auditable.
 
 ## Public ABI note
 
-`pe_metrics_t` grew (`storage_memory`, `adapter_bytes`). As with issue #234,
-the solver shared library's SOVERSION was bumped so an application built
-against the old headers cannot be mixed with a newer library.
+`pe_metrics_t` grew (`storage_memory`, `adapter_bytes`; phase 6 adds the
+tier and drop accounting). As with issue #234, the solver shared library's
+SOVERSION was bumped (now 4) so an application built against the old
+headers cannot be mixed with a newer library.
 
-## Phase-1 scope and what comes next
+## Explicit storage tiers (phase 6)
 
-Implemented here: the breakdown, the derived metrics, the port capability,
-the CLI/JSON/benchmark surfacing and the ABI bump.
+With the baseline attributed, the flagship optimisation of issue #235
+becomes a first-class axis: an explicit **storage tier** decides how much
+derived state each street keeps. The contract is the same as the sampling
+policy (ISS-232): kept next to the axis, explicit, visible in the plan —
+never inferred from a preset. The CFR semantics never change.
 
-Future phases of issue #235 (compact key representations, deep-street
-recomputation policies, retained-vs-recomputable telemetry) build on this
-accounting: a storage policy change is only measurable if the baseline
-attributed its bytes first.
+| Tier | Deep streets keep | Reduction | CPU cost |
+| --- | --- | --- | --- |
+| `full` (default) | everything, derived included | 0 | 0 |
+| `compact` | flop stored; turn/river re-materialise | largest so far | decode work |
+| `recompute-deep` | nothing kept; every street re-materialises | largest | most decode work |
+
+The red line is unchanged: a tier never touches strategy results. Dropping
+derived decoded state and re-decoding it byte-exact is not an
+approximation, and the pinned regression test (`test_storage_tiers_solve`,
+label `sto02`) holds that under the same precision and seed, every tier
+produces bitwise-identical convergence aggregates — F64 and FIXED16.
+
+### Port capability
+
+`pe_storage_ops_t` gained an optional `drop_recomputable(self, min_street)`
+op. A solver pass that has just applied an iteration may drop the derived
+double staging spans of infosets acting at or beyond `min_street` (streets
+tagged unknown always pass), after flushing them byte-exact into the
+resident compact arrays. Dropped spans re-materialise on the next access.
+
+The drop passes run at the one point that guarantees no caller anywhere
+holds a span pointer: the **iteration boundary**, between the batch apply
+and the next traversal. A checkpoint can only observe the storage at this
+boundary, never mid-iteration. An adapter that holds no derived layer (the
+legacy hash storage) leaves the op NULL and honours nothing; the policy is
+a documented no-op for it.
+
+### Tiers bite only under a compact precision
+
+Under `f64` there is no derived decoded layer anywhere, so a tier is a
+no-op by construction. Under `f32`/`mixed`/`fixed16` every access to an
+infoset decodes a double staging span resident beside the compact arrays;
+the tier decides which streets keep those spans. Where a tier bites:
+
+- `full` — nowhere: nothing is ever deep enough.
+- `compact` — infosets acting at street ≥ 2 (turn, river) plus streets
+  tagged unknown; preflop and flop stay hot.
+- `recompute-deep` — every infoset, including the opening streets.
+
+### Reading the measured trade
+
+`pe_metrics_t` appends the tier that actually ran and what the drop passes
+reported — even when the resolved port implements none of the drop
+machinery:
+
+- `storage_memory_policy` — the tier that ran; never inferred.
+- `recompute_calls` / `recompute_time_ms` — re-materialisations of
+  recomputable state a drop pass removed, and the wall clock they spent.
+  The measurable CPU cost of the trade.
+- `bytes_saved_vs_full` — recomputable bytes drop passes removed across the
+  run (cumulative; a span evicted twice counts twice). The measured RAM
+  saved against `PE_STORAGE_FULL`.
+
+The memory diagnostic line carries the resolved tier and the retained vs
+recomputable split:
+
+```text
+memory infosets=… storage_bytes=… adapter_bytes=… bytes_per_infoset=…
+bytes_per_strategy_slot=… memory_policy=compact retained_bytes=…
+recomputable_bytes=… recompute_calls=… bytes_saved_vs_full=…
+```
+
+and the JSON report's `memory` object appends `retained_strategy_bytes` /
+`recomputable_strategy_bytes` (the convergence-critical layer vs the derived
+layer: dropped only with the storage itself vs dropped at an iteration
+boundary and re-decoded byte-exact), plus `recompute_calls` /
+`bytes_saved_vs_full`. The benchmark payload captures the same split
+additively in `memory.solver_accounting`.
+
+### Choosing a tier
+
+- `full` retains every resident layer, derived included, once
+  materialised — the baseline every other mode is benchmarked against.
+- `compact` is the issue's candidate behaviour for flop/turn/river
+  materialisation: derived state kept for the hot opening streets, dropped
+  for the deep ones.
+- `recompute-deep` is the largest reduction, paid in the most decode work.
+
+Select on `pe-preflop-solve` with `--memory-policy NAME` (`full`,
+`compact`, `recompute-deep`), or on the C API with
+`pe_solver_config_t::execution::storage_policy`. The resolved tier is
+recorded in the execution plan (`storage policy` line) so diagnostics
+report the mode that actually ran.

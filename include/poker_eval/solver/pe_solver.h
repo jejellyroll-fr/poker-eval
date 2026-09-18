@@ -221,6 +221,23 @@ struct pe_metrics_t {
        attributed to the storage even when a custom port implements no
        detailed breakdown. 0 only when nothing sits outside the storage. */
     uint64_t adapter_bytes;
+
+    /* Issue #235 (phase 6): the storage tier that actually ran, visible on
+       the metrics even when the resolved port implements none of the drop
+       machinery. Never inferred; whatever was configured. */
+    pe_storage_policy_t storage_memory_policy;
+
+    /* Issue #235 (phase 6): solver-reported drop accounting.
+       recompute_calls      Re-materialisations of recomputable state a drop
+                            pass removed.
+       recompute_time_ms    Wall clock those re-materialisations spent.
+       bytes_saved_vs_full  Recomputable bytes drop passes removed across the
+                            run (cumulative; a span evicted twice counts
+                            twice). The measured RAM saved against
+                            PE_STORAGE_FULL. */
+    uint64_t recompute_calls;
+    double recompute_time_ms;
+    uint64_t bytes_saved_vs_full;
 };
 
 /** Snapshot of lifecycle progress; values are stable for one call. */

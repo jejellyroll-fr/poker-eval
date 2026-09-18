@@ -63,6 +63,7 @@ add_library(poker_solver
     solver/domain/config.c
     solver/domain/rng.c
     solver/domain/sampling_policy.c
+    solver/domain/storage_policy.c
     solver/domain/plan.c
     solver/domain/runtime.c
     solver/domain/work_unit.c
@@ -219,10 +220,14 @@ endforeach()
 # memory. The solver ABI now versions independently of the package version.
 # Issue #235: pe_metrics_t grew again (subsystem storage memory report and
 # adapter_bytes), so the same reasoning bumps the solver ABI once more.
+# Issue #235 (phase 6): pe_solver_config_t and pe_metrics_t grew again
+# (storage_policy axis, tier and drop accounting on the metrics); the solver
+# ABI bumps to SOVERSION 4 so an application built against the old headers
+# fails at load time instead of corrupting memory.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 3.0.0
-        SOVERSION 3)
+        VERSION 4.0.0
+        SOVERSION 4)
 endif()
 
 # Create a combined interface library that includes all modules

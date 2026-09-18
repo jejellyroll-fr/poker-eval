@@ -63,6 +63,10 @@ pe_solver_config_t pe_solver_config_default(void)
 
     cfg.execution.precision = PE_PREC_F64;
 
+    /* ISS-235 (phase 6): the reference path retains every resident layer
+     * (every street, derived included); anything else is opted into. */
+    cfg.execution.storage_policy = PE_STORAGE_FULL;
+
     cfg.execution.device_id   = -1;
     cfg.execution.cpu_threads = 1;
 

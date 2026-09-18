@@ -71,7 +71,10 @@ RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
 # line carries, plus the first-class bytes-per-infoset figures.
 RE_MEMORY_LINE = re.compile(
     r"^memory\s+infosets=(\d+)\s+storage_bytes=(\d+)\s+adapter_bytes=(\d+)\s+"
-    r"bytes_per_infoset=([0-9.]+)\s+bytes_per_strategy_slot=([0-9.]+)$"
+    r"bytes_per_infoset=([0-9.]+)\s+bytes_per_strategy_slot=([0-9.]+)"
+    r"(?:\s+memory_policy=(\S+)\s+retained_bytes=(\d+)\s+"
+    r"recomputable_bytes=(\d+)\s+recompute_calls=(\d+)\s+"
+    r"bytes_saved_vs_full=(\d+))?$"
 )
 RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
 RE_STEP = re.compile(
@@ -746,6 +749,18 @@ def parse_stdout(
                 "bytes_per_infoset": _float(match.group(4)),
                 "bytes_per_strategy_slot": _float(match.group(5)),
             }
+            if match.group(6):
+                # ISS-235 (phase 6): the resolved tier and its measured
+                # trade, when the binary is new enough to print it.
+                solver_memory.update(
+                    {
+                        "memory_policy": match.group(6),
+                        "retained_bytes": int(match.group(7)),
+                        "recomputable_bytes": int(match.group(8)),
+                        "recompute_calls": int(match.group(9)),
+                        "bytes_saved_vs_full": int(match.group(10)),
+                    }
+                )
             continue
         match = RE_LOOP_END.search(line)
         if match:
