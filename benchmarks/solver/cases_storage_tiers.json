@@ -1,0 +1,132 @@
+{
+  "schema": "pe-solver-benchmark-cases/v1",
+  "description": "Storage-tier twins for issue #231 (tier accounting, ISS-235 phase 6). Every family runs the same full-tree case three times, once per resolved memory policy; the seed, tree, ranges, abstraction, iteration budget and memory budget are identical and precision is forced to f32 so the staged compact precision actually stages. Comparisons are derived by storage_tier_report.py.",
+  "defaults": {
+    "players": 2,
+    "iterations": 2000,
+    "showdown_samples": 1,
+    "br_samples": 16,
+    "algorithm": "external-mccfr",
+    "backend": "cpu_ref",
+    "precision": "f32",
+    "threads": 1,
+    "seed": 20260906,
+    "max_ram_mb": 512,
+    "desc_limit_mb": 64,
+    "report_rows": 0,
+    "ranges": [
+      "100%",
+      "100%"
+    ]
+  },
+  "cases": [
+    {
+      "id": "holdem_tier_full",
+      "tags": ["tiers"],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "holdem_tier_compact",
+      "tags": ["tiers"],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "holdem_tier_deep",
+      "tags": ["tiers"],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo4_tier_full",
+      "tags": ["tiers"],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo4_tier_compact",
+      "tags": ["tiers"],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo4_tier_deep",
+      "tags": ["tiers"],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo5_tier_full",
+      "tags": ["tiers"],
+      "game": "plo5",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo5_tier_compact",
+      "tags": ["tiers"],
+      "game": "plo5",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo5_tier_deep",
+      "tags": ["tiers"],
+      "game": "plo5",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo6_tier_full",
+      "tags": ["tiers"],
+      "game": "plo6",
+      "tree": "examples/plo_hu_streets/plo6_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo6_tier_compact",
+      "tags": ["tiers"],
+      "game": "plo6",
+      "tree": "examples/plo_hu_streets/plo6_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    },
+    {
+      "id": "plo6_tier_deep",
+      "tags": ["tiers"],
+      "game": "plo6",
+      "tree": "examples/plo_hu_streets/plo6_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep",
+      "expect_streets": ["PREFLOP", "FLOP", "TURN", "RIVER"]
+    }
+  ]
+}

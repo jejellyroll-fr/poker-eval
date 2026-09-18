@@ -245,6 +245,27 @@ which is the unbiasedness correction: each replicate is an independent unbiased
 trajectory, so deep streets receive that factor more useful updates per
 iteration while the game being solved is unchanged.
 
+### Storage-tier accounting (ISS-235)
+
+The solver exposes a resolved storage-tier axis (`--memory-policy`: `full`,
+`compact`, `recompute-deep`). `cases_storage_tiers.json` holds storage twins of
+the full-tree case per variant (same tree, seed, ranges, abstraction, iteration
+and memory budget) with precision forced to `f32`, so the staged compact
+precision actually stages and the resolved tier actually trades:
+
+```
+python3 run_benchmarks.py --manifest cases_storage_tiers.json --output-dir <dir>
+python3 storage_tier_report.py --summary <dir>/summary.json --selection <dir>/selection.json --output benchmarks/baseline/pe_storage_tiers.json
+```
+
+Every figure in the comparison is copied from the runner's measurements — the
+exact `solver_accounting` bytes (resolved tier, retained/recomputable bytes,
+recompute calls, bytes saved vs full), solve-owned wall clock and the
+exhaustive-report strategy fingerprints (published as
+`strategy_matches_baseline`; no verdict is attached). Only family grouping and
+ratios are computed. The checked-in artifact at
+`benchmarks/baseline/pe_storage_tiers.json` is a machine-specific baseline.
+
 ### Private-deal count
 
 The result schema contains `sampled_private_deals`, currently `null`.

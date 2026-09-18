@@ -432,6 +432,12 @@ def build_command(
             "--street-replicates",
             ",".join(str(int(replicates)) for replicates in street_replicates),
         ))
+    # ISS-235: per-case resolved storage tier (`--memory-policy`). Optional
+    # like the sampling axis above and defaulting to the solver's standard
+    # behaviour; storage twins otherwise carry identical inputs.
+    memory_policy = case.get("memory_policy")
+    if memory_policy:
+        command.extend(("--memory-policy", str(memory_policy)))
     return command
 
 
@@ -528,8 +534,12 @@ def _strategy_rows(
     action_mismatch_rows = 0
     # The solver deduplicates step entries on (node, actor) with a single
     # representative hand, so keying by hand would leave every other hand row
-    # at the node without runtime evidence. The action set is node-level, so
-    # all rows at the same (node, actor) must match it exactly.
+    # at the node without runtime evidence. Rows are validated against the
+    # observed runtime set union the tree's declared branches: infoset groups
+    # at the same node can legally see state/stack-masked branches removed
+    # (masking only ever removes a branch, never adds one), but a row may
+    # never contain a branch that neither the representative view nor the
+    # tree declares.
     runtime_actions: dict[tuple[int, str], frozenset[str]] = {}
     for line in stdout.splitlines():
         match = RE_STEP.match(line)
@@ -561,9 +571,11 @@ def _strategy_rows(
         if action_kinds is None:
             continue
         board = fields[5].strip()
-        observed_actions = runtime_actions.get((node_index, actor))
-        if observed_actions is not None:
-            if frozenset(action_kinds) != observed_actions:
+        allowed = runtime_actions.get((node_index, actor))
+        if allowed is not None and node_actions is not None:
+            allowed = allowed | node_actions.get(node_index, frozenset())
+        if allowed is not None:
+            if not frozenset(action_kinds).issubset(allowed):
                 action_mismatch_rows += 1
                 continue
         elif node_actions is not None:
