@@ -101,6 +101,41 @@ class NativeReportValidationTests(unittest.TestCase):
         self.assertIn("native solver report missing field 'progress'", failures)
         self.assertIn("native solver report missing field 'metrics'", failures)
 
+    def _budget_stopped_result(self) -> dict[str, object]:
+        """A run the memory budget stopped cleanly before its cap."""
+        result = self._valid_result()
+        result["case"]["expected_stop_cause"] = "memory_budget"
+        benchmark = result["benchmark"]
+        benchmark["actual_iterations"] = 40
+        benchmark["complete"] = False
+        benchmark["stop_cause"] = "memory_budget"
+        benchmark["metrics"]["guarantee"] = "unspecified"
+        native = result["native_solver_report"]
+        native["progress"]["iteration"] = 40
+        native["progress"]["complete"] = False
+        native["metrics"]["guarantee"] = "unspecified"
+        return result
+
+    def test_declared_memory_budget_stop_passes_validation(self) -> None:
+        # Issue #247: a case that declares `expected_stop_cause` is allowed
+        # to end incomplete with an unspecified guarantee, because the budget
+        # stopped it on purpose. Every cross-check still has to hold.
+        self.assertEqual(bench.validate_result(self._budget_stopped_result()), [])
+
+    def test_undeclared_memory_budget_stop_is_rejected(self) -> None:
+        result = self._budget_stopped_result()
+        del result["case"]["expected_stop_cause"]
+
+        failures = bench.validate_result(result)
+
+        self.assertIn(
+            "native solver report progress is not complete", failures
+        )
+        self.assertIn("unspecified convergence guarantee telemetry", failures)
+        self.assertIn(
+            "stop_cause='memory_budget', expected 'max_iterations'", failures
+        )
+
     def test_native_report_conflicts_are_rejected(self) -> None:
         cases = (
             (

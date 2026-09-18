@@ -1,0 +1,130 @@
+{
+  "boards": {
+    "FLOP": "Ks7d2c",
+    "RIVER": "Ks7d2c9h4s",
+    "TURN": "Ks7d2c9h"
+  },
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "policies": {
+    "compact": {
+      "query_rows": {},
+      "streets": {
+        "FLOP": {
+          "board": "Ks7d2c",
+          "median_seconds": 3.4493892919272184,
+          "min_seconds": 3.447667541913688,
+          "rows": 6474,
+          "samples_seconds": [
+            3.4511110419407487,
+            3.447667541913688
+          ]
+        },
+        "RIVER": {
+          "board": "Ks7d2c9h4s",
+          "median_seconds": 0.7114329376490787,
+          "min_seconds": 0.6932031251490116,
+          "rows": 5398,
+          "samples_seconds": [
+            0.7296627501491457,
+            0.6932031251490116
+          ]
+        },
+        "TURN": {
+          "board": "Ks7d2c9h",
+          "median_seconds": 1.0359793540555984,
+          "min_seconds": 1.0247601249720901,
+          "rows": 2778,
+          "samples_seconds": [
+            1.0471985831391066,
+            1.0247601249720901
+          ]
+        }
+      }
+    },
+    "full": {
+      "query_rows": {},
+      "streets": {
+        "FLOP": {
+          "board": "Ks7d2c",
+          "median_seconds": 3.5998133334796876,
+          "min_seconds": 3.5929837918374687,
+          "rows": 6474,
+          "samples_seconds": [
+            3.5929837918374687,
+            3.6066428751219064
+          ]
+        },
+        "RIVER": {
+          "board": "Ks7d2c9h4s",
+          "median_seconds": 0.7119972915388644,
+          "min_seconds": 0.7005316249560565,
+          "rows": 5398,
+          "samples_seconds": [
+            0.7234629581216723,
+            0.7005316249560565
+          ]
+        },
+        "TURN": {
+          "board": "Ks7d2c9h",
+          "median_seconds": 0.9658627086319029,
+          "min_seconds": 0.9594161671120673,
+          "rows": 2778,
+          "samples_seconds": [
+            0.9594161671120673,
+            0.9723092501517385
+          ]
+        }
+      }
+    },
+    "recompute-deep": {
+      "query_rows": {},
+      "streets": {
+        "FLOP": {
+          "board": "Ks7d2c",
+          "median_seconds": 3.177073020953685,
+          "min_seconds": 3.1751750418916345,
+          "rows": 6474,
+          "samples_seconds": [
+            3.1789710000157356,
+            3.1751750418916345
+          ]
+        },
+        "RIVER": {
+          "board": "Ks7d2c9h4s",
+          "median_seconds": 0.6379095000447705,
+          "min_seconds": 0.6311249160207808,
+          "rows": 5398,
+          "samples_seconds": [
+            0.6446940840687603,
+            0.6311249160207808
+          ]
+        },
+        "TURN": {
+          "board": "Ks7d2c9h",
+          "median_seconds": 0.8762360415421426,
+          "min_seconds": 0.8729451249819249,
+          "rows": 2778,
+          "samples_seconds": [
+            0.8729451249819249,
+            0.8795269581023604
+          ]
+        }
+      }
+    }
+  },
+  "schema": "pe-solver-query-latency/v1",
+  "settings": {
+    "backend": "cpu_ref",
+    "board_abstraction": "large",
+    "desc_limit_mb": 16,
+    "game": "holdem",
+    "iterations": 20000,
+    "max_ram_mb": 128,
+    "players": 2,
+    "precision": "f32",
+    "repeats": 3,
+    "seed": 20260906,
+    "tree": "/Users/jde/Documents/github/poker-eval/examples/nlhe_hu/nlhe_hu_full.tree.json"
+  },
+  "solver": "/Users/jde/Documents/github/poker-eval/build/tools/pe-preflop-solve"
+}

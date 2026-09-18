@@ -817,6 +817,44 @@ class ValidationTests(unittest.TestCase):
         )
         self.assertIn("missing completed strategy report", failures)
 
+    def test_undeclared_memory_budget_stop_is_rejected(self) -> None:
+        # A case that does not opt in must still run to its iteration cap:
+        # a memory-bound stop stays a validation failure.
+        result = self._result()
+        result["benchmark"]["stop_cause"] = "memory_budget"
+        result["benchmark"]["actual_iterations"] = 17
+
+        failures = bench.validate_result(result)
+
+        self.assertIn(
+            "stop_cause='memory_budget', expected 'max_iterations'", failures
+        )
+        self.assertIn("iterations 17 != requested 64", failures)
+
+    def test_declared_memory_budget_stop_is_accepted(self) -> None:
+        result = self._result()
+        result["case"]["expected_stop_cause"] = "memory_budget"
+        result["benchmark"]["stop_cause"] = "memory_budget"
+        result["benchmark"]["actual_iterations"] = 17
+
+        failures = bench.validate_result(result)
+
+        self.assertNotIn(
+            "stop_cause='memory_budget', expected 'max_iterations'", failures
+        )
+        self.assertNotIn("iterations 17 != requested 64", failures)
+
+    def test_declared_memory_budget_stop_still_caps_iterations(self) -> None:
+        # Declaring an early stop must not license overrunning the cap.
+        result = self._result()
+        result["case"]["expected_stop_cause"] = "memory_budget"
+        result["benchmark"]["stop_cause"] = "memory_budget"
+        result["benchmark"]["actual_iterations"] = 65
+
+        failures = bench.validate_result(result)
+
+        self.assertIn("iterations 65 exceed requested 64", failures)
+
     def test_missing_convergence_telemetry_is_rejected(self) -> None:
         failures = bench.validate_result(
             self._result(

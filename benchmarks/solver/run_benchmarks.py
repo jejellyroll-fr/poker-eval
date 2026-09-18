@@ -41,6 +41,11 @@ WINDOWS_RESERVED_CASE_NAMES = frozenset(
     | {f"lpt{index}" for index in range(1, 10)}
 )
 ACTION_PERCENT_SUM_TOLERANCE = 0.51
+# A case runs to its iteration cap unless it explicitly declares another
+# clean stop. Issue #247 needs a memory-bound case (`memory_budget`) so a
+# fixed-RAM-budget comparison can record how far each storage tier got
+# before the budget stopped it.
+DEFAULT_STOP_CAUSE = "max_iterations"
 
 # The final "infosets" field on this legacy line is the description-table
 # count, not necessarily the solver's retained strategy count when --desc-limit
@@ -932,6 +937,14 @@ def parse_stdout(
 
 def validate_result(result: dict[str, Any]) -> list[str]:
     failures: list[str] = []
+    # A case runs to its iteration cap unless it declares another clean stop.
+    # `memory_budget` (issue #247) stops early by design, so such a case is
+    # also allowed to end with an incomplete progress flag and an
+    # `unspecified` guarantee: it never reached convergence on purpose.
+    expected_stop_cause = str(
+        result["case"].get("expected_stop_cause", DEFAULT_STOP_CAUSE)
+    )
+    allow_incomplete = expected_stop_cause != DEFAULT_STOP_CAUSE
     process = result["process"]
     if process["returncode"] != 0:
         failures.append(f"solver exited {process['returncode']}")
@@ -951,16 +964,30 @@ def validate_result(result: dict[str, Any]) -> list[str]:
                 f"expected {NATIVE_REPORT_SCHEMA}"
             )
         else:
-            failures.extend(validate_native_report(native_report, result))
+            failures.extend(
+                validate_native_report(
+                    native_report, result, allow_incomplete=allow_incomplete
+                )
+            )
 
     metrics = result["benchmark"]
-    if metrics["actual_iterations"] != metrics["requested_iterations"]:
+    if expected_stop_cause == DEFAULT_STOP_CAUSE:
+        if metrics["actual_iterations"] != metrics["requested_iterations"]:
+            failures.append(
+                f"iterations {metrics['actual_iterations']} != requested "
+                f"{metrics['requested_iterations']}"
+            )
+    elif metrics["actual_iterations"] > metrics["requested_iterations"]:
+        # A case that declares an early clean stop (for example
+        # `memory_budget`) must still respect the iteration cap it was given.
         failures.append(
-            f"iterations {metrics['actual_iterations']} != requested "
+            f"iterations {metrics['actual_iterations']} exceed requested "
             f"{metrics['requested_iterations']}"
         )
-    if metrics["stop_cause"] != "max_iterations":
-        failures.append(f"stop_cause={metrics['stop_cause']!r}, expected max_iterations")
+    if metrics["stop_cause"] != expected_stop_cause:
+        failures.append(
+            f"stop_cause={metrics['stop_cause']!r}, expected {expected_stop_cause!r}"
+        )
     if metrics["solve_elapsed_seconds"] is None:
         failures.append("missing solver timing markers")
     elif metrics["solve_elapsed_seconds"] <= 0:
@@ -974,7 +1001,7 @@ def validate_result(result: dict[str, Any]) -> list[str]:
     guarantee = convergence.get("guarantee")
     if not guarantee:
         failures.append("missing convergence guarantee telemetry")
-    elif guarantee == "unspecified":
+    elif guarantee == "unspecified" and not allow_incomplete:
         failures.append("unspecified convergence guarantee telemetry")
     if convergence.get("exploitability_raw") is None:
         failures.append("missing exploitability_raw telemetry")

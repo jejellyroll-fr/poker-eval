@@ -1,0 +1,129 @@
+{
+  "schema": "pe-solver-benchmark-cases/v1",
+  "description": "Scale corpus for issue #235 (tier scale). Storage twins per game semantics with a large iteration budget and a hard memory budget (128 MiB). Hold'em runs the full 20k slot. PLO4 is capped at 5k (2.5x the committed tier baseline) because the `full` tier's cumulative commit sweep is superlinear: measured on the reference machine, plo4/full costs 53 s at 1k iterations and 140 s at 2k (total process, report phase included), so the 20k slot extrapolates to well over an hour per case. That blow-up is itself the issue-#247 finding, not a harness limit. The earlier 200k attempt collapsed to ~11x per-iteration cost late in the solve for the same reason. Issue #247 adds a second family kind: `*_budget_*` cases run under a deliberately tight RAM budget so every tier is stopped by `memory_budget` at a different iteration, which is the direct measurement of the fixed-budget criterion.",
+  "defaults": {
+    "players": 2,
+    "iterations": 20000,
+    "showdown_samples": 1,
+    "br_samples": 16,
+    "algorithm": "external-mccfr",
+    "backend": "cpu_ref",
+    "precision": "f32",
+    "threads": 1,
+    "seed": 20260906,
+    "max_ram_mb": 128,
+    "desc_limit_mb": 16,
+    "report_rows": 0,
+    "ranges": [
+      "100%",
+      "100%"
+    ]
+  },
+  "cases": [
+    {
+      "id": "holdem_scale_full",
+      "tags": [
+        "tiers"
+      ],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full"
+    },
+    {
+      "id": "holdem_scale_compact",
+      "tags": [
+        "tiers"
+      ],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact"
+    },
+    {
+      "id": "holdem_scale_deep",
+      "tags": [
+        "tiers"
+      ],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep"
+    },
+    {
+      "id": "plo4_scale_full",
+      "tags": [
+        "tiers"
+      ],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full",
+      "iterations": 5000
+    },
+    {
+      "id": "plo4_scale_compact",
+      "tags": [
+        "tiers"
+      ],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact",
+      "iterations": 5000
+    },
+    {
+      "id": "plo4_scale_deep",
+      "tags": [
+        "tiers"
+      ],
+      "game": "plo4",
+      "tree": "examples/plo_hu_streets/plo5_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep",
+      "iterations": 5000
+    },
+    {
+      "id": "holdem_budget_full",
+      "tags": [
+        "budget"
+      ],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "full",
+      "iterations": 20000,
+      "max_ram_mb": 4,
+      "desc_limit_mb": 1,
+      "expected_stop_cause": "memory_budget"
+    },
+    {
+      "id": "holdem_budget_compact",
+      "tags": [
+        "budget"
+      ],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "compact",
+      "iterations": 20000,
+      "max_ram_mb": 4,
+      "desc_limit_mb": 1,
+      "expected_stop_cause": "memory_budget"
+    },
+    {
+      "id": "holdem_budget_deep",
+      "tags": [
+        "budget"
+      ],
+      "game": "holdem",
+      "tree": "examples/nlhe_hu/nlhe_hu_full.tree.json",
+      "board_abstraction": "large",
+      "memory_policy": "recompute-deep",
+      "iterations": 20000,
+      "max_ram_mb": 4,
+      "desc_limit_mb": 1,
+      "expected_stop_cause": "memory_budget"
+    }
+  ]
+}

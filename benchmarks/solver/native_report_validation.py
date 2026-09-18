@@ -128,9 +128,18 @@ def _compare_stdout_float(
 
 
 def validate_native_report(
-    native_report: dict[str, Any], result: dict[str, Any]
+    native_report: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    allow_incomplete: bool = False,
 ) -> list[str]:
-    """Validate required native-report evidence and cross-check independent views."""
+    """Validate required native-report evidence and cross-check independent views.
+
+    `allow_incomplete` relaxes the "progress is complete" requirement for a
+    case that declared a clean early stop (issue #247's `memory_budget`): such
+    a run is *expected* to end before its iteration cap, and the cross-checks
+    between the native report and stdout still apply.
+    """
     failures: list[str] = []
     missing = [field for field in _REQUIRED_TOP_LEVEL_FIELDS if field not in native_report]
     failures.extend(
@@ -238,7 +247,7 @@ def validate_native_report(
                 f"native solver report progress.complete={progress_complete} "
                 f"!= stdout {stdout_complete}"
             )
-        if progress_complete is not True:
+        if progress_complete is not True and not allow_incomplete:
             failures.append("native solver report progress is not complete")
 
     native_metrics = native_report.get("metrics")

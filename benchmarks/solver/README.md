@@ -266,6 +266,45 @@ exhaustive-report strategy fingerprints (published as
 ratios are computed. The checked-in artifact at
 `benchmarks/baseline/pe_storage_tiers.json` is a machine-specific baseline.
 
+### Storage tiers at scale (ISS-247)
+
+`cases_storage_tier_scale.json` carries two family kinds over the same
+storage twins:
+
+- `*_scale_*` — a large iteration budget (20k) under a hard memory budget
+  (128 MiB) that does *not* bind. The comparison is throughput, peak and
+  storage ratios at equal iteration counts, so the exhaustive strategy
+  fingerprints must match the `full` baseline.
+- `*_budget_*` — a deliberately tight RAM budget (`--max-ram 4`,
+  `--desc-limit 1`) so every tier is stopped by `memory_budget` at a
+  different iteration. Each budget case declares
+  `expected_stop_cause: "memory_budget"` so the runner accepts the clean
+  early stop instead of flagging it; the comparison is iterations and
+  infosets *reached*.
+
+```
+python3 run_benchmarks.py --manifest cases_storage_tier_scale.json --suite tiers  --output-dir build/solver-benchmarks-scale
+python3 run_benchmarks.py --manifest cases_storage_tier_scale.json --suite budget --output-dir build/solver-benchmarks-budget
+python3 tier_scale_report.py \
+  --summary build/solver-benchmarks-scale/summary.json \
+  --summary build/solver-benchmarks-budget/summary.json \
+  --selection build/solver-benchmarks-scale/selection.json \
+  --output benchmarks/baseline/pe_storage_tier_scale.json
+```
+
+`tier_scale_report.py` accepts a repeated `--summary` precisely so the two
+suites can be run (and re-run) independently and still land in one
+artifact.
+
+Per-street query latency — the phase-6 item that total solve time cannot
+show — is measured by `query_latency_probe.py`, which drives the solver's
+own `--interactive` protocol (one solve per tier, then one `query <cards>`
+round trip per street):
+
+```
+python3 query_latency_probe.py --output benchmarks/baseline/pe_query_latency.json
+```
+
 ### Private-deal count
 
 The result schema contains `sampled_private_deals`, currently `null`.
@@ -284,8 +323,11 @@ and runs two complementary checks:
 The job fails when:
 
 - the solver exits non-zero;
-- the requested iteration budget is not reached;
-- the stop cause is not `max_iterations`;
+- the requested iteration budget is not reached (a case may declare
+  `expected_stop_cause` — for example `memory_budget` — to accept an early
+  clean stop, but it must still respect the iteration cap it was given);
+- the stop cause is not the one the case declared (`max_iterations` by
+  default);
 - the solver timing markers are missing;
 - no infoset is materialized;
 - a required street is absent;
