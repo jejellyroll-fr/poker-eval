@@ -2088,8 +2088,6 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
 {
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    if (!solver->metrics_available)
-        return PE_SOLVER_ERR_INVALID_STATE;
     *out = solver->metrics;
 
     /* Issue #235 (phase 1): measured at query time so the breakdown always
@@ -2126,6 +2124,17 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
     out->recompute_calls = out->storage_memory.remat_calls;
     out->recompute_time_ms = out->storage_memory.remat_time_ms;
     out->bytes_saved_vs_full = out->storage_memory.evicted_bytes;
+
+    /* Issue #249: everything above is read from the live storage and the
+     * resolved config, so it is complete the moment a solver exists; only the
+     * convergence block needs a finished best-response measurement. Reporting
+     * the missing measurement *after* filling the rest is what keeps a run
+     * that stopped early -- on the memory budget, or on a caller stop -- from
+     * publishing a zeroed struct that reads as a measured zero. The status
+     * keeps its meaning: PE_SOLVER_ERR_INVALID_STATE says the convergence
+     * fields were never measured, never that the whole report is unusable. */
+    if (!solver->metrics_available)
+        return PE_SOLVER_ERR_INVALID_STATE;
     return PE_SOLVER_OK;
 }
 

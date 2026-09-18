@@ -35,6 +35,7 @@ def make_summary_case(
     iterations: int = 20000,
     infosets: int = 1000,
     stop_cause: str = "max_iterations",
+    metrics_available: bool | None = True,
 ) -> dict:
     benchmark = {
         "infosets": infosets,
@@ -50,6 +51,7 @@ def make_summary_case(
         "metrics": {
             "exploitability_mbb_per_game": 1125.0,
             "nash_conv_mbb_per_game": 1125.0,
+            "metrics_available": metrics_available,
         },
         "report": {"strategy_fingerprint_sha256": fingerprint},
     }
@@ -269,6 +271,45 @@ class BudgetFamilyTests(unittest.TestCase):
         # A binding budget makes the tiers stop at different iterations, so
         # fingerprint matching is not part of the budget comparison.
         self.assertNotIn("strategy_matches_baseline", compact)
+
+    def test_budget_family_marks_unmeasured_convergence(self) -> None:
+        # Issue #249: on a budget stop the convergence block was never
+        # measured, so exploitability is 0.0 as an absence. The artifact has
+        # to say which it is, or a reader cannot tell it from a converged
+        # solve that reached zero.
+        summary = make_summary(
+            make_summary_case(
+                "holdem_budget_full",
+                iterations=9000,
+                stop_cause="memory_budget",
+                metrics_available=False,
+            ),
+            make_summary_case(
+                "holdem_budget_compact",
+                iterations=12300,
+                stop_cause="memory_budget",
+                metrics_available=False,
+            ),
+            make_summary_case(
+                "holdem_budget_deep",
+                iterations=14400,
+                stop_cause="memory_budget",
+                metrics_available=False,
+            ),
+        )
+        document = scale.build_scale(summary, None)
+        cases = document["budget_families"]["holdem"]["cases"]
+        self.assertEqual([c["metrics_available"] for c in cases], [False] * 3)
+
+    def test_measured_convergence_is_marked_measured(self) -> None:
+        summary = make_summary(
+            make_summary_case("holdem_scale_full"),
+            make_summary_case("holdem_scale_compact"),
+            make_summary_case("holdem_scale_deep"),
+        )
+        document = scale.build_scale(summary, None)
+        cases = document["families"]["holdem"]["cases"]
+        self.assertEqual([c["metrics_available"] for c in cases], [True] * 3)
 
     def test_scale_and_budget_families_coexist(self) -> None:
         summary = make_summary(
