@@ -1395,7 +1395,15 @@ static void write_report(const char *path, const options_t *options,
         "\"nash_conv_mbb_per_game\":%.17g,"
         "\"max_br_gap\":%.17g,\"mean_br_gap\":%.17g,"
         "\"sample_count\":%" PRIu64 ",\"seed\":%" PRIu64
-        ",\"measurement_iteration\":%" PRIu64 "}}\n",
+        ",\"measurement_iteration\":%" PRIu64 "},"
+        "\"memory\":{\"total_infosets\":%zu,"
+        "\"storage_bytes\":%llu,\"adapter_bytes\":%llu,"
+        "\"hash_index_bytes\":%llu,\"metadata_bytes\":%llu,"
+        "\"regret_bytes\":%llu,\"average_bytes\":%llu,"
+        "\"other_values_bytes\":%llu,\"staging_bytes\":%llu,"
+        "\"allocator_overhead_bytes\":%llu,"
+        "\"bytes_per_infoset\":%.17g,"
+        "\"bytes_per_strategy_slot\":%.17g}}\n",
         options->game, options->players, pe_preset_name(options->algorithm),
         pe_compute_kind_name(options->backend),
         pe_precision_name(options->precision), pe_runtime_simd_name(detected_simd),
@@ -1412,7 +1420,19 @@ static void write_report(const char *path, const options_t *options,
         metrics->nash_conv, pe_metric_unit_name(metrics->nash_conv_unit),
         metrics->nash_conv_mbb_per_game,
         metrics->max_br_gap, metrics->mean_br_gap,
-        metrics->sample_count, metrics->seed, metrics->measurement_iteration);
+        metrics->sample_count, metrics->seed, metrics->measurement_iteration,
+        metrics->storage_memory.total_infosets,
+        (unsigned long long)metrics->storage_memory.storage_bytes,
+        (unsigned long long)metrics->adapter_bytes,
+        (unsigned long long)metrics->storage_memory.hash_index_bytes,
+        (unsigned long long)metrics->storage_memory.metadata_bytes,
+        (unsigned long long)metrics->storage_memory.regret_bytes,
+        (unsigned long long)metrics->storage_memory.average_bytes,
+        (unsigned long long)metrics->storage_memory.other_values_bytes,
+        (unsigned long long)metrics->storage_memory.staging_bytes,
+        (unsigned long long)metrics->storage_memory.allocator_overhead_bytes,
+        metrics->storage_memory.bytes_per_infoset,
+        metrics->storage_memory.bytes_per_strategy_slot);
     fclose(file);
 }
 
@@ -1997,6 +2017,18 @@ int main(int argc, char **argv)
                pe_metric_unit_name(metrics.nash_conv_unit),
                (unsigned long long)metrics.measurement_iteration,
                (unsigned long long)metrics.sample_count);
+        /* Issue #235: memory as a first-class diagnostic, separate from the
+           convergence line so the Studio's fixed-prefix parse of
+           "guarantee=" is untouched. bytes_per_infoset is the metric the
+           issue defines; adapter_bytes are the game descriptions and
+           samplers held on top of the solver's storage. */
+        printf("memory infosets=%zu storage_bytes=%llu adapter_bytes=%llu"
+               " bytes_per_infoset=%.1f bytes_per_strategy_slot=%.2f\n",
+               metrics.storage_memory.total_infosets,
+               (unsigned long long)metrics.storage_memory.storage_bytes,
+               (unsigned long long)metrics.adapter_bytes,
+               metrics.storage_memory.bytes_per_infoset,
+               metrics.storage_memory.bytes_per_strategy_slot);
         print_strategy_report(&options, game, solver, tree);
         /* Serve after an interrupt too.  Stopping a run is the normal way to
          * say "that is enough, let me look at it" -- and with an iteration

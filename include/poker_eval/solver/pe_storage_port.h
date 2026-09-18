@@ -74,6 +74,78 @@ static inline size_t pe_storage_slot_at(uint16_t combo_count,
 }
 
 /* ------------------------------------------------------------------ *
+ * Memory accounting (issue #235, phase 1)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Subsystem memory breakdown of one storage instance.
+ *
+ * Memory is a first-class performance metric for large sampled solves, so a
+ * storage can attribute every byte it holds to the subsystem that owns it.
+ * The categories follow issue #235: the infoset hash/index, the per-infoset
+ * metadata, the value arrays (regret, average strategy, others), the decoded
+ * staging spans a compact representation needs at the double-valued port
+ * boundary, and a documented estimate of allocator overhead.
+ *
+ * storage_bytes is the total and always equals what bytes() reports.
+ * bytes_per_infoset and bytes_per_strategy_slot are the derived first-class
+ * figures; both are 0 when nothing is stored.
+ */
+typedef struct pe_storage_memory_report_t
+{
+    /** Number of infosets the storage holds. */
+    size_t total_infosets;
+
+    /** Value slots across every infoset (the bytes_per_strategy_slot
+     *  denominator). */
+    uint64_t total_slots;
+
+    /** The key -> id map (the open-addressed slot table). */
+    size_t hash_index_bytes;
+
+    /** Per-infoset metadata: shape, offsets, flags, and for FIXED16 the
+     *  per-infoset scale vectors. */
+    size_t metadata_bytes;
+
+    /** Resident regret values, in whatever representation is selected. */
+    size_t regret_bytes;
+
+    /** Resident average-strategy values. */
+    size_t average_bytes;
+
+    /** Resident CURRENT / LOCKED arrays. */
+    size_t other_values_bytes;
+
+    /** Decoded double spans held for a compact representation at the port
+     *  boundary, including the per-infoset span index arrays. */
+    size_t staging_bytes;
+
+    /** Estimated allocator overhead: one documented per-block constant for
+     *  every heap block the storage owns (PE_STORAGE_ALLOC_OVERHEAD_BYTES).
+     *  An estimate, not a measurement; rounding inside the allocator is not
+     *  accounted for. */
+    size_t allocator_overhead_bytes;
+
+    /** The total: the sum of every category above. */
+    size_t storage_bytes;
+
+    /** storage_bytes / total_infosets; 0 when the storage is empty. */
+    double bytes_per_infoset;
+
+    /** storage_bytes / total_slots; 0 when no slot exists. */
+    double bytes_per_strategy_slot;
+} pe_storage_memory_report_t;
+
+/**
+ * Documented per-heap-block overhead used by allocator_overhead_bytes.
+ *
+ * Typical 64-bit malloc implementations charge 16 bytes of header plus size
+ * rounding per block. The real figure is allocator-dependent; the estimate
+ * exists so a report that ignores it cannot flatter the layout.
+ */
+#define PE_STORAGE_ALLOC_OVERHEAD_BYTES ((size_t)16)
+
+/* ------------------------------------------------------------------ *
  * The port
  * ------------------------------------------------------------------ */
 
@@ -164,6 +236,15 @@ typedef struct pe_storage_ops_t
 
     /** Read the stable game key of an infoset id without creating anything. */
     int (*key_at)(const void *self, pe_infoset_id_t id, uint64_t *out_key);
+
+    /**
+     * Optional subsystem memory breakdown (issue #235).
+     *
+     * NULL when the adapter cannot attribute its memory; metrics that query
+     * through the port then carry zeros beyond what bytes() alone implies.
+     * Fills *out and returns 0 on success, -1 otherwise.
+     */
+    int (*memory_report)(const void *self, pe_storage_memory_report_t *out);
 } pe_storage_ops_t;
 
 /** Whether an adapter serves a value array. */

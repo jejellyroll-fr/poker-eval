@@ -636,53 +636,105 @@ uint64_t pe_storage_slot_count(const pe_storage_t *s)
 
 size_t pe_storage_bytes(const pe_storage_t *s)
 {
-    size_t bytes;
+    pe_storage_memory_report_t report;
+
+    pe_storage_memory_report(s, &report);
+    return report.storage_bytes;
+}
+
+/* Issue #235 (phase 1): attribute every byte the storage holds to the
+ * subsystem that owns it. The accounting is deliberately the same walk
+ * pe_storage_bytes() has always done, extended with the categories the issue
+ * names and with a documented allocator-overhead estimate, so storage_bytes
+ * stays consistent with bytes() by construction. */
+void pe_storage_memory_report(const pe_storage_t *s,
+                              pe_storage_memory_report_t *out)
+{
+    size_t value_bytes[PE_VALUES_COUNT];
+    size_t blocks;
+    size_t total;
     int i;
 
+    if (!out)
+        return;
+    memset(out, 0, sizeof(*out));
     if (!s)
-        return 0u;
+        return;
 
-    bytes = sizeof(*s);
-    bytes += s->slot_capacity * sizeof(uint32_t);
-    bytes += s->meta_capacity * sizeof(pe_infoset_meta_t);
+    blocks = 3; /* the storage struct, the map, the metadata array */
+    for (i = 0; i < PE_VALUES_COUNT; ++i)
+        value_bytes[i] = 0;
+
     for (i = 0; i < PE_VALUES_COUNT; ++i)
     {
         if (s->precision == PE_PREC_FIXED16)
         {
             if (s->fixed_values[i])
-                bytes += (size_t)s->value_capacity * sizeof(int16_t);
-            if (s->fixed_scales[i])
-                bytes += s->meta_capacity * sizeof(float);
-            if (s->staging_spans[i])
             {
-                bytes += s->meta_capacity * sizeof(double *);
-                for (size_t id = 0; id < s->count; ++id)
-                    if (s->staging_spans[i][id])
-                        bytes += pe_storage_slab_size(&s->meta[id]) *
-                                 sizeof(double);
+                value_bytes[i] = (size_t)s->value_capacity * sizeof(int16_t);
+                blocks++;
             }
-            if (s->staging_dirty[i])
-                bytes += s->meta_capacity * sizeof(uint8_t);
+            if (s->fixed_scales[i])
+                blocks++; /* one scale per infoset, accounted as metadata */
         }
         else if (s->precision == PE_PREC_F32)
         {
             if (s->float_values[i])
-                bytes += (size_t)s->value_capacity * sizeof(float);
-            if (s->staging_spans[i])
             {
-                bytes += s->meta_capacity * sizeof(double *);
-                for (size_t id = 0; id < s->count; ++id)
-                    if (s->staging_spans[i][id])
-                        bytes += pe_storage_slab_size(&s->meta[id]) *
-                                 sizeof(double);
+                value_bytes[i] = (size_t)s->value_capacity * sizeof(float);
+                blocks++;
             }
-            if (s->staging_dirty[i])
-                bytes += s->meta_capacity * sizeof(uint8_t);
         }
         else if (s->values[i])
-            bytes += (size_t)s->value_capacity * sizeof(double);
+        {
+            value_bytes[i] = (size_t)s->value_capacity * sizeof(double);
+            blocks++;
+        }
+
+        if (s->precision == PE_PREC_FIXED16 || s->precision == PE_PREC_F32)
+        {
+            if (s->precision == PE_PREC_FIXED16 && s->fixed_scales[i])
+                out->metadata_bytes += s->meta_capacity * sizeof(float);
+            if (s->staging_spans[i])
+            {
+                size_t id;
+                blocks++; /* the span index array */
+                out->staging_bytes += s->meta_capacity * sizeof(double *);
+                for (id = 0; id < s->count; ++id)
+                    if (s->staging_spans[i][id])
+                    {
+                        blocks++; /* one decoded span per materialised infoset */
+                        out->staging_bytes +=
+                            pe_storage_slab_size(&s->meta[id]) * sizeof(double);
+                    }
+            }
+            if (s->staging_dirty[i])
+            {
+                blocks++;
+                out->staging_bytes += s->meta_capacity * sizeof(uint8_t);
+            }
+        }
     }
-    return bytes;
+
+    out->total_infosets = s->count;
+    out->total_slots = s->slot_count;
+    out->hash_index_bytes = s->slot_capacity * sizeof(uint32_t);
+    out->metadata_bytes += s->meta_capacity * sizeof(pe_infoset_meta_t);
+    out->regret_bytes = value_bytes[PE_VALUES_REGRET];
+    out->average_bytes = value_bytes[PE_VALUES_AVERAGE];
+    out->other_values_bytes = value_bytes[PE_VALUES_CURRENT] +
+                              value_bytes[PE_VALUES_LOCKED];
+    out->allocator_overhead_bytes = blocks * PE_STORAGE_ALLOC_OVERHEAD_BYTES;
+
+    total = sizeof(*s) + out->hash_index_bytes + out->metadata_bytes +
+            out->staging_bytes + out->allocator_overhead_bytes;
+    for (i = 0; i < PE_VALUES_COUNT; ++i)
+        total += value_bytes[i];
+    out->storage_bytes = total;
+    out->bytes_per_infoset = s->count
+        ? (double)total / (double)s->count : 0.0;
+    out->bytes_per_strategy_slot = s->slot_count
+        ? (double)total / (double)s->slot_count : 0.0;
 }
 
 /* ------------------------------------------------------------------ *

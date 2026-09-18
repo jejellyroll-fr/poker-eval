@@ -305,6 +305,9 @@ static const pe_storage_ops_t k_legacy_ops = {
     legacy_bytes,
     legacy_set_flags,
     legacy_get_flags,
+    NULL,
+    /* Issue #235: the legacy hash storage cannot yet attribute its memory;
+     * metrics queried through this port carry zeros rather than a guess. */
     NULL
 };
 

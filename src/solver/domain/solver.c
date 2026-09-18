@@ -2083,6 +2083,32 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
     if (!solver->metrics_available)
         return PE_SOLVER_ERR_INVALID_STATE;
     *out = solver->metrics;
+
+    /* Issue #235 (phase 1): measured at query time so the breakdown always
+     * reflects the storage as it stands, not a snapshot taken when the solve
+     * last touched the metrics. adapter_bytes derives from the same footprint
+     * the memory budget enforces, minus what the storage self-reports through
+     * its bytes() op. The subtraction uses bytes() even when the port does
+     * not implement the detailed breakdown (custom ports, the legacy hash
+     * storage): attribution stops there, but the storage footprint is still
+     * the storage's, never the game adapter's. The fallback covers an adapter
+     * with neither op, where the footprint still counts the storage but no
+     * self-report exists to subtract. */
+    if (solver->storage && solver->storage->memory_report &&
+        solver->storage->memory_report(solver->storage_self,
+                                       &out->storage_memory) != 0)
+        out->storage_memory.total_infosets = 0;
+    {
+        uint64_t footprint = pe_solver_footprint_bytes(solver);
+        uint64_t storage_bytes = 0u;
+
+        if (solver->storage && solver->storage->bytes)
+            storage_bytes = (uint64_t)solver->storage->bytes(solver->storage_self);
+        if (storage_bytes == 0u)
+            storage_bytes = (uint64_t)out->storage_memory.storage_bytes;
+        out->adapter_bytes =
+            footprint > storage_bytes ? footprint - storage_bytes : 0u;
+    }
     return PE_SOLVER_OK;
 }
 

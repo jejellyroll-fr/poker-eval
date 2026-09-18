@@ -160,6 +160,19 @@ uint64_t pe_storage_slot_count(const pe_storage_t *storage);
 /** Bytes currently held, metadata and map included. */
 size_t pe_storage_bytes(const pe_storage_t *storage);
 
+/**
+ * Subsystem memory breakdown (issue #235, phase 1).
+ *
+ * Attributes every byte the storage holds to the subsystem that owns it and
+ * derives the first-class bytes_per_infoset / bytes_per_strategy_slot
+ * figures. storage_bytes always equals pe_storage_bytes(); the breakdown is
+ * computed live, so it reflects the storage as it stands at call time.
+ *
+ * Does nothing when `out` is NULL; a NULL storage zeroes the report.
+ */
+void pe_storage_memory_report(const pe_storage_t *storage,
+                              pe_storage_memory_report_t *out);
+
 /* ------------------------------------------------------------------ *
  * Values
  * ------------------------------------------------------------------ */

@@ -142,6 +142,12 @@ static size_t ram_bytes(const void *self)
     return pe_storage_bytes((const pe_storage_t *)self);
 }
 
+static int ram_memory_report(const void *self, pe_storage_memory_report_t *out)
+{
+    pe_storage_memory_report((const pe_storage_t *)self, out);
+    return out ? 0 : -1;
+}
+
 static int ram_set_flags(void *self, pe_infoset_id_t id, uint8_t set, uint8_t clear)
 {
     return pe_storage_set_flags((pe_storage_t *)self, id, set, clear);
@@ -175,7 +181,8 @@ static const pe_storage_ops_t k_ram_ops = {
     ram_bytes,
     ram_set_flags,
     ram_get_flags,
-    ram_key_at
+    ram_key_at,
+    ram_memory_report
 };
 
 const pe_storage_ops_t *pe_storage_ram_ops(void)

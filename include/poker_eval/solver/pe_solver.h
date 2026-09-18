@@ -36,6 +36,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <poker_eval/solver/pe_storage_port.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -203,6 +205,22 @@ struct pe_metrics_t {
     uint64_t measurement_iteration;
     double standard_error;
     double confidence_interval_95;
+
+    /* Issue #235 (phase 1): where the solve's memory went, measured at query
+       time from the live storage. The breakdown names the subsystems (hash
+       index, metadata, regret and average values, decoded staging spans,
+       allocator overhead) and derives the first-class bytes_per_infoset and
+       bytes_per_strategy_slot figures; zeros mean the resolved storage
+       adapter cannot attribute its memory. */
+    pe_storage_memory_report_t storage_memory;
+
+    /* Issue #235: bytes held on top of the storage by the game adapter
+       (per-infoset descriptions, deal samplers). Derived at query time from
+       the footprint the memory budget enforces, minus the storage's own
+       self-report through its bytes() op — so the storage footprint stays
+       attributed to the storage even when a custom port implements no
+       detailed breakdown. 0 only when nothing sits outside the storage. */
+    uint64_t adapter_bytes;
 };
 
 /** Snapshot of lifecycle progress; values are stable for one call. */

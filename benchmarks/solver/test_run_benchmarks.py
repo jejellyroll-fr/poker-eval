@@ -457,6 +457,58 @@ class TelemetryParsingTests(unittest.TestCase):
             60.0 * bench.MB / 5829,
         )
 
+    def test_solver_accounting_captured_from_memory_line(self) -> None:
+        # Issue #235: the solver's own exact memory accounting, printed as a
+        # "memory infosets=..." diagnostic after the guarantee line.
+        stdout = "\n".join(
+            [
+                "iterations=10000 complete=1 infosets=0",
+                "solve_loop_end cause=max_iterations iteration=10000 "
+                "memory_mb=100.0 storage_mb=60.0 adapter_mb=40.0",
+                "guarantee=empirical exploitability_raw=1.0 "
+                "exploitability_mbb=2.0 br_samples=16",
+                "memory infosets=5829 storage_bytes=253431485 "
+                "adapter_bytes=24541203 bytes_per_infoset=43.4 "
+                "bytes_per_strategy_slot=11.7",
+            ]
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=7.18,
+            solve_elapsed_seconds=0.60,
+            requested_iterations=10000,
+            report_rows_requested=0,
+        )
+
+        accounting = parsed["memory"]["solver_accounting"]
+        self.assertEqual(accounting["total_infosets"], 5829)
+        self.assertEqual(accounting["storage_bytes"], 253431485)
+        self.assertEqual(accounting["adapter_bytes"], 24541203)
+        self.assertAlmostEqual(accounting["bytes_per_infoset"], 43.4)
+        self.assertAlmostEqual(accounting["bytes_per_strategy_slot"], 11.7)
+
+    def test_solver_accounting_absent_for_old_binaries(self) -> None:
+        stdout = (
+            "iterations=10000 complete=1 infosets=0\n"
+            "guarantee=empirical exploitability_raw=1.0 "
+            "exploitability_mbb=2.0 br_samples=16"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.25,
+            requested_iterations=10000,
+            report_rows_requested=0,
+        )
+
+        self.assertIsNone(parsed["memory"]["solver_accounting"])
+
     def test_throughput_uses_solve_time_not_full_process_time(self) -> None:
         stdout = "\n".join(
             [
