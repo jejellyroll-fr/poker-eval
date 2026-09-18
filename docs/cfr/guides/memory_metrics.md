@@ -193,3 +193,174 @@ Select on `pe-preflop-solve` with `--memory-policy NAME` (`full`,
 `pe_solver_config_t::execution::storage_policy`. The resolved tier is
 recorded in the execution plan (`storage policy` line) so diagnostics
 report the mode that actually ran.
+
+## Tiers at scale: fixed budget, query latency and the wall-clock inversion (issue #247)
+
+The committed `pe_storage_tiers.json` baseline pins the tier trade at 2 000
+iterations. Issue #247 transfers three measurements that #235 left with a
+"when practical" latitude. They are recorded in two artifacts,
+`benchmarks/baseline/pe_storage_tier_scale.json` and
+`benchmarks/baseline/pe_query_latency.json`, both machine-specific.
+
+### The wall-clock inversion is the cumulative commit sweep
+
+The baseline shows an inversion that the working-set hypothesis does not
+explain: at equal precision and seed, `recompute-deep` finishes a PLO4 solve
+faster than `full` (29.6 s vs 4.1 s at 2 000 iterations), even though it does
+strictly more decoding work. Profiling `pe-preflop-solve` on macOS arm64 with
+the system `sample` tool (2 579 samples at 1 ms, PLO4/f32/`full`) resolves it:
+**2 555 of 2 579 samples (99.1 %) sit in `pe_low_precision_commit_all`.**
+
+The mechanism is algorithmic, not cache-related. Under `PE_STORAGE_FULL` (and
+for preflop/flop under `compact`) no staging span is ever released, so
+`pe_low_precision_commit_all` walks *every* allocated infoset — O(N) — on each
+`pe_storage_resolve` / `pe_low_precision_values` call, and copies every float
+of every infoset whose `staging_dirty` bit is set. `pe_low_precision_commit_one`
+deliberately leaves that bit set, so the dirty set grows with infoset
+discovery and is never reset: the run pays a cumulative O(N × accesses) sweep.
+`PE_STORAGE_RECOMPUTE_DEEP` releases the staging spans and clears
+`staging_dirty` at each iteration boundary (`pe_storage_drop_recomputable`), so
+its active dirty set stays bounded by the current iteration.
+
+**Verdict: the working-set hypothesis is refuted.** The inversion is the
+cumulative re-commit sweep, which `full` pays and `recompute-deep` does not.
+The same sweep is why `full` scales worse than its tiers: on the reference
+machine, PLO4/`full` costs 53 s at 1 000 iterations and 140 s at 2 000 (whole
+process, report phase included), a superlinear factor of 2.6× for 2× the
+iterations.
+
+### Fixed RAM budget: materially more iterations and infosets
+
+`cases_storage_tier_scale.json` carries a `*_budget_*` family that runs the
+same Hold'em twins under a deliberately tight budget (`--max-ram 4`,
+`--desc-limit 1`) so every tier is stopped by `memory_budget` at a different
+iteration. Each budget case declares `expected_stop_cause: "memory_budget"`,
+which lets the runner accept the clean early stop (an incomplete `progress`
+flag and an `unspecified` guarantee are expected, and every cross-check
+between the native report and stdout still applies).
+
+Under the *same* 4 MiB budget, on the reference machine:
+
+| Tier | Iterations reached | Infosets reached | vs `full` (iterations) | vs `full` (infosets) |
+| --- | --- | --- | --- | --- |
+| `full` | 1 250 | 8 953 | 1.00× | 1.00× |
+| `compact` | 2 500 | 16 003 | 2.00× | 1.79× |
+| `recompute-deep` | 3 750 | 21 949 | **3.00×** | **2.45×** |
+
+The compressed tiers reach materially more iterations and infosets before the
+budget stops them, which is the #235 criterion measured directly rather than
+inferred.
+
+Two properties of the early stop are worth recording, because they shape how
+the artifact must be read:
+
+- The solver announces the stop explicitly — `memory budget reached: 2.204796
+  MB held, 4.000000 MB allowed (largest step between checks 1.992111 MB, so
+  the next one would not fit); stopping at iteration 1250 with the solve
+  intact` — and the `solve_loop_end` / `stop_detail` lines carry the iteration
+  reached and the storage/adapter split. Those are the figures the artifact
+  uses.
+- On a `memory_budget` stop the solver emits a **zeroed** `memory infosets=0
+  storage_bytes=0 …` diagnostic line, because the accounting is only filled at
+  completion. The budget cases therefore carry an all-zero
+  `memory_accounting` block in the artifact even though `storage_bytes` and
+  `peak_measured_bytes` (from the loop-end line) are real. Read the budget
+  family for iterations and infosets reached, not for the byte split; the
+  zeroed line is a reporting artefact of the early stop, not a measurement.
+
+### Query latency per street
+
+Total solve time cannot separate "the solve was slower" from "answering a board
+query was slower". `query_latency_probe.py` measures the second directly by
+driving the solver's own `--interactive` protocol: a `query <cards>` round trip
+per street, timed from the request to the `query_done` marker.
+
+Two protocol properties decide whether such a measurement is meaningful at all,
+and both have to be respected or the tiers collapse into each other:
+
+- **A query is only cold once per process.** Every query re-materialises and
+  *retains* the spans it touches, so a second query against the same solve is
+  already warm. The probe therefore starts **one process per (tier, street)**
+  and reports the first query in each as `cold_seconds`; later repeats in the
+  same process are the warm figure.
+- **The startup report warms the storage.** With `--report-rows 0` the solver
+  prints an exhaustive strategy report *before* the interactive handshake, and
+  that report calls `pe_solver_strategy` for every infoset — re-materialising
+  exactly the spans a drop pass had evicted, with no iteration boundary
+  afterwards to evict them again. Measured on the reference machine, that alone
+  collapses the three tiers from a 27–36 % spread to under 3 %: it silently
+  measures queries against a fully re-materialised storage, not against the
+  tiers' post-solve state. The probe defaults to `--startup-report-rows 1`.
+
+Hold'em, 20 000 iterations, f32, `--board-abstraction large`, µs. Cold = the
+first query in a fresh process; warm = median of the two steady-state repeats
+that follow (spread under 2 %):
+
+| Tier | FLOP cold | TURN cold | RIVER cold | FLOP warm | TURN warm | RIVER warm | Resident storage |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `full` | 3 488 600 | 965 600 | 714 300 | 3 734 300 | 984 600 | 717 800 | 6.29 MiB |
+| `compact` | 2 969 300 | 799 200 | 575 500 | 3 003 100 | 794 200 | 563 700 | 4.65 MiB |
+| `recompute-deep` | **2 534 000** | **640 100** | **456 700** | **2 571 400** | **648 800** | **459 900** | 3.95 MiB |
+
+Relative to `full`, `compact` answers in 0.85× / 0.83× / 0.81× (flop / turn /
+river) and `recompute-deep` in **0.73× / 0.66× / 0.64×**.
+
+**There is no query-latency penalty for the compressed tiers — the opposite.**
+The reason is that a board query is a **full sweep**: it visits every infoset
+the solve holds (52 140 here) and emits only the rows whose board matches
+(3 222 on the flop, 1 374 on the turn, 2 684 on the river, as reported by the
+solver's own `board_query_rows=` marker). Sweep cost therefore dominates, and a
+tier that keeps a smaller resident footprint sweeps faster; the re-decode work
+`recompute-deep` adds is small next to it, which is also why cold and warm are
+within ~2 % of each other.
+
+This is the opposite of the "recompute is expensive" intuition, and it is
+consistent with the profiling result: the decode work a tier adds is real, but
+at this scale it is dwarfed by the cumulative commit sweep `full` pays. Read
+together, the two sections say that `recompute-deep` currently dominates `full`
+on every measured axis — memory, solve time and query latency — while producing
+byte-identical strategies. That is a statement about the *current* commit sweep,
+not about the tier design; bounding the sweep is what would give the tiers back
+their intended trade.
+
+Method caveat: the figure is measured from the `query <cards>` request to the
+`query_done` marker over a pipe, so it includes the cost of streaming the
+matched rows back to the probe. Every tier emits the same rows, so that
+constant cost does not affect the comparison.
+
+### Scale counters
+
+**Hold'em, 20 000 iterations, 128 MiB cap** (56 222 infosets, f32, seed
+20260906):
+
+| Tier | Solve (s) | vs `full` | Peak (MiB) | Storage (MiB) | vs `full` | Recompute calls | Bytes saved | Fingerprint |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `full` | 82.65 | 1.000× | 23.07 | 6.29 | 1.000× | 0 | 0 | `15db4458…` |
+| `compact` | 48.28 | 0.584× | 21.42 | 4.65 | 0.738× | 138 798 | 1.43 MB | `15db4458…` |
+| `recompute-deep` | 20.17 | **0.244×** | 20.73 | 3.95 | **0.627×** | 294 083 | 3.70 MB | `15db4458…` |
+
+**PLO4, 5 000 iterations, 128 MiB cap** (125 004 infosets, f32, seed
+20260906):
+
+| Tier | Solve (s) | vs `full` | Peak (MiB) | Storage (MiB) | vs `full` | Recompute calls | Bytes saved | Fingerprint |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `full` | 217.63 | 1.000× | 33.76 | 16.98 | 1.000× | 0 | 0 | `3c19e016…` |
+| `compact` | 81.49 | 0.374× | 29.56 | 12.79 | 0.753× | 35 862 | 2.20 MB | `3c19e016…` |
+| `recompute-deep` | 26.20 | **0.120×** | 27.80 | 11.02 | **0.649×** | 52 712 | 3.20 MB | `3c19e016…` |
+
+All three tiers produce byte-identical exhaustive-report strategy fingerprints
+at the same iteration count, so the tiers are a pure memory/CPU trade and never
+an approximation. The inversion is *stronger* at scale than at the 2 000-iteration
+baseline (PLO4: 0.120× here vs 0.139× there), consistent with the cumulative
+commit sweep: the longer `full` runs, the more it pays.
+
+### What remains open
+
+The 100k/500k/1M/2M slots of the issue stay out of reach of a session-scale
+benchmark: a full preflop solve at 500k+ exceeds ~2 h per run, and the
+cumulative commit sweep makes `full` the worst offender. The PLO4 scale slot is
+therefore capped at 5 000 iterations (2.5× the committed baseline); the
+Hold'em slot runs the full 20 000. Reaching the large counters needs a
+dedicated CI budget or a dedicated bench machine, and is best done *after* the
+commit sweep is bounded, since otherwise the measurement is dominated by an
+artefact of the `full` tier rather than by solver throughput.
