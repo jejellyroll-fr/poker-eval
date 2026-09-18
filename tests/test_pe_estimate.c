@@ -176,6 +176,73 @@ static void test_precision_scales_the_estimate(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * The tier feeds the estimate (ISS-235)
+ * ------------------------------------------------------------------ */
+
+static void test_tier_shapes_the_span_layer(void)
+{
+    pe_solver_config_t cfg = sized(10000, 4, 100);
+    pe_solver_t *s;
+    pe_estimate_t full_f64, full_f32, compact_f32, deep_f32, deep_f64;
+
+    s = pe_solver_create(&cfg, NULL);
+    CHECK(pe_solver_estimate(s, &full_f64) == PE_SOLVER_OK, "f64 estimate failed");
+    pe_solver_destroy(s);
+
+    cfg.execution.storage_policy = PE_STORAGE_RECOMPUTE_DEEP;
+    s = pe_solver_create(&cfg, NULL);
+    CHECK(pe_solver_estimate(s, &deep_f64) == PE_SOLVER_OK,
+          "f64 deep estimate failed");
+    pe_solver_destroy(s);
+
+    cfg.execution.storage_policy = PE_STORAGE_FULL;
+    cfg.execution.precision = PE_PREC_F32;
+    s = pe_solver_create(&cfg, NULL);
+    CHECK(pe_solver_estimate(s, &full_f32) == PE_SOLVER_OK, "f32 estimate failed");
+    pe_solver_destroy(s);
+
+    cfg.execution.storage_policy = PE_STORAGE_COMPACT;
+    s = pe_solver_create(&cfg, NULL);
+    CHECK(pe_solver_estimate(s, &compact_f32) == PE_SOLVER_OK,
+          "f32 compact estimate failed");
+    pe_solver_destroy(s);
+
+    cfg.execution.storage_policy = PE_STORAGE_RECOMPUTE_DEEP;
+    s = pe_solver_create(&cfg, NULL);
+    CHECK(pe_solver_estimate(s, &deep_f32) == PE_SOLVER_OK,
+          "f32 deep estimate failed");
+    pe_solver_destroy(s);
+
+    /* f64 and mixed stage nothing: zero whatever the tier echoed. */
+    CHECK(full_f64.span_bytes == 0 && deep_f64.span_bytes == 0,
+          "f64 invented a span layer (%llu/%llu)",
+          (unsigned long long)full_f64.span_bytes,
+          (unsigned long long)deep_f64.span_bytes);
+    /* The tier is echoed, never inferred. */
+    CHECK(full_f32.policy == PE_STORAGE_FULL &&
+              compact_f32.policy == PE_STORAGE_COMPACT &&
+              deep_f32.policy == PE_STORAGE_RECOMPUTE_DEEP,
+          "the estimate lost the tier it was resolved under");
+    /* FULL keeps the whole hot layer; deep survives nothing. */
+    CHECK(full_f32.span_bytes > 0, "f32 FULL reported no span layer");
+    CHECK(deep_f32.span_bytes == 0,
+          "RECOMPUTE_DEEP survived the boundary in the estimate");
+    /* COMPACT is the street-symmetric midpoint of the layer. */
+    CHECK(compact_f32.span_bytes == full_f32.span_bytes / 2u,
+          "COMPACT span layer is %llu, expected half of %llu",
+          (unsigned long long)compact_f32.span_bytes,
+          (unsigned long long)full_f32.span_bytes);
+    /* The budget line covers the peak, which the tier does not change:
+       every tier under f32 pays the FULL span peak. */
+    CHECK(full_f32.host_bytes > full_f32.storage_bytes + full_f32.scratch_bytes,
+          "the span peak is missing from the budget line");
+    CHECK(deep_f32.host_bytes == full_f32.host_bytes,
+          "the tier changed the peak a budget must cover (%llu vs %llu)",
+          (unsigned long long)deep_f32.host_bytes,
+          (unsigned long long)full_f32.host_bytes);
+}
+
+/* ------------------------------------------------------------------ *
  * The refusal, and that it comes first
  * ------------------------------------------------------------------ */
 
@@ -394,6 +461,7 @@ int main(void)
 {
     test_estimate_matches_the_storage();
     test_precision_scales_the_estimate();
+    test_tier_shapes_the_span_layer();
     test_budget_refusal();
     test_budget_accepted_when_it_fits();
     test_no_budget_means_no_refusal();

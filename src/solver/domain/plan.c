@@ -583,6 +583,7 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
     uint64_t term;
     uint64_t storage_bytes;
     uint64_t scratch_bytes;
+    uint64_t span_peak;
 
     if (plan == NULL || problem == NULL || out == NULL)
         return PE_VALID_ERROR;
@@ -612,6 +613,7 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
     out->slots = slots;
     out->bytes_per_slot = (uint32_t)per_slot;
     out->value_arrays = (uint32_t)arrays;
+    out->policy = plan->storage_policy;
 
     /* Value arrays, plus the metadata and the key map the dense-ID storage
        keeps per infoset. The map is sized for a 70% load factor and rounded to
@@ -642,8 +644,36 @@ pe_valid_severity_t pe_plan_estimate(const pe_execution_plan_t *plan,
         return pe_estimate_overflow(out_diag);
     out->scratch_bytes = scratch_bytes;
 
-    if (pe_u64_add(out->storage_bytes, out->scratch_bytes,
-                   &out->host_bytes) != 0)
+    /* ISS-235 (tier accounting): the decoded hot-span layer exists only
+       under a staged compact precision (f32, fixed16); f64 and mixed stage
+       nothing, so they answer zero whatever the tier echoed. One decoded
+       span per touched infoset per staged array: actions * combos doubles,
+       8 bytes each, so the layer is slots * 8 * arrays once everything the
+       run touches stays hot.
+       The peak an iteration demands is that FULL figure regardless of tier
+       — the tier changes what survives the boundary, not the on-demand
+       materialisation inside one — and a budget is set against the peak.
+       The steady-state figure (what survives) is tier-shaped and reported
+       in span_bytes: FULL keeps the layer; COMPACT keeps only infosets
+       acting before its pressure point, a share the declared shape cannot
+       know, so its figure is a street-symmetric midpoint (half the layer)
+       in the same spirit as the key-map midpoint above; RECOMPUTE_DEEP
+       survives nothing, deterministically. */
+    span_peak = 0u;
+    if (plan->precision == PE_PREC_F32 || plan->precision == PE_PREC_FIXED16)
+    {
+        if (pe_u64_mul(slots, (uint64_t)sizeof(double), &span_peak) != 0 ||
+            pe_u64_mul(span_peak, arrays, &span_peak) != 0)
+            return pe_estimate_overflow(out_diag);
+    }
+    out->span_bytes = span_peak;
+    if (plan->storage_policy == PE_STORAGE_COMPACT)
+        out->span_bytes /= 2u; /* street-symmetric midpoint */
+    else if (plan->storage_policy == PE_STORAGE_RECOMPUTE_DEEP)
+        out->span_bytes = 0u; /* nothing survives the boundary */
+
+    if (pe_u64_add(out->storage_bytes, out->scratch_bytes, &out->host_bytes) != 0 ||
+        pe_u64_add(out->host_bytes, span_peak, &out->host_bytes) != 0)
         return pe_estimate_overflow(out_diag);
 
     /* A device holds the value arrays and nothing else so far: the traversal

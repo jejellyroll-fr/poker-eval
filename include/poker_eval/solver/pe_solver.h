@@ -360,12 +360,32 @@ struct pe_estimate_t {
     uint64_t slots;              /**< infosets * actions * combos */
     uint32_t bytes_per_slot;     /**< from the resolved precision */
     uint32_t value_arrays;       /**< how many the plan will keep */
+    pe_storage_policy_t policy;  /**< the resolved tier, echoed */
 
     /** Value arrays, metadata and the key map. */
     uint64_t storage_bytes;
     /** Traversal scratch and the update batches. */
     uint64_t scratch_bytes;
-    /** storage + scratch. What max_ram_bytes is compared against. */
+    /**
+     * The decoded hot-span layer, at steady state (between iterations):
+     * what survives the iteration boundary under the echoed tier. One
+     * decoded span per touched infoset per staged array (actions * combos
+     * doubles, 8 bytes each). Non-zero only under a staged compact
+     * precision (f32, fixed16); f64 and mixed stage nothing, so they
+     * answer zero whatever the tier echoed.
+     *
+     * FULL keeps everything touched (everything, for a full-tree solve);
+     * COMPACT keeps only infosets acting before its pressure point — a
+     * share the declared shape cannot know, so its figure is a documented
+     * street-symmetric midpoint (half the layer) that carries far below
+     * the slack a budget is set with; RECOMPUTE_DEEP survives nothing
+     * (deterministic zero). The peak an iteration demands is the FULL
+     * figure regardless of tier — the tier changes what survives the
+     * boundary, not the on-demand materialisation inside one — and that
+     * peak is what host_bytes covers. */
+    uint64_t span_bytes;
+    /** storage + scratch + the span peak. What max_ram_bytes is compared
+     * against. */
     uint64_t host_bytes;
     /** 0 unless a stage was resolved onto a device. */
     uint64_t device_bytes;
