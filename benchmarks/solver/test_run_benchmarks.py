@@ -509,6 +509,52 @@ class TelemetryParsingTests(unittest.TestCase):
 
         self.assertIsNone(parsed["memory"]["solver_accounting"])
 
+    def test_metrics_available_marker_is_captured(self) -> None:
+        # Issue #249: the solver states whether the convergence block was
+        # measured at all, so a budget stop's zeros are not read as a result.
+        stdout = (
+            "iterations=1250 complete=0 infosets=2194\n"
+            "guarantee=unspecified exploitability_raw=0.000000 "
+            "exploitability_mbb=0.000000 br_samples=16 br_mode=sampled "
+            "nash_conv_raw=0.000000 nash_conv_mbb=0.000000 "
+            "max_br_gap_mbb=0.000000 mean_br_gap_mbb=0.000000 unit=chips/game "
+            "measurement_iteration=0 sample_count=0 metrics_available=0"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.55,
+            requested_iterations=20000,
+            report_rows_requested=0,
+        )
+
+        self.assertIs(parsed["metrics"]["metrics_available"], False)
+        self.assertEqual(parsed["metrics"]["guarantee"], "unspecified")
+
+    def test_metrics_available_absent_for_old_binaries(self) -> None:
+        # A solver older than the marker gives no statement to check; None
+        # means "unknown", never "measured".
+        stdout = (
+            "iterations=10000 complete=1 infosets=0\n"
+            "guarantee=empirical exploitability_raw=1.0 "
+            "exploitability_mbb=2.0 br_samples=16"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.25,
+            requested_iterations=10000,
+            report_rows_requested=0,
+        )
+
+        self.assertIsNone(parsed["metrics"]["metrics_available"])
+
     def test_throughput_uses_solve_time_not_full_process_time(self) -> None:
         stdout = "\n".join(
             [
@@ -854,6 +900,73 @@ class ValidationTests(unittest.TestCase):
         failures = bench.validate_result(result)
 
         self.assertIn("iterations 65 exceed requested 64", failures)
+
+    def test_unmeasured_convergence_on_a_declared_early_stop_is_accepted(self) -> None:
+        # Issue #249: a budget stop lands before the first measurement, so the
+        # solver reports metrics_available=0. For a case that declared the
+        # early stop that is the expected telemetry, not a failure.
+        result = self._result(
+            metrics={
+                **self._valid_convergence(),
+                "guarantee": "unspecified",
+                "exploitability_raw": 0.0,
+                "exploitability_mbb_per_game": 0.0,
+                "metrics_available": False,
+            }
+        )
+        result["case"]["expected_stop_cause"] = "memory_budget"
+        result["benchmark"]["stop_cause"] = "memory_budget"
+        result["benchmark"]["actual_iterations"] = 17
+
+        failures = bench.validate_result(result)
+
+        self.assertNotIn("convergence metrics were not measured", failures)
+        self.assertNotIn("unspecified convergence guarantee telemetry", failures)
+
+    def test_unmeasured_convergence_without_a_declared_stop_is_rejected(self) -> None:
+        # The same telemetry on a run that did NOT declare an early stop means
+        # the convergence block was lost, which is exactly what used to slip
+        # through as a zeroed struct.
+        result = self._result(
+            metrics={
+                **self._valid_convergence(),
+                "guarantee": "unspecified",
+                "metrics_available": False,
+            }
+        )
+
+        failures = bench.validate_result(result)
+
+        self.assertIn("convergence metrics were not measured", failures)
+
+    def test_unspecified_guarantee_from_a_measured_run_is_accepted(self) -> None:
+        # pe_best_response_metrics_from_raw() legitimately leaves the guarantee
+        # unspecified on a real measurement with no game topology to infer
+        # from, so the name alone must not fail a run the solver says it
+        # measured. The old rule rejected exactly this.
+        result = self._result(
+            metrics={
+                **self._valid_convergence(),
+                "guarantee": "unspecified",
+                "metrics_available": True,
+            }
+        )
+
+        failures = bench.validate_result(result)
+
+        self.assertNotIn("unspecified convergence guarantee telemetry", failures)
+        self.assertNotIn("convergence metrics were not measured", failures)
+
+    def test_missing_marker_keeps_the_previous_guarantee_rule(self) -> None:
+        # A binary older than the marker gives no statement to check, so the
+        # guarantee name stays the only signal and the old rule applies.
+        result = self._result(
+            metrics={**self._valid_convergence(), "guarantee": "unspecified"}
+        )
+
+        failures = bench.validate_result(result)
+
+        self.assertIn("unspecified convergence guarantee telemetry", failures)
 
     def test_missing_convergence_telemetry_is_rejected(self) -> None:
         failures = bench.validate_result(

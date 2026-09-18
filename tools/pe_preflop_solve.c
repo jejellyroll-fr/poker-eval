@@ -1378,7 +1378,8 @@ static const char *guarantee_name(pe_guarantee_t guarantee)
 
 static void write_report(const char *path, const options_t *options,
                          const pe_metrics_t *metrics, pe_progress_t *progress,
-                         size_t infosets, simd_capability_t detected_simd)
+                         size_t infosets, simd_capability_t detected_simd,
+                         int metrics_measured)
 {
     FILE *file = fopen(path, "w");
     if (!file) {
@@ -1403,7 +1404,8 @@ static void write_report(const char *path, const options_t *options,
         "\"nash_conv_mbb_per_game\":%.17g,"
         "\"max_br_gap\":%.17g,\"mean_br_gap\":%.17g,"
         "\"sample_count\":%" PRIu64 ",\"seed\":%" PRIu64
-        ",\"measurement_iteration\":%" PRIu64 "},"
+        ",\"measurement_iteration\":%" PRIu64
+        ",\"metrics_available\":%s},"
         "\"memory\":{\"total_infosets\":%zu,"
         "\"storage_bytes\":%llu,\"adapter_bytes\":%llu,"
         "\"hash_index_bytes\":%llu,\"metadata_bytes\":%llu,"
@@ -1433,6 +1435,7 @@ static void write_report(const char *path, const options_t *options,
         metrics->nash_conv_mbb_per_game,
         metrics->max_br_gap, metrics->mean_br_gap,
         metrics->sample_count, metrics->seed, metrics->measurement_iteration,
+        metrics_measured ? "true" : "false",
         metrics->storage_memory.total_infosets,
         (unsigned long long)metrics->storage_memory.storage_bytes,
         (unsigned long long)metrics->adapter_bytes,
@@ -1465,6 +1468,12 @@ int main(int argc, char **argv)
     pe_solver_status_t status;
     pe_progress_t progress = {0};
     pe_metrics_t metrics = {0};
+    /* Issue #249: pe_solver_metrics() fills the whole struct and reports a
+       missing convergence measurement through its status. Keeping the status
+       is what lets the guarantee line say the block was never measured,
+       instead of printing a zero that reads as a measurement. */
+    pe_solver_status_t metrics_status = PE_SOLVER_ERR_NULL_ARGUMENT;
+    int metrics_measured = 0;
     StdDeck_CardMask dead;
     pe_preflop_variant_t variant;
     mpf_tree_def_t *tree = NULL;
@@ -1956,8 +1965,12 @@ int main(int argc, char **argv)
     }
     if (solver)
         (void)pe_solver_progress(solver, &progress);
+    /* Issue #249: the status is load-bearing now, not discardable. Every
+       field of `metrics` is filled either way; the status separates "the
+       convergence block was measured" from "it never was". */
     if (solver)
-        (void)pe_solver_metrics(solver, &metrics);
+        metrics_status = pe_solver_metrics(solver, &metrics);
+    metrics_measured = metrics_status == PE_SOLVER_OK;
     if (status != PE_SOLVER_OK) {
         fprintf(stderr, "preflop solve failed: status=%d\n", (int)status);
         goto fail;
@@ -2021,7 +2034,8 @@ int main(int argc, char **argv)
            a caller-controlled format string (Codacy security check). */
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%llu br_mode=%s"
                " nash_conv_raw=%.6f nash_conv_mbb=%.6f max_br_gap_mbb=%.6f mean_br_gap_mbb=%.6f"
-               " unit=%s measurement_iteration=%llu sample_count=%llu\n",
+               " unit=%s measurement_iteration=%llu sample_count=%llu"
+               " metrics_available=%d\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
                metrics.exploitability_mbb_per_game,
                (unsigned long long)options.br_samples,
@@ -2033,7 +2047,8 @@ int main(int argc, char **argv)
                    ? metrics.mean_br_gap / metrics.big_blind * 1000.0 : 0.0,
                pe_metric_unit_name(metrics.nash_conv_unit),
                (unsigned long long)metrics.measurement_iteration,
-               (unsigned long long)metrics.sample_count);
+               (unsigned long long)metrics.sample_count,
+               metrics_measured);
         /* Issue #235: memory as a first-class diagnostic, separate from the
            convergence line so the Studio's fixed-prefix parse of
            "guarantee=" is untouched. bytes_per_infoset is the metric the
@@ -2096,7 +2111,7 @@ int main(int argc, char **argv)
         }
         if (options.output)
             write_report(options.output, &options, &metrics, &progress, infosets,
-                         detected_simd);
+                         detected_simd, metrics_measured);
     }
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);

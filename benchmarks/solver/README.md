@@ -296,6 +296,17 @@ python3 tier_scale_report.py \
 suites can be run (and re-run) independently and still land in one
 artifact.
 
+A budget case's `memory_accounting` is real, and so is its
+`metrics_available`. Issue #249: a `memory_budget` stop lands before the first
+best-response measurement, so the solver reports `metrics_available=0` and the
+validator accepts the `unspecified` guarantee that goes with it — but only
+when the case declared the early stop. The storage accounting itself never
+needed a measurement and is filled either way, which is what makes
+`memory_policy` on the `memory` line name the tier that actually ran rather
+than `full` for every tier. The `progress is not complete` relaxation stays:
+an early stop genuinely is incomplete, and that is a separate question from
+whether the metrics were lost.
+
 Per-street query latency — the phase-6 item that total solve time cannot
 show — is measured by `query_latency_probe.py`, which drives the solver's
 own `--interactive` protocol (one process per tier *and street*, then one
@@ -342,6 +353,9 @@ The job fails when:
   clean stop, but it must still respect the iteration cap it was given);
 - the stop cause is not the one the case declared (`max_iterations` by
   default);
+- the solver reports that the convergence block was not measured and the case
+  did not declare an early stop (issue #249) — a declared early stop is the
+  only thing that makes an unmeasured block expected;
 - the solver timing markers are missing;
 - no infoset is materialized;
 - a required street is absent;

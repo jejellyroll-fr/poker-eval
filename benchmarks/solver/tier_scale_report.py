@@ -86,6 +86,9 @@ def case_entry(summary_case: dict[str, Any]) -> dict[str, Any]:
         "storage_bytes": memory["storage_bytes"],
         "adapter_bytes": memory["adapter_bytes"],
         "exploitability_mbb": metrics["exploitability_mbb_per_game"],
+        # Issue #249: without this, a budget-stopped case's 0.0 exploitability
+        # is indistinguishable from a converged solve that reached 0.
+        "metrics_available": metrics.get("metrics_available"),
         "nash_conv_mbb": metrics.get("nash_conv_mbb_per_game"),
         "stop_cause": benchmark.get("stop_cause"),
         "strategy_fingerprint_sha256":
