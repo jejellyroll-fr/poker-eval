@@ -66,6 +66,13 @@ RE_STOP_DETAIL = re.compile(
     r"descriptions_mb=([0-9.]+)\s+descriptions_capped=([01])$"
 )
 RE_MEMORY = re.compile(r"\bmemory_mb=([0-9.]+)")
+# Issue #235: the solver's own memory accounting, printed after the
+# guarantee= line. Exact bytes rather than the rounded MiB the loop-end
+# line carries, plus the first-class bytes-per-infoset figures.
+RE_MEMORY_LINE = re.compile(
+    r"^memory\s+infosets=(\d+)\s+storage_bytes=(\d+)\s+adapter_bytes=(\d+)\s+"
+    r"bytes_per_infoset=([0-9.]+)\s+bytes_per_strategy_slot=([0-9.]+)$"
+)
 RE_TREE_STREETS = re.compile(r"^tree_streets=(.*)$")
 RE_STEP = re.compile(
     r"^step node=(\d+) actor=(P\d+) hand=([^\s]+).* actions=(.*)$"
@@ -692,6 +699,7 @@ def parse_stdout(
     reporter_emitted_entries = None
     tree_census = None
     street_stats: dict[str, dict[str, Any]] = {}
+    solver_memory: dict[str, float | int] | None = None
 
     for line in stdout.splitlines():
         match = RE_ITERATIONS.match(line)
@@ -725,6 +733,19 @@ def parse_stdout(
             reported_sample_count = (
                 int(match.group(12)) if match.group(12) else None
             )
+            continue
+        match = RE_MEMORY_LINE.match(line)
+        if match:
+            # Issue #235: exact solver-side memory accounting, when the
+            # binary is new enough to print it. Older solvers simply leave
+            # the block out of the payload.
+            solver_memory = {
+                "total_infosets": int(match.group(1)),
+                "storage_bytes": int(match.group(2)),
+                "adapter_bytes": int(match.group(3)),
+                "bytes_per_infoset": _float(match.group(4)),
+                "bytes_per_strategy_slot": _float(match.group(5)),
+            }
             continue
         match = RE_LOOP_END.search(line)
         if match:
@@ -846,6 +867,8 @@ def parse_stdout(
                 if storage_bytes is not None and solver_infosets else None
             ),
             "descriptions_capped": descriptions_capped,
+            # Issue #235: the solver's own exact accounting, when present.
+            "solver_accounting": solver_memory,
         },
         "metrics": {
             "guarantee": guarantee,

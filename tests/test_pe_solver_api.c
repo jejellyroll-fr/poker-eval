@@ -295,6 +295,20 @@ int main(void)
                   "target metrics were not recorded (raw=%g mbb=%g)",
                   target_metrics.exploitability_raw,
                   target_metrics.exploitability_mbb_per_game);
+            /* Issue #235: metrics carry the storage's memory accounting. The
+               one-infoset solve must report exactly one infoset, non-zero
+               storage bytes and a consistent bytes-per-infoset figure. */
+            CHECK(target_metrics.storage_memory.total_infosets == 1u,
+                  "storage memory reported %zu infosets, expected 1",
+                  target_metrics.storage_memory.total_infosets);
+            CHECK(target_metrics.storage_memory.storage_bytes > 0u &&
+                      target_metrics.storage_memory.bytes_per_infoset > 0.0,
+                  "storage memory reported no bytes");
+            CHECK(fabs(target_metrics.storage_memory.bytes_per_infoset -
+                       (double)target_metrics.storage_memory.storage_bytes /
+                           (double)target_metrics.storage_memory.total_infosets) <
+                      0.01,
+                  "bytes_per_infoset does not follow from storage_bytes");
             pe_solver_destroy(solver);
         }
     }

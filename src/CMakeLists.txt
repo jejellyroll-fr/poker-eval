@@ -217,10 +217,12 @@ endforeach()
 # buffer and pe_solver_metrics() would overflow its output struct. Bump the
 # solver's SOVERSION so the loader refuses that mix instead of corrupting
 # memory. The solver ABI now versions independently of the package version.
+# Issue #235: pe_metrics_t grew again (subsystem storage memory report and
+# adapter_bytes), so the same reasoning bumps the solver ABI once more.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 2.0.0
-        SOVERSION 2)
+        VERSION 3.0.0
+        SOVERSION 3)
 endif()
 
 # Create a combined interface library that includes all modules
