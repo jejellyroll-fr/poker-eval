@@ -4,7 +4,7 @@
 Issue #235 phase 6 asked for "strategy-query latency for flop, turn and
 river" compared against `full`, not just total solve time. A board query
 walks every infoset the solve holds, so its wall clock is where a dropped
-derived layer actually bites: `recompute-deep` must re-decode the spans a
+derived layer should bite: `recompute-deep` must re-decode the spans a
 drop pass removed, `compact` re-decodes only the deep streets, and `full`
 finds everything resident.
 
@@ -16,14 +16,24 @@ than re-implementing a query path:
                              on stdin, printing "query_done" when the board
                              table is complete.
 
-For each storage tier it starts one solve, waits for the `interactive=1
-ready` handshake, then times one `query <cards>` round trip per street.
-One process per tier is enough because the query walks the same solve the
-report just finished; the reported figure is therefore a true
-after-convergence query latency, not a fresh solve.
+Two protocol details drive the design, and getting either wrong silently
+invalidates the comparison:
+
+1. **A query is only cold once per process.** Every query re-materialises
+   and *retains* the spans it touches, so the second query against the
+   same solve is already warm. One process per (tier, street) is therefore
+   started, and the first query in it is reported as `cold_seconds`.
+
+2. **The startup report warms the storage.** With `--report-rows 0` the
+   solver prints an exhaustive strategy report *before* the interactive
+   handshake, and that report calls `pe_solver_strategy` for every infoset
+   -- re-materialising exactly the spans a drop pass had evicted. The
+   default `--startup-report-rows 1` keeps that report minimal so the
+   pre-query state stays the tiers' real post-solve state.
 
 The emitted document (schema `pe-solver-query-latency/v1`) copies only
-measured wall clocks; the median/min reduction is computed here.
+measured wall clocks and the solver's own `board_query_rows=` count; the
+median reduction is computed here.
 """
 
 from __future__ import annotations
@@ -32,6 +42,7 @@ import argparse
 import json
 import platform
 import queue
+import re
 import statistics
 import subprocess
 import sys
@@ -43,6 +54,7 @@ from typing import Any
 QUERY_SCHEMA = "pe-solver-query-latency/v1"
 READY_MARKER = "interactive=1 ready"
 DONE_MARKER = "query_done"
+ROWS_PATTERN = re.compile(r"^board_query_rows=(\d+)\s*$")
 STREETS = ("FLOP", "TURN", "RIVER")
 
 
@@ -79,6 +91,15 @@ class SolverReader:
                 return seen
 
 
+def query_rows(lines: list[str]) -> int | None:
+    """The solver's own emitted-row count for the query just completed."""
+    for line in lines:
+        match = ROWS_PATTERN.match(line.strip())
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def build_command(
     solver: Path,
     *,
@@ -93,6 +114,7 @@ def build_command(
     backend: str,
     max_ram_mb: int,
     desc_limit_mb: int,
+    startup_report_rows: int,
     ranges: list[str],
 ) -> list[str]:
     command = [
@@ -113,7 +135,7 @@ def build_command(
         "--seed", str(seed),
         "--max-ram", str(max_ram_mb),
         "--desc-limit", str(desc_limit_mb),
-        "--report-rows", "0",
+        "--report-rows", str(startup_report_rows),
         "--memory-policy", policy,
         "--interactive",
         "--tree", str(tree),
@@ -125,14 +147,15 @@ def build_command(
     return command
 
 
-def probe_policy(
+def probe_street(
     command: list[str],
-    boards: dict[str, str],
+    board: str,
     *,
     repeats: int,
     startup_timeout: float,
     query_timeout: float,
 ) -> dict[str, Any]:
+    """One process, one street: the first query is cold, the rest are warm."""
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -143,31 +166,24 @@ def probe_policy(
     )
     assert process.stdout is not None and process.stdin is not None
     reader = SolverReader(process.stdout)
-    result: dict[str, Any] = {"streets": {}, "query_rows": {}}
+    cold: float | None = None
+    warm: list[float] = []
+    rows: int | None = None
     try:
         reader.read_until(READY_MARKER, startup_timeout)
-        for street in STREETS:
-            board = boards[street]
-            samples: list[float] = []
-            rows = 0
-            for index in range(repeats):
-                started = time.perf_counter()
-                process.stdin.write(f"query {board}\n")
-                process.stdin.flush()
-                lines = reader.read_until(DONE_MARKER, query_timeout)
-                elapsed = time.perf_counter() - started
-                # The first repeat absorbs the one-off decode of a dropped
-                # span; later repeats measure the steady-state query.
-                if index > 0 or repeats == 1:
-                    samples.append(elapsed)
-                rows = sum(1 for line in lines if line.strip() and DONE_MARKER not in line)
-            result["streets"][street] = {
-                "board": board,
-                "samples_seconds": samples,
-                "median_seconds": statistics.median(samples) if samples else None,
-                "min_seconds": min(samples) if samples else None,
-                "rows": rows,
-            }
+        for index in range(repeats):
+            started = time.perf_counter()
+            process.stdin.write(f"query {board}\n")
+            process.stdin.flush()
+            lines = reader.read_until(DONE_MARKER, query_timeout)
+            elapsed = time.perf_counter() - started
+            # The first query in the process is the only cold one: it pays the
+            # re-materialisation of every span a drop pass evicted.
+            if index == 0:
+                cold = elapsed
+            else:
+                warm.append(elapsed)
+            rows = query_rows(lines)
         process.stdin.write("quit\n")
         process.stdin.flush()
     finally:
@@ -176,11 +192,22 @@ def probe_policy(
         except OSError:
             pass
         try:
-            process.wait(timeout=30)
+            returncode = process.wait(timeout=30)
         except subprocess.TimeoutExpired:  # pragma: no cover - defensive
             process.kill()
             process.wait()
-    return result
+            raise RuntimeError("solver did not exit after quit")
+    if returncode != 0:
+        # A solver that answered every marker but died during shutdown must not
+        # publish latency data that looks valid.
+        raise RuntimeError(f"solver exited {returncode} after the query run")
+    return {
+        "board": board,
+        "cold_seconds": cold,
+        "warm_samples_seconds": warm,
+        "warm_median_seconds": statistics.median(warm) if warm else None,
+        "rows": rows,
+    }
 
 
 def build_document(
@@ -216,6 +243,14 @@ def main() -> int:
     parser.add_argument("--max-ram-mb", type=int, default=128)
     parser.add_argument("--desc-limit-mb", type=int, default=16)
     parser.add_argument(
+        "--startup-report-rows",
+        type=int,
+        default=1,
+        help="rows in the pre-handshake report; keep it small so the startup "
+             "report does not re-materialise the spans a tier evicted "
+             "(0 = exhaustive, which erases the tier difference)",
+    )
+    parser.add_argument(
         "--policy",
         action="append",
         dest="policies",
@@ -224,7 +259,12 @@ def main() -> int:
     parser.add_argument("--flop", default="Ks7d2c")
     parser.add_argument("--turn", default="Ks7d2c9h")
     parser.add_argument("--river", default="Ks7d2c9h4s")
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=3,
+        help="queries per street; the first is reported as cold, the rest as warm",
+    )
     parser.add_argument("--startup-timeout", type=float, default=1800.0)
     parser.add_argument("--query-timeout", type=float, default=600.0)
     parser.add_argument("--output", help="write the document here (default: stdout)")
@@ -236,6 +276,8 @@ def main() -> int:
     tree = Path(args.tree).resolve()
     if not tree.exists():
         raise SystemExit(f"tree not found: {tree}")
+    if args.repeats < 1:
+        raise SystemExit("--repeats must be at least 1")
 
     policies = args.policies or ["full", "compact", "recompute-deep"]
     boards = {"FLOP": args.flop, "TURN": args.turn, "RIVER": args.river}
@@ -243,29 +285,35 @@ def main() -> int:
 
     probed: dict[str, dict[str, Any]] = {}
     for policy in policies:
-        command = build_command(
-            solver,
-            policy=policy,
-            game=args.game,
-            players=args.players,
-            tree=tree,
-            board_abstraction=args.board_abstraction,
-            iterations=args.iterations,
-            seed=args.seed,
-            precision=args.precision,
-            backend=args.backend,
-            max_ram_mb=args.max_ram_mb,
-            desc_limit_mb=args.desc_limit_mb,
-            ranges=ranges,
-        )
-        print(f"probing policy={policy} ...", file=sys.stderr)
-        probed[policy] = probe_policy(
-            command,
-            boards,
-            repeats=args.repeats,
-            startup_timeout=args.startup_timeout,
-            query_timeout=args.query_timeout,
-        )
+        probed[policy] = {"streets": {}}
+        for street in STREETS:
+            # A fresh process per street: only the first query in a process is
+            # cold, so sharing a process across streets would report warm
+            # timings for every street after the first.
+            command = build_command(
+                solver,
+                policy=policy,
+                game=args.game,
+                players=args.players,
+                tree=tree,
+                board_abstraction=args.board_abstraction,
+                iterations=args.iterations,
+                seed=args.seed,
+                precision=args.precision,
+                backend=args.backend,
+                max_ram_mb=args.max_ram_mb,
+                desc_limit_mb=args.desc_limit_mb,
+                startup_report_rows=args.startup_report_rows,
+                ranges=ranges,
+            )
+            print(f"probing policy={policy} street={street} ...", file=sys.stderr)
+            probed[policy]["streets"][street] = probe_street(
+                command,
+                boards[street],
+                repeats=args.repeats,
+                startup_timeout=args.startup_timeout,
+                query_timeout=args.query_timeout,
+            )
 
     settings = {
         "game": args.game,
@@ -278,6 +326,7 @@ def main() -> int:
         "backend": args.backend,
         "max_ram_mb": args.max_ram_mb,
         "desc_limit_mb": args.desc_limit_mb,
+        "startup_report_rows": args.startup_report_rows,
         "repeats": args.repeats,
     }
     document = build_document(

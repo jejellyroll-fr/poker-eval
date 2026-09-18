@@ -298,12 +298,26 @@ artifact.
 
 Per-street query latency — the phase-6 item that total solve time cannot
 show — is measured by `query_latency_probe.py`, which drives the solver's
-own `--interactive` protocol (one solve per tier, then one `query <cards>`
-round trip per street):
+own `--interactive` protocol (one process per tier *and street*, then one
+`query <cards>` round trip):
 
 ```
 python3 query_latency_probe.py --output benchmarks/baseline/pe_query_latency.json
 ```
+
+Two protocol details are load-bearing, and getting either wrong silently
+erases the tier difference the probe exists to measure:
+
+- **A query is only cold once per process.** Every query re-materialises
+  and *retains* the spans it touches, so a second query against the same
+  solve is already warm. One process per (tier, street) is started, and the
+  first query in it is reported as `cold_seconds`; the rest are warm.
+- **The startup report warms the storage.** With `--report-rows 0` the
+  solver prints an exhaustive strategy report *before* the interactive
+  handshake, and that report calls `pe_solver_strategy` for every infoset —
+  re-materialising exactly the spans a drop pass evicted. On the reference
+  machine that alone collapses the three tiers to within 3 % of each other.
+  `--startup-report-rows` (default 1) keeps that report minimal.
 
 ### Private-deal count
 

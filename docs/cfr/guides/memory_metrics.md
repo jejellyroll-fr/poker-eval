@@ -272,29 +272,47 @@ the artifact must be read:
 
 Total solve time cannot separate "the solve was slower" from "answering a board
 query was slower". `query_latency_probe.py` measures the second directly by
-driving the solver's own `--interactive` protocol: one solve per tier, then one
-`query <cards>` round trip per street, timed from the request to the
-`query_done` marker. The first repeat of each street is discarded as warm-up,
-because it absorbs the one-off re-decode of a dropped span.
+driving the solver's own `--interactive` protocol: a `query <cards>` round trip
+per street, timed from the request to the `query_done` marker.
 
-Hold'em, 20 000 iterations, f32, `--board-abstraction large`, median of two
-steady-state repeats (µs; the per-street sample spread is under 1 %):
+Two protocol properties decide whether such a measurement is meaningful at all,
+and both have to be respected or the tiers collapse into each other:
 
-| Tier | FLOP (`Ks7d2c`) | TURN (`Ks7d2c9h`) | RIVER (`Ks7d2c9h4s`) | Resident storage |
-| --- | --- | --- | --- | --- |
-| `full` | 3 599 813 | 965 863 | 711 997 | 6.29 MiB |
-| `compact` | 3 449 389 | 1 035 979 | 711 433 | 4.65 MiB |
-| `recompute-deep` | **3 177 073** | **876 236** | **637 910** | 3.95 MiB |
+- **A query is only cold once per process.** Every query re-materialises and
+  *retains* the spans it touches, so a second query against the same solve is
+  already warm. The probe therefore starts **one process per (tier, street)**
+  and reports the first query in each as `cold_seconds`; later repeats in the
+  same process are the warm figure.
+- **The startup report warms the storage.** With `--report-rows 0` the solver
+  prints an exhaustive strategy report *before* the interactive handshake, and
+  that report calls `pe_solver_strategy` for every infoset — re-materialising
+  exactly the spans a drop pass had evicted, with no iteration boundary
+  afterwards to evict them again. Measured on the reference machine, that alone
+  collapses the three tiers from a 27–36 % spread to under 3 %: it silently
+  measures queries against a fully re-materialised storage, not against the
+  tiers' post-solve state. The probe defaults to `--startup-report-rows 1`.
 
-**There is no query-latency penalty for the compressed tiers.** `recompute-deep`
-answers every street slightly *faster* than `full` (≈12 % on the flop, ≈9 % on
-the turn, ≈10 % on the river), and `compact` sits between the two.
+Hold'em, 20 000 iterations, f32, `--board-abstraction large`, µs. Cold = the
+first query in a fresh process; warm = median of the two steady-state repeats
+that follow (spread under 2 %):
 
+| Tier | FLOP cold | TURN cold | RIVER cold | FLOP warm | TURN warm | RIVER warm | Resident storage |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `full` | 3 488 600 | 965 600 | 714 300 | 3 734 300 | 984 600 | 717 800 | 6.29 MiB |
+| `compact` | 2 969 300 | 799 200 | 575 500 | 3 003 100 | 794 200 | 563 700 | 4.65 MiB |
+| `recompute-deep` | **2 534 000** | **640 100** | **456 700** | **2 571 400** | **648 800** | **459 900** | 3.95 MiB |
+
+Relative to `full`, `compact` answers in 0.85× / 0.83× / 0.81× (flop / turn /
+river) and `recompute-deep` in **0.73× / 0.66× / 0.64×**.
+
+**There is no query-latency penalty for the compressed tiers — the opposite.**
 The reason is that a board query is a **full sweep**: it visits every infoset
 the solve holds (52 140 here) and emits only the rows whose board matches
-(6 474 on the flop, 2 778 on the turn, 5 398 on the river). Sweep cost therefore
-dominates, and a tier that keeps a smaller resident footprint sweeps faster —
-the per-row re-decode cost of `recompute-deep` is small next to it.
+(3 222 on the flop, 1 374 on the turn, 2 684 on the river, as reported by the
+solver's own `board_query_rows=` marker). Sweep cost therefore dominates, and a
+tier that keeps a smaller resident footprint sweeps faster; the re-decode work
+`recompute-deep` adds is small next to it, which is also why cold and warm are
+within ~2 % of each other.
 
 This is the opposite of the "recompute is expensive" intuition, and it is
 consistent with the profiling result: the decode work a tier adds is real, but

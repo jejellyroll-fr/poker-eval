@@ -7,106 +7,103 @@
   "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
   "policies": {
     "compact": {
-      "query_rows": {},
       "streets": {
         "FLOP": {
           "board": "Ks7d2c",
-          "median_seconds": 3.4493892919272184,
-          "min_seconds": 3.447667541913688,
-          "rows": 6474,
-          "samples_seconds": [
-            3.4511110419407487,
-            3.447667541913688
+          "cold_seconds": 2.969263833016157,
+          "rows": 3222,
+          "warm_median_seconds": 3.0031199789373204,
+          "warm_samples_seconds": [
+            3.0033189998939633,
+            3.0029209579806775
           ]
         },
         "RIVER": {
           "board": "Ks7d2c9h4s",
-          "median_seconds": 0.7114329376490787,
-          "min_seconds": 0.6932031251490116,
-          "rows": 5398,
-          "samples_seconds": [
-            0.7296627501491457,
-            0.6932031251490116
+          "cold_seconds": 0.5754507919773459,
+          "rows": 2684,
+          "warm_median_seconds": 0.5636572090443224,
+          "warm_samples_seconds": [
+            0.5647769591305405,
+            0.5625374589581043
           ]
         },
         "TURN": {
           "board": "Ks7d2c9h",
-          "median_seconds": 1.0359793540555984,
-          "min_seconds": 1.0247601249720901,
-          "rows": 2778,
-          "samples_seconds": [
-            1.0471985831391066,
-            1.0247601249720901
+          "cold_seconds": 0.7991735420655459,
+          "rows": 1374,
+          "warm_median_seconds": 0.7942234994843602,
+          "warm_samples_seconds": [
+            0.7758584578987211,
+            0.8125885410699993
           ]
         }
       }
     },
     "full": {
-      "query_rows": {},
       "streets": {
         "FLOP": {
           "board": "Ks7d2c",
-          "median_seconds": 3.5998133334796876,
-          "min_seconds": 3.5929837918374687,
-          "rows": 6474,
-          "samples_seconds": [
-            3.5929837918374687,
-            3.6066428751219064
+          "cold_seconds": 3.4885522089898586,
+          "rows": 3222,
+          "warm_median_seconds": 3.7343133749673143,
+          "warm_samples_seconds": [
+            3.9228314999490976,
+            3.545795249985531
           ]
         },
         "RIVER": {
           "board": "Ks7d2c9h4s",
-          "median_seconds": 0.7119972915388644,
-          "min_seconds": 0.7005316249560565,
-          "rows": 5398,
-          "samples_seconds": [
-            0.7234629581216723,
-            0.7005316249560565
+          "cold_seconds": 0.7142647500149906,
+          "rows": 2684,
+          "warm_median_seconds": 0.7177724370267242,
+          "warm_samples_seconds": [
+            0.7171587080229074,
+            0.7183861660305411
           ]
         },
         "TURN": {
           "board": "Ks7d2c9h",
-          "median_seconds": 0.9658627086319029,
-          "min_seconds": 0.9594161671120673,
-          "rows": 2778,
-          "samples_seconds": [
-            0.9594161671120673,
-            0.9723092501517385
+          "cold_seconds": 0.965557208051905,
+          "rows": 1374,
+          "warm_median_seconds": 0.9845767919905484,
+          "warm_samples_seconds": [
+            0.9926850839983672,
+            0.9764684999827296
           ]
         }
       }
     },
     "recompute-deep": {
-      "query_rows": {},
       "streets": {
         "FLOP": {
           "board": "Ks7d2c",
-          "median_seconds": 3.177073020953685,
-          "min_seconds": 3.1751750418916345,
-          "rows": 6474,
-          "samples_seconds": [
-            3.1789710000157356,
-            3.1751750418916345
+          "cold_seconds": 2.534000749932602,
+          "rows": 3222,
+          "warm_median_seconds": 2.571403312496841,
+          "warm_samples_seconds": [
+            2.5972452498972416,
+            2.5455613750964403
           ]
         },
         "RIVER": {
           "board": "Ks7d2c9h4s",
-          "median_seconds": 0.6379095000447705,
-          "min_seconds": 0.6311249160207808,
-          "rows": 5398,
-          "samples_seconds": [
-            0.6446940840687603,
-            0.6311249160207808
+          "cold_seconds": 0.4566842920612544,
+          "rows": 2684,
+          "warm_median_seconds": 0.45994252094533294,
+          "warm_samples_seconds": [
+            0.46117166709154844,
+            0.45871337479911745
           ]
         },
         "TURN": {
           "board": "Ks7d2c9h",
-          "median_seconds": 0.8762360415421426,
-          "min_seconds": 0.8729451249819249,
-          "rows": 2778,
-          "samples_seconds": [
-            0.8729451249819249,
-            0.8795269581023604
+          "cold_seconds": 0.6400693340692669,
+          "rows": 1374,
+          "warm_median_seconds": 0.6488241875777021,
+          "warm_samples_seconds": [
+            0.6467048751655966,
+            0.6509434999898076
           ]
         }
       }
@@ -124,6 +121,7 @@
     "precision": "f32",
     "repeats": 3,
     "seed": 20260906,
+    "startup_report_rows": 1,
     "tree": "/Users/jde/Documents/github/poker-eval/examples/nlhe_hu/nlhe_hu_full.tree.json"
   },
   "solver": "/Users/jde/Documents/github/poker-eval/build/tools/pe-preflop-solve"
