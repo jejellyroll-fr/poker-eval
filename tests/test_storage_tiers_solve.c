@@ -14,6 +14,7 @@
 #include <poker_eval/solver/pe_rng.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
+#include <poker_eval/solver/pe_storage.h>
 
 #include <math.h>
 #include <stdint.h>
@@ -155,6 +156,61 @@ int main(void)
         PE_STORAGE_FULL, PE_STORAGE_COMPACT, PE_STORAGE_RECOMPUTE_DEEP
     };
     const pe_precision_mode_t precisions[2] = {PE_PREC_F64, PE_PREC_F32};
+
+    /* Case-insensitive parse, like the other solver enum parsers: the CLI
+     * accepts the case variants that precision and backend accept. */
+    if (pe_storage_policy_from_name("FULL") != PE_STORAGE_FULL ||
+        pe_storage_policy_from_name("Recompute-Deep") !=
+            PE_STORAGE_RECOMPUTE_DEEP ||
+        pe_storage_policy_from_name("COMPACT") != PE_STORAGE_COMPACT ||
+        pe_storage_policy_from_name("full") != PE_STORAGE_FULL ||
+        pe_storage_policy_from_name("nope") != PE_STORAGE_POLICY_COUNT ||
+        pe_storage_policy_from_name("") != PE_STORAGE_POLICY_COUNT ||
+        pe_storage_policy_from_name(NULL) != PE_STORAGE_POLICY_COUNT)
+    {
+        fprintf(stderr, "pe_storage_policy_from_name is not case-insensitive\n");
+        return 1;
+    }
+
+    /* MIXED is not a staged compact precision: it stages no compact arrays,
+     * so a tier must drop nothing and invent no accounting. (It cannot
+     * allocate dense arrays either -- a pre-existing storage gap tracked
+     * separately; the tier contract only needs "nothing recomputable".) */
+    {
+        pe_storage_t *mixeds = pe_storage_create_with_tier(
+            8u, PE_PREC_MIXED, PE_STORAGE_RECOMPUTE_DEEP);
+        pe_storage_memory_report_t mixedr;
+
+        if (!mixeds)
+        {
+            fprintf(stderr, "tiered MIXED creation failed\n");
+            return 1;
+        }
+        if (pe_storage_resolve(mixeds, 3u, 2, 1, 0) == PE_INFOSET_ID_INVALID)
+        {
+            fprintf(stderr, "MIXED resolve failed\n");
+            return 1;
+        }
+        pe_storage_memory_report(mixeds, &mixedr);
+        if (mixedr.staging_bytes != 0)
+        {
+            fprintf(stderr, "MIXED storage staged recomputable state (%zu)\n",
+                    mixedr.staging_bytes);
+            return 1;
+        }
+        if (pe_storage_drop_recomputable(mixeds, 0) != 0)
+        {
+            fprintf(stderr, "MIXED drop failed\n");
+            return 1;
+        }
+        pe_storage_memory_report(mixeds, &mixedr);
+        if (mixedr.evict_calls != 0 || mixedr.remat_calls != 0)
+        {
+            fprintf(stderr, "MIXED storage invented recomputable state\n");
+            return 1;
+        }
+        pe_storage_destroy(mixeds);
+    }
 
     for (int p = 0; p < 2; ++p)
     {

@@ -43,13 +43,34 @@ const char *pe_storage_policy_name(pe_storage_policy_t policy)
 
 pe_storage_policy_t pe_storage_policy_from_name(const char *name)
 {
-    if (!name)
+    /* Case-insensitive like the other solver enum parsers, so the CLI
+     * accepts the case variants that precision and backend accept. */
+    static const char *const names[] = { "full", "compact", "recompute-deep" };
+    static const pe_storage_policy_t values[] = {
+        PE_STORAGE_FULL, PE_STORAGE_COMPACT, PE_STORAGE_RECOMPUTE_DEEP
+    };
+    size_t length;
+    size_t i;
+    size_t j;
+
+    if (!name || !*name)
         return PE_STORAGE_POLICY_COUNT;
-    if (strcmp(name, "full") == 0)
-        return PE_STORAGE_FULL;
-    if (strcmp(name, "compact") == 0)
-        return PE_STORAGE_COMPACT;
-    if (strcmp(name, "recompute-deep") == 0)
-        return PE_STORAGE_RECOMPUTE_DEEP;
+    length = strnlen(name, 128u);
+    if (length >= 128u)
+        return PE_STORAGE_POLICY_COUNT;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+    {
+        for (j = 0; j < length; ++j)
+        {
+            char lower = (char)((name[j] >= 'A' && name[j] <= 'Z')
+                                    ? name[j] - 'A' + 'a' : name[j]);
+            char ref = (char)((names[i][j] >= 'A' && names[i][j] <= 'Z')
+                                  ? names[i][j] - 'A' + 'a' : names[i][j]);
+            if (names[i][j] == '\0' || lower != ref)
+                break;
+        }
+        if (j == length && names[i][length] == '\0')
+            return values[i];
+    }
     return PE_STORAGE_POLICY_COUNT;
 }

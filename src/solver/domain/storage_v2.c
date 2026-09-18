@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <poker_eval/core/time_compat.h>
 
 static int finite_double(double value)
 {
@@ -880,6 +881,11 @@ int pe_storage_drop_recomputable(pe_storage_t *s, int min_street)
 
     if (!s)
         return -1;
+    /* Only the compact precisions stage compact arrays at all. MIXED is
+     * not one: it stages no compact arrays (its estimate contract sizes
+     * storage by the F64 reduction buffer, 8 bytes per slot in
+     * test_pe_estimate), so it holds no decoded spans — a tier answers
+     * success and drops nothing, exactly like F64. */
     if (s->precision != PE_PREC_F32 && s->precision != PE_PREC_FIXED16)
         return 0; /* nothing to drop */
     for (i = 0; i < PE_VALUES_COUNT; ++i)

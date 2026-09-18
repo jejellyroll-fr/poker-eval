@@ -136,9 +136,13 @@ a documented no-op for it.
 ### Tiers bite only under a compact precision
 
 Under `f64` there is no derived decoded layer anywhere, so a tier is a
-no-op by construction. Under `f32`/`mixed`/`fixed16` every access to an
-infoset decodes a double staging span resident beside the compact arrays;
-the tier decides which streets keep those spans. Where a tier bites:
+no-op by construction. The same holds for `mixed`: it is not a staged
+compact precision — it stages no compact arrays (its estimate contract
+sizes storage by the F64 reduction buffer, 8 bytes per slot), so it holds
+no decoded spans and a tier answers success and drops nothing. Under
+`f32`/`fixed16` every access to an infoset decodes a double staging span
+resident beside the compact arrays; the tier decides which streets keep
+those spans. Where a tier bites:
 
 - `full` — nowhere: nothing is ever deep enough.
 - `compact` — infosets acting at street ≥ 2 (turn, river) plus streets
