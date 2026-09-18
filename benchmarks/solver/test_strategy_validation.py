@@ -66,8 +66,8 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
     def test_runtime_actions_apply_to_every_hand_row_at_the_node(self) -> None:
         # The solver emits one step entry per (node, actor) with a single
         # representative hand; every other hand row at that node must still be
-        # validated against the observed runtime action set, not just the
-        # static tree subset.
+        # validated against the runtime evidence union the declared tree
+        # branches, not just the static tree subset.
         step = (
             "step node=7 actor=P1 hand=AhAs pot=7.00 to_call=0.00 "
             "actions=FOLD|CALL|RAISE"
@@ -76,13 +76,13 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
             "AhAs\t7\tP1\tFOLD=10.0%,CALL=20.0%,RAISE=70.0%\t"
             "FOLD=pending,CALL=pending,RAISE=pending\tKs7d2c"
         )
-        missing_fold = (
-            "KhKs\t7\tP1\tCALL=20.0%,RAISE=80.0%\t"
-            "CALL=pending,RAISE=pending\tKs7d2c"
+        invented_branch = (
+            "KhKs\t7\tP1\tCALL=20.0%,BOGUS=80.0%\t"
+            "CALL=pending,BOGUS=pending\tKs7d2c"
         )
 
         data, _, details = bench.parse_strategy_rows(
-            f"{step}\n{representative}\n{missing_fold}",
+            f"{step}\n{representative}\n{invented_branch}",
             {7: "FLOP"},
             node_actors={7: "P1"},
             node_actions={7: frozenset({"fold", "passive", "aggressive"})},
@@ -91,6 +91,34 @@ class StrategyFrequencyValidationTests(unittest.TestCase):
         self.assertEqual(data["FLOP"]["strategy_rows"], 1)
         self.assertEqual(data["FLOP"]["invalid_strategy_rows"], 0)
         self.assertEqual(details["action_mismatch_rows"], 1)
+
+    def test_state_masked_branch_is_allowed_to_drop_from_runtime_set(self) -> None:
+        # Infoset groups at the same node can legally see branches removed
+        # (state/stack masking only ever removes a branch, never adds one):
+        # a row missing a runtime token is the solver's legal masked shape
+        # and must not fail.
+        step = (
+            "step node=7 actor=P1 hand=AhAs pot=7.00 to_call=1.00 "
+            "actions=FOLD|CALL|RAISE"
+        )
+        trained = (
+            "AhAs\t7\tP1\tFOLD=10.0%,CALL=20.0%,RAISE=70.0%\t"
+            "FOLD=pending,CALL=pending,RAISE=pending\tKs7d2c"
+        )
+        masked = (
+            "KhKs\t7\tP1\tFOLD=50.0%,CALL=50.0%\t"
+            "FOLD=pending,CALL=pending\tKs7d2c"
+        )
+
+        data, _, details = bench.parse_strategy_rows(
+            f"{step}\n{trained}\n{masked}",
+            {7: "FLOP"},
+            node_actors={7: "P1"},
+            node_actions={7: frozenset({"fold", "passive", "aggressive"})},
+        )
+
+        self.assertEqual(data["FLOP"]["strategy_rows"], 2)
+        self.assertEqual(details["action_mismatch_rows"], 0)
 
     def test_tree_player_is_converted_to_report_actor_label(self) -> None:
         node_streets, node_actors, _, decisions = bench.tree_nodes(
