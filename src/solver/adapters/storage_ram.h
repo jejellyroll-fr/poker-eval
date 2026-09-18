@@ -14,6 +14,10 @@ extern "C" {
 pe_storage_t *pe_storage_ram_create_with_precision(
     size_t expected_infosets, pe_precision_mode_t precision);
 
+pe_storage_t *pe_storage_ram_create_with_tier(
+    size_t expected_infosets, pe_precision_mode_t precision,
+    pe_storage_policy_t tier);
+
 #ifdef __cplusplus
 }
 #endif

@@ -124,6 +124,7 @@ typedef struct {
     int have_dcfr_gamma;
     pe_compute_kind_t backend;
     pe_precision_mode_t precision;
+    pe_storage_policy_t memory_policy;
     int cpu_threads;
     int show_capabilities;
 } options_t;
@@ -694,6 +695,7 @@ static void usage(FILE *stream)
         "  --gamma X                   DCFR average-strategy exponent (>= 0)\n"
         "  --backend NAME               auto, cpu_ref, cpu_par, cuda, opencl\n"
         "  --precision NAME             f64, f32, mixed, fixed16\n"
+        "  --memory-policy NAME         full, compact, recompute-deep\n"
         "  --threads N                  worker threads for cpu_par\n"
         "  --show-capabilities          print detected CPU/SIMD/backend capabilities\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
@@ -1118,6 +1120,7 @@ options->checkpoint_interval =0u;
     options->dcfr_gamma = 2.0;
     options->backend = PE_COMPUTE_AUTO;
     options->precision = PE_PREC_F64;
+    options->memory_policy = PE_STORAGE_FULL;
     options->cpu_threads = 0;
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -1148,6 +1151,7 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--gamma") == 0 ||
              strcmp(arg, "--backend") == 0 ||
              strcmp(arg, "--precision") == 0 ||
+             strcmp(arg, "--memory-policy") == 0 ||
              strcmp(arg, "--threads") == 0 ||
              strcmp(arg, "--target-mbb") == 0 ||
              strcmp(arg, "--target-nash-conv-mbb") == 0 ||
@@ -1327,6 +1331,9 @@ options->checkpoint_interval =0u;
         } else if (strcmp(arg, "--precision") == 0) {
             options->precision = pe_precision_from_name(value);
             if (options->precision == PE_PREC_COUNT) return -1;
+        } else if (strcmp(arg, "--memory-policy") == 0) {
+            options->memory_policy = pe_storage_policy_from_name(value);
+            if (options->memory_policy == PE_STORAGE_POLICY_COUNT) return -1;
         } else if (strcmp(arg, "--threads") == 0) {
             uint64_t threads;
             if (parse_u64(value, &threads) != 0 || threads > INT_MAX) return -1;
@@ -1383,6 +1390,7 @@ static void write_report(const char *path, const options_t *options,
         "\"game\":\"%s\",\"players\":%d,"
         "\"algorithm\":\"%s\",\"backend\":\"%s\","
         "\"backend_validated\":true,\"precision\":\"%s\","
+        "\"memory_policy\":\"%s\","
         "\"simd_detected\":\"%s\",\"simd_cfr_integrated\":false,"
         "\"iterations\":%" PRIu64 ",\"showdown_samples\":%d,"
         "\"stack\":%.17g,\"small_blind\":%.17g,\"big_blind\":%.17g,\"ante\":%.17g,"
@@ -1402,11 +1410,15 @@ static void write_report(const char *path, const options_t *options,
         "\"regret_bytes\":%llu,\"average_bytes\":%llu,"
         "\"other_values_bytes\":%llu,\"staging_bytes\":%llu,"
         "\"allocator_overhead_bytes\":%llu,"
+        "\"retained_strategy_bytes\":%llu,\"recomputable_strategy_bytes\":%llu,"
+        "\"recompute_calls\":%llu,\"bytes_saved_vs_full\":%llu,"
         "\"bytes_per_infoset\":%.17g,"
         "\"bytes_per_strategy_slot\":%.17g}}\n",
         options->game, options->players, pe_preset_name(options->algorithm),
         pe_compute_kind_name(options->backend),
-        pe_precision_name(options->precision), pe_runtime_simd_name(detected_simd),
+        pe_precision_name(options->precision),
+        pe_storage_policy_name(metrics->storage_memory_policy),
+        pe_runtime_simd_name(detected_simd),
         options->iterations,
         options->showdown_samples, options->stack,
         options->small_blind, options->big_blind, options->ante,
@@ -1431,6 +1443,10 @@ static void write_report(const char *path, const options_t *options,
         (unsigned long long)metrics->storage_memory.other_values_bytes,
         (unsigned long long)metrics->storage_memory.staging_bytes,
         (unsigned long long)metrics->storage_memory.allocator_overhead_bytes,
+        (unsigned long long)metrics->storage_memory.retained_strategy_bytes,
+        (unsigned long long)metrics->storage_memory.recomputable_strategy_bytes,
+        (unsigned long long)metrics->recompute_calls,
+        (unsigned long long)metrics->bytes_saved_vs_full,
         metrics->storage_memory.bytes_per_infoset,
         metrics->storage_memory.bytes_per_strategy_slot);
     fclose(file);
@@ -1822,6 +1838,7 @@ int main(int argc, char **argv)
     config.execution.stages.update = options.backend;
     config.execution.stages.terminal_eval = options.backend;
     config.execution.precision = options.precision;
+    config.execution.storage_policy = options.memory_policy;
     config.execution.cpu_threads = options.cpu_threads;
     config.execution.deterministic = 1;
     config.execution.sample_batch_size = 1u;
@@ -2021,14 +2038,23 @@ int main(int argc, char **argv)
            convergence line so the Studio's fixed-prefix parse of
            "guarantee=" is untouched. bytes_per_infoset is the metric the
            issue defines; adapter_bytes are the game descriptions and
-           samplers held on top of the solver's storage. */
+           samplers held on top of the solver's storage. Phase 6 appends the
+           resolved tier and its measured trade: retained vs recomputable,
+           and what the drop passes removed across the run. */
         printf("memory infosets=%zu storage_bytes=%llu adapter_bytes=%llu"
-               " bytes_per_infoset=%.1f bytes_per_strategy_slot=%.2f\n",
+               " bytes_per_infoset=%.1f bytes_per_strategy_slot=%.2f"
+               " memory_policy=%s retained_bytes=%llu recomputable_bytes=%llu"
+               " recompute_calls=%llu bytes_saved_vs_full=%llu\n",
                metrics.storage_memory.total_infosets,
                (unsigned long long)metrics.storage_memory.storage_bytes,
                (unsigned long long)metrics.adapter_bytes,
                metrics.storage_memory.bytes_per_infoset,
-               metrics.storage_memory.bytes_per_strategy_slot);
+               metrics.storage_memory.bytes_per_strategy_slot,
+               pe_storage_policy_name(metrics.storage_memory_policy),
+               (unsigned long long)metrics.storage_memory.retained_strategy_bytes,
+               (unsigned long long)metrics.storage_memory.recomputable_strategy_bytes,
+               (unsigned long long)metrics.recompute_calls,
+               (unsigned long long)metrics.bytes_saved_vs_full);
         print_strategy_report(&options, game, solver, tree);
         /* Serve after an interrupt too.  Stopping a run is the normal way to
          * say "that is enough, let me look at it" -- and with an iteration

@@ -24,6 +24,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <poker_eval/core/time_compat.h>
 
 static int finite_double(double value)
 {
@@ -56,8 +58,17 @@ struct pe_storage_t
     float *fixed_scales[PE_VALUES_COUNT]; /* one scale per infoset */
     double **staging_spans[PE_VALUES_COUNT]; /* one decoded span per infoset */
     uint8_t *staging_dirty[PE_VALUES_COUNT];
+    /* One byte per infoset per array: set when a solver pass dropped the
+       span, consumed when the next access re-materialises it (ISS-235). */
+    uint8_t *staging_evicted[PE_VALUES_COUNT];
     pe_precision_mode_t precision;
+    pe_storage_policy_t tier;
     size_t fixed16_rescales;
+    /* Solver-driven drop accounting (ISS-235, phase 6). */
+    uint64_t evict_calls;
+    uint64_t evicted_bytes;
+    uint64_t remat_calls;
+    uint64_t remat_time_ns;
     uint64_t slot_count;     /* slots in use across every infoset */
     uint64_t value_capacity; /* slots allocated in each live array */
 
@@ -102,6 +113,7 @@ pe_storage_t *pe_storage_create_with_precision(size_t expected_infosets,
         free(s);
         return NULL;
     }
+    s->tier = PE_STORAGE_FULL;
     s->precision = precision;
     /* Size for the hint at the target load factor, so a caller who knows the
        count never rehashes. */
@@ -133,6 +145,23 @@ pe_storage_t *pe_storage_create(size_t expected_infosets)
     return pe_storage_create_with_precision(expected_infosets, PE_PREC_F64);
 }
 
+pe_storage_t *pe_storage_create_with_tier(size_t expected_infosets,
+                                          pe_precision_mode_t precision,
+                                          pe_storage_policy_t tier)
+{
+    pe_storage_t *s = pe_storage_create_with_precision(expected_infosets,
+                                                       precision);
+    if (!s)
+        return NULL;
+    if (tier < PE_STORAGE_FULL || tier >= PE_STORAGE_POLICY_COUNT)
+    {
+        pe_storage_destroy(s);
+        return NULL;
+    }
+    s->tier = tier;
+    return s;
+}
+
 pe_storage_t *pe_storage_create_precision(size_t expected_infosets,
                                           pe_precision_mode_t precision)
 {
@@ -142,6 +171,11 @@ pe_storage_t *pe_storage_create_precision(size_t expected_infosets,
 pe_precision_mode_t pe_storage_precision(const pe_storage_t *s)
 {
     return s ? s->precision : PE_PREC_COUNT;
+}
+
+pe_storage_policy_t pe_storage_tier(const pe_storage_t *s)
+{
+    return s ? s->tier : PE_STORAGE_POLICY_COUNT;
 }
 
 size_t pe_storage_fixed16_rescales(const pe_storage_t *s)
@@ -189,6 +223,7 @@ void pe_storage_destroy(pe_storage_t *s)
         free(s->fixed_values[i]);
         free(s->fixed_scales[i]);
         free(s->staging_dirty[i]);
+        free(s->staging_evicted[i]);
     }
     free(s->meta);
     free(s->slots);
@@ -281,6 +316,14 @@ static int pe_grow_meta(pe_storage_t *s)
                     return -1;
                 memset(grown + s->meta_capacity, 0, cap - s->meta_capacity);
                 s->staging_dirty[i] = grown;
+            }
+            if (s->staging_evicted[i])
+            {
+                uint8_t *grown = (uint8_t *)realloc(s->staging_evicted[i], cap);
+                if (!grown)
+                    return -1;
+                memset(grown + s->meta_capacity, 0, cap - s->meta_capacity);
+                s->staging_evicted[i] = grown;
             }
             if (s->precision == PE_PREC_FIXED16 && s->fixed_scales[i])
             {
@@ -438,6 +481,12 @@ static int pe_ensure_staging(pe_storage_t *s, pe_infoset_id_t id,
         if (!s->staging_dirty[which])
             return -1;
     }
+    if (!s->staging_evicted[which])
+    {
+        s->staging_evicted[which] = (uint8_t *)calloc(s->meta_capacity, 1u);
+        if (!s->staging_evicted[which])
+            return -1;
+    }
     if (!s->staging_spans[which][id])
     {
         s->staging_spans[which][id] = (double *)calloc(n, sizeof(double));
@@ -510,6 +559,14 @@ static double *pe_low_precision_values(pe_storage_t *s, pe_infoset_id_t id,
 {
     const pe_infoset_meta_t *meta = pe_storage_meta(s, id);
     size_t n;
+    struct timespec decode_start;
+    /* Only a span a solver pass dropped counts as a re-materialisation; the
+     * first materialisation of a fresh infoset is not. */
+    int was_evicted = (meta && s->staging_spans[which] &&
+                       s->staging_evicted[which] &&
+                       s->staging_evicted[which][id] != 0u);
+    if (was_evicted)
+        (void)clock_gettime(CLOCK_MONOTONIC, &decode_start);
     if (!meta || (s->precision == PE_PREC_FIXED16 &&
                   pe_ensure_fixed_array(s, which) != 0) ||
         (s->precision == PE_PREC_F32 && pe_ensure_float_array(s, which) != 0))
@@ -534,6 +591,16 @@ static double *pe_low_precision_values(pe_storage_t *s, pe_infoset_id_t id,
         }
     }
     s->staging_dirty[which][id] = 1u;
+    if (was_evicted)
+    {
+        struct timespec now;
+        (void)clock_gettime(CLOCK_MONOTONIC, &now);
+        s->remat_calls += 1u;
+        s->remat_time_ns += (uint64_t)(now.tv_sec - decode_start.tv_sec) *
+                               (uint64_t)1000000000u +
+                           (uint64_t)(now.tv_nsec - decode_start.tv_nsec);
+        s->staging_evicted[which][id] = 0u;
+    }
     return s->staging_spans[which][id];
 }
 
@@ -713,6 +780,11 @@ void pe_storage_memory_report(const pe_storage_t *s,
                 blocks++;
                 out->staging_bytes += s->meta_capacity * sizeof(uint8_t);
             }
+            if (s->staging_evicted[i])
+            {
+                blocks++;
+                out->metadata_bytes += s->meta_capacity * sizeof(uint8_t);
+            }
         }
     }
 
@@ -725,6 +797,19 @@ void pe_storage_memory_report(const pe_storage_t *s,
     out->other_values_bytes = value_bytes[PE_VALUES_CURRENT] +
                               value_bytes[PE_VALUES_LOCKED];
     out->allocator_overhead_bytes = blocks * PE_STORAGE_ALLOC_OVERHEAD_BYTES;
+
+    /* ISS-235 (phase 6): the retained layer is everything dropped only with
+     * the storage itself; the recomputable layer is the derived decoded
+     * spans, which a solver pass may drop and re-decode byte-exact. */
+    out->retained_strategy_bytes = out->hash_index_bytes +
+                                   out->metadata_bytes +
+                                   out->regret_bytes + out->average_bytes +
+                                   out->other_values_bytes;
+    out->recomputable_strategy_bytes = out->staging_bytes;
+    out->evict_calls = s->evict_calls;
+    out->evicted_bytes = s->evicted_bytes;
+    out->remat_calls = s->remat_calls;
+    out->remat_time_ms = (double)s->remat_time_ns / 1000000.0;
 
     total = sizeof(*s) + out->hash_index_bytes + out->metadata_bytes +
             out->staging_bytes + out->allocator_overhead_bytes;
@@ -781,6 +866,76 @@ const double *pe_storage_values_const(const pe_storage_t *s, pe_infoset_id_t id,
     if (!s->values[which])
         return NULL;
     return s->values[which] + s->meta[id].value_offset;
+}
+
+/* ISS-235 (phase 6): drop the recomputable decoded spans of infosets acting
+ * at or beyond `min_street`, flushing them byte-exact into the resident
+ * compact arrays first. A previous solver pass guarantees no pointer is held
+ * anywhere, so freeing here cannot invalidate a live span. Convergence-
+ * critical arrays are never touched. Under F64 there is no derived layer, so
+ * the call answers success and does nothing — the documented no-op. */
+int pe_storage_drop_recomputable(pe_storage_t *s, int min_street)
+{
+    uint64_t evicted_now = 0u;
+    int i;
+
+    if (!s)
+        return -1;
+    /* Only the compact precisions stage compact arrays at all. MIXED is
+     * not one: it stages no compact arrays (its estimate contract sizes
+     * storage by the F64 reduction buffer, 8 bytes per slot in
+     * test_pe_estimate), so it holds no decoded spans — a tier answers
+     * success and drops nothing, exactly like F64. */
+    if (s->precision != PE_PREC_F32 && s->precision != PE_PREC_FIXED16)
+        return 0; /* nothing to drop */
+    for (i = 0; i < PE_VALUES_COUNT; ++i)
+    {
+        pe_infoset_id_t id;
+        if (!s->staging_spans[i])
+            continue;
+        for (id = 0u; (size_t)id < s->count; ++id)
+        {
+            const pe_infoset_meta_t *meta = &s->meta[id];
+            size_t n;
+            if (meta->street != PE_STREET_UNKNOWN &&
+                (int)meta->street < min_street)
+                continue;
+            if (!s->staging_spans[i][id])
+                continue;
+            n = pe_storage_slab_size(meta);
+            if (s->staging_dirty[i] && s->staging_dirty[i][id] != 0u)
+            {
+                /* Byte-exact flush into the resident compact arrays; the
+                   span is dropped right after, so the retained-mark flush
+                   behaviour below matters no further. */
+                pe_low_precision_commit_one(s, (pe_value_array_t)i, id);
+                s->staging_dirty[i][id] = 0u;
+            }
+            free(s->staging_spans[i][id]);
+            s->staging_spans[i][id] = NULL;
+            if (s->staging_evicted[i])
+                s->staging_evicted[i][id] = 1u;
+            evicted_now += (uint64_t)n * sizeof(double);
+        }
+    }
+    s->evict_calls += 1u;
+    s->evicted_bytes += evicted_now;
+    return 0;
+}
+
+size_t pe_storage_staging_span_count(const pe_storage_t *s,
+                                     pe_value_array_t which)
+{
+    size_t resident;
+    pe_infoset_id_t id;
+
+    if (!s || which < 0 || which >= PE_VALUES_COUNT || !s->staging_spans[which])
+        return 0u;
+    resident = 0u;
+    for (id = 0u; (size_t)id < s->count; ++id)
+        if (s->staging_spans[which][id])
+            resident++;
+    return resident;
 }
 
 int pe_storage_set_flags(pe_storage_t *s, pe_infoset_id_t id, uint8_t set, uint8_t clear)

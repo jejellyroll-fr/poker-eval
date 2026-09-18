@@ -214,9 +214,13 @@ pe_solver_t *pe_solver_create(const pe_solver_config_t *cfg,
         storage_rc = -1;
     else if (using_default_storage)
     {
-        solver->storage_self = pe_storage_ram_create_with_precision(
+        /* ISS-235 (phase 6): the default-storage path honours the resolved
+           storage tier. An injected port remains authoritative and is not
+           second-guessed by the tier: honouring it is that port's job. */
+        solver->storage_self = pe_storage_ram_create_with_tier(
             (size_t)solver->config.problem.expected_infosets,
-            solver->config.execution.precision);
+            solver->config.execution.precision,
+            solver->config.execution.storage_policy);
         storage_rc = solver->storage_self != NULL ? 0 : -1;
     }
     else
@@ -776,6 +780,8 @@ static int pe_solver_vector_measure_combo_compatible(
         adapter->game->user);
 }
 
+static void pe_solver_drop_recomputable(const pe_solver_t *solver);
+
 static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                                                 const pe_execution_plan_t *plan)
 {
@@ -906,6 +912,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 &counters, "vector compute counters\n");
         }
         pe_solver_set_iteration(solver, iteration);
+        pe_solver_drop_recomputable(solver);
 
         if ((solver->config.exploitability_interval > 0u &&
               iteration % solver->config.exploitability_interval == 0u) ||
@@ -1602,6 +1609,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         pe_solver_destroy_batch_array(sample_batches, samples);
         free(sources);
         pe_solver_set_iteration(solver, iteration);
+        pe_solver_drop_recomputable(solver);
 
         if (solver->config.exploitability_interval > 0u &&
             (iteration % solver->config.exploitability_interval == 0u ||
@@ -2109,7 +2117,37 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
         out->adapter_bytes =
             footprint > storage_bytes ? footprint - storage_bytes : 0u;
     }
+
+    /* Issue #235 (phase 6): the tier that actually ran and what the drop
+     * passes reported. A port that does not implement drop_recomputable
+     * honours nothing, so these stay zero — the tier stays visible on the
+     * metrics either way. */
+    out->storage_memory_policy = solver->config.execution.storage_policy;
+    out->recompute_calls = out->storage_memory.remat_calls;
+    out->recompute_time_ms = out->storage_memory.remat_time_ms;
+    out->bytes_saved_vs_full = out->storage_memory.evicted_bytes;
     return PE_SOLVER_OK;
+}
+
+/* Issue #235 (phase 6): drop the derived decoded state a solver pass just
+ * applied, at the one point that guarantees no caller anywhere holds a span
+ * pointer: the iteration boundary, between the batch apply and the next
+ * traversal. The tier decides the street pressure; a port without the drop
+ * op (or F64, which has no derived layer) honours nothing. Checkpoints can
+ * only observe the storage at this boundary, never mid-iteration. */
+static void pe_solver_drop_recomputable(const pe_solver_t *solver)
+{
+    int pressure_street;
+
+    if (solver == NULL || solver->storage == NULL || solver->storage_self == NULL ||
+        solver->storage->drop_recomputable == NULL)
+        return;
+    pressure_street = pe_storage_policy_pressure_street(
+        solver->config.execution.storage_policy);
+    if (pressure_street >= PE_POLICY_STREET_COUNT)
+        return; /* PE_STORAGE_FULL: nothing is ever deep enough */
+    (void)solver->storage->drop_recomputable(solver->storage_self,
+                                             pressure_street);
 }
 
 /* ------------------------------------------------------------------ *

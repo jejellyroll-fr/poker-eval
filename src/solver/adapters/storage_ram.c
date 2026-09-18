@@ -42,6 +42,13 @@ pe_storage_t *pe_storage_ram_create_with_precision(
     return pe_storage_create_with_precision(expected_infosets, precision);
 }
 
+pe_storage_t *pe_storage_ram_create_with_tier(
+    size_t expected_infosets, pe_precision_mode_t precision,
+    pe_storage_policy_t tier)
+{
+    return pe_storage_create_with_tier(expected_infosets, precision, tier);
+}
+
 static void ram_destroy(void *self)
 {
     pe_storage_destroy((pe_storage_t *)self);
@@ -148,6 +155,11 @@ static int ram_memory_report(const void *self, pe_storage_memory_report_t *out)
     return out ? 0 : -1;
 }
 
+static int ram_drop_recomputable(void *self, int min_street)
+{
+    return pe_storage_drop_recomputable((pe_storage_t *)self, min_street);
+}
+
 static int ram_set_flags(void *self, pe_infoset_id_t id, uint8_t set, uint8_t clear)
 {
     return pe_storage_set_flags((pe_storage_t *)self, id, set, clear);
@@ -182,7 +194,8 @@ static const pe_storage_ops_t k_ram_ops = {
     ram_set_flags,
     ram_get_flags,
     ram_key_at,
-    ram_memory_report
+    ram_memory_report,
+    ram_drop_recomputable
 };
 
 const pe_storage_ops_t *pe_storage_ram_ops(void)

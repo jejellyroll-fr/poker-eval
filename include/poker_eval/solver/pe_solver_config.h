@@ -23,6 +23,7 @@
 
 #include <poker_eval/solver/pe_sampling_policy.h>
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_storage_policy.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -228,6 +229,12 @@ typedef struct {
     pe_stage_backends_t stages;
 
     pe_precision_mode_t precision;
+
+    /* ISS-235 (phase 6): explicit storage tier. The selected mode decides
+     * which streets keep derived decoded state and which re-materialise it
+     * on demand; it never changes strategy results. Visible in the execution
+     * plan, the CLI/Studio diagnostics and the metrics. */
+    pe_storage_policy_t storage_policy;
 
     /* Device index for a GPU backend; -1 selects any available device. */
     int device_id;

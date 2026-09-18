@@ -105,6 +105,10 @@ struct pe_execution_plan_t {
     pe_stage_backends_t stages;
     pe_precision_mode_t precision;
 
+    /* ISS-235 (phase 6): resolved storage tier. Explicit, never inferred;
+     * recorded here so diagnostics report the mode that will actually run. */
+    pe_storage_policy_t storage_policy;
+
     int cpu_threads;
     int deterministic;
 

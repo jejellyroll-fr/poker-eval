@@ -296,6 +296,14 @@ static int pe_check_enum_ranges(const pe_solver_config_t *cfg,
                     "execution precision mode %d is out of range",
                     (int)cfg->execution.precision);
     }
+    if ((int)cfg->execution.storage_policy < 0 ||
+        cfg->execution.storage_policy >= PE_STORAGE_POLICY_COUNT)
+    {
+        valid = 0;
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "execution storage policy %d is out of range",
+                    (int)cfg->execution.storage_policy);
+    }
     if ((int)cfg->execution.backend < 0 ||
         cfg->execution.backend >= PE_COMPUTE_COUNT)
     {
@@ -458,6 +466,7 @@ pe_valid_severity_t pe_plan_resolve(const pe_solver_config_t *cfg,
     plan.averaging = algo.averaging;
     plan.pruning = algo.pruning;
     plan.precision = cfg->execution.precision;
+    plan.storage_policy = cfg->execution.storage_policy;
     plan.cpu_threads = cfg->execution.cpu_threads;
     plan.deterministic = cfg->execution.deterministic;
 
@@ -689,6 +698,7 @@ size_t pe_plan_to_string(const pe_execution_plan_t *plan, char *buf, size_t bufl
                  "  averaging       %s\n"
                  "  pruning         %s\n"
                  "  precision       %s\n"
+                 "  storage policy  %s\n"
                  "  stage/traversal %s\n"
                  "  stage/update    %s\n"
                  "  stage/terminal  %s\n"
@@ -702,6 +712,7 @@ size_t pe_plan_to_string(const pe_execution_plan_t *plan, char *buf, size_t bufl
                  pe_averaging_name(plan->averaging),
                  pe_pruning_name(plan->pruning),
                  pe_precision_name(plan->precision),
+                 pe_storage_policy_name(plan->storage_policy),
                  pe_compute_kind_name(plan->stages.traversal),
                  pe_compute_kind_name(plan->stages.update),
                  pe_compute_kind_name(plan->stages.terminal_eval),

@@ -97,12 +97,38 @@ pe_storage_t *pe_storage_create(size_t expected_infosets);
 pe_storage_t *pe_storage_create_with_precision(size_t expected_infosets,
                                                pe_precision_mode_t precision);
 
+/** Create storage with an explicit numeric representation and storage tier.
+ * The tier only bites under a compact representation: F64 has no derived
+ * decoded layer, so any tier answers the historical behaviour exactly. */
+pe_storage_t *pe_storage_create_with_tier(size_t expected_infosets,
+                                          pe_precision_mode_t precision,
+                                          pe_storage_policy_t tier);
+
 /** Short alias for pe_storage_create_with_precision(). */
 pe_storage_t *pe_storage_create_precision(size_t expected_infosets,
                                           pe_precision_mode_t precision);
 
 /** Numeric representation selected at creation time. */
 pe_precision_mode_t pe_storage_precision(const pe_storage_t *storage);
+
+/** Storage tier selected at creation time. */
+pe_storage_policy_t pe_storage_tier(const pe_storage_t *storage);
+
+/**
+ * Drop the recomputable decoded spans of infosets acting at or beyond
+ * `min_street` (streets tagged unknown always pass), flushing them
+ * byte-exact into the resident compact arrays first. Only honoured under a
+ * compact representation; an F64 storage answers success and drops nothing
+ * because it has nothing to drop.
+ *
+ * @return 0 on success, -1 otherwise.
+ */
+int pe_storage_drop_recomputable(pe_storage_t *storage, int min_street);
+
+/** Number of infosets currently holding a decoded span for `which`.
+ * Diagnostics and telemetry; 0 for storage without spans. */
+size_t pe_storage_staging_span_count(const pe_storage_t *storage,
+                                     pe_value_array_t which);
 
 /** Number of fixed16 rescalings performed after a value exceeded its prior
  * representable range. A non-zero count is diagnostic, not silent truncation. */

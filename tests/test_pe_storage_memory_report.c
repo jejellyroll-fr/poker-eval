@@ -253,12 +253,152 @@ static void test_optional_arrays_and_port(void)
     ops->destroy(self);
 }
 
+/* ISS-235 (phase 6): a drop pass flushes the derived spans byte-exact into
+ * the resident compact arrays, drops only the pressure streets, and pins
+ * the rematerialise accounting. */
+static void test_drop_flushes_byte_exact(void)
+{
+    const size_t infosets = 8u;
+    pe_storage_t *s = pe_storage_create_with_tier(infosets, PE_PREC_F32,
+                                                  PE_STORAGE_RECOMPUTE_DEEP);
+    pe_storage_memory_report_t report;
+    double *span;
+
+    CHECK(s != NULL, "tiered storage creation failed");
+    if (!s)
+        return;
+    /* All infosets act on the flop (street 1): they survive a compact drop
+     * (pressure street 2) and die under a recompute-deep drop (0). */
+    for (size_t i = 0; i < infosets; ++i)
+        CHECK(pe_storage_resolve(s, i * 31u + 7u, 4, 1, 1) != PE_INFOSET_ID_INVALID,
+              "resolve failed at %zu", i);
+    span = pe_storage_values(s, 0, PE_VALUES_REGRET);
+    CHECK(span != NULL, "regret span unavailable");
+    span[0] = 1.25;
+    span[3] = -0.5;
+
+    /* compact would keep street-1 spans: pressure street 2 > 1. */
+    CHECK(pe_storage_drop_recomputable(s, 2) == 0, "compact drop failed");
+    pe_storage_memory_report(s, &report);
+    CHECK(report.staging_bytes > 0,
+          "compact drop removed spans below the pressure street");
+    CHECK(report.evict_calls == 1 && report.evicted_bytes == 0,
+          "compact drop double-counted evictions");
+    CHECK(report.recomputable_strategy_bytes == report.staging_bytes,
+          "recomputable figure disagrees with staging bytes");
+
+    /* recompute-deep drops everywhere: dirty values flush byte-exact. */
+    CHECK(pe_storage_drop_recomputable(s, 0) == 0, "deep drop failed");
+    pe_storage_memory_report(s, &report);
+    /* All slab bytes go; only the resident span index and dirty arrays of
+     * the touched array remain, so staging shrinks to their aggregate. */
+    CHECK(report.staging_bytes <=
+              (size_t)2 * infosets * (sizeof(double *) + sizeof(uint8_t)),
+          "deep drop left slab bytes resident (%zu)",
+          report.staging_bytes);
+    CHECK(report.evict_calls == 2, "expected two drop passes, got %llu",
+          (unsigned long long)report.evict_calls);
+    CHECK(report.evicted_bytes > 0, "deep drop did not account dropped bytes");
+    CHECK(report.regret_bytes > 0,
+          "flush removed the resident compact arrays");
+    {
+        /* Rematerialise: the span must decode back to the same values, which
+           is only possible if the drop flushed them into the resident
+           compact arrays first. */
+        span = pe_storage_values(s, 0, PE_VALUES_REGRET);
+        CHECK(span != NULL && span[0] == 1.25 && span[3] == -0.5,
+              "rematerialised span lost content");
+        pe_storage_memory_report(s, &report);
+        CHECK(report.remat_calls == 1,
+              "expected one rematerialisation, got %llu",
+              (unsigned long long)report.remat_calls);
+        CHECK(report.staging_bytes > 0, "rematerialisation left no span");
+    }
+    check_consistency(s, &report, "tiered f32");
+    pe_storage_destroy(s);
+}
+
+/* Streets tagged unknown always pass the pressure test; streets below it
+ * survive. */
+static void test_drop_street_pressure(void)
+{
+    pe_storage_t *s = pe_storage_create_with_tier(4u, PE_PREC_F32,
+                                                  PE_STORAGE_RECOMPUTE_DEEP);
+    pe_storage_memory_report_t report;
+
+    CHECK(s != NULL, "tiered storage creation failed");
+    if (!s)
+        return;
+    CHECK(pe_storage_resolve(s, 11u, 2, 1, 0) != PE_INFOSET_ID_INVALID,
+          "preflop resolve failed");
+    CHECK(pe_storage_resolve(s, 22u, 2, 1, 3) != PE_INFOSET_ID_INVALID,
+          "river resolve failed");
+    CHECK(pe_storage_resolve(s, 33u, 2, 1, PE_STREET_UNKNOWN) != PE_INFOSET_ID_INVALID,
+          "unknown-street resolve failed");
+    CHECK(pe_storage_values(s, 0, PE_VALUES_REGRET) != NULL,
+          "preflop span unavailable");
+    CHECK(pe_storage_values(s, 1, PE_VALUES_REGRET) != NULL,
+          "river span unavailable");
+    CHECK(pe_storage_values(s, 2, PE_VALUES_REGRET) != NULL,
+          "unknown-street span unavailable");
+
+    /* pressure street 2: the river (3) and unknown (-1) spans go; preflop
+     * (0) survives. */
+    CHECK(pe_storage_drop_recomputable(s, 2) == 0, "drop failed");
+    pe_storage_memory_report(s, &report);
+    CHECK(report.staging_bytes > 0, "preflop span was dropped below pressure");
+    CHECK(pe_storage_staging_span_count(s, PE_VALUES_REGRET) == 1u,
+          "expected one survivor (preflop), got %zu",
+          pe_storage_staging_span_count(s, PE_VALUES_REGRET));
+    pe_storage_destroy(s);
+}
+
+/* F64 has no derived layer: a drop answers success and does nothing. */
+static void test_drop_on_f64_is_noop(void)
+{
+    pe_storage_t *s = pe_storage_create_with_tier(4u, PE_PREC_F64,
+                                                  PE_STORAGE_RECOMPUTE_DEEP);
+    pe_storage_memory_report_t before, after;
+
+    CHECK(s != NULL, "tiered f64 storage creation failed");
+    if (!s)
+        return;
+    CHECK(pe_storage_resolve(s, 5u, 2, 1, 0) != PE_INFOSET_ID_INVALID,
+          "resolve failed");
+    CHECK(pe_storage_values(s, 0, PE_VALUES_REGRET) != NULL,
+          "f64 span unavailable");
+    pe_storage_memory_report(s, &before);
+    CHECK(pe_storage_drop_recomputable(s, 0) == 0, "f64 drop failed");
+    pe_storage_memory_report(s, &after);
+    CHECK(before.storage_bytes == after.storage_bytes,
+          "f64 drop changed the footprint");
+    CHECK(after.evict_calls == 0,
+          "f64 drop invented recomputable state to drop");
+    pe_storage_destroy(s);
+}
+
+/* Invalid tier creations are rejected, not silently downgraded. */
+static void test_tier_creation_validation(void)
+{
+    pe_storage_t *s = pe_storage_create_with_tier(8u, PE_PREC_F32,
+                                                  (pe_storage_policy_t)77);
+    CHECK(s == NULL, "out-of-range tier was accepted");
+    s = pe_storage_create_with_tier(8u, PE_PREC_F32, PE_STORAGE_FULL);
+    CHECK(s != NULL && pe_storage_tier(s) == PE_STORAGE_FULL,
+          "explicit FULL tier lost");
+    pe_storage_destroy(s);
+}
+
 int main(void)
 {
     test_null_and_empty();
     test_counts_and_categories();
     test_precision_scales_the_report();
     test_optional_arrays_and_port();
+    test_drop_flushes_byte_exact();
+    test_drop_street_pressure();
+    test_drop_on_f64_is_noop();
+    test_tier_creation_validation();
     if (g_failures)
     {
         fprintf(stderr, "test_pe_storage_memory_report: %d failure(s)\n",
