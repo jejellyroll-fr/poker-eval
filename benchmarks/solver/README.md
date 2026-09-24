@@ -305,7 +305,10 @@ needed a measurement and is filled either way, which is what makes
 `memory_policy` on the `memory` line name the tier that actually ran rather
 than `full` for every tier. The `progress is not complete` relaxation stays:
 an early stop genuinely is incomplete, and that is a separate question from
-whether the metrics were lost.
+whether the metrics were lost. That statement is checked twice: the validator
+reads it from stdout, and `validate_native_report()` requires the native
+report's boolean to say the same thing — one run cannot archive two
+contradictory answers about whether its convergence block was measured.
 
 Per-street query latency — the phase-6 item that total solve time cannot
 show — is measured by `query_latency_probe.py`, which drives the solver's

@@ -102,7 +102,12 @@ class NativeReportValidationTests(unittest.TestCase):
         self.assertIn("native solver report missing field 'metrics'", failures)
 
     def _budget_stopped_result(self) -> dict[str, object]:
-        """A run the memory budget stopped cleanly before its cap."""
+        """A run the memory budget stopped cleanly before its cap.
+
+        Such a stop lands before the first best-response pass, so the solver
+        reports the convergence block as unmeasured on both views (issue
+        #249): `metrics_available=0` on stdout, `false` in the native report.
+        """
         result = self._valid_result()
         result["case"]["expected_stop_cause"] = "memory_budget"
         benchmark = result["benchmark"]
@@ -110,10 +115,12 @@ class NativeReportValidationTests(unittest.TestCase):
         benchmark["complete"] = False
         benchmark["stop_cause"] = "memory_budget"
         benchmark["metrics"]["guarantee"] = "unspecified"
+        benchmark["metrics"]["metrics_available"] = False
         native = result["native_solver_report"]
         native["progress"]["iteration"] = 40
         native["progress"]["complete"] = False
         native["metrics"]["guarantee"] = "unspecified"
+        native["metrics"]["metrics_available"] = False
         return result
 
     def test_declared_memory_budget_stop_passes_validation(self) -> None:
@@ -131,9 +138,67 @@ class NativeReportValidationTests(unittest.TestCase):
         self.assertIn(
             "native solver report progress is not complete", failures
         )
-        self.assertIn("unspecified convergence guarantee telemetry", failures)
+        # Issue #249: the solver states the block was not measured, so that
+        # statement -- not the `unspecified` name derived from it -- is what
+        # fails the run (the old name rule is still covered by
+        # test_run_benchmarks for a binary that states nothing).
+        self.assertIn("convergence metrics were not measured", failures)
         self.assertIn(
             "stop_cause='memory_budget', expected 'max_iterations'", failures
+        )
+
+    def test_native_availability_marker_is_cross_checked(self) -> None:
+        # Issue #249: stdout declares whether the convergence block was
+        # measured, and the native report carries the same statement. The two
+        # views come from one run, so a report that contradicts stdout -- or
+        # drops the field stdout still declares -- would archive an unmeasured
+        # zero as a measured final result. Reject it.
+        baseline = self._budget_stopped_result()
+        self.assertEqual(bench.validate_result(baseline), [])
+
+        cases = (
+            (
+                "contradicts_stdout",
+                lambda result: result["native_solver_report"]["metrics"].__setitem__(
+                    "metrics_available", True
+                ),
+                "native solver report metrics.metrics_available=True "
+                "!= stdout False",
+            ),
+            (
+                "missing_from_native",
+                lambda result: result["native_solver_report"]["metrics"].pop(
+                    "metrics_available"
+                ),
+                "native solver report metrics.metrics_available is not boolean",
+            ),
+            (
+                "non_boolean",
+                lambda result: result["native_solver_report"]["metrics"].__setitem__(
+                    "metrics_available", 0
+                ),
+                "native solver report metrics.metrics_available is not boolean",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(field=name):
+                result = copy.deepcopy(baseline)
+                mutate(result)
+                self.assertIn(expected, bench.validate_result(result))
+
+    def test_availability_marker_absent_from_both_views_is_tolerated(self) -> None:
+        # A binary older than issue #249 states nothing on either view, so the
+        # cross-check has nothing to hold against and must stay quiet; the
+        # guarantee-name rule is the only signal left (covered in
+        # test_run_benchmarks).
+        result = self._valid_result()
+        result["benchmark"]["metrics"]["metrics_available"] = None
+
+        failures = bench.validate_result(result)
+
+        self.assertNotIn(
+            "native solver report metrics.metrics_available is not boolean",
+            failures,
         )
 
     def test_native_report_conflicts_are_rejected(self) -> None:

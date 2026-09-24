@@ -393,6 +393,12 @@ struct _app_t
     char final_br_mode[32];
     double final_nash_conv_mbb;
     double final_max_br_gap_mbb;
+    /* Issue #249: the solver states outright whether the convergence block was
+       measured at all.  -1 = the binary predates the marker and says nothing,
+       0 = the solver declared the block unmeasured (a budget stop lands before
+       the first best-response pass), 1 = a real measurement.  A stopped run's
+       zeros are absence, so they are never shown as a measurement. */
+    int final_metrics_available;
 
     size_t strategy_source_length;
     uint64_t strategy_source_hash;
@@ -4441,13 +4447,15 @@ static int last_result_line(const char *output, char *guarantee,
                             size_t guarantee_capacity, double *raw,
                             double *mbb, uint64_t *samples,
                             char *br_mode, size_t br_mode_capacity,
-                            double *nash_conv_mbb, double *max_br_gap_mbb)
+                            double *nash_conv_mbb, double *max_br_gap_mbb,
+                            int *metrics_available)
 {
     const char *cursor;
     const char *found = NULL;
     const char *mode_field;
     const char *nc_field;
     const char *gap_field;
+    const char *avail_field;
     if (!output || !guarantee || guarantee_capacity == 0u)
         return 0;
     cursor = output;
@@ -4485,6 +4493,18 @@ static int last_result_line(const char *output, char *guarantee,
         *max_br_gap_mbb = 0.0;
         if (gap_field)
             (void)sscanf(gap_field, " max_br_gap_mbb=%lf", max_br_gap_mbb);
+    }
+    /* Issue #249: the solver's own statement about whether the convergence
+       block was measured.  Optional like the aggregates above -- a binary
+       older than the marker leaves it unset, which is not a statement. */
+    if (metrics_available)
+    {
+        int value = -1;
+        *metrics_available = -1;
+        avail_field = found ? strstr(found, " metrics_available=") : NULL;
+        if (avail_field &&
+            sscanf(avail_field, " metrics_available=%d", &value) == 1)
+            *metrics_available = value ? 1 : 0;
     }
     return 1;
 }
@@ -4545,6 +4565,8 @@ static void update_result_view(App *app, const char *output, int running)
     char final_br_mode[32];
     double final_nash_conv_mbb;
     double final_max_br_gap_mbb;
+    int final_metrics_available;
+    int metrics_available = -1;
     int have_progress;
     int have_final;
     int reporting = 0;
@@ -4567,6 +4589,7 @@ static void update_result_view(App *app, const char *output, int running)
     snprintf(final_br_mode, sizeof(final_br_mode), "%s", app->final_br_mode);
     final_nash_conv_mbb = app->final_nash_conv_mbb;
     final_max_br_gap_mbb = app->final_max_br_gap_mbb;
+    final_metrics_available = app->final_metrics_available;
     bmutex_unlock(app->solve_mutex);
 
     have_progress = last_progress_line(output, &iteration, &total, &fraction,
@@ -4760,7 +4783,8 @@ static void update_result_view(App *app, const char *output, int running)
 
     have_final = last_result_line(output, guarantee, sizeof(guarantee), &raw, &mbb,
                                   &samples, br_mode, sizeof(br_mode),
-                                  &nash_conv_mbb, &max_br_gap_mbb);
+                                  &nash_conv_mbb, &max_br_gap_mbb,
+                                  &metrics_available);
     if (!have_final && final_metrics_valid)
     {
         snprintf(guarantee, sizeof(guarantee), "%s", final_guarantee);
@@ -4772,9 +4796,27 @@ static void update_result_view(App *app, const char *output, int running)
         snprintf(br_mode, sizeof(br_mode), "%s", final_br_mode);
         nash_conv_mbb = final_nash_conv_mbb;
         max_br_gap_mbb = final_max_br_gap_mbb;
+        metrics_available = final_metrics_available;
         have_final = 1;
     }
-    if (have_final)
+    if (have_final && metrics_available == 0)
+    {
+        /* Issue #249: the solver declared the convergence block unmeasured --
+           a stop on the memory budget lands before the first best-response
+           pass.  The zeros on that line are absence, not a converged zero, so
+           they are not painted as a final result. */
+        snprintf(text, sizeof(text),
+                 "Final: not measured  |  stop_reason=%s ended the run before "
+                 "the first best-response measurement "
+                 "(solver reports metrics_available=0)",
+                 app->solve_stop_reason[0] ? app->solve_stop_reason : "unknown");
+        label_text(app->run_metrics, "not measured");
+        if (app->lbl_exploit_val)
+            label_text(app->lbl_exploit_val, "—");
+        if (app->setup_run_metrics)
+            label_text(app->setup_run_metrics, text);
+    }
+    else if (have_final)
     {
         {
             const char *caveat = board_abstraction_caveat(app);
@@ -5278,14 +5320,23 @@ static void i_solve_copy_output(App *app, char *out, size_t capacity)
         {
             /* Issue #234: re-emit the appended solver fields so
                last_result_line() sees the mode and the aggregates even
-               when the raw output was replaced by the report window. */
-            char extended[128];
+               when the raw output was replaced by the report window.
+               Issue #249: metrics_available travels with them, so the
+               rebuilt line still distinguishes absence from a measurement. */
+            char extended[192];
+            size_t extended_length;
             extended[0] = '\0';
             if (app->final_br_mode[0])
                 snprintf(extended, sizeof(extended),
                          " br_mode=%s nash_conv_mbb=%f max_br_gap_mbb=%f",
                          app->final_br_mode, app->final_nash_conv_mbb,
                          app->final_max_br_gap_mbb);
+            extended_length = strlen(extended);
+            if (app->final_metrics_available >= 0 &&
+                extended_length + 32u < sizeof(extended))
+                snprintf(extended + extended_length,
+                         sizeof(extended) - extended_length,
+                         " metrics_available=%d", app->final_metrics_available);
             width = snprintf(line, sizeof(line),
                              "guarantee=%s exploitability_raw=%f"
                              " exploitability_mbb=%f br_samples=%" PRIu64
@@ -6698,6 +6749,11 @@ static void i_solve_scan_line(App *app, const char *line)
         const char *mode_field = strstr(line, " br_mode=");
         const char *nc_field = strstr(line, " nash_conv_mbb=");
         const char *gap_field = strstr(line, " max_br_gap_mbb=");
+        /* Issue #249: the solver's statement about whether the convergence
+           block was measured.  Absent on a binary older than the marker,
+           which is "no statement" rather than "not measured". */
+        const char *avail_field = strstr(line, " metrics_available=");
+        int available = -1;
         app->final_metrics_valid = 1;
         snprintf(app->final_guarantee, sizeof(app->final_guarantee), "%s", guarantee);
         app->final_raw = raw;
@@ -6715,6 +6771,10 @@ static void i_solve_scan_line(App *app, const char *line)
         if (gap_field)
             (void)sscanf(gap_field, " max_br_gap_mbb=%lf",
                          &app->final_max_br_gap_mbb);
+        app->final_metrics_available = -1;
+        if (avail_field &&
+            sscanf(avail_field, " metrics_available=%d", &available) == 1)
+            app->final_metrics_available = available ? 1 : 0;
     }
 
     /* The solver prints "solver_phase=complete stop_reason=<target|
@@ -7227,7 +7287,7 @@ static void i_solve_end(App *app, const uint32_t exit_code)
         out_len = strlen(output);
         hp = last_progress_line(output, &di, &dt, &df, &de, &dg);
         hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds,
-                              NULL, 0u, NULL, NULL);
+                              NULL, 0u, NULL, NULL, NULL);
         dump = fopen("/tmp/studio_last_output.txt", "w");
         if (dump)
         {
@@ -7365,6 +7425,8 @@ static int i_start_solve(App *app, const char *command)
     app->final_raw = 0.0;
     app->final_mbb = 0.0;
     app->final_samples = 0u;
+    /* Issue #249: no statement about the new run's convergence block yet. */
+    app->final_metrics_available = -1;
     app->solve_stop_reason[0] = '\0';
     app->player_evs_valid = 0;
     for (uint32_t player = 0u; player < MAX_PLAYERS_DISPLAY; ++player)
@@ -10088,6 +10150,11 @@ static App *i_create(void)
     app->header_font = font_system(12.0f, ekFBOLD);
     app->regular_font = font_system(11.0f, 0);
     app->bold_font = font_system(11.0f, ekFBOLD);
+
+    /* Issue #249: the solver has not stated anything about a convergence
+       measurement yet.  -1 is "no statement", which is not the same as the
+       solver saying it measured nothing. */
+    app->final_metrics_available = -1;
 
     setup = i_setup_panel(app);
     result = i_result_panel(app);

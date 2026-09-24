@@ -94,6 +94,12 @@ results, and the separation makes that auditable.
   `guarantee=` line ends with `metrics_available=1|0`, and the JSON `metrics`
   object carries the same value as a boolean, so an unmeasured convergence
   block never reads as a measured zero.
+- **Studio** — `tools/poker_eval_studio.c` parses the marker, keeps it on the
+  synthetic `guarantee=` line it rebuilds from the captured telemetry, and
+  shows `not measured` with the `stop_reason` that ended the run instead of
+  painting the block's zeros as a final result. A binary older than the marker
+  states nothing, and the Studio then keeps its previous behaviour rather than
+  guessing: "not stated" and "stated as unmeasured" are not the same thing.
 - **Benchmarks** — `benchmarks/solver/run_benchmarks.py` captures the exact
   solver accounting as `memory.solver_accounting` in the benchmark payload,
   making `bytes_per_infoset` a first-class benchmark metric next to
@@ -101,7 +107,9 @@ results, and the separation makes that auditable.
   validator accepts an `unspecified` guarantee only when the solver says the
   block was not measured — a run that loses its metrics without declaring an
   early stop is a failure, where the guarantee name alone used to be the
-  signal.
+  signal. The native report's boolean is cross-checked against the stdout
+  marker (`validate_native_report()`), so one run cannot archive two
+  contradictory answers about whether its convergence block was measured.
 
 ## Public ABI note
 
