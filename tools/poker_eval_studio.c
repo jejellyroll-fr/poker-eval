@@ -4567,6 +4567,9 @@ static void update_result_view(App *app, const char *output, int running)
     double final_max_br_gap_mbb;
     int final_metrics_available;
     int metrics_available = -1;
+    /* Issue #249: the reader thread writes this under solve_mutex, so it is
+       snapshotted with the other telemetry instead of read bare. */
+    char stop_reason[sizeof(app->solve_stop_reason)];
     int have_progress;
     int have_final;
     int reporting = 0;
@@ -4590,6 +4593,7 @@ static void update_result_view(App *app, const char *output, int running)
     final_nash_conv_mbb = app->final_nash_conv_mbb;
     final_max_br_gap_mbb = app->final_max_br_gap_mbb;
     final_metrics_available = app->final_metrics_available;
+    snprintf(stop_reason, sizeof(stop_reason), "%s", app->solve_stop_reason);
     bmutex_unlock(app->solve_mutex);
 
     have_progress = last_progress_line(output, &iteration, &total, &fraction,
@@ -4809,7 +4813,7 @@ static void update_result_view(App *app, const char *output, int running)
                  "Final: not measured  |  stop_reason=%s ended the run before "
                  "the first best-response measurement "
                  "(solver reports metrics_available=0)",
-                 app->solve_stop_reason[0] ? app->solve_stop_reason : "unknown");
+                 stop_reason[0] ? stop_reason : "unknown");
         label_text(app->run_metrics, "not measured");
         if (app->lbl_exploit_val)
             label_text(app->lbl_exploit_val, "—");
