@@ -590,17 +590,22 @@ static void pe_solver_vector_emit_heartbeat(pe_solver_t *solver,
 {
     if (!solver)
         return;
+    /* Issue #249: this lane published 0.0 as absence without saying so, which
+       reads as a converged zero.  `br_mode` carries the same statement the
+       sampled heartbeat makes, so a frontend can tell the two apart. */
     pe_telemetry_emitf(
         solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
         "progress iteration=%" PRIu64 " total=%" PRIu64
         " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f"
-        " memory_mb=%.1f budget_mb=%.1f\n",
+        " br_mode=%s memory_mb=%.1f budget_mb=%.1f\n",
         iteration, solver->config.max_iterations,
         solver->config.max_iterations > 0u
             ? (double)iteration / (double)solver->config.max_iterations : 0.0,
         solver->metrics_available
             ? solver->metrics.exploitability_mbb_per_game : 0.0,
         solver->config.target_exploitability_mbb,
+        solver->metrics_available
+            ? pe_br_mode_name(solver->metrics.br_mode) : "unmeasured",
         (double)solver->memory_bytes / (1024.0 * 1024.0),
         (double)solver->config.execution.max_ram_bytes / (1024.0 * 1024.0));
     pe_telemetry_flush(solver->deps.telemetry);

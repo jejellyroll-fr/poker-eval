@@ -126,4 +126,6 @@ promotes "target reached" into a guarantee.
   exploitable player. When the solver reports `metrics_available=0` — a run
   that ended before the first best-response measurement, typically on the
   memory budget — there is no measurement to show, so the summary says so
-  rather than printing the block's zeros as a result.
+  rather than printing the block's zeros as a result. The live view reads the
+  same statement off the heartbeat (`br_mode=unmeasured`) and holds the value
+  back the same way until the first measurement lands.

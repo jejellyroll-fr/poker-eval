@@ -86,6 +86,13 @@ results, and the separation makes that auditable.
   `PE_SOLVER_ERR_INVALID_STATE`. That status means one thing only: the
   convergence block was never measured, so its zeros are absence. Every other
   field is still valid. Issue #249.
+- **Heartbeat** — `progress iteration=…` carries `br_mode=unmeasured` until a
+  best-response measurement exists, on both the sampled and the vector lane.
+  The published `exploitability_mbb` is 0.0 in that window and real afterwards,
+  so the field is what lets a frontend tell a placeholder from a converged
+  zero. The `guarantee=` line keeps naming the enum's value (`sampled`), which
+  stays a legitimate value of `pe_br_mode_t`; `metrics_available` is the field
+  that says whether any measurement backs the line at all.
 - **CLI** — `pe-preflop-solve` prints a `memory infosets=… storage_bytes=…
   adapter_bytes=… bytes_per_infoset=… bytes_per_strategy_slot=…` diagnostic
   line after the `guarantee=` line, and the JSON report (`--output`) carries
@@ -97,9 +104,13 @@ results, and the separation makes that auditable.
 - **Studio** — `tools/poker_eval_studio.c` parses the marker, keeps it on the
   synthetic `guarantee=` line it rebuilds from the captured telemetry, and
   shows `not measured` with the `stop_reason` that ended the run instead of
-  painting the block's zeros as a final result. A binary older than the marker
-  states nothing, and the Studio then keeps its previous behaviour rather than
-  guessing: "not stated" and "stated as unmeasured" are not the same thing.
+  painting the block's zeros as a final result. The live view is gated the same
+  way: the heartbeat publishes `exploitability_mbb=0.000000` as absence and
+  states it with `br_mode=unmeasured`, so the Studio shows `not measured yet`
+  there until a measurement exists rather than `0.00 mBB`. A binary older than
+  the marker states nothing, and the Studio then keeps its previous behaviour
+  rather than guessing: "not stated" and "stated as unmeasured" are not the
+  same thing.
 - **Benchmarks** — `benchmarks/solver/run_benchmarks.py` captures the exact
   solver accounting as `memory.solver_accounting` in the benchmark payload,
   making `bytes_per_infoset` a first-class benchmark metric next to
