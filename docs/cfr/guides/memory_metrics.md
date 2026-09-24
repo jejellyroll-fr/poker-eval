@@ -225,7 +225,7 @@ Select on `pe-preflop-solve` with `--memory-policy NAME` (`full`,
 recorded in the execution plan (`storage policy` line) so diagnostics
 report the mode that actually ran.
 
-## Tiers at scale: fixed budget, query latency and the wall-clock inversion (issue #247)
+## Tiers at scale: fixed budget, query latency and the commit sweep (issues #247, #250)
 
 The committed `pe_storage_tiers.json` baseline pins the tier trade at 2 000
 iterations. Issue #247 transfers three measurements that #235 left with a
@@ -233,12 +233,14 @@ iterations. Issue #247 transfers three measurements that #235 left with a
 `benchmarks/baseline/pe_storage_tier_scale.json` and
 `benchmarks/baseline/pe_query_latency.json`, both machine-specific.
 
-### The wall-clock inversion is the cumulative commit sweep
+### The cumulative commit sweep, and its bound (issue #250)
 
-The baseline shows an inversion that the working-set hypothesis does not
-explain: at equal precision and seed, `recompute-deep` finishes a PLO4 solve
-faster than `full` (29.6 s vs 4.1 s at 2 000 iterations), even though it does
-strictly more decoding work. Profiling `pe-preflop-solve` on macOS arm64 with
+The pre-#250 baseline showed an inversion that the working-set hypothesis does
+not explain: at equal precision and seed, `recompute-deep` finished a PLO4
+solve faster than `full` (29.6 s vs 4.1 s at 2 000 iterations), even though it
+does strictly more decoding work. Those two figures are the 2 000-iteration
+baseline of #235, measured before the fix below and quoted here as the
+observation that motivated it. Profiling `pe-preflop-solve` on macOS arm64 with
 the system `sample` tool (2 579 samples at 1 ms, PLO4/f32/`full`) resolves it:
 **2 555 of 2 579 samples (99.1 %) sit in `pe_low_precision_commit_all`.**
 
@@ -259,6 +261,38 @@ The same sweep is why `full` scales worse than its tiers: on the reference
 machine, PLO4/`full` costs 53 s at 1 000 iterations and 140 s at 2 000 (whole
 process, report phase included), a superlinear factor of 2.6× for 2× the
 iterations.
+
+**Issue #250 bounds it.** `pe_low_precision_values` now commits only the span
+it is about to decode over — the invariant is preserved, since an infoset's
+span is private to it and the only reader of a resident array is the accessor,
+the tier drop or the teardown, each of which commits the span it is about to
+touch. `pe_storage_resolve` commits nothing at all: it reads no value array,
+and the port header already tells callers that a span does not survive a
+resolve. Re-measured here with the same manifest, seed and machine:
+
+| Case (scale family) | Before (s) | After (s) | Factor | Fingerprint |
+| --- | --- | --- | --- | --- |
+| Hold'em `full` | 82.65 | 0.287 | 288× | unchanged |
+| Hold'em `compact` | 48.28 | 2.309 | 21× | unchanged |
+| Hold'em `recompute-deep` | 20.17 | 0.883 | 23× | unchanged |
+| PLO4 `full` | 217.63 | 0.224 | 971× | unchanged |
+| PLO4 `compact` | 81.49 | 0.970 | 84× | unchanged |
+| PLO4 `recompute-deep` | 26.20 | 0.449 | 58× | unchanged |
+
+The whole `tiers` suite runs in 14.7 s instead of ~476 s. **The inversion was
+the sweep and is gone:** at equal iterations `full` is now the fastest tier on
+both games, because it does no re-decode work at all, and the compressed tiers
+pay their real cost — 3.0×/2.0× (`recompute-deep`) and 8.1×/4.3× (`compact`) of
+`full`. The memory trade is untouched (same infosets, same storage ratios, and
+the budget family still reaches exactly the same iterations per tier), so the
+tier design is what #235 said it was: memory against CPU, never an
+approximation.
+
+`tests/test_storage_commit_sweep.c` pins the two guarantees that make the
+bounded commit sound: a write is never lost when another infoset is accessed,
+and a mutation made through an already-flushed, still-held span is still
+captured — by the accessor, and across a tier drop. It fails if the
+flush-before-decode is removed.
 
 ### Fixed RAM budget: materially more iterations and infosets
 
@@ -364,14 +398,19 @@ tier that keeps a smaller resident footprint sweeps faster; the re-decode work
 `recompute-deep` adds is small next to it, which is also why cold and warm are
 within ~2 % of each other.
 
-This is the opposite of the "recompute is expensive" intuition, and it is
-consistent with the profiling result: the decode work a tier adds is real, but
-at this scale it is dwarfed by the cumulative commit sweep `full` pays. Read
-together, the two sections say that `recompute-deep` currently dominates `full`
-on every measured axis — memory, solve time and query latency — while producing
-byte-identical strategies. That is a statement about the *current* commit sweep,
-not about the tier design; bounding the sweep is what would give the tiers back
-their intended trade.
+This is the opposite of the "recompute is expensive" intuition, and the
+profiling result explains it: the decode work a tier adds is real, but in these
+figures it was dwarfed by the cumulative commit sweep `full` paid on every
+access.
+
+**These latency figures predate issue #250 and are now stale.** They were
+measured with the sweep in place, so the `full` column carries a cost the
+current build no longer pays; only the query path itself (not the solve) is
+comparable. The table and the ratios above must be re-measured with
+`query_latency_probe.py` before they are quoted again. What #250 changes is
+settled: `full` no longer dominates `recompute-deep` on solve time (0.287 s vs
+0.883 s on the Hold'em scale case), so the "dominates on every measured axis"
+reading no longer holds — the tiers trade memory for CPU, as designed.
 
 Method caveat: the figure is measured from the `query <cards>` request to the
 `query_done` marker over a pipe, so it includes the cost of streaming the
@@ -381,39 +420,40 @@ constant cost does not affect the comparison.
 ### Scale counters
 
 **Hold'em, 20 000 iterations, 128 MiB cap** (56 222 infosets, f32, seed
-20260906):
+20260906) — regenerated with the bound in place:
 
 | Tier | Solve (s) | vs `full` | Peak (MiB) | Storage (MiB) | vs `full` | Recompute calls | Bytes saved | Fingerprint |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `full` | 82.65 | 1.000× | 23.07 | 6.29 | 1.000× | 0 | 0 | `15db4458…` |
-| `compact` | 48.28 | 0.584× | 21.42 | 4.65 | 0.738× | 138 798 | 1.43 MB | `15db4458…` |
-| `recompute-deep` | 20.17 | **0.244×** | 20.73 | 3.95 | **0.627×** | 294 083 | 3.70 MB | `15db4458…` |
+| `full` | 0.287 | 1.000× | 22.00 | 6.00 | 1.000× | 0 | 0 | `15db4458…` |
+| `compact` | 2.309 | 8.057× | 20.43 | 4.43 | 0.738× | 138 798 | 1.36 MB | `15db4458…` |
+| `recompute-deep` | 0.883 | **3.081×** | 19.77 | 3.77 | **0.627×** | 294 083 | 3.52 MB | `15db4458…` |
 
 **PLO4, 5 000 iterations, 128 MiB cap** (125 004 infosets, f32, seed
-20260906):
+20260906) — regenerated with the bound in place:
 
 | Tier | Solve (s) | vs `full` | Peak (MiB) | Storage (MiB) | vs `full` | Recompute calls | Bytes saved | Fingerprint |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `full` | 217.63 | 1.000× | 33.76 | 16.98 | 1.000× | 0 | 0 | `3c19e016…` |
-| `compact` | 81.49 | 0.374× | 29.56 | 12.79 | 0.753× | 35 862 | 2.20 MB | `3c19e016…` |
-| `recompute-deep` | 26.20 | **0.120×** | 27.80 | 11.02 | **0.649×** | 52 712 | 3.20 MB | `3c19e016…` |
+| `full` | 0.224 | 1.000× | 32.19 | 16.19 | 1.000× | 0 | 0 | `3c19e016…` |
+| `compact` | 0.970 | 4.328× | 28.19 | 12.19 | 0.753× | 35 862 | 2.10 MB | `3c19e016…` |
+| `recompute-deep` | 0.449 | **2.002×** | 26.51 | 10.51 | **0.649×** | 52 712 | 3.05 MB | `3c19e016…` |
 
-All three tiers produce byte-identical exhaustive-report strategy fingerprints
-at the same iteration count, so the tiers are a pure memory/CPU trade and never
-an approximation. The inversion is *stronger* at scale than at the 2 000-iteration
-baseline (PLO4: 0.120× here vs 0.139× there), consistent with the cumulative
-commit sweep: the longer `full` runs, the more it pays.
+All three tiers still produce byte-identical exhaustive-report strategy
+fingerprints at the same iteration count, so the tiers remain a pure memory/CPU
+trade and never an approximation. With the sweep bounded, the solve-time order
+is the intended one: `full` first, the compressed tiers behind it by their
+decode cost. The earlier ratios (0.584×/0.244× and 0.374×/0.120×) were the
+sweep, not the tier design.
 
 ### What remains open
 
 The 100k/500k/1M/2M slots of the issue stay out of reach of a session-scale
-benchmark: a full preflop solve at 500k+ exceeds ~2 h per run, and the
-cumulative commit sweep makes `full` the worst offender. The PLO4 scale slot is
-therefore capped at 5 000 iterations (2.5× the committed baseline); the
+benchmark: a full preflop solve at 500k+ exceeds ~2 h per run. The PLO4 scale
+slot is therefore capped at 5 000 iterations (2.5× the committed baseline); the
 Hold'em slot runs the full 20 000. Reaching the large counters needs a
-dedicated CI budget or a dedicated bench machine, and is best done *after* the
-commit sweep is bounded, since otherwise the measurement is dominated by an
-artefact of the `full` tier rather than by solver throughput.
+dedicated CI budget or a dedicated bench machine. #250 removed the obstacle
+that made this pointless before — the sweep dominated the `full` tier's
+wall clock — so a run at these counters now measures solver throughput rather
+than an artefact of the commit sweep.
 
 Two defects found while measuring this were tracked separately rather than
 folded into the measurement:
@@ -421,7 +461,8 @@ folded into the measurement:
 - **#249 (fixed)** — the zeroed `memory` line and the wrong tier attribution on
   a budget stop. See "Fixed RAM budget" above. The figures in this guide were
   regenerated with the fix in place.
-- **#250 (open)** — bounding the cumulative commit sweep in
-  `pe_low_precision_commit_all`. The `full`-tier wall-clock figures here
-  describe the tier *as it behaves today*; they will need regenerating once
-  the sweep is bounded, since that is where the time goes.
+- **#250 (fixed)** — the cumulative commit sweep in
+  `pe_low_precision_commit_all`. See "The cumulative commit sweep, and its
+  bound" above: the tier wall-clock figures and the scale counters in this
+  guide were regenerated with the fix in place, and the query-latency table is
+  marked stale because it has not been.
