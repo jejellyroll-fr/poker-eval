@@ -119,8 +119,13 @@ promotes "target reached" into a guarantee.
 - `pe_preflop_solve` accepts `--target-nash-conv-mbb N` and
   `--target-max-br-gap-mbb N`; its final `guarantee=...` line appends
   `nash_conv_raw`, `nash_conv_mbb`, `max_br_gap_mbb`, `mean_br_gap_mbb`,
-  `unit`, `measurement_iteration` and `sample_count`; the JSON report carries
-  the same fields under `metrics`.
+  `unit`, `measurement_iteration`, `sample_count` and `metrics_available`;
+  the JSON report carries the same fields under `metrics`.
 - The Studio final summary shows the guarantee, the measurement mode, the
   aggregate and the worst player's gap, so a small sum cannot hide one badly
-  exploitable player.
+  exploitable player. When the solver reports `metrics_available=0` — a run
+  that ended before the first best-response measurement, typically on the
+  memory budget — there is no measurement to show, so the summary says so
+  rather than printing the block's zeros as a result. The live view reads the
+  same statement off the heartbeat (`br_mode=unmeasured`) and holds the value
+  back the same way until the first measurement lands.

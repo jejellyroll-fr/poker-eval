@@ -82,6 +82,32 @@ static int values_one_step(const void *state, const pe_reach_vec_t *reach,
     return 0;
 }
 
+/* Issue #249: the heartbeat publishes 0.0 while nothing has been measured.
+ * What keeps that placeholder from reading as a converged zero is the
+ * statement it carries with it, so pin the statement: every heartbeat taken
+ * before a measurement must say `br_mode=unmeasured`, and none may omit it. */
+typedef struct {
+    int heartbeats;
+    int stated_unmeasured;
+    int missing_statement;
+} heartbeat_capture_t;
+
+static void heartbeat_cb(const pe_telemetry_event_t *event, void *user)
+{
+    heartbeat_capture_t *capture = (heartbeat_capture_t *)user;
+    const char *line;
+    if (capture == NULL || event == NULL || event->message == NULL)
+        return;
+    line = event->message;
+    if (strstr(line, "progress iteration=") == NULL)
+        return;
+    capture->heartbeats++;
+    if (strstr(line, " br_mode=unmeasured") != NULL)
+        capture->stated_unmeasured++;
+    else if (strstr(line, " br_mode=") == NULL)
+        capture->missing_statement++;
+}
+
 #define CHECK(condition, ...)                                      \
     do                                                             \
     {                                                              \
@@ -187,20 +213,39 @@ int main(void)
         vector_config.problem.expected_actions = 1u;
         vector_config.problem.expected_combos = 1u;
         deps.vector_game = &game;
-
-        solver = pe_solver_create(&vector_config, &deps);
-        CHECK(solver != NULL, "vector solver creation failed");
-        if (solver != NULL)
         {
-            CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
-                  "vector solver run failed");
-            CHECK(pe_solver_progress(solver, &vector_progress) == PE_SOLVER_OK &&
-                      vector_progress.iteration == 3u &&
-                      vector_progress.total_iterations == 3u &&
-                      vector_progress.fraction == 1.0 &&
-                      vector_progress.complete,
-                  "vector solver progress snapshot is inconsistent");
-            pe_solver_destroy(solver);
+            heartbeat_capture_t capture = {0};
+            pe_telemetry_callback_ctx_t context;
+            pe_telemetry_ops_t ops;
+            if (pe_telemetry_callback_init(&context, heartbeat_cb, &capture,
+                                           PE_LOG_INFO) == 0)
+            {
+                ops = pe_telemetry_callback_ops(&context);
+                deps.telemetry = &ops;
+            }
+            solver = pe_solver_create(&vector_config, &deps);
+            CHECK(solver != NULL, "vector solver creation failed");
+            if (solver != NULL)
+            {
+                CHECK(pe_solver_run(solver) == PE_SOLVER_OK,
+                      "vector solver run failed");
+                CHECK(pe_solver_progress(solver, &vector_progress) == PE_SOLVER_OK &&
+                          vector_progress.iteration == 3u &&
+                          vector_progress.total_iterations == 3u &&
+                          vector_progress.fraction == 1.0 &&
+                          vector_progress.complete,
+                      "vector solver progress snapshot is inconsistent");
+                pe_solver_destroy(solver);
+            }
+            CHECK(capture.heartbeats > 0,
+                  "the vector lane emitted no heartbeat to check");
+            CHECK(capture.missing_statement == 0,
+                  "%d heartbeat(s) published a value without saying whether it "
+                  "was measured", capture.missing_statement);
+            CHECK(capture.stated_unmeasured == capture.heartbeats,
+                  "a heartbeat taken before any measurement must say "
+                  "br_mode=unmeasured (%d of %d did)",
+                  capture.stated_unmeasured, capture.heartbeats);
         }
     }
 

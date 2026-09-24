@@ -393,6 +393,17 @@ struct _app_t
     char final_br_mode[32];
     double final_nash_conv_mbb;
     double final_max_br_gap_mbb;
+    /* Issue #249: the solver states outright whether the convergence block was
+       measured at all.  -1 = the binary predates the marker and says nothing,
+       0 = the solver declared the block unmeasured (a budget stop lands before
+       the first best-response pass), 1 = a real measurement.  A stopped run's
+       zeros are absence, so they are never shown as a measurement. */
+    int final_metrics_available;
+    /* Issue #249: what the last progress heartbeat said about a measurement:
+       -1 = no statement, 0 = the solver stated it measured nothing,
+       1 = measured.  The heartbeat's 0.0 is absence in the first two cases of
+       nothing-measured, and only a real figure in the last. */
+    int telemetry_metrics_measured;
 
     size_t strategy_source_length;
     uint64_t strategy_source_hash;
@@ -4415,9 +4426,25 @@ static void update_strategy_view(App *app, const char *output)
     render_strategy_view(app, output);
 }
 
+/* Issue #249: the solver's heartbeat publishes 0.0 while nothing has been
+ * measured, and states which it is.  `measured` is the tri-state
+ * last_progress_line() reports: 0 = the solver said it measured nothing,
+ * 1 = it measured, -1 = no statement (an older binary).  Printing that 0.0 as
+ * a figure is what turns absence into a measured zero, so every place that
+ * shows the live value goes through here. */
+static const char *exploitability_text(int measured, double value,
+                                       char *buffer, size_t capacity)
+{
+    if (measured == 0)
+        return "not measured yet";
+    snprintf(buffer, capacity, "%.2f mBB", value);
+    return buffer;
+}
+
 static int last_progress_line(const char *output, uint64_t *iteration,
                               uint64_t *total, double *fraction,
-                              double *exploitability, double *target)
+                              double *exploitability, double *target,
+                              int *metrics_measured)
 {
     const char *cursor;
     const char *found = NULL;
@@ -4434,6 +4461,19 @@ static int last_progress_line(const char *output, uint64_t *iteration,
                          " fraction=%lf exploitability_mbb=%lf target_mbb=%lf",
                          iteration, total, fraction, exploitability, target) != 5)
         return 0;
+    /* Issue #249: the heartbeat publishes 0.0 as absence while no measure has
+       been taken, and says which it is with `br_mode=unmeasured`. Optional:
+       a heartbeat without the field -- an older binary, or the vector lane's
+       -- leaves the caller with no statement rather than a guessed one. */
+    if (metrics_measured)
+    {
+        const char *mode_field = strstr(found, " br_mode=");
+        char mode[32];
+        *metrics_measured = -1;
+        mode[0] = '\0';
+        if (mode_field && sscanf(mode_field, " br_mode=%31s", mode) == 1)
+            *metrics_measured = strcmp(mode, "unmeasured") == 0 ? 0 : 1;
+    }
     return 1;
 }
 
@@ -4441,13 +4481,15 @@ static int last_result_line(const char *output, char *guarantee,
                             size_t guarantee_capacity, double *raw,
                             double *mbb, uint64_t *samples,
                             char *br_mode, size_t br_mode_capacity,
-                            double *nash_conv_mbb, double *max_br_gap_mbb)
+                            double *nash_conv_mbb, double *max_br_gap_mbb,
+                            int *metrics_available)
 {
     const char *cursor;
     const char *found = NULL;
     const char *mode_field;
     const char *nc_field;
     const char *gap_field;
+    const char *avail_field;
     if (!output || !guarantee || guarantee_capacity == 0u)
         return 0;
     cursor = output;
@@ -4485,6 +4527,18 @@ static int last_result_line(const char *output, char *guarantee,
         *max_br_gap_mbb = 0.0;
         if (gap_field)
             (void)sscanf(gap_field, " max_br_gap_mbb=%lf", max_br_gap_mbb);
+    }
+    /* Issue #249: the solver's own statement about whether the convergence
+       block was measured.  Optional like the aggregates above -- a binary
+       older than the marker leaves it unset, which is not a statement. */
+    if (metrics_available)
+    {
+        int value = -1;
+        *metrics_available = -1;
+        avail_field = found ? strstr(found, " metrics_available=") : NULL;
+        if (avail_field &&
+            sscanf(avail_field, " metrics_available=%d", &value) == 1)
+            *metrics_available = value ? 1 : 0;
     }
     return 1;
 }
@@ -4545,6 +4599,14 @@ static void update_result_view(App *app, const char *output, int running)
     char final_br_mode[32];
     double final_nash_conv_mbb;
     double final_max_br_gap_mbb;
+    int final_metrics_available;
+    int metrics_available = -1;
+    /* Issue #249: the reader thread writes these under solve_mutex, so they
+       are snapshotted with the other telemetry instead of read bare. */
+    char stop_reason[sizeof(app->solve_stop_reason)];
+    int telemetry_measured;
+    int progress_measured = -1;
+    char exploit_text[48];
     int have_progress;
     int have_final;
     int reporting = 0;
@@ -4559,6 +4621,7 @@ static void update_result_view(App *app, const char *output, int running)
     telemetry_fraction = app->telemetry_fraction;
     telemetry_exploitability = app->telemetry_exploitability;
     telemetry_target = app->telemetry_target;
+    telemetry_measured = app->telemetry_metrics_measured;
     final_metrics_valid = app->final_metrics_valid;
     snprintf(final_guarantee, sizeof(final_guarantee), "%s", app->final_guarantee);
     final_raw = app->final_raw;
@@ -4567,10 +4630,13 @@ static void update_result_view(App *app, const char *output, int running)
     snprintf(final_br_mode, sizeof(final_br_mode), "%s", app->final_br_mode);
     final_nash_conv_mbb = app->final_nash_conv_mbb;
     final_max_br_gap_mbb = app->final_max_br_gap_mbb;
+    final_metrics_available = app->final_metrics_available;
+    snprintf(stop_reason, sizeof(stop_reason), "%s", app->solve_stop_reason);
     bmutex_unlock(app->solve_mutex);
 
     have_progress = last_progress_line(output, &iteration, &total, &fraction,
-                                       &exploitability, &target);
+                                       &exploitability, &target,
+                                       &progress_measured);
     if (!have_progress && telemetry_valid)
     {
         iteration = telemetry_iteration;
@@ -4578,6 +4644,7 @@ static void update_result_view(App *app, const char *output, int running)
         fraction = telemetry_fraction;
         exploitability = telemetry_exploitability;
         target = telemetry_target;
+        progress_measured = telemetry_measured;
         have_progress = 1;
     }
     reporting = running && have_progress && total > 0u && iteration >= total;
@@ -4616,8 +4683,13 @@ static void update_result_view(App *app, const char *output, int running)
         else
             snprintf(text, sizeof(text), "%.1f%%", fraction * 100.0);
         label_text(app->run_fraction, text);
-        snprintf(text, sizeof(text), "%.2f mBB%s", exploitability,
-                 board_abstraction_caveat(app)[0] ? "  (abstract)" : "");
+        /* The abstraction caveat qualifies a figure; with none to show, the
+           text stands alone. */
+        snprintf(text, sizeof(text), "%s%s",
+                 exploitability_text(progress_measured, exploitability,
+                                     exploit_text, sizeof(exploit_text)),
+                 progress_measured == 0 || !board_abstraction_caveat(app)[0]
+                     ? "" : "  (abstract)");
         label_text(app->run_metrics, text);
         snprintf(text, sizeof(text), reporting ? "REPORTING  %02d:%02d"
                  : running ? "RUNNING  %02d:%02d" : "LAST CHECK",
@@ -4644,10 +4716,9 @@ static void update_result_view(App *app, const char *output, int running)
             label_text(app->lbl_iterations_val, text);
         }
         if (app->lbl_exploit_val)
-        {
-            snprintf(text, sizeof(text), "%.2f mBB", exploitability);
-            label_text(app->lbl_exploit_val, text);
-        }
+            label_text(app->lbl_exploit_val,
+                       exploitability_text(progress_measured, exploitability,
+                                           exploit_text, sizeof(exploit_text)));
         if (app->lbl_nodes_val)
         {
             char nodes_text[64];
@@ -4679,7 +4750,20 @@ static void update_result_view(App *app, const char *output, int running)
         if (app->setup_run_metrics)
         {
             const char *caveat = board_abstraction_caveat(app);
-            if (target > 0.0)
+            if (progress_measured == 0)
+            {
+                /* There is no value for the abstraction caveat to qualify. */
+                if (target > 0.0)
+                    snprintf(text, sizeof(text),
+                             "Empirical exploitability: not measured yet"
+                             "  |  stop target: %.2f mBB",
+                             target);
+                else
+                    snprintf(text, sizeof(text),
+                             "Empirical exploitability: not measured yet"
+                             "  |  stop target: disabled (max iterations)");
+            }
+            else if (target > 0.0)
                 snprintf(text, sizeof(text),
                          "Empirical exploitability: %.2f mBB  |  stop target: %.2f mBB%s%s",
                          exploitability, target,
@@ -4760,7 +4844,8 @@ static void update_result_view(App *app, const char *output, int running)
 
     have_final = last_result_line(output, guarantee, sizeof(guarantee), &raw, &mbb,
                                   &samples, br_mode, sizeof(br_mode),
-                                  &nash_conv_mbb, &max_br_gap_mbb);
+                                  &nash_conv_mbb, &max_br_gap_mbb,
+                                  &metrics_available);
     if (!have_final && final_metrics_valid)
     {
         snprintf(guarantee, sizeof(guarantee), "%s", final_guarantee);
@@ -4772,9 +4857,27 @@ static void update_result_view(App *app, const char *output, int running)
         snprintf(br_mode, sizeof(br_mode), "%s", final_br_mode);
         nash_conv_mbb = final_nash_conv_mbb;
         max_br_gap_mbb = final_max_br_gap_mbb;
+        metrics_available = final_metrics_available;
         have_final = 1;
     }
-    if (have_final)
+    if (have_final && metrics_available == 0)
+    {
+        /* Issue #249: the solver declared the convergence block unmeasured --
+           a stop on the memory budget lands before the first best-response
+           pass.  The zeros on that line are absence, not a converged zero, so
+           they are not painted as a final result. */
+        snprintf(text, sizeof(text),
+                 "Final: not measured  |  stop_reason=%s ended the run before "
+                 "the first best-response measurement "
+                 "(solver reports metrics_available=0)",
+                 stop_reason[0] ? stop_reason : "unknown");
+        label_text(app->run_metrics, "not measured");
+        if (app->lbl_exploit_val)
+            label_text(app->lbl_exploit_val, "—");
+        if (app->setup_run_metrics)
+            label_text(app->setup_run_metrics, text);
+    }
+    else if (have_final)
     {
         {
             const char *caveat = board_abstraction_caveat(app);
@@ -5265,12 +5368,20 @@ static void i_solve_copy_output(App *app, char *out, size_t capacity)
         used = 0u;
         if (app->telemetry_valid)
         {
+            /* Issue #249: the heartbeat's `br_mode=unmeasured` is carried
+               over, so the rebuilt window still says the published value is
+               absence and not a measurement.  `br_mode=sampled` (a real
+               figure) needs no rebuild: no statement means the value stands
+               on its own, which is how a binary older than the marker is
+               read too. */
             width = snprintf(line, sizeof(line),
                              "progress iteration=%" PRIu64 " total=%" PRIu64
-                             " fraction=%f exploitability_mbb=%f target_mbb=%f\n",
+                             " fraction=%f exploitability_mbb=%f target_mbb=%f%s\n",
                              app->telemetry_iteration, app->telemetry_total,
                              app->telemetry_fraction, app->telemetry_exploitability,
-                             app->telemetry_target);
+                             app->telemetry_target,
+                             app->telemetry_metrics_measured == 0
+                                 ? " br_mode=unmeasured" : "");
             if (width > 0)
                 i_copy_append(out, capacity, &used, line, (size_t)width);
         }
@@ -5278,20 +5389,45 @@ static void i_solve_copy_output(App *app, char *out, size_t capacity)
         {
             /* Issue #234: re-emit the appended solver fields so
                last_result_line() sees the mode and the aggregates even
-               when the raw output was replaced by the report window. */
-            char extended[128];
+               when the raw output was replaced by the report window.
+               Issue #249: metrics_available travels with them, so the
+               rebuilt line still distinguishes absence from a measurement. */
+            char extended[192];
+            size_t extended_length;
             extended[0] = '\0';
             if (app->final_br_mode[0])
                 snprintf(extended, sizeof(extended),
                          " br_mode=%s nash_conv_mbb=%f max_br_gap_mbb=%f",
                          app->final_br_mode, app->final_nash_conv_mbb,
                          app->final_max_br_gap_mbb);
+            extended_length = strlen(extended);
+            if (app->final_metrics_available >= 0 &&
+                extended_length + 32u < sizeof(extended))
+                snprintf(extended + extended_length,
+                         sizeof(extended) - extended_length,
+                         " metrics_available=%d", app->final_metrics_available);
             width = snprintf(line, sizeof(line),
                              "guarantee=%s exploitability_raw=%f"
                              " exploitability_mbb=%f br_samples=%" PRIu64
                              "%s\n",
                              app->final_guarantee, app->final_raw,
                              app->final_mbb, app->final_samples, extended);
+            if (width < 0 || (size_t)width >= sizeof(line))
+            {
+                /* `%f` prints every integer digit, so a wild value can cut
+                   whatever follows it -- including the availability
+                   statement the display gates on.  Fall back to a short line
+                   and let the cached metrics carry the numbers: a line with
+                   nothing to parse sends the reader to that same cache. */
+                if (app->final_metrics_available >= 0)
+                    width = snprintf(line, sizeof(line),
+                                     "guarantee=%s metrics_available=%d\n",
+                                     app->final_guarantee,
+                                     app->final_metrics_available);
+                else
+                    width = snprintf(line, sizeof(line), "guarantee=%s\n",
+                                     app->final_guarantee);
+            }
             if (width > 0)
                 i_copy_append(out, capacity, &used, line, (size_t)width);
         }
@@ -6684,6 +6820,18 @@ static void i_solve_scan_line(App *app, const char *line)
         app->telemetry_exploitability = exploitability;
         app->telemetry_target = target;
         snprintf(app->telemetry_line, sizeof(app->telemetry_line), "%s", line);
+        /* Issue #249: keep the heartbeat's own statement about whether this
+           value is a measurement, so the synthetic progress line rebuilt from
+           the cache keeps saying it. */
+        {
+            const char *mode_field = strstr(line, " br_mode=");
+            char mode[32];
+            app->telemetry_metrics_measured = -1;
+            mode[0] = '\0';
+            if (mode_field && sscanf(mode_field, " br_mode=%31s", mode) == 1)
+                app->telemetry_metrics_measured =
+                    strcmp(mode, "unmeasured") == 0 ? 0 : 1;
+        }
     }
     if (strncmp(line, "STRATEGY REPORT", 15u) == 0)
         app->strategy_capture_started = 1;
@@ -6698,6 +6846,11 @@ static void i_solve_scan_line(App *app, const char *line)
         const char *mode_field = strstr(line, " br_mode=");
         const char *nc_field = strstr(line, " nash_conv_mbb=");
         const char *gap_field = strstr(line, " max_br_gap_mbb=");
+        /* Issue #249: the solver's statement about whether the convergence
+           block was measured.  Absent on a binary older than the marker,
+           which is "no statement" rather than "not measured". */
+        const char *avail_field = strstr(line, " metrics_available=");
+        int available = -1;
         app->final_metrics_valid = 1;
         snprintf(app->final_guarantee, sizeof(app->final_guarantee), "%s", guarantee);
         app->final_raw = raw;
@@ -6715,6 +6868,10 @@ static void i_solve_scan_line(App *app, const char *line)
         if (gap_field)
             (void)sscanf(gap_field, " max_br_gap_mbb=%lf",
                          &app->final_max_br_gap_mbb);
+        app->final_metrics_available = -1;
+        if (avail_field &&
+            sscanf(avail_field, " metrics_available=%d", &available) == 1)
+            app->final_metrics_available = available ? 1 : 0;
     }
 
     /* The solver prints "solver_phase=complete stop_reason=<target|
@@ -7040,6 +7197,12 @@ static void i_solve_update(App *app)
     double exploitability = 0.0;
     double target = 0.0;
     int report_phase = 0;
+    /* Issue #249: the status text quotes the live value, so it quotes the same
+       statement about it as the Setup panel: a heartbeat that says it has not
+       measured anything has no figure to show. */
+    int live_measured = -1;
+    char live_text[64];
+    const char *live_value;
     if (!app)
         return;
     int serving;
@@ -7160,23 +7323,25 @@ static void i_solve_update(App *app)
                (double)strat_len / 1024.0);
     }
     else if (running && last_progress_line(output, &iteration, &total, &fraction,
-                                      &exploitability, &target))
+                                      &exploitability, &target, &live_measured))
     {
         report_phase = total > 0u && total < STUDIO_NO_ITER_CAP && iteration >= total;
+        live_value = exploitability_text(live_measured, exploitability,
+                                         live_text, sizeof(live_text));
         if (total >= STUDIO_NO_ITER_CAP)
             status(app,
-                   "%s\niteration=%" PRIu64 " (no cap)\nexploitability=%.2f mBB / target=%.2f mBB\n\n"
+                   "%s\niteration=%" PRIu64 " (no cap)\nexploitability=%s / target=%.2f mBB\n\n"
                    "%s",
                    report_phase ? "REPORTING" : "SOLVING",
-                   iteration, exploitability, target,
+                   iteration, live_value, target,
                    "Live result table is updating. Click Stop solve to interrupt.");
         else
             status(app,
                    "%s\niteration=%" PRIu64 "/%" PRIu64
-                   " (%.1f%%)\nexploitability=%.2f mBB\n\n"
+                   " (%.1f%%)\nexploitability=%s\n\n"
                    "%s",
                    report_phase ? "REPORTING" : "SOLVING",
-                   iteration, total, fraction * 100.0, exploitability,
+                   iteration, total, fraction * 100.0, live_value,
                    report_phase ? "Solver stopped; materialising the result table."
                                 : "Live result table is updating. Click Stop solve to interrupt.");
     }
@@ -7225,9 +7390,9 @@ static void i_solve_end(App *app, const uint32_t exit_code)
         fv = app->final_metrics_valid;
         bmutex_unlock(app->solve_mutex);
         out_len = strlen(output);
-        hp = last_progress_line(output, &di, &dt, &df, &de, &dg);
+        hp = last_progress_line(output, &di, &dt, &df, &de, &dg, NULL);
         hf = last_result_line(output, gg, sizeof(gg), &raw, &mbb, &ds,
-                              NULL, 0u, NULL, NULL);
+                              NULL, 0u, NULL, NULL, NULL);
         dump = fopen("/tmp/studio_last_output.txt", "w");
         if (dump)
         {
@@ -7365,6 +7530,9 @@ static int i_start_solve(App *app, const char *command)
     app->final_raw = 0.0;
     app->final_mbb = 0.0;
     app->final_samples = 0u;
+    /* Issue #249: no statement about the new run's convergence block yet. */
+    app->final_metrics_available = -1;
+    app->telemetry_metrics_measured = -1;
     app->solve_stop_reason[0] = '\0';
     app->player_evs_valid = 0;
     for (uint32_t player = 0u; player < MAX_PLAYERS_DISPLAY; ++player)
@@ -10088,6 +10256,12 @@ static App *i_create(void)
     app->header_font = font_system(12.0f, ekFBOLD);
     app->regular_font = font_system(11.0f, 0);
     app->bold_font = font_system(11.0f, ekFBOLD);
+
+    /* Issue #249: the solver has not stated anything about a convergence
+       measurement yet.  -1 is "no statement", which is not the same as the
+       solver saying it measured nothing. */
+    app->final_metrics_available = -1;
+    app->telemetry_metrics_measured = -1;
 
     setup = i_setup_panel(app);
     result = i_result_panel(app);

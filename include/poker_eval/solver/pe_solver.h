@@ -468,6 +468,17 @@ pe_solver_status_t pe_solver_strategy_key_at(const pe_solver_t *solver,
  * Metrics of the solve, including the plan that actually executed: effective
  * backend per stage, resolved precision, and the exploitability guarantee that
  * applies (never "Nash" for a multiway or non-zero-sum game).
+ *
+ * Issue #249: `out` is filled in full on every return, including
+ * PE_SOLVER_ERR_INVALID_STATE. The storage accounting (storage_memory,
+ * adapter_bytes, storage_memory_policy and the drop counters) is read from the
+ * live storage and the resolved config, so it never depends on a completed
+ * measurement; the convergence block (exploitability, nash_conv, br_mode and
+ * the sampling metadata) does. PE_SOLVER_ERR_INVALID_STATE therefore means
+ * exactly "the convergence block was never measured -- its zeros are absence,
+ * not a measurement", and every other field is still valid. A run that stops
+ * before its first best-response measurement (memory budget, caller stop)
+ * lands in that case.
  */
 pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
                               pe_metrics_t *out);

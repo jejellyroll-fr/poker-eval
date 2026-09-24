@@ -81,15 +81,46 @@ results, and the separation makes that auditable.
   storage. A storage adapter that cannot attribute its memory leaves the
   breakdown zeroed rather than guessing; only the breakdown stops there,
   while `bytes()` still anchors the storage footprint for `adapter_bytes`.
+
+  The accounting is filled on **every** return, including
+  `PE_SOLVER_ERR_INVALID_STATE`. That status means one thing only: the
+  convergence block was never measured, so its zeros are absence. Every other
+  field is still valid. Issue #249.
+- **Heartbeat** — `progress iteration=…` carries `br_mode=unmeasured` until a
+  best-response measurement exists, on both the sampled and the vector lane.
+  The published `exploitability_mbb` is 0.0 in that window and real afterwards,
+  so the field is what lets a frontend tell a placeholder from a converged
+  zero. The `guarantee=` line keeps naming the enum's value (`sampled`), which
+  stays a legitimate value of `pe_br_mode_t`; `metrics_available` is the field
+  that says whether any measurement backs the line at all.
 - **CLI** — `pe-preflop-solve` prints a `memory infosets=… storage_bytes=…
   adapter_bytes=… bytes_per_infoset=… bytes_per_strategy_slot=…` diagnostic
   line after the `guarantee=` line, and the JSON report (`--output`) carries
   a top-level `memory` object with the full breakdown. Both are appended
-  fields: the Studio's fixed-prefix parse of earlier lines is untouched.
+  fields: the Studio's fixed-prefix parse of earlier lines is untouched. The
+  `guarantee=` line ends with `metrics_available=1|0`, and the JSON `metrics`
+  object carries the same value as a boolean, so an unmeasured convergence
+  block never reads as a measured zero.
+- **Studio** — `tools/poker_eval_studio.c` parses the marker, keeps it on the
+  synthetic `guarantee=` line it rebuilds from the captured telemetry, and
+  shows `not measured` with the `stop_reason` that ended the run instead of
+  painting the block's zeros as a final result. The live view is gated the same
+  way: the heartbeat publishes `exploitability_mbb=0.000000` as absence and
+  states it with `br_mode=unmeasured`, so the Studio shows `not measured yet`
+  there until a measurement exists rather than `0.00 mBB`. A binary older than
+  the marker states nothing, and the Studio then keeps its previous behaviour
+  rather than guessing: "not stated" and "stated as unmeasured" are not the
+  same thing.
 - **Benchmarks** — `benchmarks/solver/run_benchmarks.py` captures the exact
   solver accounting as `memory.solver_accounting` in the benchmark payload,
   making `bytes_per_infoset` a first-class benchmark metric next to
-  peak/final RAM.
+  peak/final RAM. It also captures `metrics.metrics_available`, and the
+  validator accepts an `unspecified` guarantee only when the solver says the
+  block was not measured — a run that loses its metrics without declaring an
+  early stop is a failure, where the guarantee name alone used to be the
+  signal. The native report's boolean is cross-checked against the stdout
+  marker (`validate_native_report()`), so one run cannot archive two
+  contradictory answers about whether its convergence block was measured.
 
 ## Public ABI note
 
@@ -260,13 +291,32 @@ the artifact must be read:
   intact` — and the `solve_loop_end` / `stop_detail` lines carry the iteration
   reached and the storage/adapter split. Those are the figures the artifact
   uses.
-- On a `memory_budget` stop the solver emits a **zeroed** `memory infosets=0
-  storage_bytes=0 …` diagnostic line, because the accounting is only filled at
-  completion. The budget cases therefore carry an all-zero
-  `memory_accounting` block in the artifact even though `storage_bytes` and
-  `peak_measured_bytes` (from the loop-end line) are real. Read the budget
-  family for iterations and infosets reached, not for the byte split; the
-  zeroed line is a reporting artefact of the early stop, not a measurement.
+- The convergence block is genuinely absent, and the solver now says so. A
+  budget stop lands before the first best-response measurement, so
+  `pe_solver_metrics()` returns `PE_SOLVER_ERR_INVALID_STATE` and the emitted
+  telemetry carries `metrics_available=0` (the JSON report carries the same
+  field as a boolean). `exploitability_mbb=0.000000` on such a run is absence,
+  not a converged solve that reached zero; the marker is what makes the two
+  distinguishable, and the artifact records it per case.
+
+That marker is issue #249. Before it, the entire `memory` line was zeroed on a
+budget stop — **including `memory_policy`**, so `compact` and
+`recompute-deep` runs were both attributed to `full`: a wrong value that
+looked like a plausible one, rather than an obviously absent one. The storage
+accounting (`storage_memory`, `adapter_bytes`, the tier and the drop counters)
+is read from the live storage at query time and never needed a measurement, so
+it is now filled on that path too. The budget family's `memory_accounting`
+block carries the real per-tier figures:
+
+| Tier | `memory_policy` | `storage_bytes` | `bytes_per_infoset` | `recompute_calls` | `bytes_saved_vs_full` |
+| --- | --- | --- | --- | --- | --- |
+| `full` | `full` | 1 360 648 | 152.0 | 0 | 0 |
+| `compact` | `compact` | 1 644 464 | 102.8 | 9 306 | 158 360 |
+| `recompute-deep` | `recompute-deep` | 2 369 064 | 107.9 | 39 043 | 654 720 |
+
+The drop accounting in the last two columns was invisible on this path before
+the fix — which is precisely the trade the fixed-budget criterion exists to
+measure.
 
 ### Query latency per street
 
@@ -364,3 +414,14 @@ Hold'em slot runs the full 20 000. Reaching the large counters needs a
 dedicated CI budget or a dedicated bench machine, and is best done *after* the
 commit sweep is bounded, since otherwise the measurement is dominated by an
 artefact of the `full` tier rather than by solver throughput.
+
+Two defects found while measuring this were tracked separately rather than
+folded into the measurement:
+
+- **#249 (fixed)** — the zeroed `memory` line and the wrong tier attribution on
+  a budget stop. See "Fixed RAM budget" above. The figures in this guide were
+  regenerated with the fix in place.
+- **#250 (open)** — bounding the cumulative commit sweep in
+  `pe_low_precision_commit_all`. The `full`-tier wall-clock figures here
+  describe the tier *as it behaves today*; they will need regenerating once
+  the sweep is bounded, since that is where the time goes.

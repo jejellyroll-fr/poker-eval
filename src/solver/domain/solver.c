@@ -590,17 +590,22 @@ static void pe_solver_vector_emit_heartbeat(pe_solver_t *solver,
 {
     if (!solver)
         return;
+    /* Issue #249: this lane published 0.0 as absence without saying so, which
+       reads as a converged zero.  `br_mode` carries the same statement the
+       sampled heartbeat makes, so a frontend can tell the two apart. */
     pe_telemetry_emitf(
         solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
         "progress iteration=%" PRIu64 " total=%" PRIu64
         " fraction=%.4f exploitability_mbb=%.6f target_mbb=%.6f"
-        " memory_mb=%.1f budget_mb=%.1f\n",
+        " br_mode=%s memory_mb=%.1f budget_mb=%.1f\n",
         iteration, solver->config.max_iterations,
         solver->config.max_iterations > 0u
             ? (double)iteration / (double)solver->config.max_iterations : 0.0,
         solver->metrics_available
             ? solver->metrics.exploitability_mbb_per_game : 0.0,
         solver->config.target_exploitability_mbb,
+        solver->metrics_available
+            ? pe_br_mode_name(solver->metrics.br_mode) : "unmeasured",
         (double)solver->memory_bytes / (1024.0 * 1024.0),
         (double)solver->config.execution.max_ram_bytes / (1024.0 * 1024.0));
     pe_telemetry_flush(solver->deps.telemetry);
@@ -2088,8 +2093,6 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
 {
     if (solver == NULL || out == NULL)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
-    if (!solver->metrics_available)
-        return PE_SOLVER_ERR_INVALID_STATE;
     *out = solver->metrics;
 
     /* Issue #235 (phase 1): measured at query time so the breakdown always
@@ -2126,6 +2129,17 @@ pe_solver_status_t pe_solver_metrics(const pe_solver_t *solver,
     out->recompute_calls = out->storage_memory.remat_calls;
     out->recompute_time_ms = out->storage_memory.remat_time_ms;
     out->bytes_saved_vs_full = out->storage_memory.evicted_bytes;
+
+    /* Issue #249: everything above is read from the live storage and the
+     * resolved config, so it is complete the moment a solver exists; only the
+     * convergence block needs a finished best-response measurement. Reporting
+     * the missing measurement *after* filling the rest is what keeps a run
+     * that stopped early -- on the memory budget, or on a caller stop -- from
+     * publishing a zeroed struct that reads as a measured zero. The status
+     * keeps its meaning: PE_SOLVER_ERR_INVALID_STATE says the convergence
+     * fields were never measured, never that the whole report is unusable. */
+    if (!solver->metrics_available)
+        return PE_SOLVER_ERR_INVALID_STATE;
     return PE_SOLVER_OK;
 }
 

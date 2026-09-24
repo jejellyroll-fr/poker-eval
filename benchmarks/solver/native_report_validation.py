@@ -272,6 +272,30 @@ def validate_native_report(
             benchmark_metrics,
             "exploitability_mbb_per_game",
         )
+        # Issue #249: the solver states whether the convergence block was
+        # measured at all -- stdout as the trailing `metrics_available=0|1`
+        # marker, the native report as a boolean in the same metrics object.
+        # They come from one run, so a report that drops the field while
+        # stdout still declares it, or that disagrees with it, is contradictory
+        # evidence: the zeros of an unmeasured block would otherwise be
+        # archived as a measurement.  Both views staying silent is a binary
+        # older than the marker, which states nothing either way.
+        stdout_available = benchmark_metrics.get("metrics_available")
+        native_available = native_metrics.get("metrics_available")
+        if native_available is None and stdout_available is None:
+            pass
+        elif type(native_available) is not bool:
+            failures.append(
+                "native solver report metrics.metrics_available is not boolean"
+            )
+        elif (
+            isinstance(stdout_available, bool)
+            and native_available != stdout_available
+        ):
+            failures.append(
+                f"native solver report metrics.metrics_available="
+                f"{native_available} != stdout {stdout_available}"
+            )
         native_metric_bb = _finite_number(native_metrics.get("big_blind"))
         native_bb = _finite_number(native_report.get("big_blind"))
         if native_metric_bb is None:
