@@ -551,7 +551,12 @@ static void pe_low_precision_commit_one(pe_storage_t *s,
     /* Keep the span marked after committing it. The caller may still hold
        the decoded pointer and mutate it after a later accessor caused this
        span to be flushed; retaining the mark makes the next flush capture
-       that mutation as well. */
+       that mutation as well. Issue #250 keeps this invariant and makes it
+       load-bearing: with the sweep gone, a flush is no longer followed by
+       another full pass, so only the retained mark brings a mutation made
+       through a held pointer back into the resident array. It can be cleared
+       only where the caller guarantees no pointer is live -- the iteration
+       boundary, which is what pe_storage_drop_recomputable() acts on. */
 }
 
 static double *pe_low_precision_values(pe_storage_t *s, pe_infoset_id_t id,
@@ -571,12 +576,19 @@ static double *pe_low_precision_values(pe_storage_t *s, pe_infoset_id_t id,
                   pe_ensure_fixed_array(s, which) != 0) ||
         (s->precision == PE_PREC_F32 && pe_ensure_float_array(s, which) != 0))
         return NULL;
-    pe_low_precision_commit_all(s);
     n = pe_storage_slab_size(meta);
     /* Allocate an independent decoded span so another infoset cannot alias
        it and later growth cannot invalidate a pointer already returned. */
     if (pe_ensure_staging(s, id, which, n) != 0)
         return NULL;
+    /* Issue #250: flatten *this* span before decoding over it. The resident
+       compact array is what the decode below reads, and the span it replaces
+       is the only thing the overwrite can lose: an infoset's span is private
+       to it, and every other reader of a resident array (this accessor, the
+       tier drop, the teardown) commits that same span first. Sweeping every
+       allocated infoset here instead made FULL quadratic -- O(count) per
+       access, with `count` growing all run. */
+    pe_low_precision_commit_one(s, which, id);
     for (size_t i = 0; i < n; ++i)
     {
         if (s->precision == PE_PREC_F32)
@@ -622,7 +634,12 @@ pe_infoset_id_t pe_storage_resolve(pe_storage_t *s,
     if (!s || action_count == 0 || combo_count == 0)
         return PE_INFOSET_ID_INVALID;
 
-    pe_low_precision_commit_all(s);
+    /* Issue #250: this call reads no value array, so it commits nothing. The
+       header already tells callers that a span does not survive a resolve,
+       which is what a flush here would have been protecting; the resident
+       arrays are reconciled by the accessor, the tier drop and the teardown,
+       each of which commits the span it is about to touch. Resolves happen
+       once per infoset per iteration, so the sweep paid O(count) each time. */
 
     i = pe_probe(s, key);
     slot = s->slots[i];
