@@ -124,14 +124,10 @@ static int omaha_callback(const mask_t *holes, uint8_t player_count,
     omaha_showdown_ctx_t *ctx = (omaha_showdown_ctx_t *)user;
     HandVal strength[PE_OMAHA_RIVER_MAX_PLAYERS];
     LowHandVal low_strength[PE_OMAHA_RIVER_MAX_PLAYERS];
-    pe_pot_slice_t slices[2u * PE_OMAHA_RIVER_MAX_PLAYERS];
-    uint8_t winner_masks[2u * PE_OMAHA_RIVER_MAX_PLAYERS];
     double awards[PE_OMAHA_RIVER_MAX_PLAYERS];
     StdDeck_CardMask board = to_std_mask(ctx->board);
-    uint8_t slice_count;    /* 0 means "the ctx's own slices" */
     uint8_t player;
-    pe_pot_slice_t high_only[PE_OMAHA_RIVER_MAX_PLAYERS];
-    uint8_t high_only_winners[PE_OMAHA_RIVER_MAX_PLAYERS];
+
     if (player_count != ctx->player_count)
         return 1;
     for (player = 0u; player < player_count; ++player)
@@ -149,21 +145,27 @@ static int omaha_callback(const mask_t *holes, uint8_t player_count,
 
     if (!ctx->hilo8)
     {
-        for (slice_count = 0u; slice_count < ctx->slice_count; ++slice_count)
+        /* Zero-initialised so the distribution cannot read an entry the loop
+         * above did not write when a state has no slices at all. */
+        pe_pot_slice_t slices[PE_OMAHA_RIVER_MAX_PLAYERS] = {0};
+        uint8_t winner_masks[PE_OMAHA_RIVER_MAX_PLAYERS] = {0};
+        uint8_t slice;
+        for (slice = 0u; slice < ctx->slice_count; ++slice)
         {
-            high_only[slice_count] = ctx->slices[slice_count];
-            high_only_winners[slice_count] = omaha_best_high_mask(
-                strength, ctx->slices[slice_count].eligible_mask,
-                player_count);
+            slices[slice] = ctx->slices[slice];
+            winner_masks[slice] = omaha_best_high_mask(
+                strength, ctx->slices[slice].eligible_mask, player_count);
         }
-        if (pe_pot_distribute(high_only, slice_count, high_only_winners,
+        if (pe_pot_distribute(slices, ctx->slice_count, winner_masks,
                               player_count, awards) != 0)
             return 1;
     }
     else
     {
-        slice_count = omaha_hilo8_slices(ctx, strength, low_strength,
-                                         player_count, slices, winner_masks);
+        pe_pot_slice_t slices[2u * PE_OMAHA_RIVER_MAX_PLAYERS];
+        uint8_t winner_masks[2u * PE_OMAHA_RIVER_MAX_PLAYERS];
+        uint8_t slice_count = omaha_hilo8_slices(
+            ctx, strength, low_strength, player_count, slices, winner_masks);
         if (pe_pot_distribute(slices, slice_count, winner_masks, player_count,
                               awards) != 0)
             return 1;
