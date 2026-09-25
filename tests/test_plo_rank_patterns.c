@@ -117,8 +117,9 @@ int main(void)
     }
 
     /* Suit suffixes are four-card notation: 2-2-0-0 for ds, 1-1-1-1 for
-     * rainbow.  Those shapes have no agreed 5/6-card meaning, so they are
-     * refused rather than guessed at. */
+     * rainbow.  Those words have no agreed 5/6-card meaning, so they are
+     * refused rather than guessed at; the structure itself is written as
+     * `[suits=...]` instead, and test_plo_suit_shapes.c pins that. */
     {
         static const char *suffixed[] = { "AAxxxds", "AAxxxss", "AAxxxr" };
         for (size_t i = 0u; i < sizeof(suffixed) / sizeof(suffixed[0]); ++i)
@@ -133,6 +134,29 @@ int main(void)
                 return 1;
             }
         }
+    }
+
+    /* The shape annotation is a rank-pattern constraint, not a replacement:
+     * the expanded hands still carry every required rank. */
+    {
+        pe_range_t *range = NULL;
+        if (pe_range_parse(game_omaha5, "AAxxx[suits=2-2-1]", dead, NULL,
+                           &range) != PE_STATUS_OK ||
+            !range || range->count == 0u)
+        {
+            fprintf(stderr,
+                    "test_plo_rank_patterns: AAxxx[suits=2-2-1] failed\n");
+            return 1;
+        }
+        for (size_t h = 0u; h < range->count; ++h)
+            if (card_count(range->combos[h].hand) != 5 ||
+                rank_count(range->combos[h].hand, StdDeck_Rank_ACE) < 2)
+            {
+                fprintf(stderr,
+                        "test_plo_rank_patterns: shaped hand lost its ranks\n");
+                return 1;
+            }
+        pe_range_free(range);
     }
 
     /* A 5-card game must never accept a four-card pattern: that was the old

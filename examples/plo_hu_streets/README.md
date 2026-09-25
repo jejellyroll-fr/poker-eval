@@ -64,6 +64,10 @@ on board **Ks 9d 4c 2h Ts**.
    already in the middle is an input. Preflop leaves both empty.
 4. Leave the range fields empty (they default to `100%`) or enter a
    ProPokerTools rank pattern: `AAxxx` / `AKQxx` / `AAKKx` for PLO5,
-   `AKQJxx` / `AAKKxx` for PLO6. Use the same kind of range for both
+   `AKQJxx` / `AAKKxx` for PLO6. A pattern can carry a suit shape after it,
+   written as the sizes of the non-empty suit groups largest first:
+   `AAxxx[suits=2-2-1]` (PLO5), `AAKKxx[suits=2-2-2]` (PLO6). The four-card
+   suffixes (`ds`, `ss`, `ts`, `qs`, `r`) are refused on five- and six-card
+   hands rather than guessed at. Use the same kind of range for both
    players — mixing a pattern with `100%` is not supported.
 5. **Solve this spot**.

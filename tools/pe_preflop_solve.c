@@ -1712,17 +1712,24 @@ int main(int argc, char **argv)
                         "note: %s ranges accept\n"
                         "  - a complete hand: %s\n"
                         "  - a ProPokerTools rank pattern, 'x' for any rank: %s\n"
+                        "  - a rank pattern with a suit shape: %s\n"
                         "  - the full range: 100%%\n"
                         "A pattern is refused when it expands past %u combos "
                         "(AAxxxx alone is 1.4M); narrow it, e.g. AAKxxx "
                         "instead of AAxxxx.\n"
                         "Suit suffixes (ds/ss/ts/qs/r) are 4-card notation and "
-                        "are not accepted for %d-card hands: their suit-count "
-                        "shapes have no agreed %d-card meaning.\n",
+                        "are not accepted for %d-card hands.  Write the suit "
+                        "structure instead, as the sizes of the non-empty "
+                        "suit groups largest first: %s.\n",
                         options.game,
                         n == 5 ? "AsKsQd3c9h" : "AsKsQd3c9h8d",
                         n == 5 ? "AAxxx, AKQxx, AAKKx" : "AKQJxx, AAKKxx",
-                        (unsigned)500000, n, n);
+                        n == 5 ? "AAxxx[suits=2-2-1], AAKKx[suits=2-2-1]"
+                               : "AAKKxx[suits=2-2-2], AKQJxx[suits=2-2-1-1]",
+                        (unsigned)500000, n,
+                        n == 5 ? "AAxxx[suits=2-2-1] is two suits of two and a "
+                                 "singleton"
+                               : "AAKKxx[suits=2-2-2] is three suits of two");
             }
             goto fail;
         }
