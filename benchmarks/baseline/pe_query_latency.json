@@ -4,38 +4,38 @@
     "RIVER": "Ks7d2c9h4s",
     "TURN": "Ks7d2c9h"
   },
-  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
   "policies": {
     "compact": {
       "streets": {
         "FLOP": {
           "board": "Ks7d2c",
-          "cold_seconds": 2.969263833016157,
+          "cold_seconds": 0.0692257500000002,
           "rows": 3222,
-          "warm_median_seconds": 3.0031199789373204,
+          "warm_median_seconds": 0.06866102100000004,
           "warm_samples_seconds": [
-            3.0033189998939633,
-            3.0029209579806775
+            0.06883337500000053,
+            0.06848866699999956
           ]
         },
         "RIVER": {
           "board": "Ks7d2c9h4s",
-          "cold_seconds": 0.5754507919773459,
+          "cold_seconds": 0.04071716699999861,
           "rows": 2684,
-          "warm_median_seconds": 0.5636572090443224,
+          "warm_median_seconds": 0.04080572849999964,
           "warm_samples_seconds": [
-            0.5647769591305405,
-            0.5625374589581043
+            0.040593040999999275,
+            0.041018416
           ]
         },
         "TURN": {
           "board": "Ks7d2c9h",
-          "cold_seconds": 0.7991735420655459,
+          "cold_seconds": 0.03891337499999992,
           "rows": 1374,
-          "warm_median_seconds": 0.7942234994843602,
+          "warm_median_seconds": 0.03912031250000014,
           "warm_samples_seconds": [
-            0.7758584578987211,
-            0.8125885410699993
+            0.03893383299999975,
+            0.039306792000000534
           ]
         }
       }
@@ -44,32 +44,32 @@
       "streets": {
         "FLOP": {
           "board": "Ks7d2c",
-          "cold_seconds": 3.4885522089898586,
+          "cold_seconds": 0.06949683299999987,
           "rows": 3222,
-          "warm_median_seconds": 3.7343133749673143,
+          "warm_median_seconds": 0.06838327049999993,
           "warm_samples_seconds": [
-            3.9228314999490976,
-            3.545795249985531
+            0.06821545799999984,
+            0.06855108300000001
           ]
         },
         "RIVER": {
           "board": "Ks7d2c9h4s",
-          "cold_seconds": 0.7142647500149906,
+          "cold_seconds": 0.039876041999999945,
           "rows": 2684,
-          "warm_median_seconds": 0.7177724370267242,
+          "warm_median_seconds": 0.042790520999999915,
           "warm_samples_seconds": [
-            0.7171587080229074,
-            0.7183861660305411
+            0.04000620799999988,
+            0.04557483399999995
           ]
         },
         "TURN": {
           "board": "Ks7d2c9h",
-          "cold_seconds": 0.965557208051905,
+          "cold_seconds": 0.038234290999999754,
           "rows": 1374,
-          "warm_median_seconds": 0.9845767919905484,
+          "warm_median_seconds": 0.03835183349999993,
           "warm_samples_seconds": [
-            0.9926850839983672,
-            0.9764684999827296
+            0.03832300000000011,
+            0.03838066699999976
           ]
         }
       }
@@ -78,32 +78,32 @@
       "streets": {
         "FLOP": {
           "board": "Ks7d2c",
-          "cold_seconds": 2.534000749932602,
+          "cold_seconds": 0.06772637500000123,
           "rows": 3222,
-          "warm_median_seconds": 2.571403312496841,
+          "warm_median_seconds": 0.07066508349999978,
           "warm_samples_seconds": [
-            2.5972452498972416,
-            2.5455613750964403
+            0.07252845800000074,
+            0.06880170899999882
           ]
         },
         "RIVER": {
           "board": "Ks7d2c9h4s",
-          "cold_seconds": 0.4566842920612544,
+          "cold_seconds": 0.04095150000000025,
           "rows": 2684,
-          "warm_median_seconds": 0.45994252094533294,
+          "warm_median_seconds": 0.0407652710000006,
           "warm_samples_seconds": [
-            0.46117166709154844,
-            0.45871337479911745
+            0.04089637500000087,
+            0.04063416700000033
           ]
         },
         "TURN": {
           "board": "Ks7d2c9h",
-          "cold_seconds": 0.6400693340692669,
+          "cold_seconds": 0.042135082999999796,
           "rows": 1374,
-          "warm_median_seconds": 0.6488241875777021,
+          "warm_median_seconds": 0.03887839599999943,
           "warm_samples_seconds": [
-            0.6467048751655966,
-            0.6509434999898076
+            0.03894962499999899,
+            0.038807166999999865
           ]
         }
       }
