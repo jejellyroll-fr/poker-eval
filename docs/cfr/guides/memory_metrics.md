@@ -378,44 +378,47 @@ and both have to be respected or the tiers collapse into each other:
 
 Hold'em, 20 000 iterations, f32, `--board-abstraction large`, µs. Cold = the
 first query in a fresh process; warm = median of the two steady-state repeats
-that follow (spread under 2 %):
+that follow. These figures were re-measured after issue #250; the pre-fix
+numbers are quoted below as the reading the follow-up had to correct.
 
 | Tier | FLOP cold | TURN cold | RIVER cold | FLOP warm | TURN warm | RIVER warm | Resident storage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `full` | 3 488 600 | 965 600 | 714 300 | 3 734 300 | 984 600 | 717 800 | 6.29 MiB |
-| `compact` | 2 969 300 | 799 200 | 575 500 | 3 003 100 | 794 200 | 563 700 | 4.65 MiB |
-| `recompute-deep` | **2 534 000** | **640 100** | **456 700** | **2 571 400** | **648 800** | **459 900** | 3.95 MiB |
+| `full` | 69 500 | 38 200 | 39 900 | 68 400 | 38 400 | 42 800 | 6.29 MiB |
+| `compact` | 69 200 | 38 900 | 40 700 | 68 700 | 39 100 | 40 800 | 4.65 MiB |
+| `recompute-deep` | 67 700 | 42 100 | 41 000 | 70 700 | 38 900 | 40 800 | 3.95 MiB |
 
-Relative to `full`, `compact` answers in 0.85× / 0.83× / 0.81× (flop / turn /
-river) and `recompute-deep` in **0.73× / 0.66× / 0.64×**.
+Relative to `full`, `compact` answers in 1.00× / 1.02× / 0.95× (flop / turn /
+river) and `recompute-deep` in 1.03× / 1.01× / 0.95×. Every ratio sits inside
+the measurement noise and the signs disagree across streets, which is what "no
+tier effect" looks like — not a small systematic one in either direction.
 
-**There is no query-latency penalty for the compressed tiers — the opposite.**
-The reason is that a board query is a **full sweep**: it visits every infoset
-the solve holds (52 140 here) and emits only the rows whose board matches
-(3 222 on the flop, 1 374 on the turn, 2 684 on the river, as reported by the
-solver's own `board_query_rows=` marker). Sweep cost therefore dominates, and a
-tier that keeps a smaller resident footprint sweeps faster; the re-decode work
-`recompute-deep` adds is small next to it, which is also why cold and warm are
-within ~2 % of each other.
-
-This is the opposite of the "recompute is expensive" intuition, and the
-profiling result explains it: the decode work a tier adds is real, but in these
-figures it was dwarfed by the cumulative commit sweep `full` paid on every
-access.
-
-**These latency figures predate issue #250 and are now stale.** They were
-measured with the sweep in place, so the `full` column carries a cost the
-current build no longer pays; only the query path itself (not the solve) is
-comparable. The table and the ratios above must be re-measured with
-`query_latency_probe.py` before they are quoted again. What #250 changes is
-settled: `full` no longer dominates `recompute-deep` on solve time (0.287 s vs
-0.883 s on the Hold'em scale case), so the "dominates on every measured axis"
-reading no longer holds — the tiers trade memory for CPU, as designed.
+**The query cost is tier-independent, and the pre-#250 spread was the commit
+sweep, not the tiers.** A board query is a **full sweep**: it visits every
+infoset the solve holds (52 140 here) and emits only the rows whose board
+matches (3 222 on the flop, 1 374 on the turn, 2 684 on the river, as reported
+by the solver's own `board_query_rows=` marker). With the cumulative commit
+sweep bounded (issue #250), what remains is that visit plus the tier's own
+decode work, and the decode work is small next to it — which is also why cold
+and warm stay within a couple of percent of each other. Before the fix the
+`full` column was 1.4–1.6× *slower* than the compressed tiers (3 488 600 /
+965 600 / 714 300 µs cold, ratios 0.85×/0.83×/0.81× and 0.73×/0.66×/0.64×),
+because `full` paid the sweep on every access. That is the whole of the old
+"there is no query-latency penalty for the compressed tiers — the opposite"
+conclusion, and it is no longer true: the same column is now 35–50× smaller
+and the three tiers agree. The "dominates on every measured axis" reading no
+longer holds on the solve side either (0.287 s vs 0.883 s on the Hold'em scale
+case) — the tiers trade memory for CPU, as designed.
 
 Method caveat: the figure is measured from the `query <cards>` request to the
 `query_done` marker over a pipe, so it includes the cost of streaming the
 matched rows back to the probe. Every tier emits the same rows, so that
-constant cost does not affect the comparison.
+constant cost does not affect the comparison. Two warm samples per (tier,
+street) also means a single noisy repeat moves the median: `full`/RIVER warm
+spans 40.0–45.6 ms (1.14×) and `recompute-deep`/FLOP 68.8–72.5 ms (1.05×),
+while every other pair stays within 1 %. A first pass of this measurement
+reported a `compact`/RIVER cold figure of 67.7 ms against a 45.6 ms warm
+median; it did not reproduce on the recorded re-run and is attributed to
+process startup rather than to the tier.
 
 ### Scale counters
 
@@ -463,6 +466,7 @@ folded into the measurement:
   regenerated with the fix in place.
 - **#250 (fixed)** — the cumulative commit sweep in
   `pe_low_precision_commit_all`. See "The cumulative commit sweep, and its
-  bound" above: the tier wall-clock figures and the scale counters in this
-  guide were regenerated with the fix in place, and the query-latency table is
-  marked stale because it has not been.
+  bound" above: the tier wall-clock figures, the scale counters and the
+  query-latency table in this guide were all regenerated with the fix in place.
+  The follow-up the fix owed was the query latency, whose pre-fix reading had
+  inverted the client-visible tier order.

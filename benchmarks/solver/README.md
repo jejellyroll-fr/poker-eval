@@ -320,7 +320,8 @@ python3 query_latency_probe.py --output benchmarks/baseline/pe_query_latency.jso
 ```
 
 Two protocol details are load-bearing, and getting either wrong silently
-erases the tier difference the probe exists to measure:
+erases what the probe exists to measure (after issue #250 the answer is that
+the tiers agree within noise — the earlier spread was the commit sweep):
 
 - **A query is only cold once per process.** Every query re-materialises
   and *retains* the spans it touches, so a second query against the same
