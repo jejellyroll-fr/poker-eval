@@ -10,6 +10,12 @@
  * production sampler is then driven on the same fixture and its output is
  * compared against that reference.
  *
+ * The fixture only ever supplies *prior* weights. The action likelihood is
+ * applied by the production conditioning step, pe_range_bayesian_update, and
+ * the sampler is handed whatever that step produced. Nothing here multiplies a
+ * prior by a likelihood itself, so a caller that stopped conditioning on the
+ * observed action cannot pass this suite.
+ *
  * The invariant under test is stated once, in the guide:
  *
  *   Hidden cards belonging to players who have already acted remain removed
@@ -31,6 +37,8 @@
  * checkable (1.0, 0.0, 1/2, 1/3) and pin the oracle itself.
  */
 
+#include <poker_eval/core/cardmask_compat.h>
+#include <poker_eval/range.h>
 #include <poker_eval/solver/pe_preflop_deal_sampler.h>
 
 #include <math.h>
@@ -40,6 +48,11 @@
 #include <string.h>
 
 #include "support/pe_conditional_oracle.h"
+
+/* Every fixture conditions on exactly one observed action. The likelihood
+   table carried by the fixture gives P(that action | combo); the action id
+   itself is only a label handed to the production conditioning step. */
+#define FIXTURE_OBSERVED_ACTION 0
 
 static int g_failures = 0;
 
@@ -108,6 +121,14 @@ typedef struct
     pe_holdem_combo_t *holdem_combos;
     pe_omaha_combo_t *omaha_combos;
     size_t combo_count;
+
+    /* What the production conditioning step did, so the suite can assert that
+       it really ran instead of trusting the fixture. */
+    size_t conditioned_players;   /* ranges that went through it */
+    size_t likelihood_calls;      /* P(action | combo) lookups it made */
+    size_t likelihood_mismatches; /* wrong index, wrong cards, wrong action */
+    size_t informative_combos;    /* combos with P(action | combo) != 1 */
+    size_t weights_moved;         /* combos whose weight it changed */
 } built_ranges_t;
 
 static void built_ranges_free(built_ranges_t *built)
@@ -119,6 +140,39 @@ static void built_ranges_free(built_ranges_t *built)
     memset(built, 0, sizeof(*built));
 }
 
+/* The likelihood the production conditioning step is asked for. The fixture
+   already carries P(action | combo) per combo, so this is a table lookup that
+   doubles as a contract check: the caller must hand back the same combo index,
+   the same cards, and the action it was asked to condition on. */
+typedef struct
+{
+    const pe_oracle_combo_t *combos;
+    size_t count;
+    size_t calls;
+    size_t mismatches;
+} likelihood_ctx_t;
+
+static double fixture_likelihood(size_t combo_index,
+                                 StdDeck_CardMask combo_cards, int action_id,
+                                 void *user_data)
+{
+    likelihood_ctx_t *ctx = (likelihood_ctx_t *)user_data;
+
+    ctx->calls++;
+    if (combo_index >= ctx->count || action_id != FIXTURE_OBSERVED_ACTION ||
+        cardmask_to_mask_t(combo_cards) != ctx->combos[combo_index].cards)
+    {
+        ctx->mismatches++;
+        return 0.0;
+    }
+    return ctx->combos[combo_index].action_prob;
+}
+
+/* Build the production ranges for a fixture. The fixture supplies prior
+   weights only: the observed action is applied by the production conditioning
+   step, pe_range_bayesian_update, exactly as a real caller would have to. A
+   suite that conditioned the ranges itself would keep passing if production
+   stopped conditioning on the observed action. */
 static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
                               built_ranges_t *out)
 {
@@ -126,11 +180,16 @@ static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
     size_t offset = 0u;
     uint8_t player;
     size_t i;
+    pe_combo_t *prior_combos = NULL;
 
     memset(out, 0, sizeof(*out));
     for (player = 0u; player < game->player_count; ++player)
         total += game->ranges[player].count;
     if (total == 0u)
+        return -1;
+
+    prior_combos = (pe_combo_t *)calloc(total, sizeof(*prior_combos));
+    if (!prior_combos)
         return -1;
 
     if (omaha)
@@ -141,6 +200,7 @@ static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
             total, sizeof(pe_omaha_combo_t));
         if (!out->omaha || !out->omaha_combos)
         {
+            free(prior_combos);
             built_ranges_free(out);
             return -1;
         }
@@ -153,6 +213,7 @@ static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
             total, sizeof(pe_holdem_combo_t));
         if (!out->holdem || !out->holdem_combos)
         {
+            free(prior_combos);
             built_ranges_free(out);
             return -1;
         }
@@ -162,6 +223,9 @@ static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
     for (player = 0u; player < game->player_count; ++player)
     {
         const pe_oracle_range_t *range = &game->ranges[player];
+        pe_range_t view;
+        likelihood_ctx_t ctx;
+
         if (omaha)
         {
             out->omaha[player].combos = &out->omaha_combos[offset];
@@ -172,9 +236,46 @@ static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
             out->holdem[player].combos = &out->holdem_combos[offset];
             out->holdem[player].count = range->count;
         }
+
+        /* The prior, untouched, as the production conditioning step's input. */
         for (i = 0u; i < range->count; ++i)
         {
-            double weight = pe_oracle_combo_weight(&range->combos[i]);
+            prior_combos[offset + i].hand =
+                mask_t_to_cardmask(range->combos[i].cards);
+            prior_combos[offset + i].weight = range->combos[i].prior;
+            if (fabs(range->combos[i].action_prob - 1.0) > 0.0)
+                out->informative_combos++;
+        }
+
+        view.combos = &prior_combos[offset];
+        view.count = range->count;
+        view.capacity = range->count;
+        /* Inert here: the update reweights the list it is given and does not
+           read the variant. Named anyway so the view is a valid range. */
+        view.game_type = omaha ? game_omaha : game_holdem;
+        view.total_weight = 0.0;
+
+        ctx.combos = range->combos;
+        ctx.count = range->count;
+        ctx.calls = 0u;
+        ctx.mismatches = 0u;
+
+        if (pe_range_bayesian_update(&view, FIXTURE_OBSERVED_ACTION,
+                                     fixture_likelihood, &ctx) != PE_STATUS_OK)
+        {
+            free(prior_combos);
+            built_ranges_free(out);
+            return -1;
+        }
+        out->conditioned_players++;
+        out->likelihood_calls += ctx.calls;
+        out->likelihood_mismatches += ctx.mismatches;
+
+        for (i = 0u; i < range->count; ++i)
+        {
+            const double weight = view.combos[i].weight;
+            if (fabs(weight - range->combos[i].prior) > 0.0)
+                out->weights_moved++;
             if (omaha)
             {
                 out->omaha_combos[offset + i].cards = range->combos[i].cards;
@@ -188,7 +289,32 @@ static int built_ranges_build(const pe_oracle_game_t *game, int omaha,
         }
         offset += range->count;
     }
+
+    free(prior_combos);
     return 0;
+}
+
+/* The conditioning must have run, over every range, and must have moved the
+   weights the fixture marks as informative. */
+static void check_conditioning_ran(const char *label,
+                                   const built_ranges_t *built,
+                                   const pe_oracle_game_t *game)
+{
+    CHECK(built->conditioned_players == game->player_count,
+          "%s: %zu of %u ranges went through the production conditioning step",
+          label, built->conditioned_players, (unsigned)game->player_count);
+    CHECK(built->likelihood_calls > 0u,
+          "%s: the production conditioning step asked for no likelihoods",
+          label);
+    CHECK(built->likelihood_mismatches == 0u,
+          "%s: the production conditioning step called the likelihood with the "
+          "wrong combo index, cards or action %zu times",
+          label, built->likelihood_mismatches);
+    CHECK(built->informative_combos == 0u ||
+              built->weights_moved >= built->informative_combos,
+          "%s: the production conditioning step left the weights alone "
+          "(%zu informative combos, %zu weights moved)",
+          label, built->informative_combos, built->weights_moved);
 }
 
 /* ---------------------------------------------------------------- *
@@ -404,6 +530,7 @@ static int run_holdem_fixture(const char *label, const pe_oracle_game_t *game,
         pe_oracle_result_free(&exact);
         return -1;
     }
+    check_conditioning_ran(label, &built, game);
     if (pe_preflop_deal_sampler_init_holdem(&sampler, game->board,
                                             built.holdem,
                                             game->player_count) != 0)
@@ -458,6 +585,7 @@ static int run_omaha_fixture(const char *label, const pe_oracle_game_t *game,
         pe_oracle_result_free(&exact);
         return -1;
     }
+    check_conditioning_ran(label, &built, game);
     if (pe_preflop_deal_sampler_init_omaha(&sampler, game->board, built.omaha,
                                            game->player_count,
                                            hole_cards) != 0)
