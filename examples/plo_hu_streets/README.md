@@ -72,3 +72,9 @@ on board **Ks 9d 4c 2h Ts**.
    the full-range player is drawn from the live deck, so no 2.6M/20.4M-combo
    list is built for it.
 5. **Solve this spot**.
+
+Note: these hand-written trees carry no range profiles, and the ones
+`pe-preflop-tree` emits use its own `pe-preflop-tree/v2` node schema, which
+`mpf_run_with_metrics` does not parse — feed the solver one of these files, or
+name the ranges with `--rangeN`.
+
