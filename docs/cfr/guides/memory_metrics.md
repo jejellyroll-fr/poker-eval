@@ -125,8 +125,9 @@ results, and the separation makes that auditable.
 ## Public ABI note
 
 `pe_metrics_t` grew (`storage_memory`, `adapter_bytes`; phase 6 adds the
-tier and drop accounting). As with issue #234, the solver shared library's
-SOVERSION was bumped (now 4) so an application built against the old
+tier and drop accounting), and `pe_preflop_allin_rules_t` grew the
+`complete_mask` field for mixed complete/explicit ranges. The solver shared
+library's SOVERSION is now 5, so an application built against the old
 headers cannot be mixed with a newer library.
 
 ## Explicit storage tiers (phase 6)
