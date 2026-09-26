@@ -181,7 +181,8 @@ int pe_suit_shape_parse(const char *text, unsigned cards, pe_suit_shape_t *out)
     memset(out, 0, sizeof(*out));
     out->cards = (unsigned char)cards;
     out->group_count = (unsigned char)count;
-    memcpy(out->groups, groups, count);
+    for (unsigned i = 0u; i < count; ++i)
+        out->groups[i] = groups[i];
     return 1;
 }
 
@@ -234,16 +235,14 @@ int pe_suit_shape_format(const pe_suit_shape_t *shape, char *out, size_t out_siz
         return 0;
     for (i = 0u; i < shape->group_count; ++i)
     {
-        char part[8];
         int written;
 
         if (shape->groups[i] == 0u)
             return 0;
-        written = snprintf(part, sizeof(part), "%s%u", i ? "-" : "",
+        written = snprintf(out + used, out_size - used, "%s%u", i ? "-" : "",
                            (unsigned)shape->groups[i]);
-        if (written < 0 || used + (size_t)written + 1u > out_size)
+        if (written < 0 || (size_t)written >= out_size - used)
             return 0;
-        memcpy(out + used, part, (size_t)written);
         used += (size_t)written;
     }
     out[used] = '\0';
@@ -419,29 +418,31 @@ static int plo_rank_pattern_expand(pe_range_t *range,
     return ok;
 }
 
-/* Split a trailing `[suits=<shape>]` off `compact`, in place.  The brackets are
- * the whole grammar: one key, `suits=`, and a shape that has to be exact for
- * this width.  An unknown key, an empty bracket, an unterminated bracket, a
+/* Split a trailing `[suits=<shape>]` off `compact`, in place, and shorten
+ * `*length` (the caller's count of characters in `compact`) to what is left.
+ * The brackets are the whole grammar: one key, `suits=`, and a shape that has
+ * to be exact for this width.  An unknown key, an empty bracket, an unterminated bracket, a
  * second bracket or embedded whitespace is a parse error rather than an
  * ignored annotation, because ignoring it would accept a different range than
  * the one written. */
-static int plo_split_suit_shape(char *compact, size_t expected_cards,
-                                pe_suit_shape_t *shape, int *has_shape)
+static int plo_split_suit_shape(char *compact, size_t *length,
+                                size_t expected_cards, pe_suit_shape_t *shape,
+                                int *has_shape)
 {
     char *open = strchr(compact, '[');
-    size_t length = strlen(compact);
     char *close;
 
     *has_shape = 0;
     if (!open)
         return strchr(compact, ']') == NULL;
-    if (length == 0u || compact[length - 1u] != ']')
+    if (*length == 0u || compact[*length - 1u] != ']')
         return 0;
-    close = compact + length - 1u;
+    close = compact + *length - 1u;
     if (strchr(open + 1, '['))
         return 0;
     *open = '\0';
     *close = '\0';
+    *length = (size_t)(open - compact);
 
     /* Keep the inner grammar whitespace-free so "2 - 2 - 1" cannot be read
      * two ways; the token-level trim already happened for the outside. */
@@ -515,9 +516,9 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
     /* A suit shape is an annotation on the token, so strip it before the rank
      * or concrete-hand grammar sees the token; `length` then describes what is
      * left.  `[suits=...]` is the documented spelling -- see range.h. */
-    if (!plo_split_suit_shape(compact, expected_cards, &shape, &has_shape))
+    if (!plo_split_suit_shape(compact, &length, expected_cards, &shape,
+                              &has_shape))
         return 0;
-    length = strlen(compact);
 
     /* PPT rank pattern (AAxxx / AKQxx): n rank slots, 'x' for any rank.
      * Checked before the concrete-hand form, which is twice as long. */
