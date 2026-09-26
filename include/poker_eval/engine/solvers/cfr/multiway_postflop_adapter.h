@@ -130,6 +130,17 @@ typedef struct
      * The range must have been through pe_solver_range_prepare().
      */
     const pe_range_t *range[MPF_MAX_PLAYERS];
+
+    /*
+     * Player p holds the complete private range: every n-card hand is possible
+     * with equal weight, and nothing is materialised.  This is what makes a
+     * full PLO5/PLO6 range (2.6M / 20.4M combos) usable here: the root private
+     * chance draws the player's hole from the live deck through the same
+     * combination index an explicit range uses, so the deal distribution and
+     * the counterfactual weights are the ordinary ones.  range[p] is ignored
+     * when this is set.  Refused for SHORTDECK, whose live deck is not 52.
+     */
+    int complete_range[MPF_MAX_PLAYERS];
     int board_cards[5];
     int board_card_count;
 

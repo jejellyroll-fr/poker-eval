@@ -231,6 +231,13 @@ if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
         VERSION 5.0.0
         SOVERSION 5)
+
+    # Issue #236: mpf_config_t and mpf_tree_range_profile_t gained public
+    # complete-range fields.  Keep old applications from passing their
+    # smaller struct layouts to the new engine ABI.
+    set_target_properties(poker_engine PROPERTIES
+        VERSION 2.0.0
+        SOVERSION 2)
 endif()
 
 # Create a combined interface library that includes all modules

@@ -28,7 +28,12 @@ static int mpf_debug_enabled(void)
     } while (0)
 
 #define MPF_TREE_VERSION_CURRENT 1
-#define MPF_TREE_MAX_TOKENS (1 << 20)
+/* Every node of a full preflop tree carries its own snapshot, so a generated
+ * 20k-node document is ~2.8M jsmn tokens (13.6 MB of JSON).  The doubling
+ * walk below stops here; 1<<20 made such trees unreadable with "json parse
+ * error (-1)".  32M tokens is 512 MB of token array at worst -- the loader
+ * only grows as far as the document demands. */
+#define MPF_TREE_MAX_TOKENS (1 << 25)
 
 typedef struct
 {
@@ -976,6 +981,7 @@ static int mpf_parse_range_profile(const char *json,
     profile->player = -1;
     profile->street = MPF_STREET_PREFLOP;
     profile->street_defined = 0;
+    profile->complete = 0;
     profile->combos = NULL;
     profile->combo_count = 0;
     profile->aliases = NULL;
@@ -1016,6 +1022,14 @@ static int mpf_parse_range_profile(const char *json,
                     return 0;
                 }
                 profile->street_defined = 1;
+            }
+            else if (mpf_token_streq(json, key, "complete"))
+            {
+                if (!mpf_token_to_bool(json, &tokens[value_idx], &profile->complete))
+                {
+                    mpf_tree_error(err, "rangeProfile.complete must be boolean");
+                    return 0;
+                }
             }
             else if (mpf_token_streq(json, key, "combos"))
             {
@@ -2658,6 +2672,13 @@ int mpf_tree_validate(const mpf_tree_def_t *tree, mpf_tree_error_t *err)
             mpf_tree_error(err, "range profile player index out of range");
             return 0;
         }
+        /* "Complete" and a combo list contradict each other: the whole point
+           of the flag is that the range cannot be materialised. */
+        if (profile->complete && profile->combo_count > 0)
+        {
+            mpf_tree_error(err, "complete range profile must not carry combos");
+            return 0;
+        }
         for (int j = 0; j < profile->combo_count; ++j)
         {
             const mpf_tree_range_combo_t *combo = &profile->combos[j];
@@ -3150,6 +3171,11 @@ char *mpf_tree_serialize_json(const mpf_tree_def_t *tree, size_t *out_len)
         {
             if (!mpf_buf_append_str(&buf, ",\"street\":") ||
                 !mpf_buf_append_quoted(&buf, mpf_street_to_string(profile->street)))
+                goto fail;
+        }
+        if (profile->complete)
+        {
+            if (!mpf_buf_append_str(&buf, ",\"complete\":true"))
                 goto fail;
         }
         if (profile->alias_count > 0)

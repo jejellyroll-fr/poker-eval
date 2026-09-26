@@ -327,6 +327,23 @@ int main(void)
     tree.profiles[0].bet_sizes[1] = 1.0;
     tree.profiles[0].use_pot_sizing = 1;
 
+    /* One explicit profile and one complete ("any hand") profile: a full PLO6
+       range is 20.4M hands, so the flag is the only way a stored profile can
+       say it.  The round trip must not confuse the two. */
+    tree.range_profile_count = 2;
+    tree.range_profiles = (mpf_tree_range_profile_t *)calloc(
+        (size_t)tree.range_profile_count, sizeof(mpf_tree_range_profile_t));
+    tree.range_profiles[0].id = strdup("p0_explicit");
+    tree.range_profiles[0].player = 0;
+    tree.range_profiles[0].combo_count = 1;
+    tree.range_profiles[0].combos =
+        (mpf_tree_range_combo_t *)calloc(1, sizeof(mpf_tree_range_combo_t));
+    tree.range_profiles[0].combos[0].hand = strdup("AhKh");
+    tree.range_profiles[0].combos[0].weight = 1.0;
+    tree.range_profiles[1].id = strdup("p1_complete");
+    tree.range_profiles[1].player = 1;
+    tree.range_profiles[1].complete = 1;
+
     ASSERT_TRUE(pe_tree_save(&tree, tree_path) == 0, "save tree");
 
     /* pe_tree_save serializes the caller-owned tree; release its allocations
@@ -338,6 +355,14 @@ int main(void)
     free(tree.profiles[0].bet_sizes);
     free(tree.profiles[0].id);
     free(tree.profiles);
+    for (int i = 0; i < tree.range_profile_count; ++i)
+    {
+        free(tree.range_profiles[i].id);
+        for (int j = 0; j < tree.range_profiles[i].combo_count; ++j)
+            free(tree.range_profiles[i].combos[j].hand);
+        free(tree.range_profiles[i].combos);
+    }
+    free(tree.range_profiles);
     memset(&tree, 0, sizeof(tree));
 
     mpf_tree_def_t *rt = pe_tree_load(tree_path);
@@ -374,6 +399,21 @@ int main(void)
     ASSERT_TRUE(strcmp(rt->profiles[0].id, "default") == 0, "tree profile id");
     ASSERT_TRUE(rt->profiles[0].bet_size_count == 2, "tree profile bet count");
     ASSERT_NEAR(rt->profiles[0].bet_sizes[1], 1.0, 1e-12, "tree profile bet size");
+    ASSERT_TRUE(rt->range_profile_count == 2, "tree range profile count");
+    ASSERT_TRUE(strcmp(rt->range_profiles[0].id, "p0_explicit") == 0,
+                "tree explicit range id");
+    ASSERT_TRUE(rt->range_profiles[0].complete == 0,
+                "an explicit profile must not come back complete");
+    ASSERT_TRUE(rt->range_profiles[0].combo_count == 1,
+                "tree explicit range combo count");
+    ASSERT_TRUE(strcmp(rt->range_profiles[0].combos[0].hand, "AhKh") == 0,
+                "tree explicit range combo hand");
+    ASSERT_TRUE(strcmp(rt->range_profiles[1].id, "p1_complete") == 0,
+                "tree complete range id");
+    ASSERT_TRUE(rt->range_profiles[1].complete == 1,
+                "the complete flag must survive the .pe_tree round trip");
+    ASSERT_TRUE(rt->range_profiles[1].combo_count == 0,
+                "the complete profile stays combo-less");
 
     mpf_tree_free(rt);
 

@@ -61,6 +61,12 @@ static const char *k_tree_json =
     "      \"combos\": [\n"
     "        {\"hand\": \"7c7d\", \"weight\": 1.0}\n"
     "      ]\n"
+    "    },\n"
+    "    {\n"
+    "      \"id\": \"any_hand\",\n"
+    "      \"player\": 1,\n"
+    "      \"complete\": true,\n"
+    "      \"combos\": []\n"
     "    }\n"
     "  ],\n"
     "  \"nodes\": [\n"
@@ -216,7 +222,23 @@ int main(void)
     tree = mpf_tree_load_json(k_tree_json, strlen(k_tree_json), &err);
     ASSERT_TRUE(tree != NULL, err.message[0] ? err.message : "tree load");
 
-    ASSERT_TRUE(tree->range_profile_count == 2, "range profile count");
+    ASSERT_TRUE(tree->range_profile_count == 3, "range profile count");
+    {
+        /* The complete profile: any hand, no combos to walk. */
+        const mpf_tree_range_profile_t *any = NULL;
+        for (int i = 0; i < tree->range_profile_count; ++i)
+        {
+            if (strcmp(tree->range_profiles[i].id, "any_hand") == 0)
+            {
+                any = &tree->range_profiles[i];
+                break;
+            }
+        }
+        ASSERT_TRUE(any != NULL, "complete profile found");
+        ASSERT_TRUE(any->complete == 1, "complete flag parsed");
+        ASSERT_TRUE(any->combo_count == 0, "complete profile carries no combos");
+        ASSERT_TRUE(any->player == 1, "complete profile player");
+    }
     root_node = &tree->nodes[tree->root_index];
     MPF_TEST_DEBUG("MPF_TREE parser: root node type=%d actions=%d range_profile=%s\n",
                    root_node->type, root_node->action_count,
@@ -272,6 +294,21 @@ int main(void)
     rt_flop = &round_trip->nodes[rt_flop_idx];
     ASSERT_TRUE(rt_flop->range_profile != NULL, "round trip flop range");
     ASSERT_TRUE(strcmp(rt_flop->range_profile->id, "flop_p0") == 0, "round trip flop id");
+    {
+        /* The flag must survive the JSON round trip. */
+        int rt_any = 0;
+        for (int i = 0; i < round_trip->range_profile_count; ++i)
+        {
+            if (strcmp(round_trip->range_profiles[i].id, "any_hand") == 0)
+            {
+                rt_any = round_trip->range_profiles[i].complete;
+                ASSERT_TRUE(round_trip->range_profiles[i].combo_count == 0,
+                            "round trip complete profile has no combos");
+                break;
+            }
+        }
+        ASSERT_TRUE(rt_any == 1, "round trip complete flag");
+    }
 
     ecfg = eval_config_holdem();
     ctx = eval_context_create(&ecfg);

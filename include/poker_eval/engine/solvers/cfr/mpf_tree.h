@@ -81,6 +81,12 @@ typedef struct mpf_tree_range_profile_t
     int player; /* -1 si non spécifié */
     mpf_street_t street;
     int street_defined;
+    /* Set when the profile names the COMPLETE private range (every n-card
+       hand, equal weight) instead of a combo list.  Such a profile carries
+       no combos -- a full PLO6 range is 20.4M hands, which cannot be
+       materialised -- so an empty combos array alone is ambiguous: a
+       consumer must be able to tell "any hand" from "nothing". */
+    int complete;
     mpf_tree_range_combo_t *combos;
     int combo_count;
     char **aliases;
