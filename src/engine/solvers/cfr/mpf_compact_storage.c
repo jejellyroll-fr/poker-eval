@@ -57,7 +57,12 @@
 #define PE_SOL_VERSION 1
 
 #define PE_TREE_MAGIC "PETREE001"
-#define PE_TREE_VERSION 1
+/* v2 adds the per-range-profile `complete` flag (a full PLO5/PLO6 range is
+   2.6M/20.4M hands and cannot be materialised into a combo list, so the flag
+   is the only way a stored profile can say "any hand").  v1 files still load:
+   the reader takes the flag from the layout the version names. */
+#define PE_TREE_VERSION 2
+#define PE_TREE_VERSION_COMPLETE_FLAG 2
 
 #define PE_SOL_QMAX 65535u /* max value of a quantized probability */
 
@@ -812,7 +817,7 @@ void pe_sol_close_mmap(pe_sol_mmap_t *view)
  *
  * Layout:
  *   magic[8]="PETREE001"
- *   uint32 version
+ *   uint32 version        (2 = range profiles carry a `complete` flag)
  *   int32  tree_version
  *   int32  root_index
  *   int32  node_count
@@ -820,7 +825,8 @@ void pe_sol_close_mmap(pe_sol_mmap_t *view)
  *   int32  profile_count
  *   --- bet profiles[] ---
  *   int32  range_profile_count
- *   --- range profiles[] ---
+ *   --- range profiles[] ---   (v2: id, player, street, street_defined,
+ *                               complete, combo_count, combos, aliases)
  */
 
 struct pe_tree_writer
@@ -915,6 +921,8 @@ static int pe_write_range_profile(struct pe_tree_writer *w,
     if (pe_wr_i32(w, p->street) != 0)
         return -1;
     if (pe_wr_i32(w, p->street_defined) != 0)
+        return -1;
+    if (pe_wr_i32(w, p->complete) != 0)
         return -1;
     if (pe_wr_i32(w, p->combo_count) != 0)
         return -1;
@@ -1247,7 +1255,9 @@ static mpf_tree_bet_profile_t *pe_read_bet_profiles(pe_tree_reader_t *r, int *co
     return arr;
 }
 
-static mpf_tree_range_profile_t *pe_read_range_profiles(pe_tree_reader_t *r, int *count)
+static mpf_tree_range_profile_t *pe_read_range_profiles(pe_tree_reader_t *r,
+                                                        int file_version,
+                                                        int *count)
 {
     int n = pe_rd_i32(r);
     if (r->failed || n < 0)
@@ -1271,6 +1281,10 @@ static mpf_tree_range_profile_t *pe_read_range_profiles(pe_tree_reader_t *r, int
         arr[i].player = pe_rd_i32(r);
         arr[i].street = (mpf_street_t)(int)pe_rd_i32(r);
         arr[i].street_defined = pe_rd_i32(r);
+        /* The complete flag exists on disk since v2; a v1 file predates it
+           and every profile it holds is an explicit combo list. */
+        arr[i].complete =
+            file_version >= PE_TREE_VERSION_COMPLETE_FLAG ? pe_rd_i32(r) : 0;
         arr[i].combo_count = pe_rd_i32(r);
         if (arr[i].combo_count > 0)
         {
@@ -1479,12 +1493,14 @@ mpf_tree_def_t *pe_tree_load(const char *path)
         errno = EINVAL;
         return NULL;
     }
-    if (memcmp(magic, PE_TREE_MAGIC, 8) != 0 || version != PE_TREE_VERSION)
+    if (memcmp(magic, PE_TREE_MAGIC, 8) != 0 ||
+        version < 1 || version > PE_TREE_VERSION)
     {
         fclose(f);
         errno = EINVAL;
         return NULL;
     }
+    unsigned file_version = version;
 
     if (fseek(f, 0, SEEK_END) != 0)
     {
@@ -1534,7 +1550,8 @@ mpf_tree_def_t *pe_tree_load(const char *path)
     tree->nodes = pe_read_nodes(&r, &tree->node_count);
 
     tree->profiles = pe_read_bet_profiles(&r, &tree->profile_count);
-    tree->range_profiles = pe_read_range_profiles(&r, &tree->range_profile_count);
+    tree->range_profiles =
+        pe_read_range_profiles(&r, (int)file_version, &tree->range_profile_count);
 
     if (tree->node_count > 0 && tree->nodes)
     {
