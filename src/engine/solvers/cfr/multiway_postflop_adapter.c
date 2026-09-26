@@ -1137,6 +1137,49 @@ static void mpf_state_release_chance_children(mpf_state_t *st)
     st->chance_children_count = 0;
 }
 
+static void mpf_state_release_private_children(mpf_state_t *st)
+{
+    if (!st)
+        return;
+    for (int i = 0; i < st->private_deal_count; ++i)
+    {
+        mpf_state_t *child = st->private_children ? st->private_children[i] : NULL;
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            st->private_children[i] = NULL;
+        }
+    }
+    free(st->private_children);
+    free(st->private_deals);
+    st->private_children = NULL;
+    st->private_deals = NULL;
+    st->private_deal_count = 0;
+    st->private_pending = 0;
+}
+
+static void mpf_state_release_flop_children(mpf_state_t *st)
+{
+    if (!st)
+        return;
+    for (int i = 0; i < st->flop_child_count; ++i)
+    {
+        mpf_state_t *child = st->flop_children ? st->flop_children[i] : NULL;
+        if (child)
+        {
+            mpf_state_cleanup_internal(child);
+            if (child->heap_owned)
+                free(child);
+            st->flop_children[i] = NULL;
+        }
+    }
+    free(st->flop_children);
+    st->flop_children = NULL;
+    st->flop_child_count = 0;
+}
+
 static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_state_t *out)
 {
     mpf_state_t *saved_cache[MPF_TREE_ACTION_MAX];
@@ -1145,6 +1188,8 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
     /* out may be a cached slot whose previous incarnation was a chance node;
      * its dealt subtree must not leak (it is freed before the morph). */
     mpf_state_release_chance_children(out);
+    mpf_state_release_private_children(out);
+    mpf_state_release_flop_children(out);
     *out = *st;
     out->perf_stats = st->perf_stats;
     memcpy(out->action_cache, saved_cache, sizeof(saved_cache));
@@ -1155,6 +1200,15 @@ static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_sta
     out->chance_children_count = 0;
     for (int i = 0; i < 52; ++i)
         out->chance_children[i] = NULL;
+    /* Child caches belong to the state that created them.  Do not copy the
+     * parent's private-deal or flop-child arrays into an action child: doing
+     * so makes two states free the same allocation during cleanup. */
+    out->private_deals = NULL;
+    out->private_children = NULL;
+    out->private_deal_count = 0;
+    out->private_pending = 0;
+    out->flop_children = NULL;
+    out->flop_child_count = 0;
     MPF_PERF_INC_STATE(st, state_clone_ops);
 
     int next_tree_idx = mpf_tree_find_next(st, action);
