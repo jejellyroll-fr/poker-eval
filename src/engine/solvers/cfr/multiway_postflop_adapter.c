@@ -1182,6 +1182,8 @@ static void mpf_state_release_flop_children(mpf_state_t *st)
 
 static void mpf_apply_action_internal(const mpf_state_t *st, int action, mpf_state_t *out)
 {
+    if (!st || !out)
+        return;
     mpf_state_t *saved_cache[MPF_TREE_ACTION_MAX];
     memcpy(saved_cache, out->action_cache, sizeof(saved_cache));
     int heap_owned = out->heap_owned;
