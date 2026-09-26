@@ -28,7 +28,12 @@ static int mpf_debug_enabled(void)
     } while (0)
 
 #define MPF_TREE_VERSION_CURRENT 1
-#define MPF_TREE_MAX_TOKENS (1 << 20)
+/* Every node of a full preflop tree carries its own snapshot, so a generated
+ * 20k-node document is ~2.8M jsmn tokens (13.6 MB of JSON).  The doubling
+ * walk below stops here; 1<<20 made such trees unreadable with "json parse
+ * error (-1)".  32M tokens is 512 MB of token array at worst -- the loader
+ * only grows as far as the document demands. */
+#define MPF_TREE_MAX_TOKENS (1 << 25)
 
 typedef struct
 {

@@ -1776,6 +1776,22 @@ if(TARGET pe-preflop-tree)
     set_tests_properties(pe_preflop_tree_smoke PROPERTIES LABELS "product;solver")
 endif()
 
+if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
+    # The generated tree is mpf_tree schema now: the solver must take it
+    # directly, ranges included (player 1's profile is marked complete, and
+    # no --range overrides it -- the tree drives its own ranges).
+    add_test(NAME pe_preflop_tree_resolves_with_mpf
+        COMMAND mpf_run_with_metrics
+            --rules holdem
+            --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-smoke.json
+            --iterations 1)
+    set_tests_properties(pe_preflop_tree_resolves_with_mpf PROPERTIES
+        LABELS "product;solver;preflop"
+        PASS_REGULAR_EXPRESSION "Finished 1 iterations"
+        DEPENDS pe_preflop_tree_smoke
+        TIMEOUT 120)
+endif()
+
 if(TARGET pe-preflop-solve)
     add_test(NAME pe_preflop_solve_smoke
         COMMAND pe-preflop-solve

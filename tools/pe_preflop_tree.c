@@ -1,4 +1,13 @@
-/* Generate a bounded, machine-readable preflop betting tree. */
+/* Generate a bounded, machine-readable preflop betting tree.
+ *
+ * The node schema is mpf_tree's: {"id","type":"player|terminal","street",
+ * "player","bet_profile","range_profile","snapshot","actions":[{"type":
+ * "fold|call|check|raise","size_index","next"}]}.  That is the schema
+ * mpf_run_with_metrics parses, so a generated tree can be solved directly:
+ *   mpf_run_with_metrics --tree out.json --rules <game> [--rangeN ...]
+ * Betting semantics still come from the generic one-street state machine;
+ * the tree it produces is what changed.
+ */
 #include <poker_eval/solver/pe_actions.h>
 #include <poker_eval/solver/pe_betting_state.h>
 #include <poker_eval/solver/pe_range.h>
@@ -16,7 +25,12 @@ typedef struct {
     pe_betting_rules_t rules;
     enum_game_t game;
     size_t node_count;
-    size_t emitted;
+    /* Two comma counters: one walks the node array, the other the action
+       array of the node being emitted.  Sharing one produced `{,` or `}{`.
+       The action counter is reset at the top of emit_node; the node counter
+       runs for the whole document. */
+    size_t node_emitted;
+    size_t action_emitted;
     size_t max_combos;
     double raise_sizes[MAX_TREE_ACTIONS];
     size_t raise_count;
@@ -120,11 +134,11 @@ static int emit_range_profiles(tree_context_t *ctx)
             /* Marked complete rather than expanded: the consumer can tell the
                range is every hand, which no combo list could say. */
             fprintf(ctx->out, "{\"id\":\"player%d-preflop\",\"player\":%d,"
-                    "\"street\":\"preflop\",\"complete\":true,\"combos\":[]}",
+                    "\"street\":\"PREFLOP\",\"complete\":true,\"combos\":[]}",
                     player, player);
             continue;
         }
-        fprintf(ctx->out, "{\"id\":\"player%d-preflop\",\"player\":%d,\"street\":\"preflop\",\"combos\":[",
+        fprintf(ctx->out, "{\"id\":\"player%d-preflop\",\"player\":%d,\"street\":\"PREFLOP\",\"combos\":[",
                 player, player);
         for (size_t combo = 0u; combo < range->count; ++combo) {
             char hand[32];
@@ -177,7 +191,76 @@ static size_t build_actions(const tree_context_t *ctx, const pe_betting_state_t 
     return n;
 }
 
-static int emit_node(tree_context_t *ctx, size_t id, const pe_betting_state_t *state)
+/* mpf_tree actions carry no amount: a raise names a size_index into the
+   node's bet_sizes, which mpf reads as the increment above the call --
+   exactly what --raises names and what the generic state machine charges for
+   PE_ACTION_RAISE/PE_ACTION_BET.  bet/check/call/fold are the action types
+   mpf_tree_parse_action_type accepts; a check with nothing to call and a
+   call facing a bet both map onto "call", which is all mpf's adapter offers
+   for staying in the hand. */
+/* mpf_tree actions carry no amount: a raise names a size_index into the
+   node's bet_sizes, which mpf reads as the increment above the call --
+   exactly what --raises names and what the generic state machine charges for
+   PE_ACTION_RAISE/PE_ACTION_BET.  check/call both map onto "call", which is
+   all mpf's adapter offers for staying in the hand. */
+static void emit_action(tree_context_t *ctx, size_t child_id,
+                        pe_action_kind_t kind, size_t size_index)
+{
+    if (ctx->action_emitted++ != 0u) fputc(',', ctx->out);
+    if (kind == PE_ACTION_FOLD)
+        fprintf(ctx->out, "{\"type\":\"fold\",\"next\":\"n%zu\"}", child_id);
+    else if (kind == PE_ACTION_RAISE || kind == PE_ACTION_BET)
+        fprintf(ctx->out, "{\"type\":\"raise\",\"size_index\":%zu,\"next\":\"n%zu\"}",
+                size_index, child_id);
+    else
+        fprintf(ctx->out, "{\"type\":\"call\",\"next\":\"n%zu\"}", child_id);
+}
+
+/* The snapshot carries the state the solver must not have to guess: who acts
+   and how much is already in the middle.  Stacks are what the state machine
+   was handed; invested/round_contrib/pot come from the same state, so the
+   solver's blind posting stays switched off there (cfg.preflop.defined). */
+static void emit_snapshot(tree_context_t *ctx, const pe_betting_state_t *state,
+                          int players, int first_to_act)
+{
+    fprintf(ctx->out,
+            ",\"snapshot\":{\"defined\":true,\"num_players\":%d,"
+            "\"street\":\"PREFLOP\",\"to_act\":%d,\"first_to_act\":%d,"
+            "\"pot\":%.6g,\"to_call\":%.6g,\"current_bet\":%.6g,"
+            "\"raises_made\":%u,\"board_revealed\":0,",
+            players, state->to_act, first_to_act,
+            state->pot, state->to_call, state->current_bet,
+            (unsigned)state->raises_made);
+    fputs("\"stacks\":[", ctx->out);
+    for (int p = 0; p < players; ++p) {
+        if (p) fputc(',', ctx->out);
+        fprintf(ctx->out, "%.6g", state->stack[p]);
+    }
+    fputs("],\"invested\":[", ctx->out);
+    for (int p = 0; p < players; ++p) {
+        if (p) fputc(',', ctx->out);
+        fprintf(ctx->out, "%.6g", state->invested[p]);
+    }
+    fputs("],\"round_contrib\":[", ctx->out);
+    for (int p = 0; p < players; ++p) {
+        if (p) fputc(',', ctx->out);
+        fprintf(ctx->out, "%.6g", state->round_contrib[p]);
+    }
+    fputs("],\"active\":[", ctx->out);
+    for (int p = 0; p < players; ++p) {
+        if (p) fputc(',', ctx->out);
+        fprintf(ctx->out, "%d", state->active[p] ? 1 : 0);
+    }
+    fputs("],\"acted\":[", ctx->out);
+    for (int p = 0; p < players; ++p) {
+        if (p) fputc(',', ctx->out);
+        fprintf(ctx->out, "%d", state->acted[p] ? 1 : 0);
+    }
+    fputs("]}", ctx->out);
+}
+
+static int emit_node(tree_context_t *ctx, size_t id, const pe_betting_state_t *state,
+                     int players, int first_to_act)
 {
     pe_action_t actions[MAX_TREE_ACTIONS];
     const char *labels[MAX_TREE_ACTIONS];
@@ -186,10 +269,18 @@ static int emit_node(tree_context_t *ctx, size_t id, const pe_betting_state_t *s
     size_t count = 0u;
     size_t n = 0u;
     if (ctx->node_count > MAX_TREE_NODES) return -1;
-    if (ctx->emitted++ != 0u) fputc(',', ctx->out);
-    fprintf(ctx->out, "{\"id\":%zu,\"type\":\"%s\",\"player\":%d,\"pot\":%.6g,\"to_call\":%.6g,\"actions\":[",
-            id, state->terminal || state->round_complete ? "terminal" : "decision",
-            state->to_act, state->pot, state->to_call);
+    if (ctx->node_emitted++ != 0u) fputc(',', ctx->out);
+    ctx->action_emitted = 0u;
+    /* mpf ids are strings; the acting player is a separate field.  A terminal
+       here is the end of the preflop betting round, not the showdown: mpf's
+       adapter stops following the tree there and hands over to its own
+       streets, which is exactly the handoff this tool wants. */
+    fprintf(ctx->out, "{\"id\":\"n%zu\",\"type\":\"%s\",\"street\":\"PREFLOP\",\"player\":%d",
+            id, state->terminal || state->round_complete ? "terminal" : "player",
+            state->to_act);
+    fputs(",\"bet_profile\":\"default\"", ctx->out);
+    emit_snapshot(ctx, state, players, first_to_act);
+    fputs(",\"actions\":[", ctx->out);
     if (state->terminal || state->round_complete)
     {
         fputs("]}", ctx->out);
@@ -201,13 +292,12 @@ static int emit_node(tree_context_t *ctx, size_t id, const pe_betting_state_t *s
         if (pe_betting_apply_action(state, &ctx->rules, &actions[i], &children[count]) != PE_BETTING_OK)
             continue;
         child_ids[count] = ctx->node_count++;
-        if (count++ != 0u) fputc(',', ctx->out);
-        fputs("{\"label\":", ctx->out); json_string(ctx->out, labels[i]);
-        fprintf(ctx->out, ",\"amount\":%.6g,\"child\":%zu}", actions[i].amount, child_ids[count - 1u]);
+        emit_action(ctx, child_ids[count], actions[i].kind, (size_t)actions[i].size_index);
+        count++;
     }
     fputs("]}", ctx->out);
     for (size_t i = 0u; i < count; ++i)
-        if (emit_node(ctx, child_ids[i], &children[i]) != 0) return -1;
+        if (emit_node(ctx, child_ids[i], &children[i], players, first_to_act) != 0) return -1;
     return 0;
 }
 
@@ -260,6 +350,8 @@ int main(int argc, char **argv)
                 for (size_t j = 0u; j <= source_length; ++j)
                     copy[j] = source[j];
             }
+            /* strtok's first argument is written through, so `copy` cannot be
+               const; the walking pointer itself only reads. */
             char *part = copy ? strtok(copy, ",") : NULL;
             while (part && ctx.raise_count < MAX_TREE_ACTIONS) { ctx.raise_sizes[ctx.raise_count++] = strtod(part, NULL); part = strtok(NULL, ","); }
             free(copy);
@@ -283,17 +375,22 @@ int main(int argc, char **argv)
     if (!compile_ranges(&ctx)) { free_ranges(&ctx); return 1; }
     ctx.out = fopen(output_path, "w");
     if (!ctx.out) { fprintf(stderr, "cannot open %s\n", output_path); free_ranges(&ctx); return 1; }
-    fputs("{\"schema\":\"pe-preflop-tree/v2\",\"game\":", ctx.out);
-    json_string(ctx.out, game_name(ctx.game));
-    fputs(",\"players\":", ctx.out);
-    fprintf(ctx.out, "%u,\"ranges\":[", players);
-    for (i = 0; i < (int)players; ++i) { if (i) fputc(',', ctx.out); json_string(ctx.out, ctx.ranges[i]); }
-    fputs("],\"nodes\":[", ctx.out);
+    /* mpf_tree documents carry no game/players fields of their own: the spot
+       is named by the run (--rules) and the snapshots.  What this tool adds
+       over a hand-written tree is the snapshot and the range profiles. */
+    fputs("{\"version\":1,\"root\":\"n0\",\"betProfiles\":["
+          "{\"id\":\"default\",\"sizes\":[", ctx.out);
+    for (i = 0; (size_t)i < ctx.raise_count; ++i) {
+        if (i) fputc(',', ctx.out);
+        fprintf(ctx.out, "%.6g", ctx.raise_sizes[i]);
+    }
+    /* Absolute chips, the same reading mpf gives a raise's bet_size. */
+    fputs("],\"pot_sizing\":false}]", ctx.out);
+    fputs(",\"nodes\":[", ctx.out);
     ctx.node_count = 1u;
-    if (emit_node(&ctx, 0u, &root) != 0) { fclose(ctx.out); free_ranges(&ctx); return 1; }
-    /* Keep the range profiles beside the tree nodes. MPF's parser accepts the
-       same profile shape, so generated ranges can be consumed without a
-       second hand-written import step. */
+    ctx.node_emitted = 0u;
+    ctx.action_emitted = 0u;
+    if (emit_node(&ctx, 0u, &root, (int)players, first) != 0) { fclose(ctx.out); free_ranges(&ctx); return 1; }
     fputs("]", ctx.out);
     if (!emit_range_profiles(&ctx)) { fclose(ctx.out); free_ranges(&ctx); return 1; }
     fputs("}\n", ctx.out);
