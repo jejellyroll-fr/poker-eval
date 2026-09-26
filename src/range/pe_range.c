@@ -109,11 +109,31 @@ static int plo_starts_with_ci(const char *text, const char *prefix)
  * that does not sum to the card count -- or that asks for more groups than
  * the deck has suits -- is an error instead of a different hand. */
 
+static int pe_suit_shape_is_valid(const pe_suit_shape_t *shape)
+{
+    unsigned total = 0u;
+
+    if (!shape || shape->group_count == 0u ||
+        shape->group_count > (unsigned)StdDeck_Suit_COUNT ||
+        shape->cards == 0u || shape->cards > PE_SUIT_SHAPE_MAX_GROUPS)
+        return 0;
+
+    for (unsigned i = 0u; i < shape->group_count; ++i)
+    {
+        unsigned group = shape->groups[i];
+        if (group == 0u || group > (unsigned)StdDeck_Rank_COUNT ||
+            (i > 0u && shape->groups[i - 1u] < group))
+            return 0;
+        total += group;
+    }
+    return total == shape->cards;
+}
+
 int pe_suit_shape_equal(const pe_suit_shape_t *a, const pe_suit_shape_t *b)
 {
     unsigned i;
 
-    if (!a || !b)
+    if (!pe_suit_shape_is_valid(a) || !pe_suit_shape_is_valid(b))
         return 0;
     if (a->group_count != b->group_count || a->cards != b->cards)
         return 0;

@@ -41,7 +41,6 @@ A PLO5/PLO6 range is a comma-separated union of terms; each term is one of:
 ```text
 <rank pattern> [ "[" "suits=" <shape> "]" ] [ ":" <weight> ]
 <concrete hand> [ "[" "suits=" <shape> "]" ] [ ":" <weight> ]
-100%
 ```
 
 - `<rank pattern>` is `n` rank slots with `x` for any rank, `n` being the
@@ -53,7 +52,16 @@ A PLO5/PLO6 range is a comma-separated union of terms; each term is one of:
   `2-2-1`).
 - `<concrete hand>` is an even-length list of cards, `AsKsQd3c9h`.
 - `<weight>` is a non-negative double, `:0.25`; the default is 1.0.
-- `100%` is the whole range.
+
+The PLO5/PLO6 range parser materialises the hands it returns and therefore
+does not accept a complete-range token.  In particular, `100%` must not be
+passed to `pe_range_parse()`: a complete PLO6 range contains 20,358,520
+hands and is intentionally represented lazily by the sampling tools.
+
+The solver-facing tools (`pe-preflop-solve`, `pe-preflop-tree` and
+`mpf_run_with_metrics`) accept `100%` as their complete-range spelling.  They
+draw those hands directly from the live deck and do not materialise the
+range.  This is a tool input, not an additional `pe_range_parse()` token.
 
 Every term's weights are kept as written; `total_weight` is their sum, so a
 union of a weight-2 term and a weight-1 term is not renormalised behind the

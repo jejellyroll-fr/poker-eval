@@ -108,6 +108,19 @@ static void test_shape_model(void)
 
     CHECK(!pe_suit_shape_equal(&a, NULL), "a missing shape is not equal to one");
 
+    /* The fields are public, so equality must validate them before using the
+     * caller-provided group_count as an array bound. */
+    {
+        pe_suit_shape_t malformed = a;
+        malformed.group_count = PE_SUIT_SHAPE_MAX_GROUPS + 1u;
+        CHECK(!pe_suit_shape_equal(&malformed, &a),
+              "an oversized public group_count is invalid");
+        malformed = a;
+        malformed.cards = 6u;
+        CHECK(!pe_suit_shape_equal(&malformed, &a),
+              "a shape whose groups do not sum to cards is invalid");
+    }
+
     /* A shape that could mean two hands, or no hand, is refused. */
     static const char *bad[] = {
         "",           /* empty */
