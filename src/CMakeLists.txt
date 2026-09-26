@@ -224,10 +224,13 @@ endforeach()
 # (storage_policy axis, tier and drop accounting on the metrics); the solver
 # ABI bumps to SOVERSION 4 so an application built against the old headers
 # fails at load time instead of corrupting memory.
+# Issue #236: pe_preflop_allin_rules_t grew a complete_mask field for mixed
+# complete/explicit PLO5/PLO6 ranges.  Bump the solver ABI again so callers
+# built against the previous rules layout cannot be passed to this library.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 4.0.0
-        SOVERSION 4)
+        VERSION 5.0.0
+        SOVERSION 5)
 endif()
 
 # Create a combined interface library that includes all modules

@@ -79,11 +79,15 @@ typedef struct
      * C(52,6) = 20,358,520 combos -- 326 MB per player to store, and the
      * enumerated proposal walks that list once per player per drawn deal.
      * The complete-range draw is O(hole_cards) and yields the same
-     * distribution and the same importance weight.
-     *
-     * All-or-nothing on purpose: a mix of complete and explicit ranges would
-     * need per-choice completion checks that have no closed form. */
+     * distribution and the same importance weight. */
     int complete_ranges;
+    /* Bit p set: player p holds the complete range while the others keep an
+     * explicit range (a mixed spot).  Ignored when complete_ranges is set,
+     * which then reads as every bit set.  This is what makes a restricted
+     * range mixed with "100%" usable on a 5- or 6-card game: the complete
+     * player is drawn from the live deck instead of from a combo list that
+     * cannot be materialised. */
+    uint8_t complete_mask;
     /* Board abstraction folded into the infoset key
      * (pe_texture_filter_level_t).  0 = none: boards are told apart exactly,
      * up to the suit isomorphism that is always applied.

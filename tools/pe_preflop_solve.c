@@ -1544,6 +1544,7 @@ int main(int argc, char **argv)
     int root_street = parse_street_name(options.street);
     mask_t board_mask = 0u;
     int complete_ranges = 1;
+    uint8_t complete_mask = 0u;
     int interrupted = 0;
     if (root_street < 0)
     {
@@ -1690,16 +1691,24 @@ int main(int argc, char **argv)
         }
     }
     StdDeck_CardMask_RESET(dead);
-    /* All-or-nothing: the complete-range draw has no closed form for a deal
-     * that mixes "any hand" with an explicit list, so one restricted range
-     * puts every player back on the enumerated path. */
+    /* A player whose range is "100%"/"random" holds any hand and has no
+     * combo list to parse -- which is exactly what makes the 5- and 6-card
+     * games solvable.  Such a player is compatible with the rest of the
+     * table holding an explicit range: the deal sampler draws the complete
+     * players from the live deck after the explicit ones, at the same
+     * importance weight, so a mixed spot no longer needs the full range
+     * materialised. */
     for (int player = 0; player < options.players; ++player)
-        if (!range_is_complete(options.range[player]))
-            complete_ranges = 0;
-    for (int player = 0; !complete_ranges && player < options.players; ++player) {
+        if (range_is_complete(options.range[player]))
+            complete_mask |= (uint8_t)(1u << player);
+    complete_ranges =
+        (complete_mask == (uint8_t)((1u << options.players) - 1u));
+    for (int player = 0; player < options.players; ++player) {
         enum_game_t range_game = variant == PE_PREFLOP_HOLDEM ? game_holdem
             : variant == PE_PREFLOP_PLO4 ? game_omaha
             : variant == PE_PREFLOP_PLO5 ? game_omaha5 : game_omaha6;
+        if (complete_mask & (uint8_t)(1u << player))
+            continue;   /* any hand: nothing to parse or materialise */
         if (pe_solver_range_parse(range_game, options.range[player], dead,
                                   &ranges[player]) != PE_SOLVER_OK ||
             !ranges[player]) {
@@ -1761,6 +1770,7 @@ int main(int argc, char **argv)
     rules.showdown_samples = options.showdown_samples;
     rules.showdown_seed = options.seed;
     rules.complete_ranges = complete_ranges;
+    rules.complete_mask = complete_mask;
     {
         int level = parse_board_abstraction(options.board_abstraction);
         if (level < 0)

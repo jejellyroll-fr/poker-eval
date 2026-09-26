@@ -35,6 +35,17 @@ static int valid_common(mask_t board, uint8_t players)
            players <= PE_PREFLOP_MAX_PLAYERS && mask_popcount(board) <= 5;
 }
 
+static uint8_t all_players_mask(uint8_t player_count)
+{
+    return (uint8_t)((1u << player_count) - 1u);
+}
+
+static int player_complete(const pe_preflop_deal_sampler_t *sampler,
+                           uint8_t player)
+{
+    return (int)((sampler->complete_mask >> player) & 1u);
+}
+
 /* A complete-range deal needs hole_cards per player out of the live deck. */
 static int complete_deal_fits(const pe_preflop_deal_sampler_t *sampler)
 {
@@ -55,6 +66,7 @@ int pe_preflop_deal_sampler_init_holdem(
     out->ranges = ranges;
     /* NULL ranges: every player holds any hand (see complete_ranges). */
     out->complete_ranges = (uint8_t)(ranges == NULL);
+    out->complete_mask = ranges == NULL ? all_players_mask(player_count) : 0u;
     if (!ranges && !complete_deal_fits(out)) return -1;
     return 0;
 }
@@ -79,7 +91,32 @@ int pe_preflop_deal_sampler_init_omaha(
     out->hole_cards = hole_cards;
     out->ranges = ranges;
     out->complete_ranges = (uint8_t)(ranges == NULL);
+    out->complete_mask = ranges == NULL ? all_players_mask(player_count) : 0u;
     if (!ranges && !complete_deal_fits(out)) return -1;
+    return 0;
+}
+
+int pe_preflop_deal_sampler_set_complete(pe_preflop_deal_sampler_t *sampler,
+                                         uint8_t player)
+{
+    if (!sampler || player >= sampler->player_count)
+        return -1;
+    /* A complete player has no combo list to walk; the sampler must have been
+       handed one (even a stub) so the other players' lists are present. */
+    if (!sampler->ranges)
+        return -1;
+    sampler->complete_mask |= (uint8_t)(1u << player);
+    if (sampler->complete_mask == all_players_mask(sampler->player_count))
+    {
+        /* Every player is complete after all: the closed-form draw replaces
+           the list-driven one, but only if the deal still fits. */
+        if (!complete_deal_fits(sampler))
+        {
+            sampler->complete_mask &= (uint8_t)~(1u << player);
+            return -1;
+        }
+        sampler->complete_ranges = 1u;
+    }
     return 0;
 }
 
@@ -89,6 +126,12 @@ int pe_preflop_deal_sampler_measure(const pe_preflop_deal_sampler_t *sampler,
 {
     if (!sampler || !out_deal_count || !out_weight_sum ||
         (!sampler->ranges && !sampler->complete_ranges))
+        return -1;
+    /* A mixed deal owns a full range whose combo list does not exist, so its
+       exact normalisation cannot be enumerated.  The all-complete case is
+       closed form below; anything in between is refused rather than
+       approximated. */
+    if (sampler->complete_mask && !sampler->complete_ranges)
         return -1;
     if (sampler->complete_ranges)
     {
@@ -148,13 +191,26 @@ static double range_weight(const pe_preflop_deal_sampler_t *sampler,
             .combos[index].weight;
 }
 
-static int has_completion(const pe_preflop_deal_sampler_t *sampler,
-                          uint8_t player, mask_t used)
+/* Is there a completion of order[pos..order_count) that avoids `used`?
+   Complete-range players are ordered last, so once one is reached every
+   remaining player is complete and the only question is whether the deck
+   still holds hole_cards for each of them. */
+static int has_completion_from(const pe_preflop_deal_sampler_t *sampler,
+                               const uint8_t *order, uint8_t order_count,
+                               uint8_t pos, mask_t used)
 {
     size_t count;
+    uint8_t player;
 
-    if (player == sampler->player_count)
+    if (pos == order_count)
         return 1;
+    player = order[pos];
+    if (player_complete(sampler, player))
+    {
+        unsigned live = 52u - (unsigned)mask_popcount(used);
+        return live >= (unsigned)sampler->hole_cards *
+                           (unsigned)(order_count - pos);
+    }
     count = range_count(sampler, player);
     for (size_t i = 0u; i < count; ++i)
     {
@@ -164,10 +220,33 @@ static int has_completion(const pe_preflop_deal_sampler_t *sampler,
             mask_popcount(cards) != sampler->hole_cards ||
             mask_intersects(cards, used) || !finite_positive(weight))
             continue;
-        if (has_completion(sampler, (uint8_t)(player + 1u), used | cards))
+        if (has_completion_from(sampler, order, order_count,
+                                (uint8_t)(pos + 1u), used | cards))
             return 1;
     }
     return 0;
+}
+
+/* Uniform n-subset of the live deck, excluding `used`.  Rejection sampling:
+   at least (live - n + 1) of every 52 cards are acceptable, so it terminates
+   quickly for any legal player/board count. */
+static void draw_uniform_hole(pe_rng_t *rng, mask_t used, uint8_t hole_cards,
+                              mask_t *out_hole)
+{
+    mask_t hole = MASK_EMPTY;
+    for (uint8_t drawn = 0u; drawn < hole_cards; ++drawn)
+    {
+        for (;;)
+        {
+            uint32_t card = pe_rng_below(rng, 52u);
+            mask_t bit = mask_set(MASK_EMPTY, (int)card);
+            if (mask_intersects(bit, used) || mask_intersects(bit, hole))
+                continue;
+            hole |= bit;
+            break;
+        }
+    }
+    *out_hole = hole;
 }
 
 /* Complete ranges: every player holds any hand, so the deal is a uniform
@@ -197,21 +276,7 @@ static int sample_complete(const pe_preflop_deal_sampler_t *sampler,
 
         if (live < (unsigned)sampler->hole_cards || !finite_positive(total))
             return -1;
-        /* Uniform n-subset of the live deck: reject cards already taken.
-           Every draw has at least (live - n + 1) acceptable cards out of 52,
-           so this terminates quickly for any legal player/board count. */
-        for (uint8_t drawn = 0u; drawn < sampler->hole_cards; ++drawn)
-        {
-            for (;;)
-            {
-                uint32_t card = pe_rng_below(rng, 52u);
-                mask_t bit = mask_set(MASK_EMPTY, (int)card);
-                if (mask_intersects(bit, used) || mask_intersects(bit, hole))
-                    continue;
-                hole |= bit;
-                break;
-            }
-        }
+        draw_uniform_hole(rng, used, sampler->hole_cards, &hole);
         out->holes[player] = hole;
         used |= hole;
         proposal /= total;
@@ -224,11 +289,18 @@ static int sample_complete(const pe_preflop_deal_sampler_t *sampler,
 /* Draw from a card-removal proposal that excludes prefixes with no complete
    continuation. This avoids conditioning a sequential proposal on retries:
    proposal_probability is the probability of the returned deal under the
-   actual proposal, so target/proposal remains an unbiased importance weight. */
+   actual proposal, so target/proposal remains an unbiased importance weight.
+
+   List-driven players are placed first and complete-range players last: a
+   complete player's hole cards are unknown until drawn, so no restricted
+   player may be made to depend on what it leaves behind.  When every player
+   is list-driven this is exactly the original in-seat order. */
 static int sample_sequential(const pe_preflop_deal_sampler_t *sampler,
                              pe_rng_t *rng,
                              pe_preflop_deal_sample_t *out)
 {
+    uint8_t order[PE_PREFLOP_MAX_PLAYERS];
+    uint8_t order_count = 0u;
     mask_t used;
     double target = 1.0;
     double proposal = 1.0;
@@ -237,51 +309,78 @@ static int sample_sequential(const pe_preflop_deal_sampler_t *sampler,
         !valid_variant(sampler->variant, sampler->hole_cards))
         return -1;
     memset(out, 0, sizeof(*out));
-    used = sampler->board;
     for (uint8_t player = 0u; player < sampler->player_count; ++player)
+        if (!player_complete(sampler, player))
+            order[order_count++] = player;
+    for (uint8_t player = 0u; player < sampler->player_count; ++player)
+        if (player_complete(sampler, player))
+            order[order_count++] = player;
+    used = sampler->board;
+    for (uint8_t pos = 0u; pos < order_count; ++pos)
     {
-        double total = 0.0;
-        double draw;
-        double cumulative = 0.0;
-        size_t selected = SIZE_MAX;
-        size_t last_legal = SIZE_MAX;
-        size_t count = range_count(sampler, player);
-        for (size_t i = 0u; i < count; ++i)
+        uint8_t player = order[pos];
+        if (player_complete(sampler, player))
         {
-            mask_t cards = range_cards(sampler, player, i);
-            double weight = range_weight(sampler, player, i);
-            if (!mask_is_valid(cards) || mask_popcount(cards) != sampler->hole_cards ||
-                mask_intersects(cards, used) || !finite_positive(weight) ||
-                !has_completion(sampler, (uint8_t)(player + 1u),
-                                used | cards))
-                continue;
-            total += weight;
+            unsigned live = 52u - (unsigned)mask_popcount(used);
+            double total = combinations(live, sampler->hole_cards);
+            mask_t hole;
+            if (live < (unsigned)sampler->hole_cards ||
+                !finite_positive(total))
+                return -1;
+            draw_uniform_hole(rng, used, sampler->hole_cards, &hole);
+            out->holes[player] = hole;
+            used |= hole;
+            /* Weight 1, legal total C(live, n): the same term the
+               all-complete path contributes. */
+            proposal /= total;
+            continue;
         }
-        if (!finite_positive(total)) return -1;
-        draw = pe_rng_uniform01(rng) * total;
-        for (size_t i = 0u; i < count; ++i)
         {
-            mask_t cards = range_cards(sampler, player, i);
-            double weight = range_weight(sampler, player, i);
-            if (!mask_is_valid(cards) || mask_popcount(cards) != sampler->hole_cards ||
-                mask_intersects(cards, used) || !finite_positive(weight) ||
-                !has_completion(sampler, (uint8_t)(player + 1u),
-                                used | cards))
-                continue;
-            last_legal = i;
-            cumulative += weight;
-            if (draw < cumulative)
+            double total = 0.0;
+            double draw;
+            double cumulative = 0.0;
+            size_t selected = SIZE_MAX;
+            size_t last_legal = SIZE_MAX;
+            size_t count = range_count(sampler, player);
+            for (size_t i = 0u; i < count; ++i)
             {
-                selected = i;
-                break;
+                mask_t cards = range_cards(sampler, player, i);
+                double weight = range_weight(sampler, player, i);
+                if (!mask_is_valid(cards) ||
+                    mask_popcount(cards) != sampler->hole_cards ||
+                    mask_intersects(cards, used) || !finite_positive(weight) ||
+                    !has_completion_from(sampler, order, order_count,
+                                         (uint8_t)(pos + 1u), used | cards))
+                    continue;
+                total += weight;
             }
+            if (!finite_positive(total)) return -1;
+            draw = pe_rng_uniform01(rng) * total;
+            for (size_t i = 0u; i < count; ++i)
+            {
+                mask_t cards = range_cards(sampler, player, i);
+                double weight = range_weight(sampler, player, i);
+                if (!mask_is_valid(cards) ||
+                    mask_popcount(cards) != sampler->hole_cards ||
+                    mask_intersects(cards, used) || !finite_positive(weight) ||
+                    !has_completion_from(sampler, order, order_count,
+                                         (uint8_t)(pos + 1u), used | cards))
+                    continue;
+                last_legal = i;
+                cumulative += weight;
+                if (draw < cumulative)
+                {
+                    selected = i;
+                    break;
+                }
+            }
+            if (selected == SIZE_MAX) selected = last_legal;
+            if (selected == SIZE_MAX) return -1;
+            out->holes[player] = range_cards(sampler, player, selected);
+            used |= out->holes[player];
+            target *= range_weight(sampler, player, selected);
+            proposal *= range_weight(sampler, player, selected) / total;
         }
-        if (selected == SIZE_MAX) selected = last_legal;
-        if (selected == SIZE_MAX) return -1;
-        out->holes[player] = range_cards(sampler, player, selected);
-        used |= out->holes[player];
-        target *= range_weight(sampler, player, selected);
-        proposal *= range_weight(sampler, player, selected) / total;
     }
     out->target_weight = target;
     out->proposal_probability = proposal;

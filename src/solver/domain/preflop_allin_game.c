@@ -1291,6 +1291,7 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     double stacks_after[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     int player;
+    uint8_t complete_mask;
 
     if (!rules || rules->player_count < 2 ||
         rules->player_count > PE_PREFLOP_ALLIN_MAX_PLAYERS ||
@@ -1321,12 +1322,17 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
          * its street, would silently solve a different spot than asked. */
         return NULL;
     }
+    /* complete_ranges is the all-players case; complete_mask names the
+       complete players of a mixed spot (one restricted, one any-hand). */
+    complete_mask = rules->complete_ranges
+        ? (uint8_t)((1u << rules->player_count) - 1u)
+        : rules->complete_mask;
     for (player = 0; player < rules->player_count; ++player)
     {
         if (!(rules->stacks[player] > 0.0))
             return NULL;
         /* Complete ranges carry no combo list to validate. */
-        if (rules->complete_ranges)
+        if (complete_mask & (uint8_t)(1u << player))
             continue;
         if (!ranges || !ranges[player] || !ranges[player]->combos ||
             ranges[player]->count == 0)
@@ -1340,10 +1346,11 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->ranges = ranges;
 
     /* Convert prepared ranges to mask-based combos for the deal sampler.
-     * Skipped entirely for complete ranges: there is no list to build. */
-    for (player = 0; !rules->complete_ranges && player < rules->player_count;
-         ++player)
+     * Skipped for complete players: there is no list to build. */
+    for (player = 0; player < rules->player_count; ++player)
     {
+        if (complete_mask & (uint8_t)(1u << player))
+            continue;
         pe_range_view_t view = pe_solver_range_view(ranges[player]);
         unsigned required_cards = rules->variant == PE_PREFLOP_HOLDEM ? 2u :
             rules->variant == PE_PREFLOP_PLO4 ? 4u :
@@ -1406,6 +1413,19 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     {
         pe_preflop_allin_game_destroy(game);
         return NULL;
+    }
+    /* Mixed spot: name the complete players to the sampler.  They draw from
+       the live deck, ordered after the list-driven players. */
+    if (!rules->complete_ranges && complete_mask)
+    {
+        for (player = 0; player < rules->player_count; ++player)
+            if ((complete_mask & (uint8_t)(1u << player)) &&
+                pe_preflop_deal_sampler_set_complete(
+                    &game->sampler, (uint8_t)player) != 0)
+            {
+                pe_preflop_allin_game_destroy(game);
+                return NULL;
+            }
     }
 
     /* Forced bets: blinds plus an optional ante for every later seat. */
