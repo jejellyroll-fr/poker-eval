@@ -68,6 +68,7 @@ on board **Ks 9d 4c 2h Ts**.
    written as the sizes of the non-empty suit groups largest first:
    `AAxxx[suits=2-2-1]` (PLO5), `AAKKxx[suits=2-2-2]` (PLO6). The four-card
    suffixes (`ds`, `ss`, `ts`, `qs`, `r`) are refused on five- and six-card
-   hands rather than guessed at. Use the same kind of range for both
-   players — mixing a pattern with `100%` is not supported.
+   hands rather than guessed at. A pattern and `100%` can be mixed freely:
+   the full-range player is drawn from the live deck, so no 2.6M/20.4M-combo
+   list is built for it.
 5. **Solve this spot**.

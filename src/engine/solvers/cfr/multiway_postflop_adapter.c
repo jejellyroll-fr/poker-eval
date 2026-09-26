@@ -2461,6 +2461,33 @@ int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
     return applied;
 }
 
+static int mpf_rule_hole_cards(mpf_rule_t rules)
+{
+    switch (rules)
+    {
+    case MPF_RULE_HOLDEM:  return 2;
+    case MPF_RULE_PLO4:    return 4;
+    case MPF_RULE_PLO5:    return 5;
+    case MPF_RULE_PLO6:    return 6;
+    default:               return 0;   /* SHORTDECK: 52-indexing does not hold */
+    }
+}
+
+static int mpf_player_complete(const mpf_config_t *cfg, int p)
+{
+    return cfg->complete_range[p] ? 1 : 0;
+}
+
+/* A player whose hole is not fixed and whose range is wider than one combo is
+   dealt by the root private chance node.  A complete range qualifies even
+   though it has no combo list at all. */
+static int mpf_player_needs_deal(const mpf_config_t *cfg, int p)
+{
+    if (mpf_player_complete(cfg, p))
+        return 1;
+    return cfg->range[p] != NULL && pe_solver_range_view(cfg->range[p]).count > 1;
+}
+
 /*
  * Resolve the private ranges into fixed holes (RNG-02).
  *
@@ -2468,8 +2495,9 @@ int mpf_apply_locked_strategies(mpf_state_t *root_state, cfr_storage_t *storage)
  * is a bit-for-bit walk rather than a rank/suit round trip.
  *
  * A one-combo range is a fixed hand written another way and is materialised
- * here. Anything wider is left alone: the root private chance node deals it
- * (RNG-03), and writing a hole here would pin the player to one combo.
+ * here. Anything wider -- and a complete range, which has no list at all -- is
+ * left alone: the root private chance node deals it (RNG-03), and writing a
+ * hole here would pin the player to one combo.
  *
  * Returns 0, or -1 on a range that is unprepared or empty.
  */
@@ -2481,7 +2509,7 @@ static int mpf_resolve_ranges(const mpf_config_t *cfg, mask_t *out_hole,
         pe_range_view_t view;
         mask_t m = MASK_EMPTY;
 
-        if (cfg->range[p] == NULL)
+        if (cfg->range[p] == NULL || mpf_player_complete(cfg, p))
             continue;
 
         if (!pe_solver_range_is_prepared(cfg->range[p], 1e-9))
@@ -2633,6 +2661,13 @@ static int mpf_build_private_deals_sampled(const mpf_config_t *cfg,
 
 static int mpf_range_option_count(const mpf_config_t *cfg, int p)
 {
+    if (mpf_player_complete(cfg, p))
+    {
+        int hole_cards = mpf_rule_hole_cards(cfg->rules);
+        if (hole_cards <= 0)
+            return 0;
+        return (int)pe_comb_count(52u, (unsigned)hole_cards);
+    }
     if (cfg->range[p] != NULL)
         return (int)pe_solver_range_view(cfg->range[p]).count;
     return 1;   /* the fixed hole, or an empty hand */
@@ -2641,6 +2676,25 @@ static int mpf_range_option_count(const mpf_config_t *cfg, int p)
 static void mpf_range_option(const mpf_config_t *cfg, int p, int idx,
                              mask_t *out_hole, double *out_weight)
 {
+    if (mpf_player_complete(cfg, p))
+    {
+        int hole_cards = mpf_rule_hole_cards(cfg->rules);
+        unsigned cards[PE_COMB_MAX_K];
+        mask_t m = MASK_EMPTY;
+        if (hole_cards <= 0 || idx < 0 ||
+            pe_comb_unrank(52u, (unsigned)hole_cards, (uint64_t)idx, cards) !=
+                PE_SOLVER_OK)
+        {
+            *out_hole = MASK_EMPTY;
+            *out_weight = 0.0;
+            return;
+        }
+        for (int i = 0; i < hole_cards; ++i)
+            m = mask_set(m, (int)cards[i]);
+        *out_hole = m;
+        *out_weight = 1.0;
+        return;
+    }
     if (cfg->range[p] != NULL)
     {
         pe_range_view_t view = pe_solver_range_view(cfg->range[p]);
@@ -2955,7 +3009,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
        has — which is what keeps every existing configuration bit-identical. */
     int needs_private_deal = 0;
     for (int i = 0; i < cfg->num_players; ++i)
-        if (cfg->range[i] != NULL && pe_solver_range_view(cfg->range[i]).count > 1)
+        if (mpf_player_needs_deal(cfg, i))
             needs_private_deal = 1;
 
     for (int i = 0; i < cfg->num_players; ++i)
@@ -3143,7 +3197,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
            holes in place would let an infoset key see cards the player has
            not been given. */
         for (int i = 0; i < cfg->num_players; ++i)
-            if (cfg->range[i] != NULL && pe_solver_range_view(cfg->range[i]).count > 1)
+            if (mpf_player_needs_deal(cfg, i))
                 out_state->hole[i] = MASK_EMPTY;
     }
     /* FEAT-14 (#150): folded-range card bunching configuration. Copied into

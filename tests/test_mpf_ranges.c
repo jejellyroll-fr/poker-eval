@@ -434,6 +434,123 @@ static void test_unprepared_range_is_refused(void)
     pe_range_free(r);
 }
 
+/* ------------------------------------------------------------------ *
+ * Complete ranges: any hand, drawn without a combo list
+ * ------------------------------------------------------------------ */
+
+/* A preflop spot, so the live deck is the whole 52 cards and the counts are
+   the textbook binomials. */
+static void configure_preflop(mpf_config_t *cfg, const EvalContext *ctx,
+                              mpf_rule_t rules)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->ctx = ctx;
+    cfg->rules = rules;
+    cfg->num_players = 2;
+    cfg->button_index = 0;
+    cfg->start_street = MPF_STREET_PREFLOP;
+    cfg->stacks[0] = 100.0;
+    cfg->stacks[1] = 100.0;
+    cfg->sb = 0.5;
+    cfg->bb = 1.0;
+    cfg->bet_sizes_common[0] = 1.0;
+    cfg->bet_size_count_common = 1;
+    cfg->raise_cap = 1;
+    cfg->enable_pot_sizing = 0;
+    cfg->preflop.defined = 1;
+    cfg->preflop.has_to_act = 1;
+    cfg->preflop.to_act = 0;
+    cfg->preflop.has_pot = 1;
+    cfg->preflop.pot = 1.5;
+    cfg->preflop.has_to_call = 1;
+    cfg->preflop.to_call = 1.0;
+}
+
+/*
+ * One complete Hold'em range against a fixed hand enumerates the same
+ * C(52,2) = 1326 combos an explicit full range would, minus the 101 pairs
+ * that need Ah or Kh: 1225 legal deals, each with weight 1/1225.  That is the
+ * whole point of the complete path -- no 1326-combo list is built for the
+ * player who holds it.
+ */
+static void test_complete_range_deals_uniform_hands(void)
+{
+    const EvalContext *ctx = g_ctx;
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+    mask_t fixed = mask_of("AhKh");
+    double total = 0.0;
+
+    CHECK(fixed != MASK_EMPTY, "hole setup failed");
+    configure_preflop(&cfg, ctx, MPF_RULE_HOLDEM);
+    cfg.complete_range[0] = 1;
+    cfg.hole[1] = fixed;
+    cfg.hole_specified[1] = 1;
+
+    CHECK(mpf_build_game(&cfg, &game, &root) == 0, "build with a complete range failed");
+    CHECK(root.private_pending, "a complete range did not create a deal node");
+    CHECK(root.private_deal_count == 1225,
+          "complete AA-deck range against AhKh should leave 1225 deals, got %d",
+          root.private_deal_count);
+
+    for (int i = 0; i < root.private_deal_count; ++i)
+    {
+        mask_t a = root.private_deals[i].hole[0];
+        CHECK(mask_to_array_count_test(a) == 2, "deal %d has %zu hole cards",
+              i, mask_to_array_count_test(a));
+        CHECK((a & fixed) == 0, "deal %d reuses Ah or Kh", i);
+        CHECK(root.private_deals[i].hole[1] == fixed,
+              "deal %d did not keep the fixed hand", i);
+        CHECK(fabs(root.private_deals[i].weight - 1.0 / 1225.0) < 1e-12,
+              "deal %d weighs %.17g, expected 1/1225", i, root.private_deals[i].weight);
+        total += root.private_deals[i].weight;
+    }
+    CHECK(fabs(total - 1.0) < 1e-12, "deal weights sum to %.17g", total);
+
+    mpf_state_cleanup(&root);
+}
+
+/*
+ * PLO5 both-complete: C(52,5) is 2.6M per player, so the joint space is
+ * sampled and no combo list exists anywhere.  What must hold is that the
+ * deals are real five-card hands, disjoint, and equally weighted.
+ */
+static void test_complete_plo5_ranges_are_dealt(void)
+{
+    EvalConfig omaha_cfg = eval_config_omaha();
+    EvalContext *ctx = eval_context_create(&omaha_cfg);
+    mpf_config_t cfg;
+    cfr_game_t game;
+    mpf_state_t root;
+
+    if (ctx == NULL)
+    {
+        CHECK(0, "could not create an Omaha eval context");
+        return;
+    }
+
+    configure_preflop(&cfg, ctx, MPF_RULE_PLO5);
+    cfg.complete_range[0] = 1;
+    cfg.complete_range[1] = 1;
+
+    CHECK(mpf_build_game(&cfg, &game, &root) == 0, "build with two complete PLO5 ranges failed");
+    CHECK(root.private_pending, "two complete ranges did not create a deal node");
+    CHECK(root.private_deal_count > 0, "the sampled deal set is empty");
+
+    for (int i = 0; i < root.private_deal_count; ++i)
+    {
+        mask_t a = root.private_deals[i].hole[0];
+        mask_t b = root.private_deals[i].hole[1];
+        CHECK(mask_to_array_count_test(a) == 5 && mask_to_array_count_test(b) == 5,
+              "deal %d does not give five cards to each player", i);
+        CHECK((a & b) == 0, "deal %d gives the same card to both players", i);
+    }
+
+    mpf_state_cleanup(&root);
+    eval_context_destroy(ctx);
+}
+
 int main(void)
 {
     EvalConfig eval_cfg = eval_config_holdem();
@@ -450,6 +567,8 @@ int main(void)
     test_wide_range_is_dealt_not_refused();
     test_wide_range_is_refused();
     test_unprepared_range_is_refused();
+    test_complete_range_deals_uniform_hands();
+    test_complete_plo5_ranges_are_dealt();
 
     eval_context_destroy(g_ctx);
 

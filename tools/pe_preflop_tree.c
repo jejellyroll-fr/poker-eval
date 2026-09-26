@@ -21,6 +21,10 @@ typedef struct {
     double raise_sizes[MAX_TREE_ACTIONS];
     size_t raise_count;
     char ranges[PE_BETTING_MAX_PLAYERS][256];
+    /* "100%"/"random": the whole private range.  It has no combo list to
+       emit (PLO6 is 20.4M hands), so the profile records that it is complete
+       instead of materialising it. */
+    int complete[PE_BETTING_MAX_PLAYERS];
     pe_range_t *compiled_ranges[PE_BETTING_MAX_PLAYERS];
 } tree_context_t;
 
@@ -71,9 +75,15 @@ static int compile_ranges(tree_context_t *ctx)
     for (int player = 0; player < (int)PE_BETTING_MAX_PLAYERS; ++player) {
         const char *range_text;
         if (!ctx->ranges[player][0]) continue;
-        /* Keep the historical CLI spelling while compiling it to the real
-           complete range understood by the range adapter. */
-        range_text = strcmp(ctx->ranges[player], "random") == 0 ? "100%" : ctx->ranges[player];
+        /* The whole range is a profile flag, not a combo list: PLO6 is 20.4M
+           hands and cannot be materialised.  "random" is the historical CLI
+           spelling of the same thing. */
+        if (strcmp(ctx->ranges[player], "100%") == 0 ||
+            strcmp(ctx->ranges[player], "random") == 0) {
+            ctx->complete[player] = 1;
+            continue;
+        }
+        range_text = ctx->ranges[player];
         if (pe_solver_range_parse(ctx->game, range_text, dead,
                                   &ctx->compiled_ranges[player]) != PE_SOLVER_OK ||
             !ctx->compiled_ranges[player]) {
@@ -104,8 +114,16 @@ static int emit_range_profiles(tree_context_t *ctx)
     int emitted = 0;
     for (int player = 0; player < (int)PE_BETTING_MAX_PLAYERS; ++player) {
         const pe_range_t *range = ctx->compiled_ranges[player];
-        if (!range) continue;
+        if (!range && !ctx->complete[player]) continue;
         if (emitted++) fputc(',', ctx->out);
+        if (!range) {
+            /* Marked complete rather than expanded: the consumer can tell the
+               range is every hand, which no combo list could say. */
+            fprintf(ctx->out, "{\"id\":\"player%d-preflop\",\"player\":%d,"
+                    "\"street\":\"preflop\",\"complete\":true,\"combos\":[]}",
+                    player, player);
+            continue;
+        }
         fprintf(ctx->out, "{\"id\":\"player%d-preflop\",\"player\":%d,\"street\":\"preflop\",\"combos\":[",
                 player, player);
         for (size_t combo = 0u; combo < range->count; ++combo) {
@@ -219,7 +237,13 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--players") == 0 && i + 1 < argc) players = (uint8_t)atoi(argv[++i]);
-        else if (strcmp(argv[i], "--game") == 0 && i + 1 < argc && !parse_game(argv[++i], &ctx.game)) { usage(argv[0]); return 2; }
+        else if (strcmp(argv[i], "--game") == 0 && i + 1 < argc)
+        {
+            /* Call parse_game unconditionally: folding its success into the
+               test made every --game value (valid included) fall through to
+               usage, so no game but the default could ever be selected. */
+            if (!parse_game(argv[++i], &ctx.game)) { usage(argv[0]); return 2; }
+        }
         else if (strcmp(argv[i], "--max-combos") == 0 && i + 1 < argc) ctx.max_combos = (size_t)strtoull(argv[++i], NULL, 10);
         else if (strcmp(argv[i], "--stack") == 0 && i + 1 < argc && stack_count < (int)PE_BETTING_MAX_PLAYERS)
             stacks[stack_count++] = strtod(argv[++i], NULL);

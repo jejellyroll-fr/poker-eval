@@ -575,6 +575,18 @@ static int parse_rule_name(const char *name, mpf_rule_t *out_rule,
     return 0;
 }
 
+/* "100%"/"random" is the whole private range.  It has no combo list to build
+   (PLO6 is 20.4M hands), so the engine draws it from the live deck instead;
+   it is exactly the default the solver uses for an unstated range. */
+static int range_text_is_complete(const char *text)
+{
+    if (!text)
+        return 0;
+    while (*text == ' ' || *text == '\t')
+        ++text;
+    return strcmp(text, "100%") == 0 || strcmp(text, "random") == 0;
+}
+
 static int parse_street_name(const char *name, mpf_street_t *out)
 {
     if (!name || !out)
@@ -1460,6 +1472,7 @@ int main(int argc, char **argv)
     }
 
     pe_range_t *ranges[MPF_MAX_PLAYERS] = {0};
+    int complete_range[MPF_MAX_PLAYERS] = {0};
     pe_monker_range_set_t tree_ranges = {0};
     if (binary_tree)
     {
@@ -1501,6 +1514,11 @@ int main(int argc, char **argv)
     {
         if (!range_text[p])
             continue;
+        if (range_text_is_complete(range_text[p]))
+        {
+            complete_range[p] = 1;   /* drawn from the live deck, not built */
+            continue;
+        }
         if (pe_solver_range_parse(range_game, range_text[p],
                                   modern_to_std_mask(board_mask), &ranges[p]) != PE_SOLVER_OK)
         {
@@ -1556,6 +1574,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < cfg.num_players; ++i)
     {
         cfg.range[i] = ranges[i];
+        cfg.complete_range[i] = complete_range[i];
         cfg.stacks[i] = (binary_tree && monker_header.stacks[i] > 0.0) ?
             monker_header.stacks[i] : stack_amount;
     }
