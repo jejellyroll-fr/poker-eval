@@ -40,10 +40,17 @@ Three consequences matter in practice.
 
 1. **Blockers are applied before the final normalisation.** The normalisation
    runs over legal joints, not over each player's range independently. A combo
-   that blocks a large part of the other players' ranges therefore carries
-   proportionally *more* posterior mass than the raw reweighting
-   `prior x action_prob` suggests. Applying blockers after normalising gives a
-   plausible-looking distribution that is wrong.
+   that blocks a large part of the opponents' ranges takes part in *fewer*
+   legal joints, so it ends up with *less* posterior mass than the raw
+   per-player reweighting `prior x action_prob` would give it: the opponents'
+   availability is a factor in the numerator, and for a blocking combo that
+   factor is smaller.
+
+   Case B shows the direction. There, the combo holding the ace of hearts
+   shares a card with the opponent's `Ah Kh`, and conditioning on the fold
+   moves it from `2/3` down to `4/7`. Renormalising each range on its own —
+   the per-player version of Bayes' rule — reproduces the `2/3` and is wrong
+   exactly because it ignores that availability factor.
 
 2. **A folded player is still a player.** Folding does not return a hand to the
    deck. The folded player's cards stay out of the deck according to his
@@ -53,9 +60,10 @@ Three consequences matter in practice.
    `pe_preflop_deal_sampler_*` samples unconditionally from the ranges it is
    handed, by design: it is a deal primitive, not a game model. A caller that
    has observed an action expresses the posterior by handing it a
-   reach-conditioned range (weights multiplied by the action likelihood, then
-   renormalised). The sampler then removes cards, and the importance ratio it
-   returns keeps the estimator unbiased.
+   reach-conditioned range. Production ships that step as
+   `pe_range_bayesian_update`, which multiplies each weight by
+   `P(action | combo)` and renormalises; the sampler then removes cards, and
+   the importance ratio it returns keeps the estimator unbiased.
 
    `pe_holdem_river_terminal_values` is the production path that consumes a
    reach vector directly; `pe_blockers_compatible_sum` is the terminal-node
@@ -70,6 +78,15 @@ computed by exact enumeration, then drives the production sampler on the same
 fixture and compares. The oracle never calls the sampler, the deal iterator or
 the blocker code: an oracle that reuses the code under test proves only that
 the code agrees with itself.
+
+The fixture supplies **prior** weights only. The observed action is applied by
+the production conditioning step, `pe_range_bayesian_update`, and the sampler
+receives whatever that step produced. Nothing in the suite multiplies a prior
+by a likelihood itself, so a caller that stopped conditioning on the observed
+action cannot pass it. The suite also asserts that the step really ran — every
+range went through it, it asked for a likelihood at least once, it named the
+right combo index, cards and action every time, and it moved the weights the
+fixture marks as informative.
 
 | Case | Fixture | Exact claim |
 |------|---------|-------------|
@@ -92,8 +109,9 @@ reproduces.
 
 ## What the suite rejects
 
-Two variants of each fixture are measured alongside the correct one, so the
-suite fails if either mistake is reintroduced. Both were confirmed by mutation:
+Variants of each fixture are measured alongside the correct one, so the suite
+fails if any of the three mistakes is reintroduced. All three were confirmed by
+mutation, with the production code restored afterwards:
 
 - **Sampling from the unconditional range after an action was observed** — the
   suite reports 120 failures, e.g. the folded group coming back at `0.169`
@@ -101,6 +119,11 @@ suite fails if either mistake is reintroduced. Both were confirmed by mutation:
 - **Returning an acting player's private cards to the deck** — the suite
   reports 141 failures, e.g. a card's availability at `0.338` against an exact
   `0.0`.
+- **The conditioning step ignoring the observed action** — the suite reports
+  141 failures, 21 of them from the conditioning guards alone (every fixture
+  reports "asked for no likelihoods", and each of the eight fixtures that
+  should move reports "left the weights alone"), e.g. the folded group at
+  `0.169` against an exact `0.5`.
 
 ## Scope and remaining work
 
