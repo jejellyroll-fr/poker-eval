@@ -1544,6 +1544,7 @@ int main(int argc, char **argv)
     int root_street = parse_street_name(options.street);
     mask_t board_mask = 0u;
     int complete_ranges = 1;
+    uint8_t complete_mask = 0u;
     int interrupted = 0;
     if (root_street < 0)
     {
@@ -1697,7 +1698,6 @@ int main(int argc, char **argv)
      * players from the live deck after the explicit ones, at the same
      * importance weight, so a mixed spot no longer needs the full range
      * materialised. */
-    uint8_t complete_mask = 0u;
     for (int player = 0; player < options.players; ++player)
         if (range_is_complete(options.range[player]))
             complete_mask |= (uint8_t)(1u << player);
