@@ -114,6 +114,24 @@ counts by suit-group enumeration):
 As with the unsuffixed patterns, the same hand is reachable through several
 required/wildcard splits and the expansion deduplicates.
 
+## Mixing `100%` with an explicit range
+
+A full PLO5/PLO6 range is C(52,5) = 2.6M or C(52,6) = 20.4M hands, which is
+neither storable nor walkable per deal. The solver therefore draws a `100%`
+player straight from the live deck instead of materialising its combo list, and
+the direct solver used to require the whole table to agree on that choice:
+mixing `--range0 AAxxx --range1 100%` failed with `invalid plo5 range1: 100%`,
+blaming the full range for a limitation of the combination.
+
+A complete player now coexists with explicit ones. The sampler places the
+explicit players first and draws the `100%` players from what the live deck
+leaves, contributing the same `1 / C(live, n)` proposal and the same exact
+importance weight as an all-complete table. So `--range0 AAxxx --range1 100%`
+is a valid PLO5 spot, and there is no closed-form normalisation to enumerate for
+it (the range has no combo list); the importance weight stays exact regardless.
+`tests/test_plo_mixed_ranges.c` pins the equivalence against the enumerated
+path and the closed-form ratios.
+
 ## Resource guard
 
 One pattern may materialise at most 500 000 hands (`PLO_PATTERN_MAX_COMBOS`;

@@ -40,10 +40,20 @@ typedef struct
        combos (326 MB per player) and the sequential proposal is linear in
        that count per drawn deal.  Drawing uniformly from the live deck is
        mathematically the same proposal -- a uniform n-subset, with the
-       per-player legal total C(live, n) -- at O(hole_cards) per player.
-       Only the all-players-complete case is modelled, because a mixed deal
-       would need per-choice completion checks that have no closed form. */
+       per-player legal total C(live, n) -- at O(hole_cards) per player. */
     uint8_t complete_ranges;
+
+    /* Bit p set: player p holds the complete range while the others keep an
+       explicit combo list (a *mixed* deal).  Such a player still draws a
+       uniform hole-card subset from what is left, but the proposed deal is
+       ordered so the list-driven players are placed first and the complete
+       ones last; each complete player then contributes 1 / C(live, n) to the
+       proposal exactly as in the all-complete case, so the importance ratio
+       stays exact.  This is what lets a restricted range be mixed with
+       "100%" on a 5- or 6-card game, where materialising the full range is
+       not possible.  complete_ranges is the special case where every bit is
+       set; complete_mask then mirrors the player count. */
+    uint8_t complete_mask;
 
     /* Exact normalisation of the product range distribution.  When zero,
        sampling still applies target/proposal importance weighting, but the
@@ -69,6 +79,14 @@ int pe_preflop_deal_sampler_init_omaha(
     pe_preflop_deal_sampler_t *out, mask_t board,
     const pe_omaha_range_t *ranges, uint8_t player_count,
     uint8_t hole_cards);
+
+/* Declare player `player` as holding the complete range while the sampler was
+   initialised with an explicit range array (a mixed deal).  Its entry in that
+   array is ignored from then on: the player is drawn uniformly from the live
+   deck, ordered after every list-driven player.  Returns 0 on success, -1 for
+   a bad argument or a deal that no longer fits the live deck. */
+int pe_preflop_deal_sampler_set_complete(pe_preflop_deal_sampler_t *sampler,
+                                         uint8_t player);
 
 /* Exact product-range normalisation and legal joint-deal count. */
 int pe_preflop_deal_sampler_measure(const pe_preflop_deal_sampler_t *sampler,
