@@ -22,6 +22,21 @@
  * - Categories: `AAxx`, `AKds` (double-suited)
  * - PLO categories: `AADS`, `BROADWAYDS`, `RUNDOWN`
  *
+ * PLO5/PLO6 range notation (unambiguous suit structure):
+ * - Rank patterns: `AAxxx`, `AKQxx`, `AAKKxx`
+ * - Suit shape: `AAxxx[suits=2-2-1]`, `AAKKxx[suits=2-2-2]`
+ *
+ * The `[suits=...]` suffix is a **suit shape**: the sizes of the non-empty
+ * suit groups, largest first, separated by `-`, summing to the number of
+ * private cards.  `2-2-1` means two suits hold two cards each and one suit
+ * holds a single card.  The shape has to be written out because the four-card
+ * names do not survive the widening: for PLO4 `ds` is 2-2 and `ss` is 2-1-1,
+ * but `2-2` on five cards is ambiguous between 2-2-1 and 2-2-... nothing, and
+ * no six-card hand can be rainbow at all.  A shape listing a zero group
+ * (`2-2-0-0`), more than four groups, or a sum other than the card count is a
+ * parse error, as is a letter suffix on a five- or six-card token.  PLO4 keeps
+ * its existing suffix vocabulary unchanged.
+ *
  * @section range_example Example
  * @code{.c}
  * #include <poker_eval/range.h>
@@ -108,6 +123,28 @@ typedef struct {
     int allow_weights;     /**< Allow weight syntax like "AA:0.5" (default: 1) */
     double default_weight; /**< Default weight for unweighted hands (default: 1.0) */
 } pe_parse_opts_t;
+
+/**
+ * @brief Suit structure of a private hand, as group sizes rather than a name.
+ *
+ * `groups` holds the sizes of the non-empty suit groups in descending order,
+ * so a hand is described the same way for 4, 5 and 6 cards with no vocabulary
+ * to widen.  `AhAsKhKs` is 2-2; `AhAsKdQcJh` is 3-1-1; `AhKhQhJd9s` is
+ * 3-1-... in fact 3-1-1 for any five cards whose suits split 3/1/1.  The empty
+ * hand has `group_count == 0`.
+ *
+ * The representation is exact, not a name with an implied definition: a shape
+ * and the hand it describes agree on the number of cards, the number of suits
+ * used and the size of every group.  That is what lets the parser refuse a
+ * shape instead of guessing when a textual form does not have one meaning.
+ */
+#define PE_SUIT_SHAPE_MAX_GROUPS 6
+
+typedef struct {
+    unsigned char groups[PE_SUIT_SHAPE_MAX_GROUPS]; /**< Descending, all > 0 */
+    unsigned char group_count;                      /**< Non-empty groups */
+    unsigned char cards;                            /**< Sum of groups */
+} pe_suit_shape_t;
 
 /**
  * @brief Strategy likelihood callback returning P(action | combo).
@@ -227,6 +264,77 @@ extern POKEREVAL_EXPORT pe_status_t pe_range_bayesian_update(
     pe_action_likelihood_fn likelihood_fn,
     void *user_data
 );
+
+/**
+ * @brief Parse a suit shape such as "2-2-1".
+ *
+ * Accepts the group sizes in any order and canonicalises them to descending,
+ * so `1-2-2` and `2-2-1` produce the same shape.  Rejects anything that could
+ * mean more than one hand: a group of zero, a non-numeric or empty group, more
+ * groups than the deck has suits, more than six groups, a group larger than
+ * the number of ranks, and a sum that is not `cards`.  Nothing is inferred
+ * from a malformed shape — the caller gets 0 and the range parse fails.
+ *
+ * @param[in]  text  Shape text, e.g. "2-2-1" (not NUL-terminated past 64 chars)
+ * @param[in]  cards Number of private cards the shape must sum to (1..6)
+ * @param[out] out   Shape to fill on success
+ * @return 1 on success, 0 if the text is not a valid shape for `cards`
+ */
+extern POKEREVAL_EXPORT int pe_suit_shape_parse(
+    const char *text,
+    unsigned cards,
+    pe_suit_shape_t *out
+);
+
+/**
+ * @brief Suit shape of a concrete hand.
+ *
+ * @param[in]  hand Card mask of a private hand (1..6 cards)
+ * @param[out] out  Shape to fill
+ * @return 1 on success, 0 for an empty or wider-than-six-card mask
+ */
+extern POKEREVAL_EXPORT int pe_suit_shape_from_mask(
+    StdDeck_CardMask hand,
+    pe_suit_shape_t *out
+);
+
+/**
+ * @brief Render a shape as "2-2-1".
+ *
+ * @param[in]  shape    Shape to render
+ * @param[out] out      Destination buffer
+ * @param[in]  out_size Size of `out`
+ * @return Number of characters written (excluding the terminator), or 0 when
+ *         the buffer is too small or the arguments are invalid
+ */
+extern POKEREVAL_EXPORT int pe_suit_shape_format(
+    const pe_suit_shape_t *shape,
+    char *out,
+    size_t out_size
+);
+
+/**
+ * @brief Test two shapes for equality.
+ *
+ * @return 1 when both are valid shapes describing the same structure
+ */
+extern POKEREVAL_EXPORT int pe_suit_shape_equal(
+    const pe_suit_shape_t *a,
+    const pe_suit_shape_t *b
+);
+
+/**
+ * @brief Bytes held by a range's combo storage.
+ *
+ * The materialized combo count is `range->count`; this is what those combos
+ * cost, so a caller can decide against materialising a wide pattern before
+ * asking for it (the PLO5/PLO6 expander caps a single pattern at 500 000
+ * combos).  Combos are stored at capacity, not count.
+ *
+ * @param[in] range Range to measure (may be NULL)
+ * @return Bytes allocated for the combo array, 0 for NULL
+ */
+extern POKEREVAL_EXPORT size_t pe_range_memory_bytes(const pe_range_t *range);
 
 /**
  * @brief Compile a range (sort, deduplicate, optimize)

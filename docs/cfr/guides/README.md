@@ -10,6 +10,7 @@ can jump directly to the topic you need.
 | CFR Metrics | Runtime metrics API, snapshots, examples | planned — CLI/API exist, standalone guide absent |
 | Multiplayer Convergence Metrics | NashConv, per-player BR gaps, units, guarantees, sampling metadata (issue #234) | ✅ — see `convergence_metrics.md` |
 | Memory Metrics | bytes per infoset, subsystem breakdown, precision trade-offs, explicit storage tiers, adapter separation (issue #235) | ✅ — see `memory_metrics.md` |
+| PLO5/PLO6 Range Syntax | rank patterns, the suit-shape grammar, what is refused, resource guard (issue #236) | ✅ — see `plo_range_syntax.md` |
 | CFR Export Results | Post-run result exports (JSON / CSV) | planned — see `mpf_dump_results` |
 | CFR Performance | Perf counters & instrumentation tips | planned |
 | CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | planned — see `examples/4way_postflop/` |

@@ -65,13 +65,17 @@ static int pe_range_add_combo(pe_range_t *range, StdDeck_CardMask hand, double w
  * ranked tables are C(52,4), so a 5- or 6-card pattern sent through it came
  * back as FOUR-card hands.  This is the n-card expander.
  *
- * Deliberately NOT implemented here: the suit-property suffixes (ds, ss, ts,
- * qs, r).  Their four-card definitions are exact suit-count shapes -- ds is
- * 2-2-0-0, rainbow is 1-1-1-1 -- and those shapes do not carry over to five
- * and six cards on their own (six cards cannot be rainbow at all, and "double
- * suited" could mean 2-2-1-1 or 2-2-2-0).  Picking one would be inventing
- * notation rather than following it, so a suffixed 5/6-card pattern is
- * rejected with a message instead of guessed at.
+ * The suit-property suffixes (ds, ss, ts, qs, r) are still NOT accepted here.
+ * Their four-card definitions are exact suit-count shapes -- ds is 2-2-0-0,
+ * rainbow is 1-1-1-1 -- and those shapes do not carry over to five and six
+ * cards on their own (six cards cannot be rainbow at all, and "double suited"
+ * could mean 2-2-1-1 or 2-2-2-0).  Picking one would be inventing notation
+ * rather than following it, so a suffixed 5/6-card pattern stays rejected.
+ *
+ * What replaces the suffixes on this path is the shape itself:
+ * `AAxxx[suits=2-2-1]`.  The shape is the multiset of suit-group sizes, which
+ * is the one thing the four-card names were standing in for, and it is exact
+ * at every width.  See pe_suit_shape_parse() for what is refused.
  *
  * "At least" semantics, as in PPT: AAxx contains AhAsAcKd.  A hand is
  * therefore reachable through several required/wildcard splits, so the
@@ -85,6 +89,191 @@ static int plo_streq_ci(const char *lhs, const char *rhs)
         if (tolower((unsigned char)*lhs) != tolower((unsigned char)*rhs))
             return 0;
     return *lhs == '\0' && *rhs == '\0';
+}
+
+static int plo_starts_with_ci(const char *text, const char *prefix)
+{
+    for (; *prefix; ++text, ++prefix)
+        if (tolower((unsigned char)*text) != tolower((unsigned char)*prefix))
+            return 0;
+    return 1;
+}
+
+/* ---------------- Suit structure as a shape, not a name -----------------
+ *
+ * A suit suffix is a four-card word: ds is 2-2-0-0, ss is 2-1-1-0, ts is
+ * 3-1-0-0, qs is 4-0-0-0, r is 1-1-1-1.  Widening the hand breaks the words
+ * rather than the structure, so the structure is what is written down here:
+ * the sizes of the non-empty suit groups, largest first.  PLO5 2-2-1,
+ * PLO6 2-2-2.  Nothing is named, so nothing has to be guessed, and a shape
+ * that does not sum to the card count -- or that asks for more groups than
+ * the deck has suits -- is an error instead of a different hand. */
+
+static int pe_suit_shape_is_valid(const pe_suit_shape_t *shape)
+{
+    unsigned total = 0u;
+
+    if (!shape || shape->group_count == 0u ||
+        shape->group_count > (unsigned)StdDeck_Suit_COUNT ||
+        shape->cards == 0u || shape->cards > PE_SUIT_SHAPE_MAX_GROUPS)
+        return 0;
+
+    for (unsigned i = 0u; i < shape->group_count; ++i)
+    {
+        unsigned group = shape->groups[i];
+        if (group == 0u || group > (unsigned)StdDeck_Rank_COUNT ||
+            (i > 0u && shape->groups[i - 1u] < group))
+            return 0;
+        total += group;
+    }
+    return total == shape->cards;
+}
+
+int pe_suit_shape_equal(const pe_suit_shape_t *a, const pe_suit_shape_t *b)
+{
+    unsigned i;
+
+    if (!pe_suit_shape_is_valid(a) || !pe_suit_shape_is_valid(b))
+        return 0;
+    if (a->group_count != b->group_count || a->cards != b->cards)
+        return 0;
+    for (i = 0u; i < a->group_count; ++i)
+        if (a->groups[i] != b->groups[i])
+            return 0;
+    return 1;
+}
+
+int pe_suit_shape_parse(const char *text, unsigned cards, pe_suit_shape_t *out)
+{
+    unsigned char groups[PE_SUIT_SHAPE_MAX_GROUPS];
+    unsigned count = 0u;
+    unsigned total = 0u;
+    const char *p;
+
+    if (!text || !out || cards == 0u || cards > PE_SUIT_SHAPE_MAX_GROUPS)
+        return 0;
+
+    for (p = text;;)
+    {
+        unsigned value = 0u;
+
+        if (*p < '0' || *p > '9')
+            return 0;
+        while (*p >= '0' && *p <= '9')
+        {
+            value = value * 10u + (unsigned)(*p - '0');
+            if (value > (unsigned)StdDeck_Rank_COUNT)
+                return 0;
+            ++p;
+        }
+        /* A zero group would be a second spelling of a shape that already
+         * exists (2-2-0-0 vs 2-2), which is exactly the ambiguity this
+         * representation is meant to end. */
+        if (value == 0u || count == PE_SUIT_SHAPE_MAX_GROUPS)
+            return 0;
+        groups[count++] = (unsigned char)value;
+        total += value;
+        if (*p == '\0')
+            break;
+        if (*p != '-')
+            return 0;
+        ++p;
+    }
+
+    if (count > (unsigned)StdDeck_Suit_COUNT)
+        return 0;
+    if (total != cards)
+        return 0;
+
+    /* Canonical descending order: 1-2-2 and 2-2-1 are the same shape. */
+    for (unsigned i = 1u; i < count; ++i)
+    {
+        unsigned char key = groups[i];
+        unsigned j = i;
+        while (j > 0u && groups[j - 1u] < key)
+        {
+            groups[j] = groups[j - 1u];
+            --j;
+        }
+        groups[j] = key;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->cards = (unsigned char)cards;
+    out->group_count = (unsigned char)count;
+    for (unsigned i = 0u; i < count; ++i)
+        out->groups[i] = groups[i];
+    return 1;
+}
+
+int pe_suit_shape_from_mask(StdDeck_CardMask hand, pe_suit_shape_t *out)
+{
+    unsigned char groups[PE_SUIT_SHAPE_MAX_GROUPS];
+    unsigned count = 0u;
+    unsigned total = 0u;
+    int suit;
+
+    if (!out)
+        return 0;
+    for (suit = 0; suit < StdDeck_Suit_COUNT; ++suit)
+    {
+        unsigned in_suit = 0u;
+        int rank;
+        for (rank = 0; rank < StdDeck_Rank_COUNT; ++rank)
+            if (StdDeck_CardMask_CARD_IS_SET(hand,
+                                             StdDeck_MAKE_CARD(rank, suit)))
+                ++in_suit;
+        if (in_suit > 0u)
+            groups[count++] = (unsigned char)in_suit;
+        total += in_suit;
+    }
+    if (total == 0u || total > PE_SUIT_SHAPE_MAX_GROUPS)
+        return 0;
+
+    memset(out, 0, sizeof(*out));
+    out->cards = (unsigned char)total;
+    out->group_count = (unsigned char)count;
+    for (unsigned i = 0u; i < count; ++i)
+    {
+        unsigned at = 0u;
+        while (at < i && out->groups[at] >= groups[i])
+            ++at;
+        for (unsigned move = i; move > at; --move)
+            out->groups[move] = out->groups[move - 1u];
+        out->groups[at] = groups[i];
+    }
+    return 1;
+}
+
+int pe_suit_shape_format(const pe_suit_shape_t *shape, char *out, size_t out_size)
+{
+    size_t used = 0u;
+    unsigned i;
+
+    if (!shape || !out || out_size == 0u || shape->group_count == 0u ||
+        shape->group_count > PE_SUIT_SHAPE_MAX_GROUPS)
+        return 0;
+    for (i = 0u; i < shape->group_count; ++i)
+    {
+        int written;
+
+        if (shape->groups[i] == 0u)
+            return 0;
+        written = snprintf(out + used, out_size - used, "%s%u", i ? "-" : "",
+                           (unsigned)shape->groups[i]);
+        if (written < 0 || (size_t)written >= out_size - used)
+            return 0;
+        used += (size_t)written;
+    }
+    out[used] = '\0';
+    return (int)used;
+}
+
+size_t pe_range_memory_bytes(const pe_range_t *range)
+{
+    if (!range)
+        return 0u;
+    return range->capacity * sizeof(pe_combo_t);
 }
 
 typedef struct {
@@ -130,11 +319,21 @@ typedef struct {
     size_t capacity;
     StdDeck_CardMask dead;
     const plo_rank_pattern_t *pattern;
+    const pe_suit_shape_t *shape;   /* NULL when unconstrained */
     int overflow;
 } plo_expand_ctx_t;
 
 static int plo_expand_emit(plo_expand_ctx_t *ctx, StdDeck_CardMask hand)
 {
+    if (ctx->shape) {
+        pe_suit_shape_t actual;
+        /* Filtering at the leaf keeps the rejected shape out of the array
+         * entirely: a shape is a property of the whole six-card hand, so no
+         * prefix of the recursion can decide it. */
+        if (!pe_suit_shape_from_mask(hand, &actual) ||
+            !pe_suit_shape_equal(&actual, ctx->shape))
+            return 1;
+    }
     if (ctx->count == ctx->capacity) {
         size_t grown = ctx->capacity ? ctx->capacity * 2u : 4096u;
         StdDeck_CardMask *bigger;
@@ -195,7 +394,9 @@ static int plo_expand_required(plo_expand_ctx_t *ctx, StdDeck_CardMask hand,
 static int plo_rank_pattern_expand(pe_range_t *range,
                                    const plo_rank_pattern_t *pattern,
                                    StdDeck_CardMask dead_cards, double weight,
-                                   size_t expected_cards, int *out_overflow)
+                                   size_t expected_cards,
+                                   const pe_suit_shape_t *shape,
+                                   int *out_overflow)
 {
     plo_expand_ctx_t ctx;
     int ok = 1;
@@ -203,6 +404,7 @@ static int plo_rank_pattern_expand(pe_range_t *range,
     memset(&ctx, 0, sizeof(ctx));
     ctx.dead = dead_cards;
     ctx.pattern = pattern;
+    ctx.shape = shape;
     *out_overflow = 0;
 
     if (pattern->required_count + pattern->wildcards != expected_cards)
@@ -236,6 +438,46 @@ static int plo_rank_pattern_expand(pe_range_t *range,
     return ok;
 }
 
+/* Split a trailing `[suits=<shape>]` off `compact`, in place, and shorten
+ * `*length` (the caller's count of characters in `compact`) to what is left.
+ * The brackets are the whole grammar: one key, `suits=`, and a shape that has
+ * to be exact for this width.  An unknown key, an empty bracket, an unterminated bracket, a
+ * second bracket or embedded whitespace is a parse error rather than an
+ * ignored annotation, because ignoring it would accept a different range than
+ * the one written. */
+static int plo_split_suit_shape(char *compact, size_t *length,
+                                size_t expected_cards, pe_suit_shape_t *shape,
+                                int *has_shape)
+{
+    char *open = strchr(compact, '[');
+    char *close;
+
+    *has_shape = 0;
+    if (!open)
+        return strchr(compact, ']') == NULL;
+    if (*length == 0u || compact[*length - 1u] != ']')
+        return 0;
+    close = compact + *length - 1u;
+    if (strchr(open + 1, '['))
+        return 0;
+    *open = '\0';
+    *close = '\0';
+    *length = (size_t)(open - compact);
+
+    /* Keep the inner grammar whitespace-free so "2 - 2 - 1" cannot be read
+     * two ways; the token-level trim already happened for the outside. */
+    for (const char *p = open + 1; p < close; ++p)
+        if (isspace((unsigned char)*p))
+            return 0;
+
+    if (!plo_starts_with_ci(open + 1, "suits="))
+        return 0;
+    if (!pe_suit_shape_parse(open + 7, (unsigned)expected_cards, shape))
+        return 0;
+    *has_shape = 1;
+    return 1;
+}
+
 /* Suit-property suffixes are recognised only to reject them explicitly. */
 static int plo_has_suit_suffix(const char *compact)
 {
@@ -261,6 +503,8 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
                                    size_t expected_cards, double default_weight)
 {
     char compact[32];
+    pe_suit_shape_t shape;
+    int has_shape = 0;
     char *weight_text;
     size_t length = 0u;
     size_t cards;
@@ -289,6 +533,13 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
     }
     compact[length] = '\0';
 
+    /* A suit shape is an annotation on the token, so strip it before the rank
+     * or concrete-hand grammar sees the token; `length` then describes what is
+     * left.  `[suits=...]` is the documented spelling -- see range.h. */
+    if (!plo_split_suit_shape(compact, &length, expected_cards, &shape,
+                              &has_shape))
+        return 0;
+
     /* PPT rank pattern (AAxxx / AKQxx): n rank slots, 'x' for any rank.
      * Checked before the concrete-hand form, which is twice as long. */
     if (length == expected_cards) {
@@ -298,7 +549,8 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
             return 0;
         if (plo_rank_pattern_parse(compact, expected_cards, &pattern))
             return plo_rank_pattern_expand(range, &pattern, dead_cards, weight,
-                                           expected_cards, &overflow);
+                                           expected_cards,
+                                           has_shape ? &shape : NULL, &overflow);
         return 0;
     }
     if (length != expected_cards * 2u)
@@ -319,7 +571,18 @@ static int parse_fixed_omaha_token(pe_range_t *range, char *token,
         StdDeck_CardMask_SET(hand, card);
         ++cards;
     }
-    return cards == expected_cards && pe_range_add_combo(range, hand, weight);
+    if (cards != expected_cards)
+        return 0;
+    /* A concrete hand already has a shape; writing one is allowed only when it
+     * is the one the cards have, so `AsKsQd3c9h[suits=2-2-1]` round-trips and
+     * `AsKsQd3c9h[suits=3-1-1]` is refused instead of quietly re-read. */
+    if (has_shape) {
+        pe_suit_shape_t actual;
+        if (!pe_suit_shape_from_mask(hand, &actual) ||
+            !pe_suit_shape_equal(&actual, &shape))
+            return 0;
+    }
+    return pe_range_add_combo(range, hand, weight);
 }
 
 static pe_status_t parse_fixed_omaha_range(enum_game_t variant,
