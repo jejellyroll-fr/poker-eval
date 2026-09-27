@@ -15,8 +15,9 @@
 
 #include <poker_eval/solver/pe_hand_features.h>
 
-#include <math.h>
 #include <string.h>
+
+#include "finite_double.h"
 
 #include <poker_eval/core/eval.h>
 #include <poker_eval/core/handval.h>
@@ -335,7 +336,8 @@ static void hf_private_structure(const int *hole, int nh, pe_hand_features_t *f,
         f->longest_run = (uint8_t)best;
     }
 
-    memcpy(shape, suit_count, sizeof(shape));
+    for (int i = 0; i < HF_SUITS; ++i)
+        shape[i] = suit_count[i];
     for (int i = 0; i < HF_SUITS; ++i)
         for (int j = i + 1; j < HF_SUITS; ++j)
             if (shape[j] > shape[i])
@@ -344,7 +346,8 @@ static void hf_private_structure(const int *hole, int nh, pe_hand_features_t *f,
                 shape[i] = shape[j];
                 shape[j] = t;
             }
-    memcpy(f->suit_shape, shape, sizeof(shape));
+    for (int i = 0; i < HF_SUITS; ++i)
+        f->suit_shape[i] = shape[i];
     for (int s = 0; s < HF_SUITS; ++s)
         if (suit_count[s] >= 2)
             f->suited_groups++;
@@ -481,8 +484,12 @@ static void hf_evaluate(const pe_hf_board_t *b, const int *hole, int nh,
     /* Blockers. */
     for (int s = 0; s < HF_SUITS; ++s)
     {
+        /* A suit can still flush while the board can reach three of it:
+           two on board with a card to come, or one on the flop with two
+           to come (the backdoor case). */
         const int live = b->suit_count[s] >= 3 ||
-                         (b->suit_count[s] == 2 && b->card_count < 5);
+                         (b->suit_count[s] == 2 && b->card_count < 5) ||
+                         (b->suit_count[s] == 1 && b->card_count == 3);
         if (!live)
             continue;
         for (int i = 0; i < nh; ++i)
@@ -619,17 +626,19 @@ int pe_hf_key_matches(const pe_hand_features_t *features, uint64_t key)
     return features && pe_hf_key(features, pe_hf_key_dims(key)) == key;
 }
 
+/* Append a NUL-terminated literal, snprintf-style: count every byte, write
+   only what fits, and keep the buffer terminated. */
 static void hf_append(char *buf, size_t size, size_t *len, const char *text)
 {
-    size_t n = strlen(text);
-    if (buf && size && *len < size - 1u)
+    for (; *text; ++text)
     {
-        size_t room = size - 1u - *len;
-        size_t copy = n < room ? n : room;
-        memcpy(buf + *len, text, copy);
-        buf[*len + copy] = '\0';
+        if (buf && size && *len < size - 1u)
+        {
+            buf[*len] = *text;
+            buf[*len + 1u] = '\0';
+        }
+        ++*len;
     }
-    *len += n;
 }
 
 size_t pe_hf_key_format(uint64_t key, char *buf, size_t size)
@@ -767,7 +776,7 @@ size_t pe_hf_key_format(uint64_t key, char *buf, size_t size)
  * Aggregation
  * ------------------------------------------------------------------ */
 
-static int hf_finite_nonneg(double v) { return isfinite(v) && v >= 0.0; }
+static int hf_finite_nonneg(double v) { return pe_finite_double(v) && v >= 0.0; }
 
 pe_solver_status_t pe_strategy_bucket_aggregate(const pe_hf_board_t *board,
                                                 const pe_strategy_row_t *rows,
@@ -804,7 +813,7 @@ pe_solver_status_t pe_strategy_bucket_aggregate(const pe_hf_board_t *board,
         {
             if (!hf_finite_nonneg(row->freq[a]))
                 return PE_SOLVER_ERR_INVALID_CONFIG;
-            if (row->ev && !isfinite(row->ev[a]))
+            if (row->ev && !pe_finite_double(row->ev[a]))
                 return PE_SOLVER_ERR_INVALID_CONFIG;
         }
         if (pe_hand_features_compute(board, row->hand, &f) != PE_SOLVER_OK)
