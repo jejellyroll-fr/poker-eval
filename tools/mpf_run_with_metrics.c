@@ -1597,6 +1597,16 @@ int main(int argc, char **argv)
     cfg.board_card_count = board_count;
     for (int i = 0; i < board_count; ++i)
         cfg.board_cards[i] = board_cards[i];
+    /* The board past the selected street is unknown. Without chance nodes
+       the adapter would reveal the unset slots, which are zeros and so a
+       real card (2c), on every later street: an illegal runout that can
+       repeat a board card or collide with a hole card. Deal it instead.
+       Sampled traversals draw one runout per trajectory, so this is always
+       affordable there, and Hi/Lo is new enough to take it everywhere. A
+       full-tree high-only solve keeps its historical board handling, whose
+       cost the existing product smokes are sized against. */
+    if (board_count < 5 && (lane_b || showdown == MPF_SHOWDOWN_HILO8))
+        cfg.enable_chance_nodes = 1;
     cfg.bet_size_count_common = 1;
     cfg.bet_sizes_common[0] = bb_amount * 3.0;
     cfg.raise_cap = 4;

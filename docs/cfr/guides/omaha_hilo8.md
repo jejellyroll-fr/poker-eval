@@ -33,6 +33,14 @@ mpf_run_with_metrics --rules plo5-hilo8 --tree flop.json --lane-b --iterations 2
 `plo4-hilo8`, `plo5-hilo8` and `plo6-hilo8` parse ranges exactly like `plo4`,
 `plo5` and `plo6`.
 
+When the tree starts before the river, the command line knows only the cards
+of the selected street. A Hi/Lo run, like every `--lane-b` run, then deals the
+turn and river from the live deck through the adapter's chance nodes. Without
+them the adapter would reveal the unset board slots. Those slots are zeros,
+which is a real card (2c), so the runout would be illegal. A sampled run draws
+one runout per trajectory. A full-tree Hi/Lo run enumerates every runout, so
+it is only practical on a narrow spot.
+
 ## The rules the showdown applies
 
 For every live player the adapter computes a high value and, when one exists,
