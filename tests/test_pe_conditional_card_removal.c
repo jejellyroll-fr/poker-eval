@@ -1240,6 +1240,10 @@ static void test_invariant_certain_action_changes_nothing(void)
  * the "changing an unrelated card does not alter independent marginals"
  * invariant, and it is the one that catches a sampler that renormalises
  * against the wrong total.
+ *
+ * The oracle side only shows the statement is true. What catches the sampler
+ * is running both games through it: each sampled run must match its own
+ * oracle, and the two sampled marginals for A must agree with each other.
  */
 static void test_invariant_unrelated_cards_do_not_move_marginals(void)
 {
@@ -1272,6 +1276,7 @@ static void test_invariant_unrelated_cards_do_not_move_marginals(void)
     pe_oracle_game_t short_game = {short_ranges, 2u, MASK_EMPTY};
     pe_oracle_game_t long_game = {long_ranges, 2u, MASK_EMPTY};
     pe_oracle_result_t short_exact, long_exact;
+    mc_t short_mc, long_mc;
 
     (void)TWO; (void)THREE; (void)FOUR; (void)FIVE; (void)SIX; (void)SEVEN;
 
@@ -1287,6 +1292,32 @@ static void test_invariant_unrelated_cards_do_not_move_marginals(void)
               "player's range grew on unrelated cards",
               i, pe_oracle_combo_prob(&short_exact, 0, i),
               pe_oracle_combo_prob(&long_exact, 0, i));
+
+    /* Same statement, through production: the longer range must not move
+       A's sampled marginal either. Each run is also held to its oracle. */
+    if (run_holdem_fixture("invariant  short unrelated range", &short_game,
+                           0x1A1u, 40000u, &short_mc) == 0 &&
+        run_holdem_fixture("invariant  long unrelated range", &long_game,
+                           0x1A2u, 40000u, &long_mc) == 0)
+    {
+        for (size_t i = 0u; i < 3u; ++i)
+        {
+            double want = pe_oracle_combo_prob(&short_exact, 0, i);
+            double got_short = mc_combo_prob(&short_mc, 0, i);
+            double got_long = mc_combo_prob(&long_mc, 0, i);
+            /* Two independent estimates: their gap is bounded by the sum of
+               their own five-sigma tolerances. */
+            double tol =
+                pe_oracle_tolerance(want, mc_n_eff(&short_mc), MC_Z) +
+                pe_oracle_tolerance(want, mc_n_eff(&long_mc), MC_Z);
+
+            CHECK(fabs(got_short - got_long) <= tol,
+                  "invariant: sampled combo %zu moved from %.6f to %.6f when "
+                  "the other player's range grew on unrelated cards "
+                  "(tolerance %.2e)",
+                  i, got_short, got_long, tol);
+        }
+    }
 
     pe_oracle_result_free(&short_exact);
     pe_oracle_result_free(&long_exact);
