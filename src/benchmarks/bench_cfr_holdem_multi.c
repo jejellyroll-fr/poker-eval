@@ -732,7 +732,8 @@ static void compute_avg_ev(cfr_game_t *game, cfr_storage_t *storage, uint64_t st
         double weight = strategy[i];
         for (int p = 0; p < num_players; ++p)
             accum[p] += weight * child[p];
-        free((void *)(uintptr_t)next_state);
+        /* next_state is owned by the adapter (its parent's action cache),
+           not by this walk: mpf_state_cleanup on the root releases it. */
     }
     for (int p = 0; p < num_players; ++p)
         out[p] = accum[p];
@@ -1423,6 +1424,7 @@ int main(int argc, char **argv)
         if (g_stop_flag || g_force_exit)
         {
             cfr_storage_destroy(storage_local);
+            mpf_state_cleanup(&root_state);
             if (resume_path)
                 resume_path = NULL;
             break;
@@ -1454,6 +1456,9 @@ int main(int argc, char **argv)
             cfr_storage_iterate(storage_local, hero_dump_iter, &hero_total);
 
         cfr_storage_destroy(storage_local);
+        /* The root owns its stack index (and any trained abstraction model);
+           only mpf_state_cleanup releases them. */
+        mpf_state_cleanup(&root_state);
 
         if (resume_path)
             resume_path = NULL;
