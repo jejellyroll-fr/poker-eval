@@ -3,6 +3,8 @@
 #include <poker_eval/engine/solvers/cfr/mpf_stack_index.h>
 #include <poker_eval/engine/solvers/cfr/board_canonical.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/core/cardmask_compat.h>
+#include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/solver/pe_combinations.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1124,6 +1126,46 @@ static eval_t eval_omaha_high(const EvalContext *ctx, mask_t hole, mask_t board,
     return best;
 }
 
+/* #237: an 8-or-better low plays three board cards whose ranks must differ
+ * and be A or 2..8. A board without three such ranks gives nobody a low,
+ * whatever they hold, so the per-player low evaluation can be skipped. */
+static int mpf_board_allows_low8(mask_t board)
+{
+    int low_ranks = 0;
+    for (int rank = MODERN_RANK_2; rank <= MODERN_RANK_8; ++rank)
+    {
+        for (int suit = 0; suit < MODERN_SUIT_COUNT; ++suit)
+        {
+            if (mask_is_set(board, MODERN_MAKE_CARD(rank, suit)))
+            {
+                low_ranks++;
+                break;
+            }
+        }
+    }
+    for (int suit = 0; suit < MODERN_SUIT_COUNT; ++suit)
+    {
+        if (mask_is_set(board, MODERN_MAKE_CARD(MODERN_RANK_A, suit)))
+        {
+            low_ranks++;
+            break;
+        }
+    }
+    return low_ranks >= 3;
+}
+
+/* #237: best A-5 low that is 8-or-better, from exactly two hole cards and
+ * three board cards, or LowHandVal_NOTHING. A smaller value is a better low,
+ * and LowHandVal_NOTHING compares above every real low. */
+static LowHandVal eval_omaha_low8(mask_t hole, mask_t board)
+{
+    LowHandVal low = LowHandVal_NOTHING;
+    if (StdDeck_OmahaHiLow8_EVAL(mask_t_to_cardmask(hole),
+                                 mask_t_to_cardmask(board), NULL, &low) != 0)
+        return LowHandVal_NOTHING;
+    return low;
+}
+
 static void mpf_state_release_chance_children(mpf_state_t *st)
 {
     for (int i = 0; i < st->chance_children_count && i < 52; ++i)
@@ -1914,6 +1956,21 @@ static void mpf_compute_utilities(mpf_state_t *st)
         hand_val[p] = value;
     }
 
+    /* #237: in Hi/Lo every active hand also gets its 8-or-better low, or
+       LowHandVal_NOTHING when it has none. */
+    const int hilo = st->showdown == MPF_SHOWDOWN_HILO8;
+    LowHandVal low_val[MPF_MAX_PLAYERS];
+    if (hilo)
+    {
+        const int board_low = mpf_board_allows_low8(board);
+        for (int idx = 0; idx < act_cnt; ++idx)
+        {
+            int p = active_players[idx];
+            low_val[p] = board_low ? eval_omaha_low8(st->hole[p], board)
+                                   : LowHandVal_NOTHING;
+        }
+    }
+
     /* Award each side pot to the best hand among the players who can
        win it.  The pot contributed by a layer of invested amounts is
        shared by the players who invested at least that much; folded
@@ -1998,9 +2055,43 @@ static void mpf_compute_utilities(mpf_state_t *st)
                    players' contributions, with rake applied. */
                 double layer_pot = pe_apply_rake(layer * (double)n_layer_players,
                                                 &st->rake);
-                double share = layer_pot / (double)win_cnt;
+
+                /* #237: Hi/Lo halves the raked layer. The low half goes to
+                   the best qualifying low among the same entitled players;
+                   when none of them has one, it stays with the high. */
+                int low_winners[MPF_MAX_PLAYERS];
+                int low_cnt = 0;
+                if (hilo)
+                {
+                    LowHandVal best_low = LowHandVal_NOTHING;
+                    for (int k = 0; k < n_layer_players; ++k)
+                    {
+                        int p = layer_players[k];
+                        if (!st->active[p] || low_val[p] == LowHandVal_NOTHING)
+                            continue;
+                        if (low_cnt == 0 || low_val[p] < best_low)
+                        {
+                            best_low = low_val[p];
+                            low_winners[0] = p;
+                            low_cnt = 1;
+                        }
+                        else if (low_val[p] == best_low)
+                        {
+                            low_winners[low_cnt++] = p;
+                        }
+                    }
+                }
+
+                double high_pot = low_cnt > 0 ? 0.5 * layer_pot : layer_pot;
+                double share = high_pot / (double)win_cnt;
                 for (int i = 0; i < win_cnt; ++i)
                     st->utilities[winners[i]] += share;
+                if (low_cnt > 0)
+                {
+                    double low_share = (layer_pot - high_pot) / (double)low_cnt;
+                    for (int i = 0; i < low_cnt; ++i)
+                        st->utilities[low_winners[i]] += low_share;
+                }
             }
             else
             {
@@ -2968,11 +3059,35 @@ static int mpf_prepare_abstraction(const mpf_config_t *cfg, mpf_state_t *st)
     return 0;
 }
 
+/* #237: Hi/Lo is an Omaha payoff model. Refuse it anywhere its two halves
+ * would not mean what they say: outside PLO4/5/6, and with a strength-bucket
+ * abstraction, whose buckets rank hands by high strength alone and would merge
+ * a nut low with an unplayable one. An unknown value is refused rather than
+ * read as high-only. */
+static int mpf_showdown_config_invalid(const mpf_config_t *cfg)
+{
+    switch (cfg->showdown)
+    {
+    case MPF_SHOWDOWN_HIGH:
+        return 0;
+    case MPF_SHOWDOWN_HILO8:
+        if (cfg->rules != MPF_RULE_PLO4 && cfg->rules != MPF_RULE_PLO5 &&
+            cfg->rules != MPF_RULE_PLO6)
+            return 1;
+        return cfg->strength_buckets_per_street > 0 ||
+               cfg->abstraction_model != NULL;
+    default:
+        return 1;
+    }
+}
+
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state)
 {
     if (!cfg || !cfg->ctx || !out_game || !out_state)
         return -1;
     if (cfg->num_players < 2 || cfg->num_players > MPF_MAX_PLAYERS)
+        return -1;
+    if (mpf_showdown_config_invalid(cfg))
         return -1;
 
     /* NOTE: callers that reuse the same out_state across mpf_build_game
@@ -2999,6 +3114,7 @@ int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *o
     out_state->owns_abstraction_model = 0;
     out_state->rake = cfg->rake;
     out_state->rules = cfg->rules;
+    out_state->showdown = cfg->showdown;
     out_state->lock_storage = NULL;
     out_state->num_players = cfg->num_players;
     out_state->street = cfg->start_street;
