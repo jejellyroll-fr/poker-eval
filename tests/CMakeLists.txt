@@ -1815,19 +1815,25 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
     # Omaha Hi/Lo 8-or-better (#237): a PLO5 flop root solved by the sampled
     # Lane B traversal. The flop carries three low ranks (7-4-2), so the low
     # half is live at every showdown and the split, not just the high, is
-    # exercised.
+    # exercised. --game plo5 makes the tree's profiles five-card hands (the
+    # generator defaults to Hold'em and would read AAxxx as AA).
     add_test(NAME pe_preflop_tree_hilo8_flop_smoke
         COMMAND pe-preflop-tree
+            --game plo5
             --players 2 --stack 96.5 --stack 96.5
             --street flop --board 7d4c2s --pot 7 --raises 7
             --range 0 "100%" --range 1 "AAxxx"
             --output ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json)
     set_tests_properties(pe_preflop_tree_hilo8_flop_smoke PROPERTIES
         LABELS "product;solver;hilo")
+    # The runner takes a tree's complete profiles but not its combo lists, so
+    # player 1's range is passed explicitly; without it player 1 would be
+    # dealt no hand at all. Player 0's "100%" profile is complete.
     add_test(NAME mpf_hilo8_sampled_flop_resolves
         COMMAND mpf_run_with_metrics
             --rules plo5-hilo8
             --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
+            --range1 AAxxx
             --lane-b
             --iterations 200)
     set_tests_properties(mpf_hilo8_sampled_flop_resolves PROPERTIES
