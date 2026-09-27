@@ -24,7 +24,8 @@
  * the board or with another player's hand has been removed. That ordering
  * matters and is itself one of the invariants under test: blockers are
  * applied before the final normalisation, so a combo that blocks a large part
- * of the other players' ranges carries proportionally more posterior mass.
+ * of the other players' ranges takes part in fewer legal joint deals and
+ * carries less posterior mass than per-player renormalisation would give it.
  *
  * The header is header-only and every function is static, so a test can
  * include it without touching the CMake target list, which builds exactly one
@@ -37,6 +38,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <poker_eval/core/modern_cardmask.h>

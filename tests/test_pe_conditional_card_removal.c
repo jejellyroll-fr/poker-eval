@@ -373,6 +373,14 @@ static int mc_run(const pe_preflop_deal_sampler_t *sampler, uint64_t seed,
 {
     pe_rng_t rng;
 
+    /* combo_weight is a fixed PE_ORACLE_MAX_PLAYERS x MC_MAX_COMBOS table:
+       refuse a fixture that would index past it rather than corrupt it. */
+    if (game->player_count > PE_ORACLE_MAX_PLAYERS)
+        return -1;
+    for (uint8_t p = 0u; p < game->player_count; ++p)
+        if (game->ranges[p].count > MC_MAX_COMBOS)
+            return -1;
+
     memset(acc, 0, sizeof(*acc));
     acc->player_count = game->player_count;
     for (uint8_t p = 0u; p < game->player_count; ++p)
