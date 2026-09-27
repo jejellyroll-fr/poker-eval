@@ -200,7 +200,8 @@ static void usage(const char *prog)
             "  --tree <path>            JSON or compatible binary .tree\n"
             "  --mkr <path>             compatible .mkr strategy archive\n"
             "  --strategy <name>        Strategy entry (default: storedstrategy0)\n"
-            "  --rules <kind>           holdem, plo4, plo5 or plo6\n"
+            "  --rules <kind>           holdem, plo4, plo5, plo6, or plo4-hilo8,\n"
+            "                           plo5-hilo8, plo6-hilo8 (8-or-better split)\n"
             "  --street <kind>          preflop, flop, turn or river\n"
             "  --board <cards>          Board such as AsKdQcJdTh\n"
             "  --range<N> <expr>        Override player N range (N = 0..6)\n"
@@ -543,11 +544,34 @@ static int write_node_map_csv(const mpf_tree_def_t *tree, const char *path)
     return 0;
 }
 
+/* "-hilo8" selects the Omaha Hi/Lo 8-or-better showdown (#237) on top of the
+   same PLO4/5/6 rule, so the range parser and every rule-driven path stay the
+   high-only ones. */
 static int parse_rule_name(const char *name, mpf_rule_t *out_rule,
-                           enum_game_t *out_game)
+                           enum_game_t *out_game, mpf_showdown_t *out_showdown)
 {
-    if (!name || !out_rule || !out_game)
+    static const char hilo_suffix[] = "-hilo8";
+    char base[16];
+    size_t len;
+
+    if (!name || !out_rule || !out_game || !out_showdown)
         return 0;
+    *out_showdown = MPF_SHOWDOWN_HIGH;
+    len = strlen(name);
+    if (len > sizeof(hilo_suffix) - 1 &&
+        strcmp(name + len - (sizeof(hilo_suffix) - 1), hilo_suffix) == 0)
+    {
+        len -= sizeof(hilo_suffix) - 1;
+        if (len >= sizeof(base))
+            return 0;
+        memcpy(base, name, len);
+        base[len] = '\0';
+        if (strcmp(base, "plo4") != 0 && strcmp(base, "plo5") != 0 &&
+            strcmp(base, "plo6") != 0)
+            return 0;
+        *out_showdown = MPF_SHOWDOWN_HILO8;
+        name = base;
+    }
     if (strcmp(name, "holdem") == 0)
     {
         *out_rule = MPF_RULE_HOLDEM;
@@ -1422,10 +1446,11 @@ int main(int argc, char **argv)
     }
 
     mpf_rule_t rules = MPF_RULE_PLO4;
+    mpf_showdown_t showdown = MPF_SHOWDOWN_HIGH;
     enum_game_t range_game = game_omaha;
     if (rules_name)
     {
-        if (!parse_rule_name(rules_name, &rules, &range_game))
+        if (!parse_rule_name(rules_name, &rules, &range_game, &showdown))
         {
             fprintf(stderr, "Unknown rules kind: %s\n", rules_name);
             mpf_tree_free(tree);
@@ -1482,7 +1507,9 @@ int main(int argc, char **argv)
         mpf_tree_free(tree);
         return 1;
     }
-    if (mkr_path && rules != MPF_RULE_PLO4)
+    /* The archive holds PLO4 high-only strategies; replaying them in a Hi/Lo
+       game would solve a different payoff under their labels. */
+    if (mkr_path && (rules != MPF_RULE_PLO4 || showdown != MPF_SHOWDOWN_HIGH))
     {
         fprintf(stderr, "Imported Monker strategies currently require --rules plo4\n");
         mpf_tree_free(tree);
@@ -1580,6 +1607,7 @@ int main(int argc, char **argv)
     memset(&cfg, 0, sizeof(cfg));
     cfg.ctx = ctx;
     cfg.rules = rules;
+    cfg.showdown = showdown;
     cfg.num_players = num_players;
     cfg.button_index = button_index % num_players;
     cfg.start_street = start_street;
