@@ -1107,13 +1107,16 @@ static eval_t eval_omaha_high(const EvalContext *ctx, mask_t hole, mask_t board,
                 for (int b = a + 1; b < bcount; ++b)
                     for (int c = b + 1; c < bcount; ++c)
                     {
-                        mask_t seven = MASK_EMPTY;
-                        seven = mask_set(seven, hole_cards[i]);
-                        seven = mask_set(seven, hole_cards[j]);
-                        seven = mask_set(seven, board_cards[a]);
-                        seven = mask_set(seven, board_cards[b]);
-                        seven = mask_set(seven, board_cards[c]);
-                        eval_t v = pe_eval_7c(ctx, seven);
+                        /* Two hole cards and three board cards make five:
+                           pe_eval_7c refuses anything but seven and would
+                           score every Omaha hand EVAL_INVALID, a tie. */
+                        mask_t five = MASK_EMPTY;
+                        five = mask_set(five, hole_cards[i]);
+                        five = mask_set(five, hole_cards[j]);
+                        five = mask_set(five, board_cards[a]);
+                        five = mask_set(five, board_cards[b]);
+                        five = mask_set(five, board_cards[c]);
+                        eval_t v = pe_eval_5c(ctx, five);
                         if (v > best)
                             best = v;
                     }
