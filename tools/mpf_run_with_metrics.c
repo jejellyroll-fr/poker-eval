@@ -546,55 +546,38 @@ static int write_node_map_csv(const mpf_tree_def_t *tree, const char *path)
 
 /* "-hilo8" selects the Omaha Hi/Lo 8-or-better showdown (#237) on top of the
    same PLO4/5/6 rule, so the range parser and every rule-driven path stay the
-   high-only ones. */
+   high-only ones. Hold'em has no Hi/Lo form. */
 static int parse_rule_name(const char *name, mpf_rule_t *out_rule,
                            enum_game_t *out_game, mpf_showdown_t *out_showdown)
 {
-    static const char hilo_suffix[] = "-hilo8";
-    char base[16];
-    size_t len;
+    static const struct
+    {
+        const char *name;
+        mpf_rule_t rule;
+        enum_game_t game;
+        mpf_showdown_t showdown;
+    } k_rules[] = {
+        {"holdem", MPF_RULE_HOLDEM, game_holdem, MPF_SHOWDOWN_HIGH},
+        {"plo4", MPF_RULE_PLO4, game_omaha, MPF_SHOWDOWN_HIGH},
+        {"omaha", MPF_RULE_PLO4, game_omaha, MPF_SHOWDOWN_HIGH},
+        {"plo5", MPF_RULE_PLO5, game_omaha5, MPF_SHOWDOWN_HIGH},
+        {"plo6", MPF_RULE_PLO6, game_omaha6, MPF_SHOWDOWN_HIGH},
+        {"plo4-hilo8", MPF_RULE_PLO4, game_omaha, MPF_SHOWDOWN_HILO8},
+        {"plo5-hilo8", MPF_RULE_PLO5, game_omaha5, MPF_SHOWDOWN_HILO8},
+        {"plo6-hilo8", MPF_RULE_PLO6, game_omaha6, MPF_SHOWDOWN_HILO8},
+    };
 
     if (!name || !out_rule || !out_game || !out_showdown)
         return 0;
-    *out_showdown = MPF_SHOWDOWN_HIGH;
-    len = strlen(name);
-    if (len > sizeof(hilo_suffix) - 1 &&
-        strcmp(name + len - (sizeof(hilo_suffix) - 1), hilo_suffix) == 0)
+    for (size_t i = 0; i < sizeof(k_rules) / sizeof(k_rules[0]); ++i)
     {
-        len -= sizeof(hilo_suffix) - 1;
-        if (len >= sizeof(base))
-            return 0;
-        memcpy(base, name, len);
-        base[len] = '\0';
-        if (strcmp(base, "plo4") != 0 && strcmp(base, "plo5") != 0 &&
-            strcmp(base, "plo6") != 0)
-            return 0;
-        *out_showdown = MPF_SHOWDOWN_HILO8;
-        name = base;
-    }
-    if (strcmp(name, "holdem") == 0)
-    {
-        *out_rule = MPF_RULE_HOLDEM;
-        *out_game = game_holdem;
-        return 1;
-    }
-    if (strcmp(name, "plo4") == 0 || strcmp(name, "omaha") == 0)
-    {
-        *out_rule = MPF_RULE_PLO4;
-        *out_game = game_omaha;
-        return 1;
-    }
-    if (strcmp(name, "plo5") == 0)
-    {
-        *out_rule = MPF_RULE_PLO5;
-        *out_game = game_omaha5;
-        return 1;
-    }
-    if (strcmp(name, "plo6") == 0)
-    {
-        *out_rule = MPF_RULE_PLO6;
-        *out_game = game_omaha6;
-        return 1;
+        if (strcmp(name, k_rules[i].name) == 0)
+        {
+            *out_rule = k_rules[i].rule;
+            *out_game = k_rules[i].game;
+            *out_showdown = k_rules[i].showdown;
+            return 1;
+        }
     }
     return 0;
 }
