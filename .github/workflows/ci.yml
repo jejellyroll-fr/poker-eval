@@ -194,7 +194,10 @@ jobs:
         # every subsystem, and an allowlist silently excludes each new test.
         # Serial on purpose — parallel ASan processes are memory hungry for a
         # hosted runner. --timeout bounds a sanitizer hang per test.
-        ctest --output-on-failure --timeout 900
+        # -LE sanitizer-skip drops the tests quarantined in tests/CMakeLists.txt
+        # as correct but too slow under instrumentation, matching
+        # infra-sanitizers.yml; they keep running in the unsanitized suite.
+        ctest --output-on-failure --timeout 900 -LE sanitizer-skip
 
   benchmark-performance:
     name: Performance Benchmarks

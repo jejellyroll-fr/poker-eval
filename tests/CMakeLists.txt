@@ -893,6 +893,8 @@ add_poker_test(test_pe_cfr_external_adapter)
 set_tests_properties(test_pe_cfr_external_adapter PROPERTIES LABELS "solver;solver-v3;lane-b;legacy-bridge" TIMEOUT 30)
 add_poker_test(test_pe_preflop_sampler)
 set_tests_properties(test_pe_preflop_sampler PROPERTIES LABELS "solver;solver-v3;preflop;holdem;plo4;plo5;plo6;card-removal" TIMEOUT 30)
+add_poker_test(test_pe_conditional_card_removal)
+set_tests_properties(test_pe_conditional_card_removal PROPERTIES LABELS "solver;solver-v3;preflop;holdem;plo4;plo5;plo6;card-removal;posterior;iss259" TIMEOUT 120)
 add_poker_test(test_pe_preflop_betting)
 set_tests_properties(test_pe_preflop_betting PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;betting" TIMEOUT 30)
 add_poker_test(test_preflop_allin_game)
@@ -1808,6 +1810,14 @@ endif()
 if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
     # Same deal postflop: the tree's own street/board/profiles drive the spot,
     # so the solve needs no --board/--pot/--range of its own.
+    #
+    # The PLO5 flop root puts player 0 on a complete range, so one iteration
+    # walks a large tree: measured at 201 s in a Debug build configured exactly
+    # like the native CI job (-DENABLE_OPENMP=OFF -DENABLE_NATIVE_ARCH=OFF) on
+    # a 10-core machine, against 71 s for the optimized build. The CI runners
+    # are 3-4 vCPU and slower per core, and the previous 240 s budget was below
+    # the real cost on all three jobs that ran it. 900 s leaves room for the
+    # slower runners while keeping the job inside its 30-minute budget.
     add_test(NAME pe_preflop_tree_flop_resolves_with_mpf
         COMMAND mpf_run_with_metrics
             --rules plo5
@@ -1817,7 +1827,13 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
         LABELS "product;solver;preflop"
         PASS_REGULAR_EXPRESSION "Finished 1 iterations"
         DEPENDS pe_preflop_tree_flop_smoke
-        TIMEOUT 240)
+        TIMEOUT 900)
+    # Instrumented runs are far past any budget worth granting this one: it is
+    # correct, just slow, so it is quarantined from the sanitizer job the same
+    # way the tests listed at `_slow_san_test` are. It stays in the normal
+    # (unsanitized) suite.
+    set_property(TEST pe_preflop_tree_flop_resolves_with_mpf
+                 APPEND PROPERTY LABELS "sanitizer-skip")
 endif()
 
 if(TARGET pe-preflop-solve)
