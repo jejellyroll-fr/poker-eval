@@ -112,7 +112,8 @@ flush would still improve (a made straight or less).
 `blockers` is a set of flags:
 
 - `nut_flush`: the hand holds the nut card of a suit that has, or can still
-  make, a flush;
+  make, a flush. That includes a suit with one card on the flop, since two
+  more can still arrive;
 - `nut_straight`: the hand holds a rank the current nut straight needs from the
   hole;
 - `board_pair`: the hand holds a card of a paired board rank (boats, quads);

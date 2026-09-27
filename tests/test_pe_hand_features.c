@@ -125,9 +125,18 @@ static void test_fixtures(void)
     CHECK(f.rank_gaps == 4 && f.connectivity == PE_HF_CONNECT_LOW,
           "A98: four missing ranks in 8..A (gaps %u)", f.rank_gaps);
     CHECK(!(f.blockers & PE_HF_BLOCKS_TOP_CARD), "AA89 holds no king");
+    /* One spade on the flop can still become three by the river, so the
+       nut spade is a blocker (the backdoor case)... */
+    CHECK(f.blockers & PE_HF_BLOCKS_NUT_FLUSH,
+          "As on a one-spade flop blocks the backdoor nut flush");
     CHECK(!b.paired && !b.monotone && !b.flush_possible && b.max_suit == 1,
           "K72 rainbow texture");
     CHECK(b.nut_straight_top == -1, "no straight possible on K72");
+
+    /* ...but not on the turn, with one card to come. */
+    features("Ks7d2c5h", "AsAh8c9d", &b, &f);
+    CHECK(!(f.blockers & PE_HF_BLOCKS_NUT_FLUSH),
+          "one spade on the turn cannot become a flush: no blocker");
 
     /* Top set is the nuts on a dry board; a backdoor flush draw. */
     features("Ks7d2c", "KhKd5s6s", &b, &f);
@@ -651,10 +660,11 @@ static void test_keys(void)
 
     /* snprintf semantics. */
     size_t need = pe_hf_key_format(k, NULL, 0);
-    char small[8];
-    size_t got = pe_hf_key_format(k, small, sizeof(small));
+    /* not "small": windows.h defines it as a macro */
+    char tiny[8];
+    size_t got = pe_hf_key_format(k, tiny, sizeof(tiny));
     CHECK(need == strlen("made=high_card,flush_draw=nut") && got == need &&
-              strlen(small) == sizeof(small) - 1,
+              strlen(tiny) == sizeof(tiny) - 1,
           "format returns the full length and truncates (need %zu)", need);
 
     /* Deterministic: recomputing gives the same key. */
@@ -834,8 +844,9 @@ static void test_contract(void)
           "seven hole cards refused");
     holes[0] = cards("AsAh8c9d");
     holes[1] = cards("Ks8c9d2h"); /* Ks on the board */
-    CHECK(pe_hand_features_compute_batch(&b, holes, 2, (pe_hand_features_t[2]){0},
-                                         &failed) == PE_SOLVER_ERR_INVALID_CONFIG &&
+    pe_hand_features_t batch_out[2];
+    CHECK(pe_hand_features_compute_batch(&b, holes, 2, batch_out, &failed) ==
+                  PE_SOLVER_ERR_INVALID_CONFIG &&
               failed == 1,
           "the batch reports the failing index (%zu)", failed);
 }
