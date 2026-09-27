@@ -200,7 +200,8 @@ static void usage(const char *prog)
             "  --tree <path>            JSON or compatible binary .tree\n"
             "  --mkr <path>             compatible .mkr strategy archive\n"
             "  --strategy <name>        Strategy entry (default: storedstrategy0)\n"
-            "  --rules <kind>           holdem, plo4, plo5 or plo6\n"
+            "  --rules <kind>           holdem, plo4, plo5, plo6, or plo4-hilo8,\n"
+            "                           plo5-hilo8, plo6-hilo8 (8-or-better split)\n"
             "  --street <kind>          preflop, flop, turn or river\n"
             "  --board <cards>          Board such as AsKdQcJdTh\n"
             "  --range<N> <expr>        Override player N range (N = 0..6)\n"
@@ -543,34 +544,40 @@ static int write_node_map_csv(const mpf_tree_def_t *tree, const char *path)
     return 0;
 }
 
+/* "-hilo8" selects the Omaha Hi/Lo 8-or-better showdown (#237) on top of the
+   same PLO4/5/6 rule, so the range parser and every rule-driven path stay the
+   high-only ones. Hold'em has no Hi/Lo form. */
 static int parse_rule_name(const char *name, mpf_rule_t *out_rule,
-                           enum_game_t *out_game)
+                           enum_game_t *out_game, mpf_showdown_t *out_showdown)
 {
-    if (!name || !out_rule || !out_game)
+    static const struct
+    {
+        const char *name;
+        mpf_rule_t rule;
+        enum_game_t game;
+        mpf_showdown_t showdown;
+    } k_rules[] = {
+        {"holdem", MPF_RULE_HOLDEM, game_holdem, MPF_SHOWDOWN_HIGH},
+        {"plo4", MPF_RULE_PLO4, game_omaha, MPF_SHOWDOWN_HIGH},
+        {"omaha", MPF_RULE_PLO4, game_omaha, MPF_SHOWDOWN_HIGH},
+        {"plo5", MPF_RULE_PLO5, game_omaha5, MPF_SHOWDOWN_HIGH},
+        {"plo6", MPF_RULE_PLO6, game_omaha6, MPF_SHOWDOWN_HIGH},
+        {"plo4-hilo8", MPF_RULE_PLO4, game_omaha, MPF_SHOWDOWN_HILO8},
+        {"plo5-hilo8", MPF_RULE_PLO5, game_omaha5, MPF_SHOWDOWN_HILO8},
+        {"plo6-hilo8", MPF_RULE_PLO6, game_omaha6, MPF_SHOWDOWN_HILO8},
+    };
+
+    if (!name || !out_rule || !out_game || !out_showdown)
         return 0;
-    if (strcmp(name, "holdem") == 0)
+    for (size_t i = 0; i < sizeof(k_rules) / sizeof(k_rules[0]); ++i)
     {
-        *out_rule = MPF_RULE_HOLDEM;
-        *out_game = game_holdem;
-        return 1;
-    }
-    if (strcmp(name, "plo4") == 0 || strcmp(name, "omaha") == 0)
-    {
-        *out_rule = MPF_RULE_PLO4;
-        *out_game = game_omaha;
-        return 1;
-    }
-    if (strcmp(name, "plo5") == 0)
-    {
-        *out_rule = MPF_RULE_PLO5;
-        *out_game = game_omaha5;
-        return 1;
-    }
-    if (strcmp(name, "plo6") == 0)
-    {
-        *out_rule = MPF_RULE_PLO6;
-        *out_game = game_omaha6;
-        return 1;
+        if (strcmp(name, k_rules[i].name) == 0)
+        {
+            *out_rule = k_rules[i].rule;
+            *out_game = k_rules[i].game;
+            *out_showdown = k_rules[i].showdown;
+            return 1;
+        }
     }
     return 0;
 }
@@ -1422,10 +1429,11 @@ int main(int argc, char **argv)
     }
 
     mpf_rule_t rules = MPF_RULE_PLO4;
+    mpf_showdown_t showdown = MPF_SHOWDOWN_HIGH;
     enum_game_t range_game = game_omaha;
     if (rules_name)
     {
-        if (!parse_rule_name(rules_name, &rules, &range_game))
+        if (!parse_rule_name(rules_name, &rules, &range_game, &showdown))
         {
             fprintf(stderr, "Unknown rules kind: %s\n", rules_name);
             mpf_tree_free(tree);
@@ -1482,7 +1490,9 @@ int main(int argc, char **argv)
         mpf_tree_free(tree);
         return 1;
     }
-    if (mkr_path && rules != MPF_RULE_PLO4)
+    /* The archive holds PLO4 high-only strategies; replaying them in a Hi/Lo
+       game would solve a different payoff under their labels. */
+    if (mkr_path && (rules != MPF_RULE_PLO4 || showdown != MPF_SHOWDOWN_HIGH))
     {
         fprintf(stderr, "Imported Monker strategies currently require --rules plo4\n");
         mpf_tree_free(tree);
@@ -1580,12 +1590,23 @@ int main(int argc, char **argv)
     memset(&cfg, 0, sizeof(cfg));
     cfg.ctx = ctx;
     cfg.rules = rules;
+    cfg.showdown = showdown;
     cfg.num_players = num_players;
     cfg.button_index = button_index % num_players;
     cfg.start_street = start_street;
     cfg.board_card_count = board_count;
     for (int i = 0; i < board_count; ++i)
         cfg.board_cards[i] = board_cards[i];
+    /* The board past the selected street is unknown. Without chance nodes
+       the adapter would reveal the unset slots, which are zeros and so a
+       real card (2c), on every later street: an illegal runout that can
+       repeat a board card or collide with a hole card. Deal it instead.
+       Sampled traversals draw one runout per trajectory, so this is always
+       affordable there, and Hi/Lo is new enough to take it everywhere. A
+       full-tree high-only solve keeps its historical board handling, whose
+       cost the existing product smokes are sized against. */
+    if (board_count < 5 && (lane_b || showdown == MPF_SHOWDOWN_HILO8))
+        cfg.enable_chance_nodes = 1;
     cfg.bet_size_count_common = 1;
     cfg.bet_sizes_common[0] = bb_amount * 3.0;
     cfg.raise_cap = 4;

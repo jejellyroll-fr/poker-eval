@@ -69,6 +69,27 @@ typedef enum
     MPF_RULE_SHORTDECK,
 } mpf_rule_t;
 
+/*
+ * How a showdown pot is awarded (#237). Orthogonal to mpf_rule_t, which keeps
+ * deciding the deck, the private-card count and pot-limit betting: Hi/Lo is a
+ * payoff model, not another hand size, so PLO4/5/6 each gain it without a
+ * variant of their own and every rule-driven path (sampling, ranges, trees)
+ * is shared with the high-only game.
+ *
+ * MPF_SHOWDOWN_HILO8 splits every side pot, after rake, into a high half and a
+ * low half. Both halves use exactly two hole cards and three board cards. The
+ * low is A-5 (ace low, straights and flushes ignored) and must be
+ * 8-or-better; a pot with no qualifying low goes entirely to the high. Each
+ * half is divided among its own tied winners, so one player can scoop both
+ * halves, and ties on either side quarter the pot. Only the Omaha rules
+ * accept it.
+ */
+typedef enum
+{
+    MPF_SHOWDOWN_HIGH = 0, /* whole pot to the best high hand (default) */
+    MPF_SHOWDOWN_HILO8,    /* Omaha Hi/Lo 8-or-better split */
+} mpf_showdown_t;
+
 typedef struct
 {
     uint64_t apply_action_calls;
@@ -189,6 +210,12 @@ typedef struct
     int strength_buckets_per_street; /* 0 = disabled */
     int texture_filter_level;         /* pe_texture_filter_level_t */
     const pe_abstraction_model_t *abstraction_model;
+
+    /* #237: showdown payoff model. Zero is high-only, so a zero-initialised
+       config keeps the historical game. MPF_SHOWDOWN_HILO8 requires
+       MPF_RULE_PLO4/5/6 and no strength-bucket abstraction (the buckets rank
+       hands by high strength alone). */
+    mpf_showdown_t showdown;
 } mpf_config_t;
 
 typedef struct mpf_state_s
@@ -325,6 +352,8 @@ typedef struct mpf_state_s
     int texture_filter_level;
     const pe_abstraction_model_t *abstraction_model;
     int owns_abstraction_model;
+
+    mpf_showdown_t showdown; /* #237: copied from the config */
 } mpf_state_t;
 
 int mpf_build_game(const mpf_config_t *cfg, cfr_game_t *out_game, mpf_state_t *out_state);
