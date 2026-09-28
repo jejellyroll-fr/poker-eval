@@ -13,6 +13,11 @@ typedef struct {
     pe_rng_t rng;
     uint8_t br_player;
     uint16_t max_depth;
+    /* Issue #257: resolved adaptive settings (max_samples 0 = off) and the
+       totals they feed. */
+    pe_br_sampling_config_t sampling;
+    pe_br_sampling_stats_t *stats;
+    uint64_t terminal_evaluations;
 } br_context_t;
 
 static int sample_action(br_context_t *ctx, const void *state, uint16_t actions)
@@ -66,7 +71,10 @@ static double policy_rollout(br_context_t *ctx, const void *state, uint16_t dept
     double value;
     if (!state || depth >= ctx->max_depth) return NAN;
     if (ctx->game->is_terminal(state, ctx->game->user))
+    {
+        ctx->terminal_evaluations++;
         return ctx->game->terminal_value(state, ctx->br_player, ctx->game->user);
+    }
     if (ctx->game->acting_player(state, ctx->game->user) < 0)
     {
         child = sample_chance(ctx, state);
@@ -97,13 +105,29 @@ static double br_action_value(br_context_t *ctx, const void *state, uint16_t act
     return value;
 }
 
+/* Issue #257: one draw of a BR action's value, for pe_br_resolve_decision. */
+typedef struct {
+    br_context_t *ctx;
+    const void *state;
+    uint16_t depth;
+} br_action_sampler_t;
+
+static double br_action_sample(void *user, uint16_t action)
+{
+    br_action_sampler_t *s = (br_action_sampler_t *)user;
+    return br_action_value(s->ctx, s->state, action, s->depth);
+}
+
 static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
 {
     const void *child;
     double value;
     if (!state || depth >= ctx->max_depth) return NAN;
     if (ctx->game->is_terminal(state, ctx->game->user))
+    {
+        ctx->terminal_evaluations++;
         return ctx->game->terminal_value(state, ctx->br_player, ctx->game->user);
+    }
     if (ctx->game->acting_player(state, ctx->game->user) < 0)
     {
         child = sample_chance(ctx, state);
@@ -115,6 +139,18 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
     uint16_t actions = ctx->game->action_count(state, ctx->game->user);
     int actor = ctx->game->acting_player(state, ctx->game->user);
     if (actions == 0u || actions > PE_EXTERNAL_MAX_ACTIONS) return NAN;
+    if (actor == (int)ctx->br_player && pe_br_sampling_enabled(&ctx->sampling))
+    {
+        br_action_sampler_t sampler;
+        pe_br_decision_t decision;
+        sampler.ctx = ctx;
+        sampler.state = state;
+        sampler.depth = depth;
+        if (pe_br_resolve_decision(actions, br_action_sample, &sampler,
+                                   &ctx->sampling, &decision, ctx->stats) != 0)
+            return NAN;
+        return decision.value;
+    }
     if (actor == (int)ctx->br_player)
     {
         double best = -INFINITY;
@@ -137,9 +173,13 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
 
 pe_external_br_config_t pe_external_br_config_default(void)
 {
-    pe_external_br_config_t config = {
-        256u, 128u, 1u, PE_BR_AUTO, 0u, 0u
-    };
+    pe_external_br_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.samples = 256u;
+    config.max_depth = 128u;
+    config.seed = 1u;
+    config.mode = PE_BR_AUTO;
+    /* max_br_nodes, max_br_time_ms and sampling (off) stay zero. */
     return config;
 }
 
@@ -921,6 +961,8 @@ int pe_external_best_response_sampled(const pe_external_game_t *game,
     memset(out, 0, sizeof(*out));
     memset(&ctx, 0, sizeof(ctx));
     ctx.game = game; ctx.br_player = br_player; ctx.max_depth = config->max_depth;
+    if (pe_br_sampling_resolve(&config->sampling, &ctx.sampling) != 0) return -1;
+    ctx.stats = &out->sampling;
     pe_rng_seed(&ctx.rng, config->seed);
     for (uint32_t i = 0u; i < samples; ++i)
     {
@@ -929,6 +971,7 @@ int pe_external_best_response_sampled(const pe_external_game_t *game,
         value = br_rollout(&ctx, game->root, 0u);
         if (pe_finite_double(value)) { br += value; ++out->br_samples; }
     }
+    out->sampling.terminal_evaluations = ctx.terminal_evaluations;
     if (out->policy_samples == 0u || out->br_samples == 0u) return -1;
     out->policy_value = policy / (double)out->policy_samples;
     out->br_value = br / (double)out->br_samples;

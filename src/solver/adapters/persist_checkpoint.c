@@ -207,6 +207,17 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->target_exploitability_mbb);
     HASH_FIELD(config->exploitability_interval);
     HASH_FIELD(config->br_samples);
+    /* Issue #257: hashed like br_samples, field by field, and only when on,
+       so a checkpoint made without it keeps its hash. */
+    if (config->br_sampling.max_samples != 0u)
+    {
+        HASH_FIELD(config->br_sampling.min_samples);
+        HASH_FIELD(config->br_sampling.max_samples);
+        HASH_FIELD(config->br_sampling.check_interval);
+        HASH_FIELD(config->br_sampling.confidence);
+        HASH_FIELD(config->br_sampling.absolute_tolerance);
+        HASH_FIELD(config->br_sampling.relative_tolerance);
+    }
 #undef HASH_FIELD
     return hash;
 }

@@ -22,6 +22,7 @@
 #define POKER_EVAL_PE_SOLVER_CONFIG_H
 
 #include <poker_eval/solver/pe_sampling_policy.h>
+#include <poker_eval/solver/pe_br_sampling.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_storage_policy.h>
 
@@ -329,6 +330,12 @@ struct pe_solver_config_t {
        instead of silently sampling. PE_BR_AUTO tries exact first and falls
        back to sampled, with the mode actually used reported on the metrics. */
     pe_br_mode_t br_mode;
+
+    /* Issue #257: confidence-guided evaluation of each sampled BR decision
+       (see pe_br_sampling.h). All-zero (max_samples 0) keeps one rollout per
+       action. It only changes how exploitability is measured, never the CFR
+       updates. */
+    pe_br_sampling_config_t br_sampling;
 };
 
 /* ------------------------------------------------------------------ *
