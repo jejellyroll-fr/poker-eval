@@ -71,6 +71,7 @@ add_library(poker_solver
     solver/domain/runtime.c
     solver/domain/work_unit.c
     solver/domain/work_scheduler.c
+    solver/domain/work_priority.c
     solver/domain/work_protocol.c
     solver/domain/work_coordinator.c
     solver/domain/work_reducer.c
