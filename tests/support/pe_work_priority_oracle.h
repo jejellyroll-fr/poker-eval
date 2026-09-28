@@ -61,6 +61,8 @@ static long double oracle_score(const pe_work_priority_config_t *config,
     uncertainty = oracle_uncertainty(item);
     if (!(uncertainty >= 0.0L))
         return INFINITY;
+    if (!(uncertainty > 0.0L)) /* no spread supplied: the assumed one */
+        uncertainty = (long double)config->assumed_stderr;
     floor_gap = (long double)config->epsilon;
     if (gap < floor_gap)
         gap = floor_gap;

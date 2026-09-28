@@ -20,6 +20,11 @@
  * high. A decision whose ordering is not even resolved - the runner-up is
  * not behind, or the gap is not a number - scores +infinity and sorts first.
  *
+ * A decision that supplies no spread at all (both stderrs zero) is scored
+ * against `assumed_stderr` instead, so its priority still falls as its gap
+ * grows: a near tie ranks above a clear winner even without variance
+ * information, which is the fallback when adaptive sampling is off.
+ *
  * The score is unbounded, and a scheduler must not be. It is therefore
  * quantised into `buckets` geometric buckets, and the ordering only looks at
  * the bucket: within a bucket the input order is preserved. That is what
@@ -50,7 +55,7 @@
  * a requirement: pe_work_priority_item_from_stats() fills an item from two
  * pe_online_stats_t accumulators, and a caller that has no uncertainty
  * information passes a zero stderr, which scores the decision on its gap
- * alone.
+ * against `assumed_stderr`.
  */
 
 #ifndef POKER_EVAL_PE_WORK_PRIORITY_H
@@ -70,6 +75,7 @@ extern "C" {
 #define PE_WORK_PRIORITY_DEFAULT_RATIO 2.0
 #define PE_WORK_PRIORITY_DEFAULT_EPSILON 1e-9
 #define PE_WORK_PRIORITY_DEFAULT_MIN_VISITS 1u
+#define PE_WORK_PRIORITY_DEFAULT_ASSUMED_STDERR 1.0
 
 /** How a batch of work is ordered. */
 typedef enum {
@@ -100,8 +106,8 @@ typedef enum {
     below, which under the default FIFO policy change no ordering at all. */
 typedef struct pe_work_priority_config_t {
     pe_work_scheduler_policy_t policy; /* 0 = FIFO */
-    /* Coverage floor: fewer services than this ranks in the top bucket.
-       0 selects 1. Ignored under FIFO. */
+    /* Coverage floor: fewer services than this ranks in a tier of its own,
+       ahead of every bucket. 0 selects 1. Ignored under FIFO. */
     uint32_t min_visits;
     /* Floor on the gap, so the score stays finite. 0 selects 1e-9. */
     double epsilon;
@@ -114,6 +120,12 @@ typedef struct pe_work_priority_config_t {
     /* Epochs of waiting per promoted bucket; 0 disables aging. Ignored
        under FIFO. */
     uint64_t aging_interval;
+    /* The combined standard error assumed for a decision that supplies none
+       (both stderrs zero), in the same units as the values: the score is
+       then assumed_stderr / max(gap, epsilon), so a gap below it counts as
+       fragile. Set it to the typical noise of the values. 0 selects 1.0;
+       negative or non-finite is refused. */
+    double assumed_stderr;
 } pe_work_priority_config_t;
 
 /**
@@ -124,8 +136,10 @@ typedef struct pe_work_priority_item_t {
     /* The leader's and the runner-up's estimated values. */
     double best;
     double second_best;
-    /* Their standard errors. Zero means "no uncertainty information": the
-       decision is then scored on its gap alone. NaN means "not enough
+    /* Their standard errors. Both zero means "no uncertainty information":
+       the decision is then scored on its gap, against the config's
+       assumed_stderr (a measured spread of exactly zero reads the same way:
+       with no noise to weigh, the gap is the only signal). NaN means "not enough
        observations to estimate one", which scores as unresolved - the two are
        not the same thing, and pe_work_priority_item_from_stats() produces the
        second rather than a zero it cannot justify. */
@@ -143,7 +157,8 @@ typedef struct pe_work_priority_item_t {
 /** Totals over one ordering, for telemetry. */
 typedef struct pe_work_priority_stats_t {
     uint64_t items;
-    /* Items the coverage floor pulled into the top bucket. */
+    /* Items the coverage floor ranked in its own tier, ahead of every
+       bucket. */
     uint64_t coverage_promotions;
     /* Items aging moved up at least one bucket. */
     uint64_t aging_promotions;
@@ -167,8 +182,8 @@ typedef struct pe_work_priority_stats_t {
 
 /** Fill the defaults into a copy. A NULL input resolves to all defaults.
     @return 0, or -1 for a policy outside the enum, a bucket count of 1 or
-    above 32, a bucket ratio of 1.0 or less or non-finite, or a negative or
-    non-finite epsilon. */
+    above 32, a bucket ratio of 1.0 or less or non-finite, a negative or
+    non-finite epsilon, or a negative or non-finite assumed_stderr. */
 int pe_work_priority_resolve(const pe_work_priority_config_t *in,
                              pe_work_priority_config_t *out);
 
@@ -176,8 +191,8 @@ int pe_work_priority_resolve(const pe_work_priority_config_t *in,
  * The priority of one decision under a resolved config: larger means more
  * useful additional work. +infinity when the ordering is unresolved (the
  * runner-up is not behind, or a value is not a number), 0 when there is
- * nothing to decide (fewer than two actions) or when the estimates are
- * equally certain and the leader is ahead.
+ * nothing to decide (fewer than two actions). With both stderrs zero the
+ * uncertainty is the config's assumed_stderr.
  */
 double pe_work_priority_score(const pe_work_priority_config_t *resolved,
                               const pe_work_priority_item_t *item);
@@ -283,7 +298,8 @@ int pe_work_scheduler_policy_parse(const char *name,
 /**
  * Set one field from text: "policy" (a name), "min-visits" and "buckets"
  * (unsigned integers), "aging-interval" (an unsigned 64-bit integer),
- * "epsilon" and "bucket-ratio" (numbers). Ranges are checked later, by
+ * "epsilon", "bucket-ratio" and "assumed-stderr" (numbers). Ranges are
+ * checked later, by
  * pe_work_priority_resolve. @return 0, or -1 for an unknown key or a value
  * that is not of that kind.
  */

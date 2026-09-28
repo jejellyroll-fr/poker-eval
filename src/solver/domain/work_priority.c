@@ -34,11 +34,15 @@ int pe_work_priority_resolve(const pe_work_priority_config_t *in,
         r.epsilon = PE_WORK_PRIORITY_DEFAULT_EPSILON;
     if (r.min_visits == 0u)
         r.min_visits = PE_WORK_PRIORITY_DEFAULT_MIN_VISITS;
+    if (is_unset(r.assumed_stderr))
+        r.assumed_stderr = PE_WORK_PRIORITY_DEFAULT_ASSUMED_STDERR;
     if (r.buckets < 2u || r.buckets > PE_WORK_PRIORITY_MAX_BUCKETS)
         return -1;
     if (!(r.bucket_ratio > 1.0) || !pe_finite_double(r.bucket_ratio))
         return -1;
     if (!pe_finite_double(r.epsilon) || r.epsilon < 0.0)
+        return -1;
+    if (!pe_finite_double(r.assumed_stderr) || !(r.assumed_stderr > 0.0))
         return -1;
     *out = r;
     return 0;
@@ -58,6 +62,11 @@ double pe_work_priority_score(const pe_work_priority_config_t *resolved,
     uncertainty = hypot(item->best_stderr, item->second_stderr);
     if (!(uncertainty >= 0.0))
         return INFINITY; /* a NaN spread is not evidence of resolution */
+    /* No spread supplied: the gap is the only signal left, so score it
+       against the spread assumed for such a decision. A zero here would rank
+       every positive gap alike - a near tie as settled as a clear winner. */
+    if (is_unset(uncertainty))
+        uncertainty = resolved->assumed_stderr;
     floor_gap = resolved->epsilon;
     if (gap < floor_gap)
         gap = floor_gap;
@@ -487,5 +496,7 @@ int pe_work_priority_parse_option(pe_work_priority_config_t *config,
         return parse_real(value, &config->epsilon);
     if (strcmp(key, "bucket-ratio") == 0)
         return parse_real(value, &config->bucket_ratio);
+    if (strcmp(key, "assumed-stderr") == 0)
+        return parse_real(value, &config->assumed_stderr);
     return -1;
 }

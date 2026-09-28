@@ -88,11 +88,6 @@ static uint64_t rng_next(uint64_t *s)
     return x;
 }
 
-static double rng_unit(uint64_t *s)
-{
-    return ((double)(rng_next(s) >> 11) + 0.5) / 9007199254740992.0;
-}
-
 /* ---------------------------------------------------------------- *
  * 1. Fixtures
  * ---------------------------------------------------------------- */
@@ -113,11 +108,12 @@ static void test_score_fixtures(void)
           "a single action must score zero, got %g",
           pe_work_priority_score(&config, &item));
 
-    /* The issue's first example: a clear winner, no spread recorded. */
+    /* The issue's first example: a clear winner, no spread recorded. It is
+       scored on its gap against the assumed spread (1.0 by default). */
     item = oracle_item(12.4, 6.1, 0.0, 0.0, 3u, 0u, 3u);
     score = pe_work_priority_score(&config, &item);
-    CHECK(score >= 0.0 && score <= 0.0,
-          "a settled decision with no spread must score zero, got %g", score);
+    CHECK(fabs(score - 1.0 / 6.3) < 1e-12,
+          "a settled decision with no spread must score 1/6.3, got %g", score);
 
     /* The issue's second example: raise 2.102, call 2.097, both +-0.01. */
     item = oracle_item(2.102, 2.097, 0.01, 0.01, 3u, 0u, 3u);
@@ -199,9 +195,9 @@ static void test_bucket_fixtures(void)
     CHECK(pe_work_priority_bucket(&config, &item, 0u) == 0u,
           "score 0.5 must land in bucket 0, got %u",
           pe_work_priority_bucket(&config, &item, 0u));
-    item = oracle_item(12.4, 6.1, 0.0, 0.0, 1u, 0u, 3u); /* score 0 */
+    item = oracle_item(12.4, 6.1, 0.0, 0.0, 1u, 0u, 3u); /* score 1/6.3 */
     CHECK(pe_work_priority_bucket(&config, &item, 0u) == 0u,
-          "score 0 must land in bucket 0, got %u",
+          "score 1/6.3 must land in bucket 0, got %u",
           pe_work_priority_bucket(&config, &item, 0u));
 
     /* The boundaries themselves: score 1 -> 1, 2 -> 2, 4 -> 3. */
@@ -310,6 +306,9 @@ static void test_configuration(void)
           "default min_visits is %u, got %u",
           PE_WORK_PRIORITY_DEFAULT_MIN_VISITS, out.min_visits);
     CHECK(out.aging_interval == 0u, "aging is off by default");
+    CHECK(fabs(out.assumed_stderr - PE_WORK_PRIORITY_DEFAULT_ASSUMED_STDERR) < 1e-15,
+          "default assumed_stderr is %g, got %g",
+          PE_WORK_PRIORITY_DEFAULT_ASSUMED_STDERR, out.assumed_stderr);
 
     CHECK(pe_work_priority_resolve(NULL, &out) == 0,
           "a NULL config must resolve to the defaults");
@@ -367,6 +366,16 @@ static void test_configuration(void)
     in.epsilon = INFINITY;
     CHECK(pe_work_priority_resolve(&in, &out) == -1, "an infinite epsilon refused");
     memset(&in, 0, sizeof(in));
+    in.assumed_stderr = -0.5;
+    CHECK(pe_work_priority_resolve(&in, &out) == -1,
+          "a negative assumed_stderr refused");
+    in.assumed_stderr = INFINITY;
+    CHECK(pe_work_priority_resolve(&in, &out) == -1,
+          "an infinite assumed_stderr refused");
+    in.assumed_stderr = NAN;
+    CHECK(pe_work_priority_resolve(&in, &out) == -1,
+          "a NaN assumed_stderr refused");
+    memset(&in, 0, sizeof(in));
     in.buckets = PE_WORK_PRIORITY_MAX_BUCKETS;
     CHECK(pe_work_priority_resolve(&in, &out) == 0, "32 buckets accepted");
 
@@ -411,6 +420,8 @@ static void test_options(void)
               fabs(config.epsilon - 0.25) < 1e-15, "option epsilon");
     CHECK(pe_work_priority_parse_option(&config, "bucket-ratio", "3") == 0 &&
               fabs(config.bucket_ratio - 3.0) < 1e-15, "option bucket-ratio");
+    CHECK(pe_work_priority_parse_option(&config, "assumed-stderr", "0.5") == 0 &&
+              fabs(config.assumed_stderr - 0.5) < 1e-15, "option assumed-stderr");
 
     CHECK(pe_work_priority_parse_option(&config, "nonsense", "1") == -1,
           "an unknown key must be refused");
@@ -780,8 +791,10 @@ static void test_balanced_rotates(void)
         make_config(PE_WORK_SCHED_UNCERTAINTY_AWARE, 1u, 8u, 0u);
     size_t order[8], strict_order[8];
     /* One decision per bucket: item i scores edges[i] and lands in bucket i.
-       A gap of exactly 1 makes the score the spread itself. */
-    static const double edges[8] = {0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0};
+       A gap of exactly 1 makes the score the spread itself; bucket 0 takes a
+       spread of 1/2, since no spread at all would be scored against the
+       assumed one. */
+    static const double edges[8] = {0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0};
     size_t i;
     uint64_t epoch;
 
@@ -838,6 +851,9 @@ static void test_against_oracle(void)
         PE_WORK_SCHED_UNCERTAINTY_AWARE
     };
     static const double ratios[3] = {1.5, 2.0, 3.0};
+    /* 0 selects the default; the others are on the scale of the spreads
+       below, so the fallback competes with measured items. */
+    static const double assumed[3] = {0.0, 0.01, 0.04};
     uint64_t rng = 20250816u;
     unsigned int trial;
 
@@ -872,6 +888,7 @@ static void test_against_oracle(void)
             in.buckets = 2u + (uint32_t)(rng_next(&rng) % 7u);
             in.bucket_ratio = ratios[rng_next(&rng) % 3u];
             in.aging_interval = rng_next(&rng) % 2u == 0u ? 0u : 1u + rng_next(&rng) % 8u;
+            in.assumed_stderr = assumed[rng_next(&rng) % 3u];
             if (pe_work_priority_resolve(&in, &config) != 0)
             {
                 CHECK(0, "trial %u: a generated config must resolve", trial);
@@ -1336,6 +1353,89 @@ static void test_from_stats(void)
 
 /* ---------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------- *
+ * Without a spread, the gap still orders
+ * ---------------------------------------------------------------- */
+
+/* The fallback when adaptive sampling is off: no stderr at all. A near tie
+   must still outrank a clear winner, or the policy degenerates to FIFO for
+   every caller without variance information. */
+static void test_zero_spread_fallback(void)
+{
+    pe_work_priority_config_t config =
+        make_config(PE_WORK_SCHED_UNCERTAINTY_AWARE, 1u, 8u, 0u);
+    pe_work_priority_item_t items[3];
+    size_t order[3];
+    oracle_ctx_t ctx;
+    size_t expected[3];
+
+    printf("  zero-spread fallback\n");
+
+    /* Exact fixtures, powers of two: gap 2^-2 against the assumed 1.0 scores
+       4 (bucket 3); against an assumed 0.5 it scores 2 (bucket 2). */
+    items[0] = oracle_item(1.25, 1.0, 0.0, 0.0, 1u, 0u, 2u);
+    CHECK(fabs(pe_work_priority_score(&config, &items[0]) - 4.0) < 1e-15 &&
+              pe_work_priority_bucket(&config, &items[0], 0u) == 3u,
+          "gap 1/4, assumed 1: score 4 in bucket 3, got %g in %u",
+          pe_work_priority_score(&config, &items[0]),
+          pe_work_priority_bucket(&config, &items[0], 0u));
+    {
+        pe_work_priority_config_t in, half;
+        memset(&in, 0, sizeof(in));
+        in.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+        in.assumed_stderr = 0.5;
+        CHECK(pe_work_priority_resolve(&in, &half) == 0, "assumed 0.5 resolves");
+        CHECK(fabs(pe_work_priority_score(&half, &items[0]) - 2.0) < 1e-15 &&
+                  pe_work_priority_bucket(&half, &items[0], 0u) == 2u,
+              "gap 1/4, assumed 1/2: score 2 in bucket 2, got %g in %u",
+              pe_work_priority_score(&half, &items[0]),
+              pe_work_priority_bucket(&half, &items[0], 0u));
+    }
+
+    /* The issue's two examples, both without a spread: raise 12.4 / call
+       6.1 is settled, raise 2.102 / call 2.097 is fragile. */
+    items[0] = oracle_item(12.4, 6.1, 0.0, 0.0, 1u, 0u, 3u);
+    items[1] = oracle_item(9.9, 4.4, 0.0, 0.0, 1u, 0u, 3u);
+    items[2] = oracle_item(2.102, 2.097, 0.0, 0.0, 1u, 0u, 3u);
+    CHECK(pe_work_priority_bucket(&config, &items[0], 0u) == 0u &&
+              pe_work_priority_bucket(&config, &items[2], 0u) == 7u,
+          "no spread: clear winner in bucket 0, near tie in bucket 7, got %u "
+          "and %u",
+          pe_work_priority_bucket(&config, &items[0], 0u),
+          pe_work_priority_bucket(&config, &items[2], 0u));
+    CHECK(pe_work_priority_order(&config, items, 3u, 0u, order, 3u, NULL) == 0 &&
+              order[0] == 2u && order[1] == 0u && order[2] == 1u,
+          "no spread: the near tie must be serviced first, got %zu %zu %zu",
+          order[0], order[1], order[2]);
+    fill_ctx(&ctx, &config, items, 3u, 0u);
+    CHECK(oracle_order_exhaustive(&ctx, expected) == 0 && expected[0] == order[0] &&
+              expected[1] == order[1] && expected[2] == order[2],
+          "no spread: the oracle must agree");
+
+    /* A measured spread of exactly zero (identical draws) reads the same
+       way: the gap is the only signal. */
+    {
+        pe_online_stats_t best, second;
+        pe_work_priority_item_t item;
+        pe_online_stats_reset(&best);
+        pe_online_stats_reset(&second);
+        pe_online_stats_add(&best, 2.102);
+        pe_online_stats_add(&best, 2.102);
+        pe_online_stats_add(&second, 2.097);
+        pe_online_stats_add(&second, 2.097);
+        pe_work_priority_item_from_stats(&item, &best, &second, 3u, 1u, 0u);
+        CHECK(pe_work_priority_bucket(&config, &item, 0u) == 7u,
+              "a measured zero spread with a near tie must rank high, got %u",
+              pe_work_priority_bucket(&config, &item, 0u));
+    }
+
+    /* One zero stderr and one positive is information, not the fallback. */
+    items[0] = oracle_item(1.015625, 1.0, 0.015625, 0.0, 1u, 0u, 2u);
+    CHECK(fabs(pe_work_priority_score(&config, &items[0]) - 1.0) < 1e-15,
+          "a single supplied spread must be used as is, got %.17g",
+          pe_work_priority_score(&config, &items[0]));
+}
+
 int main(void)
 {
     test_score_fixtures();
@@ -1355,6 +1455,7 @@ int main(void)
     test_from_stats();
     test_undersampled_bridge();
     test_balanced_rotates();
+    test_zero_spread_fallback();
 
     if (g_failures != 0)
     {
