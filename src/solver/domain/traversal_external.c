@@ -457,10 +457,14 @@ void pe_external_sampling_get_adaptive_state(const pe_external_sampling_ctx_t *c
 {
     if (!ctx || !out)
         return;
-    memcpy(out->budget, ctx->adaptive_budget, sizeof(out->budget));
-    memcpy(out->next_check, ctx->adaptive_next_check, sizeof(out->next_check));
-    memcpy(out->means, ctx->adaptive_means, sizeof(out->means));
-    memcpy(out->within, ctx->adaptive_within, sizeof(out->within));
+    for (size_t p = 0; p < PE_TRAVERSAL_MAX_PLAYERS; ++p)
+        for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
+        {
+            out->budget[p][g] = ctx->adaptive_budget[p][g];
+            out->next_check[p][g] = ctx->adaptive_next_check[p][g];
+            out->means[p][g] = ctx->adaptive_means[p][g];
+            out->within[p][g] = ctx->adaptive_within[p][g];
+        }
 }
 
 void pe_external_sampling_set_adaptive_state(pe_external_sampling_ctx_t *ctx,
@@ -468,11 +472,14 @@ void pe_external_sampling_set_adaptive_state(pe_external_sampling_ctx_t *ctx,
 {
     if (!ctx || !state)
         return;
-    memcpy(ctx->adaptive_budget, state->budget, sizeof(ctx->adaptive_budget));
-    memcpy(ctx->adaptive_next_check, state->next_check,
-           sizeof(ctx->adaptive_next_check));
-    memcpy(ctx->adaptive_means, state->means, sizeof(ctx->adaptive_means));
-    memcpy(ctx->adaptive_within, state->within, sizeof(ctx->adaptive_within));
+    for (size_t p = 0; p < PE_TRAVERSAL_MAX_PLAYERS; ++p)
+        for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
+        {
+            ctx->adaptive_budget[p][g] = state->budget[p][g];
+            ctx->adaptive_next_check[p][g] = state->next_check[p][g];
+            ctx->adaptive_means[p][g] = state->means[p][g];
+            ctx->adaptive_within[p][g] = state->within[p][g];
+        }
 }
 
 static const unsigned char k_adaptive_tag[8] = {'P', 'E', 'A', 'D', 'A', 'P', 'T', '1'};
@@ -494,11 +501,18 @@ static unsigned char *put_u32(unsigned char *p, uint32_t v)
     return p + 4;
 }
 
+/* A double and its 64 bits, for the byte encoding below. */
+typedef union
+{
+    double value;
+    uint64_t bits;
+} f64_bits_t;
+
 static unsigned char *put_f64(unsigned char *p, double v)
 {
-    uint64_t bits;
-    memcpy(&bits, &v, sizeof(bits));
-    return put_u64(p, bits);
+    f64_bits_t u;
+    u.value = v;
+    return put_u64(p, u.bits);
 }
 
 static const unsigned char *get_u64(const unsigned char *p, uint64_t *v)
@@ -521,9 +535,9 @@ static const unsigned char *get_u32(const unsigned char *p, uint32_t *v)
 
 static const unsigned char *get_f64(const unsigned char *p, double *v)
 {
-    uint64_t bits;
-    p = get_u64(p, &bits);
-    memcpy(v, &bits, sizeof(*v));
+    f64_bits_t u;
+    p = get_u64(p, &u.bits);
+    *v = u.value;
     return p;
 }
 
@@ -533,8 +547,8 @@ size_t pe_adaptive_state_serialize(const pe_adaptive_state_t *state,
     unsigned char *p = out;
     if (!state || !out || capacity < PE_ADAPTIVE_STATE_BYTES)
         return 0u;
-    memcpy(p, k_adaptive_tag, sizeof(k_adaptive_tag));
-    p += sizeof(k_adaptive_tag);
+    for (size_t i = 0; i < sizeof(k_adaptive_tag); ++i)
+        *p++ = k_adaptive_tag[i];
     for (size_t pl = 0; pl < PE_TRAVERSAL_MAX_PLAYERS; ++pl)
         for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
         {

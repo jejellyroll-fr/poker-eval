@@ -607,7 +607,9 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
     if (sampler_state && source->sampler_state && source->sampler_state_size &&
         sampler_state_size <= source->sampler_state_capacity)
     {
-        memcpy(source->sampler_state, sampler_state, (size_t)sampler_state_size);
+        unsigned char *dst = (unsigned char *)source->sampler_state;
+        for (size_t b = 0u; b < (size_t)sampler_state_size; ++b)
+            dst[b] = sampler_state[b];
         *source->sampler_state_size = (size_t)sampler_state_size;
     }
     free(sampler_state);
