@@ -76,10 +76,18 @@ typedef enum {
     /* Input order, unchanged. The historical behaviour, and the default. */
     PE_WORK_SCHED_FIFO = 0,
 
-    /* Highest bucket first, then one item per bucket per round, from the
-       highest bucket down. Bounds the service ratio between the top and the
-       bottom bucket by the number of non-empty buckets, at the cost of not
-       draining the top bucket first. */
+    /* One item per bucket per round, walking down from the round's starting
+       bucket and wrapping, so the service ratio between the top and the
+       bottom bucket is bounded by the number of non-empty buckets, at the
+       cost of not draining the top bucket first.
+
+       The round starts at the top bucket on epoch 0 and one bucket lower on
+       each later epoch, wrapping at the bottom. That rotation is what makes
+       the bound hold for a caller that services a prefix of the order and
+       recomputes: without it every call would put the same top bucket at
+       position zero, and the policy would do nothing the strict one does not.
+       A caller that consumes the whole permutation sees the rotation only as
+       a change of order within a round. */
     PE_WORK_SCHED_BALANCED,
 
     /* Highest bucket first, drained before the next bucket starts. */
@@ -117,7 +125,10 @@ typedef struct pe_work_priority_item_t {
     double best;
     double second_best;
     /* Their standard errors. Zero means "no uncertainty information": the
-       decision is then scored on its gap alone. */
+       decision is then scored on its gap alone. NaN means "not enough
+       observations to estimate one", which scores as unresolved - the two are
+       not the same thing, and pe_work_priority_item_from_stats() produces the
+       second rather than a zero it cannot justify. */
     double best_stderr;
     double second_stderr;
     /* How often this decision has been serviced, and at which epoch of the
@@ -211,6 +222,12 @@ int pe_work_priority_order(const pe_work_priority_config_t *resolved,
  * already keeps pe_online_stats_t accumulators (the adaptive-variance
  * sampler, issue #256) does not have to know the layout. A NULL
  * `second_best` mirrors `best`, which with `actions` < 2 scores zero.
+ *
+ * An accumulator with fewer than two observations yields a NaN standard
+ * error, not a zero one: pe_online_stats_std_error() cannot estimate a spread
+ * from a single sample, and reading that as certainty would drop a decision
+ * that has barely been measured into the lowest bucket. The item then scores
+ * as unresolved and is ranked first.
  */
 void pe_work_priority_item_from_stats(pe_work_priority_item_t *item,
                                       const pe_online_stats_t *best,

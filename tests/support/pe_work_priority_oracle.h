@@ -193,15 +193,19 @@ static int oracle_order_exhaustive(const oracle_ctx_t *ctx, size_t *out)
 }
 
 /* BALANCED, built directly from the description: the coverage tier first in
-   input order, then one item per non-empty bucket per round, highest bucket
-   first. */
+   input order, then one item per non-empty bucket per round, walking down
+   from the round's starting bucket and wrapping. The start is the top bucket
+   on epoch 0 and one lower on each later epoch. */
 static int oracle_balanced_order(const oracle_ctx_t *ctx, size_t *out)
 {
     size_t depth[PE_WORK_PRIORITY_MAX_BUCKETS];
     size_t written = 0u;
     size_t round, i;
-    uint32_t b;
-    for (b = 0u; b < ctx->config.buckets; ++b)
+    uint32_t buckets = ctx->config.buckets;
+    uint32_t start = buckets - 1u - (uint32_t)(ctx->epoch % (uint64_t)buckets);
+    uint32_t b, k;
+
+    for (b = 0u; b < buckets; ++b)
         depth[b] = 0u;
     for (i = 0u; i < ctx->count; ++i)
         if (!oracle_below_floor(ctx, i))
@@ -215,9 +219,10 @@ static int oracle_balanced_order(const oracle_ctx_t *ctx, size_t *out)
     for (round = 0u; round < ctx->count; ++round)
     {
         int any = 0;
-        for (b = ctx->config.buckets; b-- > 0u;)
+        for (k = 0u; k < buckets; ++k)
         {
             size_t seen = 0u;
+            b = (start + buckets - k) % buckets; /* the k-th bucket visited */
             if (round >= depth[b])
                 continue;
             any = 1;

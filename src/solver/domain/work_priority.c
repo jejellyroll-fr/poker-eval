@@ -116,17 +116,20 @@ uint32_t pe_work_priority_bucket(const pe_work_priority_config_t *resolved,
 
 /* Where a BALANCED emission puts the item that is `round`-th within its own
    bucket: every earlier round emits one item per non-empty bucket, and every
-   bucket above this one emits an extra item in this round. */
+   bucket visited before this one emits an extra item in this round. `start`
+   is the bucket the round begins at; the visit order walks down from it and
+   wraps, so `rank` is how far `bucket` sits along that walk. */
 static size_t balanced_position(const size_t *depth, uint32_t buckets,
-                                uint32_t bucket, size_t round)
+                                uint32_t bucket, size_t round, uint32_t start)
 {
     size_t position = 0u;
+    uint32_t rank = (start + buckets - bucket) % buckets;
     uint32_t b;
     for (b = 0u; b < buckets; ++b)
     {
         size_t d = depth[b];
         position += d < round ? d : round;
-        if (b > bucket && d > round)
+        if (d > round && (start + buckets - b) % buckets < rank)
             position++;
     }
     return position;
@@ -214,6 +217,16 @@ int pe_work_priority_order(const pe_work_priority_config_t *resolved,
 
     if (resolved->policy == PE_WORK_SCHED_BALANCED)
     {
+        /* A round-robin only balances if the round starts somewhere else next
+           time. A caller that services the whole permutation does not care,
+           but one that takes a prefix and recomputes - the usual shape - would
+           otherwise see the same top bucket at position zero for ever. The
+           epoch rotates the starting bucket down by one, so epoch 0 is the
+           plain highest-first order and every later one begins one bucket
+           lower, wrapping. */
+        uint32_t start =
+            resolved->buckets - 1u -
+            (uint32_t)(epoch % (uint64_t)resolved->buckets);
         for (i = 0u; i < count; ++i)
         {
             uint32_t bucket;
@@ -222,8 +235,9 @@ int pe_work_priority_order(const pe_work_priority_config_t *resolved,
                 continue;
             bucket = pe_work_priority_bucket(resolved, &items[i], epoch);
             round = cursor[bucket]++;
-            out_order[floored + balanced_position(depth, resolved->buckets, bucket,
-                                                  round)] = i;
+            out_order[floored +
+                      balanced_position(depth, resolved->buckets, bucket, round,
+                                        start)] = i;
         }
         return 0;
     }
@@ -246,6 +260,18 @@ int pe_work_priority_order(const pe_work_priority_config_t *resolved,
     return 0;
 }
 
+/* The standard error of an accumulator, or NaN when it cannot give one. A
+   single observation has an undefined variance; reporting it as a zero spread
+   would rank a decision nobody has measured twice as settled, which is the
+   opposite of what it is. pe_online_stats_std_error() returns 0 there, so the
+   distinction has to be made here, where the sample count is known. */
+static double spread_of(const pe_online_stats_t *stats)
+{
+    if (!stats || stats->n < 2u)
+        return NAN;
+    return pe_online_stats_std_error(stats);
+}
+
 void pe_work_priority_item_from_stats(pe_work_priority_item_t *item,
                                       const pe_online_stats_t *best,
                                       const pe_online_stats_t *second_best,
@@ -255,11 +281,11 @@ void pe_work_priority_item_from_stats(pe_work_priority_item_t *item,
     if (!item)
         return;
     item->best = best ? best->mean : 0.0;
-    item->best_stderr = best ? pe_online_stats_std_error(best) : 0.0;
+    item->best_stderr = spread_of(best);
     if (second_best)
     {
         item->second_best = second_best->mean;
-        item->second_stderr = pe_online_stats_std_error(second_best);
+        item->second_stderr = spread_of(second_best);
     }
     else
     {
