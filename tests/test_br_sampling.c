@@ -183,6 +183,9 @@ static void test_decisions(void)
           (unsigned long long)s.draws[2], (unsigned long long)s.draws[3]);
     CHECK(stats.decisions == 1u && stats.samples == d.samples,
           "the decision is counted in the totals");
+    CHECK(stats.separated + stats.tolerance_stops + stats.max_budget_hits +
+              stats.single_action == stats.decisions,
+          "the end reasons add up to the decisions");
 
     /* An ordering that flips: action 0 opens with two draws at 3, which
        put it ahead after the first four, then settles at 0; action 1 sits
@@ -245,6 +248,21 @@ static void test_decisions(void)
     CHECK(d.best == 1u && d.samples > 40u,
           "high variance: still resolved, with more draws (%llu)",
           (unsigned long long)d.samples);
+
+    /* One action: nothing to decide. It is counted as a single-action
+       decision, not as a stop, so the end reasons still add up; and its
+       running mean is the plain mean, since nothing was selected. */
+    memset(&stats, 0, sizeof(stats));
+    s = make_sampler(22u);
+    s.mean[0] = 1.0; s.sd[0] = 0.5;
+    CHECK(pe_br_resolve_decision(1u, sample, &s, &c, &d, &stats) == 0 &&
+              d.end == PE_BR_DECISION_SINGLE && d.samples == 4u &&
+              fabs(d.value - d.selection_value) <= 0.0 &&
+              stats.decisions == 1u && stats.single_action == 1u &&
+              stats.separated == 0u && stats.tolerance_stops == 0u &&
+              stats.max_budget_hits == 0u,
+          "one action: a single-action decision, not a stop (%llu draws, "
+          "end %d)", (unsigned long long)d.samples, (int)d.end);
 
     /* Reproducible: the same seed gives the same decision. */
     {
@@ -518,6 +536,24 @@ static void test_best_response(void)
           r_legacy.br_value);
     CHECK(r_legacy.sampling.decisions == 0u && r_fixed.sampling.decisions == 400u,
           "the adaptive totals are only kept when the evaluation is on");
+    /* The running mean the decision stopped on is the biased estimate the
+       guide's table quotes: stopping when the leader happens to look good
+       favours a high mean. The re-estimate above is the unbiased one, so it
+       must sit closer to the exact 1.0. Asserted, not just described. */
+    {
+        double running =
+            r_adaptive.sampling.selection_value_sum /
+            (double)r_adaptive.sampling.decisions;
+        CHECK(running > 1.02,
+              "the running mean the decisions stopped on is biased upward "
+              "(%.4f against the exact 1.0)", running);
+        CHECK(fabs(r_adaptive.br_value - 1.0) < fabs(running - 1.0),
+              "the re-estimate sits closer to the exact 1.0 than the running "
+              "mean it replaced (%.4f against %.4f away)",
+              fabs(r_adaptive.br_value - 1.0), fabs(running - 1.0));
+        printf("    running mean of the chosen action %.4f, re-estimated "
+               "%.4f\n", running, r_adaptive.br_value);
+    }
     printf("    BR value: one rollout %.3f, fixed 64 %.3f (%llu evals), "
            "confidence-guided %.3f (%llu evals)\n",
            r_legacy.br_value, r_fixed.br_value,
