@@ -39,7 +39,9 @@ mpf_run_with_metrics --lane-b ... --br-max-samples 64
 | `absolute_tolerance` / `relative_tolerance` | 0 | a gap this small does not matter |
 
 The settings enter the checkpoint compatibility hash only when the evaluation
-is on. `pe_external_br_config_t::sampling` and `pe_solver_config_t::br_sampling`
+is on, and as *resolved*: writing a default out explicitly (`--br-min-samples 4`
+for the implicit 4) leaves the hash unchanged, so the same configuration
+resumes. `pe_external_br_config_t::sampling` and `pe_solver_config_t::br_sampling`
 enlarge public structs, so the solver library moves to SOVERSION 7.
 
 ## The decision rule
@@ -89,14 +91,21 @@ draws it `min_samples` more times, and reports the mean of those fresh draws.
 Those draws played no part in the choice, so they are an unbiased estimate of
 its value.
 
-On the test's toy game, whose exact best-response value is 1.0:
+On the test's toy game, whose exact best-response value is 1.0 — the rows are
+numbers `test_best_response()` prints and asserts:
 
 | Estimate | Value |
 |---|---|
 | one rollout per action | 1.157 |
-| running mean of the chosen action | 1.065 |
+| running mean of the chosen action | 1.0497 |
 | re-estimated | **1.006** |
 | fixed 64 draws per action | 0.997 |
+
+The running-mean row is `selection_value_sum / decisions` over the same 400
+trajectories: the leader's mean at the moment it was chosen, which is exactly
+what optional stopping inflates. It is the quantity the re-estimation
+replaces, so the test asserts it stays above the re-estimated value rather
+than merely quoting it.
 
 The hard bound is therefore `actions × max_samples + min_samples` draws per
 decision.
@@ -110,17 +119,25 @@ Each sampled measurement reports `br_sampling terminal_evaluations=N`. With
 the evaluation on, it also reports:
 
 ```text
-br_decisions decisions=734 samples=10728 avg_samples=14.616 early_stop_pct=99.86
-  separated=733 tolerance_stops=0 max_budget_hits=1 eliminated=733
-  mean_gap=28.64 mean_gap_half_width=12.24 histogram=470,79,144,41,0,0,0,0
+br_decisions decisions=307 samples=6308 avg_samples=20.547 early_stop_pct=99.67
+  separated=306 tolerance_stops=0 max_budget_hits=1 single_action=0
+  eliminated=306 mean_gap=30.7709 mean_gap_half_width=11.1518
+  mean_selection_value=14.0654 histogram=168,57,60,20,2,0,0,0
 ```
 
 - `early_stop_pct`: decisions that ended before the cap;
 - `max_budget_hits`: decisions still unresolved at the cap;
+- `single_action`: decisions with one legal action, which had nothing to
+  decide. With `separated` and `tolerance_stops` these four add up to
+  `decisions`, so a reader can tell a decision that stopped early from one
+  that never had a choice;
 - `histogram`: decisions by draws per action, in buckets of `min_samples`,
   then ×2, ×4, and so on;
 - `mean_gap` and `mean_gap_half_width`: the final best-versus-runner-up gap
-  and its uncertainty.
+  and its uncertainty;
+- `mean_selection_value`: the mean of the running means the decisions were
+  made on — the biased quantity the re-estimation replaces. A diagnostic for
+  the bias, never an estimate of the best-response value.
 
 `pe_external_br_result_t::sampling` carries the same totals.
 
@@ -156,10 +173,17 @@ strategy, so the difference to the fixed-64 reference is paired, per seed.
 | | adaptive | **159,889** | 27.9 | 1.93 | +375 ± 1,230 |
 | | adaptive, tolerance 5 | 126,121 | 21.7 | 1.58 | −1,363 ± 2,146 |
 
+Everything but the wall-clock column is deterministic for a given seed, and a
+second machine reproduced the table exactly — every terminal-evaluation
+count, every draws-per-decision figure and every paired difference to the
+decimal. The wall column is machine-dependent and indicative only.
+
 - **Cost.** Against a fixed budget of 64 rollouts per action, the adaptive
   measurement makes **9–11× fewer terminal evaluations** heads-up (6.6×
-  three-way, where more decisions are close) and runs **5–9× faster**.
-  95–100% of decisions stop before the cap.
+  three-way, where more decisions are close), and 95–100% of decisions stop
+  before the cap. Wall clock follows the same work but is not a property of
+  the feature: the authoring machine ran 5–9× faster, the second one
+  4.5–5.1×, with the evaluation counts identical.
 - **Accuracy.** Its paired difference from the fixed-64 measurement stays
   within the measurement's own noise: the ± above is the spread of the
   per-seed difference, dominated by the 2,000 sampled trajectories. No
