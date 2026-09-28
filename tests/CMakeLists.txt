@@ -794,6 +794,9 @@ set_tests_properties(test_mpf_hilo8 PROPERTIES LABELS "engine;cfr;multiway;hilo"
 # Issue #256: running statistics and the adaptive-variance sampling policy.
 add_poker_test(test_pe_online_stats)
 set_tests_properties(test_pe_online_stats PROPERTIES LABELS "solver;sampling")
+# Issue #257: confidence-guided best-response decisions.
+add_poker_test(test_br_sampling)
+set_tests_properties(test_br_sampling PROPERTIES LABELS "solver;sampling;best-response")
 add_poker_test(test_adaptive_variance_sampling)
 set_tests_properties(test_adaptive_variance_sampling PROPERTIES LABELS "solver;sampling;lane-b")
 add_poker_test(test_pe_hand_features)
@@ -2058,6 +2061,21 @@ if(TARGET pe-preflop-solve)
     set_tests_properties(pe_preflop_solve_adaptive_sampling_smoke PROPERTIES
         LABELS "product;solver;lane-b;preflop;sampling"
         PASS_REGULAR_EXPRESSION "adaptive_stats group=street:preflop estimates=[1-9]"
+        TIMEOUT 60)
+    # Issue #257: confidence-guided BR decisions end to end, reporting how
+    # the measurement's decisions stopped.
+    add_test(NAME pe_preflop_solve_br_sampling_smoke
+        COMMAND pe-preflop-solve
+            --game plo4
+            --algorithm external-mccfr
+            --iterations 32
+            --samples 2
+            --br-samples 64
+            --exploitability-interval 32
+            --br-max-samples 16)
+    set_tests_properties(pe_preflop_solve_br_sampling_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;best-response"
+        PASS_REGULAR_EXPRESSION "br_decisions decisions=[1-9][0-9]* samples=[1-9]"
         TIMEOUT 60)
     add_test(NAME pe_preflop_solve_adaptive_settings_need_policy
         COMMAND pe-preflop-solve
