@@ -626,6 +626,13 @@ static void test_checkpoint_resume(void)
                   back.budget[1][5] == 7u && back.next_check[1][5] == 128u &&
                   back.means[1][5].n == 3u,
               "adaptive state round trip");
+        /* Little-endian on every host: the first budget follows the 8-byte
+           tag, least significant byte first. */
+        st.budget[0][0] = 0x01020304u;
+        pe_adaptive_state_serialize(&st, bytes, sizeof(bytes));
+        CHECK(bytes[8] == 0x04u && bytes[9] == 0x03u && bytes[10] == 0x02u &&
+                  bytes[11] == 0x01u,
+              "the sampler state is written little-endian");
         bytes[0] ^= 0xFFu;
         CHECK(pe_adaptive_state_deserialize(&back, bytes, sizeof(bytes)) != 0,
               "a wrong tag is refused");

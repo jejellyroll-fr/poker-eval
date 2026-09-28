@@ -187,9 +187,9 @@ void pe_external_sampling_get_adaptive_state(const pe_external_sampling_ctx_t *c
 /* Restore learned state; call after pe_external_sampling_set_adaptive. */
 void pe_external_sampling_set_adaptive_state(pe_external_sampling_ctx_t *ctx,
                                              const pe_adaptive_state_t *state);
-/* Write the state field by field, native byte order (checkpoints record and
-   check theirs). @return PE_ADAPTIVE_STATE_BYTES, or 0 when it does not
-   fit. */
+/* Write the state field by field, little-endian like the rest of the
+   checkpoint, doubles as their IEEE-754 bits. @return
+   PE_ADAPTIVE_STATE_BYTES, or 0 when it does not fit. */
 size_t pe_adaptive_state_serialize(const pe_adaptive_state_t *state,
                                    unsigned char *out, size_t capacity);
 /* @return 0, or -1 for a size or tag mismatch or a non-finite value. */

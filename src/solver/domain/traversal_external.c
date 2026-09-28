@@ -477,16 +477,54 @@ void pe_external_sampling_set_adaptive_state(pe_external_sampling_ctx_t *ctx,
 
 static const unsigned char k_adaptive_tag[8] = {'P', 'E', 'A', 'D', 'A', 'P', 'T', '1'};
 
-static unsigned char *put_bytes(unsigned char *p, const void *v, size_t n)
+/* Little-endian throughout, like the rest of the checkpoint, so a file
+   moves between hosts of either byte order; a double travels as the 64 bits
+   of its IEEE-754 representation. */
+static unsigned char *put_u64(unsigned char *p, uint64_t v)
 {
-    memcpy(p, v, n);
-    return p + n;
+    for (unsigned i = 0u; i < 8u; ++i)
+        p[i] = (unsigned char)(v >> (8u * i));
+    return p + 8;
 }
 
-static const unsigned char *get_bytes(const unsigned char *p, void *v, size_t n)
+static unsigned char *put_u32(unsigned char *p, uint32_t v)
 {
-    memcpy(v, p, n);
-    return p + n;
+    for (unsigned i = 0u; i < 4u; ++i)
+        p[i] = (unsigned char)(v >> (8u * i));
+    return p + 4;
+}
+
+static unsigned char *put_f64(unsigned char *p, double v)
+{
+    uint64_t bits;
+    memcpy(&bits, &v, sizeof(bits));
+    return put_u64(p, bits);
+}
+
+static const unsigned char *get_u64(const unsigned char *p, uint64_t *v)
+{
+    uint64_t r = 0u;
+    for (unsigned i = 0u; i < 8u; ++i)
+        r |= (uint64_t)p[i] << (8u * i);
+    *v = r;
+    return p + 8;
+}
+
+static const unsigned char *get_u32(const unsigned char *p, uint32_t *v)
+{
+    uint32_t r = 0u;
+    for (unsigned i = 0u; i < 4u; ++i)
+        r |= (uint32_t)p[i] << (8u * i);
+    *v = r;
+    return p + 4;
+}
+
+static const unsigned char *get_f64(const unsigned char *p, double *v)
+{
+    uint64_t bits;
+    p = get_u64(p, &bits);
+    memcpy(v, &bits, sizeof(*v));
+    return p;
 }
 
 size_t pe_adaptive_state_serialize(const pe_adaptive_state_t *state,
@@ -495,17 +533,18 @@ size_t pe_adaptive_state_serialize(const pe_adaptive_state_t *state,
     unsigned char *p = out;
     if (!state || !out || capacity < PE_ADAPTIVE_STATE_BYTES)
         return 0u;
-    p = put_bytes(p, k_adaptive_tag, sizeof(k_adaptive_tag));
+    memcpy(p, k_adaptive_tag, sizeof(k_adaptive_tag));
+    p += sizeof(k_adaptive_tag);
     for (size_t pl = 0; pl < PE_TRAVERSAL_MAX_PLAYERS; ++pl)
         for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
         {
-            p = put_bytes(p, &state->budget[pl][g], 4u);
-            p = put_bytes(p, &state->next_check[pl][g], 8u);
-            p = put_bytes(p, &state->means[pl][g].n, 8u);
-            p = put_bytes(p, &state->means[pl][g].mean, 8u);
-            p = put_bytes(p, &state->means[pl][g].m2, 8u);
-            p = put_bytes(p, &state->within[pl][g].dof, 8u);
-            p = put_bytes(p, &state->within[pl][g].ssd, 8u);
+            p = put_u32(p, state->budget[pl][g]);
+            p = put_u64(p, state->next_check[pl][g]);
+            p = put_u64(p, state->means[pl][g].n);
+            p = put_f64(p, state->means[pl][g].mean);
+            p = put_f64(p, state->means[pl][g].m2);
+            p = put_u64(p, state->within[pl][g].dof);
+            p = put_f64(p, state->within[pl][g].ssd);
         }
     return (size_t)(p - out);
 }
@@ -515,22 +554,20 @@ int pe_adaptive_state_deserialize(pe_adaptive_state_t *state,
 {
     const unsigned char *p = in;
     pe_adaptive_state_t s;
-    unsigned char tag[8];
-    if (!state || !in || size != PE_ADAPTIVE_STATE_BYTES)
+    if (!state || !in || size != PE_ADAPTIVE_STATE_BYTES ||
+        memcmp(p, k_adaptive_tag, sizeof(k_adaptive_tag)) != 0)
         return -1;
-    p = get_bytes(p, tag, sizeof(tag));
-    if (memcmp(tag, k_adaptive_tag, sizeof(tag)) != 0)
-        return -1;
+    p += sizeof(k_adaptive_tag);
     for (size_t pl = 0; pl < PE_TRAVERSAL_MAX_PLAYERS; ++pl)
         for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
         {
-            p = get_bytes(p, &s.budget[pl][g], 4u);
-            p = get_bytes(p, &s.next_check[pl][g], 8u);
-            p = get_bytes(p, &s.means[pl][g].n, 8u);
-            p = get_bytes(p, &s.means[pl][g].mean, 8u);
-            p = get_bytes(p, &s.means[pl][g].m2, 8u);
-            p = get_bytes(p, &s.within[pl][g].dof, 8u);
-            p = get_bytes(p, &s.within[pl][g].ssd, 8u);
+            p = get_u32(p, &s.budget[pl][g]);
+            p = get_u64(p, &s.next_check[pl][g]);
+            p = get_u64(p, &s.means[pl][g].n);
+            p = get_f64(p, &s.means[pl][g].mean);
+            p = get_f64(p, &s.means[pl][g].m2);
+            p = get_u64(p, &s.within[pl][g].dof);
+            p = get_f64(p, &s.within[pl][g].ssd);
             if (!pe_finite_double(s.means[pl][g].mean) ||
                 !pe_finite_double(s.means[pl][g].m2) ||
                 !pe_finite_double(s.within[pl][g].ssd))
