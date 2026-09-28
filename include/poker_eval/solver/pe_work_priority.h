@@ -152,6 +152,12 @@ typedef struct pe_work_priority_stats_t {
     /* Queue depth per effective bucket; the histogram of the scores the
        ordering was actually built from. */
     uint64_t bucket_depth[PE_WORK_PRIORITY_MAX_BUCKETS];
+    /* The uncertainty-score distribution on its own: the histogram of each
+       score's bucket before the coverage floor or aging move anything, so a
+       percentile of it describes the workload rather than the policy. Every
+       item counts exactly once, unresolved scores included - they saturate
+       the top bucket, which is where they rank. */
+    uint64_t score_depth[PE_WORK_PRIORITY_MAX_BUCKETS];
     /* Sum and count of the finite scores, for their mean. */
     double score_sum;
     uint64_t score_count;
@@ -236,15 +242,31 @@ void pe_work_priority_item_from_stats(pe_work_priority_item_t *item,
                                       uint64_t last_served);
 
 /**
+ * The bucket a percentile of the uncertainty score falls in, by nearest rank
+ * over `score_depth`. `percentile` is a fraction: 0.5 gives the median bucket,
+ * 0.9 the ninetieth. Below 0 is read as 0, above 1 as 1.
+ *
+ * The score is quantised on purpose - the ordering only looks at the bucket -
+ * so a percentile of it is a bucket, not a value: the answer is exact for the
+ * quantised distribution, and the bucket's score range is
+ * [ratio^bucket, ratio^(bucket+1)). @return the bucket, or 0 when there are
+ * no items or `buckets` is below 2.
+ */
+uint32_t pe_work_priority_percentile_bucket(
+    const pe_work_priority_stats_t *stats, uint32_t buckets, double percentile);
+
+/**
  * Render one stats snapshot as a single telemetry line, in the style of the
  * solver's other counters, so a baseline run and an uncertainty-aware run can
  * be compared field by field:
  *
  *   work_priority items=40 buckets=8 coverage_promotions=40
  *     aging_promotions=0 unresolved=10 mean_score=0.0016 mean_delay=0.000
- *     depth=30,0,0,0,0,0,10,0
+ *     p50_bucket=6 p90_bucket=7 depth=30,0,0,0,0,0,10,0
  *
- * `depth` is the queue depth per bucket, lowest bucket first. @return the
+ * `depth` is the queue depth per bucket, lowest bucket first; `p50_bucket` and
+ * `p90_bucket` are percentiles of the score distribution alone, so they do not
+ * move when the coverage floor or aging reorders the queue. @return the
  * length the line needs, excluding the terminator, like snprintf; a NULL
  * `out` or a zero capacity measures without writing.
  */

@@ -154,6 +154,10 @@ static void accumulate(const pe_work_priority_config_t *resolved,
     }
     else
         stats->unresolved++;
+    /* The score distribution, before any policy moves an item. Counted for
+       every policy, so a baseline run and a prioritised one are comparable,
+       and an unresolved score lands in the top bucket exactly where it ranks. */
+    stats->score_depth[score_bucket(resolved, score)]++;
     if (resolved->policy == PE_WORK_SCHED_FIFO)
         return;
     if (pe_work_priority_below_floor(resolved, item))
@@ -309,6 +313,42 @@ static void append_text(char *out, size_t capacity, size_t *used,
         *used += (size_t)n;
 }
 
+uint32_t pe_work_priority_percentile_bucket(
+    const pe_work_priority_stats_t *stats, uint32_t buckets, double percentile)
+{
+    uint64_t total = 0u;
+    uint64_t target;
+    uint64_t running = 0u;
+    double rank;
+    uint32_t b;
+
+    if (!stats || buckets < 2u)
+        return 0u;
+    if (buckets > PE_WORK_PRIORITY_MAX_BUCKETS)
+        buckets = PE_WORK_PRIORITY_MAX_BUCKETS;
+    if (!(percentile > 0.0))
+        percentile = 0.0;
+    else if (percentile > 1.0)
+        percentile = 1.0;
+    for (b = 0u; b < buckets; ++b)
+        total += stats->score_depth[b];
+    if (total == 0u)
+        return 0u;
+    /* Nearest rank: the smallest bucket whose cumulative count reaches the
+       target, with the rank taken as ceil(p * total) and never below 1. The
+       ceil lands in a double first: the strict build refuses a direct cast
+       from a function call (-Wbad-function-cast). */
+    rank = ceil(percentile * (double)total);
+    target = rank > 0.0 ? (uint64_t)rank : 1u;
+    for (b = 0u; b < buckets; ++b)
+    {
+        running += stats->score_depth[b];
+        if (running >= target)
+            return b;
+    }
+    return buckets - 1u;
+}
+
 size_t pe_work_priority_format_stats(const pe_work_priority_stats_t *stats,
                                      uint32_t buckets, char *out,
                                      size_t capacity)
@@ -328,7 +368,7 @@ size_t pe_work_priority_format_stats(const pe_work_priority_stats_t *stats,
     snprintf(head, sizeof(head),
              "work_priority items=%llu buckets=%u coverage_promotions=%llu "
              "aging_promotions=%llu unresolved=%llu mean_score=%.6g "
-             "mean_delay=%.3f depth=",
+             "mean_delay=%.3f p50_bucket=%u p90_bucket=%u depth=",
              (unsigned long long)stats->items, buckets,
              (unsigned long long)stats->coverage_promotions,
              (unsigned long long)stats->aging_promotions,
@@ -337,7 +377,9 @@ size_t pe_work_priority_format_stats(const pe_work_priority_stats_t *stats,
                  ? stats->score_sum / (double)stats->score_count
                  : 0.0,
              stats->items != 0u ? (double)stats->delay_sum / (double)stats->items
-                                : 0.0);
+                                : 0.0,
+             pe_work_priority_percentile_bucket(stats, buckets, 0.5),
+             pe_work_priority_percentile_bucket(stats, buckets, 0.9));
     append_text(out, capacity, &used, head);
     for (b = 0u; b < buckets; ++b)
     {
