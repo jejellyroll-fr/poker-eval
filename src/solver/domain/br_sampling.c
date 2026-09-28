@@ -132,6 +132,16 @@ int pe_br_resolve_decision(uint16_t actions, pe_br_sample_fn sample,
     {
         uint32_t per = round == 0 ? config->min_samples : config->check_interval;
         int drew = 0;
+        /* No survivor can take more than its remaining budget, so a round
+           never needs more passes than the largest one. */
+        {
+            uint32_t room = 0u;
+            for (uint16_t a = 0; a < actions; ++a)
+                if (alive[a] && config->max_samples - (uint32_t)est[a].n > room)
+                    room = config->max_samples - (uint32_t)est[a].n;
+            if (per > room)
+                per = room;
+        }
         for (uint32_t k = 0; k < per; ++k)
             for (uint16_t a = 0; a < actions; ++a)
             {

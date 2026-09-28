@@ -8,6 +8,11 @@
 #include <stdlib.h>
 #include <time.h>
 
+/* Every decision the evaluator accepts must fit the confidence-guided
+   resolver, or enabling it would fail games that work without it. */
+typedef char pe_br_sampling_action_limit_check[
+    (PE_BR_SAMPLING_MAX_ACTIONS >= PE_EXTERNAL_MAX_ACTIONS) ? 1 : -1];
+
 typedef struct {
     const pe_external_game_t *game;
     pe_rng_t rng;

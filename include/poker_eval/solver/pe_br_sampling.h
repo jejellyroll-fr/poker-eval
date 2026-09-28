@@ -50,7 +50,8 @@
 extern "C" {
 #endif
 
-#define PE_BR_SAMPLING_MAX_ACTIONS 32u
+/* Matches PE_EXTERNAL_MAX_ACTIONS, the sampled best response's own limit. */
+#define PE_BR_SAMPLING_MAX_ACTIONS 64u
 #define PE_BR_SAMPLING_HISTOGRAM 8u
 
 /**

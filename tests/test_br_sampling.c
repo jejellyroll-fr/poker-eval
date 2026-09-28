@@ -309,6 +309,60 @@ static void test_configuration(void)
     }
 }
 
+/* The external evaluator's widest decision, and a check interval far above
+   the budget. */
+typedef struct {
+    uint64_t rng;
+    uint64_t calls;
+} wide_sampler_t;
+
+static double wide_sample(void *user, uint16_t action)
+{
+    wide_sampler_t *w = (wide_sampler_t *)user;
+    w->calls++;
+    return (action == PE_EXTERNAL_MAX_ACTIONS - 1u ? 10.0 : 0.0) +
+           rng_normal(&w->rng);
+}
+
+static void test_limits(void)
+{
+    pe_br_decision_t d;
+    wide_sampler_t w;
+    printf("  limits\n");
+
+    /* Every action count the external evaluator accepts is decidable. */
+    {
+        const pe_br_sampling_config_t c = config(4u, 64u, 4u, 0.95, 0.0);
+        w.rng = 30u;
+        w.calls = 0u;
+        CHECK(pe_br_resolve_decision((uint16_t)PE_EXTERNAL_MAX_ACTIONS,
+                                     wide_sample, &w, &c, &d, NULL) == 0 &&
+                  d.best == PE_EXTERNAL_MAX_ACTIONS - 1u,
+              "%u actions: decided (best %u)",
+              (unsigned)PE_EXTERNAL_MAX_ACTIONS, (unsigned)d.best);
+        CHECK(pe_br_resolve_decision((uint16_t)(PE_BR_SAMPLING_MAX_ACTIONS + 1u),
+                                     wide_sample, &w, &c, &d, NULL) != 0,
+              "above the limit: refused");
+    }
+
+    /* A huge check interval is bounded by the remaining budget: the round
+       makes the few draws left rather than billions of empty passes. */
+    {
+        pe_br_sampling_config_t in, c;
+        memset(&in, 0, sizeof(in));
+        in.min_samples = 4u;
+        in.max_samples = 8u;
+        in.check_interval = UINT32_MAX;
+        CHECK(pe_br_sampling_resolve(&in, &c) == 0, "huge interval resolves");
+        w.rng = 31u;
+        w.calls = 0u;
+        CHECK(pe_br_resolve_decision(2u, wide_sample, &w, &c, &d, NULL) == 0 &&
+                  w.calls <= 2u * 8u + 4u && w.calls == d.samples,
+              "huge interval: at most the hard bound (%llu draws)",
+              (unsigned long long)w.calls);
+    }
+}
+
 /* ---------------------------------------------------------------- *
  * 2. Sequential validity, measured
  * ---------------------------------------------------------------- */
@@ -486,6 +540,7 @@ int main(void)
     printf("test_br_sampling: confidence-guided best-response decisions\n");
     test_decisions();
     test_configuration();
+    test_limits();
     test_error_rate();
     test_best_response();
     if (g_failures)
