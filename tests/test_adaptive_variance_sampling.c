@@ -36,6 +36,8 @@
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_persist.h>
+#include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/solver/pe_storage.h>
 
 #include <math.h>
@@ -522,6 +524,116 @@ static void test_solver_level(void)
     }
 }
 
+/* ---------------------------------------------------------------- *
+ * 9. Checkpoints carry what the policy learned
+ * ---------------------------------------------------------------- */
+
+/* The root group's average draws, read from the solver's own report. */
+static void capture_root_draws(const pe_telemetry_event_t *event, void *user)
+{
+    const char *line = event && event->message
+        ? strstr(event->message, "adaptive_stats group=chance-depth:0 ")
+        : NULL;
+    const char *avg = line ? strstr(line, "avg_samples=") : NULL;
+    if (avg)
+        *(double *)user = strtod(avg + strlen("avg_samples="), NULL);
+}
+
+static pe_solver_t *make_solver(pe_external_game_t *game, uint64_t iterations,
+                                const pe_adaptive_sampling_t *adaptive,
+                                pe_solver_deps_t *deps,
+                                const pe_telemetry_ops_t *telemetry)
+{
+    pe_solver_config_t cfg = pe_solver_config_default();
+    cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
+    cfg.algorithm.sampling_policy = PE_SAMPLING_ADAPTIVE_VARIANCE;
+    cfg.algorithm.adaptive = *adaptive;
+    cfg.max_iterations = iterations;
+    cfg.problem.expected_infosets = 1u;
+    cfg.problem.expected_actions = 2u;
+    cfg.problem.expected_combos = 1u;
+    cfg.seed = 77u;
+    *deps = pe_solver_deps_default();
+    deps->external_game = game;
+    deps->persist = pe_persist_checkpoint_ops();
+    deps->telemetry = telemetry;
+    return pe_solver_create(&cfg, deps);
+}
+
+static void test_checkpoint_resume(void)
+{
+    /* A tiny tolerance on a noisy game: once past the pilot, the root draws
+       the maximum, 8. The pilot draws 2. The root group's average draws over
+       the ten iterations after a resume show which one the solver uses. */
+    pe_adaptive_sampling_t s = settings(2u, 8u, 16u, 1e-6);
+    pe_external_game_t game = make_game();
+    pe_solver_deps_t deps;
+    char path[] = "adaptive_resume_checkpoint.bin";
+    pe_persist_target_t target;
+    pe_persist_source_t source;
+    pe_telemetry_callback_ctx_t tctx;
+    pe_telemetry_ops_t telemetry;
+    double resumed = -1.0, fresh = -1.0;
+
+    printf("  checkpoint resume keeps the learned budgets\n");
+    set_game(1.0, 1.0);
+    memset(&target, 0, sizeof(target));
+    target.path = path;
+    memset(&source, 0, sizeof(source));
+    source.path = path;
+
+    pe_solver_t *a = make_solver(&game, 200u, &s, &deps, NULL);
+    CHECK(a && pe_solver_run(a) == PE_SOLVER_OK &&
+              pe_solver_save(a, &target) == PE_SOLVER_OK,
+          "solve and save");
+    pe_solver_destroy(a);
+
+    pe_telemetry_callback_init(&tctx, capture_root_draws, &resumed, PE_LOG_INFO);
+    telemetry = pe_telemetry_callback_ops(&tctx);
+    pe_solver_t *b = make_solver(&game, 210u, &s, &deps, &telemetry);
+    CHECK(b && pe_solver_load(b, &source) == PE_SOLVER_OK, "load");
+    CHECK(b && pe_solver_run(b) == PE_SOLVER_OK, "resumed run");
+    pe_solver_destroy(b);
+
+    pe_telemetry_callback_init(&tctx, capture_root_draws, &fresh, PE_LOG_INFO);
+    telemetry = pe_telemetry_callback_ops(&tctx);
+    pe_solver_t *c = make_solver(&game, 10u, &s, &deps, &telemetry);
+    CHECK(c && pe_solver_run(c) == PE_SOLVER_OK, "fresh run");
+    pe_solver_destroy(c);
+    remove(path);
+
+    CHECK(resumed > 7.99 && resumed < 8.01,
+          "the resumed run draws at the learned budget (%.3f, want 8)",
+          resumed);
+    CHECK(fresh > 1.99 && fresh < 2.01,
+          "a fresh run is still in its pilot (%.3f, want 2)", fresh);
+    printf("    root draws per visit after a resume %.2f, fresh %.2f\n",
+           resumed, fresh);
+
+    /* The state round-trips byte for byte, and a damaged copy is refused. */
+    {
+        pe_adaptive_state_t st, back;
+        unsigned char bytes[PE_ADAPTIVE_STATE_BYTES];
+        memset(&st, 0, sizeof(st));
+        st.budget[1][5] = 7u;
+        st.next_check[1][5] = 128u;
+        st.means[1][5].n = 3u;
+        st.means[1][5].mean = -2.5;
+        st.within[1][5].ssd = 9.0;
+        CHECK(pe_adaptive_state_serialize(&st, bytes, sizeof(bytes)) ==
+                  PE_ADAPTIVE_STATE_BYTES &&
+                  pe_adaptive_state_deserialize(&back, bytes, sizeof(bytes)) == 0 &&
+                  back.budget[1][5] == 7u && back.next_check[1][5] == 128u &&
+                  back.means[1][5].n == 3u,
+              "adaptive state round trip");
+        bytes[0] ^= 0xFFu;
+        CHECK(pe_adaptive_state_deserialize(&back, bytes, sizeof(bytes)) != 0,
+              "a wrong tag is refused");
+        CHECK(pe_adaptive_state_deserialize(&back, bytes, sizeof(bytes) - 1u) != 0,
+              "a wrong size is refused");
+    }
+}
+
 int main(void)
 {
     printf("test_adaptive_variance_sampling: adaptive-variance sampling\n");
@@ -529,6 +641,7 @@ int main(void)
     test_weighting_and_bias();
     test_determinism_and_groups();
     test_solver_level();
+    test_checkpoint_resume();
     if (g_failures)
     {
         fprintf(stderr, "test_adaptive_variance_sampling: %d failure(s)\n",

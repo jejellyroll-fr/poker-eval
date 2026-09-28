@@ -72,6 +72,13 @@ A group starts at the minimum and keeps it for its first `check_interval`
 visits, which serve as the pilot sample. After that, the budget is recomputed
 every `check_interval` visits.
 
+A checkpoint carries what the groups have learned (budgets, next checks,
+means and pooled spreads), so a resumed solve continues at its learned
+budgets instead of re-running the pilot. This matters for work split into
+short resumed jobs. The state travels as a sampler-state section of the
+checkpoint (format version 3). Version 2 checkpoints, which have no such
+section, still load: they simply start with the pilot.
+
 ### Which visits share statistics
 
 The groups are the four **streets** when the adapter tags its chance draws.

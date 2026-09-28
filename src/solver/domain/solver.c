@@ -95,6 +95,11 @@ struct pe_solver_t {
     int runtime_probed;
     int state;
     int checkpoint_loaded;
+    /* Issue #256: what the adaptive-variance policy has learned, kept current
+       after every sampled iteration and restored when a run starts, so a
+       checkpoint can carry it across a resume. */
+    pe_adaptive_state_t adaptive_state;
+    int adaptive_state_valid;
     uint64_t iteration;
     int runner_active;
     /* Footprint measured at the last heartbeat, and whether a budget stopped
@@ -1506,6 +1511,13 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             compute_ops->destroy(compute_self);
             return PE_SOLVER_ERR_INVALID_CONFIG;
         }
+        /* A checkpoint carried learned budgets: resume with them instead of
+           re-running the pilot. */
+        if (solver->config.algorithm.sampling_policy ==
+                PE_SAMPLING_ADAPTIVE_VARIANCE &&
+            solver->adaptive_state_valid)
+            pe_external_sampling_set_adaptive_state(&external,
+                                                    &solver->adaptive_state);
     }
     pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
     solver->stop_cause = PE_STOP_NONE;
@@ -1625,6 +1637,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         }
         pe_solver_destroy_batch_array(sample_batches, samples);
         free(sources);
+        if (!use_outcome && external.policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
+        {
+            pe_external_sampling_get_adaptive_state(&external,
+                                                    &solver->adaptive_state);
+            solver->adaptive_state_valid = 1;
+        }
         pe_solver_set_iteration(solver, iteration);
         pe_solver_drop_recomputable(solver);
 
@@ -2235,10 +2253,24 @@ pe_solver_status_t pe_solver_save(const pe_solver_t *solver,
             state != PE_SOLVER_STATE_STOPPED)
             return PE_SOLVER_ERR_INVALID_STATE;
     }
-    return solver->deps.persist->save(NULL, target, &solver->config,
-                                      solver->storage, solver->storage_self,
-                                      pe_solver_iteration(solver)) == 0
-        ? PE_SOLVER_OK : PE_SOLVER_ERR_EXECUTION;
+    {
+        /* Issue #256: carry the adaptive policy's learned state. */
+        pe_persist_target_t with_state = *target;
+        unsigned char state_bytes[PE_ADAPTIVE_STATE_BYTES];
+        if (solver->adaptive_state_valid &&
+            solver->config.algorithm.sampling_policy ==
+                PE_SAMPLING_ADAPTIVE_VARIANCE)
+        {
+            with_state.sampler_state_size = pe_adaptive_state_serialize(
+                &solver->adaptive_state, state_bytes, sizeof(state_bytes));
+            with_state.sampler_state =
+                with_state.sampler_state_size ? state_bytes : NULL;
+        }
+        return solver->deps.persist->save(NULL, &with_state, &solver->config,
+                                          solver->storage, solver->storage_self,
+                                          pe_solver_iteration(solver)) == 0
+            ? PE_SOLVER_OK : PE_SOLVER_ERR_EXECUTION;
+    }
 }
 
 pe_solver_status_t pe_solver_load(pe_solver_t *solver,
@@ -2256,10 +2288,23 @@ pe_solver_status_t pe_solver_load(pe_solver_t *solver,
     }
     {
         uint64_t loaded_iteration = 0u;
-    if (solver->deps.persist->load(NULL, source, &solver->config,
+        /* Issue #256: collect the sampler state, if the checkpoint has one. */
+        pe_persist_source_t with_state = *source;
+        unsigned char state_bytes[PE_ADAPTIVE_STATE_BYTES];
+        size_t state_size = 0u;
+        with_state.sampler_state = state_bytes;
+        with_state.sampler_state_capacity = sizeof(state_bytes);
+        with_state.sampler_state_size = &state_size;
+    if (solver->deps.persist->load(NULL, &with_state, &solver->config,
                                    solver->storage, solver->storage_self,
                                    &loaded_iteration) != 0)
         return PE_SOLVER_ERR_EXECUTION;
+    solver->adaptive_state_valid =
+        state_size != 0u &&
+        solver->config.algorithm.sampling_policy ==
+            PE_SAMPLING_ADAPTIVE_VARIANCE &&
+        pe_adaptive_state_deserialize(&solver->adaptive_state, state_bytes,
+                                      state_size) == 0;
     pe_solver_set_iteration(solver, loaded_iteration);
     pe_solver_set_state(solver, PE_SOLVER_STATE_CREATED);
     solver->checkpoint_loaded = 1;

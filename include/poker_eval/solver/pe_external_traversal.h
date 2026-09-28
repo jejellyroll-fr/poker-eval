@@ -164,6 +164,38 @@ void pe_external_sampling_set_policy(pe_external_sampling_ctx_t *ctx,
                                      pe_sampling_policy_t policy,
                                      const uint16_t *street_replicates);
 
+/* Issue #256: what the adaptive policy has learned, per updating player and
+   group. A checkpoint carries it so a resumed solve keeps its budgets
+   instead of re-running the pilot. */
+typedef struct
+{
+    uint32_t budget[PE_TRAVERSAL_MAX_PLAYERS][PE_ADAPTIVE_GROUP_COUNT];
+    uint64_t next_check[PE_TRAVERSAL_MAX_PLAYERS][PE_ADAPTIVE_GROUP_COUNT];
+    pe_online_stats_t means[PE_TRAVERSAL_MAX_PLAYERS][PE_ADAPTIVE_GROUP_COUNT];
+    pe_pooled_variance_t within[PE_TRAVERSAL_MAX_PLAYERS]
+                               [PE_ADAPTIVE_GROUP_COUNT];
+} pe_adaptive_state_t;
+
+/* Serialised size: a tag, then per player and group a budget (4 bytes) and
+   next check, n, mean, m2, dof and ssd (8 bytes each). */
+#define PE_ADAPTIVE_STATE_BYTES                                          \
+    (8u + (size_t)PE_TRAVERSAL_MAX_PLAYERS * PE_ADAPTIVE_GROUP_COUNT *   \
+              (4u + 6u * 8u))
+
+void pe_external_sampling_get_adaptive_state(const pe_external_sampling_ctx_t *ctx,
+                                             pe_adaptive_state_t *out);
+/* Restore learned state; call after pe_external_sampling_set_adaptive. */
+void pe_external_sampling_set_adaptive_state(pe_external_sampling_ctx_t *ctx,
+                                             const pe_adaptive_state_t *state);
+/* Write the state field by field, native byte order (checkpoints record and
+   check theirs). @return PE_ADAPTIVE_STATE_BYTES, or 0 when it does not
+   fit. */
+size_t pe_adaptive_state_serialize(const pe_adaptive_state_t *state,
+                                   unsigned char *out, size_t capacity);
+/* @return 0, or -1 for a size or tag mismatch or a non-finite value. */
+int pe_adaptive_state_deserialize(pe_adaptive_state_t *state,
+                                  const unsigned char *in, size_t size);
+
 /* Issue #256: install adaptive-variance settings (NULL means defaults) and
    reset the adaptive statistics. pe_external_sampling_set_policy installs
    the defaults itself when it selects PE_SAMPLING_ADAPTIVE_VARIANCE, so this

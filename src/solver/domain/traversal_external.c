@@ -452,6 +452,94 @@ int pe_external_sampling_set_adaptive(pe_external_sampling_ctx_t *ctx,
     return 0;
 }
 
+void pe_external_sampling_get_adaptive_state(const pe_external_sampling_ctx_t *ctx,
+                                             pe_adaptive_state_t *out)
+{
+    if (!ctx || !out)
+        return;
+    memcpy(out->budget, ctx->adaptive_budget, sizeof(out->budget));
+    memcpy(out->next_check, ctx->adaptive_next_check, sizeof(out->next_check));
+    memcpy(out->means, ctx->adaptive_means, sizeof(out->means));
+    memcpy(out->within, ctx->adaptive_within, sizeof(out->within));
+}
+
+void pe_external_sampling_set_adaptive_state(pe_external_sampling_ctx_t *ctx,
+                                             const pe_adaptive_state_t *state)
+{
+    if (!ctx || !state)
+        return;
+    memcpy(ctx->adaptive_budget, state->budget, sizeof(ctx->adaptive_budget));
+    memcpy(ctx->adaptive_next_check, state->next_check,
+           sizeof(ctx->adaptive_next_check));
+    memcpy(ctx->adaptive_means, state->means, sizeof(ctx->adaptive_means));
+    memcpy(ctx->adaptive_within, state->within, sizeof(ctx->adaptive_within));
+}
+
+static const unsigned char k_adaptive_tag[8] = {'P', 'E', 'A', 'D', 'A', 'P', 'T', '1'};
+
+static unsigned char *put_bytes(unsigned char *p, const void *v, size_t n)
+{
+    memcpy(p, v, n);
+    return p + n;
+}
+
+static const unsigned char *get_bytes(const unsigned char *p, void *v, size_t n)
+{
+    memcpy(v, p, n);
+    return p + n;
+}
+
+size_t pe_adaptive_state_serialize(const pe_adaptive_state_t *state,
+                                   unsigned char *out, size_t capacity)
+{
+    unsigned char *p = out;
+    if (!state || !out || capacity < PE_ADAPTIVE_STATE_BYTES)
+        return 0u;
+    p = put_bytes(p, k_adaptive_tag, sizeof(k_adaptive_tag));
+    for (size_t pl = 0; pl < PE_TRAVERSAL_MAX_PLAYERS; ++pl)
+        for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
+        {
+            p = put_bytes(p, &state->budget[pl][g], 4u);
+            p = put_bytes(p, &state->next_check[pl][g], 8u);
+            p = put_bytes(p, &state->means[pl][g].n, 8u);
+            p = put_bytes(p, &state->means[pl][g].mean, 8u);
+            p = put_bytes(p, &state->means[pl][g].m2, 8u);
+            p = put_bytes(p, &state->within[pl][g].dof, 8u);
+            p = put_bytes(p, &state->within[pl][g].ssd, 8u);
+        }
+    return (size_t)(p - out);
+}
+
+int pe_adaptive_state_deserialize(pe_adaptive_state_t *state,
+                                  const unsigned char *in, size_t size)
+{
+    const unsigned char *p = in;
+    pe_adaptive_state_t s;
+    unsigned char tag[8];
+    if (!state || !in || size != PE_ADAPTIVE_STATE_BYTES)
+        return -1;
+    p = get_bytes(p, tag, sizeof(tag));
+    if (memcmp(tag, k_adaptive_tag, sizeof(tag)) != 0)
+        return -1;
+    for (size_t pl = 0; pl < PE_TRAVERSAL_MAX_PLAYERS; ++pl)
+        for (int g = 0; g < PE_ADAPTIVE_GROUP_COUNT; ++g)
+        {
+            p = get_bytes(p, &s.budget[pl][g], 4u);
+            p = get_bytes(p, &s.next_check[pl][g], 8u);
+            p = get_bytes(p, &s.means[pl][g].n, 8u);
+            p = get_bytes(p, &s.means[pl][g].mean, 8u);
+            p = get_bytes(p, &s.means[pl][g].m2, 8u);
+            p = get_bytes(p, &s.within[pl][g].dof, 8u);
+            p = get_bytes(p, &s.within[pl][g].ssd, 8u);
+            if (!pe_finite_double(s.means[pl][g].mean) ||
+                !pe_finite_double(s.means[pl][g].m2) ||
+                !pe_finite_double(s.within[pl][g].ssd))
+                return -1;
+        }
+    *state = s;
+    return 0;
+}
+
 void pe_external_sampling_ctx_destroy(pe_external_sampling_ctx_t *ctx)
 {
     if (ctx)
