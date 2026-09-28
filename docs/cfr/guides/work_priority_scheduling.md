@@ -62,10 +62,11 @@ pe_work_priority_resolve(&cfg, &resolved);   /* fills defaults, validates */
 | `buckets` | 8 | geometric buckets; 1 or more than 32 is refused |
 | `bucket_ratio` | 2.0 | bucket boundaries are `ratio^0`, `ratio^1`, …; 1.0 or less is refused |
 | `aging_interval` | 0 (off) | epochs of waiting per promoted bucket |
+| `assumed_stderr` | 1.0 | spread assumed for a decision that supplies none, in value units; must be positive |
 
 `pe_work_priority_parse_option()` accepts the same fields as
-`policy`, `min-visits`, `epsilon`, `buckets`, `bucket-ratio` and
-`aging-interval`, for a command line or a config file. The issue's proposed
+`policy`, `min-visits`, `epsilon`, `buckets`, `bucket-ratio`,
+`aging-interval` and `assumed-stderr`, for a command line or a config file. The issue's proposed
 `uncertainty_refresh_interval` has no counterpart: the layer is a pure function
 of the metadata it is handed, so *when* to recompute is the caller's decision,
 not a setting.
@@ -85,11 +86,28 @@ score       = uncertainty / max(gap, epsilon)
 - **nothing to decide** — fewer than two actions — scores 0.
 
 The two spreads combine in quadrature because the score is about the
-*difference* of two estimates. A caller with no uncertainty information passes a
-zero stderr, and the decision is scored on its gap alone: a wide gap with no
-spread recorded is the lowest priority, which is the honest reading, since
-nothing observed suggests the ordering is fragile. That is the documented
-fallback when adaptive sampling (#256) is off.
+*difference* of two estimates.
+
+A caller with no uncertainty information passes a zero stderr for both actions.
+The decision is then scored on its gap against `assumed_stderr`:
+
+```
+score = assumed_stderr / max(gap, epsilon)
+```
+
+so the gap still orders the queue. With the default of 1.0, the issue's two
+examples without any spread land at opposite ends: raise 12.4 / call 6.1 scores
+0.16 (bucket 0), raise 2.102 / call 2.097 scores 200 (the top bucket). Scoring a
+missing spread as zero instead would rank every positive gap alike, and the
+policy would fall back to FIFO for every caller without variance information,
+which is exactly the case this fallback exists for (adaptive sampling, #256,
+off). Set `assumed_stderr` to the typical noise of the values, in their units,
+so a decision without a spread competes fairly with measured ones.
+
+A spread measured as exactly zero (identical draws) reads the same way. With no
+noise to weigh, the gap is the only signal left, and in a solve the values keep
+moving as the strategy updates, so a narrow gap stays fragile. A single
+positive spread is information and is used as is.
 
 Zero and *cannot say* are not the same thing, and the layer keeps them apart. A
 NaN spread reads as unresolved and saturates the top bucket, because a decision
