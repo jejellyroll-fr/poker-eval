@@ -64,6 +64,7 @@ add_library(poker_solver
     solver/domain/config.c
     solver/domain/rng.c
     solver/domain/sampling_policy.c
+    solver/domain/online_stats.c
     solver/domain/storage_policy.c
     solver/domain/plan.c
     solver/domain/runtime.c
