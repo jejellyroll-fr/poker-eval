@@ -117,6 +117,7 @@ typedef struct {
     uint16_t street_replicates[PE_SAMPLING_STREET_COUNT];
     pe_adaptive_sampling_t adaptive; /* issue #256 */
     int have_adaptive;
+    pe_br_sampling_config_t br_sampling; /* issue #257 */
     double exponential_lambda;
     double dcfr_alpha;
     double dcfr_beta;
@@ -695,6 +696,8 @@ static void usage(FILE *stream)
         "  --adaptive-KEY VALUE         adaptive-variance setting: min-samples,\n"
         "                               max-samples, check-interval, confidence,\n"
         "                               absolute-tolerance, relative-tolerance\n"
+        "  --br-KEY VALUE               confidence-guided BR decisions, same keys;\n"
+        "                               --br-max-samples N turns them on\n"
         , DEFAULT_ITERATIONS);
     /* Split in two: one literal may not exceed the 4095 characters every C99
        compiler must accept. */
@@ -1147,6 +1150,7 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--samples") == 0 || strcmp(arg, "--stack") == 0 ||
              strcmp(arg, "--sb") == 0 || strcmp(arg, "--bb") == 0 ||
              strcmp(arg, "--ante") == 0 || strcmp(arg, "--br-samples") == 0 ||
+             strncmp(arg, "--br-", 5) == 0 ||
              strcmp(arg, "--min-raise") == 0 || strcmp(arg, "--raise") == 0 ||
              strcmp(arg, "--seed") == 0 || strcmp(arg, "--output") == 0 ||
              strcmp(arg, "--tree") == 0 ||
@@ -1234,6 +1238,15 @@ options->checkpoint_interval =0u;
             if (parse_u64(value, &options->br_samples) != 0 ||
                 options->br_samples == 0u || options->br_samples > UINT32_MAX)
                 return -1;
+        } else if (strncmp(arg, "--br-", 5) == 0) {
+            /* Issue #257: --br-min-samples, --br-max-samples,
+               --br-check-interval, --br-confidence, --br-absolute-tolerance,
+               --br-relative-tolerance. */
+            if (pe_br_sampling_parse_option(&options->br_sampling, arg + 5,
+                                            value) != 0) {
+                fprintf(stderr, "invalid %s value: %s\n", arg, value);
+                return -1;
+            }
         } else if (strcmp(arg, "--target-mbb") == 0) {
             char *end = NULL;
             double target;
@@ -1906,6 +1919,7 @@ int main(int argc, char **argv)
     config.target_max_br_gap_mbb = options.target_max_br_gap_mbb;
     config.exploitability_interval = options.exploitability_interval;
     config.br_samples = (uint32_t)options.br_samples;
+    config.br_sampling = options.br_sampling;
     config.seed = options.seed;
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);
