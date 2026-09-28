@@ -57,6 +57,7 @@ add_library(poker_solver
     solver/domain/cluster.c
     solver/domain/runout_report.c
     solver/domain/omaha_river.c
+    solver/domain/hand_features.c
     solver/domain/pots.c
     solver/domain/solver.c
     solver/domain/registry.c

@@ -789,6 +789,19 @@ set_tests_properties(test_mpf_rake PROPERTIES LABELS "engine;cfr;rake")
 # splits, random deals against an independent oracle, and a river solve.
 add_poker_test(test_mpf_hilo8)
 set_tests_properties(test_mpf_hilo8 PROPERTIES LABELS "engine;cfr;multiway;hilo")
+# PLO4/5/6 hand features and strategy buckets (issue #238): fixtures, random
+# deals against brute force, bucket keys and strategy aggregation.
+add_poker_test(test_pe_hand_features)
+set_tests_properties(test_pe_hand_features PROPERTIES LABELS "solver;analysis;omaha")
+if(TARGET bench_plo_hand_features)
+    # Throughput smoke: small enough for CI, and every call must succeed.
+    add_test(NAME bench_plo_hand_features_smoke
+        COMMAND $<TARGET_FILE:bench_plo_hand_features> 500 2)
+    set_tests_properties(bench_plo_hand_features_smoke PROPERTIES
+        LABELS "solver;analysis;omaha;benchmark"
+        PASS_REGULAR_EXPRESSION "PLO6 +river"
+        TIMEOUT 120)
+endif()
 add_poker_test(test_mpf_tree)
 set_tests_properties(test_mpf_tree PROPERTIES LABELS "engine;cfr;multiway;feat06" TIMEOUT 180)
 add_poker_test(test_bet_sizing)

@@ -12,6 +12,7 @@ can jump directly to the topic you need.
 | Memory Metrics | bytes per infoset, subsystem breakdown, precision trade-offs, explicit storage tiers, adapter separation (issue #235) | ✅ — see `memory_metrics.md` |
 | PLO5/PLO6 Range Syntax | rank patterns, the suit-shape grammar, what is refused, resource guard (issue #236) | ✅ — see `plo_range_syntax.md` |
 | Conditional Card Removal | the posterior-range invariant for sampled deals, the exact oracle, what the suite rejects (issue #259) | ✅ — see `conditional_card_removal.md` |
+| PLO Hand Features | PLO4/5/6 made hands, draws, blockers and private structure under two-plus-three; bucket keys; strategy aggregation (issue #238) | ✅ — see `plo_hand_features.md` |
 | Omaha Hi/Lo 8-or-Better | PLO4/5/6 Hi/Lo showdowns: selecting it, two-plus-three for both halves, side-pot splitting, rake order, what is refused (issue #237) | ✅ — see `omaha_hilo8.md` |
 | CFR Export Results | Post-run result exports (JSON / CSV) | planned — see `mpf_dump_results` |
 | CFR Performance | Perf counters & instrumentation tips | planned |

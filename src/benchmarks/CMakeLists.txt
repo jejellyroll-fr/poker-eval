@@ -31,6 +31,7 @@ set(BENCHMARK_PROGRAMS
     bench_range_parsing
     bench_preflop_equity
     bench_flop_equity
+    bench_plo_hand_features
 )
 
 set(GPU_BENCHMARK_AVAILABLE 0)
@@ -84,6 +85,8 @@ foreach(BENCHMARK ${BENCHMARK_PROGRAMS})
         target_link_libraries(${BENCHMARK} poker_core poker_engine poker_equity poker_utils m)
     elseif(BENCHMARK STREQUAL "bench_cfr_razz_river")
         target_link_libraries(${BENCHMARK} poker_core poker_engine poker_equity poker_utils m)
+    elseif(BENCHMARK STREQUAL "bench_plo_hand_features")
+        target_link_libraries(${BENCHMARK} poker_solver poker_core m)
     elseif(BENCHMARK STREQUAL "bench_range_parsing")
         if(UNIX AND NOT APPLE)
             target_link_libraries(${BENCHMARK} -Wl,--start-group poker_equity poker_distributions poker-eval-range -Wl,--end-group poker_core ${CMAKE_THREAD_LIBS_INIT} m)
