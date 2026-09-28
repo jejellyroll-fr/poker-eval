@@ -47,6 +47,11 @@ int pe_br_sampling_resolve(const pe_br_sampling_config_t *in,
         r.max_samples > BR_MAX_SAMPLES_CEILING ||
         r.min_samples > r.max_samples)
         return -1;
+    /* A confidence so close to 1 that the union-bound level rounds to 1
+       would pass here and then fail every decision. The z grows with the
+       action count, so the widest decision covers every other. */
+    if (!pe_finite_double(pe_br_sequential_z(&r, (uint16_t)PE_BR_SAMPLING_MAX_ACTIONS)))
+        return -1;
     *out = r;
     return 0;
 }

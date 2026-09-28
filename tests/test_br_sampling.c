@@ -280,6 +280,15 @@ static void test_configuration(void)
     in.min_samples = 0u;
     in.confidence = 1.0;
     CHECK(pe_br_sampling_resolve(&in, &out) != 0, "confidence 1");
+    /* Below 1, but its union-bound level rounds to 1: refused up front
+       rather than failing every decision. */
+    in.confidence = 0.9999999999999999;
+    CHECK(pe_br_sampling_resolve(&in, &out) != 0,
+          "a confidence whose adjusted level rounds to 1");
+    in.confidence = 0.999999;
+    CHECK(pe_br_sampling_resolve(&in, &out) == 0 &&
+              pe_br_sequential_z(&out, 64u) < HUGE_VAL,
+          "a high but representable confidence is kept");
     in.confidence = 0.0;
     in.absolute_tolerance = -1.0;
     CHECK(pe_br_sampling_resolve(&in, &out) != 0, "negative tolerance");

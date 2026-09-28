@@ -120,8 +120,9 @@ static inline int pe_br_sampling_enabled(const pe_br_sampling_config_t *config)
 
 /**
  * Fill the defaults into a copy. A config with max_samples == 0 resolves to
- * itself (off). @return 0, or -1 for a confidence outside (0, 1), a negative
- * or non-finite tolerance, min above max, or max above 1 << 20.
+ * itself (off). @return 0, or -1 for a confidence outside (0, 1) or so close
+ * to 1 that its union-bound level rounds to 1, a negative or non-finite
+ * tolerance, min above max, or max above 1 << 20.
  */
 int pe_br_sampling_resolve(const pe_br_sampling_config_t *in,
                            pe_br_sampling_config_t *out);
