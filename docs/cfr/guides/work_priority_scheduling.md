@@ -177,19 +177,34 @@ The coverage tier comes first under all three non-FIFO policies.
 
 ## Telemetry
 
-`pe_work_priority_stats_t` carries the queue depth per bucket, the floor and
-aging activations, the unresolved count, the mean score and the mean delay.
-`pe_work_priority_format_stats()` renders one line, in the style of the solver's
-other counters — this is `test_stats()`'s printed output:
+`pe_work_priority_stats_t` carries the queue depth per bucket, the score
+distribution, the floor and aging activations, the unresolved count, the mean
+score and the mean delay. `pe_work_priority_format_stats()` renders one line, in
+the style of the solver's other counters — this is `test_stats()`'s printed
+output:
 
 ```text
-work_priority items=4 buckets=8 coverage_promotions=1 aging_promotions=1 unresolved=1 mean_score=16.6667 mean_delay=33.750 depth=0,0,1,0,0,0,1,2
+work_priority items=4 buckets=8 coverage_promotions=1 aging_promotions=1 unresolved=1 mean_score=16.6667 mean_delay=33.750 p50_bucket=0 p90_bucket=7 depth=0,0,1,0,0,0,1,2
 ```
 
 `depth` is the queue depth per bucket, lowest bucket first, so a baseline run
 and an uncertainty-aware run can be compared field by field. The counters are
 counted under FIFO too — the buckets describe the workload even when nothing is
 reordered — which is what makes the baseline comparable.
+
+The score's own distribution is kept separately, in `score_depth`, and counted
+*before* the coverage floor or aging move anything. That is the difference the
+two histograms show above: item 0 scores 0 and is aged from bucket 0 to 2, so
+`score_depth` has 2 in bucket 0 where `depth` has none, and 0 in bucket 2 where
+`depth` has one. `depth` describes what the policy did; `score_depth` describes
+the workload it was given.
+
+`p50_bucket` and `p90_bucket` are percentiles of that score distribution, by
+nearest rank over `score_depth` (`pe_work_priority_percentile_bucket()` takes
+any fraction). The score is quantised on purpose — the ordering only looks at
+the bucket — so a percentile of it is a **bucket**, exact for the quantised
+distribution, whose score range is `[ratio^k, ratio^(k+1))`. A reader wanting a
+value rather than a rank reads the boundary off the ratio.
 
 ## Measured: does the priority do what it claims?
 
@@ -234,21 +249,25 @@ build inside the same second leaves the previous object in place.
 
 | Mutation | Failing checks |
 |---|---|
-| the score ratio inverted (`/` → `*`) | 1,211 |
+| the score ratio inverted (`/` → `*`) | 1,213 |
 | the coverage tier removed | 5,024 |
 | the spread no longer combined in quadrature | 257 |
-| an unresolved ordering no longer saturates | 1,719 |
-| aging neutralised | 386 |
+| an unresolved ordering no longer saturates | 1,723 |
+| aging neutralised | 387 |
 | the bucket boundary made exclusive (`>=` → `>`) | 22 |
 | the bridge accepts a single observation | 3 |
 | the BALANCED rotation removed | 385 |
+| the score histogram taken from the effective bucket | 4 |
+| the percentile rank made exclusive (`>=` → `>`) | 7 |
 
-Two rows are small on purpose, and small is not the same as weak. A score lands
+Four rows are small on purpose, and small is not the same as weak. A score lands
 on a bucket boundary only when it is exactly `ratio^k`, which the randomised
 batches almost never produce, so `test_bucket_boundaries()` exists precisely to
 cover it — that is the 22. The bridge's single-observation guard is covered by
-one fixture, which is the 3. Both are non-zero, and each is caught by the test
-written for it rather than by luck.
+one fixture, which is the 3; the score histogram's independence from the policy
+by one fixture, which is the 4; and the percentile's rank convention by
+`test_percentile()`'s exact distribution, which is the 7. Every one is
+non-zero, and each is caught by the test written for it rather than by luck.
 
 The source was restored byte-for-byte after each run. Beyond those mutations,
 the suite caught a real design defect during development — the coverage floor
