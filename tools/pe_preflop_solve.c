@@ -115,6 +115,8 @@ typedef struct {
     pe_policy_mode_t policy;
     pe_sampling_policy_t sampling_policy;
     uint16_t street_replicates[PE_SAMPLING_STREET_COUNT];
+    pe_adaptive_sampling_t adaptive; /* issue #256 */
+    int have_adaptive;
     double exponential_lambda;
     double dcfr_alpha;
     double dcfr_beta;
@@ -686,9 +688,17 @@ static void usage(FILE *stream)
         "                               (full-tree cfr/cfr+/dcfr presets are\n"
         "                               rejected by this sampled driver)\n"
         "  --policy NAME                regret-matching or exponential\n"
-        "  --sampling-policy NAME       standard (default) or street-balanced\n"
+        "  --sampling-policy NAME       standard (default), street-balanced or\n"
+        "                               adaptive-variance\n"
         "  --street-replicates A,B,C,D  chance draws per visit, preflop..river\n"
         "                               (street-balanced only; 0 keeps 1)\n"
+        "  --adaptive-KEY VALUE         adaptive-variance setting: min-samples,\n"
+        "                               max-samples, check-interval, confidence,\n"
+        "                               absolute-tolerance, relative-tolerance\n"
+        , DEFAULT_ITERATIONS);
+    /* Split in two: one literal may not exceed the 4095 characters every C99
+       compiler must accept. */
+    fprintf(stream,
         "  --lambda X                   exponential policy temperature (> 0)\n"
         "  --alpha X                   DCFR positive-regret discount exponent (>= 0)\n"
         "  --beta X                    DCFR negative-regret discount exponent (>= 0)\n"
@@ -707,8 +717,7 @@ static void usage(FILE *stream)
         "  --max-ram MB                 stop cleanly when storage plus the game\n"
         "                               adapter exceed MB (default: 70%% of RAM,\n"
         "                               0 disables).  A run with no iteration cap\n"
-        "                               grows until something stops it.\n"
-        , DEFAULT_ITERATIONS);
+        "                               grows until something stops it.\n");
     fputs(
         "  --desc-limit MB              cap the human-readable description table\n"
         "                               (default: a quarter of --max-ram).  It is\n"
@@ -1145,6 +1154,7 @@ options->checkpoint_interval =0u;
              strcmp(arg, "--policy") == 0 ||
              strcmp(arg, "--sampling-policy") == 0 ||
              strcmp(arg, "--street-replicates") == 0 ||
+             strncmp(arg, "--adaptive-", 11) == 0 ||
              strcmp(arg, "--lambda") == 0 ||
              strcmp(arg, "--alpha") == 0 ||
              strcmp(arg, "--beta") == 0 ||
@@ -1310,6 +1320,13 @@ options->checkpoint_interval =0u;
                 fprintf(stderr, "invalid street replicate table: %s\n", value);
                 return -1;
             }
+        } else if (strncmp(arg, "--adaptive-", 11) == 0) {
+            if (pe_adaptive_sampling_parse_option(&options->adaptive, arg + 11,
+                                                  value) != 0) {
+                fprintf(stderr, "invalid %s value: %s\n", arg, value);
+                return -1;
+            }
+            options->have_adaptive = 1;
         } else if (strcmp(arg, "--lambda") == 0) {
             if (parse_positive_double(value, &options->exponential_lambda) != 0)
                 return -1;
@@ -1840,6 +1857,16 @@ int main(int argc, char **argv)
     for (int street = 0; street < PE_SAMPLING_STREET_COUNT; ++street)
         config.algorithm.street_replicates[street] =
             options.street_replicates[street];
+    /* Adaptive settings mean nothing to another policy; refuse them rather
+       than archive a run whose metadata claims an effect it never had. */
+    if (options.have_adaptive &&
+        options.sampling_policy != PE_SAMPLING_ADAPTIVE_VARIANCE) {
+        fprintf(stderr,
+                "--adaptive-* settings need --sampling-policy "
+                "adaptive-variance\n");
+        goto fail;
+    }
+    config.algorithm.adaptive = options.adaptive;
     if (options.policy != PE_POLICY_COUNT ||
         fabs(options.exponential_lambda - 1.0) > 1e-15 ||
         options.have_dcfr_alpha || options.have_dcfr_beta || options.have_dcfr_gamma) {
