@@ -386,7 +386,7 @@ static void test_determinism_and_groups(void)
     runner_open(&b, PE_SAMPLING_ADAPTIVE_VARIANCE, &s, 99u);
     for (int i = 0; i < 300 && same; ++i)
     {
-        double ra, rb, ma, mb;
+        double ra = 0.0, rb = 0.0, ma = 0.0, mb = 0.0;
         runner_step(&a, &ra, &ma);
         runner_step(&b, &rb, &mb);
         if (a.batch.count != b.batch.count ||

@@ -61,6 +61,10 @@ int pe_sampling_policy_parse(const char *name, pe_sampling_policy_t *out)
     return -1;
 }
 
+/* "Left at zero" without == on a double (-Wfloat-equal); false for NaN, so
+   a NaN setting is not mistaken for "use the default". */
+static int is_unset(double value) { return value >= 0.0 && value <= 0.0; }
+
 int pe_adaptive_sampling_resolve(const pe_adaptive_sampling_t *in,
                                  pe_adaptive_sampling_t *out, double *out_z)
 {
@@ -84,12 +88,12 @@ int pe_adaptive_sampling_resolve(const pe_adaptive_sampling_t *in,
                             : PE_ADAPTIVE_DEFAULT_MAX_SAMPLES;
     if (r.check_interval == 0u)
         r.check_interval = PE_ADAPTIVE_DEFAULT_CHECK_INTERVAL;
-    if (r.confidence_level == 0.0)
+    if (is_unset(r.confidence_level))
         r.confidence_level = PE_ADAPTIVE_DEFAULT_CONFIDENCE;
     if (!pe_finite_double(r.absolute_tolerance) || r.absolute_tolerance < 0.0 ||
         !pe_finite_double(r.relative_tolerance) || r.relative_tolerance < 0.0)
         return -1;
-    if (r.absolute_tolerance == 0.0 && r.relative_tolerance == 0.0)
+    if (is_unset(r.absolute_tolerance) && is_unset(r.relative_tolerance))
         r.relative_tolerance = PE_ADAPTIVE_DEFAULT_RELATIVE_TOLERANCE;
     if (r.min_samples > r.max_samples ||
         r.max_samples > PE_ADAPTIVE_MAX_SAMPLES_CEILING)
