@@ -236,6 +236,55 @@ static void test_bucket_fixtures(void)
           pe_work_priority_bucket(&config, &item, 0u));
 }
 
+/* The boundaries are ratio^k, and a score sitting exactly on one belongs to
+   the upper bucket. Swept over two ratios whose powers are exact in binary,
+   with a gap of exactly 1 so the score is the spread itself, so a comparison
+   that drifts from >= to > cannot hide behind a single fixture. */
+static void test_bucket_boundaries(void)
+{
+    static const struct
+    {
+        double ratio;
+        double edge;
+        uint32_t bucket;
+    } cases[] = {
+        {2.0, 0.5, 0u},  {2.0, 1.0, 1u}, {2.0, 2.0, 2u},
+        {2.0, 4.0, 3u},  {2.0, 8.0, 3u}, {4.0, 0.5, 0u},
+        {4.0, 1.0, 1u},  {4.0, 4.0, 2u}, {4.0, 16.0, 3u},
+        {4.0, 64.0, 3u}
+    };
+    size_t i;
+
+    for (i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        pe_work_priority_config_t in, config;
+        pe_work_priority_item_t item;
+
+        memset(&in, 0, sizeof(in));
+        in.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+        in.min_visits = 1u;
+        in.buckets = 4u;
+        in.bucket_ratio = cases[i].ratio;
+        if (pe_work_priority_resolve(&in, &config) != 0)
+        {
+            CHECK(0, "case %zu (ratio %g) must resolve", i, cases[i].ratio);
+            continue;
+        }
+
+        /* best - second is exactly 1, so the score is the spread exactly. */
+        item = oracle_item(cases[i].edge + 1.0, cases[i].edge, cases[i].edge,
+                           0.0, 1u, 0u, 2u);
+        CHECK(fabs(pe_work_priority_score(&config, &item) - cases[i].edge) <
+                  1e-15,
+              "case %zu: the score must be %g, got %.17g", i, cases[i].edge,
+              pe_work_priority_score(&config, &item));
+        CHECK(pe_work_priority_bucket(&config, &item, 0u) == cases[i].bucket,
+              "case %zu (ratio %g, score %g): the bucket must be %u, got %u", i,
+              cases[i].ratio, cases[i].edge, cases[i].bucket,
+              pe_work_priority_bucket(&config, &item, 0u));
+    }
+}
+
 /* ---------------------------------------------------------------- *
  * 2. Configuration
  * ---------------------------------------------------------------- */
@@ -660,6 +709,122 @@ static void test_determinism(void)
           "a NULL config must be refused");
     CHECK(pe_work_priority_order(&config, items, 0u, 0u, first, 0u, NULL) == 0,
           "an empty batch must succeed");
+}
+
+/* Codex P2 on PR #270: a one-observation accumulator has an *undefined*
+   variance, not a zero one. Reading it as zero would drop a decision nobody
+   has measured twice into the lowest bucket, and with aging off it could be
+   starved there. The bridge must say "not enough observations", not "no
+   spread". */
+static void test_undersampled_bridge(void)
+{
+    pe_online_stats_t best, second;
+    pe_work_priority_item_t item;
+    pe_work_priority_config_t config =
+        make_config(PE_WORK_SCHED_UNCERTAINTY_AWARE, 1u, 8u, 0u);
+    uint32_t top = config.buckets - 1u;
+
+    pe_online_stats_reset(&best);
+    pe_online_stats_reset(&second);
+    pe_online_stats_add(&best, 2.102);
+    pe_online_stats_add(&second, 2.097);
+    CHECK(pe_online_stats_std_error(&best) >= 0.0 &&
+              pe_online_stats_std_error(&best) <= 0.0,
+          "the accumulator itself reports a zero spread below two samples");
+
+    pe_work_priority_item_from_stats(&item, &best, &second, 3u, 1u, 0u);
+    CHECK(isnan(item.best_stderr) && isnan(item.second_stderr),
+          "the bridge must report an undefined spread as NaN, got %g and %g",
+          item.best_stderr, item.second_stderr);
+    CHECK(isinf(pe_work_priority_score(&config, &item)),
+          "an undefined spread must score as unresolved, got %g",
+          pe_work_priority_score(&config, &item));
+    CHECK(pe_work_priority_bucket(&config, &item, 0u) == top,
+          "an undefined spread must rank first, got bucket %u",
+          pe_work_priority_bucket(&config, &item, 0u));
+
+    /* A single action has nothing to decide, however thin the measurement. */
+    pe_work_priority_item_from_stats(&item, &best, NULL, 1u, 0u, 0u);
+    CHECK(pe_work_priority_score(&config, &item) >= 0.0 &&
+              pe_work_priority_score(&config, &item) <= 0.0,
+          "a single action must still score zero, got %g",
+          pe_work_priority_score(&config, &item));
+
+    /* Two observations are enough, and the score is a real number again. */
+    pe_online_stats_add(&best, 2.202);
+    pe_online_stats_add(&second, 2.000);
+    pe_work_priority_item_from_stats(&item, &best, &second, 3u, 2u, 0u);
+    CHECK(!isnan(item.best_stderr) && item.best_stderr > 0.0,
+          "two observations must give a real spread, got %g", item.best_stderr);
+    {
+        double score = pe_work_priority_score(&config, &item);
+        CHECK(!isnan(score) && !isinf(score) && score > 0.0,
+              "a measured decision must score finitely, got %g", score);
+        CHECK(pe_work_priority_bucket(&config, &item, 0u) < top,
+              "a measured decision must not rank first, got bucket %u",
+              pe_work_priority_bucket(&config, &item, 0u));
+    }
+}
+
+/* Codex P2 on PR #270: a stateless interleave that always starts at the top
+   bucket does nothing for a caller that services a prefix of the order and
+   recomputes - the usual shape. The starting bucket must advance with the
+   epoch, or BALANCED is the strict policy with a different within-round
+   order. */
+static void test_balanced_rotates(void)
+{
+    pe_work_priority_item_t items[8];
+    pe_work_priority_config_t balanced =
+        make_config(PE_WORK_SCHED_BALANCED, 1u, 8u, 0u); /* aging off */
+    pe_work_priority_config_t strict =
+        make_config(PE_WORK_SCHED_UNCERTAINTY_AWARE, 1u, 8u, 0u);
+    size_t order[8], strict_order[8];
+    /* One decision per bucket: item i scores edges[i] and lands in bucket i.
+       A gap of exactly 1 makes the score the spread itself. */
+    static const double edges[8] = {0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0};
+    size_t i;
+    uint64_t epoch;
+
+    for (i = 0u; i < 8u; ++i)
+    {
+        items[i] =
+            oracle_item(edges[i] + 1.0, edges[i], edges[i], 0.0, 5u, 0u, 2u);
+        CHECK(pe_work_priority_bucket(&balanced, &items[i], 0u) == (uint32_t)i,
+              "item %zu must land in bucket %zu, got %u", i, i,
+              pe_work_priority_bucket(&balanced, &items[i], 0u));
+    }
+
+    printf("balanced rotation: heads");
+    for (epoch = 0u; epoch < 8u; ++epoch)
+    {
+        CHECK(pe_work_priority_order(&balanced, items, 8u, epoch, order, 8u,
+                                     NULL) == 0,
+              "order must succeed");
+        CHECK(pe_work_priority_order(&strict, items, 8u, epoch, strict_order, 8u,
+                                     NULL) == 0,
+              "order must succeed");
+        printf(" %zu", order[0]);
+        /* The round starts at the top bucket and walks down, so with every
+           bucket occupied the head is exactly one bucket lower each epoch. */
+        CHECK(order[0] == (size_t)(7u - (uint32_t)epoch),
+              "epoch %llu: the head must be the decision in bucket %u, got %zu",
+              (unsigned long long)epoch, 7u - (uint32_t)epoch, order[0]);
+        CHECK(strict_order[0] == 7u,
+              "the strict policy must keep the top bucket in front, got %zu",
+              strict_order[0]);
+        {
+            int seen[8];
+            memset(seen, 0, sizeof(seen));
+            for (i = 0u; i < 8u; ++i)
+            {
+                CHECK(order[i] < 8u && !seen[order[i]],
+                      "epoch %llu: position %zu is %zu, not a permutation",
+                      (unsigned long long)epoch, i, order[i]);
+                seen[order[i]] = 1;
+            }
+        }
+    }
+    printf("\n");
 }
 
 /* ---------------------------------------------------------------- *
@@ -1089,6 +1254,7 @@ int main(void)
 {
     test_score_fixtures();
     test_bucket_fixtures();
+    test_bucket_boundaries();
     test_configuration();
     test_options();
     test_coverage_floor();
@@ -1100,6 +1266,8 @@ int main(void)
     test_synthetic_workload();
     test_unit_permutation();
     test_from_stats();
+    test_undersampled_bridge();
+    test_balanced_rotates();
 
     if (g_failures != 0)
     {
