@@ -3,6 +3,7 @@
 #define POKER_EVAL_PE_EXTERNAL_BEST_RESPONSE_H
 
 #include <poker_eval/solver/pe_external_traversal.h>
+#include <poker_eval/solver/pe_br_sampling.h>
 #include <poker_eval/solver/pe_solver.h>
 
 #include <stddef.h>
@@ -35,6 +36,11 @@ typedef struct {
     /* Exact-mode resource guard: refuse once this much wall time (ms) is
        spent (0 = unlimited). */
     uint64_t max_br_time_ms;
+    /* Issue #257, sampled mode: confidence-guided evaluation of the BR
+       decision. max_samples == 0 (the default) keeps one rollout per action;
+       otherwise each action is sampled until the best one is resolved (see
+       pe_br_sampling.h). */
+    pe_br_sampling_config_t sampling;
 } pe_external_br_config_t;
 
 typedef struct {
@@ -53,6 +59,10 @@ typedef struct {
     pe_guarantee_t guarantee;
     /* Exact mode only: states visited by the deterministic traversal. */
     size_t nodes_visited;
+    /* Issue #257, sampled mode: decisions, draws, early stops, max-budget
+       hits, the draws histogram, the final gaps, and terminal evaluations
+       (counted with or without the adaptive evaluation). */
+    pe_br_sampling_stats_t sampling;
 } pe_external_br_result_t;
 
 pe_external_br_config_t pe_external_br_config_default(void);
@@ -62,6 +72,11 @@ pe_external_br_config_t pe_external_br_config_default(void);
  * behavioral strategy. Chance and opponent actions are sampled. At a BR
  * decision all legal actions are rolled out and the highest sample is used;
  * this is intentionally an empirical estimate, never an exact Nash claim.
+ *
+ * Issue #257: with config->sampling enabled, a BR decision samples each
+ * action until the best is resolved or the cap is reached, and uses the
+ * chosen action's sample mean. Only this measurement changes; nothing here
+ * touches CFR updates.
  */
 int pe_external_best_response_sampled(const pe_external_game_t *game,
                                       uint8_t br_player,

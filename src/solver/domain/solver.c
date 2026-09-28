@@ -1235,6 +1235,7 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
     pe_external_br_config_t br_config = pe_external_br_config_default();
     double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
     uint64_t sample_count = 0u;
+    pe_br_sampling_stats_t br_totals;
     pe_br_mode_t measured_mode = PE_BR_SAMPLED;
     uint8_t player;
     int reached = 0;
@@ -1251,12 +1252,28 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
        loudly; AUTO may fall back to sampled but then reports the sampled
        mode, so an exact claim is never made on sampled numbers. */
     br_config.mode = solver->config.br_mode;
+    br_config.sampling = solver->config.br_sampling;
+    memset(&br_totals, 0, sizeof(br_totals));
     for (player = 0u; player < sampled_game->player_count; ++player)
     {
         pe_external_br_result_t br_result;
         if (pe_external_best_response(sampled_game, player,
                                       &br_config, &br_result) != 0)
             return PE_SOLVER_ERR_EXECUTION;
+        /* Issue #257: the measurement's sampling totals, over the players. */
+        br_totals.decisions += br_result.sampling.decisions;
+        br_totals.samples += br_result.sampling.samples;
+        br_totals.separated += br_result.sampling.separated;
+        br_totals.tolerance_stops += br_result.sampling.tolerance_stops;
+        br_totals.max_budget_hits += br_result.sampling.max_budget_hits;
+        br_totals.single_action += br_result.sampling.single_action;
+        br_totals.eliminated_actions += br_result.sampling.eliminated_actions;
+        br_totals.terminal_evaluations += br_result.sampling.terminal_evaluations;
+        br_totals.gap_sum += br_result.sampling.gap_sum;
+        br_totals.gap_half_width_sum += br_result.sampling.gap_half_width_sum;
+        br_totals.selection_value_sum += br_result.sampling.selection_value_sum;
+        for (unsigned b = 0u; b < PE_BR_SAMPLING_HISTOGRAM; ++b)
+            br_totals.histogram[b] += br_result.sampling.histogram[b];
         gaps[player] = br_result.br_gap;
         /* Issue #234: keep the sampling metadata of the measurement. The
            policy value is re-evaluated once per player's BR, so its
@@ -1306,6 +1323,44 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
         solver->metrics.exploitability_mbb_per_game,
         solver->config.target_exploitability_mbb,
         pe_br_mode_name(solver->metrics.br_mode));
+    /* Issue #257: what the measurement cost, and with the confidence-guided
+       evaluation, how it stopped. Sampled measurements only: the exact
+       traversal reports none of this. */
+    if (measured_mode == PE_BR_SAMPLED)
+    {
+        pe_telemetry_emitf(
+            solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+            "br_sampling terminal_evaluations=%" PRIu64 "\n",
+            br_totals.terminal_evaluations);
+        if (pe_br_sampling_enabled(&br_config.sampling) && br_totals.decisions)
+        {
+            double decisions = (double)br_totals.decisions;
+            pe_telemetry_emitf(
+                solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+                "br_decisions decisions=%" PRIu64 " samples=%" PRIu64
+                " avg_samples=%.3f early_stop_pct=%.2f separated=%" PRIu64
+                " tolerance_stops=%" PRIu64 " max_budget_hits=%" PRIu64
+                " single_action=%" PRIu64
+                " eliminated=%" PRIu64 " mean_gap=%.6g mean_gap_half_width=%.6g"
+                " mean_selection_value=%.6g"
+                " histogram=%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
+                ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+                br_totals.decisions, br_totals.samples,
+                (double)br_totals.samples / decisions,
+                100.0 * (double)(br_totals.decisions - br_totals.max_budget_hits) /
+                    decisions,
+                br_totals.separated, br_totals.tolerance_stops,
+                br_totals.max_budget_hits, br_totals.single_action,
+                br_totals.eliminated_actions,
+                br_totals.gap_sum / decisions,
+                br_totals.gap_half_width_sum / decisions,
+                br_totals.selection_value_sum / decisions,
+                br_totals.histogram[0], br_totals.histogram[1],
+                br_totals.histogram[2], br_totals.histogram[3],
+                br_totals.histogram[4], br_totals.histogram[5],
+                br_totals.histogram[6], br_totals.histogram[7]);
+        }
+    }
     pe_telemetry_flush(solver->deps.telemetry);
     return PE_SOLVER_OK;
 }

@@ -794,6 +794,9 @@ set_tests_properties(test_mpf_hilo8 PROPERTIES LABELS "engine;cfr;multiway;hilo"
 # Issue #256: running statistics and the adaptive-variance sampling policy.
 add_poker_test(test_pe_online_stats)
 set_tests_properties(test_pe_online_stats PROPERTIES LABELS "solver;sampling")
+# Issue #257: confidence-guided best-response decisions.
+add_poker_test(test_br_sampling)
+set_tests_properties(test_br_sampling PROPERTIES LABELS "solver;sampling;best-response")
 add_poker_test(test_adaptive_variance_sampling)
 set_tests_properties(test_adaptive_variance_sampling PROPERTIES LABELS "solver;sampling;lane-b")
 add_poker_test(test_pe_hand_features)
@@ -1878,6 +1881,32 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
             --iterations 40
             --sampling-policy adaptive-variance
             --adaptive-max-samples 4)
+    # Issue #257: --br-* asks for a best response, which Lane B measures only
+    # on its exploitability schedule; the tool schedules one at the end.
+    add_test(NAME mpf_br_sampling_flop_smoke
+        COMMAND mpf_run_with_metrics
+            --rules plo5
+            --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
+            --range1 AAxxx
+            --lane-b
+            --iterations 40
+            --br-max-samples 8)
+    set_tests_properties(mpf_br_sampling_flop_smoke PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "br_decisions decisions=[1-9][0-9]* samples=[1-9]"
+        DEPENDS pe_preflop_tree_hilo8_flop_smoke
+        TIMEOUT 120)
+    # Issue #257: the settings only mean something on Lane B's sampled solver,
+    # so the tool refuses them elsewhere instead of accepting and ignoring.
+    add_test(NAME mpf_br_settings_need_lane_b
+        COMMAND mpf_run_with_metrics
+            --rules plo5
+            --iterations 1
+            --br-max-samples 8)
+    set_tests_properties(mpf_br_settings_need_lane_b PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "--br-\\* settings need --lane-b"
+        TIMEOUT 60)
     # street-balanced would run as standard on this adapter (no street
     # tags), so the tool refuses it rather than mislabel the run.
     add_test(NAME mpf_rejects_street_balanced
@@ -2058,6 +2087,39 @@ if(TARGET pe-preflop-solve)
     set_tests_properties(pe_preflop_solve_adaptive_sampling_smoke PROPERTIES
         LABELS "product;solver;lane-b;preflop;sampling"
         PASS_REGULAR_EXPRESSION "adaptive_stats group=street:preflop estimates=[1-9]"
+        TIMEOUT 60)
+    # Issue #257: confidence-guided BR decisions end to end, reporting how
+    # the measurement's decisions stopped.
+    add_test(NAME pe_preflop_solve_br_sampling_smoke
+        COMMAND pe-preflop-solve
+            --game plo4
+            --algorithm external-mccfr
+            --iterations 32
+            --samples 2
+            --br-samples 64
+            --exploitability-interval 32
+            --br-max-samples 16)
+    set_tests_properties(pe_preflop_solve_br_sampling_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;best-response"
+        PASS_REGULAR_EXPRESSION "br_decisions decisions=[1-9][0-9]* samples=[1-9]"
+        TIMEOUT 60)
+    # Issue #257: a confidence whose union-bound level rounds to 1 is refused
+    # by the plan before any measurement runs, rather than failing every
+    # decision at runtime. Status 5 is PE_SOLVER_ERR_INVALID_CONFIG; the
+    # measurement must not have started.
+    add_test(NAME pe_preflop_solve_br_sampling_rejects_bad_confidence
+        COMMAND pe-preflop-solve
+            --game holdem
+            --algorithm external-mccfr
+            --iterations 4
+            --br-samples 16
+            --br-max-samples 16
+            --br-confidence 0.9999999999999999)
+    set_tests_properties(pe_preflop_solve_br_sampling_rejects_bad_confidence
+        PROPERTIES
+        LABELS "product;solver;lane-b;preflop;best-response"
+        PASS_REGULAR_EXPRESSION "preflop solve failed: status=5"
+        FAIL_REGULAR_EXPRESSION "br_decisions"
         TIMEOUT 60)
     add_test(NAME pe_preflop_solve_adaptive_settings_need_policy
         COMMAND pe-preflop-solve

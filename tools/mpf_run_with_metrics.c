@@ -247,6 +247,8 @@ static void usage(const char *prog)
             "  --adaptive-<key> <v>    adaptive-variance setting: min-samples,\n"
             "                          max-samples, check-interval, confidence,\n"
             "                          absolute-tolerance, relative-tolerance\n"
+            "  --br-<key> <v>          Lane B: confidence-guided BR decisions,\n"
+            "                          same keys; --br-max-samples N turns it on\n"
             "  --list-algorithms       List registered algorithm presets and exit\n"
             "  --list-backends         List registered compute backends and exit\n"
             "  --show-capabilities     Print the available capability bits and exit\n"
@@ -921,6 +923,8 @@ int main(int argc, char **argv)
     pe_sampling_policy_t sampling_policy = PE_SAMPLING_STANDARD;
     pe_adaptive_sampling_t adaptive_settings;
     int have_adaptive = 0;
+    pe_br_sampling_config_t br_sampling; /* issue #257 */
+    int have_br_sampling = 0;
     int have_sampling_policy = 0;
     int sample_batch = 1;
     int cpu_threads = 1;
@@ -965,6 +969,7 @@ int main(int argc, char **argv)
 
     memset(&overrides, 0, sizeof(overrides));
     memset(&adaptive_settings, 0, sizeof(adaptive_settings));
+    memset(&br_sampling, 0, sizeof(br_sampling));
 
     for (int i = 1; i < argc; ++i)
     {
@@ -1241,6 +1246,17 @@ int main(int argc, char **argv)
             }
             have_sampling_policy = 1;
         }
+        else if (strncmp(argv[i], "--br-", 5) == 0 && i + 1 < argc)
+        {
+            if (pe_br_sampling_parse_option(&br_sampling, argv[i] + 5,
+                                            argv[i + 1]) != 0)
+            {
+                fprintf(stderr, "Invalid %s value: %s\n", argv[i], argv[i + 1]);
+                return 1;
+            }
+            ++i;
+            have_br_sampling = 1;
+        }
         else if (strncmp(argv[i], "--adaptive-", 11) == 0 && i + 1 < argc)
         {
             if (pe_adaptive_sampling_parse_option(&adaptive_settings,
@@ -1399,6 +1415,11 @@ int main(int argc, char **argv)
     /* Never let an explicit v3 choice disappear into the fixed legacy
        runner. A full-tree v3 request is routed below after the shared tree
        has been parsed, while --lane-b keeps its sampled semantics. */
+    if (!lane_b && have_br_sampling)
+    {
+        fprintf(stderr, "--br-* settings need --lane-b\n");
+        return 2;
+    }
     if (!lane_b && (sampling_policy != PE_SAMPLING_STANDARD || have_adaptive))
     {
         fprintf(stderr, "--sampling-policy and --adaptive-* need --lane-b\n");
@@ -1905,6 +1926,12 @@ int main(int argc, char **argv)
         }
         lane_cfg.algorithm.sampling_policy = sampling_policy;
         lane_cfg.algorithm.adaptive = adaptive_settings;
+        lane_cfg.br_sampling = br_sampling;
+        /* The sampled solver measures a best response only on its
+           exploitability schedule, which is off by default: --br-* asks
+           for one, so measure it at the final iteration. */
+        if (have_br_sampling)
+            lane_cfg.exploitability_interval = (uint64_t)iterations;
         lane_cfg.execution.backend = lane_backend;
         lane_cfg.execution.stages.traversal = lane_backend;
         lane_cfg.execution.stages.update = lane_backend;
@@ -1923,7 +1950,7 @@ int main(int argc, char **argv)
            the solver's per-street and adaptive statistics and the terminal
            evaluation total. Runs without it keep their output unchanged. */
         pe_telemetry_ops_t lane_telemetry;
-        if (have_sampling_policy)
+        if (have_sampling_policy || have_br_sampling)
         {
             lane_telemetry = *pe_telemetry_stdout();
             lane_telemetry.max_level = PE_LOG_INFO;

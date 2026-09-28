@@ -65,6 +65,7 @@ add_library(poker_solver
     solver/domain/rng.c
     solver/domain/sampling_policy.c
     solver/domain/online_stats.c
+    solver/domain/br_sampling.c
     solver/domain/storage_policy.c
     solver/domain/plan.c
     solver/domain/runtime.c
@@ -233,10 +234,13 @@ endforeach()
 # pe_persist_source_t (sampler state) and pe_external_sampling_ctx_t
 # (adaptive state) all grew; SOVERSION 6 keeps callers built against the
 # SOVERSION 5 layouts from being handed this library.
+# Issue #257: pe_solver_config_t (br_sampling), pe_external_br_config_t and
+# pe_external_br_result_t (confidence-guided BR settings and totals) grew:
+# SOVERSION 7.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 6.0.0
-        SOVERSION 6)
+        VERSION 7.0.0
+        SOVERSION 7)
 
     # Issue #236: mpf_config_t and mpf_tree_range_profile_t gained public
     # complete-range fields.  Keep old applications from passing their

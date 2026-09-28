@@ -354,6 +354,20 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     "averaging_delay must not be negative, got %d",
                     a->averaging_delay);
 
+    {
+        pe_br_sampling_config_t resolved;
+        if (pe_br_sampling_resolve(&cfg->br_sampling, &resolved) != 0)
+            pe_diag_add(diag, PE_VALID_ERROR,
+                        "best-response sampling settings are invalid: min %u, "
+                        "max %u, confidence %f in (0, 1), tolerances %f and %f "
+                        "must be finite and non-negative",
+                        cfg->br_sampling.min_samples,
+                        cfg->br_sampling.max_samples,
+                        cfg->br_sampling.confidence,
+                        cfg->br_sampling.absolute_tolerance,
+                        cfg->br_sampling.relative_tolerance);
+    }
+
     if (a->sampling_policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
     {
         pe_adaptive_sampling_t resolved;
