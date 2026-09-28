@@ -111,12 +111,15 @@ int pe_br_resolve_decision(uint16_t actions, pe_br_sample_fn sample,
             pe_online_stats_add(&s, v);
         }
         out->value = s.mean;
+        out->selection_value = s.mean; /* one action: nothing was selected */
         out->samples = s.n;
         out->end = PE_BR_DECISION_SINGLE;
         if (stats)
         {
             stats->decisions++;
             stats->samples += s.n;
+            stats->single_action++;
+            stats->selection_value_sum += out->selection_value;
             stats->histogram[0]++;
         }
         return 0;
@@ -267,6 +270,7 @@ int pe_br_resolve_decision(uint16_t actions, pe_br_sample_fn sample,
             stats->decisions++;
             stats->samples += out->samples;
             stats->eliminated_actions += out->eliminated;
+            stats->selection_value_sum += out->selection_value;
             stats->histogram[bucket]++;
             if (end == PE_BR_DECISION_SEPARATED)
                 stats->separated++;

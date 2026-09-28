@@ -84,7 +84,9 @@ typedef enum {
 typedef struct pe_br_decision_t {
     uint16_t best;              /* chosen action */
     double value;               /* its mean over fresh draws (unbiased) */
-    double selection_value;     /* its running mean when chosen (biased up) */
+    double selection_value;     /* its running mean when chosen (biased up);
+                                   equal to value for a single action, where
+                                   nothing was selected */
     double gap;                 /* leader mean minus runner-up mean (0 when single) */
     double gap_half_width;      /* leader + runner-up half-widths at the end */
     uint64_t samples;           /* draws over all actions, estimate included */
@@ -92,13 +94,17 @@ typedef struct pe_br_decision_t {
     pe_br_decision_end_t end;
 } pe_br_decision_t;
 
-/** Totals over many decisions, for telemetry. */
+/** Totals over many decisions, for telemetry. The four end reasons below
+    (separated, tolerance_stops, max_budget_hits, single_action) sum to
+    `decisions`, so a reader can tell a decision that had nothing to decide
+    from one that stopped early. */
 typedef struct pe_br_sampling_stats_t {
     uint64_t decisions;
     uint64_t samples;           /* action draws */
     uint64_t separated;
     uint64_t tolerance_stops;
     uint64_t max_budget_hits;   /* unresolved at the cap */
+    uint64_t single_action;     /* nothing to decide: one legal action */
     uint64_t eliminated_actions;
     uint64_t terminal_evaluations; /* filled by the best-response evaluator */
     /* Decisions by draws per action: bucket b holds those with at most
@@ -106,6 +112,10 @@ typedef struct pe_br_sampling_stats_t {
     uint64_t histogram[PE_BR_SAMPLING_HISTOGRAM];
     double gap_sum;             /* for the mean final gap */
     double gap_half_width_sum;  /* ... and its mean uncertainty */
+    /* The running means the decisions were made on. Their mean sits above
+       the chosen actions' true values (that is what the fresh re-estimate
+       corrects), so it is the diagnostic for the bias, not an estimate. */
+    double selection_value_sum;
 } pe_br_sampling_stats_t;
 
 /** Draw one sample of action `action`'s value. Return a finite value, or a
