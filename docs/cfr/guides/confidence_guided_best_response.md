@@ -178,6 +178,7 @@ strategy, so the difference to the fixed-64 reference is paired, per seed.
 - **`best_response_ii.c`**, the vector information-set best response, is
   deterministic: it enumerates chance and iterates to a fixed point, with no
   Monte Carlo draws to stop early, so it has nothing to adapt.
-- **`mpf_run_with_metrics --lane-b`** accepts the settings. Its sampled solves
+- **`mpf_run_with_metrics --lane-b`** accepts the settings and then measures
+  a best response at the final iteration. Its sampled solves
   are still subject to the multiway postflop adapter's non-re-entrant state
   cache (see `adaptive_variance_sampling.md`).
