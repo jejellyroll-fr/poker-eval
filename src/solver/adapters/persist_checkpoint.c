@@ -207,16 +207,23 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->target_exploitability_mbb);
     HASH_FIELD(config->exploitability_interval);
     HASH_FIELD(config->br_samples);
-    /* Issue #257: hashed like br_samples, field by field, and only when on,
-       so a checkpoint made without it keeps its hash. */
+    /* Issue #257: hashed like br_samples, field by field, and only when the
+       evaluation is on, so a checkpoint made without it keeps its hash. The
+       *resolved* settings are hashed rather than the raw ones: writing a
+       default out explicitly (--br-min-samples 4 for the implicit 4) is the
+       same configuration and must resume, where the raw fields would hash
+       differently for the same behaviour. */
     if (config->br_sampling.max_samples != 0u)
     {
-        HASH_FIELD(config->br_sampling.min_samples);
-        HASH_FIELD(config->br_sampling.max_samples);
-        HASH_FIELD(config->br_sampling.check_interval);
-        HASH_FIELD(config->br_sampling.confidence);
-        HASH_FIELD(config->br_sampling.absolute_tolerance);
-        HASH_FIELD(config->br_sampling.relative_tolerance);
+        pe_br_sampling_config_t resolved;
+        if (pe_br_sampling_resolve(&config->br_sampling, &resolved) != 0)
+            resolved = config->br_sampling; /* the plan refuses this anyway */
+        HASH_FIELD(resolved.min_samples);
+        HASH_FIELD(resolved.max_samples);
+        HASH_FIELD(resolved.check_interval);
+        HASH_FIELD(resolved.confidence);
+        HASH_FIELD(resolved.absolute_tolerance);
+        HASH_FIELD(resolved.relative_tolerance);
     }
 #undef HASH_FIELD
     return hash;
