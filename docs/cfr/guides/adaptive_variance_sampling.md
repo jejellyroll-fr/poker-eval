@@ -46,6 +46,12 @@ checkpoints keep their hash. The command-line tools refuse the adaptive
 settings with any other policy, and the policy with outcome sampling, rather
 than recording an effect that never happened.
 
+The adaptive settings, the persistence structs' sampler-state fields and
+the traversal context's adaptive state enlarge public structs. For that
+reason, the solver library's SOVERSION moves from 5 to 6: a program built
+against the older headers is refused at load time rather than handed layouts
+it did not allocate.
+
 ## The budget rule
 
 Draws at the same kind of chance visit share statistics. The target

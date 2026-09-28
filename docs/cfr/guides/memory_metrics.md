@@ -127,8 +127,9 @@ results, and the separation makes that auditable.
 `pe_metrics_t` grew (`storage_memory`, `adapter_bytes`; phase 6 adds the
 tier and drop accounting), and `pe_preflop_allin_rules_t` grew the
 `complete_mask` field for mixed complete/explicit ranges. The solver shared
-library's SOVERSION is now 5, so an application built against the old
-headers cannot be mixed with a newer library.
+library's SOVERSION became 5, so an application built against the old
+headers cannot be mixed with a newer library. (Issue #256 grew the solver
+config, persistence and traversal structs again, which moved it to 6.)
 
 ## Explicit storage tiers (phase 6)
 
