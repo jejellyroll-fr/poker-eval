@@ -12,7 +12,10 @@
 
 #include "../domain/finite_double.h"
 
-#define PE_CHECKPOINT_VERSION 2u
+/* Version 3 appends a length-prefixed sampler-state section after the
+   entries (issue #256); version 2 files, which have none, still load. */
+#define PE_CHECKPOINT_VERSION 3u
+#define PE_CHECKPOINT_MAX_SAMPLER_STATE (1u << 20)
 #define PE_CHECKPOINT_ENDIAN  0x01020304u
 #define PE_CHECKPOINT_MAX_ENTRIES 10000000u
 #define PE_CHECKPOINT_MAGIC "PECHKPT2"
@@ -183,6 +186,20 @@ static uint64_t hash_config(const pe_solver_config_t *config)
        must refuse to resume under street-balanced sampling (ISS-232). */
     HASH_FIELD(config->algorithm.sampling_policy);
     HASH_FIELD(config->algorithm.street_replicates);
+    /* Issue #256: the adaptive settings shape the update distribution too,
+       but only under the adaptive policy; hashing them otherwise would change
+       every existing checkpoint's hash for fields it never read. */
+    if (config->algorithm.sampling_policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
+    {
+        /* Field by field: the struct has padding, whose bytes are not
+           state. */
+        HASH_FIELD(config->algorithm.adaptive.min_samples);
+        HASH_FIELD(config->algorithm.adaptive.max_samples);
+        HASH_FIELD(config->algorithm.adaptive.check_interval);
+        HASH_FIELD(config->algorithm.adaptive.confidence_level);
+        HASH_FIELD(config->algorithm.adaptive.absolute_tolerance);
+        HASH_FIELD(config->algorithm.adaptive.relative_tolerance);
+    }
     HASH_FIELD(config->problem.expected_infosets);
     HASH_FIELD(config->problem.expected_actions);
     HASH_FIELD(config->problem.expected_combos);
@@ -428,6 +445,15 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
                     goto fail;
         }
     }
+    {
+        /* Sampler state: its length, then its bytes (none is a length of 0).
+           Inside the checksummed payload. */
+        size_t state_size = target->sampler_state ? target->sampler_state_size : 0u;
+        if (state_size > PE_CHECKPOINT_MAX_SAMPLER_STATE ||
+            write_u64(file, (uint64_t)state_size) != 0 ||
+            (state_size && write_bytes(file, target->sampler_state, state_size) != 0))
+            goto fail;
+    }
     if (fflush(file) != 0 || checksum_payload(file, PE_CHECKPOINT_HEADER_BYTES,
                                                -1L, &checksum) != 0 ||
         fseek(file, 0L, SEEK_END) != 0 ||
@@ -459,10 +485,14 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
     uint64_t stored_rng_state = 0u;
     uint64_t stored_checksum = 0u;
     checkpoint_entry_t *entries = NULL;
+    unsigned char *sampler_state = NULL;
+    uint64_t sampler_state_size = 0u;
     size_t count = 0u;
     size_t i;
     (void)self;
 
+    if (source && source->sampler_state_size)
+        *source->sampler_state_size = 0u;
     if (!source || !source->path || !*source->path || !config ||
         !storage || !storage_self || !storage->resolve || !storage->shape ||
         !storage->values || !storage->set_flags)
@@ -482,7 +512,8 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
         read_u64(file, &stored_tree_hash) != 0 ||
         read_u64(file, &stored_rng_state) != 0 ||
         memcmp(magic, PE_CHECKPOINT_MAGIC, sizeof(magic)) != 0 ||
-        version != PE_CHECKPOINT_VERSION || endian != PE_CHECKPOINT_ENDIAN ||
+        (version != PE_CHECKPOINT_VERSION && version != 2u) ||
+        endian != PE_CHECKPOINT_ENDIAN ||
         stored_hash != hash_config(config) ||
         stored_game_hash != source->game_hash ||
         stored_tree_hash != source->tree_hash ||
@@ -535,6 +566,19 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
                     goto fail;
         }
     }
+    if (version >= 3u)
+    {
+        if (read_u64(file, &sampler_state_size) != 0 ||
+            sampler_state_size > PE_CHECKPOINT_MAX_SAMPLER_STATE)
+            goto fail;
+        if (sampler_state_size)
+        {
+            sampler_state = (unsigned char *)malloc((size_t)sampler_state_size);
+            if (!sampler_state ||
+                read_bytes(file, sampler_state, (size_t)sampler_state_size) != 0)
+                goto fail;
+        }
+    }
     {
         long footer_position = ftell(file);
         char footer[8];
@@ -558,6 +602,18 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
         file = NULL;
         goto fail;
     }
+    /* Verified by the checksum: hand the sampler state back when the caller
+       asked for it and it fits; otherwise it is skipped. */
+    if (sampler_state && source->sampler_state && source->sampler_state_size &&
+        sampler_state_size <= source->sampler_state_capacity)
+    {
+        unsigned char *dst = (unsigned char *)source->sampler_state;
+        for (size_t b = 0u; b < (size_t)sampler_state_size; ++b)
+            dst[b] = sampler_state[b];
+        *source->sampler_state_size = (size_t)sampler_state_size;
+    }
+    free(sampler_state);
+    sampler_state = NULL;
     for (i = 0u; i < count; ++i)
     {
         pe_infoset_id_t id = storage->resolve(
@@ -596,6 +652,7 @@ apply_fail:
 fail:
     if (file)
         fclose(file);
+    free(sampler_state);
     free_entries(entries, count);
     return -1;
 }

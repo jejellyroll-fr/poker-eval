@@ -217,6 +217,9 @@ typedef struct {
     /* Per-street replicate table (pe_holdem_street_t indexing). 0 means 1;
        only meaningful when sampling_policy is PE_SAMPLING_STREET_BALANCED. */
     uint16_t street_replicates[PE_SAMPLING_STREET_COUNT];
+    /* Issue #256: settings of PE_SAMPLING_ADAPTIVE_VARIANCE. All-zero selects
+       the defaults; read only when sampling_policy selects it. */
+    pe_adaptive_sampling_t adaptive;
 } pe_algorithm_config_t;
 
 /* ------------------------------------------------------------------ *

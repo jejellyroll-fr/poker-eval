@@ -15,6 +15,7 @@
 #include <poker_eval/solver/pe_monker_classes.h>
 #include <poker_eval/solver/pe_monker_strategy.h>
 #include <poker_eval/solver/pe_range.h>
+#include <poker_eval/solver/pe_telemetry.h>
 #include <poker_eval/core/modern_cardmask.h>
 
 #include <errno.h>
@@ -212,6 +213,8 @@ static void usage(const char *prog)
             "  --sample-batch <n>       Lane B trajectories per update (default: 1)\n"
             "  --threads <n>           CPU-parallel workers (default: 1)\n"
             "  --benchmark-json <path>  Write Lane B throughput metrics as JSON\n"
+            "  --strategy-dump <path>   Lane B: write each infoset's normalised\n"
+            "                           average strategy, one \"key p0 p1 ...\" line\n"
             "  --metrics-interval <n>   Emit metrics every n iterations (default: 50)\n"
             "  --metrics-file <path>    Write metrics snapshots as JSON lines (use '-' for stdout)\n"
             "  --node-map <path>        Save node->state key mapping for later exports\n"
@@ -239,6 +242,11 @@ static void usage(const char *prog)
             "  --gamma <x>             Override averaging/DCFR gamma\n"
             "  --lambda <x>            Exponential policy temperature (> 0)\n"
             "  --outcome-epsilon <x>   Outcome-sampling exploration (0..1)\n"
+            "  --sampling-policy <p>   Lane B external sampling: standard or\n"
+            "                          adaptive-variance\n"
+            "  --adaptive-<key> <v>    adaptive-variance setting: min-samples,\n"
+            "                          max-samples, check-interval, confidence,\n"
+            "                          absolute-tolerance, relative-tolerance\n"
             "  --list-algorithms       List registered algorithm presets and exit\n"
             "  --list-backends         List registered compute backends and exit\n"
             "  --show-capabilities     Print the available capability bits and exit\n"
@@ -909,9 +917,15 @@ int main(int argc, char **argv)
     const char *node_map_path = NULL;
     int iterations = 1000;
     int lane_b = 0;
+    /* Issue #256: Lane B sampling policy and its adaptive settings. */
+    pe_sampling_policy_t sampling_policy = PE_SAMPLING_STANDARD;
+    pe_adaptive_sampling_t adaptive_settings;
+    int have_adaptive = 0;
+    int have_sampling_policy = 0;
     int sample_batch = 1;
     int cpu_threads = 1;
     const char *benchmark_json_path = NULL;
+    const char *strategy_dump_path = NULL; /* issue #256 */
     int metrics_interval = 50;
     int metrics_history = 128;
     int metrics_level = 2;
@@ -950,6 +964,7 @@ int main(int argc, char **argv)
     cli_solver_overrides_t overrides;
 
     memset(&overrides, 0, sizeof(overrides));
+    memset(&adaptive_settings, 0, sizeof(adaptive_settings));
 
     for (int i = 1; i < argc; ++i)
     {
@@ -1012,6 +1027,8 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
+        else if (strcmp(argv[i], "--strategy-dump") == 0 && i + 1 < argc)
+            strategy_dump_path = argv[++i];
         else if (strcmp(argv[i], "--benchmark-json") == 0 && i + 1 < argc)
         {
             benchmark_json_path = argv[++i];
@@ -1202,6 +1219,40 @@ int main(int argc, char **argv)
             }
             overrides.have_exponential_lambda = 1;
         }
+        else if (strcmp(argv[i], "--sampling-policy") == 0 && i + 1 < argc)
+        {
+            if (pe_sampling_policy_parse(argv[++i], &sampling_policy) != 0)
+            {
+                fprintf(stderr, "Unknown sampling policy: %s\n", argv[i]);
+                return 1;
+            }
+            /* street-balanced replicates by the street a chance draw is
+               tagged with, and the multiway postflop adapter tags none (nor
+               does this tool take a replicate table): it would run as
+               standard under another name and skew any comparison. */
+            if (sampling_policy == PE_SAMPLING_STREET_BALANCED)
+            {
+                fprintf(stderr,
+                        "--sampling-policy street-balanced has no effect here: "
+                        "the multiway postflop adapter does not tag chance "
+                        "draws with a street. Use standard or "
+                        "adaptive-variance.\n");
+                return 1;
+            }
+            have_sampling_policy = 1;
+        }
+        else if (strncmp(argv[i], "--adaptive-", 11) == 0 && i + 1 < argc)
+        {
+            if (pe_adaptive_sampling_parse_option(&adaptive_settings,
+                                                  argv[i] + 11,
+                                                  argv[i + 1]) != 0)
+            {
+                fprintf(stderr, "Invalid %s value: %s\n", argv[i], argv[i + 1]);
+                return 1;
+            }
+            ++i;
+            have_adaptive = 1;
+        }
         else if (strcmp(argv[i], "--outcome-epsilon") == 0 && i + 1 < argc)
         {
             if (!parse_double(argv[++i], &overrides.outcome_epsilon) ||
@@ -1348,6 +1399,11 @@ int main(int argc, char **argv)
     /* Never let an explicit v3 choice disappear into the fixed legacy
        runner. A full-tree v3 request is routed below after the shared tree
        has been parsed, while --lane-b keeps its sampled semantics. */
+    if (!lane_b && (sampling_policy != PE_SAMPLING_STANDARD || have_adaptive))
+    {
+        fprintf(stderr, "--sampling-policy and --adaptive-* need --lane-b\n");
+        return 2;
+    }
     if (!lane_b && mkr_path != NULL &&
         (algorithm_name != NULL || backend_name != NULL ||
          traversal_name != NULL || regret_name != NULL ||
@@ -1826,6 +1882,29 @@ int main(int argc, char **argv)
             mpf_tree_free(tree);
             return 2;
         }
+        /* Issue #256: the policy acts on external-sampling chance visits
+           only; refuse it elsewhere rather than report an effect it never
+           had. */
+        if ((sampling_policy != PE_SAMPLING_STANDARD || have_adaptive) &&
+            (lane_cfg.algorithm.traversal != PE_TRAVERSAL_EXTERNAL_SAMPLING ||
+             (have_adaptive &&
+              sampling_policy != PE_SAMPLING_ADAPTIVE_VARIANCE)))
+        {
+            fprintf(stderr,
+                    "--sampling-policy needs external sampling, and "
+                    "--adaptive-* needs --sampling-policy adaptive-variance\n");
+            mpf_state_cleanup(&root_state);
+            mpf_perf_stats_pool_destroy(perf_pool);
+            eval_context_destroy(ctx);
+            for (int p = 0; p < num_players; ++p)
+                if (ranges[p] && (!tree_ranges.players || ranges[p] != tree_ranges.players[p]))
+                    pe_range_free(ranges[p]);
+            pe_monker_range_set_free(&tree_ranges);
+            mpf_tree_free(tree);
+            return 2;
+        }
+        lane_cfg.algorithm.sampling_policy = sampling_policy;
+        lane_cfg.algorithm.adaptive = adaptive_settings;
         lane_cfg.execution.backend = lane_backend;
         lane_cfg.execution.stages.traversal = lane_backend;
         lane_cfg.execution.stages.update = lane_backend;
@@ -1840,6 +1919,16 @@ int main(int argc, char **argv)
         lane_cfg.max_iterations = (uint64_t)iterations;
         lane_cfg.seed = UINT64_C(0x50455f4c414e455f) ^ (uint64_t)iterations;
         lane_deps.external_game = pe_cfr_external_adapter_game(&adapter);
+        /* An explicit --sampling-policy asks to compare policies, so print
+           the solver's per-street and adaptive statistics and the terminal
+           evaluation total. Runs without it keep their output unchanged. */
+        pe_telemetry_ops_t lane_telemetry;
+        if (have_sampling_policy)
+        {
+            lane_telemetry = *pe_telemetry_stdout();
+            lane_telemetry.max_level = PE_LOG_INFO;
+            lane_deps.telemetry = &lane_telemetry;
+        }
         lane_solver = pe_solver_create(&lane_cfg, &lane_deps);
         if (lane_solver && selected_backend == PE_COMPUTE_AUTO)
         {
@@ -1931,6 +2020,43 @@ int main(int argc, char **argv)
                         (unsigned long long)trajectories, elapsed_cpu,
                         trajectories_per_second, (int)lane_status);
                 fclose(benchmark_file);
+            }
+        }
+        /* Issue #256: the average strategy per storage key, so runs under
+           different sampling policies can be compared with a reference. */
+        if (strategy_dump_path && lane_solver && lane_status == PE_SOLVER_OK)
+        {
+            FILE *dump = fopen(strategy_dump_path, "w");
+            if (!dump)
+                fprintf(stderr, "Failed to write strategy dump '%s': %s\n",
+                        strategy_dump_path, strerror(errno));
+            else
+            {
+                size_t infosets = pe_solver_strategy_count(lane_solver);
+                for (size_t id = 0; id < infosets; ++id)
+                {
+                    pe_strategy_query_t query;
+                    pe_strategy_view_t view;
+                    uint64_t key = 0u;
+                    double total = 0.0;
+                    query.infoset = (uint32_t)id;
+                    if (pe_solver_strategy_key_at(lane_solver, (uint32_t)id,
+                                                  &key) != PE_SOLVER_OK ||
+                        pe_solver_strategy(lane_solver, &query, &view) !=
+                            PE_SOLVER_OK ||
+                        view.action_count == 0u ||
+                        view.count < view.action_count)
+                        continue;
+                    for (uint16_t a = 0u; a < view.action_count; ++a)
+                        total += view.values[a];
+                    if (!(total > 0.0))
+                        continue; /* never reached: no average to report */
+                    fprintf(dump, "%llu", (unsigned long long)key);
+                    for (uint16_t a = 0u; a < view.action_count; ++a)
+                        fprintf(dump, " %.9f", view.values[a] / total);
+                    fputc('\n', dump);
+                }
+                fclose(dump);
             }
         }
         pe_solver_destroy(lane_solver);

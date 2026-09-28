@@ -64,6 +64,7 @@ add_library(poker_solver
     solver/domain/config.c
     solver/domain/rng.c
     solver/domain/sampling_policy.c
+    solver/domain/online_stats.c
     solver/domain/storage_policy.c
     solver/domain/plan.c
     solver/domain/runtime.c
@@ -228,17 +229,23 @@ endforeach()
 # Issue #236: pe_preflop_allin_rules_t grew a complete_mask field for mixed
 # complete/explicit PLO5/PLO6 ranges.  Bump the solver ABI again so callers
 # built against the previous rules layout cannot be passed to this library.
+# Issue #256: pe_solver_config_t (adaptive settings), pe_persist_target_t /
+# pe_persist_source_t (sampler state) and pe_external_sampling_ctx_t
+# (adaptive state) all grew; SOVERSION 6 keeps callers built against the
+# SOVERSION 5 layouts from being handed this library.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 5.0.0
-        SOVERSION 5)
+        VERSION 6.0.0
+        SOVERSION 6)
 
     # Issue #236: mpf_config_t and mpf_tree_range_profile_t gained public
     # complete-range fields.  Keep old applications from passing their
     # smaller struct layouts to the new engine ABI.
+    # Issue #237: mpf_config_t and mpf_state_t gained the showdown field
+    # (Omaha Hi/Lo) without a bump; SOVERSION 3 closes that gap.
     set_target_properties(poker_engine PROPERTIES
-        VERSION 2.0.0
-        SOVERSION 2)
+        VERSION 3.0.0
+        SOVERSION 3)
 endif()
 
 # Create a combined interface library that includes all modules

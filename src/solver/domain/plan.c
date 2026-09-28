@@ -354,6 +354,21 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     "averaging_delay must not be negative, got %d",
                     a->averaging_delay);
 
+    if (a->sampling_policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
+    {
+        pe_adaptive_sampling_t resolved;
+        if (pe_adaptive_sampling_resolve(&a->adaptive, &resolved, NULL) != 0)
+            pe_diag_add(diag, PE_VALID_ERROR,
+                        "adaptive sampling settings are invalid: min %u, max %u "
+                        "(ceiling %u), confidence %f in (0, 1), tolerances "
+                        "%f and %f must be finite and non-negative",
+                        a->adaptive.min_samples, a->adaptive.max_samples,
+                        PE_ADAPTIVE_MAX_SAMPLES_CEILING,
+                        a->adaptive.confidence_level,
+                        a->adaptive.absolute_tolerance,
+                        a->adaptive.relative_tolerance);
+    }
+
     if (a->policy == PE_POLICY_EXPONENTIAL && a->exponential_lambda <= 0.0)
         pe_diag_add(diag, PE_VALID_ERROR,
                     "exponential_lambda must be positive, got %f",

@@ -791,6 +791,11 @@ add_poker_test(test_mpf_hilo8)
 set_tests_properties(test_mpf_hilo8 PROPERTIES LABELS "engine;cfr;multiway;hilo")
 # PLO4/5/6 hand features and strategy buckets (issue #238): fixtures, random
 # deals against brute force, bucket keys and strategy aggregation.
+# Issue #256: running statistics and the adaptive-variance sampling policy.
+add_poker_test(test_pe_online_stats)
+set_tests_properties(test_pe_online_stats PROPERTIES LABELS "solver;sampling")
+add_poker_test(test_adaptive_variance_sampling)
+set_tests_properties(test_adaptive_variance_sampling PROPERTIES LABELS "solver;sampling;lane-b")
 add_poker_test(test_pe_hand_features)
 set_tests_properties(test_pe_hand_features PROPERTIES LABELS "solver;analysis;omaha")
 if(TARGET bench_plo_hand_features)
@@ -1861,6 +1866,37 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
             --rules holdem-hilo8
             --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
             --iterations 1)
+    # Issue #256: adaptive-variance sampling on a PLO5 flop root whose turn
+    # and river are dealt by chance, reporting its groups and terminal
+    # evaluations.
+    add_test(NAME mpf_adaptive_sampling_flop_smoke
+        COMMAND mpf_run_with_metrics
+            --rules plo5
+            --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
+            --range1 AAxxx
+            --lane-b
+            --iterations 40
+            --sampling-policy adaptive-variance
+            --adaptive-max-samples 4)
+    # street-balanced would run as standard on this adapter (no street
+    # tags), so the tool refuses it rather than mislabel the run.
+    add_test(NAME mpf_rejects_street_balanced
+        COMMAND mpf_run_with_metrics
+            --rules plo5
+            --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
+            --lane-b
+            --iterations 1
+            --sampling-policy street-balanced)
+    set_tests_properties(mpf_rejects_street_balanced PROPERTIES
+        LABELS "product;solver;lane-b;sampling"
+        PASS_REGULAR_EXPRESSION "street-balanced has no effect here"
+        DEPENDS pe_preflop_tree_hilo8_flop_smoke
+        TIMEOUT 60)
+    set_tests_properties(mpf_adaptive_sampling_flop_smoke PROPERTIES
+        LABELS "product;solver;lane-b;sampling"
+        PASS_REGULAR_EXPRESSION "adaptive_stats group=chance-depth:1 .*sampling_totals policy=adaptive-variance terminal_evaluations=[1-9]"
+        DEPENDS pe_preflop_tree_hilo8_flop_smoke
+        TIMEOUT 120)
     set_tests_properties(mpf_hilo8_rejects_holdem PROPERTIES
         LABELS "product;solver;hilo"
         PASS_REGULAR_EXPRESSION "Unknown rules kind: holdem-hilo8"
@@ -2003,5 +2039,34 @@ if(TARGET pe-preflop-solve)
             --br-samples 4)
     set_tests_properties(pe_preflop_solve_plo6_smoke PROPERTIES
         LABELS "product;solver;lane-b;preflop;plo6;card-removal"
+        TIMEOUT 60)
+    # Issue #256: the adaptive-variance policy end to end on a Hold'em spot.
+    # The preflop game tags its chance draws with their street, so the budget
+    # is reported for the street:preflop group.
+    add_test(NAME pe_preflop_solve_adaptive_sampling_smoke
+        COMMAND pe-preflop-solve
+            --game holdem
+            --range0 AA,KK,AK
+            --range1 QQ,JJ,AQ
+            --algorithm external-mccfr
+            --sampling-policy adaptive-variance
+            --adaptive-max-samples 4
+            --adaptive-check-interval 8
+            --iterations 64
+            --samples 1
+            --br-samples 1)
+    set_tests_properties(pe_preflop_solve_adaptive_sampling_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;sampling"
+        PASS_REGULAR_EXPRESSION "adaptive_stats group=street:preflop estimates=[1-9]"
+        TIMEOUT 60)
+    add_test(NAME pe_preflop_solve_adaptive_settings_need_policy
+        COMMAND pe-preflop-solve
+            --game holdem
+            --algorithm external-mccfr
+            --adaptive-max-samples 4
+            --iterations 1)
+    set_tests_properties(pe_preflop_solve_adaptive_settings_need_policy PROPERTIES
+        LABELS "product;solver;sampling"
+        PASS_REGULAR_EXPRESSION "need --sampling-policy adaptive-variance"
         TIMEOUT 60)
 endif()
