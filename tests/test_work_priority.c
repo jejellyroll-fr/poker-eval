@@ -966,6 +966,38 @@ static void test_stats(void)
               pe_work_priority_below_floor(&config, &items[0]) == 0,
           "only the unserviced item is below the floor");
 
+    /* The score histogram is the workload, not the policy: it counts each
+       item once at its own score's bucket, before the floor and aging move
+       anything. Item 0 scores 0 and is aged from bucket 0 to 2, so the two
+       histograms must disagree exactly there - that is the difference the
+       percentile is meant to describe. */
+    {
+        uint64_t score_total = 0u;
+        for (b = 0u; b < config.buckets; ++b)
+            score_total += stats.score_depth[b];
+        CHECK(score_total == 4u,
+              "the score histogram must cover every item, got %llu",
+              (unsigned long long)score_total);
+        CHECK(stats.score_depth[0] == 2u && stats.score_depth[6] == 1u &&
+                  stats.score_depth[7] == 1u,
+              "the score histogram is 2 in bucket 0, 1 in 6, 1 in 7, got "
+              "%llu/%llu/%llu",
+              (unsigned long long)stats.score_depth[0],
+              (unsigned long long)stats.score_depth[6],
+              (unsigned long long)stats.score_depth[7]);
+        CHECK(stats.bucket_depth[0] == 0u && stats.score_depth[0] == 2u,
+              "aging must move an item in bucket_depth and not in score_depth, "
+              "got %llu and %llu",
+              (unsigned long long)stats.bucket_depth[0],
+              (unsigned long long)stats.score_depth[0]);
+    }
+    CHECK(pe_work_priority_percentile_bucket(&stats, config.buckets, 0.5) == 0u,
+          "the median score bucket must be 0, got %u",
+          pe_work_priority_percentile_bucket(&stats, config.buckets, 0.5));
+    CHECK(pe_work_priority_percentile_bucket(&stats, config.buckets, 0.9) == 7u,
+          "the ninetieth percentile must be the top bucket, got %u",
+          pe_work_priority_percentile_bucket(&stats, config.buckets, 0.9));
+
     /* A NULL stats pointer is allowed. */
     CHECK(pe_work_priority_order(&config, items, 4u, 100u, order, 4u, NULL) == 0,
           "a NULL stats pointer must be allowed");
@@ -989,6 +1021,9 @@ static void test_stats(void)
               "the line must carry the unresolved count, got: %s", line);
         CHECK(strstr(line, "depth=0,0,1,0,0,0,1,2") != NULL,
               "the line must carry the per-bucket depth, got: %s", line);
+        CHECK(strstr(line, "p50_bucket=0") != NULL &&
+                  strstr(line, "p90_bucket=7") != NULL,
+              "the line must carry the score percentiles, got: %s", line);
         printf("%s\n", line);
 
         {
@@ -1096,6 +1131,57 @@ static int serve(const pe_work_priority_config_t *config,
             return -1;
     *max_delay = (size_t)worst;
     return 0;
+}
+
+/* The percentile is nearest rank over the score histogram: the smallest
+   bucket whose cumulative count reaches ceil(p * total). That convention is
+   the whole content of the function, so it is pinned on a distribution whose
+   boundaries are exact - ten items, 3 in bucket 0, 4 in bucket 1, 3 in
+   bucket 2 - rather than on a random one where an off-by-one would hide. */
+static void test_percentile(void)
+{
+    pe_work_priority_stats_t stats;
+    uint32_t buckets = 8u;
+
+    memset(&stats, 0, sizeof(stats));
+    CHECK(pe_work_priority_percentile_bucket(NULL, buckets, 0.5) == 0u,
+          "a NULL stats must give bucket 0");
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 0.5) == 0u,
+          "an empty histogram must give bucket 0");
+    CHECK(pe_work_priority_percentile_bucket(&stats, 1u, 0.5) == 0u,
+          "fewer than two buckets must give bucket 0");
+
+    stats.score_depth[0] = 3u;
+    stats.score_depth[1] = 4u;
+    stats.score_depth[2] = 3u;
+    stats.items = 10u;
+
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 0.0) == 0u,
+          "the zeroth percentile is the lowest bucket, got %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, 0.0));
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 0.3) == 0u,
+          "rank 3 is still the last of bucket 0, got %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, 0.3));
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 0.31) == 1u,
+          "rank 4 crosses into bucket 1, got %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, 0.31));
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 0.5) == 1u,
+          "the median is in bucket 1, got %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, 0.5));
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 0.7) == 1u,
+          "rank 7 is the last of bucket 1, got %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, 0.7));
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, 1.0) == 2u,
+          "the hundredth percentile is the highest occupied bucket, got %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, 1.0));
+    CHECK(pe_work_priority_percentile_bucket(&stats, buckets, -1.0) == 0u &&
+              pe_work_priority_percentile_bucket(&stats, buckets, 9.0) == 2u,
+          "out-of-range percentiles are clamped, got %u and %u",
+          pe_work_priority_percentile_bucket(&stats, buckets, -1.0),
+          pe_work_priority_percentile_bucket(&stats, buckets, 9.0));
+    CHECK(pe_work_priority_percentile_bucket(&stats, 999u, 1.0) == 2u,
+          "a bucket count above the maximum is clamped, got %u",
+          pe_work_priority_percentile_bucket(&stats, 999u, 1.0));
 }
 
 static void test_synthetic_workload(void)
@@ -1263,6 +1349,7 @@ int main(void)
     test_determinism();
     test_against_oracle();
     test_stats();
+    test_percentile();
     test_synthetic_workload();
     test_unit_permutation();
     test_from_stats();
