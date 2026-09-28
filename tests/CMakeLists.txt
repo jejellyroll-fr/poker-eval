@@ -1881,6 +1881,21 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
             --iterations 40
             --sampling-policy adaptive-variance
             --adaptive-max-samples 4)
+    # Issue #257: --br-* asks for a best response, which Lane B measures only
+    # on its exploitability schedule; the tool schedules one at the end.
+    add_test(NAME mpf_br_sampling_flop_smoke
+        COMMAND mpf_run_with_metrics
+            --rules plo5
+            --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
+            --range1 AAxxx
+            --lane-b
+            --iterations 40
+            --br-max-samples 8)
+    set_tests_properties(mpf_br_sampling_flop_smoke PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "br_decisions decisions=[1-9][0-9]* samples=[1-9]"
+        DEPENDS pe_preflop_tree_hilo8_flop_smoke
+        TIMEOUT 120)
     # street-balanced would run as standard on this adapter (no street
     # tags), so the tool refuses it rather than mislabel the run.
     add_test(NAME mpf_rejects_street_balanced

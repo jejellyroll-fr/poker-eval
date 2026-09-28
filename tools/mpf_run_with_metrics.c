@@ -1927,6 +1927,11 @@ int main(int argc, char **argv)
         lane_cfg.algorithm.sampling_policy = sampling_policy;
         lane_cfg.algorithm.adaptive = adaptive_settings;
         lane_cfg.br_sampling = br_sampling;
+        /* The sampled solver measures a best response only on its
+           exploitability schedule, which is off by default: --br-* asks
+           for one, so measure it at the final iteration. */
+        if (have_br_sampling)
+            lane_cfg.exploitability_interval = (uint64_t)iterations;
         lane_cfg.execution.backend = lane_backend;
         lane_cfg.execution.stages.traversal = lane_backend;
         lane_cfg.execution.stages.update = lane_backend;
