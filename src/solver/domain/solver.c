@@ -1492,9 +1492,21 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
        sampler owns its whole trajectory, so a per-chance-node work table has
        no place to act there and the config is ignored for it. */
     if (!use_outcome)
+    {
         pe_external_sampling_set_policy(
             &external, solver->config.algorithm.sampling_policy,
             solver->config.algorithm.street_replicates);
+        /* Issue #256: validation already accepted these settings. */
+        if (solver->config.algorithm.sampling_policy ==
+                PE_SAMPLING_ADAPTIVE_VARIANCE &&
+            pe_external_sampling_set_adaptive(
+                &external, &solver->config.algorithm.adaptive) != 0)
+        {
+            pe_external_sampling_ctx_destroy(&external);
+            compute_ops->destroy(compute_self);
+            return PE_SOLVER_ERR_INVALID_CONFIG;
+        }
+    }
     pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
     solver->stop_cause = PE_STOP_NONE;
     solver->memory_exhausted = 0;
@@ -1799,6 +1811,35 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
                 (uint64_t)unique_infosets[street],
                 (uint64_t)uniform_rows[street]);
         }
+        /* Issue #256: the effective budget and early-resolution rate of each
+           adaptive group, with the spread that drove it. */
+        if (external.policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
+        {
+            for (int group = 0; group < PE_ADAPTIVE_GROUP_COUNT; ++group)
+            {
+                const pe_adaptive_group_stats_t *g = &external.adaptive_stats[group];
+                double variance, avg, std_error;
+                if (g->estimates == 0u)
+                    continue;
+                variance = pe_pooled_variance_value(&g->within);
+                avg = (double)g->samples / (double)g->estimates;
+                std_error = avg > 0.0 ? sqrt(variance / avg) : 0.0;
+                pe_telemetry_emitf(
+                    solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+                    "adaptive_stats group=%s estimates=%" PRIu64
+                    " samples=%" PRIu64 " avg_samples=%.3f min_hits=%" PRIu64
+                    " max_hits=%" PRIu64 " resolved=%" PRIu64
+                    " variance=%.6g std_error=%.6g half_width=%.6g\n",
+                    pe_adaptive_group_name(group), g->estimates, g->samples,
+                    avg, g->min_hits, g->max_hits, g->resolved, variance,
+                    std_error, external.adaptive_z * std_error);
+            }
+        }
+        pe_telemetry_emitf(
+            solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
+            "sampling_totals policy=%s terminal_evaluations=%" PRIu64 "\n",
+            pe_sampling_policy_name(external.policy),
+            external.total_terminal_nodes);
         pe_telemetry_flush(solver->deps.telemetry);
     }
     }

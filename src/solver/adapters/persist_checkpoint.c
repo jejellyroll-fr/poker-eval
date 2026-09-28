@@ -183,6 +183,20 @@ static uint64_t hash_config(const pe_solver_config_t *config)
        must refuse to resume under street-balanced sampling (ISS-232). */
     HASH_FIELD(config->algorithm.sampling_policy);
     HASH_FIELD(config->algorithm.street_replicates);
+    /* Issue #256: the adaptive settings shape the update distribution too,
+       but only under the adaptive policy; hashing them otherwise would change
+       every existing checkpoint's hash for fields it never read. */
+    if (config->algorithm.sampling_policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
+    {
+        /* Field by field: the struct has padding, whose bytes are not
+           state. */
+        HASH_FIELD(config->algorithm.adaptive.min_samples);
+        HASH_FIELD(config->algorithm.adaptive.max_samples);
+        HASH_FIELD(config->algorithm.adaptive.check_interval);
+        HASH_FIELD(config->algorithm.adaptive.confidence_level);
+        HASH_FIELD(config->algorithm.adaptive.absolute_tolerance);
+        HASH_FIELD(config->algorithm.adaptive.relative_tolerance);
+    }
     HASH_FIELD(config->problem.expected_infosets);
     HASH_FIELD(config->problem.expected_actions);
     HASH_FIELD(config->problem.expected_combos);

@@ -7,6 +7,7 @@
 #include <poker_eval/solver/pe_capabilities.h>
 #include <poker_eval/solver/pe_game_rules.h>
 #include <poker_eval/solver/pe_sampling_policy.h>
+#include <poker_eval/solver/pe_online_stats.h>
 #include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_traversal.h>
 
@@ -78,6 +79,26 @@ typedef struct pe_external_game_t
     uint32_t (*chance_outcome_count)(const void *state, void *user);
 } pe_external_game_t;
 
+/* Issue #256: adaptive-variance groups, four street-tagged and four by
+   chance depth. */
+#define PE_ADAPTIVE_GROUP_COUNT 8
+
+/* Telemetry of one adaptive group, summed over the updating players. */
+typedef struct
+{
+    uint64_t estimates;  /* chance visits sampled adaptively */
+    uint64_t samples;    /* draws those visits made */
+    uint64_t min_hits;   /* visits drawn at the minimum budget */
+    uint64_t max_hits;   /* visits drawn at the maximum budget */
+    uint64_t resolved;   /* visits whose own confidence half-width met the
+                            tolerance */
+    pe_pooled_variance_t within; /* per-draw spread */
+    pe_online_stats_t means;     /* visit values */
+} pe_adaptive_group_stats_t;
+
+/* Group name for reports: "street:flop", "chance-depth:1", ... */
+const char *pe_adaptive_group_name(int group);
+
 typedef struct
 {
     const pe_external_game_t *game;
@@ -100,6 +121,32 @@ typedef struct
     size_t updates_by_street[PE_SAMPLING_STREET_COUNT];
     size_t chance_samples_by_street[PE_SAMPLING_STREET_COUNT];
     int initialized;
+
+    /* Issue #256: PE_SAMPLING_ADAPTIVE_VARIANCE state. Chance visits are
+       grouped by the street the adapter tags them with (groups 0..3) or,
+       when it does not say, by how many chance nodes lie above them on the
+       trajectory (groups 4..7, depth 3 and deeper sharing group 7). Each
+       updating player keeps its own statistics per group, since values are
+       seen from its side. All of it is reset by ctx_init and by
+       pe_external_sampling_set_adaptive. */
+    pe_adaptive_sampling_t adaptive;   /* resolved settings */
+    double adaptive_z;
+    int chance_depth;                  /* chance nodes above the current visit */
+    /* Product of the adaptive replicate counts above the current visit.
+       max_samples caps it, so nested chance nodes cannot multiply a
+       trajectory's work past that bound. */
+    uint64_t replicate_product;
+    pe_online_stats_t adaptive_means[PE_TRAVERSAL_MAX_PLAYERS]
+                                    [PE_ADAPTIVE_GROUP_COUNT];
+    pe_pooled_variance_t adaptive_within[PE_TRAVERSAL_MAX_PLAYERS]
+                                        [PE_ADAPTIVE_GROUP_COUNT];
+    uint32_t adaptive_budget[PE_TRAVERSAL_MAX_PLAYERS][PE_ADAPTIVE_GROUP_COUNT];
+    uint64_t adaptive_next_check[PE_TRAVERSAL_MAX_PLAYERS]
+                                [PE_ADAPTIVE_GROUP_COUNT];
+    pe_adaptive_group_stats_t adaptive_stats[PE_ADAPTIVE_GROUP_COUNT];
+    /* Terminal evaluations over the ctx's whole life (terminal_nodes counts
+       one run only). */
+    uint64_t total_terminal_nodes;
 } pe_external_sampling_ctx_t;
 
 int pe_external_sampling_ctx_init(pe_external_sampling_ctx_t *ctx,
@@ -116,6 +163,14 @@ void pe_external_sampling_ctx_destroy(pe_external_sampling_ctx_t *ctx);
 void pe_external_sampling_set_policy(pe_external_sampling_ctx_t *ctx,
                                      pe_sampling_policy_t policy,
                                      const uint16_t *street_replicates);
+
+/* Issue #256: install adaptive-variance settings (NULL means defaults) and
+   reset the adaptive statistics. pe_external_sampling_set_policy installs
+   the defaults itself when it selects PE_SAMPLING_ADAPTIVE_VARIANCE, so this
+   is only needed to override them. @return 0, or -1 when the settings are
+   invalid (see pe_adaptive_sampling_resolve), leaving the ctx unchanged. */
+int pe_external_sampling_set_adaptive(pe_external_sampling_ctx_t *ctx,
+                                      const pe_adaptive_sampling_t *settings);
 
 /* Run one external-sampling iteration for ctx->updating_player. */
 int pe_external_sampling_run(pe_external_sampling_ctx_t *ctx,
