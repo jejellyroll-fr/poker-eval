@@ -1878,6 +1878,20 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
             --iterations 40
             --sampling-policy adaptive-variance
             --adaptive-max-samples 4)
+    # street-balanced would run as standard on this adapter (no street
+    # tags), so the tool refuses it rather than mislabel the run.
+    add_test(NAME mpf_rejects_street_balanced
+        COMMAND mpf_run_with_metrics
+            --rules plo5
+            --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-hilo8-flop-smoke.json
+            --lane-b
+            --iterations 1
+            --sampling-policy street-balanced)
+    set_tests_properties(mpf_rejects_street_balanced PROPERTIES
+        LABELS "product;solver;lane-b;sampling"
+        PASS_REGULAR_EXPRESSION "street-balanced has no effect here"
+        DEPENDS pe_preflop_tree_hilo8_flop_smoke
+        TIMEOUT 60)
     set_tests_properties(mpf_adaptive_sampling_flop_smoke PROPERTIES
         LABELS "product;solver;lane-b;sampling"
         PASS_REGULAR_EXPRESSION "adaptive_stats group=chance-depth:1 .*sampling_totals policy=adaptive-variance terminal_evaluations=[1-9]"

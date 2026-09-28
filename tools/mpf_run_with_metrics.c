@@ -242,8 +242,8 @@ static void usage(const char *prog)
             "  --gamma <x>             Override averaging/DCFR gamma\n"
             "  --lambda <x>            Exponential policy temperature (> 0)\n"
             "  --outcome-epsilon <x>   Outcome-sampling exploration (0..1)\n"
-            "  --sampling-policy <p>   Lane B external sampling: standard,\n"
-            "                          street-balanced or adaptive-variance\n"
+            "  --sampling-policy <p>   Lane B external sampling: standard or\n"
+            "                          adaptive-variance\n"
             "  --adaptive-<key> <v>    adaptive-variance setting: min-samples,\n"
             "                          max-samples, check-interval, confidence,\n"
             "                          absolute-tolerance, relative-tolerance\n"
@@ -1224,6 +1224,19 @@ int main(int argc, char **argv)
             if (pe_sampling_policy_parse(argv[++i], &sampling_policy) != 0)
             {
                 fprintf(stderr, "Unknown sampling policy: %s\n", argv[i]);
+                return 1;
+            }
+            /* street-balanced replicates by the street a chance draw is
+               tagged with, and the multiway postflop adapter tags none (nor
+               does this tool take a replicate table): it would run as
+               standard under another name and skew any comparison. */
+            if (sampling_policy == PE_SAMPLING_STREET_BALANCED)
+            {
+                fprintf(stderr,
+                        "--sampling-policy street-balanced has no effect here: "
+                        "the multiway postflop adapter does not tag chance "
+                        "draws with a street. Use standard or "
+                        "adaptive-variance.\n");
                 return 1;
             }
             have_sampling_policy = 1;
