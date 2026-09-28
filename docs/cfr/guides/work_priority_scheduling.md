@@ -91,9 +91,20 @@ spread recorded is the lowest priority, which is the honest reading, since
 nothing observed suggests the ordering is fragile. That is the documented
 fallback when adaptive sampling (#256) is off.
 
+Zero and *cannot say* are not the same thing, and the layer keeps them apart. A
+NaN spread reads as unresolved and saturates the top bucket, because a decision
+whose spread could not be estimated has not been shown to be settled. Only the
+bridge below produces a NaN, and only when it has a reason to.
+
 `pe_work_priority_item_from_stats()` fills an item straight from two
 `pe_online_stats_t` accumulators, so a caller that already keeps them does not
-have to know the layout. The bridge is a convenience, not a requirement.
+have to know the layout. The bridge is a convenience, not a requirement. An
+accumulator with fewer than two observations yields a NaN standard error, not a
+zero one: `pe_online_stats_std_error()` cannot estimate a spread from a single
+sample, and reading that as certainty would drop a decision that has barely been
+measured into the lowest bucket. The item then scores as unresolved and is
+ranked first. A single action still scores zero however thin the measurement —
+there is nothing to decide.
 
 The score is unbounded, and a scheduler must not be. It is quantised into
 `buckets` geometric buckets, and **the ordering only looks at the bucket**:
@@ -150,9 +161,17 @@ determined by the metadata, so identical input gives identical output.
 - `fifo` — the input order, unchanged. The default.
 - `uncertainty-aware` — highest bucket first, drained before the next.
 - `balanced` — the same buckets, but one item per non-empty bucket per round,
-  highest first, which bounds the service ratio between the top and the bottom
-  bucket by the number of non-empty buckets. It costs some top-bucket
-  throughput.
+  walking down from the round's starting bucket and wrapping, which bounds the
+  service ratio between the top and the bottom bucket by the number of
+  non-empty buckets. It costs some top-bucket throughput.
+
+  The round starts at the top bucket on epoch 0 and one bucket lower on each
+  later epoch, wrapping at the bottom. That rotation is what makes the bound
+  hold for the caller the policy exists for — one that services a prefix of the
+  order and recomputes. Without it every call would put the same top bucket at
+  position zero and the policy would do nothing the strict one does not. A
+  caller that consumes the whole permutation sees the rotation only as a change
+  of order within a round, so epoch 0 is the plain highest-first order.
 
 The coverage tier comes first under all three non-FIFO policies.
 
@@ -183,12 +202,14 @@ of 9 or more against a spread of 0.01, so a score near 0.001), and services
 |---|---|---|
 | FIFO (rotating) | 25.0% — the group is a quarter of the queue | 39 rounds |
 | uncertainty-aware, aging 8 | **60.1%** | 80 rounds |
-| balanced, aging 8 | — | 80 rounds |
+| balanced, aging 8 | — | 65 rounds |
 
 The prioritised run spends **2.4×** the baseline share on the decisions that are
 actually undecided, and every decision is still serviced: the worst delay is
 80 rounds, finite and bounded, against 39 for the even baseline. That is the
-trade the feature exists to make.
+trade the feature exists to make. `balanced` trades some of the concentration
+for a tighter worst case — 65 rounds rather than 80 — which is what the epoch
+rotation buys.
 
 ## Benchmarks: what is and is not measured
 
@@ -203,17 +224,31 @@ synthetic workload whose composition is known in advance.
 ## The suite found a defect, and the guards bite
 
 Every guard was broken on purpose and the failures counted. Each row is one
-mutation of `work_priority.c`, rebuilt and run, then restored.
+mutation of `work_priority.c`, rebuilt and run, then restored. The build is
+proven to have taken effect — the object file is deleted before each build and
+the solver library is hashed before and after — and each mutation is run three
+times with the counts required to agree. Both precautions are there because an
+earlier harness silently reported a *stale* binary's count for two of the rows:
+CMake compares timestamps at one-second granularity, so a write followed by a
+build inside the same second leaves the previous object in place.
 
 | Mutation | Failing checks |
 |---|---|
-| the score ratio inverted (`/` → `*`) | 1,065 |
-| the coverage tier removed | 4,952 |
-| the spread no longer combined in quadrature | 222 |
-| an unresolved ordering no longer saturates | 1,990 |
-| aging neutralised | 361 |
-| the bucket boundary made exclusive (`>=` → `>`) | 361 |
-| the BALANCED interleave collapsed | 1,137 |
+| the score ratio inverted (`/` → `*`) | 1,211 |
+| the coverage tier removed | 5,024 |
+| the spread no longer combined in quadrature | 257 |
+| an unresolved ordering no longer saturates | 1,719 |
+| aging neutralised | 386 |
+| the bucket boundary made exclusive (`>=` → `>`) | 22 |
+| the bridge accepts a single observation | 3 |
+| the BALANCED rotation removed | 385 |
+
+Two rows are small on purpose, and small is not the same as weak. A score lands
+on a bucket boundary only when it is exactly `ratio^k`, which the randomised
+batches almost never produce, so `test_bucket_boundaries()` exists precisely to
+cover it — that is the 22. The bridge's single-observation guard is covered by
+one fixture, which is the 3. Both are non-zero, and each is caught by the test
+written for it rather than by luck.
 
 The source was restored byte-for-byte after each run. Beyond those mutations,
 the suite caught a real design defect during development — the coverage floor
