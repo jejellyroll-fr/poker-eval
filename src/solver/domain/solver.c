@@ -2043,8 +2043,20 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         return PE_SOLVER_ERR_INVALID_CONFIG;
     const double *average = solver->storage->values_const(
         solver->storage_self, query->infoset, PE_VALUES_AVERAGE, &out->count);
-    if (average == NULL || out->count > solver->strategy_cache->capacity)
+    if (average == NULL)
         return PE_SOLVER_ERR_INVALID_STATE;
+    /* The cache is sized from the problem hint (expected actions x combos),
+       and an infoset may be wider than the hint: grow it rather than refuse
+       the query. The cache is the solver's scratch, not its state. */
+    if (out->count > solver->strategy_cache->capacity)
+    {
+        double *grown = (double *)realloc(solver->strategy_cache->values,
+                                          out->count * sizeof(double));
+        if (grown == NULL)
+            return PE_SOLVER_ERR_OUT_OF_MEMORY;
+        solver->strategy_cache->values = grown;
+        solver->strategy_cache->capacity = out->count;
+    }
     for (uint16_t combo = 0u; combo < out->combo_count; ++combo)
     {
         double total = 0.0;
