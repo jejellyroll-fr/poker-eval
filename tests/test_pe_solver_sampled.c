@@ -211,6 +211,68 @@ int main(void)
         return 1;
     }
     pe_solver_destroy(solver);
+    /* Issue #271: the BR priority policy needs infoset keys. The solver wraps
+       the game for Lane B, and the wrapper must not hide a missing key: a
+       keyless game under an active policy is refused before the first
+       iteration, while the same game under FIFO still trains and measures,
+       and the keyed game runs under the policy. */
+    {
+        pe_external_game_t keyless = game;
+        pe_solver_status_t status;
+        keyless.infoset_key = NULL;
+        cfg = pe_solver_config_default();
+        cfg.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
+        cfg.max_iterations = 8u;
+        cfg.problem.expected_infosets = 4u;
+        cfg.problem.expected_actions = 2u;
+        cfg.problem.expected_combos = 1u;
+        cfg.seed = 0x271u;
+        cfg.target_exploitability_mbb = 0.0;
+        cfg.exploitability_interval = 4u;
+        cfg.br_mode = PE_BR_SAMPLED;
+        cfg.br_sampling.max_samples = 16u;
+        cfg.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+
+        deps.external_game = &game;
+        solver = pe_solver_create(&cfg, &deps);
+        if (!solver || pe_solver_run(solver) != PE_SOLVER_OK)
+        {
+            fprintf(stderr, "test_pe_solver_sampled: keyed game under the "
+                            "BR priority policy failed\n");
+            pe_solver_destroy(solver);
+            return 1;
+        }
+        pe_solver_destroy(solver);
+
+        deps.external_game = &keyless;
+        solver = pe_solver_create(&cfg, &deps);
+        status = solver ? pe_solver_run(solver) : PE_SOLVER_ERR_EXECUTION;
+        if (!solver || status != PE_SOLVER_ERR_INVALID_CONFIG ||
+            pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+            progress.iteration != 0u)
+        {
+            fprintf(stderr, "test_pe_solver_sampled: keyless game under the "
+                            "BR priority policy was not refused up front "
+                            "(status %d)\n", (int)status);
+            pe_solver_destroy(solver);
+            return 1;
+        }
+        pe_solver_destroy(solver);
+
+        cfg.br_priority.policy = PE_WORK_SCHED_FIFO;
+        solver = pe_solver_create(&cfg, &deps);
+        if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
+            pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+            progress.iteration != cfg.max_iterations)
+        {
+            fprintf(stderr, "test_pe_solver_sampled: keyless game under FIFO "
+                            "failed\n");
+            pe_solver_destroy(solver);
+            return 1;
+        }
+        pe_solver_destroy(solver);
+        deps.external_game = &game;
+    }
     puts("test_pe_solver_sampled: external sampling lifecycle passed");
     return 0;
 }

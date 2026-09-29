@@ -419,6 +419,17 @@ rather than keying every decision to 0, which would allocate each one by
 whichever decision ran last. Under FIFO, or with sampling off, such a game is
 measured exactly as before.
 
+Through the solver the refusal comes earlier. Lane B wraps the game before
+measuring it, and the wrapper used to install a key callback that returned 0
+when the base game had none, so the guard above never saw a missing key. The
+wrapper is now installed only over a game that has the callback — the
+traversals fall back to key 0 on their own, as the vector path's wrapper already
+assumed — and `pe_solver_run_sampled()` returns `PE_SOLVER_ERR_INVALID_CONFIG`
+**before the first iteration** when the sampled BR and a non-FIFO policy are
+both on and the game has no key. `test_pe_solver_sampled.c` asserts the refusal
+at iteration 0, and that the same keyless game still trains and measures under
+FIFO.
+
 The checkpoint adapter hashes the policy only where it is in effect — a non-FIFO
 policy **and** the sampled evaluation on — so a checkpoint made under the
 default still resumes after an inert `--br-priority-policy` is added, while one

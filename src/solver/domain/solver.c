@@ -1083,11 +1083,14 @@ static uint16_t sampled_action_count(const void *state, void *user)
     return adapter->base->action_count(state, adapter->base->user);
 }
 
+/* Installed only over a game that has the callback (see
+   pe_solver_run_sampled), so a keyless game stays keyless for its readers:
+   the traversals fall back to key 0 themselves, and the best response has to
+   be able to tell that there is no key at all. */
 static uint64_t sampled_infoset_key(const void *state, void *user)
 {
     pe_sampled_adapter_t *adapter = (pe_sampled_adapter_t *)user;
-    return adapter->base->infoset_key
-        ? adapter->base->infoset_key(state, adapter->base->user) : 0u;
+    return adapter->base->infoset_key(state, adapter->base->user);
 }
 
 static const void *sampled_apply_action(const void *state, uint16_t action,
@@ -1496,6 +1499,14 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
         ((game->sample_chance || game->sample_chance_with_user) &&
          !game->apply_chance && !game->sample_chance_child))
         return PE_SOLVER_ERR_NOT_IMPLEMENTED;
+    /* Issue #271: the BR priority policy allocates each decision by its
+       infoset's own previous measurement, so a game that cannot name its
+       infosets cannot run it. Refused here, before the first iteration,
+       rather than by the best response at the first measurement. */
+    if (pe_br_sampling_enabled(&solver->config.br_sampling) &&
+        solver->config.br_priority.policy != PE_WORK_SCHED_FIFO &&
+        !game->infoset_key)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
     compute_ops = solver->deps.compute;
     if (compute_ops == NULL)
     {
@@ -1564,7 +1575,7 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     sampled_game.is_terminal = sampled_is_terminal;
     sampled_game.acting_player = sampled_acting_player;
     sampled_game.action_count = sampled_action_count;
-    sampled_game.infoset_key = sampled_infoset_key;
+    sampled_game.infoset_key = game->infoset_key ? sampled_infoset_key : NULL;
     sampled_game.apply_action = sampled_apply_action;
     sampled_game.action_probability = sampled_action_probability;
     sampled_game.terminal_value = sampled_terminal_value;
