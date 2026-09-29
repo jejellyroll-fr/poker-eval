@@ -4,9 +4,10 @@
  * A solve spends the same amount of work on every decision it has to make,
  * whether the preferred action wins by a mile or by a hair. The confidence-
  * guided best response (issue #257) already measures, per decision, how far
- * the leader is ahead of the runner-up (`gap`) and how uncertain that
- * difference is (`gap_half_width`). This module turns those two numbers into
- * a single priority, and turns a batch of them into an ordering.
+ * the leader is ahead of the runner-up (`gap`) and how uncertain each side
+ * is (`best_stderr`, `runner_stderr` - standard errors, not the z-scaled
+ * `gap_half_width`). This module turns those numbers into a single priority,
+ * and turns a batch of them into an ordering.
  *
  * The score is the uncertainty of the leader-versus-runner-up difference
  * divided by its size:

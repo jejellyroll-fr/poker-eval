@@ -50,7 +50,9 @@ typedef struct {
        interpolated over the decision's priority bucket, which is taken from
        the previous measurement of the same infoset. Requires sampling to be
        on; a FIFO policy or sampling off leaves the historical path exactly
-       as it was. See pe_work_priority.h. */
+       as it was. A game without an infoset_key callback cannot be
+       prioritised: with the policy in effect the call returns -1. See
+       pe_work_priority.h. */
     pe_work_priority_config_t priority;
 } pe_external_br_config_t;
 

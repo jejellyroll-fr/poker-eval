@@ -89,6 +89,9 @@ typedef struct pe_br_decision_t {
                                    nothing was selected */
     double gap;                 /* leader mean minus runner-up mean (0 when single) */
     double gap_half_width;      /* leader + runner-up half-widths at the end */
+    double best_stderr;         /* leader's standard error at the end, and */
+    double runner_stderr;       /* the runner-up's (issue #271): not scaled
+                                   by the confidence z (0 when single) */
     uint64_t samples;           /* draws over all actions, estimate included */
     uint16_t eliminated;        /* actions dropped before the end */
     pe_br_decision_end_t end;

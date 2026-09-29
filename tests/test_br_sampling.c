@@ -136,6 +136,21 @@ static void test_decisions(void)
     CHECK(d.best == 0u && d.end == PE_BR_DECISION_SEPARATED && d.samples < 40u,
           "clearly positive: resolved above the boundary quickly (%llu draws)",
           (unsigned long long)d.samples);
+    /* Issue #271: the two standard errors are reported apart and unscaled.
+       They are not equal in general - here the boundary has none - and the
+       half-width is the sequential z (the union bound over looks and
+       actions, about 3.5 here, not 1.96) times their *sum*: it is neither a
+       standard error nor their quadrature. */
+    {
+        const double z = pe_br_sequential_z(&c, 2u);
+        CHECK(d.runner_stderr <= 0.0 && d.best_stderr > 0.0 && z > 3.0 &&
+                  fabs(d.gap_half_width -
+                       z * (d.best_stderr + d.runner_stderr)) <=
+                      1e-12 * d.gap_half_width,
+              "per-action standard errors (best %.4f, runner %.4f, z %.4f, "
+              "half-width %.4f)", d.best_stderr, d.runner_stderr, z,
+              d.gap_half_width);
+    }
 
     s = make_sampler(12u);
     s.mean[0] = -1.0; s.sd[0] = 0.3;

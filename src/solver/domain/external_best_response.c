@@ -14,18 +14,16 @@ typedef char pe_br_sampling_action_limit_check[
     (PE_BR_SAMPLING_MAX_ACTIONS >= PE_EXTERNAL_MAX_ACTIONS) ? 1 : -1];
 
 /* Issue #271: what one infoset's last decision measured. The priority layer
-   wants a leader-versus-runner-up gap and the uncertainty of that
-   difference; the resolver reports the first directly and the second as a
-   half-width that is the *sum* of the two actions' half-widths, where the
-   layer's own combination is their quadrature. Feeding that sum as a single
-   spread is conservative - it never understates the uncertainty - and the
-   two differ by a factor that is constant for a given measurement, so the
-   score is a monotone rescaling of the exact one. A bucket boundary is all
-   the allocation reads, and the bucket is what buys the samples. */
+   wants a leader-versus-runner-up gap and the two actions' standard errors,
+   which it combines in quadrature; the resolver reports all three. Its
+   gap_half_width is not a substitute: it is z times the *sum* of the two
+   standard errors, and the bucket boundaries are absolute, so a factor of z
+   (or of an L1 against an L2 combination) moves decisions across them. */
 typedef struct {
     uint64_t key;
     double gap;
-    double uncertainty;
+    double best_stderr;
+    double runner_stderr;
     uint32_t actions;
     uint64_t visits;
     uint64_t last_served;
@@ -294,8 +292,8 @@ static void br_priority_snapshot(const pe_work_priority_config_t *resolved,
         item = &items[count++];
         item->best = record->gap;
         item->second_best = 0.0;
-        item->best_stderr = record->uncertainty;
-        item->second_stderr = 0.0;
+        item->best_stderr = record->best_stderr;
+        item->second_stderr = record->runner_stderr;
         item->visits = record->visits;
         item->last_served = record->last_served;
         item->actions = record->actions;
@@ -352,8 +350,8 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
             {
                 item.best = record->gap;
                 item.second_best = 0.0;
-                item.best_stderr = record->uncertainty;
-                item.second_stderr = 0.0;
+                item.best_stderr = record->best_stderr;
+                item.second_stderr = record->runner_stderr;
                 item.visits = record->visits;
                 item.last_served = record->last_served;
             }
@@ -370,7 +368,8 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
         if (record)
         {
             record->gap = decision.gap;
-            record->uncertainty = decision.gap_half_width;
+            record->best_stderr = decision.best_stderr;
+            record->runner_stderr = decision.runner_stderr;
             record->actions = actions;
             record->visits++;
             record->last_served = ctx->epoch;
@@ -1194,6 +1193,11 @@ int pe_external_best_response_sampled(const pe_external_game_t *game,
        decisions rather than return them in input order. */
     ctx.priority_on = pe_br_sampling_enabled(&ctx.sampling) &&
                       ctx.priority.policy != PE_WORK_SCHED_FIFO;
+    /* The allocation reads each infoset's own previous measurement, so a game
+       that cannot name its infosets cannot be prioritised. Refused rather
+       than keyed to 0, which would allocate every decision by whichever one
+       ran last. */
+    if (ctx.priority_on && !game->infoset_key) return -1;
     ctx.stats = &out->sampling;
     pe_rng_seed(&ctx.rng, config->seed);
     for (uint32_t i = 0u; i < samples; ++i)

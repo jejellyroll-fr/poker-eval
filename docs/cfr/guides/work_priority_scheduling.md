@@ -406,26 +406,49 @@ order and no per-item work to allocate.
 ### Where the numbers come from
 
 A decision's own *previous* measurement ranks it. `br_rollout()` keeps one
-record per infoset — the game's infoset key, the last measured `gap` and spread,
-the action count, the visit count and the epoch it was last served — in an
-open-addressed table (`pe_rng_mix(key)`, power-of-two capacity, 256 slots to
-start, doubling). The record is read before the decision is resolved and written
-after, so the second visit to a decision is allocated by the first.
+record per infoset — the game's infoset key, the last measured `gap` and the two
+standard errors, the action count, the visit count and the epoch it was last
+served — in an open-addressed table (`pe_rng_mix(key)`, power-of-two capacity,
+256 slots to start, doubling). The record is read before the decision is
+resolved and written after, so the second visit to a decision is allocated by
+the first.
 
-The spread needs a conversion, and it is the one place the call site is not
-literal about the layer's contract. `pe_br_decision_t.gap_half_width` is the
-**sum** of the leader's and the runner-up's half-widths; the layer wants the
-**quadrature** of the two standard errors. Passing the sum as a single spread is
-a conservative majorant, since `hypot(a, b) <= a + b`. It is also *exactly* the
-same ordering, not merely a safe one: the two half-widths are equal (the
-confidence rule budgets them the same way), so with `sigma = gap_half_width / 2`
-the layer computes `hypot(sigma, sigma) = sigma * sqrt(2)` — a constant multiple
-of the `sigma` it is fed. A constant multiple moves no bucket boundary, and the
-bucket is all the ordering looks at. The item is therefore built as
-`best = gap`, `second_best = 0`, `best_stderr = uncertainty`,
-`second_stderr = 0`. Splitting the half-widths in the decision struct would make
-the call site literal; it would also change `pe_br_decision_t`, and it buys
-nothing the constant multiple does not already give.
+A game without an `infoset_key` callback has no record to allocate by, so with
+the policy in effect `pe_external_best_response_sampled()` refuses it (`-1`)
+rather than keying every decision to 0, which would allocate each one by
+whichever decision ran last. Under FIFO, or with sampling off, such a game is
+measured exactly as before.
+
+The checkpoint adapter hashes the policy only where it is in effect — a non-FIFO
+policy **and** the sampled evaluation on — so a checkpoint made under the
+default still resumes after an inert `--br-priority-policy` is added, while one
+made under an active policy refuses a resume under another.
+
+The spread is fed as the layer's contract asks: the leader's and the
+runner-up's **standard errors**, which `pe_br_resolve_decision()` reports in
+`pe_br_decision_t.best_stderr` and `.runner_stderr`, and which the layer
+combines in quadrature. The item is built as `best = gap`, `second_best = 0`,
+`best_stderr = best_stderr`, `second_stderr = runner_stderr`.
+
+`gap_half_width` is **not** a substitute, and an earlier draft of this call site
+that fed it was wrong in two ways. It is `z * (SE_best + SE_runner)` — an L1
+sum, not the quadrature — and its two terms are not equal in general: the
+actions have their own variances and, after elimination, their own draw counts
+(`test_br_sampling.c` pins a decision whose runner-up has no spread at all).
+Worse, `z` is not a fixed 1.96: it is the sequential union bound over the
+decision's looks and actions (`pe_br_sequential_z()`), so it moves with
+`max_samples`, `check_interval`, `confidence` and the action count. The bucket
+boundaries `ratio^0, ratio^1, ...` are absolute, so a factor of `z` (about 3 on
+a three-action decision at min 4 / max 64) moves decisions across them — and
+raising `max_samples` would have made every decision look less settled. The
+monotone-rescaling argument only preserves the *ranking*, and the allocation
+reads the *bucket*.
+
+The consequence is a different threshold for "settled", and it is the layer's,
+not the resolver's: bucket 0 is a gap wider than one standard error of the
+difference, where the resolver separates two actions only once their `z`-wide
+intervals clear. A decision can therefore be capped at `min_samples` before the
+resolver would call it separated — the second fixture below is one.
 
 A record that does not exist yet reads as "not tracked": the decision is scored
 on the zeroed metadata it is handed, which is the coverage-floor path.
@@ -480,9 +503,13 @@ The three public structs the new settings and totals live in all grew:
 | `pe_solver_config_t` | 320 bytes | 368 |
 | `pe_external_br_config_t` | 80 bytes | 128 |
 | `pe_external_br_result_t` | 216 bytes | 784 |
+| `pe_br_decision_t` | 56 bytes | 72 |
 
-Most of the last one is the two 32-entry histograms inside
-`pe_work_priority_stats_t`. `pe_solver_config_default()` writes the whole
+Most of the third one is the two 32-entry histograms inside
+`pe_work_priority_stats_t`. The last one gained the leader's and the
+runner-up's standard errors, which the call site feeds the layer (see above);
+it is written by `pe_br_resolve_decision()` into the caller's struct, so a
+caller compiled against the smaller layout would be overrun too. `pe_solver_config_default()` writes the whole
 struct, so a caller compiled against the smaller layout would have its buffer
 overrun — the same reasoning as issue #257, which grew the same three structs.
 The solver ABI therefore bumps to **SOVERSION 8**.
@@ -495,20 +522,23 @@ End to end on the shipped CLI — Hold'em heads-up, 20 iterations, seed fixed,
 | | terminal evaluations |
 |---|---|
 | FIFO (the default) | 9,491 |
-| uncertainty-aware | 7,619 |
+| uncertainty-aware | 7,475 |
 
-That is **19.7% fewer** terminal evaluations for the same measurement, and the
+That is **21.2% fewer** terminal evaluations for the same measurement, and the
 priority telemetry reports what it was spent on:
 
 ```text
-work_priority items=216 buckets=8 coverage_promotions=0 aging_promotions=0 unresolved=0 mean_score=0.595244 mean_delay=97.694 p50_bucket=0 p90_bucket=1 depth=175,37,4,0,0,0,0,0
+work_priority items=205 buckets=8 coverage_promotions=0 aging_promotions=0 unresolved=0 mean_score=0.307877 mean_delay=94.429 p50_bucket=0 p90_bucket=0 depth=194,10,1,0,0,0,0,0
 ```
 
-216 decisions, 175 of them in bucket 0 (settled, so capped at `min_samples`), 37
-in bucket 1 and 4 in bucket 2 — nothing above. On this spot the decisions
-separate cleanly, which is why the saving is a reallocation rather than a
-reshuffle: the work taken from the settled decisions is not handed to anyone
-else, it is simply not spent.
+205 decision infosets, 194 of them in bucket 0 (settled, so capped at
+`min_samples`), 10 in bucket 1 and 1 in bucket 2 — nothing above. On this spot
+the decisions separate cleanly, which is why the saving is a reallocation rather
+than a reshuffle: the work taken from the settled decisions is not handed to
+anyone else, it is simply not spent. The resolver's own telemetry shows the
+other side of the threshold difference above: `max_budget_hits` rises from 3 to
+87 — decisions stopped by their (lowered) cap before their `z`-wide intervals
+cleared.
 
 This is a demonstration, not the four solve-level benchmarks #258 asks for (see
 above): one spot, one game, 20 iterations. The numbers are machine-independent
@@ -524,9 +554,9 @@ counts it prints (Debug, this machine):
 | Fixture (leader / runner-up / noise) | FIFO draws | prioritised draws | bucket |
 |---|---|---|---|
 | 10.0 / 0.0 / 0.1 — resolves at the first look | 6,400 | 6,400 | 0 |
-| 3.0 / 0.0 / 2.25 — does not resolve | 15,332 | 9,100 | 1 |
-| 1.0 / 0.999 / 1.0 — near tie | — | — | 5 |
-| 1.0 / 1.0 / 1.0 — exact tie | — | — | 4 |
+| 3.0 / 0.0 / 2.25 — does not resolve at the first look | 15,332 | 6,540 | 0 |
+| 1.0 / 0.999 / 1.0 — near tie | — | — | 0 to 7, mean 1.3 over 16 seeds |
+| 1.0 / 1.0 / 1.0 — exact tie | — | — | 0 to 2, mean 0.7 over 16 seeds |
 
 Four readings:
 
@@ -534,15 +564,20 @@ Four readings:
   two totals are equal, and they are equal because the confidence rule already
   stops at 6,400 draws, not because the policy is off: the test asserts that the
   infoset was tracked (`items == 1`) and that it landed in bucket 0.
-- Where the decision does not resolve, the cap bites: 15,332 → 9,100 draws, a
-  40.6% reduction, while the estimate stays on the exact value (asserted to
+- Where the decision does not resolve, the cap bites: 15,332 → 6,540 draws, a
+  57.3% reduction, while the estimate stays on the exact value (asserted to
   within 0.1 of 3.0) because a cap limits the *budget*, it does not stop the
-  fresh-draw re-estimate.
-- The classification is the layer's, not the test's: the same run on a near tie
-  and on an exact tie puts them in buckets 5 and 4 against 0 for the settled
-  decision.
+  fresh-draw re-estimate. The layer puts it in bucket 0 — its gap is several
+  standard errors wide — although the resolver's `z`-wide intervals do not clear
+  at the first look: the threshold difference described above.
+- The classification is the layer's, not the test's, and it is asserted on
+  average. One end-of-run snapshot of a tie is a single draw of a noisy
+  statistic — a tie's measured gap exceeds one standard error of the difference
+  about a third of the time, which is bucket 0 — so the test runs each fixture
+  over 16 seeds and asserts that both ties' summed buckets exceed the settled
+  decision's, which is 0 on every seed.
 - Aging is observable only through the cap. On the second row, aging off draws
-  9,100 and `aging_interval = 1` draws 12,034 — a larger cap, as designed, and
+  6,540 and `aging_interval = 1` draws 11,828 — a larger cap, as designed, and
   still below FIFO's 15,332, so the promotion cannot undo the cap.
 
 ## The guards bite at the call site
@@ -554,17 +589,31 @@ to agree.
 
 | Mutation | Failing checks |
 |---|---|
-| `br_priority_cap` returns the configured maximum (the policy is inert) | 3 |
-| the measured gap is not recorded | 7 |
-| the measured spread is not recorded | 1 |
-| the visit count is not advanced (the coverage floor never lifts) | 7 |
-| the record is never looked up (`create = 0`) | 8 |
-| the gate is inverted (the policy is never on) | 12 |
-| the telemetry snapshot is not taken | 6 |
+| `br_priority_cap` returns the configured maximum (the policy is inert) | 2 |
+| the measured gap is not recorded | 24 |
+| the leader's standard error is not recorded | 1 |
+| the runner-up's standard error is not recorded | 1 |
+| the visit count is not advanced (the coverage floor never lifts) | 24 |
+| the record is never looked up (`create = 0`) | 41 |
+| the gate is inverted (the policy is never on) | 47 |
+| the telemetry snapshot is not taken | 39 |
 | the last-served epoch is not recorded (aging sees no wait) | 1 |
-| the action count is not recorded (every decision looks single-action) | 3 |
+| the action count is not recorded (every decision looks single-action) | 2 |
 | the epoch never advances | 1 |
+| a keyless game is not refused (the NULL key is called) | crash (SIGSEGV) |
 | the table is never freed (a leak, not a wrong answer) | 0 |
+
+The counts are larger than in the first version of this table because the
+classification check now runs each fixture over 16 seeds and asserts per seed.
+The two standard-error rows were **0** each before `test_both_spreads` existed:
+with the same noise on every action, dropping one of two equal spreads only
+scales the score by `sqrt(2)`, which the fixtures could not see. The fixture
+that sees it puts noise on a single action and sets `assumed_stderr` absurdly
+wide, so a decision that lost its only spread lands in the top bucket.
+
+The checkpoint hash is guarded in `test_pe_checkpoint_v2.c`: hashing the policy
+whenever it is not FIFO, whether or not the sampled evaluation is on, fails the
+"inert policy resumes" check.
 
 Two rows need a word.
 

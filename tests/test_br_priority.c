@@ -21,10 +21,16 @@
  *  4. It bites where the decision does not resolve: a noisy decision spends
  *     strictly fewer draws, and the estimate stays on the exact value.
  *  5. The classification is what the layer promises. A decision with a wide
- *     gap and little noise lands in the lowest bucket; a near tie lands high.
+ *     gap and little noise lands in the lowest bucket; a near tie ranks
+ *     higher on average over seeds (one snapshot of a tie is noisy).
  *     The comparison is across two games because an external game has a single
  *     root, so a run carries a single decision infoset.
  *  6. It is reproducible: a seeded run repeats exactly.
+ *  7. Both actions' spreads are read: a decision whose only noise is on the
+ *     leader, or only on the runner-up, is not mistaken for one with none.
+ *  8. A game that cannot name its infosets is refused under the policy -
+ *     there is no per-infoset record to allocate by - and still measured
+ *     under FIFO, exactly as before.
  *
  * The measured numbers in the comments come from this machine, Debug, and are
  * what the assertions were written against.
@@ -56,7 +62,8 @@ static int g_failures = 0;
  * A one-decision toy game
  *
  * root: player 0 picks one of three actions (values base[0..2], each plus a
- * uniform noise of spread `noise`), then a chance node draws the noise.
+ * uniform noise of spread `noise[action]`), then a chance node draws the
+ * noise.
  * Player 0's policy is uniform, so its best response is exactly base[0] when
  * that is the largest. One infoset (key 5), which is all the allocation
  * needs: the bucket is a per-decision property.
@@ -70,7 +77,7 @@ static int g_failures = 0;
    games never share state. */
 typedef struct {
     double base[3];
-    double noise;
+    double noise[3];
 } toy_params_t;
 
 static int t_terminal(const void *s, void *u)
@@ -108,7 +115,7 @@ static double t_value(const void *s, int player, void *u)
 {
     const toy_params_t *p = (const toy_params_t *)u;
     uintptr_t v = (uintptr_t)s - T_TERM;
-    double value = p->base[v / 16u] + p->noise * (((double)(v % 16u) - 7.5) / 7.5);
+    double value = p->base[v / 16u] + p->noise[v / 16u] * (((double)(v % 16u) - 7.5) / 7.5);
     return player == 0 ? value : -value;
 }
 static int t_sample_chance(const void *s, pe_rng_t *rng, pe_chance_sample_t *out)
@@ -135,7 +142,7 @@ static pe_external_game_t toy_game(toy_params_t *params, double b0, double b1,
     params->base[0] = b0;
     params->base[1] = b1;
     params->base[2] = 0.0;
-    params->noise = noise;
+    params->noise[0] = params->noise[1] = params->noise[2] = noise;
     g.root = (const void *)(uintptr_t)T_ROOT;
     g.user = params;
     g.player_count = 2u;
@@ -159,6 +166,7 @@ static pe_external_game_t toy_game(toy_params_t *params, double b0, double b1,
 #define SEED 9u
 #define MIN_SAMPLES 4u
 #define MAX_SAMPLES 64u
+#define CLASSIFY_SEEDS 16u
 
 static pe_external_br_config_t make_config(void)
 {
@@ -295,9 +303,17 @@ static void test_cap_bites(void)
     CHECK(fabs(r_prio.br_value - 3.0) < 0.1,
           "the estimate stays on the exact value under the policy (%.4f)",
           r_prio.br_value);
-    CHECK(occupied_bucket(&r_prio.priority, 8u) == 1,
-          "a marginal decision ranks one bucket up (%d)",
+    /* The gap (3.0) is several standard errors of the difference wide even
+       at min_samples, so the layer calls it settled - bucket 0 - although the
+       resolver's own interval, z standard errors wide with z the sequential
+       union bound, does not clear it at the first look. The two thresholds differ by z, and it is the layer's that
+       allocates. */
+    CHECK(occupied_bucket(&r_prio.priority, 8u) == 0,
+          "a decision the layer calls settled is in bucket 0 (%d)",
           occupied_bucket(&r_prio.priority, 8u));
+    printf("    draws: fifo=%llu prioritised=%llu\n",
+           (unsigned long long)r_fifo.sampling.samples,
+           (unsigned long long)r_prio.sampling.samples);
 }
 
 /* ---------------------------------------------------------------- *
@@ -313,29 +329,51 @@ static void test_classification(void)
     pe_external_game_t tie = toy_game(&p_tie, 1.0, 0.999, 1.0);
     pe_external_game_t exact = toy_game(&p_exact, 1.0, 1.0, 1.0);
     int b_clear, b_tie, b_exact;
+    int sum_clear = 0, sum_tie = 0, sum_exact = 0, runs_ok = 1;
+    uint64_t seed;
 
     printf("  a near tie outranks a clearly separated decision\n");
     prio.priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
     prio.priority.buckets = 8u;
     prio.priority.bucket_ratio = 2.0;
 
-    CHECK(pe_external_best_response_sampled(&clear, 0u, &prio, &r_clear) == 0 &&
-              pe_external_best_response_sampled(&tie, 0u, &prio, &r_tie) == 0 &&
-              pe_external_best_response_sampled(&exact, 0u, &prio, &r_exact) == 0,
-          "the three measurements run");
-    b_clear = occupied_bucket(&r_clear.priority, 8u);
-    b_tie = occupied_bucket(&r_tie.priority, 8u);
-    b_exact = occupied_bucket(&r_exact.priority, 8u);
-    CHECK(b_clear == 0, "the settled decision is in bucket 0 (%d)", b_clear);
-    CHECK(b_tie > b_clear,
-          "the near tie outranks it (%d against %d)", b_tie, b_clear);
-    CHECK(b_exact > b_clear,
-          "so does a decision with no gap at all (%d against %d)",
-          b_exact, b_clear);
-    /* The measured spread, quoted so a regression in the score shows up as a
-       number rather than as a shifted bucket. */
-    printf("    buckets: clear=%d near-tie=%d exact-tie=%d\n", b_clear, b_tie,
-           b_exact);
+    /* The bucket is read from the end-of-run snapshot, which is one draw of
+       a noisy statistic: bucket 0 is a gap wider than one standard error of
+       the difference, and a tie's measured gap exceeds that about a third of
+       the time. So the ranking is asserted over several seeds, on the mean
+       bucket, rather than on whichever snapshot one seed happens to give. */
+    printf("    buckets (clear/near-tie/exact-tie):");
+    for (seed = 1u; seed <= CLASSIFY_SEEDS; ++seed)
+    {
+        prio.seed = seed;
+        if (pe_external_best_response_sampled(&clear, 0u, &prio, &r_clear) != 0 ||
+            pe_external_best_response_sampled(&tie, 0u, &prio, &r_tie) != 0 ||
+            pe_external_best_response_sampled(&exact, 0u, &prio, &r_exact) != 0)
+        {
+            runs_ok = 0;
+            break;
+        }
+        b_clear = occupied_bucket(&r_clear.priority, 8u);
+        b_tie = occupied_bucket(&r_tie.priority, 8u);
+        b_exact = occupied_bucket(&r_exact.priority, 8u);
+        CHECK(b_clear == 0, "the settled decision is in bucket 0 (seed %llu: %d)",
+              (unsigned long long)seed, b_clear);
+        CHECK(b_tie >= 0 && b_exact >= 0,
+              "one tracked infoset per run (seed %llu)",
+              (unsigned long long)seed);
+        sum_clear += b_clear;
+        sum_tie += b_tie;
+        sum_exact += b_exact;
+        printf(" %d/%d/%d", b_clear, b_tie, b_exact);
+    }
+    printf("\n");
+    CHECK(runs_ok, "the measurements run");
+    CHECK(sum_tie > sum_clear,
+          "the near tie outranks it on average (%d against %d over %u seeds)",
+          sum_tie, sum_clear, CLASSIFY_SEEDS);
+    CHECK(sum_exact > sum_clear,
+          "so does a decision with no gap at all (%d against %d over %u seeds)",
+          sum_exact, sum_clear, CLASSIFY_SEEDS);
 }
 
 /* ---------------------------------------------------------------- *
@@ -428,6 +466,68 @@ static void test_reproducible(void)
           "the priority snapshot repeats");
 }
 
+/* ---------------------------------------------------------------- *
+ * 7. Both standard errors reach the layer
+ * ---------------------------------------------------------------- */
+
+static void test_both_spreads(void)
+{
+    toy_params_t p_leader, p_runner;
+    pe_external_game_t leader = toy_game(&p_leader, 10.0, 0.0, 0.0);
+    pe_external_game_t runner = toy_game(&p_runner, 10.0, 0.0, 0.0);
+    pe_external_br_config_t prio = make_config();
+    pe_external_br_result_t r_leader, r_runner;
+    int b_leader, b_runner;
+
+    printf("  the leader's and the runner-up's spreads both reach the layer\n");
+    /* Noise on one action only, and the third action far below so the
+       runner-up is always action 1. A decision that reports no spread at all
+       is scored against assumed_stderr; set absurdly wide, it sends such a
+       decision to the top bucket. So each fixture lands in bucket 0 only if
+       the one spread it has - the leader's, then the runner-up's - is the
+       one the record kept. */
+    p_leader.base[2] = p_runner.base[2] = -10.0;
+    p_leader.noise[0] = 1.0;
+    p_runner.noise[1] = 1.0;
+    prio.priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+    prio.priority.buckets = 8u;
+    prio.priority.bucket_ratio = 2.0;
+    prio.priority.assumed_stderr = 1.0e6;
+
+    CHECK(pe_external_best_response_sampled(&leader, 0u, &prio, &r_leader) == 0 &&
+              pe_external_best_response_sampled(&runner, 0u, &prio, &r_runner) == 0,
+          "both measurements run");
+    b_leader = occupied_bucket(&r_leader.priority, 8u);
+    b_runner = occupied_bucket(&r_runner.priority, 8u);
+    CHECK(b_leader == 0,
+          "noise on the leader only: its spread is scored (bucket %d)",
+          b_leader);
+    CHECK(b_runner == 0,
+          "noise on the runner-up only: its spread is scored (bucket %d)",
+          b_runner);
+}
+
+/* ---------------------------------------------------------------- *
+ * 8. A game without infoset keys
+ * ---------------------------------------------------------------- */
+
+static void test_keyless_game(void)
+{
+    toy_params_t params;
+    pe_external_game_t game = toy_game(&params, 3.0, 0.0, 2.25);
+    pe_external_br_config_t fifo = make_config();
+    pe_external_br_config_t prio = make_config();
+    pe_external_br_result_t out;
+
+    printf("  a keyless game is refused under the policy, measured under FIFO\n");
+    game.infoset_key = NULL;
+    prio.priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+    CHECK(pe_external_best_response_sampled(&game, 0u, &fifo, &out) == 0,
+          "FIFO measures a keyless game as before");
+    CHECK(pe_external_best_response_sampled(&game, 0u, &prio, &out) != 0,
+          "the policy refuses a keyless game instead of calling a NULL key");
+}
+
 int main(void)
 {
     printf("test_br_priority (issue #271)\n");
@@ -437,6 +537,8 @@ int main(void)
     test_classification();
     test_aging_promotes();
     test_reproducible();
+    test_both_spreads();
+    test_keyless_game();
     if (g_failures != 0)
     {
         fprintf(stderr, "%d check(s) FAILED\n", g_failures);
