@@ -196,22 +196,33 @@ static int oracle_order_exhaustive(const oracle_ctx_t *ctx, size_t *out)
 
 /* BALANCED, built directly from the description: the coverage tier first in
    input order, then one item per non-empty bucket per round, walking down
-   from the round's starting bucket and wrapping. The start is the top bucket
-   on epoch 0 and one lower on each later epoch. */
+   from the round's starting bucket and wrapping. The start is the
+   ((epoch mod B) * n / B)-th of the n occupied buckets, counted from the
+   highest, where B is the configured bucket count. */
 static int oracle_balanced_order(const oracle_ctx_t *ctx, size_t *out)
 {
     size_t depth[PE_WORK_PRIORITY_MAX_BUCKETS];
     size_t written = 0u;
     size_t round, i;
     uint32_t buckets = ctx->config.buckets;
-    uint32_t start = buckets - 1u - (uint32_t)(ctx->epoch % (uint64_t)buckets);
-    uint32_t b, k;
+    uint32_t start = buckets - 1u;
+    uint32_t b, k, occupied = 0u;
 
     for (b = 0u; b < buckets; ++b)
         depth[b] = 0u;
     for (i = 0u; i < ctx->count; ++i)
         if (!oracle_below_floor(ctx, i))
             depth[oracle_effective_bucket(ctx, i)]++;
+    {
+        /* List the occupied buckets top down and index it by the epoch. */
+        uint32_t list[PE_WORK_PRIORITY_MAX_BUCKETS];
+        for (b = buckets; b > 0u; --b)
+            if (depth[b - 1u] > 0u)
+                list[occupied++] = b - 1u;
+        if (occupied > 0u)
+            start = list[(ctx->epoch % (uint64_t)buckets) *
+                         (uint64_t)occupied / (uint64_t)buckets];
+    }
     for (i = 0u; i < ctx->count; ++i)
         if (oracle_below_floor(ctx, i))
         {

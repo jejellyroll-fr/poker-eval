@@ -87,8 +87,12 @@ typedef enum {
        bottom bucket is bounded by the number of non-empty buckets, at the
        cost of not draining the top bucket first.
 
-       The round starts at the top bucket on epoch 0 and one bucket lower on
-       each later epoch, wrapping at the bottom. That rotation is what makes
+       The round's starting bucket sweeps the occupied buckets, highest
+       first, over a period of `buckets` epochs: epoch e starts at the
+       ((e mod buckets) * n / buckets)-th of the n occupied buckets. Each
+       occupied bucket therefore leads a share of every period in proportion,
+       empty buckets take no turn, and epoch 0 is the highest-first order.
+       That rotation is what makes
        the bound hold for a caller that services a prefix of the order and
        recomputes: without it every call would put the same top bucket at
        position zero, and the policy would do nothing the strict one does not.

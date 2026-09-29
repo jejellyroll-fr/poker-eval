@@ -840,6 +840,113 @@ static void test_balanced_rotates(void)
     printf("\n");
 }
 
+/* Codex P2 on PR #270 (second round): the rotation must share its period
+   among the occupied buckets only. Stepping through every bucket number let
+   the empty ones hand their turn to the next occupied bucket down, so with
+   buckets 7 and 0 alone one of them led seven epochs in eight, and with 32
+   buckets the skew could reach 31:1. */
+static size_t lead_bucket_of(size_t index)
+{
+    return index < 2u ? 7u : (index < 4u ? 0u : 3u);
+}
+
+static void test_balanced_sparse(void)
+{
+    pe_work_priority_config_t balanced =
+        make_config(PE_WORK_SCHED_BALANCED, 1u, 8u, 0u); /* aging off */
+    /* Gap 1, so each score is its spread: 64 -> bucket 7, 4 -> bucket 3,
+       1/2 -> bucket 0. */
+    pe_work_priority_item_t items[6];
+    size_t order[6];
+    size_t led[8];
+    uint64_t epoch;
+
+    printf("  balanced rotation over sparse buckets\n");
+    items[0] = oracle_item(65.0, 64.0, 64.0, 0.0, 5u, 0u, 2u);
+    items[1] = oracle_item(65.0, 64.0, 64.0, 0.0, 5u, 0u, 2u);
+    items[2] = oracle_item(1.5, 0.5, 0.5, 0.0, 5u, 0u, 2u);
+    items[3] = oracle_item(1.5, 0.5, 0.5, 0.0, 5u, 0u, 2u);
+    items[4] = oracle_item(5.0, 4.0, 4.0, 0.0, 5u, 0u, 2u);
+    items[5] = oracle_item(5.0, 4.0, 4.0, 0.0, 5u, 0u, 2u);
+    CHECK(pe_work_priority_bucket(&balanced, &items[0], 0u) == 7u &&
+              pe_work_priority_bucket(&balanced, &items[2], 0u) == 0u &&
+              pe_work_priority_bucket(&balanced, &items[4], 0u) == 3u,
+          "fixtures must land in buckets 7, 0 and 3");
+
+    /* Two occupied buckets, 7 and 0, over one period of 8 epochs: the top one
+       leads the first half, the bottom one the second. */
+    memset(led, 0, sizeof(led));
+    for (epoch = 0u; epoch < 8u; ++epoch)
+    {
+        size_t head;
+        CHECK(pe_work_priority_order(&balanced, items, 4u, epoch, order, 6u,
+                                     NULL) == 0,
+              "order must succeed");
+        head = lead_bucket_of(order[0]);
+        led[head]++;
+        CHECK(head == (epoch < 4u ? 7u : 0u),
+              "two buckets, epoch %llu: bucket %u must lead, got %zu",
+              (unsigned long long)epoch, epoch < 4u ? 7u : 0u, head);
+    }
+    CHECK(led[7] == 4u && led[0] == 4u,
+          "two buckets over a period must lead 4 and 4, got %zu and %zu",
+          led[7], led[0]);
+
+    /* Three occupied buckets, 7, 3 and 0: the period of 8 is shared 3, 3, 2,
+       top down, and the next period starts at the top again. */
+    memset(led, 0, sizeof(led));
+    for (epoch = 0u; epoch < 9u; ++epoch)
+    {
+        static const size_t expected[8] = {7u, 7u, 7u, 3u, 3u, 3u, 0u, 0u};
+        size_t head;
+        CHECK(pe_work_priority_order(&balanced, items, 6u, epoch, order, 6u,
+                                     NULL) == 0,
+              "order must succeed");
+        head = lead_bucket_of(order[0]);
+        if (epoch < 8u)
+            led[head]++;
+        CHECK(head == expected[epoch % 8u],
+              "three buckets, epoch %llu: bucket %zu must lead, got %zu",
+              (unsigned long long)epoch, expected[epoch % 8u], head);
+    }
+    CHECK(led[7] == 3u && led[3] == 3u && led[0] == 2u,
+          "three buckets over a period must lead 3, 3 and 2, got %zu, %zu, %zu",
+          led[7], led[3], led[0]);
+
+    /* The 32-bucket extreme from the review: buckets 31 and 0 alone must
+       split the period evenly, not 31:1. */
+    {
+        pe_work_priority_config_t in, wide;
+        pe_work_priority_item_t pair[2];
+        size_t pair_order[2];
+        size_t top = 0u, bottom = 0u;
+        memset(&in, 0, sizeof(in));
+        in.policy = PE_WORK_SCHED_BALANCED;
+        in.buckets = PE_WORK_PRIORITY_MAX_BUCKETS;
+        CHECK(pe_work_priority_resolve(&in, &wide) == 0, "32 buckets resolve");
+        /* Gap 1, spread 2^31: bucket 31. Spread 1/2: bucket 0. */
+        pair[0] = oracle_item(2147483649.0, 2147483648.0, 2147483648.0, 0.0,
+                              5u, 0u, 2u);
+        pair[1] = oracle_item(1.5, 0.5, 0.5, 0.0, 5u, 0u, 2u);
+        CHECK(pe_work_priority_bucket(&wide, &pair[0], 0u) == 31u &&
+                  pe_work_priority_bucket(&wide, &pair[1], 0u) == 0u,
+              "fixtures must land in buckets 31 and 0");
+        for (epoch = 0u; epoch < 32u; ++epoch)
+        {
+            CHECK(pe_work_priority_order(&wide, pair, 2u, epoch, pair_order, 2u,
+                                         NULL) == 0,
+                  "order must succeed");
+            if (pair_order[0] == 0u)
+                top++;
+            else
+                bottom++;
+        }
+        CHECK(top == 16u && bottom == 16u,
+              "32 buckets, two occupied: must lead 16 and 16, got %zu and %zu",
+              top, bottom);
+    }
+}
+
 /* ---------------------------------------------------------------- *
  * 5. Against the brute-force oracle
  * ---------------------------------------------------------------- */
@@ -1455,6 +1562,7 @@ int main(void)
     test_from_stats();
     test_undersampled_bridge();
     test_balanced_rotates();
+    test_balanced_sparse();
     test_zero_spread_fallback();
 
     if (g_failures != 0)

@@ -234,12 +234,37 @@ int pe_work_priority_order(const pe_work_priority_config_t *resolved,
            time. A caller that services the whole permutation does not care,
            but one that takes a prefix and recomputes - the usual shape - would
            otherwise see the same top bucket at position zero for ever. The
-           epoch rotates the starting bucket down by one, so epoch 0 is the
-           plain highest-first order and every later one begins one bucket
-           lower, wrapping. */
-        uint32_t start =
-            resolved->buckets - 1u -
-            (uint32_t)(epoch % (uint64_t)resolved->buckets);
+           epoch rotates the starting bucket through the *occupied* buckets,
+           highest first. The period stays `buckets` epochs and is shared out
+           in proportion: position epoch % buckets maps to the
+           (position * occupied / buckets)-th occupied bucket, so each of n
+           occupied buckets leads buckets/n epochs of every period, rounded,
+           and epoch 0 is the plain highest-first order.
+
+           Rotating through every bucket number instead let the empty ones
+           hand their turns to the next occupied bucket down - with buckets 7
+           and 0 alone, bucket 0 led seven epochs in eight. Indexing the
+           occupied buckets by epoch % n instead is fair only while n holds
+           still; a caller that services a prefix changes n from epoch to
+           epoch, and the index then jumps about (the 40-decision workload's
+           worst delay went from 65 rounds to 362). A fixed period sweeps the
+           occupied buckets in order whatever n does. */
+        uint32_t occupied = 0u, pick, start = resolved->buckets - 1u;
+        for (b = resolved->buckets; b-- > 0u;)
+            if (depth[b] != 0u)
+                occupied++;
+        if (occupied != 0u)
+        {
+            uint64_t position = epoch % (uint64_t)resolved->buckets;
+            pick = (uint32_t)(position * (uint64_t)occupied /
+                              (uint64_t)resolved->buckets);
+            for (b = resolved->buckets; b-- > 0u;)
+                if (depth[b] != 0u && pick-- == 0u)
+                {
+                    start = b;
+                    break;
+                }
+        }
         for (i = 0u; i < count; ++i)
         {
             uint32_t bucket;
