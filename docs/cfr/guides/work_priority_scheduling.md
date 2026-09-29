@@ -183,13 +183,25 @@ determined by the metadata, so identical input gives identical output.
   service ratio between the top and the bottom bucket by the number of
   non-empty buckets. It costs some top-bucket throughput.
 
-  The round starts at the top bucket on epoch 0 and one bucket lower on each
-  later epoch, wrapping at the bottom. That rotation is what makes the bound
-  hold for the caller the policy exists for — one that services a prefix of the
+  The round's starting bucket sweeps the occupied buckets, highest first, over
+  a period of `buckets` epochs. Epoch `e` starts at the
+  `((e mod buckets) × n / buckets)`-th of the `n` occupied buckets, so each
+  occupied bucket leads its share of every period and empty buckets take no
+  turn. That rotation is what makes the bound hold for the caller the policy
+  exists for — one that services a prefix of the
   order and recomputes. Without it every call would put the same top bucket at
   position zero and the policy would do nothing the strict one does not. A
   caller that consumes the whole permutation sees the rotation only as a change
   of order within a round, so epoch 0 is the plain highest-first order.
+
+  Two simpler rotations were tried and rejected:
+
+  - Stepping through every bucket *number* let each empty bucket hand its
+    turn to the next occupied one down. With buckets 7 and 0 alone, one of
+    them led seven epochs in eight, and with 32 buckets the skew reached 31:1.
+  - Indexing the occupied buckets by `e mod n` is fair only while `n` holds
+    still. A caller that services a prefix changes `n` from epoch to epoch,
+    and the index then jumps about.
 
 The coverage tier comes first under all three non-FIFO policies.
 
@@ -235,14 +247,28 @@ of 9 or more against a spread of 0.01, so a score near 0.001), and services
 |---|---|---|
 | FIFO (rotating) | 25.0% — the group is a quarter of the queue | 39 rounds |
 | uncertainty-aware, aging 8 | **60.1%** | 80 rounds |
-| balanced, aging 8 | — | 65 rounds |
+| balanced, aging 8 | — | 244 rounds |
 
 The prioritised run spends **2.4×** the baseline share on the decisions that are
 actually undecided, and every decision is still serviced: the worst delay is
 80 rounds, finite and bounded, against 39 for the even baseline. That is the
-trade the feature exists to make. `balanced` trades some of the concentration
-for a tighter worst case — 65 rounds rather than 80 — which is what the epoch
-rotation buys.
+trade the feature exists to make.
+
+`balanced` bounds the service ratio between **buckets**, not the delay of a
+single decision, and on this workload that makes its per-decision worst case
+longer: 244 rounds, against 80 for the strict policy.
+
+- With aging on, a decision climbs a bucket for every 8 epochs it waits. The
+  high buckets therefore hold the decisions that have waited longest, and
+  bucket 0 holds the ones that have just been serviced.
+- A fair share of turns for bucket 0 is spent re-serving the same
+  freshly-served decision: within a bucket the input order decides.
+
+An earlier rotation stepped through bucket numbers and printed 65 rounds here.
+It got that figure by accident, handing most of the turns to the high buckets,
+and it broke the bucket bound the policy promises (see above). Use `balanced`
+for its bucket-level guarantee. When the worst delay per decision matters, use
+`uncertainty-aware` with aging.
 
 ## Benchmarks: what is and is not measured
 
