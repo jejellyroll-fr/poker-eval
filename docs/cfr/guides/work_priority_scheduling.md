@@ -290,43 +290,43 @@ synthetic workload whose composition is known in advance.
 ## The suite found a defect, and the guards bite
 
 Every guard was broken on purpose and the failures counted. Each row is one
-mutation of `work_priority.c`, rebuilt and run, then restored. The build is
-proven to have taken effect — the object file is deleted before each build and
-the solver library is hashed before and after — and each mutation is run three
-times with the counts required to agree. Both precautions are there because an
-earlier harness silently reported a *stale* binary's count for two of the rows:
-CMake compares timestamps at one-second granularity, so a write followed by a
-build inside the same second leaves the previous object in place.
+mutation of `work_priority.c`, named by the code change it makes so that it can
+be reproduced, rebuilt and run, then restored. The build is proven to have taken
+effect — the object file is deleted before each build and the solver library is
+hashed before and after — and each mutation is run three times with the counts
+required to agree. Both precautions are there because an earlier harness
+silently reported a *stale* binary's count for two of the rows: CMake compares
+timestamps at one-second granularity, so a write followed by a build inside the
+same second leaves the previous object in place.
 
 | Mutation | Failing checks |
 |---|---|
-| the score ratio inverted (`/` → `*`) | 1,213 |
-| the coverage tier removed | 5,024 |
-| the spread no longer combined in quadrature | 257 |
-| an unresolved ordering no longer saturates | 1,723 |
-| aging neutralised | 387 |
-| the bucket boundary made exclusive (`>=` → `>`) | 22 |
-| the bridge accepts a single observation | 3 |
-| the BALANCED rotation removed | 385 |
-| the score histogram taken from the effective bucket | 4 |
-| the percentile rank made exclusive (`>=` → `>`) | 7 |
-| the coverage promotion removed | 3 |
-
-The last row is `pe_work_priority_bucket()` no longer returning the top bucket
-for an item below the floor. It needs its own fixture because aging reaches the
-top bucket by a second path: with aging on, the promotion can disappear and the
-same bucket still comes out, so a workload with aging on does not notice.
-`test_coverage_promotion()` runs it with aging off, which is the 3.
+| `return uncertainty / gap` → `* gap` | 1,164 |
+| the coverage tier dropped: below-floor items ranked by bucket like the rest | 4,172 |
+| `hypot(best_stderr, second_stderr)` → a plain sum | 192 |
+| the `+infinity` of an unresolved ordering → `0` | 1,930 |
+| `promotion = age / aging_interval` → `promotion = 0` | 311 |
+| `score >= threshold` → `score > threshold` in `score_bucket()` | 25 |
+| `stats->n < 2` → `stats->n < 1` in `spread_of()` | 2 |
+| the epoch's start bucket fixed at the top occupied one | 449 |
+| `score_depth[score_bucket(score)]` → `score_depth[bucket]` | 5 |
+| `running >= target` → `running > target` in the percentile | 7 |
+| the `return top` for a below-floor item dropped | 3 |
 
 Five rows are small on purpose, and small is not the same as weak. A score lands
 on a bucket boundary only when it is exactly `ratio^k`, which the randomised
 batches almost never produce, so `test_bucket_boundaries()` exists precisely to
-cover it — that is the 22. The bridge's single-observation guard is covered by
-one fixture, and the floor's bucket promotion by another, which is the two 3s;
-the score histogram's independence from the policy by one fixture, which is the
-4; and the percentile's rank convention by `test_percentile()`'s exact
+cover it — that is the 25. The bridge's single-observation guard is covered by
+one fixture, which is the 2; the floor's bucket promotion by another, which is
+the 3; the score histogram's independence from the policy by one fixture, which
+is the 5; and the percentile's rank convention by `test_percentile()`'s exact
 distribution, which is the 7. Every one is non-zero, and each is caught by the
 test written for it rather than by luck.
+
+The floor's promotion needs a fixture of its own because aging reaches the top
+bucket by a second path: with aging on, the promotion can disappear and the same
+bucket still comes out, so a workload with aging on does not notice.
+`test_coverage_promotion()` runs it with aging off, which is the 3.
 
 The source was restored byte-for-byte after each run. Beyond those mutations,
 the suite caught a real design defect during development — the coverage floor
