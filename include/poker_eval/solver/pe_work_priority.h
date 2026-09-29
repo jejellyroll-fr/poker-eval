@@ -280,17 +280,23 @@ uint32_t pe_work_priority_percentile_bucket(
 /**
  * Render one stats snapshot as a single telemetry line, in the style of the
  * solver's other counters, so a baseline run and an uncertainty-aware run can
- * be compared field by field:
+ * be compared field by field. One snapshot - 40 decisions, 30 settled in the
+ * lowest bucket and 10 fragile in the top one, the floor satisfied and aging
+ * off - renders as:
  *
- *   work_priority items=40 buckets=8 coverage_promotions=40
- *     aging_promotions=0 unresolved=10 mean_score=0.0016 mean_delay=0.000
- *     p50_bucket=6 p90_bucket=7 depth=30,0,0,0,0,0,10,0
+ *   work_priority items=40 buckets=8 coverage_promotions=0 aging_promotions=0
+ *     unresolved=0 mean_score=50.0007 mean_delay=12.000 p50_bucket=0
+ *     p90_bucket=7 depth=30,0,0,0,0,0,0,10
  *
- * `depth` is the queue depth per bucket, lowest bucket first; `p50_bucket` and
- * `p90_bucket` are percentiles of the score distribution alone, so they do not
- * move when the coverage floor or aging reorders the queue. @return the
- * length the line needs, excluding the terminator, like snprintf; a NULL
- * `out` or a zero capacity measures without writing.
+ * `depth` is the queue depth per bucket, lowest bucket first, so it sums to
+ * `items`. An item below the coverage floor ranks in the top bucket, and so
+ * does an unresolved score, so each of `coverage_promotions` and `unresolved`
+ * is bounded by `depth[buckets-1]` (an item can be both at once, so their sum
+ * need not be). `p50_bucket` and `p90_bucket` are percentiles of the score
+ * distribution alone, so they do not move when the coverage floor or aging
+ * reorders the queue. @return the length the line needs, excluding the
+ * terminator, like snprintf; a NULL `out` or a zero capacity measures without
+ * writing.
  */
 size_t pe_work_priority_format_stats(const pe_work_priority_stats_t *stats,
                                      uint32_t buckets, char *out,

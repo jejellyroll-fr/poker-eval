@@ -214,7 +214,7 @@ the style of the solver's other counters — this is `test_stats()`'s printed
 output:
 
 ```text
-work_priority items=4 buckets=8 coverage_promotions=1 aging_promotions=1 unresolved=1 mean_score=16.6667 mean_delay=33.750 p50_bucket=0 p90_bucket=7 depth=0,0,1,0,0,0,1,2
+work_priority items=4 buckets=8 coverage_promotions=1 aging_promotions=1 unresolved=1 mean_score=16.7725 mean_delay=33.750 p50_bucket=0 p90_bucket=7 depth=0,0,1,0,0,0,1,2
 ```
 
 `depth` is the queue depth per bucket, lowest bucket first, so a baseline run
@@ -224,10 +224,12 @@ reordered — which is what makes the baseline comparable.
 
 The score's own distribution is kept separately, in `score_depth`, and counted
 *before* the coverage floor or aging move anything. That is the difference the
-two histograms show above: item 0 scores 0 and is aged from bucket 0 to 2, so
-`score_depth` has 2 in bucket 0 where `depth` has none, and 0 in bucket 2 where
-`depth` has one. `depth` describes what the policy did; `score_depth` describes
-the workload it was given.
+two histograms show above. Items 0 and 3 both supply no spread, so both score
+`assumed_stderr / gap` = 0.16 and sit in score bucket 0; in `depth` item 0 is
+aged from bucket 0 to 2 while item 3 is below the floor and lands in the top
+bucket. `score_depth` therefore has 2 in bucket 0 where `depth` has none, and 0
+in bucket 2 where `depth` has one. `depth` describes what the policy did;
+`score_depth` describes the workload it was given.
 
 `p50_bucket` and `p90_bucket` are percentiles of that score distribution, by
 nearest rank over `score_depth` (`pe_work_priority_percentile_bucket()` takes
@@ -308,15 +310,23 @@ build inside the same second leaves the previous object in place.
 | the BALANCED rotation removed | 385 |
 | the score histogram taken from the effective bucket | 4 |
 | the percentile rank made exclusive (`>=` → `>`) | 7 |
+| the coverage promotion removed | 3 |
 
-Four rows are small on purpose, and small is not the same as weak. A score lands
+The last row is `pe_work_priority_bucket()` no longer returning the top bucket
+for an item below the floor. It needs its own fixture because aging reaches the
+top bucket by a second path: with aging on, the promotion can disappear and the
+same bucket still comes out, so a workload with aging on does not notice.
+`test_coverage_promotion()` runs it with aging off, which is the 3.
+
+Five rows are small on purpose, and small is not the same as weak. A score lands
 on a bucket boundary only when it is exactly `ratio^k`, which the randomised
 batches almost never produce, so `test_bucket_boundaries()` exists precisely to
 cover it — that is the 22. The bridge's single-observation guard is covered by
-one fixture, which is the 3; the score histogram's independence from the policy
-by one fixture, which is the 4; and the percentile's rank convention by
-`test_percentile()`'s exact distribution, which is the 7. Every one is
-non-zero, and each is caught by the test written for it rather than by luck.
+one fixture, and the floor's bucket promotion by another, which is the two 3s;
+the score histogram's independence from the policy by one fixture, which is the
+4; and the percentile's rank convention by `test_percentile()`'s exact
+distribution, which is the 7. Every one is non-zero, and each is caught by the
+test written for it rather than by luck.
 
 The source was restored byte-for-byte after each run. Beyond those mutations,
 the suite caught a real design defect during development — the coverage floor
