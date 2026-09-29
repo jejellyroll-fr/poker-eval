@@ -527,6 +527,63 @@ static void test_coverage_floor(void)
           "the coverage tier must outrank an aged item, got %zu", order[0]);
 }
 
+/* The floor does not only tier the ordering, it also raises the item to the top
+   bucket. That promotion needs a fixture of its own, because aging reaches the
+   top bucket by a second path: a workload with aging on does not notice the
+   promotion disappearing. Here aging is off and the item's own score is
+   settled, so the top bucket can only come from the floor. */
+static void test_coverage_promotion(void)
+{
+    pe_work_priority_config_t config =
+        make_config(PE_WORK_SCHED_UNCERTAINTY_AWARE, 2u, 8u, 0u);
+    pe_work_priority_config_t fifo = make_config(PE_WORK_SCHED_FIFO, 2u, 8u, 0u);
+    pe_work_priority_item_t items[2];
+    pe_work_priority_stats_t stats;
+    size_t order[2];
+    uint32_t top = config.buckets - 1u;
+
+    /* Settled on its own score (1/6.3, bucket 0) and never serviced; the
+       second item is measured enough to be at the floor. */
+    items[0] = oracle_item(12.4, 6.1, 0.0, 0.0, 0u, 0u, 3u);
+    items[1] = oracle_item(2.102, 2.097, 0.01, 0.01, 2u, 0u, 3u);
+
+    CHECK(pe_work_priority_below_floor(&config, &items[0]) == 1 &&
+              pe_work_priority_below_floor(&config, &items[1]) == 0,
+          "the fixtures must straddle the floor");
+
+    /* FIFO ranks nothing, so it returns the score's bucket: bucket 0. Under a
+       ranking policy the same item is raised to the top by the floor alone. */
+    CHECK(pe_work_priority_bucket(&fifo, &items[0], 0u) == 0u,
+          "the fixture's own bucket must be 0, got %u",
+          pe_work_priority_bucket(&fifo, &items[0], 0u));
+    CHECK(pe_work_priority_bucket(&config, &items[0], 0u) == top,
+          "below the floor must promote to bucket %u, got %u", top,
+          pe_work_priority_bucket(&config, &items[0], 0u));
+
+    /* The promotion is what keeps the documented depth invariant: a
+       below-floor item is counted in the top bucket, not in its score's. */
+    CHECK(pe_work_priority_order(&config, items, 2u, 0u, order, 2u, &stats) == 0,
+          "order must succeed");
+    CHECK(order[0] == 0u, "the unserved decision must lead, got %zu", order[0]);
+    CHECK(stats.coverage_promotions == 1u,
+          "one item is below the floor, got %llu",
+          (unsigned long long)stats.coverage_promotions);
+    CHECK(stats.bucket_depth[top] == 1u,
+          "the promoted item must be counted in bucket %u, got %llu", top,
+          (unsigned long long)stats.bucket_depth[top]);
+    CHECK(stats.bucket_depth[0] == 0u && stats.score_depth[0] == 1u,
+          "the promoted item must leave bucket 0 in depth and stay in "
+          "score_depth, got %llu and %llu",
+          (unsigned long long)stats.bucket_depth[0],
+          (unsigned long long)stats.score_depth[0]);
+
+    /* Servicing it satisfies the floor, and the score decides again. */
+    items[0].visits = 2u;
+    CHECK(pe_work_priority_bucket(&config, &items[0], 0u) == 0u,
+          "at the floor the score decides, got %u",
+          pe_work_priority_bucket(&config, &items[0], 0u));
+}
+
 static void test_aging(void)
 {
     pe_work_priority_config_t config =
@@ -1573,6 +1630,7 @@ int main(void)
     test_configuration();
     test_options();
     test_coverage_floor();
+    test_coverage_promotion();
     test_aging();
     test_starvation();
     test_determinism();
