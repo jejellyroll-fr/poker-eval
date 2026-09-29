@@ -947,6 +947,8 @@ add_poker_test(test_plo_mixed_ranges)
 set_tests_properties(test_plo_mixed_ranges PROPERTIES LABELS "solver;solver-v3;range;preflop;omaha;plo5;plo6;mixed" TIMEOUT 120)
 add_poker_test(test_preflop_postflop_root)
 set_tests_properties(test_preflop_postflop_root PROPERTIES LABELS "solver;solver-v3;lane-b;postflop;flop;holdem;tree" TIMEOUT 60)
+add_poker_test(test_preflop_monker_multiway)
+set_tests_properties(test_preflop_monker_multiway PROPERTIES LABELS "solver;solver-v3;lane-b;preflop;holdem;multiway;monker;tree;iss273" TIMEOUT 60)
 add_poker_test(test_pe_runout_report)
 set_tests_properties(test_pe_runout_report PROPERTIES LABELS "solver;solver-v3;runout;holdem" TIMEOUT 30)
 

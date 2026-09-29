@@ -35,7 +35,8 @@ typedef struct
     double stacks[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     /* Forced bets: player 0 posts small_blind, player 1 posts big_blind,
        every later player posts ante (0 disables). Heads-up player 0 acts
-       first; multiway games start at player 2 (UTG abstraction). */
+       first; multiway games start at player 2 (UTG abstraction).
+       has_root_posts below replaces this seating. */
     double small_blind;
     double big_blind;
     double ante;
@@ -71,6 +72,16 @@ typedef struct
     uint64_t root_board; /* card mask of the fixed flop/turn/river board */
     double root_pot;
     int root_to_act; /* seating index to act first, -1 = seat 0 */
+    /* Seat-by-seat forced bets at a preflop root (root_street == 0).  When
+     * has_root_posts is set, root_posts[p] is what player p has in front of
+     * them before the first decision, replacing small_blind / big_blind /
+     * ante, the largest post is the bet to call, and root_to_act names the
+     * first actor.  This plays a tree in its own seat numbering: a native
+     * Monker multiway tree posts the SB on seat 1 and the BB on seat 2 and
+     * opens on the last seat, which the classic root (SB = 0, BB = 1,
+     * multiway opens on 2) cannot express. */
+    int has_root_posts;
+    double root_posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     /* Every player holds the complete range ("any hand").  The `ranges`
      * argument to pe_preflop_allin_game_create is then ignored and may be
      * NULL: deals are drawn straight from the live deck.

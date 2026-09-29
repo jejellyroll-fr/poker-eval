@@ -1848,6 +1848,38 @@ int main(int argc, char **argv)
         rules.root_to_act = tree_header.first_to_act;
     else
         rules.root_to_act = 0;
+    /* A native Monker preflop tree is played in Monker's own seat numbering:
+     * the header's committed[] posts the blinds on the seats the tree acts
+     * for (SB = 1 and BB = 2 past two players, opener = first_to_act).  The
+     * classic root would post SB = 0, BB = 1 and open on seat 2, which no
+     * multiway node of the tree acts for.  JSON trees keep the classic root. */
+    if (root_street == 0 && tree && !tree_path_is_json(options.tree))
+    {
+        double posts[PE_MONKER_MAX_PLAYERS];
+        double stacks[PE_MONKER_MAX_PLAYERS];
+        if (pe_monker_tree_preflop_posts(&tree_header, options.big_blind,
+                                         posts, stacks) == PE_MONKER_OK)
+        {
+            rules.has_root_posts = 1;
+            printf("tree_seats=monker first_to_act=%d posts=", rules.root_to_act);
+            for (int player = 0; player < options.players; ++player)
+            {
+                rules.root_posts[player] = posts[player];
+                if (stacks[player] > 0.0)
+                    rules.stacks[player] = stacks[player];
+                printf("%s%g", player ? "," : "", posts[player]);
+            }
+            printf(" stacks=");
+            for (int player = 0; player < options.players; ++player)
+                printf("%s%g", player ? "," : "", rules.stacks[player]);
+            printf("\n");
+            if (tree_header.dead_money > 0.0)
+                fprintf(stderr,
+                        "warning: the tree header carries %g dead money; "
+                        "the preflop root does not model it and plays "
+                        "without it.\n", tree_header.dead_money);
+        }
+    }
     for (size_t i = 0u; i < sizeof(rules.raise_sizes) / sizeof(rules.raise_sizes[0]); ++i)
         rules.raise_sizes[i] = options.raise_sizes[i];
     game = pe_preflop_allin_game_create(&rules, ranges);

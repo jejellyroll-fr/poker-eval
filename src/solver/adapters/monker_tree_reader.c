@@ -196,6 +196,42 @@ pe_monker_status_t pe_monker_tree_read_header(
     return PE_MONKER_OK;
 }
 
+pe_monker_status_t pe_monker_tree_preflop_posts(
+    const pe_monker_tree_header_t *header, double big_blind,
+    double *out_posts, double *out_stacks)
+{
+    double largest = 0.0;
+    double scale;
+    uint32_t i;
+
+    if (!header || !out_posts || !out_stacks)
+        return PE_MONKER_ERR_NULL_ARGUMENT;
+    if (header->street != 0 || header->player_count < 1u ||
+        header->player_count > PE_MONKER_MAX_PLAYERS ||
+        !pe_finite_double(big_blind) || !(big_blind > 0.0))
+        return PE_MONKER_ERR_INVALID_HEADER;
+    for (i = 0u; i < header->player_count; ++i)
+    {
+        if (!pe_finite_double(header->committed[i]) ||
+            header->committed[i] < 0.0 ||
+            !pe_finite_double(header->stacks[i]) || header->stacks[i] < 0.0)
+            return PE_MONKER_ERR_INVALID_HEADER;
+        if (header->committed[i] > largest)
+            largest = header->committed[i];
+    }
+    if (!(largest > 0.0))
+        return PE_MONKER_ERR_INVALID_HEADER;
+    /* The file's money scale is not stated (see read_money); the big blind is
+     * the one amount both sides agree on, so it anchors the conversion. */
+    scale = big_blind / largest;
+    for (i = 0u; i < header->player_count; ++i)
+    {
+        out_posts[i] = header->committed[i] * scale;
+        out_stacks[i] = header->stacks[i] * scale;
+    }
+    return PE_MONKER_OK;
+}
+
 const char *pe_monker_status_string(pe_monker_status_t status)
 {
     switch (status)

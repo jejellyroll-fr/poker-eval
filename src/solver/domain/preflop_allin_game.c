@@ -1305,7 +1305,24 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     /* Forced bets are only meaningful at a preflop root: a flop/turn/river
      * root posts nothing and takes its pot from rules->root_pot, so a caller
      * rooting there must not be made to invent blind values it ignores. */
-    if (rules->root_street == 0)
+    if (rules->root_street == 0 && rules->has_root_posts)
+    {
+        /* Seat-by-seat posts: someone must be in for a positive amount (the
+         * bet to call), and the first actor must be a real seat. */
+        double largest = 0.0;
+        for (player = 0; player < rules->player_count; ++player)
+        {
+            if (!(rules->root_posts[player] >= 0.0) ||
+                rules->root_posts[player] > DBL_MAX)
+                return NULL;
+            if (rules->root_posts[player] > largest)
+                largest = rules->root_posts[player];
+        }
+        if (!(largest > 0.0) || rules->root_to_act < 0 ||
+            rules->root_to_act >= rules->player_count)
+            return NULL;
+    }
+    else if (rules->root_street == 0)
     {
         if (!(rules->small_blind > 0.0) || !(rules->big_blind > 0.0) ||
             rules->big_blind < rules->small_blind ||
@@ -1428,13 +1445,16 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
             }
     }
 
-    /* Forced bets: blinds plus an optional ante for every later seat. */
+    /* Forced bets: blinds plus an optional ante for every later seat, or the
+     * seat-by-seat posts when the rules carry them. */
     posts[0] = rules->small_blind;
     posts[1] = rules->big_blind;
     for (player = 0; player < rules->player_count; ++player)
     {
         if (player >= 2)
             posts[player] = rules->ante;
+        if (rules->root_street == 0 && rules->has_root_posts)
+            posts[player] = rules->root_posts[player];
         if (posts[player] >= rules->stacks[player])
         {
             pe_preflop_allin_game_destroy(game);
@@ -1453,17 +1473,30 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->root_betting.tree_node_index = rules->tree
         ? rules->tree->root_index : -1;
     /* Heads-up starts at the small blind. Multiway starts at the first player
-       after the blinds/antes, which is the preflop UTG abstraction. */
-    if (pe_betting_state_init(&game->root_betting.betting, &game->betting_rules,
-                              stacks_after, (uint8_t)rules->player_count,
-                              rules->player_count > 2 ? 2 : 0,
-                              posts[0] + posts[1],
-                              rules->big_blind) != PE_BETTING_OK)
+       after the blinds/antes, which is the preflop UTG abstraction.  Seat-by-
+       seat posts name their own first actor and face the largest post. */
     {
-        pe_preflop_allin_game_destroy(game);
-        return NULL;
+        int first_to_act = rules->player_count > 2 ? 2 : 0;
+        double to_call = rules->big_blind;
+        if (rules->root_street == 0 && rules->has_root_posts)
+        {
+            first_to_act = rules->root_to_act;
+            to_call = 0.0;
+            for (player = 0; player < rules->player_count; ++player)
+                if (posts[player] > to_call)
+                    to_call = posts[player];
+        }
+        if (pe_betting_state_init(&game->root_betting.betting,
+                                  &game->betting_rules, stacks_after,
+                                  (uint8_t)rules->player_count, first_to_act,
+                                  posts[0] + posts[1],
+                                  to_call) != PE_BETTING_OK)
+        {
+            pe_preflop_allin_game_destroy(game);
+            return NULL;
+        }
+        game->root_betting.betting.current_bet = to_call;
     }
-    game->root_betting.betting.current_bet = rules->big_blind;
     for (player = 0; player < rules->player_count; ++player)
     {
         game->root_betting.betting.round_contrib[player] = posts[player];
