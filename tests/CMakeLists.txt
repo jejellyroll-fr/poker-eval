@@ -853,6 +853,15 @@ add_poker_test(test_pe_work_unit)
 set_tests_properties(test_pe_work_unit PROPERTIES LABELS "solver;solver-v3;distributed")
 add_poker_test(test_pe_work_scheduler)
 set_tests_properties(test_pe_work_scheduler PROPERTIES LABELS "solver;solver-v3;distributed;dist03")
+# Issue #258: uncertainty-aware work prioritisation. The suite brute-forces
+# the ordering against an independent oracle, so it stays cheap but it is not
+# a smoke test: 4,000 randomised batches, each compared against all n! orders.
+add_poker_test(test_work_priority)
+set_tests_properties(test_work_priority PROPERTIES LABELS "solver;sampling;solver-v3;priority" TIMEOUT 120)
+# Issue #258: pins that the priority header stays self-contained and pulls in
+# no backend header, which is what keeps the layer backend-independent.
+add_poker_test(test_work_priority_headers)
+set_tests_properties(test_work_priority_headers PROPERTIES LABELS "solver;solver-v3;priority" TIMEOUT 30)
 add_poker_test(test_pe_work_protocol)
 set_tests_properties(test_pe_work_protocol PROPERTIES LABELS "solver;solver-v3;distributed;dist03;protocol")
 add_poker_test(test_pe_work_coordinator)

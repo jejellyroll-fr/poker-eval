@@ -14,6 +14,7 @@ can jump directly to the topic you need.
 | Conditional Card Removal | the posterior-range invariant for sampled deals, the exact oracle, what the suite rejects (issue #259) | ✅ — see `conditional_card_removal.md` |
 | Confidence-Guided Best Response | sampled BR decisions that stop once the best action is resolved: union-bound sequential intervals, re-estimated values, telemetry, benchmarks (issue #257) | ✅ — see `confidence_guided_best_response.md` |
 | Adaptive Variance Sampling | variance-driven chance replication for Lane B: budget rule, unbiasedness (R fixed beforehand, 1/R weights), groups, trajectory cap, telemetry, benchmarks (issue #256) | ✅ — see `adaptive_variance_sampling.md` |
+| Uncertainty-Aware Work Prioritisation | ordering work by how undecided a decision is: the gap/spread score, geometric buckets, the coverage tier, aging, telemetry, and why it is a layer rather than a change to `pe_work_schedule()` (issue #258) | ✅ — see `work_priority_scheduling.md` |
 | PLO Hand Features | PLO4/5/6 made hands, draws, blockers and private structure under two-plus-three; bucket keys; strategy aggregation (issue #238) | ✅ — see `plo_hand_features.md` |
 | Omaha Hi/Lo 8-or-Better | PLO4/5/6 Hi/Lo showdowns: selecting it, two-plus-three for both halves, side-pot splitting, rake order, what is refused (issue #237) | ✅ — see `omaha_hilo8.md` |
 | CFR Export Results | Post-run result exports (JSON / CSV) | planned — see `mpf_dump_results` |
