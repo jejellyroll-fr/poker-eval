@@ -249,6 +249,10 @@ static void usage(const char *prog)
             "                          absolute-tolerance, relative-tolerance\n"
             "  --br-<key> <v>          Lane B: confidence-guided BR decisions,\n"
             "                          same keys; --br-max-samples N turns it on\n"
+            "  --br-priority-<key> <v> Lane B: spread the BR sample cap over the\n"
+            "                          decisions (issue #271); policy, min-visits,\n"
+            "                          epsilon, buckets, bucket-ratio, aging-interval,\n"
+            "                          assumed-stderr.  Needs --br-<key> on.\n"
             "  --list-algorithms       List registered algorithm presets and exit\n"
             "  --list-backends         List registered compute backends and exit\n"
             "  --show-capabilities     Print the available capability bits and exit\n"
@@ -925,6 +929,8 @@ int main(int argc, char **argv)
     int have_adaptive = 0;
     pe_br_sampling_config_t br_sampling; /* issue #257 */
     int have_br_sampling = 0;
+    pe_work_priority_config_t br_priority; /* issue #271 */
+    int have_br_priority = 0;
     int have_sampling_policy = 0;
     int sample_batch = 1;
     int cpu_threads = 1;
@@ -970,6 +976,7 @@ int main(int argc, char **argv)
     memset(&overrides, 0, sizeof(overrides));
     memset(&adaptive_settings, 0, sizeof(adaptive_settings));
     memset(&br_sampling, 0, sizeof(br_sampling));
+    memset(&br_priority, 0, sizeof(br_priority));
 
     for (int i = 1; i < argc; ++i)
     {
@@ -1246,6 +1253,19 @@ int main(int argc, char **argv)
             }
             have_sampling_policy = 1;
         }
+        else if (strncmp(argv[i], "--br-priority-", 14) == 0 && i + 1 < argc)
+        {
+            /* Issue #271.  Before the --br- branch below, which would
+               otherwise claim the prefix. */
+            if (pe_work_priority_parse_option(&br_priority, argv[i] + 14,
+                                              argv[i + 1]) != 0)
+            {
+                fprintf(stderr, "Invalid %s value: %s\n", argv[i], argv[i + 1]);
+                return 1;
+            }
+            ++i;
+            have_br_priority = 1;
+        }
         else if (strncmp(argv[i], "--br-", 5) == 0 && i + 1 < argc)
         {
             if (pe_br_sampling_parse_option(&br_sampling, argv[i] + 5,
@@ -1415,7 +1435,7 @@ int main(int argc, char **argv)
     /* Never let an explicit v3 choice disappear into the fixed legacy
        runner. A full-tree v3 request is routed below after the shared tree
        has been parsed, while --lane-b keeps its sampled semantics. */
-    if (!lane_b && have_br_sampling)
+    if (!lane_b && (have_br_sampling || have_br_priority))
     {
         fprintf(stderr, "--br-* settings need --lane-b\n");
         return 2;
@@ -1927,6 +1947,7 @@ int main(int argc, char **argv)
         lane_cfg.algorithm.sampling_policy = sampling_policy;
         lane_cfg.algorithm.adaptive = adaptive_settings;
         lane_cfg.br_sampling = br_sampling;
+        lane_cfg.br_priority = br_priority;
         /* The sampled solver measures a best response only on its
            exploitability schedule, which is off by default: --br-* asks
            for one, so measure it at the final iteration. */
@@ -1948,9 +1969,11 @@ int main(int argc, char **argv)
         lane_deps.external_game = pe_cfr_external_adapter_game(&adapter);
         /* An explicit --sampling-policy asks to compare policies, so print
            the solver's per-street and adaptive statistics and the terminal
-           evaluation total. Runs without it keep their output unchanged. */
+           evaluation total. --br-priority-* asks for the same, since the
+           priority line is the only evidence the policy took effect. Runs
+           without either keep their output unchanged. */
         pe_telemetry_ops_t lane_telemetry;
-        if (have_sampling_policy || have_br_sampling)
+        if (have_sampling_policy || have_br_sampling || have_br_priority)
         {
             lane_telemetry = *pe_telemetry_stdout();
             lane_telemetry.max_level = PE_LOG_INFO;

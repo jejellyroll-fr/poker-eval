@@ -225,6 +225,24 @@ static uint64_t hash_config(const pe_solver_config_t *config)
         HASH_FIELD(resolved.absolute_tolerance);
         HASH_FIELD(resolved.relative_tolerance);
     }
+    /* Issue #271: hashed like br_sampling, and again only when the feature is
+       on - a non-FIFO policy - so a checkpoint made under the default keeps
+       its hash. The policy changes how many draws each BR decision spends, so
+       resuming under a different one would not reproduce the numbers this
+       checkpoint recorded. */
+    if (config->br_priority.policy != PE_WORK_SCHED_FIFO)
+    {
+        pe_work_priority_config_t resolved;
+        if (pe_work_priority_resolve(&config->br_priority, &resolved) != 0)
+            resolved = config->br_priority; /* the plan refuses this anyway */
+        HASH_FIELD(resolved.policy);
+        HASH_FIELD(resolved.min_visits);
+        HASH_FIELD(resolved.epsilon);
+        HASH_FIELD(resolved.buckets);
+        HASH_FIELD(resolved.bucket_ratio);
+        HASH_FIELD(resolved.aging_interval);
+        HASH_FIELD(resolved.assumed_stderr);
+    }
 #undef HASH_FIELD
     return hash;
 }

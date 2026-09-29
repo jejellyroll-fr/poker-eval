@@ -1228,6 +1228,28 @@ static uint32_t sampled_chance_outcome_count(const void *state, void *user)
     return adapter->base->chance_outcome_count(state, adapter->base->user);
 }
 
+/* Issue #271: fold one measurement's priority snapshot into a total. The
+   layer's counters describe a single ordering, and this measurement runs one
+   per player, so the caller adds them. */
+static void pe_solver_priority_accumulate(pe_work_priority_stats_t *into,
+                                          const pe_work_priority_stats_t *from)
+{
+    uint32_t b;
+
+    into->items += from->items;
+    into->coverage_promotions += from->coverage_promotions;
+    into->aging_promotions += from->aging_promotions;
+    into->unresolved += from->unresolved;
+    into->score_sum += from->score_sum;
+    into->score_count += from->score_count;
+    into->delay_sum += from->delay_sum;
+    for (b = 0u; b < PE_WORK_PRIORITY_MAX_BUCKETS; ++b)
+    {
+        into->bucket_depth[b] += from->bucket_depth[b];
+        into->score_depth[b] += from->score_depth[b];
+    }
+}
+
 static pe_solver_status_t pe_solver_sampled_measure_br(
     pe_solver_t *solver, const pe_external_game_t *sampled_game,
     uint64_t iteration, int *target_reached)
@@ -1236,6 +1258,8 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
     double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
     uint64_t sample_count = 0u;
     pe_br_sampling_stats_t br_totals;
+    pe_work_priority_stats_t br_priority_totals;
+    pe_work_priority_config_t br_priority;
     pe_br_mode_t measured_mode = PE_BR_SAMPLED;
     uint8_t player;
     int reached = 0;
@@ -1253,7 +1277,15 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
        mode, so an exact claim is never made on sampled numbers. */
     br_config.mode = solver->config.br_mode;
     br_config.sampling = solver->config.br_sampling;
+    /* Issue #271: the sampled BR's own work allocation. FIFO (the default)
+       leaves the measurement exactly as it was. */
+    br_config.priority = solver->config.br_priority;
     memset(&br_totals, 0, sizeof(br_totals));
+    memset(&br_priority_totals, 0, sizeof(br_priority_totals));
+    /* Issue #271: resolved here as well, so the telemetry below names the
+       bucket count the layer actually used rather than the one asked for. */
+    if (pe_work_priority_resolve(&br_config.priority, &br_priority) != 0)
+        return PE_SOLVER_ERR_INVALID_CONFIG;
     for (player = 0u; player < sampled_game->player_count; ++player)
     {
         pe_external_br_result_t br_result;
@@ -1274,6 +1306,7 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
         br_totals.selection_value_sum += br_result.sampling.selection_value_sum;
         for (unsigned b = 0u; b < PE_BR_SAMPLING_HISTOGRAM; ++b)
             br_totals.histogram[b] += br_result.sampling.histogram[b];
+        pe_solver_priority_accumulate(&br_priority_totals, &br_result.priority);
         gaps[player] = br_result.br_gap;
         /* Issue #234: keep the sampling metadata of the measurement. The
            policy value is re-evaluated once per player's BR, so its
@@ -1359,6 +1392,18 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
                 br_totals.histogram[2], br_totals.histogram[3],
                 br_totals.histogram[4], br_totals.histogram[5],
                 br_totals.histogram[6], br_totals.histogram[7]);
+        }
+        /* Issue #271: the layer's own line, so a baseline measurement and a
+           prioritised one can be compared field by field. 1024 bytes covers
+           the worst case: a 255-byte head plus 32 buckets of 20 digits. */
+        if (br_priority.policy != PE_WORK_SCHED_FIFO && br_priority_totals.items)
+        {
+            char line[1024];
+            size_t needed = pe_work_priority_format_stats(
+                &br_priority_totals, br_priority.buckets, line, sizeof(line));
+            if (needed < sizeof(line))
+                pe_telemetry_emitf(solver->deps.telemetry, PE_LOG_INFO,
+                                   "solver", iteration, "%s\n", line);
         }
     }
     pe_telemetry_flush(solver->deps.telemetry);

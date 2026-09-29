@@ -5,6 +5,7 @@
 #include <poker_eval/solver/pe_external_traversal.h>
 #include <poker_eval/solver/pe_br_sampling.h>
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_work_priority.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -41,6 +42,16 @@ typedef struct {
        otherwise each action is sampled until the best one is resolved (see
        pe_br_sampling.h). */
     pe_br_sampling_config_t sampling;
+    /* Issue #271, sampled mode: how the confidence-guided evaluation's own
+       budget is spread over the decisions. The default (FIFO) changes
+       nothing - every decision keeps the sampling config's max_samples.
+       Under another policy a decision whose action ordering is less settled
+       is allowed to sample further, up to that same max_samples: the cap is
+       interpolated over the decision's priority bucket, which is taken from
+       the previous measurement of the same infoset. Requires sampling to be
+       on; a FIFO policy or sampling off leaves the historical path exactly
+       as it was. See pe_work_priority.h. */
+    pe_work_priority_config_t priority;
 } pe_external_br_config_t;
 
 typedef struct {
@@ -63,6 +74,12 @@ typedef struct {
        hits, the draws histogram, the final gaps, and terminal evaluations
        (counted with or without the adaptive evaluation). */
     pe_br_sampling_stats_t sampling;
+    /* Issue #271, sampled mode: the priority layer's own statistics over the
+       infosets this measurement tracked, so a baseline run and a prioritised
+       one can be compared field by field. All zero under the default FIFO
+       policy. It describes the workload, not the allocation: the allocation
+       is per decision, from that decision's bucket, as the traversal runs. */
+    pe_work_priority_stats_t priority;
 } pe_external_br_result_t;
 
 pe_external_br_config_t pe_external_br_config_default(void);
