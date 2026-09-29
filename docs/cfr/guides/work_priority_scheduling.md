@@ -233,8 +233,13 @@ the workload it was given.
 nearest rank over `score_depth` (`pe_work_priority_percentile_bucket()` takes
 any fraction). The score is quantised on purpose — the ordering only looks at
 the bucket — so a percentile of it is a **bucket**, exact for the quantised
-distribution, whose score range is `[ratio^k, ratio^(k+1))`. A reader wanting a
-value rather than a rank reads the boundary off the ratio.
+distribution. The bucket's range follows the boundary convention the config
+documents — bucket 0 holds scores below `ratio^0`, so `[0, ratio^0)`, and
+bucket `k > 0` holds `[ratio^(k-1), ratio^k)`. The top bucket is saturated, so
+it holds `[ratio^(buckets-2), +infinity)`, which is where an unresolved score
+lands. With the defaults, `p90_bucket=7` therefore means "at least 64", not
+"at least 128". A reader wanting a value rather than a rank reads the boundary
+off the ratio.
 
 ## Measured: does the priority do what it claims?
 

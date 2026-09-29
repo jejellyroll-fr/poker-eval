@@ -267,8 +267,11 @@ void pe_work_priority_item_from_stats(pe_work_priority_item_t *item,
  *
  * The score is quantised on purpose - the ordering only looks at the bucket -
  * so a percentile of it is a bucket, not a value: the answer is exact for the
- * quantised distribution, and the bucket's score range is
- * [ratio^bucket, ratio^(bucket+1)). @return the bucket, or 0 when there are
+ * quantised distribution. The bucket's score range follows the boundary
+ * convention the config documents - bucket 0 holds scores below ratio^0, so
+ * [0, ratio^0), and bucket k above 0 holds [ratio^(k-1), ratio^k). The top
+ * bucket is saturated, so it holds [ratio^(buckets-2), +infinity), which is
+ * where an unresolved score lands. @return the bucket, or 0 when there are
  * no items or `buckets` is below 2.
  */
 uint32_t pe_work_priority_percentile_bucket(
