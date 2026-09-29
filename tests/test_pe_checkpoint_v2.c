@@ -210,6 +210,63 @@ int main(void)
             ops->destroy(mismatch);
         }
     }
+    /* Issue #271: the BR priority policy is hashed only where it is in
+       effect. Over a disabled BR evaluation it is inert, so adding it must
+       not refuse the resume; over an enabled one it changes the draws, so
+       changing it must. */
+    {
+        pe_solver_config_t inert = config;
+        pe_solver_config_t sampled = config;
+        pe_solver_config_t prioritised;
+        void *probe = NULL;
+        inert.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+        CHECK(ops->create(&probe, 1u) == 0, "priority probe creation failed");
+        if (probe)
+        {
+            CHECK(persist->load(NULL, &source, &inert, ops, probe,
+                                &iteration) == 0,
+                  "an inert BR priority policy refused the resume");
+            ops->destroy(probe);
+            probe = NULL;
+        }
+        sampled.br_sampling.max_samples = 64u;
+        prioritised = sampled;
+        prioritised.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+        /* EXACT never runs the sampled BR: the policy is inert there too. */
+        {
+            pe_solver_config_t exact = sampled;
+            pe_solver_config_t exact_prioritised;
+            exact.br_mode = PE_BR_EXACT;
+            exact_prioritised = exact;
+            exact_prioritised.br_priority.policy =
+                PE_WORK_SCHED_UNCERTAINTY_AWARE;
+            CHECK(persist->save(NULL, &target, &exact, ops, left, 500u) == 0,
+                  "exact checkpoint save failed");
+            CHECK(ops->create(&probe, 1u) == 0,
+                  "priority probe creation failed");
+            if (probe)
+            {
+                CHECK(persist->load(NULL, &source, &exact_prioritised, ops,
+                                    probe, &iteration) == 0,
+                      "a BR priority policy under exact BR refused the "
+                      "resume");
+                ops->destroy(probe);
+                probe = NULL;
+            }
+        }
+        CHECK(persist->save(NULL, &target, &sampled, ops, left, 500u) == 0,
+              "sampled checkpoint save failed");
+        CHECK(ops->create(&probe, 1u) == 0, "priority probe creation failed");
+        if (probe)
+        {
+            CHECK(persist->load(NULL, &source, &prioritised, ops, probe,
+                                &iteration) != 0,
+                  "a BR priority policy in effect was not hashed");
+            ops->destroy(probe);
+        }
+        CHECK(persist->save(NULL, &target, &config, ops, left, 500u) == 0,
+              "checkpoint re-save failed");
+    }
     {
         FILE *corrupt = fopen(path, "r+b");
         void *corrupt_storage = NULL;

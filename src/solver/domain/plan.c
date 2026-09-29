@@ -368,6 +368,25 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                         cfg->br_sampling.relative_tolerance);
     }
 
+    /* Issue #271: refused here rather than at the first measurement, so a bad
+       bucket count is a configuration error and not a mid-run failure. */
+    {
+        pe_work_priority_config_t resolved;
+        if (pe_work_priority_resolve(&cfg->br_priority, &resolved) != 0)
+            pe_diag_add(diag, PE_VALID_ERROR,
+                        "work priority settings are invalid: policy %d outside "
+                        "0..%d, buckets %u outside 2..%u, bucket_ratio %f above "
+                        "1 and finite, epsilon %f and assumed_stderr %f "
+                        "positive and finite",
+                        (int)cfg->br_priority.policy,
+                        (int)(PE_WORK_SCHED_COUNT - 1),
+                        cfg->br_priority.buckets,
+                        PE_WORK_PRIORITY_MAX_BUCKETS,
+                        cfg->br_priority.bucket_ratio,
+                        cfg->br_priority.epsilon,
+                        cfg->br_priority.assumed_stderr);
+    }
+
     if (a->sampling_policy == PE_SAMPLING_ADAPTIVE_VARIANCE)
     {
         pe_adaptive_sampling_t resolved;

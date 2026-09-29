@@ -797,6 +797,12 @@ set_tests_properties(test_pe_online_stats PROPERTIES LABELS "solver;sampling")
 # Issue #257: confidence-guided best-response decisions.
 add_poker_test(test_br_sampling)
 set_tests_properties(test_br_sampling PROPERTIES LABELS "solver;sampling;best-response")
+# Issue #271: the priority layer driving the sampled BR's per-decision cap.
+# It asserts the invariant the design rests on (the cap never rises above the
+# configured maximum), the case where it is deliberately inert, and the case
+# where it bites, against the exact value of a one-decision toy game.
+add_poker_test(test_br_priority)
+set_tests_properties(test_br_priority PROPERTIES LABELS "solver;sampling;best-response;priority" TIMEOUT 60)
 add_poker_test(test_adaptive_variance_sampling)
 set_tests_properties(test_adaptive_variance_sampling PROPERTIES LABELS "solver;sampling;lane-b")
 add_poker_test(test_pe_hand_features)
@@ -2127,6 +2133,41 @@ if(TARGET pe-preflop-solve)
     set_tests_properties(pe_preflop_solve_br_sampling_rejects_bad_confidence
         PROPERTIES
         LABELS "product;solver;lane-b;preflop;best-response"
+        PASS_REGULAR_EXPRESSION "preflop solve failed: status=5"
+        FAIL_REGULAR_EXPRESSION "br_decisions"
+        TIMEOUT 60)
+    # Issue #271: the priority policy driving the sampled BR's per-decision
+    # sample cap, end to end, reporting what the cap was spent on.
+    add_test(NAME pe_preflop_solve_br_priority_smoke
+        COMMAND pe-preflop-solve
+            --game plo4
+            --algorithm external-mccfr
+            --iterations 32
+            --samples 2
+            --br-samples 64
+            --exploitability-interval 32
+            --br-min-samples 4
+            --br-max-samples 16
+            --br-priority-policy uncertainty-aware)
+    set_tests_properties(pe_preflop_solve_br_priority_smoke PROPERTIES
+        LABELS "product;solver;lane-b;preflop;best-response;priority"
+        PASS_REGULAR_EXPRESSION "work_priority items=[1-9][0-9]*"
+        TIMEOUT 60)
+    # Issue #271: a bucket count the layer refuses is caught by the plan,
+    # before any measurement runs, rather than failing every decision at
+    # runtime. Status 5 is PE_SOLVER_ERR_INVALID_CONFIG.
+    add_test(NAME pe_preflop_solve_br_priority_rejects_bad_buckets
+        COMMAND pe-preflop-solve
+            --game holdem
+            --algorithm external-mccfr
+            --iterations 4
+            --br-samples 16
+            --br-max-samples 16
+            --br-priority-policy uncertainty-aware
+            --br-priority-buckets 1)
+    set_tests_properties(pe_preflop_solve_br_priority_rejects_bad_buckets
+        PROPERTIES
+        LABELS "product;solver;lane-b;preflop;best-response;priority"
         PASS_REGULAR_EXPRESSION "preflop solve failed: status=5"
         FAIL_REGULAR_EXPRESSION "br_decisions"
         TIMEOUT 60)

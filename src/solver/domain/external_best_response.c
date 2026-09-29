@@ -13,6 +13,31 @@
 typedef char pe_br_sampling_action_limit_check[
     (PE_BR_SAMPLING_MAX_ACTIONS >= PE_EXTERNAL_MAX_ACTIONS) ? 1 : -1];
 
+/* Issue #271: what one infoset's last decision measured. The priority layer
+   wants a leader-versus-runner-up gap and the two actions' standard errors,
+   which it combines in quadrature; the resolver reports all three. Its
+   gap_half_width is not a substitute: it is z times the *sum* of the two
+   standard errors, and the bucket boundaries are absolute, so a factor of z
+   (or of an L1 against an L2 combination) moves decisions across them. */
+typedef struct {
+    uint64_t key;
+    double gap;
+    double best_stderr;
+    double runner_stderr;
+    uint32_t actions;
+    uint64_t visits;
+    uint64_t last_served;
+    int used;
+} br_priority_record_t;
+
+#define BR_PRIORITY_INITIAL_SLOTS 256u
+
+typedef struct {
+    br_priority_record_t *slots;
+    size_t capacity; /* power of two; 0 until the first allocation */
+    size_t count;
+} br_priority_table_t;
+
 typedef struct {
     const pe_external_game_t *game;
     pe_rng_t rng;
@@ -23,6 +48,14 @@ typedef struct {
     pe_br_sampling_config_t sampling;
     pe_br_sampling_stats_t *stats;
     uint64_t terminal_evaluations;
+    /* Issue #271: resolved priority settings, whether they apply (a FIFO
+       policy, or sampling off, leaves the historical path untouched), the
+       per-infoset record the allocation reads, and the caller's service
+       counter - which is the epoch aging measures a wait against. */
+    pe_work_priority_config_t priority;
+    int priority_on;
+    br_priority_table_t tracked;
+    uint64_t epoch;
 } br_context_t;
 
 static int sample_action(br_context_t *ctx, const void *state, uint16_t actions)
@@ -123,6 +156,154 @@ static double br_action_sample(void *user, uint16_t action)
     return br_action_value(s->ctx, s->state, action, s->depth);
 }
 
+/* ------------------------------------------------------------------ *
+ * Issue #271: a decision's priority, and the sample cap it buys
+ * ------------------------------------------------------------------ */
+
+static size_t br_priority_slot(uint64_t key, size_t capacity)
+{
+    return (size_t)(pe_rng_mix(key) & (uint64_t)(capacity - 1u));
+}
+
+static int br_priority_grow(br_priority_table_t *table)
+{
+    br_priority_record_t *grown;
+    size_t capacity = table->capacity ? table->capacity * 2u
+                                      : BR_PRIORITY_INITIAL_SLOTS;
+    size_t i;
+
+    grown = (br_priority_record_t *)calloc(capacity, sizeof(*grown));
+    if (!grown)
+        return -1;
+    for (i = 0u; i < table->capacity; ++i)
+    {
+        size_t slot;
+        if (!table->slots[i].used)
+            continue;
+        slot = br_priority_slot(table->slots[i].key, capacity);
+        while (grown[slot].used)
+            slot = (slot + 1u) & (capacity - 1u);
+        grown[slot] = table->slots[i];
+    }
+    free(table->slots);
+    table->slots = grown;
+    table->capacity = capacity;
+    return 0;
+}
+
+/* The record for `key`, created at zero when `create`. A NULL return means
+   the decision is not tracked - which the allocation reads the same way as
+   "never measured", so a table that cannot grow leaves the historical
+   behaviour in place instead of failing the measurement. */
+static br_priority_record_t *br_priority_find(br_priority_table_t *table,
+                                              uint64_t key, int create)
+{
+    size_t slot;
+
+    if (!table->capacity && br_priority_grow(table) != 0)
+        return NULL;
+    if (create && (table->count + 1u) * 10u >= table->capacity * 7u)
+    {
+        if (br_priority_grow(table) != 0)
+            return NULL;
+    }
+    slot = br_priority_slot(key, table->capacity);
+    for (;;)
+    {
+        br_priority_record_t *record = &table->slots[slot];
+        if (!record->used)
+        {
+            if (!create)
+                return NULL;
+            memset(record, 0, sizeof(*record));
+            record->used = 1;
+            record->key = key;
+            table->count++;
+            return record;
+        }
+        if (record->key == key)
+            return record;
+        slot = (slot + 1u) & (table->capacity - 1u);
+    }
+}
+
+static void br_priority_table_free(br_priority_table_t *table)
+{
+    free(table->slots);
+    table->slots = NULL;
+    table->capacity = 0u;
+    table->count = 0u;
+}
+
+/* The per-decision cap: the sampling config's own minimum for a decision in
+   the lowest bucket, its maximum for one in the highest, interpolated
+   between. The scale is the bucket index, so each step up the geometric
+   score ladder buys the same share of the extra budget. A decision with no
+   measurement behind it carries a zero gap, which the layer scores as
+   unresolved and ranks in the top bucket - the cap is then the configured
+   maximum, which is the historical behaviour. */
+static uint32_t br_priority_cap(const pe_work_priority_config_t *resolved,
+                                const pe_work_priority_item_t *item,
+                                uint64_t epoch, uint32_t min_samples,
+                                uint32_t max_samples)
+{
+    uint32_t bucket, top;
+
+    if (max_samples <= min_samples)
+        return max_samples;
+    /* No clamp on the bucket: pe_work_priority_resolve refuses fewer than two
+       of them, and pe_work_priority_bucket promises a result below `buckets`,
+       so it is in [0, top] by contract rather than by luck. */
+    top = resolved->buckets - 1u;
+    bucket = pe_work_priority_bucket(resolved, item, epoch);
+    return min_samples + (uint32_t)(((uint64_t)(max_samples - min_samples) *
+                                     (uint64_t)bucket) / (uint64_t)top);
+}
+
+/* The layer's own statistics over the tracked infosets. This call site does
+   not act on the ordering - it acts on the bucket, one decision at a time -
+   so the snapshot is of the workload, taken through the layer's own routine
+   so that its formatter and its percentiles mean what its guide says. */
+static void br_priority_snapshot(const pe_work_priority_config_t *resolved,
+                                 const br_priority_table_t *table,
+                                 uint64_t epoch,
+                                 pe_work_priority_stats_t *stats)
+{
+    pe_work_priority_item_t *items;
+    size_t *order;
+    size_t i, count = 0u;
+
+    if (!stats || table->count == 0u)
+        return;
+    items = (pe_work_priority_item_t *)calloc(table->count, sizeof(*items));
+    order = (size_t *)calloc(table->count, sizeof(*order));
+    if (!items || !order)
+    {
+        free(items);
+        free(order);
+        return;
+    }
+    for (i = 0u; i < table->capacity; ++i)
+    {
+        const br_priority_record_t *record = &table->slots[i];
+        pe_work_priority_item_t *item;
+        if (!record->used)
+            continue;
+        item = &items[count++];
+        item->best = record->gap;
+        item->second_best = 0.0;
+        item->best_stderr = record->best_stderr;
+        item->second_stderr = record->runner_stderr;
+        item->visits = record->visits;
+        item->last_served = record->last_served;
+        item->actions = record->actions;
+    }
+    (void)pe_work_priority_order(resolved, items, count, epoch, order, count,
+                                 stats);
+    free(order);
+    free(items);
+}
+
 static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
 {
     const void *child;
@@ -148,12 +329,51 @@ static double br_rollout(br_context_t *ctx, const void *state, uint16_t depth)
     {
         br_action_sampler_t sampler;
         pe_br_decision_t decision;
+        const pe_br_sampling_config_t *sampling = &ctx->sampling;
+        pe_br_sampling_config_t scaled;
+        br_priority_record_t *record = NULL;
         sampler.ctx = ctx;
         sampler.state = state;
         sampler.depth = depth;
+        /* Issue #271: a decision the policy can rank samples up to its
+           bucket's cap; one it cannot rank - never measured, or the record
+           table could not grow - carries a zero gap, which the layer scores
+           as unresolved and ranks in the top bucket, so it keeps the
+           configured maximum. A FIFO policy never reaches this. */
+        if (ctx->priority_on)
+        {
+            pe_work_priority_item_t item;
+            uint64_t key = ctx->game->infoset_key(state, ctx->game->user);
+            record = br_priority_find(&ctx->tracked, key, 1);
+            memset(&item, 0, sizeof(item));
+            if (record)
+            {
+                item.best = record->gap;
+                item.second_best = 0.0;
+                item.best_stderr = record->best_stderr;
+                item.second_stderr = record->runner_stderr;
+                item.visits = record->visits;
+                item.last_served = record->last_served;
+            }
+            item.actions = actions;
+            scaled = ctx->sampling;
+            scaled.max_samples = br_priority_cap(
+                &ctx->priority, &item, ctx->epoch,
+                ctx->sampling.min_samples, ctx->sampling.max_samples);
+            sampling = &scaled;
+        }
         if (pe_br_resolve_decision(actions, br_action_sample, &sampler,
-                                   &ctx->sampling, &decision, ctx->stats) != 0)
+                                   sampling, &decision, ctx->stats) != 0)
             return NAN;
+        if (record)
+        {
+            record->gap = decision.gap;
+            record->best_stderr = decision.best_stderr;
+            record->runner_stderr = decision.runner_stderr;
+            record->actions = actions;
+            record->visits++;
+            record->last_served = ctx->epoch;
+        }
         return decision.value;
     }
     if (actor == (int)ctx->br_player)
@@ -967,16 +1187,32 @@ int pe_external_best_response_sampled(const pe_external_game_t *game,
     memset(&ctx, 0, sizeof(ctx));
     ctx.game = game; ctx.br_player = br_player; ctx.max_depth = config->max_depth;
     if (pe_br_sampling_resolve(&config->sampling, &ctx.sampling) != 0) return -1;
+    if (pe_work_priority_resolve(&config->priority, &ctx.priority) != 0) return -1;
+    /* The policy only applies where it can change something: the
+       confidence-guided evaluation has to be on, and the policy has to rank
+       decisions rather than return them in input order. */
+    ctx.priority_on = pe_br_sampling_enabled(&ctx.sampling) &&
+                      ctx.priority.policy != PE_WORK_SCHED_FIFO;
+    /* The allocation reads each infoset's own previous measurement, so a game
+       that cannot name its infosets cannot be prioritised. Refused rather
+       than keyed to 0, which would allocate every decision by whichever one
+       ran last. */
+    if (ctx.priority_on && !game->infoset_key) return -1;
     ctx.stats = &out->sampling;
     pe_rng_seed(&ctx.rng, config->seed);
     for (uint32_t i = 0u; i < samples; ++i)
     {
-        double value = policy_rollout(&ctx, game->root, 0u);
+        double value;
+        /* One trajectory per epoch: it is the wait that aging measures. */
+        ctx.epoch = i;
+        value = policy_rollout(&ctx, game->root, 0u);
         if (pe_finite_double(value)) { policy += value; ++out->policy_samples; }
         value = br_rollout(&ctx, game->root, 0u);
         if (pe_finite_double(value)) { br += value; ++out->br_samples; }
     }
     out->sampling.terminal_evaluations = ctx.terminal_evaluations;
+    br_priority_snapshot(&ctx.priority, &ctx.tracked, ctx.epoch, &out->priority);
+    br_priority_table_free(&ctx.tracked);
     if (out->policy_samples == 0u || out->br_samples == 0u) return -1;
     out->policy_value = policy / (double)out->policy_samples;
     out->br_value = br / (double)out->br_samples;

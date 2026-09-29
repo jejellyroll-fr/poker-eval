@@ -4,6 +4,11 @@ Issue #258. API: `include/poker_eval/solver/pe_work_priority.h`. Implementation:
 `src/solver/domain/work_priority.c`. Test: `tests/test_work_priority.c`, against
 the brute-force oracle `tests/support/pe_work_priority_oracle.h`.
 
+Issue #271 is the second half: the layer had no call site, and now it has one.
+`src/solver/domain/external_best_response.c` consumes the *bucket* of a decision
+to interpolate that decision's sample cap. Test: `tests/test_br_priority.c`. See
+"The call site" and "Measured: the cap in a solve" below.
+
 A solve spends the same work on every decision it has to make. That is wasteful
 in both directions: an action that wins by a mile is settled after a handful of
 samples, while a near tie is still a coin flip after thousands. The
@@ -281,11 +286,17 @@ for its bucket-level guarantee. When the worst delay per decision matters, use
 
 The issue asks for solve-level benchmarks — wall clock to a target
 exploitability on Hold'em heads-up, PLO4, PLO5 and a multiway Omaha solve. **They
-are not produced, and producing them would be dishonest here.** The layer has no
-call site in a solve (see the audit above), so a solve-level table would measure
-whatever harness was invented to drive it, not the feature. The workload table
-above is the honest substitute: it measures the allocation the layer makes, on a
-synthetic workload whose composition is known in advance.
+are still not produced.** Issue #258 measured nothing at solve level because the
+layer had no call site, and a table built on an invented harness would have
+measured the harness. Issue #271 gives it a call site (below), so those four
+benchmarks are now *possible* rather than blocked on wiring — but four solves to
+a target exploitability is a piece of work in its own right, and it is still
+owned by #258.
+
+What #271 measures instead is one end-to-end demonstration on the shipped CLI,
+reported under "Measured: the cap in a solve" below. The workload table above
+remains the measurement of the allocation the layer makes, on a synthetic
+workload whose composition is known in advance.
 
 ## The suite found a defect, and the guards bite
 
@@ -346,12 +357,335 @@ and returns a permutation, so it works whether or not the distributed stack is
 in use, and it introduces no game-specific or backend-specific code — it never
 mentions a backend at all.
 
+## The call site
+
+The audit above is about why the layer could not go *into* the distributed
+scheduler. Issue #271 is about where it *can* go, and the answer came from the
+same reading of the architecture: **the bucket, not the permutation.**
+
+`pe_work_priority_order()` returns a permutation of a batch, and a permutation
+changes the *quantity* of work served only when the caller consumes a prefix of
+it or stops at a finite cap. Neither holds here:
+
+| Consumer | What it does with a batch | Would a permutation change anything? |
+|---|---|---|
+| the sampled solve loop (`solver.c`) | runs its whole batch, every iteration | no — every item is served anyway |
+| `pe_work_coordinator_dispatch()` | sends contiguous index ranges covering everything | no |
+
+So `order()` has no consumer, and giving it one would have meant inventing the
+prefix semantics first. `pe_work_priority_bucket()` is the primitive that does
+have one: it is a pure function of a *single* decision's metadata, needs no
+batch, and answers "how much does this one deserve".
+
+The site is `src/solver/domain/external_best_response.c`. In `br_rollout()`,
+`pe_br_resolve_decision()` already receives its `pe_br_sampling_config_t` **by
+call** and already spends a variable number of draws per decision — anywhere
+between `min_samples` and `max_samples`, chosen by the confidence rule. Passing
+a per-decision config is therefore a change to a number the function already
+treats as variable, not a new concept. Deriving that number from the decision's
+bucket turns the layer into an allocation:
+
+```
+cap = min_samples + (max_samples - min_samples) * bucket / (buckets - 1)
+```
+
+Bucket 0 — a settled decision — gets `min_samples`; the top bucket gets
+`max_samples`. The historical behaviour is `max_samples` everywhere, so the
+policy only ever spends *less* on a decision, never more. It is a cap and not a
+budget, which is why a decision that resolves at its first look is untouched
+whatever its bucket: there is nothing left to cap.
+
+The first draft of the issue proposed the vector best response
+(`best_response_ii.c`) instead. That was wrong, and the issue body records why.
+`br_collect()` (line 675, called at line 838) is a recursive traversal of the
+whole tree that serves **every** infoset in one pass, and the loop over
+`table_capacity` (line 845) is an order-independent selection pass over the
+results. The table is an accumulator, not a work queue: there is no batch to
+order and no per-item work to allocate.
+
+### Where the numbers come from
+
+A decision's own *previous* measurement ranks it. `br_rollout()` keeps one
+record per infoset — the game's infoset key, the last measured `gap` and the two
+standard errors, the action count, the visit count and the epoch it was last
+served — in an open-addressed table (`pe_rng_mix(key)`, power-of-two capacity,
+256 slots to start, doubling). The record is read before the decision is
+resolved and written after, so the second visit to a decision is allocated by
+the first.
+
+A game without an `infoset_key` callback has no record to allocate by, so with
+the policy in effect `pe_external_best_response_sampled()` refuses it (`-1`)
+rather than keying every decision to 0, which would allocate each one by
+whichever decision ran last. Under FIFO, or with sampling off, such a game is
+measured exactly as before.
+
+Through the solver the refusal comes earlier. Lane B wraps the game before
+measuring it, and the wrapper used to install a key callback that returned 0
+when the base game had none, so the guard above never saw a missing key. The
+wrapper is now installed only over a game that has the callback — the
+traversals fall back to key 0 on their own, as the vector path's wrapper already
+assumed — and `pe_solver_run_sampled()` returns `PE_SOLVER_ERR_INVALID_CONFIG`
+**before the first iteration** when the sampled BR and a non-FIFO policy are
+both on, the BR mode can reach the sampled evaluator, and the game has no key.
+`PE_BR_EXACT` never runs it — the exact evaluator treats a keyless game's nodes
+separately — so it is not refused there; `PE_BR_AUTO` may fall back to sampling,
+so it is. `test_pe_solver_sampled.c` asserts the refusal at iteration 0, that
+the same keyless game still trains and measures under FIFO, and that it runs
+under exact BR with the policy configured.
+
+The checkpoint adapter hashes the policy only where it is in effect — a non-FIFO
+policy, the sampled evaluation on, **and** a BR mode other than `PE_BR_EXACT` —
+so a checkpoint made under the default, or under exact BR, still resumes after
+an inert `--br-priority-policy` is added, while one made under an active policy
+refuses a resume under another.
+
+The spread is fed as the layer's contract asks: the leader's and the
+runner-up's **standard errors**, which `pe_br_resolve_decision()` reports in
+`pe_br_decision_t.best_stderr` and `.runner_stderr`, and which the layer
+combines in quadrature. The item is built as `best = gap`, `second_best = 0`,
+`best_stderr = best_stderr`, `second_stderr = runner_stderr`.
+
+`gap_half_width` is **not** a substitute, and an earlier draft of this call site
+that fed it was wrong in two ways. It is `z * (SE_best + SE_runner)` — an L1
+sum, not the quadrature — and its two terms are not equal in general: the
+actions have their own variances and, after elimination, their own draw counts
+(`test_br_sampling.c` pins a decision whose runner-up has no spread at all).
+Worse, `z` is not a fixed 1.96: it is the sequential union bound over the
+decision's looks and actions (`pe_br_sequential_z()`), so it moves with
+`max_samples`, `check_interval`, `confidence` and the action count. The bucket
+boundaries `ratio^0, ratio^1, ...` are absolute, so a factor of `z` (about 3 on
+a three-action decision at min 4 / max 64) moves decisions across them — and
+raising `max_samples` would have made every decision look less settled. The
+monotone-rescaling argument only preserves the *ranking*, and the allocation
+reads the *bucket*.
+
+The consequence is a different threshold for "settled", and it is the layer's,
+not the resolver's: bucket 0 is a gap wider than one standard error of the
+difference, where the resolver separates two actions only once their `z`-wide
+intervals clear. A decision can therefore be capped at `min_samples` before the
+resolver would call it separated — the second fixture below is one.
+
+A record that does not exist yet reads as "not tracked": the decision is scored
+on the zeroed metadata it is handed, which is the coverage-floor path.
+
+### Epochs and aging
+
+One best-response trajectory is one epoch: `last_served = epoch`, and the age of
+a decision is `epoch - last_served`. A decision infoset is served at most once
+per trajectory, so the age is 1 and `aging_interval = 1` promotes it by exactly
+one bucket — one bucket per trajectory waited, which is the tightest the rule
+can be.
+
+The promotions happen *during* the traversal, so the snapshot taken after the
+last trajectory reports `aging_promotions = 0` even with aging on: at that
+moment every record has just been served. `test_br_priority.c` therefore asserts
+the promotion where it is observable — the cap it buys — and pins the zero with
+a comment, so a reader cannot mistake the snapshot for a record of the
+promotions.
+
+### Selecting it
+
+```c
+config.br_sampling.max_samples = 64;      /* issue #257: turns BR sampling on */
+config.br_sampling.min_samples = 4;
+config.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+config.br_priority.buckets = 8;           /* the default */
+```
+
+Both CLI drivers expose it, as `--br-priority-KEY VALUE` on `pe-preflop-solve`
+and `--br-priority-<key> <value>` on `mpf_run_with_metrics`. The option is
+parsed *before* the `--br-` branch, which would otherwise claim the prefix. It
+needs the sampled best response on: with `--br-max-samples` unset the policy is
+inert, by design, and both help texts say so.
+
+An all-zero config is FIFO, and FIFO leaves every decision at `max_samples`.
+Measured on the shipped CLI (`pe-preflop-solve --iterations 20
+--br-min-samples 4 --br-max-samples 64`), three runs byte-identical to each
+other:
+
+| Run | Output SHA-256 (first 16 hex digits) |
+|---|---|
+| no `--br-priority-*` option | `430e300a9a5b2bb7` |
+| `--br-priority-policy fifo` | `430e300a9a5b2bb7` |
+| every `--br-priority-*` key spelled out at its documented default | `430e300a9a5b2bb7` |
+
+### The ABI
+
+The three public structs the new settings and totals live in all grew:
+
+| Struct | Before | After |
+|---|---|---|
+| `pe_solver_config_t` | 320 bytes | 368 |
+| `pe_external_br_config_t` | 80 bytes | 128 |
+| `pe_external_br_result_t` | 216 bytes | 784 |
+| `pe_br_decision_t` | 56 bytes | 72 |
+
+Most of the third one is the two 32-entry histograms inside
+`pe_work_priority_stats_t`. The last one gained the leader's and the
+runner-up's standard errors, which the call site feeds the layer (see above);
+it is written by `pe_br_resolve_decision()` into the caller's struct, so a
+caller compiled against the smaller layout would be overrun too. `pe_solver_config_default()` writes the whole
+struct, so a caller compiled against the smaller layout would have its buffer
+overrun — the same reasoning as issue #257, which grew the same three structs.
+The solver ABI therefore bumps to **SOVERSION 8**.
+
+## Measured: the cap in a solve
+
+End to end on the shipped CLI — Hold'em heads-up, 20 iterations, seed fixed,
+`--br-min-samples 4 --br-max-samples 64`:
+
+| | terminal evaluations |
+|---|---|
+| FIFO (the default) | 9,491 |
+| uncertainty-aware | 7,475 |
+
+That is **21.2% fewer** terminal evaluations for the same measurement, and the
+priority telemetry reports what it was spent on:
+
+```text
+work_priority items=205 buckets=8 coverage_promotions=0 aging_promotions=0 unresolved=0 mean_score=0.307877 mean_delay=94.429 p50_bucket=0 p90_bucket=0 depth=194,10,1,0,0,0,0,0
+```
+
+205 decision infosets, 194 of them in bucket 0 (settled, so capped at
+`min_samples`), 10 in bucket 1 and 1 in bucket 2 — nothing above. On this spot
+the decisions separate cleanly, which is why the saving is a reallocation rather
+than a reshuffle: the work taken from the settled decisions is not handed to
+anyone else, it is simply not spent. The resolver's own telemetry shows the
+other side of the threshold difference above: `max_budget_hits` rises from 3 to
+87 — decisions stopped by their (lowered) cap before their `z`-wide intervals
+cleared.
+
+This is a demonstration, not the four solve-level benchmarks #258 asks for (see
+above): one spot, one game, 20 iterations. The numbers are machine-independent
+because they are sample *counts* rather than wall clock, but they are not a
+convergence study.
+
+### The unit test's numbers
+
+`tests/test_br_priority.c` uses a one-decision toy game — three actions, one
+infoset, 400 trajectories, seed 9, min 4 / max 64 — and asserts against the
+counts it prints (Debug, this machine):
+
+| Fixture (leader / runner-up / noise) | FIFO draws | prioritised draws | bucket |
+|---|---|---|---|
+| 10.0 / 0.0 / 0.1 — resolves at the first look | 6,400 | 6,400 | 0 |
+| 3.0 / 0.0 / 2.25 — does not resolve at the first look | 15,332 | 6,540 | 0 |
+| 1.0 / 0.999 / 1.0 — near tie | — | — | 0 to 7, mean 1.3 over 16 seeds |
+| 1.0 / 1.0 / 1.0 — exact tie | — | — | 0 to 2, mean 0.7 over 16 seeds |
+
+Four readings:
+
+- The cap is inert where a decision resolves at its first look. The first row's
+  two totals are equal, and they are equal because the confidence rule already
+  stops at 6,400 draws, not because the policy is off: the test asserts that the
+  infoset was tracked (`items == 1`) and that it landed in bucket 0.
+- Where the decision does not resolve, the cap bites: 15,332 → 6,540 draws, a
+  57.3% reduction, while the estimate stays on the exact value (asserted to
+  within 0.1 of 3.0) because a cap limits the *budget*, it does not stop the
+  fresh-draw re-estimate. The layer puts it in bucket 0 — its gap is several
+  standard errors wide — although the resolver's `z`-wide intervals do not clear
+  at the first look: the threshold difference described above.
+- The classification is the layer's, not the test's, and it is asserted on
+  average. One end-of-run snapshot of a tie is a single draw of a noisy
+  statistic — a tie's measured gap exceeds one standard error of the difference
+  about a third of the time, which is bucket 0 — so the test runs each fixture
+  over 16 seeds and asserts that both ties' summed buckets exceed the settled
+  decision's, which is 0 on every seed.
+- Aging is observable only through the cap. On the second row, aging off draws
+  6,540 and `aging_interval = 1` draws 11,828 — a larger cap, as designed, and
+  still below FIFO's 15,332, so the promotion cannot undo the cap.
+
+## The guards bite at the call site
+
+Same protocol as the #258 table above, applied to
+`src/solver/domain/external_best_response.c`: each row is one mutation, named by
+the code change it makes, rebuilt and run three times with the counts required
+to agree.
+
+| Mutation | Failing checks |
+|---|---|
+| `br_priority_cap` returns the configured maximum (the policy is inert) | 2 |
+| the measured gap is not recorded | 24 |
+| the leader's standard error is not recorded | 1 |
+| the runner-up's standard error is not recorded | 1 |
+| the visit count is not advanced (the coverage floor never lifts) | 24 |
+| the record is never looked up (`create = 0`) | 41 |
+| the gate is inverted (the policy is never on) | 47 |
+| the telemetry snapshot is not taken | 39 |
+| the last-served epoch is not recorded (aging sees no wait) | 1 |
+| the action count is not recorded (every decision looks single-action) | 2 |
+| the epoch never advances | 1 |
+| a keyless game is not refused (the NULL key is called) | crash (SIGSEGV) |
+| the table is never freed (a leak, not a wrong answer) | 0 |
+
+The counts are larger than in the first version of this table because the
+classification check now runs each fixture over 16 seeds and asserts per seed.
+The two standard-error rows were **0** each before `test_both_spreads` existed:
+with the same noise on every action, dropping one of two equal spreads only
+scales the score by `sqrt(2)`, which the fixtures could not see. The fixture
+that sees it puts noise on a single action and sets `assumed_stderr` absurdly
+wide, so a decision that lost its only spread lands in the top bucket.
+
+The checkpoint hash is guarded in `test_pe_checkpoint_v2.c`: hashing the policy
+whenever it is not FIFO, whether or not the sampled evaluation is on, fails the
+"inert policy resumes" check.
+
+Two rows need a word.
+
+The **0** is the correct measurement, and it is not a weak guard: the test
+suite cannot see a leak, because a leaked table produces the same numbers as a
+freed one. What catches it is CI's `asan-ubsan` job, which runs the full suite
+on `ubuntu-latest` with `ASAN_OPTIONS=detect_leaks=1` and does not skip this
+test (its labels are `solver;sampling;best-response;priority`, not
+`sanitizer-skip`). Locally the check is not available — ASan's leak detection
+reports `detect_leaks is not supported on this platform` on this macOS, and the
+instrumented binary is killed before it prints anything.
+
+The **1** on "the epoch never advances" is the same 1 the "last-served epoch is
+not recorded" row scores, and that is not a coincidence: both mutations make the
+age zero, and the one assertion that sees an age is the aging row's
+`r_on.samples > r_off.samples`. A guard that only one assertion can see is worth
+naming, which is why the mutation is listed rather than folded away.
+
+The **plan validation** is guarded by a CTest rather than by the unit test, so
+it is measured separately. `plan.c` refuses a configuration the layer would
+reject, and the refusal has to arrive *before* the solve starts. Mutating the
+block away moves the failure from `preflop solve failed: status=5` with no
+`progress` line at all, to `status=7` **after** `progress iteration=1` — so the
+negative CTest's `status=5` plus `FAIL_REGULAR_EXPRESSION "br_decisions"` is
+exactly what distinguishes the two, and the guard is live rather than dead code
+the measurement path would have covered anyway.
+
+### The harness had a bug of its own, and it was the instructive kind
+
+Two rows first reported `LIBRARY UNCHANGED` — a claim that the build had not
+taken effect — and the row it happened to was different on each run. The
+protocol above guards against a *stale compile* by deleting the object file
+before each build. That is not enough: deleting the object forces the compile,
+but **not the link**. `make` decides the shared library is up to date when the
+fresh object carries the same mtime *second* as the existing library, and an
+iteration of the harness fits inside a second. The build output says the object
+was rebuilt, the library still holds the previous mutation's code, and the row
+reports the previous row's count — or, when the previous count was zero,
+`LIBRARY UNCHANGED`. Deleting the library files as well as the object file fixed
+it, and the table became reproducible: three consecutive runs produced
+byte-identical tables.
+
+The lesson generalises: "the build took effect" has two steps, compile and link,
+and the one-second granularity bites both.
+
 ## Scope
 
-- **No production call site yet.** The layer is complete, tested and documented,
-  but nothing in a solve calls it. Wiring it in is a separate change, and the
-  audit above is the reason it is separate.
-- **CFR training is untouched.** This module only orders work; it computes no
-  regrets and averages no strategies.
+- **A production call site exists** (issue #271). The sampled best response
+  allocates its per-decision sample cap from the layer's bucket. The layer is
+  still a read-only module: it is given metadata and returns a bucket, and it
+  knows nothing about best responses.
+- **`pe_work_priority_order()` still has no consumer.** Nothing in a solve
+  consumes a permutation, for the reason in the audit: the solve loop drains its
+  batch. The distributed scheduler is still not wired, and the benchmarks that
+  would justify wiring it are still #258's.
+- **CFR training is untouched.** The layer only orders work, and the call site
+  only changes how many draws a *measurement* spends. It computes no regrets and
+  averages no strategies.
 - **`pe_work_schedule()` and `pe_work_coordinator_schedule()` are unchanged.**
   They arbitrate across backends and workers by measured rate, and still do.

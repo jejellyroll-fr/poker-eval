@@ -25,6 +25,7 @@
 #include <poker_eval/solver/pe_br_sampling.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_storage_policy.h>
+#include <poker_eval/solver/pe_work_priority.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -336,6 +337,13 @@ struct pe_solver_config_t {
        action. It only changes how exploitability is measured, never the CFR
        updates. */
     pe_br_sampling_config_t br_sampling;
+
+    /* Issue #271: how the sampled BR's per-decision sample cap is spread over
+       the decisions (see pe_work_priority.h). All-zero is FIFO, which leaves
+       every decision at br_sampling's max_samples - the historical path. It
+       needs br_sampling on; on its own it does nothing. Like br_sampling it
+       only changes how exploitability is measured, never the CFR updates. */
+    pe_work_priority_config_t br_priority;
 };
 
 /* ------------------------------------------------------------------ *

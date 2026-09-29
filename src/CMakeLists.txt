@@ -238,10 +238,15 @@ endforeach()
 # Issue #257: pe_solver_config_t (br_sampling), pe_external_br_config_t and
 # pe_external_br_result_t (confidence-guided BR settings and totals) grew:
 # SOVERSION 7.
+# Issue #271: the same three structs grew again - br_priority on the solver
+# config, the priority settings on the BR config and the priority snapshot on
+# the BR result - so the solver ABI bumps once more: SOVERSION 8.  Same
+# reasoning as #257: pe_solver_config_default() writes the whole struct, so a
+# caller compiled against the smaller layout would have its buffer overrun.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 7.0.0
-        SOVERSION 7)
+        VERSION 8.0.0
+        SOVERSION 8)
 
     # Issue #236: mpf_config_t and mpf_tree_range_profile_t gained public
     # complete-range fields.  Keep old applications from passing their

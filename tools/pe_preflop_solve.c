@@ -118,6 +118,7 @@ typedef struct {
     pe_adaptive_sampling_t adaptive; /* issue #256 */
     int have_adaptive;
     pe_br_sampling_config_t br_sampling; /* issue #257 */
+    pe_work_priority_config_t br_priority; /* issue #271 */
     double exponential_lambda;
     double dcfr_alpha;
     double dcfr_beta;
@@ -712,6 +713,11 @@ static void usage(FILE *stream)
         "  --threads N                  worker threads for cpu_par\n"
         "  --show-capabilities          print detected CPU/SIMD/backend capabilities\n"
         "  --br-samples N               sampled unilateral BR rollouts\n"
+        "  --br-priority-KEY VALUE      how the BR sample cap is spread over the\n"
+        "                               decisions (issue #271): policy, min-visits,\n"
+        "                               epsilon, buckets, bucket-ratio,\n"
+        "                               aging-interval, assumed-stderr.  Needs the\n"
+        "                               --br-* settings above to be on.\n"
         "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
         "  --target-nash-conv-mbb N     stop when NashConv <= N mBB/game\n"
         "  --target-max-br-gap-mbb N    stop when the worst player's BR gap\n"
@@ -1238,6 +1244,17 @@ options->checkpoint_interval =0u;
             if (parse_u64(value, &options->br_samples) != 0 ||
                 options->br_samples == 0u || options->br_samples > UINT32_MAX)
                 return -1;
+        } else if (strncmp(arg, "--br-priority-", 14) == 0) {
+            /* Issue #271: --br-priority-policy, --br-priority-min-visits,
+               --br-priority-epsilon, --br-priority-buckets,
+               --br-priority-bucket-ratio, --br-priority-aging-interval,
+               --br-priority-assumed-stderr.  Tested before the --br- branch
+               below, which would otherwise claim the prefix. */
+            if (pe_work_priority_parse_option(&options->br_priority, arg + 14,
+                                              value) != 0) {
+                fprintf(stderr, "invalid %s value: %s\n", arg, value);
+                return -1;
+            }
         } else if (strncmp(arg, "--br-", 5) == 0) {
             /* Issue #257: --br-min-samples, --br-max-samples,
                --br-check-interval, --br-confidence, --br-absolute-tolerance,
@@ -1920,6 +1937,7 @@ int main(int argc, char **argv)
     config.exploitability_interval = options.exploitability_interval;
     config.br_samples = (uint32_t)options.br_samples;
     config.br_sampling = options.br_sampling;
+    config.br_priority = options.br_priority;
     config.seed = options.seed;
     deps = pe_solver_deps_default();
     deps.external_game = pe_preflop_allin_external(game);

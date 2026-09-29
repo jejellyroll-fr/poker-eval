@@ -243,6 +243,8 @@ int pe_br_resolve_decision(uint16_t actions, pe_br_sample_fn sample,
             out->gap = est[best].mean - est[runner].mean;
             out->gap_half_width =
                 half_width(&est[best], z) + half_width(&est[runner], z);
+            out->best_stderr = pe_online_stats_std_error(&est[best]);
+            out->runner_stderr = pe_online_stats_std_error(&est[runner]);
         }
         /* Estimate the chosen action from draws that did not choose it. */
         {
