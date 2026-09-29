@@ -439,6 +439,28 @@ static void test_options(void)
           "an unknown policy name must be refused");
     CHECK(pe_work_priority_parse_option(&config, "aging-interval", "-3") == -1,
           "a negative aging interval must be refused");
+    /* Codex P2: strtoull skips whitespace and wraps a sign, so " -1" would
+       parse as UINT64_MAX and silently disable aging. A refusal must also
+       leave the field untouched. Checked on a copy, so the config above
+       reaches the resolve check below unchanged. */
+    {
+        pe_work_priority_config_t scratch = config;
+        scratch.aging_interval = 7u;
+        scratch.min_visits = 3u;
+        CHECK(pe_work_priority_parse_option(&scratch, "aging-interval", " -1") == -1 &&
+                  scratch.aging_interval == 7u,
+              "a whitespace-signed aging interval must be refused and leave "
+              "the field unchanged");
+        CHECK(pe_work_priority_parse_option(&scratch, "aging-interval", "+5") == -1,
+              "a plus-signed aging interval must be refused");
+        CHECK(pe_work_priority_parse_option(&scratch, "aging-interval", " 5") == -1,
+              "a whitespace-led aging interval must be refused");
+        CHECK(pe_work_priority_parse_option(&scratch, "min-visits", " -1") == -1 &&
+                  scratch.min_visits == 3u,
+              "a whitespace-signed min-visits must be refused");
+        CHECK(pe_work_priority_parse_option(&scratch, "buckets", "\t-2") == -1,
+              "a tab-signed bucket count must be refused");
+    }
     CHECK(pe_work_priority_parse_option(NULL, "buckets", "4") == -1,
           "a NULL config must be refused");
 

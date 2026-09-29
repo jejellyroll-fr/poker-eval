@@ -3,6 +3,7 @@
 
 #include <poker_eval/solver/pe_work_priority.h>
 
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -462,11 +463,20 @@ int pe_work_scheduler_policy_parse(const char *name,
     return 0;
 }
 
+/* strtoul and strtoull skip leading whitespace and accept a sign, and they
+   negate a "-1" into the type's maximum rather than refusing it: " -1" would
+   become UINT64_MAX, an aging interval that silently disables aging. An
+   unsigned option must therefore start with a digit, nothing else. */
+static int starts_with_digit(const char *text)
+{
+    return text && isdigit((unsigned char)text[0]);
+}
+
 static int parse_u32(const char *text, uint32_t *out)
 {
     char *end = NULL;
     unsigned long v;
-    if (!text || !*text || *text == '-')
+    if (!starts_with_digit(text))
         return -1;
     errno = 0;
     v = strtoul(text, &end, 10);
@@ -480,7 +490,7 @@ static int parse_u64(const char *text, uint64_t *out)
 {
     char *end = NULL;
     unsigned long long v;
-    if (!text || !*text || *text == '-')
+    if (!starts_with_digit(text))
         return -1;
     errno = 0;
     v = strtoull(text, &end, 10);
