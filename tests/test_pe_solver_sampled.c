@@ -79,6 +79,14 @@ static const void *apply_chance(const void *state, int outcome, void *user)
     return (const void *)(uintptr_t)10u;
 }
 
+/* Both outcomes lead to the same decision node, so they enumerate as two
+   equally weighted copies of it: enough for the exact BR to measure. */
+static uint32_t chance_count(const void *state, void *user)
+{
+    (void)user;
+    return (uintptr_t)state == 50u ? 2u : 0u;
+}
+
 int main(void)
 {
     pe_external_game_t game = {0};
@@ -258,6 +266,25 @@ int main(void)
             return 1;
         }
         pe_solver_destroy(solver);
+
+        /* EXACT never runs the sampled BR, so the policy is inert there and
+           a keyless game - which the exact evaluator supports - is not
+           refused for it. */
+        cfg.br_mode = PE_BR_EXACT;
+        keyless.chance_outcome_count = chance_count;
+        solver = pe_solver_create(&cfg, &deps);
+        if (!solver || pe_solver_run(solver) != PE_SOLVER_OK ||
+            pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+            progress.iteration != cfg.max_iterations)
+        {
+            fprintf(stderr, "test_pe_solver_sampled: keyless game under an "
+                            "inert policy (exact BR) was refused\n");
+            pe_solver_destroy(solver);
+            return 1;
+        }
+        pe_solver_destroy(solver);
+        cfg.br_mode = PE_BR_SAMPLED;
+        keyless.chance_outcome_count = NULL;
 
         cfg.br_priority.policy = PE_WORK_SCHED_FIFO;
         solver = pe_solver_create(&cfg, &deps);

@@ -426,14 +426,18 @@ wrapper is now installed only over a game that has the callback — the
 traversals fall back to key 0 on their own, as the vector path's wrapper already
 assumed — and `pe_solver_run_sampled()` returns `PE_SOLVER_ERR_INVALID_CONFIG`
 **before the first iteration** when the sampled BR and a non-FIFO policy are
-both on and the game has no key. `test_pe_solver_sampled.c` asserts the refusal
-at iteration 0, and that the same keyless game still trains and measures under
-FIFO.
+both on, the BR mode can reach the sampled evaluator, and the game has no key.
+`PE_BR_EXACT` never runs it — the exact evaluator treats a keyless game's nodes
+separately — so it is not refused there; `PE_BR_AUTO` may fall back to sampling,
+so it is. `test_pe_solver_sampled.c` asserts the refusal at iteration 0, that
+the same keyless game still trains and measures under FIFO, and that it runs
+under exact BR with the policy configured.
 
 The checkpoint adapter hashes the policy only where it is in effect — a non-FIFO
-policy **and** the sampled evaluation on — so a checkpoint made under the
-default still resumes after an inert `--br-priority-policy` is added, while one
-made under an active policy refuses a resume under another.
+policy, the sampled evaluation on, **and** a BR mode other than `PE_BR_EXACT` —
+so a checkpoint made under the default, or under exact BR, still resumes after
+an inert `--br-priority-policy` is added, while one made under an active policy
+refuses a resume under another.
 
 The spread is fed as the layer's contract asks: the leader's and the
 runner-up's **standard errors**, which `pe_br_resolve_decision()` reports in

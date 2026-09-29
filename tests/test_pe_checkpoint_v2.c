@@ -232,6 +232,28 @@ int main(void)
         sampled.br_sampling.max_samples = 64u;
         prioritised = sampled;
         prioritised.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+        /* EXACT never runs the sampled BR: the policy is inert there too. */
+        {
+            pe_solver_config_t exact = sampled;
+            pe_solver_config_t exact_prioritised;
+            exact.br_mode = PE_BR_EXACT;
+            exact_prioritised = exact;
+            exact_prioritised.br_priority.policy =
+                PE_WORK_SCHED_UNCERTAINTY_AWARE;
+            CHECK(persist->save(NULL, &target, &exact, ops, left, 500u) == 0,
+                  "exact checkpoint save failed");
+            CHECK(ops->create(&probe, 1u) == 0,
+                  "priority probe creation failed");
+            if (probe)
+            {
+                CHECK(persist->load(NULL, &source, &exact_prioritised, ops,
+                                    probe, &iteration) == 0,
+                      "a BR priority policy under exact BR refused the "
+                      "resume");
+                ops->destroy(probe);
+                probe = NULL;
+            }
+        }
         CHECK(persist->save(NULL, &target, &sampled, ops, left, 500u) == 0,
               "sampled checkpoint save failed");
         CHECK(ops->create(&probe, 1u) == 0, "priority probe creation failed");

@@ -1502,8 +1502,12 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     /* Issue #271: the BR priority policy allocates each decision by its
        infoset's own previous measurement, so a game that cannot name its
        infosets cannot run it. Refused here, before the first iteration,
-       rather than by the best response at the first measurement. */
-    if (pe_br_sampling_enabled(&solver->config.br_sampling) &&
+       rather than by the best response at the first measurement - but only
+       where the sampled BR can run: EXACT never reaches it, and its exact
+       evaluator treats a keyless game's nodes separately. AUTO may fall back
+       to sampling, so it is refused too. */
+    if (solver->config.br_mode != PE_BR_EXACT &&
+        pe_br_sampling_enabled(&solver->config.br_sampling) &&
         solver->config.br_priority.policy != PE_WORK_SCHED_FIFO &&
         !game->infoset_key)
         return PE_SOLVER_ERR_INVALID_CONFIG;

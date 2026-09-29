@@ -226,12 +226,14 @@ static uint64_t hash_config(const pe_solver_config_t *config)
         HASH_FIELD(resolved.relative_tolerance);
     }
     /* Issue #271: hashed like br_sampling, and again only when the feature is
-       in effect - a non-FIFO policy over an evaluation that is on - so a
-       checkpoint made under the default keeps its hash, and so does one that
-       only adds a policy the disabled evaluation ignores. The policy changes
-       how many draws each BR decision spends, so resuming under a different
-       one would not reproduce the numbers this checkpoint recorded. */
-    if (pe_br_sampling_enabled(&config->br_sampling) &&
+       in effect - a non-FIFO policy over a sampled evaluation that is on and
+       that the BR mode can reach (EXACT never runs it; AUTO may fall back to
+       it) - so a checkpoint made under the default keeps its hash, and so
+       does one that only adds a policy nothing reads. The policy changes how
+       many draws each BR decision spends, so resuming under a different one
+       would not reproduce the numbers this checkpoint recorded. */
+    if (config->br_mode != PE_BR_EXACT &&
+        pe_br_sampling_enabled(&config->br_sampling) &&
         config->br_priority.policy != PE_WORK_SCHED_FIFO)
     {
         pe_work_priority_config_t resolved;
