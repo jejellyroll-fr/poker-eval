@@ -294,6 +294,12 @@ static void test_four_handed_monker_seats(void)
     CHECK(game != NULL, "classic 4-handed root was not created");
     if (game)
     {
+        pe_preflop_root_view_t root;
+        CHECK(pe_preflop_allin_root_view(game, &root) == 0 &&
+                  root.first_to_act == 2 && root.posts[0] == 0.5 &&
+                  root.posts[1] == 1.0 && fabs(root.pot - 1.5) < 1e-12,
+              "classic root view: opener %d posts %g,%g pot %g",
+              root.first_to_act, root.posts[0], root.posts[1], root.pot);
         CHECK(run_solve(game, 1, 0x273u, &storage) != 0,
               "the classic root solved a tree whose root seat 2 never acts");
         pe_storage_destroy(storage);
@@ -511,6 +517,20 @@ static void test_dead_money_in_pot(void)
     CHECK(game != NULL, "dead-money game was not created");
     if (game)
     {
+        /* The root a report describes is the one play starts from. */
+        pe_preflop_root_view_t root;
+        CHECK(pe_preflop_allin_root_view(game, &root) == 0 &&
+                  root.street == 0 && root.first_to_act == 3 &&
+                  fabs(root.pot - 2.0) < 1e-12 && root.posts[0] == 0.0 &&
+                  root.posts[1] == 0.5 && root.posts[2] == 1.0 &&
+                  root.posts[3] == 0.0 && root.behind[1] == 4.5 &&
+                  root.behind[2] == 4.0 && root.behind[3] == 5.0,
+              "root view: street %d opener %d pot %g posts %g,%g,%g,%g",
+              root.street, root.first_to_act, root.pot, root.posts[0],
+              root.posts[1], root.posts[2], root.posts[3]);
+    }
+    if (game)
+    {
         const pe_external_game_t *external = pe_preflop_allin_external(game);
         pe_rng_t rng = pe_solver_rng_root(0xDEADu);
         pe_chance_sample_t sample;
@@ -695,6 +715,8 @@ static void test_header_rejections(void)
     CHECK(pe_monker_tree_preflop_posts(NULL, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_NULL_ARGUMENT,
           "a NULL header was accepted");
+    CHECK(pe_preflop_allin_root_view(NULL, NULL) == -1,
+          "a NULL root view was accepted");
 }
 
 int main(void)

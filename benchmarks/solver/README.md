@@ -143,6 +143,12 @@ build/solver-benchmarks/
 ```
 
 `solver-report.json` is the native `pe-preflop-solve/v1` report.
+Its `stack`, `small_blind`, `big_blind` and `ante` fields echo the command
+line. The `root` object describes the root that was actually solved, which a
+tree can override: `source` (`blinds`, `tree-header` for a native Monker
+preflop tree seated from its header, or `postflop`), `street`,
+`first_to_act`, `pot` (posts plus dead money, or the postflop pot),
+`dead_money`, and per-seat `posts` and `stacks` (before the posts).
 `benchmark.json` uses `pe-solver-benchmark/v1` and adds the measurements below.
 
 ### Performance

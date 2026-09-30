@@ -1672,6 +1672,25 @@ int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game)
     return game ? game->rules.player_count : 0;
 }
 
+int pe_preflop_allin_root_view(const pe_preflop_allin_game_t *game,
+                               pe_preflop_root_view_t *out)
+{
+    const pe_betting_state_t *betting;
+    if (!game || !out)
+        return -1;
+    betting = &game->root_betting.betting;
+    memset(out, 0, sizeof(*out));
+    out->street = (int)game->root_betting.street;
+    out->first_to_act = betting->to_act;
+    out->pot = betting->pot;
+    for (int player = 0; player < game->rules.player_count; ++player)
+    {
+        out->posts[player] = betting->invested[player];
+        out->behind[player] = betting->stack[player];
+    }
+    return 0;
+}
+
 int pe_preflop_allin_tree_actor(const pe_preflop_allin_game_t *game,
                                 int node_index)
 {

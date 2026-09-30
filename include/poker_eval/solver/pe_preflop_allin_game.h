@@ -155,6 +155,24 @@ const pe_external_game_t *pe_preflop_allin_external(
 
 int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game);
 
+/* The root the game actually plays, before any card is dealt: what each seat
+ * has posted and has behind, the pot (posts plus dead money, or the given
+ * postflop pot) and who acts first.  It reflects every source that shaped
+ * the root -- blinds, seat-by-seat posts, a postflop root -- so a caller
+ * reporting the solved game describes this rather than its own inputs. */
+typedef struct
+{
+    int street;
+    int first_to_act;
+    double pot;
+    double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    double behind[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+} pe_preflop_root_view_t;
+
+/* 0 on success, -1 on a NULL argument. */
+int pe_preflop_allin_root_view(const pe_preflop_allin_game_t *game,
+                               pe_preflop_root_view_t *out);
+
 /* Seat the tree node at node_index acts for, as play binds it: replayed
  * through the betting engine under rules.tree_actors_from_betting, the
  * tree's own label otherwise.  -1 without a tree or out of range. */

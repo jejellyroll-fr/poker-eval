@@ -1424,7 +1424,36 @@ static const char *guarantee_name(pe_guarantee_t guarantee)
     }
 }
 
+/* The solved root, as the game plays it.  stack/small_blind/big_blind/ante
+ * above are the command line; a Monker header (seats, posts, stacks, dead
+ * money) or a postflop root replaces them, and only this object says so. */
+static void write_report_root(FILE *file, const options_t *options,
+                              const pe_preflop_allin_rules_t *rules,
+                              const pe_preflop_allin_game_t *game)
+{
+    pe_preflop_root_view_t root;
+    const char *source = rules->has_root_posts ? "tree-header"
+                       : rules->root_street != 0 ? "postflop"
+                       : "blinds";
+    if (pe_preflop_allin_root_view(game, &root) != 0)
+        return;
+    fprintf(file,
+            "\"root\":{\"source\":\"%s\",\"street\":%d,\"first_to_act\":%d,"
+            "\"pot\":%.17g,\"dead_money\":%.17g,\"posts\":[",
+            source, root.street, root.first_to_act, root.pot,
+            rules->has_root_posts ? rules->root_dead_money : 0.0);
+    for (int player = 0; player < options->players; ++player)
+        fprintf(file, "%s%.17g", player ? "," : "", root.posts[player]);
+    fprintf(file, "],\"stacks\":[");
+    for (int player = 0; player < options->players; ++player)
+        fprintf(file, "%s%.17g", player ? "," : "",
+                root.posts[player] + root.behind[player]);
+    fprintf(file, "]},");
+}
+
 static void write_report(const char *path, const options_t *options,
+                         const pe_preflop_allin_rules_t *rules,
+                         const pe_preflop_allin_game_t *game,
                          const pe_metrics_t *metrics, pe_progress_t *progress,
                          size_t infosets, simd_capability_t detected_simd,
                          int metrics_measured)
@@ -1434,8 +1463,9 @@ static void write_report(const char *path, const options_t *options,
         fprintf(stderr, "cannot write %s: %s\n", path, strerror(errno));
         return;
     }
+    fputs("{\"schema\":\"pe-preflop-solve/v1\",", file);
+    write_report_root(file, options, rules, game);
     fprintf(file,
-        "{\"schema\":\"pe-preflop-solve/v1\","
         "\"game\":\"%s\",\"players\":%d,"
         "\"algorithm\":\"%s\",\"backend\":\"%s\","
         "\"backend_validated\":true,\"precision\":\"%s\","
@@ -2234,8 +2264,8 @@ int main(int argc, char **argv)
             }
         }
         if (options.output)
-            write_report(options.output, &options, &metrics, &progress, infosets,
-                         detected_simd, metrics_measured);
+            write_report(options.output, &options, &rules, game, &metrics,
+                         &progress, infosets, detected_simd, metrics_measured);
     }
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);
