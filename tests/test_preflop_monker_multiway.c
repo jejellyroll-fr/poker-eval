@@ -1061,6 +1061,60 @@ static void test_dead_money_by_equity(void)
     printf("  dead money by equity: OK\n");
 }
 
+/* Asymmetric stacks: posts 0/0.5/1, stacks 5/3/5.  After the BTN shoves 5
+ * the SB faces 4.5 more with 2.5 behind; the tree's "call" is then all it
+ * has left.  Read as a plain call it was illegal and the node offered only
+ * the fold. */
+static void test_short_stack_call(void)
+{
+    static const int32_t committed[3] = {0, 1000, 2000};
+    unsigned char bytes[256];
+    size_t length = build_push_fold_tree(bytes, 3, 0, committed, 10000);
+    pe_monker_tree_header_t header;
+    mpf_tree_def_t *tree = NULL;
+    pe_preflop_allin_rules_t rules;
+    pe_preflop_allin_game_t *game;
+    pe_storage_t *storage = NULL;
+    int short_calls = 0;
+
+    CHECK(load_tree("poker_eval_monker_short3.tree", bytes, length, &header,
+                    &tree) == 0,
+          "3-handed push/fold fixture did not load");
+    if (!tree)
+        return;
+    base_rules(&rules, 3, tree);
+    rules.has_root_posts = 1;
+    rules.tree_actors_from_betting = 1;
+    rules.root_to_act = 0;
+    rules.root_posts[1] = 0.5;
+    rules.root_posts[2] = 1.0;
+    rules.stacks[1] = 3.0;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL, "short-stack game was not created");
+    if (game)
+    {
+        CHECK(run_solve(game, 400, 0x5u, &storage) == 0,
+              "short-stack solve failed");
+        for (size_t i = 0u; i < pe_preflop_allin_infodesc_count(game); ++i)
+        {
+            pe_preflop_infodesc_view_t view;
+            if (pe_preflop_allin_infodesc_view_at(game, i, &view) != 0)
+                continue;
+            CHECK(view.action_count == 2u,
+                  "node %d (seat %d, to call %g) offered %u actions, want 2",
+                  view.tree_node_index, view.actor, view.to_call,
+                  (unsigned)view.action_count);
+            if (view.actor == 1 && view.to_call > 4.0)
+                ++short_calls;
+        }
+        CHECK(short_calls > 0, "the SB never faced the BTN shove");
+        pe_storage_destroy(storage);
+        pe_preflop_allin_game_destroy(game);
+    }
+    mpf_tree_free(tree);
+    printf("  short-stack call: OK\n");
+}
+
 /* A postflop header and a header with nothing posted have nothing to seat. */
 static void test_header_rejections(void)
 {
@@ -1105,6 +1159,7 @@ int main(void)
     test_straddle_and_allin_posts();
     test_root_without_decision();
     test_dead_money_by_equity();
+    test_short_stack_call();
     test_four_handed_monker_seats();
     test_actor_wraps_past_fold();
     test_heads_up_unchanged();

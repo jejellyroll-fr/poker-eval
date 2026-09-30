@@ -243,6 +243,13 @@ static int tree_action_to_semantic_in_state(const mpf_tree_node_t *node,
                       ? betting->to_call - contribution : 0.0;
     if (out->kind == PE_ACTION_CALL && outstanding <= PREFLOP_EPSILON)
         out->kind = PE_ACTION_CHECK;
+    /* A tree "call" by a seat the wager covers puts in what it has left.
+     * The engine refuses a CALL it cannot pay in full, so without this a
+     * short stack facing a bigger shove could only fold; an all-in below
+     * the bet is the engine's short call and reopens nothing. */
+    else if (out->kind == PE_ACTION_CALL && actor >= 0 &&
+             outstanding > betting->stack[actor] + PREFLOP_EPSILON)
+        out->kind = PE_ACTION_ALL_IN;
     else if (out->kind == PE_ACTION_RAISE && betting->to_call <= PREFLOP_EPSILON)
     {
         out->kind = PE_ACTION_BET;
