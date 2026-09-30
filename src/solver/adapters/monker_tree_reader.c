@@ -196,6 +196,13 @@ pe_monker_status_t pe_monker_tree_read_header(
     return PE_MONKER_OK;
 }
 
+/* The seat's post is its whole stack (a header stack of zero is unknown). */
+static int post_is_capped(const pe_monker_tree_header_t *header, uint32_t seat)
+{
+    return header->stacks[seat] > 0.0 &&
+           header->committed[seat] >= header->stacks[seat];
+}
+
 pe_monker_status_t pe_monker_tree_preflop_posts(
     const pe_monker_tree_header_t *header, double big_blind,
     double *out_posts, double *out_stacks, double *out_dead_money)
@@ -224,14 +231,21 @@ pe_monker_status_t pe_monker_tree_preflop_posts(
      * straddle posts more.  Heads-up there is no non-blind seat to show an
      * ante, so the whole post is the blind. */
     big_blind_seat = header->player_count == 2u ? 1u : 2u;
-    ante = 0.0;
+    /* A post that took the whole stack is capped, not the table's price: a
+     * seat all in for less than the ante would read as a smaller ante, and a
+     * short big blind is no big blind at all.  The ante comes from uncapped
+     * posts only; a capped big blind leaves nothing to anchor on. */
+    if (post_is_capped(header, big_blind_seat))
+        return PE_MONKER_ERR_INVALID_HEADER;
+    ante = header->committed[big_blind_seat];
     if (header->player_count > 2u)
     {
-        ante = header->committed[0];
-        for (i = 1u; i < header->player_count; ++i)
-            if (header->committed[i] < ante)
+        for (i = 0u; i < header->player_count; ++i)
+            if (!post_is_capped(header, i) && header->committed[i] < ante)
                 ante = header->committed[i];
     }
+    else
+        ante = 0.0;
     blind = header->committed[big_blind_seat] - ante;
     if (!(blind > 0.0))
         return PE_MONKER_ERR_INVALID_HEADER;

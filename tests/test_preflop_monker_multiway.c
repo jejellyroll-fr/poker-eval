@@ -489,6 +489,23 @@ static void test_header_scaling(void)
               fabs(posts[2] - 1.05) < 1e-12 && fabs(posts[3] - 0.05) < 1e-12,
           "ante header read as %g,%g,%g,%g; want 0.05,0.55,1.05,0.05",
           posts[0], posts[1], posts[2], posts[3]);
+
+    /* Seat 0 is all in for 50, less than the 100 ante: its post is capped
+     * and says nothing about the ante, so the blind stays 2100 - 100. */
+    header.committed[0] = 50.0;
+    header.stacks[0] = 50.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+              PE_MONKER_OK &&
+              fabs(posts[0] - 0.025) < 1e-12 && fabs(posts[2] - 1.05) < 1e-12 &&
+              fabs(stacks[0] - 0.025) < 1e-12 && fabs(stacks[1] - 100.0) < 1e-12,
+          "short all-in ante read as %g,%g,%g,%g stack %g; want blind 2000",
+          posts[0], posts[1], posts[2], posts[3], stacks[1]);
+
+    /* A big blind all in from its post leaves no blind to anchor on. */
+    header.stacks[2] = header.committed[2];
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+              PE_MONKER_ERR_INVALID_HEADER,
+          "a header whose big blind is all in from its post was seated");
 }
 
 /* Dead money sits in the root pot and goes to whoever wins it. */
@@ -725,6 +742,16 @@ static void test_straddle_and_allin_posts(void)
     CHECK(game != NULL && pe_preflop_allin_root_view(game, &root) == 0 &&
               fabs(root.min_raise - 1.0) < 1e-12,
           "ante root: min raise %g, want 1", game ? root.min_raise : -1.0);
+    pe_preflop_allin_game_destroy(game);
+
+    /* Seat 0 all in for less than the ante: still a minimum raise of 1. */
+    rules.root_posts[0] = 0.025;
+    rules.stacks[0] = 0.025;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL && pe_preflop_allin_root_view(game, &root) == 0 &&
+              fabs(root.min_raise - 1.0) < 1e-12,
+          "short all-in ante root: min raise %g, want 1",
+          game ? root.min_raise : -1.0);
     pe_preflop_allin_game_destroy(game);
 
     /* The SB is all in from its 0.5 post and would open: the action skips it

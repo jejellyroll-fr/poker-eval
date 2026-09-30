@@ -179,12 +179,14 @@ const char *pe_monker_status_string(pe_monker_status_t status);
  * blind, and first_to_act is the last seat -- and money in the file's own
  * scale.  Seats are returned as they are; money is rescaled so that the big
  * blind seat's post, less the ante every seat pays, equals big_blind.  The
- * ante is the smallest post at the table (a non-blind seat's), so a straddle
- * or any other post above the big blind does not move the scale.  A stack
- * the header leaves at zero stays zero, for the caller to fill in.
+ * ante is the smallest post at the table among posts that did not take the
+ * seat's whole stack, so neither a straddle nor a short stack all in for
+ * less than the ante moves the scale.  A stack the header leaves at zero
+ * stays zero, for the caller to fill in.
  *
- * Returns PE_MONKER_ERR_INVALID_HEADER for a postflop header or one whose
- * big blind seat posts nothing above the ante: there is no scale to anchor.
+ * Returns PE_MONKER_ERR_INVALID_HEADER for a postflop header, one whose big
+ * blind seat is all in from its post, or one whose big blind seat posts
+ * nothing above the ante: there is no scale to anchor.
  */
 pe_monker_status_t pe_monker_tree_preflop_posts(
     const pe_monker_tree_header_t *header, double big_blind,

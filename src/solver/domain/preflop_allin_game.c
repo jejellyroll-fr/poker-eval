@@ -1545,21 +1545,27 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         int seated = rules->root_street == 0 && rules->has_root_posts;
         if (seated)
         {
-            double smallest = posts[0];
+            double smallest = -1.0;
             first_to_act = rules->root_to_act;
             to_call = 0.0;
             for (player = 0; player < rules->player_count; ++player)
             {
                 if (posts[player] > to_call)
                     to_call = posts[player];
-                if (posts[player] < smallest)
+                /* A post that took the whole stack is capped, not the price
+                 * every seat pays: an all-in for less than the ante would
+                 * otherwise read as a smaller ante. */
+                if (posts[player] < rules->stacks[player] &&
+                    (smallest < 0.0 || posts[player] < smallest))
                     smallest = posts[player];
             }
             /* The largest post is the live bet a raise must beat by its own
              * size: over a straddle of 2 the minimum raise goes to 4, not to
-             * straddle + one big blind.  The smallest post is what every seat
-             * pays (an ante, or nothing) and is not part of that bet. */
-            min_raise = to_call - smallest;
+             * straddle + one big blind.  The smallest uncapped post is what
+             * every seat pays (an ante, or nothing) and is not part of that
+             * bet. */
+            if (smallest >= 0.0)
+                min_raise = to_call - smallest;
         }
         if (pe_betting_state_init(&game->root_betting.betting,
                                   &game->betting_rules, stacks_after,
