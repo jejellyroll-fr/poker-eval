@@ -1898,9 +1898,9 @@ int main(int argc, char **argv)
         double posts[PE_MONKER_MAX_PLAYERS];
         double stacks[PE_MONKER_MAX_PLAYERS];
         double dead_money = 0.0;
-        if (pe_monker_tree_preflop_posts(&tree_header, options.big_blind,
-                                         posts, stacks, &dead_money) ==
-            PE_MONKER_OK)
+        if (pe_monker_tree_preflop_posts(&tree_header, options.small_blind,
+                                         options.big_blind, posts, stacks,
+                                         &dead_money) == PE_MONKER_OK)
         {
             rules.has_root_posts = 1;
             rules.root_dead_money = dead_money;
@@ -1917,14 +1917,18 @@ int main(int argc, char **argv)
                 printf("%s%g", player ? "," : "", rules.stacks[player]);
             printf(" dead_money=%g\n", dead_money);
         }
-        else if (options.players > 2)
+        else
         {
-            /* Heads-up the classic root seats the blinds the same way, so a
-             * header without posts still plays; multiway it cannot. */
+            /* Falling back to the command-line root would solve a game the
+             * header does not describe: its posts, stacks and dead money
+             * would be silently dropped. */
             fprintf(stderr,
-                    "could not seat Monker tree %s: its header posts no big "
-                    "blind on seat 2, and the classic root does not match "
-                    "Monker's multiway seats\n", options.tree);
+                    "could not seat Monker tree %s: its header's posts give "
+                    "no big blind to anchor on (the big blind seat -- seat %d "
+                    "-- posts nothing above the ante or is all in from its "
+                    "post%s)\n", options.tree, options.players == 2 ? 1 : 2,
+                    options.players == 2
+                        ? ", or the two posts do not fit --sb/--bb" : "");
             goto fail;
         }
     }

@@ -277,7 +277,7 @@ static void test_four_handed_monker_seats(void)
           tree->nodes[0].acting_player);
 
     /* 1. Header -> posts and stacks in big blinds, seats untouched. */
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK,
           "preflop header did not convert");
     CHECK(posts[0] == 0.0 && posts[1] == 0.5 && posts[2] == 1.0 &&
@@ -395,7 +395,7 @@ static void test_heads_up_unchanged(void)
     if (!tree)
         return;
     CHECK(count_decision_nodes(tree) == 2, "heads-up push/fold is not 2 nodes");
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK && posts[0] == 0.5 && posts[1] == 1.0,
           "heads-up header did not convert to 0.5/1");
 
@@ -468,7 +468,7 @@ static void test_header_scaling(void)
     header.dead_money = 1000.0;
     for (int p = 0; p < 4; ++p)
         header.stacks[p] = 200000.0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK,
           "straddled header did not convert");
     CHECK(posts[0] == 0.0 && posts[1] == 0.5 && posts[2] == 1.0 &&
@@ -483,7 +483,7 @@ static void test_header_scaling(void)
     header.committed[2] = 2100.0;
     header.committed[3] = 100.0;
     header.dead_money = 0.0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK &&
               fabs(posts[0] - 0.05) < 1e-12 && fabs(posts[1] - 0.55) < 1e-12 &&
               fabs(posts[2] - 1.05) < 1e-12 && fabs(posts[3] - 0.05) < 1e-12,
@@ -494,7 +494,7 @@ static void test_header_scaling(void)
      * and says nothing about the ante, so the blind stays 2100 - 100. */
     header.committed[0] = 50.0;
     header.stacks[0] = 50.0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK &&
               fabs(posts[0] - 0.025) < 1e-12 && fabs(posts[2] - 1.05) < 1e-12 &&
               fabs(stacks[0] - 0.025) < 1e-12 && fabs(stacks[1] - 100.0) < 1e-12,
@@ -503,9 +503,48 @@ static void test_header_scaling(void)
 
     /* A big blind all in from its post leaves no blind to anchor on. */
     header.stacks[2] = header.committed[2];
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a header whose big blind is all in from its post was seated");
+
+    /* Heads-up both seats are blinds, so the declared blinds anchor the
+     * scale: [1000, 2000] is 0.5/1 with no ante, [1100, 2100] a 0.05 ante
+     * on 0.5/1 -- not 0.524/1 from reading the whole BB post as the blind. */
+    memset(&header, 0, sizeof(header));
+    header.player_count = 2u;
+    header.committed[0] = 1000.0;
+    header.committed[1] = 2000.0;
+    header.stacks[0] = header.stacks[1] = 200000.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks,
+                                       &dead) == PE_MONKER_OK &&
+              fabs(posts[0] - 0.5) < 1e-12 && fabs(posts[1] - 1.0) < 1e-12 &&
+              fabs(stacks[0] - 100.0) < 1e-9,
+          "heads-up read as %g,%g stack %g, want 0.5,1 stack 100",
+          posts[0], posts[1], stacks[0]);
+    header.committed[0] = 1100.0;
+    header.committed[1] = 2100.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks,
+                                       &dead) == PE_MONKER_OK &&
+              fabs(posts[0] - 0.55) < 1e-12 && fabs(posts[1] - 1.05) < 1e-12 &&
+              fabs(stacks[1] - 100.0) < 1e-9,
+          "heads-up ante read as %g,%g stack %g, want 0.55,1.05 stack 100",
+          posts[0], posts[1], stacks[1]);
+    /* Posts 1000/2100 against declared 0.5/1 would need a negative ante. */
+    header.committed[0] = 1000.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks,
+                                       &dead) == PE_MONKER_ERR_INVALID_HEADER,
+          "heads-up posts that do not fit the declared blinds were seated");
+    /* A small blind all in from its post hides the gap between the blinds,
+     * and equal declared blinds leave no gap to measure. */
+    header.committed[1] = 2000.0;
+    header.stacks[0] = 1000.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks,
+                                       &dead) == PE_MONKER_ERR_INVALID_HEADER,
+          "a heads-up small blind all in from its post was seated");
+    header.stacks[0] = 200000.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, 1.0, posts, stacks,
+                                       &dead) == PE_MONKER_ERR_INVALID_HEADER,
+          "equal declared blinds were accepted as a heads-up anchor");
 }
 
 /* Dead money sits in the root pot and goes to whoever wins it. */
@@ -636,7 +675,7 @@ static void test_actor_wraps_past_fold(void)
               tree->nodes[SB_AGAIN].acting_player == 0,
           "fixture drifted: node %d should be the reader's 'seat 0' guess",
           (int)SB_AGAIN);
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK,
           "3-handed header did not convert");
 
@@ -811,23 +850,23 @@ static void test_header_rejections(void)
     memset(&header, 0, sizeof(header));
     header.player_count = 2u;
     header.stacks[0] = header.stacks[1] = 100.0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a header with no post was seated");
     header.committed[0] = 1.0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a heads-up header with nothing on the big blind seat was seated");
     header.committed[1] = 2.0;
     header.street = 1;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a flop header was seated as preflop");
     header.street = 0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 0.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.5, 0.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a zero big blind was accepted");
-    CHECK(pe_monker_tree_preflop_posts(NULL, 1.0, posts, stacks, &dead) ==
+    CHECK(pe_monker_tree_preflop_posts(NULL, 0.5, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_NULL_ARGUMENT,
           "a NULL header was accepted");
     CHECK(pe_preflop_allin_root_view(NULL, NULL) == -1,

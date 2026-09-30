@@ -204,8 +204,9 @@ static int post_is_capped(const pe_monker_tree_header_t *header, uint32_t seat)
 }
 
 pe_monker_status_t pe_monker_tree_preflop_posts(
-    const pe_monker_tree_header_t *header, double big_blind,
-    double *out_posts, double *out_stacks, double *out_dead_money)
+    const pe_monker_tree_header_t *header, double small_blind,
+    double big_blind, double *out_posts, double *out_stacks,
+    double *out_dead_money)
 {
     uint32_t big_blind_seat;
     double ante;
@@ -218,6 +219,8 @@ pe_monker_status_t pe_monker_tree_preflop_posts(
     if (header->street != 0 || header->player_count < 2u ||
         header->player_count > PE_MONKER_MAX_PLAYERS ||
         !pe_finite_double(big_blind) || !(big_blind > 0.0) ||
+        !pe_finite_double(small_blind) || !(small_blind > 0.0) ||
+        !(small_blind < big_blind) ||
         !pe_finite_double(header->dead_money) || header->dead_money < 0.0)
         return PE_MONKER_ERR_INVALID_HEADER;
     for (i = 0u; i < header->player_count; ++i)
@@ -228,8 +231,7 @@ pe_monker_status_t pe_monker_tree_preflop_posts(
     /* The file's money scale is not stated (see read_money); the big blind is
      * the one amount both sides agree on, so it anchors the conversion.  Its
      * seat is fixed by Monker's numbering, not by being the largest post: a
-     * straddle posts more.  Heads-up there is no non-blind seat to show an
-     * ante, so the whole post is the blind. */
+     * straddle posts more. */
     big_blind_seat = header->player_count == 2u ? 1u : 2u;
     /* A post that took the whole stack is capped, not the table's price: a
      * seat all in for less than the ante would read as a smaller ante, and a
@@ -237,19 +239,33 @@ pe_monker_status_t pe_monker_tree_preflop_posts(
      * posts only; a capped big blind leaves nothing to anchor on. */
     if (post_is_capped(header, big_blind_seat))
         return PE_MONKER_ERR_INVALID_HEADER;
-    ante = header->committed[big_blind_seat];
-    if (header->player_count > 2u)
+    if (header->player_count == 2u)
     {
+        /* Heads-up both seats are blinds: no seat posts the ante alone, so
+         * the posts cannot tell an ante from the blinds ([1100, 2100] is a
+         * 100 ante on 1000/2000 as much as blinds of 1100/2100).  The
+         * declared blinds settle it: SB + ante and BB + ante differ by
+         * exactly BB - SB, which fixes the scale; what is left over is the
+         * ante.  A capped small blind hides that gap, and a header whose
+         * posts need a negative ante does not match the declared blinds. */
+        double gap = header->committed[1] - header->committed[0];
+        if (post_is_capped(header, 0u) || !(gap > 0.0))
+            return PE_MONKER_ERR_INVALID_HEADER;
+        scale = (big_blind - small_blind) / gap;
+        if (header->committed[1] * scale < big_blind * (1.0 - 1e-9))
+            return PE_MONKER_ERR_INVALID_HEADER;
+    }
+    else
+    {
+        ante = header->committed[big_blind_seat];
         for (i = 0u; i < header->player_count; ++i)
             if (!post_is_capped(header, i) && header->committed[i] < ante)
                 ante = header->committed[i];
+        blind = header->committed[big_blind_seat] - ante;
+        if (!(blind > 0.0))
+            return PE_MONKER_ERR_INVALID_HEADER;
+        scale = big_blind / blind;
     }
-    else
-        ante = 0.0;
-    blind = header->committed[big_blind_seat] - ante;
-    if (!(blind > 0.0))
-        return PE_MONKER_ERR_INVALID_HEADER;
-    scale = big_blind / blind;
     for (i = 0u; i < header->player_count; ++i)
     {
         out_posts[i] = header->committed[i] * scale;
