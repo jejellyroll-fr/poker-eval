@@ -35,7 +35,8 @@ typedef struct
     double stacks[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     /* Forced bets: player 0 posts small_blind, player 1 posts big_blind,
        every later player posts ante (0 disables). Heads-up player 0 acts
-       first; multiway games start at player 2 (UTG abstraction). */
+       first; multiway games start at player 2 (UTG abstraction).
+       has_root_posts below replaces this seating. */
     double small_blind;
     double big_blind;
     double ante;
@@ -71,6 +72,31 @@ typedef struct
     uint64_t root_board; /* card mask of the fixed flop/turn/river board */
     double root_pot;
     int root_to_act; /* seating index to act first, -1 = seat 0 */
+    /* Seat-by-seat forced bets at a preflop root (root_street == 0).  When
+     * has_root_posts is set, root_posts[p] is what player p has in front of
+     * them before the first decision, replacing small_blind / big_blind /
+     * ante, the largest post is the bet to call, and root_to_act names the
+     * first actor.  This plays a tree in its own seat numbering: a native
+     * Monker multiway tree posts the SB on seat 1 and the BB on seat 2 and
+     * opens on the last seat, which the classic root (SB = 0, BB = 1,
+     * multiway opens on 2) cannot express. */
+    int has_root_posts;
+    double root_posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    /* Money already in the pot that belongs to nobody (a Monker header's
+     * dead money).  Read only with has_root_posts. */
+    double root_dead_money;
+    /* The ante every seat's root_posts include (0 without one).  It is not
+     * part of the live bet: the root minimum raise is the largest post less
+     * it, so over a straddle of 2 a minimum raise goes to 4.  Read only
+     * with has_root_posts. */
+    double root_ante;
+    /* The tree's actor labels are a guess, not data: replay the tree through
+     * the betting engine at creation and let each node act for the seat the
+     * engine hands the action to.  A Monker .tree stores no actor, and its
+     * reader's "next seat" label is wrong once the action wraps past a
+     * folded or all-in player.  Leave unset for trees that name their
+     * players (JSON), so a mislabelled node still fails loudly. */
+    int tree_actors_from_betting;
     /* Every player holds the complete range ("any hand").  The `ranges`
      * argument to pe_preflop_allin_game_create is then ignored and may be
      * NULL: deals are drawn straight from the live deck.
@@ -133,6 +159,32 @@ const pe_external_game_t *pe_preflop_allin_external(
     const pe_preflop_allin_game_t *game);
 
 int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game);
+
+/* The root the game actually plays, before any card is dealt: what each seat
+ * has posted and has behind (0 for a seat all in from its post), the pot
+ * (posts plus dead money, or the given postflop pot), the minimum raise and
+ * who acts first.  It reflects every source that shaped
+ * the root -- blinds, seat-by-seat posts, a postflop root -- so a caller
+ * reporting the solved game describes this rather than its own inputs. */
+typedef struct
+{
+    int street;
+    int first_to_act;
+    double pot;
+    double min_raise; /* smallest legal raise increment at the root */
+    double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    double behind[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+} pe_preflop_root_view_t;
+
+/* 0 on success, -1 on a NULL argument. */
+int pe_preflop_allin_root_view(const pe_preflop_allin_game_t *game,
+                               pe_preflop_root_view_t *out);
+
+/* Seat the tree node at node_index acts for, as play binds it: replayed
+ * through the betting engine under rules.tree_actors_from_betting, the
+ * tree's own label otherwise.  -1 without a tree or out of range. */
+int pe_preflop_allin_tree_actor(const pe_preflop_allin_game_t *game,
+                                int node_index);
 
 /* Attach the storage the solve loop updates. While set, the game answers
  * action_probability with the current regret-matching strategy so opponents

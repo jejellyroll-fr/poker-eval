@@ -367,7 +367,8 @@ static void print_strategy_report(const options_t *options,
             if (node->type != MPF_TREE_NODE_PLAYER)
                 continue;
             printf("tree_step node=%d id=%s actor=P%d branches=", node_index,
-                   node->id ? node->id : "?", node->acting_player + 1);
+                   node->id ? node->id : "?",
+                   pe_preflop_allin_tree_actor(game, node_index) + 1);
             for (int action = 0; action < node->action_count; ++action)
             {
                 char label[80] = {0};
@@ -1423,7 +1424,38 @@ static const char *guarantee_name(pe_guarantee_t guarantee)
     }
 }
 
+/* The solved root, as the game plays it.  stack/small_blind/big_blind/ante
+ * above are the command line; a Monker header (seats, posts, stacks, dead
+ * money) or a postflop root replaces them, and only this object says so. */
+static void write_report_root(FILE *file, const options_t *options,
+                              const pe_preflop_allin_rules_t *rules,
+                              const pe_preflop_allin_game_t *game)
+{
+    pe_preflop_root_view_t root;
+    const char *source = rules->has_root_posts ? "tree-header"
+                       : rules->root_street != 0 ? "postflop"
+                       : "blinds";
+    if (pe_preflop_allin_root_view(game, &root) != 0)
+        return;
+    fprintf(file,
+            "\"root\":{\"source\":\"%s\",\"street\":%d,\"first_to_act\":%d,"
+            "\"pot\":%.17g,\"dead_money\":%.17g,\"min_raise\":%.17g,"
+            "\"posts\":[",
+            source, root.street, root.first_to_act, root.pot,
+            rules->has_root_posts ? rules->root_dead_money : 0.0,
+            root.min_raise);
+    for (int player = 0; player < options->players; ++player)
+        fprintf(file, "%s%.17g", player ? "," : "", root.posts[player]);
+    fprintf(file, "],\"stacks\":[");
+    for (int player = 0; player < options->players; ++player)
+        fprintf(file, "%s%.17g", player ? "," : "",
+                root.posts[player] + root.behind[player]);
+    fprintf(file, "]},");
+}
+
 static void write_report(const char *path, const options_t *options,
+                         const pe_preflop_allin_rules_t *rules,
+                         const pe_preflop_allin_game_t *game,
                          const pe_metrics_t *metrics, pe_progress_t *progress,
                          size_t infosets, simd_capability_t detected_simd,
                          int metrics_measured)
@@ -1433,8 +1465,9 @@ static void write_report(const char *path, const options_t *options,
         fprintf(stderr, "cannot write %s: %s\n", path, strerror(errno));
         return;
     }
+    fputs("{\"schema\":\"pe-preflop-solve/v1\",", file);
+    write_report_root(file, options, rules, game);
     fprintf(file,
-        "{\"schema\":\"pe-preflop-solve/v1\","
         "\"game\":\"%s\",\"players\":%d,"
         "\"algorithm\":\"%s\",\"backend\":\"%s\","
         "\"backend_validated\":true,\"precision\":\"%s\","
@@ -1848,6 +1881,58 @@ int main(int argc, char **argv)
         rules.root_to_act = tree_header.first_to_act;
     else
         rules.root_to_act = 0;
+    /* A Monker .tree stores no actor per node; the reader labels each one
+     * "the next seat", which misses folded and all-in seats.  Let the game
+     * replay the tree through the betting engine instead.  JSON trees name
+     * their players and keep them. */
+    if (tree && !tree_path_is_json(options.tree))
+        rules.tree_actors_from_betting = 1;
+    /* A native Monker preflop tree is played in Monker's own seat numbering:
+     * the header's committed[] posts the blinds on the seats the tree acts
+     * for (SB = 1 and BB = 2 past two players, opener = first_to_act), and
+     * its dead money goes in the pot.  The classic root would post SB = 0,
+     * BB = 1 and open on seat 2, which no multiway node of the tree acts
+     * for.  JSON trees keep the classic root. */
+    if (root_street == 0 && tree && !tree_path_is_json(options.tree))
+    {
+        double posts[PE_MONKER_MAX_PLAYERS];
+        double stacks[PE_MONKER_MAX_PLAYERS];
+        double dead_money = 0.0;
+        double ante = 0.0;
+        if (pe_monker_tree_preflop_posts(&tree_header, options.small_blind,
+                                         options.big_blind, posts, stacks,
+                                         &dead_money, &ante) == PE_MONKER_OK)
+        {
+            rules.has_root_posts = 1;
+            rules.root_dead_money = dead_money;
+            rules.root_ante = ante;
+            printf("tree_seats=monker first_to_act=%d posts=", rules.root_to_act);
+            for (int player = 0; player < options.players; ++player)
+            {
+                rules.root_posts[player] = posts[player];
+                if (stacks[player] > 0.0)
+                    rules.stacks[player] = stacks[player];
+                printf("%s%g", player ? "," : "", posts[player]);
+            }
+            printf(" stacks=");
+            for (int player = 0; player < options.players; ++player)
+                printf("%s%g", player ? "," : "", rules.stacks[player]);
+            printf(" dead_money=%g ante=%g\n", dead_money, ante);
+        }
+        else
+        {
+            /* Falling back to the command-line root would solve a game the
+             * header does not describe: its posts, stacks and dead money
+             * would be silently dropped. */
+            fprintf(stderr,
+                    "could not seat Monker tree %s: its header's posts give "
+                    "no big blind to anchor on (the big blind seat -- seat %d "
+                    "-- is all in from its post, or no seat shows the ante "
+                    "and the blind posts do not fit --sb/--bb)\n",
+                    options.tree, options.players == 2 ? 1 : 2);
+            goto fail;
+        }
+    }
     for (size_t i = 0u; i < sizeof(rules.raise_sizes) / sizeof(rules.raise_sizes[0]); ++i)
         rules.raise_sizes[i] = options.raise_sizes[i];
     game = pe_preflop_allin_game_create(&rules, ranges);
@@ -2186,8 +2271,8 @@ int main(int argc, char **argv)
             }
         }
         if (options.output)
-            write_report(options.output, &options, &metrics, &progress, infosets,
-                         detected_simd, metrics_measured);
+            write_report(options.output, &options, &rules, game, &metrics,
+                         &progress, infosets, detected_simd, metrics_measured);
     }
     pe_solver_destroy(solver);
     pe_preflop_allin_game_destroy(game);

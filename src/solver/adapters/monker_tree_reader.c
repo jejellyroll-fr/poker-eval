@@ -196,6 +196,113 @@ pe_monker_status_t pe_monker_tree_read_header(
     return PE_MONKER_OK;
 }
 
+/* The seat's post is its whole stack (a header stack of zero is unknown). */
+static int post_is_capped(const pe_monker_tree_header_t *header, uint32_t seat)
+{
+    return header->stacks[seat] > 0.0 &&
+           header->committed[seat] >= header->stacks[seat];
+}
+
+/* Scale from the declared blinds: the small and big blind seats post
+ * SB + ante and BB + ante, which differ by exactly BB - SB.  That gap fixes
+ * the scale and what is left on the big blind is the ante.  A capped blind
+ * hides the gap; posts that need a negative ante do not fit the declared
+ * blinds. */
+static int scale_from_declared_blinds(const pe_monker_tree_header_t *header,
+                                      uint32_t small_blind_seat,
+                                      uint32_t big_blind_seat,
+                                      double small_blind, double big_blind,
+                                      double *out_scale, double *out_ante)
+{
+    double gap = header->committed[big_blind_seat] -
+                 header->committed[small_blind_seat];
+    double scale;
+    double ante;
+    if (post_is_capped(header, small_blind_seat) || !(gap > 0.0))
+        return -1;
+    scale = (big_blind - small_blind) / gap;
+    ante = header->committed[big_blind_seat] * scale - big_blind;
+    if (ante < -big_blind * 1e-9)
+        return -1;
+    *out_scale = scale;
+    *out_ante = ante > 0.0 ? ante : 0.0;
+    return 0;
+}
+
+pe_monker_status_t pe_monker_tree_preflop_posts(
+    const pe_monker_tree_header_t *header, double small_blind,
+    double big_blind, double *out_posts, double *out_stacks,
+    double *out_dead_money, double *out_ante)
+{
+    uint32_t small_blind_seat;
+    uint32_t big_blind_seat;
+    double ante = 0.0;
+    double scale = 0.0;
+    int ante_seen = 0;
+    uint32_t i;
+
+    if (!header || !out_posts || !out_stacks || !out_dead_money || !out_ante)
+        return PE_MONKER_ERR_NULL_ARGUMENT;
+    if (header->street != 0 || header->player_count < 2u ||
+        header->player_count > PE_MONKER_MAX_PLAYERS ||
+        !pe_finite_double(big_blind) || !(big_blind > 0.0) ||
+        !pe_finite_double(small_blind) || !(small_blind > 0.0) ||
+        !(small_blind < big_blind) ||
+        !pe_finite_double(header->dead_money) || header->dead_money < 0.0)
+        return PE_MONKER_ERR_INVALID_HEADER;
+    for (i = 0u; i < header->player_count; ++i)
+        if (!pe_finite_double(header->committed[i]) ||
+            header->committed[i] < 0.0 ||
+            !pe_finite_double(header->stacks[i]) || header->stacks[i] < 0.0)
+            return PE_MONKER_ERR_INVALID_HEADER;
+    /* The file's money scale is not stated (see read_money); the big blind is
+     * the one amount both sides agree on, so it anchors the conversion.  Its
+     * seat is fixed by Monker's numbering, not by being the largest post: a
+     * straddle posts more. */
+    small_blind_seat = header->player_count == 2u ? 0u : 1u;
+    big_blind_seat = header->player_count == 2u ? 1u : 2u;
+    /* A post that took the whole stack is capped, not the table's price: a
+     * short big blind is no big blind at all. */
+    if (post_is_capped(header, big_blind_seat))
+        return PE_MONKER_ERR_INVALID_HEADER;
+    /* The ante is what a seat outside the blinds posts.  Only such a seat
+     * shows it alone: a blind posts blind + ante, a seat all in for less
+     * than the ante posts a capped amount, and a straddle posts at least a
+     * big blind.  The smallest uncapped post below the big blind among the
+     * other seats is the ante. */
+    for (i = 0u; i < header->player_count; ++i)
+    {
+        if (i == small_blind_seat || i == big_blind_seat ||
+            post_is_capped(header, i) ||
+            !(header->committed[i] < header->committed[big_blind_seat]))
+            continue;
+        if (!ante_seen || header->committed[i] < ante)
+            ante = header->committed[i];
+        ante_seen = 1;
+    }
+    if (ante_seen)
+    {
+        scale = big_blind / (header->committed[big_blind_seat] - ante);
+        ante *= scale;
+    }
+    /* No seat shows the ante alone -- heads-up, where both seats are blinds,
+     * or when every other seat is capped or straddles.  The posts alone are
+     * then ambiguous ([1100, 2100] is a 100 ante on 1000/2000 as much as
+     * blinds of 1100/2100), and the declared blinds settle it. */
+    else if (scale_from_declared_blinds(header, small_blind_seat,
+                                        big_blind_seat, small_blind,
+                                        big_blind, &scale, &ante) != 0)
+        return PE_MONKER_ERR_INVALID_HEADER;
+    for (i = 0u; i < header->player_count; ++i)
+    {
+        out_posts[i] = header->committed[i] * scale;
+        out_stacks[i] = header->stacks[i] * scale;
+    }
+    *out_dead_money = header->dead_money * scale;
+    *out_ante = ante;
+    return PE_MONKER_OK;
+}
+
 const char *pe_monker_status_string(pe_monker_status_t status)
 {
     switch (status)
