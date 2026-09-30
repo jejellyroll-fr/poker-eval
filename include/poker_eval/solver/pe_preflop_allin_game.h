@@ -156,8 +156,9 @@ const pe_external_game_t *pe_preflop_allin_external(
 int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game);
 
 /* The root the game actually plays, before any card is dealt: what each seat
- * has posted and has behind, the pot (posts plus dead money, or the given
- * postflop pot) and who acts first.  It reflects every source that shaped
+ * has posted and has behind (0 for a seat all in from its post), the pot
+ * (posts plus dead money, or the given postflop pot), the minimum raise and
+ * who acts first.  It reflects every source that shaped
  * the root -- blinds, seat-by-seat posts, a postflop root -- so a caller
  * reporting the solved game describes this rather than its own inputs. */
 typedef struct
@@ -165,6 +166,7 @@ typedef struct
     int street;
     int first_to_act;
     double pot;
+    double min_raise; /* smallest legal raise increment at the root */
     double posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
     double behind[PE_PREFLOP_ALLIN_MAX_PLAYERS];
 } pe_preflop_root_view_t;

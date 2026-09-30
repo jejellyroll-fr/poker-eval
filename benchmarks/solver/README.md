@@ -148,7 +148,9 @@ line. The `root` object describes the root that was actually solved, which a
 tree can override: `source` (`blinds`, `tree-header` for a native Monker
 preflop tree seated from its header, or `postflop`), `street`,
 `first_to_act`, `pot` (posts plus dead money, or the postflop pot),
-`dead_money`, and per-seat `posts` and `stacks` (before the posts).
+`dead_money`, `min_raise` (the smallest raise increment at the root, e.g.
+the straddle over a straddled header), and per-seat `posts` and `stacks`
+(before the posts; a seat whose post is its whole stack starts all in).
 `benchmark.json` uses `pe-solver-benchmark/v1` and adds the measurements below.
 
 ### Performance

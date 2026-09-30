@@ -297,7 +297,8 @@ static void test_four_handed_monker_seats(void)
         pe_preflop_root_view_t root;
         CHECK(pe_preflop_allin_root_view(game, &root) == 0 &&
                   root.first_to_act == 2 && root.posts[0] == 0.5 &&
-                  root.posts[1] == 1.0 && fabs(root.pot - 1.5) < 1e-12,
+                  root.posts[1] == 1.0 && fabs(root.pot - 1.5) < 1e-12 &&
+                  root.min_raise == 1.0,
               "classic root view: opener %d posts %g,%g pot %g",
               root.first_to_act, root.posts[0], root.posts[1], root.pot);
         CHECK(run_solve(game, 1, 0x273u, &storage) != 0,
@@ -685,6 +686,93 @@ static void test_actor_wraps_past_fold(void)
            (int)SB_AGAIN);
 }
 
+/* Seat-by-seat posts the classic blinds cannot express: a live straddle sets
+ * the minimum raise, and a post that covers a whole stack puts that seat all
+ * in from the start instead of refusing the game. */
+static void test_straddle_and_allin_posts(void)
+{
+    pe_preflop_allin_rules_t rules;
+    pe_preflop_allin_game_t *game;
+    pe_preflop_root_view_t root;
+    pe_storage_t *storage = NULL;
+
+    /* UTG straddles to 2: the minimum raise is 2 (to 4), not the CLI's 1. */
+    base_rules(&rules, 4, NULL);
+    rules.tree_showdown = 0;
+    rules.has_root_posts = 1;
+    rules.root_to_act = 0;
+    rules.root_posts[1] = 0.5;
+    rules.root_posts[2] = 1.0;
+    rules.root_posts[3] = 2.0;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL, "straddled root was not created");
+    if (game)
+    {
+        CHECK(pe_preflop_allin_root_view(game, &root) == 0 &&
+                  fabs(root.min_raise - 2.0) < 1e-12 &&
+                  fabs(root.pot - 3.5) < 1e-12 && root.first_to_act == 0,
+              "straddled root: min raise %g pot %g opener %d, want 2, 3.5, 0",
+              root.min_raise, root.pot, root.first_to_act);
+        pe_preflop_allin_game_destroy(game);
+    }
+
+    /* An ante on every seat is not part of the raise: 1.05 - 0.05. */
+    for (int p = 0; p < 4; ++p)
+        rules.root_posts[p] = 0.05;
+    rules.root_posts[1] = 0.55;
+    rules.root_posts[2] = 1.05;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL && pe_preflop_allin_root_view(game, &root) == 0 &&
+              fabs(root.min_raise - 1.0) < 1e-12,
+          "ante root: min raise %g, want 1", game ? root.min_raise : -1.0);
+    pe_preflop_allin_game_destroy(game);
+
+    /* The SB is all in from its 0.5 post and would open: the action skips it
+     * to the BB, and the solve plays around the all-in seat. */
+    base_rules(&rules, 4, NULL);
+    rules.tree_showdown = 0;
+    rules.has_root_posts = 1;
+    rules.root_to_act = 1;
+    rules.root_posts[1] = 0.5;
+    rules.root_posts[2] = 1.0;
+    rules.stacks[1] = 0.5;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL, "a seat all in from its post refused the game");
+    if (game)
+    {
+        CHECK(pe_preflop_allin_root_view(game, &root) == 0 &&
+                  root.first_to_act == 2 && root.posts[1] == 0.5 &&
+                  root.behind[1] == 0.0 && root.behind[2] == 4.0,
+              "all-in root: opener %d, SB posts %g behind %g",
+              root.first_to_act, root.posts[1], root.behind[1]);
+        CHECK(run_solve(game, 200, 0xA11u, &storage) == 0,
+              "the solve failed around a seat all in from its post");
+        for (size_t i = 0u; i < pe_preflop_allin_infodesc_count(game); ++i)
+        {
+            pe_preflop_infodesc_view_t view;
+            if (pe_preflop_allin_infodesc_view_at(game, i, &view) == 0)
+                CHECK(view.actor != 1, "the all-in SB was asked to act");
+        }
+        pe_storage_destroy(storage);
+        pe_preflop_allin_game_destroy(game);
+    }
+
+    /* A post above the stack is still invalid, and so is a table where no
+     * seat is left to act. */
+    rules.root_posts[1] = 0.6;
+    CHECK(pe_preflop_allin_game_create(&rules, NULL) == NULL,
+          "a post above its stack was accepted");
+    base_rules(&rules, 2, NULL);
+    rules.tree_showdown = 0;
+    rules.has_root_posts = 1;
+    rules.root_to_act = 0;
+    rules.root_posts[0] = rules.stacks[0];
+    rules.root_posts[1] = rules.stacks[1];
+    CHECK(pe_preflop_allin_game_create(&rules, NULL) == NULL,
+          "a table all in from its posts was accepted");
+    printf("  straddle and all-in posts: OK\n");
+}
+
 /* A postflop header and a header with nothing posted have nothing to seat. */
 static void test_header_rejections(void)
 {
@@ -725,6 +813,7 @@ int main(void)
     test_header_rejections();
     test_header_scaling();
     test_dead_money_in_pot();
+    test_straddle_and_allin_posts();
     test_four_handed_monker_seats();
     test_actor_wraps_past_fold();
     test_heads_up_unchanged();

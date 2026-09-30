@@ -1506,6 +1506,18 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
             posts[player] = rules->ante;
         if (rules->root_street == 0 && rules->has_root_posts)
             posts[player] = rules->root_posts[player];
+        /* A seat-by-seat post may cover the whole stack: that seat starts
+         * all in, which pe_betting_state_init cannot express (it wants chips
+         * behind every seat), so it is seated with a placeholder and put all
+         * in once the state exists.  The classic blinds keep refusing it. */
+        if (rules->root_street == 0 && rules->has_root_posts &&
+            posts[player] <= rules->stacks[player] &&
+            posts[player] + PREFLOP_EPSILON >= rules->stacks[player])
+        {
+            posts[player] = rules->stacks[player];
+            stacks_after[player] = 1.0;
+            continue;
+        }
         if (posts[player] >= rules->stacks[player])
         {
             pe_preflop_allin_game_destroy(game);
@@ -1529,13 +1541,25 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     {
         int first_to_act = rules->player_count > 2 ? 2 : 0;
         double to_call = rules->big_blind;
-        if (rules->root_street == 0 && rules->has_root_posts)
+        double min_raise = 0.0;
+        int seated = rules->root_street == 0 && rules->has_root_posts;
+        if (seated)
         {
+            double smallest = posts[0];
             first_to_act = rules->root_to_act;
             to_call = 0.0;
             for (player = 0; player < rules->player_count; ++player)
+            {
                 if (posts[player] > to_call)
                     to_call = posts[player];
+                if (posts[player] < smallest)
+                    smallest = posts[player];
+            }
+            /* The largest post is the live bet a raise must beat by its own
+             * size: over a straddle of 2 the minimum raise goes to 4, not to
+             * straddle + one big blind.  The smallest post is what every seat
+             * pays (an ante, or nothing) and is not part of that bet. */
+            min_raise = to_call - smallest;
         }
         if (pe_betting_state_init(&game->root_betting.betting,
                                   &game->betting_rules, stacks_after,
@@ -1547,6 +1571,37 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
             return NULL;
         }
         game->root_betting.betting.current_bet = to_call;
+        if (min_raise > game->root_betting.betting.min_raise)
+            game->root_betting.betting.min_raise = min_raise;
+        if (seated)
+        {
+            pe_betting_state_t *betting = &game->root_betting.betting;
+            int actionable = 0;
+            /* Seats whose post took their whole stack: all in, nothing
+             * behind, and never the one to act. */
+            for (player = 0; player < rules->player_count; ++player)
+                if (posts[player] >= rules->stacks[player])
+                {
+                    betting->stack[player] = 0.0;
+                    betting->all_in[player] = 1;
+                }
+            for (int step = 0; step < rules->player_count; ++step)
+            {
+                int seat = (first_to_act + step) % rules->player_count;
+                if (!betting->all_in[seat])
+                {
+                    betting->to_act = (int8_t)seat;
+                    break;
+                }
+            }
+            for (player = 0; player < rules->player_count; ++player)
+                actionable += !betting->all_in[player];
+            if (actionable == 0)
+            {
+                pe_preflop_allin_game_destroy(game);
+                return NULL;
+            }
+        }
     }
     for (player = 0; player < rules->player_count; ++player)
     {
@@ -1683,6 +1738,7 @@ int pe_preflop_allin_root_view(const pe_preflop_allin_game_t *game,
     out->street = (int)game->root_betting.street;
     out->first_to_act = betting->to_act;
     out->pot = betting->pot;
+    out->min_raise = betting->min_raise;
     for (int player = 0; player < game->rules.player_count; ++player)
     {
         out->posts[player] = betting->invested[player];

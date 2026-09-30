@@ -1439,9 +1439,11 @@ static void write_report_root(FILE *file, const options_t *options,
         return;
     fprintf(file,
             "\"root\":{\"source\":\"%s\",\"street\":%d,\"first_to_act\":%d,"
-            "\"pot\":%.17g,\"dead_money\":%.17g,\"posts\":[",
+            "\"pot\":%.17g,\"dead_money\":%.17g,\"min_raise\":%.17g,"
+            "\"posts\":[",
             source, root.street, root.first_to_act, root.pot,
-            rules->has_root_posts ? rules->root_dead_money : 0.0);
+            rules->has_root_posts ? rules->root_dead_money : 0.0,
+            root.min_raise);
     for (int player = 0; player < options->players; ++player)
         fprintf(file, "%s%.17g", player ? "," : "", root.posts[player]);
     fprintf(file, "],\"stacks\":[");
