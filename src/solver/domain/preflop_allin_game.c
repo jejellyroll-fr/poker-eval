@@ -87,6 +87,9 @@ struct pe_preflop_allin_game_t
     size_t desc_index_mask;
     size_t desc_limit_bytes;   /* 0 = unbounded */
     int desc_limited;          /* set once the bound stopped a recording */
+    /* Seat each tree node acts for, replayed through the betting engine
+     * (rules.tree_actors_from_betting); NULL keeps the tree's own labels. */
+    int *tree_actor;
 };
 
 #define PREFLOP_DESC_CHUNK 1024u
@@ -259,6 +262,51 @@ static const mpf_tree_node_t *preflop_tree_node(
     return &game->rules.tree->nodes[state->tree_node_index];
 }
 
+/* The seat a tree node acts for: the replayed one when the game derived it,
+ * else the label the tree carries. */
+static int preflop_tree_actor(const pe_preflop_allin_game_t *game,
+                              int node_index)
+{
+    if (game->tree_actor)
+        return game->tree_actor[node_index];
+    return game->rules.tree->nodes[node_index].acting_player;
+}
+
+/* Replay the tree from `betting` through the betting engine, recording at
+ * each decision node the seat the engine hands the action to.  A tree whose
+ * file stores no actor (Monker) can only label a node "the next seat", which
+ * is wrong as soon as the action wraps past a folded or all-in player; the
+ * engine skips those seats, so its answer is the one play will meet.  The
+ * walk stays on the node's street: a street change is dealt by the game. */
+static void preflop_replay_tree_actors(pe_preflop_allin_game_t *game,
+                                       int node_index,
+                                       const pe_betting_state_t *betting,
+                                       int street, int depth)
+{
+    const mpf_tree_def_t *tree = game->rules.tree;
+    const mpf_tree_node_t *node;
+
+    if (node_index < 0 || node_index >= tree->node_count ||
+        depth > tree->node_count)
+        return;
+    node = &tree->nodes[node_index];
+    if (node->type != MPF_TREE_NODE_PLAYER || (int)node->street != street ||
+        betting->terminal || betting->round_complete || betting->to_act < 0)
+        return;
+    game->tree_actor[node_index] = betting->to_act;
+    for (int i = 0; i < node->action_count; ++i)
+    {
+        pe_action_t action;
+        pe_betting_state_t child;
+        if (tree_action_to_semantic_in_state(node, i, betting, &action) != 0 ||
+            pe_betting_apply_action(betting, &game->betting_rules, &action,
+                                    &child) != PE_BETTING_OK)
+            continue;
+        preflop_replay_tree_actors(game, node->actions[i].next_index, &child,
+                                   street, depth + 1);
+    }
+}
+
 /* ------------------------------------------------------------------ *
  * Hashing helpers
  * ------------------------------------------------------------------ */
@@ -329,7 +377,8 @@ static uint16_t preflop_enumerate(const pe_preflop_allin_game_t *game,
     {
         const mpf_tree_node_t *node = preflop_tree_node(game, state);
         if (node && node->type == MPF_TREE_NODE_PLAYER &&
-            node->acting_player == betting->to_act &&
+            preflop_tree_actor(game, state->tree_node_index) ==
+                betting->to_act &&
             (int)node->street == (int)state->street)
         {
             uint16_t kept = 0u;
@@ -1219,8 +1268,9 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
         round.betting = source->betting;
         /* The tree names who is first on the new street; only fall back to
          * the seating rule when it does not. */
-        first_to_act = tree_next ? tree_next->acting_player
-                                 : preflop_first_actionable_player(&source->betting);
+        first_to_act = tree_next
+            ? preflop_tree_actor(game, source->tree_node_index)
+            : preflop_first_actionable_player(&source->betting);
         if (first_to_act < 0)
             first_to_act = 0;
         if (pe_holdem_round_advance(&round, &game->betting_rules, next_board,
@@ -1318,7 +1368,8 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
             if (rules->root_posts[player] > largest)
                 largest = rules->root_posts[player];
         }
-        if (!(largest > 0.0) || rules->root_to_act < 0 ||
+        if (!(largest > 0.0) || !(rules->root_dead_money >= 0.0) ||
+            rules->root_dead_money > DBL_MAX || rules->root_to_act < 0 ||
             rules->root_to_act >= rules->player_count)
             return NULL;
     }
@@ -1505,6 +1556,10 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
     game->root_betting.betting.pot = 0.0;
     for (player = 0; player < rules->player_count; ++player)
         game->root_betting.betting.pot += posts[player];
+    /* Dead money is in the pot but nobody's investment: pot-sized actions
+     * count it and the payoffs hand it to the winner as a carried pot. */
+    if (rules->root_street == 0 && rules->has_root_posts)
+        game->root_betting.betting.pot += rules->root_dead_money;
 
     if (rules->root_street != 0)
     {
@@ -1533,6 +1588,23 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
          * make a tree that continues into the next street unplayable.  The deal
          * sampler already has the board dead through its own init. */
         game->root_betting.dead_cards = MASK_EMPTY;
+    }
+
+    if (rules->tree && rules->tree_actors_from_betting &&
+        rules->tree->node_count > 0)
+    {
+        game->tree_actor = malloc((size_t)rules->tree->node_count *
+                                  sizeof(*game->tree_actor));
+        if (!game->tree_actor)
+        {
+            pe_preflop_allin_game_destroy(game);
+            return NULL;
+        }
+        for (int node = 0; node < rules->tree->node_count; ++node)
+            game->tree_actor[node] = rules->tree->nodes[node].acting_player;
+        preflop_replay_tree_actors(game, rules->tree->root_index,
+                                   &game->root_betting.betting,
+                                   (int)game->root_betting.street, 0);
     }
 
     game->ops.action_count = preflop_op_action_count;
@@ -1585,6 +1657,7 @@ void pe_preflop_allin_game_destroy(pe_preflop_allin_game_t *game)
         free(game->desc_chunks[chunk]);
     free(game->desc_chunks);
     free(game->desc_index);
+    free(game->tree_actor);
     free(game);
 }
 
@@ -1597,6 +1670,15 @@ const pe_external_game_t *pe_preflop_allin_external(
 int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game)
 {
     return game ? game->rules.player_count : 0;
+}
+
+int pe_preflop_allin_tree_actor(const pe_preflop_allin_game_t *game,
+                                int node_index)
+{
+    if (!game || !game->rules.tree || node_index < 0 ||
+        node_index >= game->rules.tree->node_count)
+        return -1;
+    return preflop_tree_actor(game, node_index);
 }
 
 void pe_preflop_allin_game_set_storage(pe_preflop_allin_game_t *game,

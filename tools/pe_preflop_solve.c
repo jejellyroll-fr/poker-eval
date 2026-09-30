@@ -367,7 +367,8 @@ static void print_strategy_report(const options_t *options,
             if (node->type != MPF_TREE_NODE_PLAYER)
                 continue;
             printf("tree_step node=%d id=%s actor=P%d branches=", node_index,
-                   node->id ? node->id : "?", node->acting_player + 1);
+                   node->id ? node->id : "?",
+                   pe_preflop_allin_tree_actor(game, node_index) + 1);
             for (int action = 0; action < node->action_count; ++action)
             {
                 char label[80] = {0};
@@ -1848,19 +1849,29 @@ int main(int argc, char **argv)
         rules.root_to_act = tree_header.first_to_act;
     else
         rules.root_to_act = 0;
+    /* A Monker .tree stores no actor per node; the reader labels each one
+     * "the next seat", which misses folded and all-in seats.  Let the game
+     * replay the tree through the betting engine instead.  JSON trees name
+     * their players and keep them. */
+    if (tree && !tree_path_is_json(options.tree))
+        rules.tree_actors_from_betting = 1;
     /* A native Monker preflop tree is played in Monker's own seat numbering:
      * the header's committed[] posts the blinds on the seats the tree acts
-     * for (SB = 1 and BB = 2 past two players, opener = first_to_act).  The
-     * classic root would post SB = 0, BB = 1 and open on seat 2, which no
-     * multiway node of the tree acts for.  JSON trees keep the classic root. */
+     * for (SB = 1 and BB = 2 past two players, opener = first_to_act), and
+     * its dead money goes in the pot.  The classic root would post SB = 0,
+     * BB = 1 and open on seat 2, which no multiway node of the tree acts
+     * for.  JSON trees keep the classic root. */
     if (root_street == 0 && tree && !tree_path_is_json(options.tree))
     {
         double posts[PE_MONKER_MAX_PLAYERS];
         double stacks[PE_MONKER_MAX_PLAYERS];
+        double dead_money = 0.0;
         if (pe_monker_tree_preflop_posts(&tree_header, options.big_blind,
-                                         posts, stacks) == PE_MONKER_OK)
+                                         posts, stacks, &dead_money) ==
+            PE_MONKER_OK)
         {
             rules.has_root_posts = 1;
+            rules.root_dead_money = dead_money;
             printf("tree_seats=monker first_to_act=%d posts=", rules.root_to_act);
             for (int player = 0; player < options.players; ++player)
             {
@@ -1872,12 +1883,17 @@ int main(int argc, char **argv)
             printf(" stacks=");
             for (int player = 0; player < options.players; ++player)
                 printf("%s%g", player ? "," : "", rules.stacks[player]);
-            printf("\n");
-            if (tree_header.dead_money > 0.0)
-                fprintf(stderr,
-                        "warning: the tree header carries %g dead money; "
-                        "the preflop root does not model it and plays "
-                        "without it.\n", tree_header.dead_money);
+            printf(" dead_money=%g\n", dead_money);
+        }
+        else if (options.players > 2)
+        {
+            /* Heads-up the classic root seats the blinds the same way, so a
+             * header without posts still plays; multiway it cannot. */
+            fprintf(stderr,
+                    "could not seat Monker tree %s: its header posts no big "
+                    "blind on seat 2, and the classic root does not match "
+                    "Monker's multiway seats\n", options.tree);
+            goto fail;
         }
     }
     for (size_t i = 0u; i < sizeof(rules.raise_sizes) / sizeof(rules.raise_sizes[0]); ++i)

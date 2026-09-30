@@ -198,37 +198,50 @@ pe_monker_status_t pe_monker_tree_read_header(
 
 pe_monker_status_t pe_monker_tree_preflop_posts(
     const pe_monker_tree_header_t *header, double big_blind,
-    double *out_posts, double *out_stacks)
+    double *out_posts, double *out_stacks, double *out_dead_money)
 {
-    double largest = 0.0;
+    uint32_t big_blind_seat;
+    double ante;
+    double blind;
     double scale;
     uint32_t i;
 
-    if (!header || !out_posts || !out_stacks)
+    if (!header || !out_posts || !out_stacks || !out_dead_money)
         return PE_MONKER_ERR_NULL_ARGUMENT;
-    if (header->street != 0 || header->player_count < 1u ||
+    if (header->street != 0 || header->player_count < 2u ||
         header->player_count > PE_MONKER_MAX_PLAYERS ||
-        !pe_finite_double(big_blind) || !(big_blind > 0.0))
+        !pe_finite_double(big_blind) || !(big_blind > 0.0) ||
+        !pe_finite_double(header->dead_money) || header->dead_money < 0.0)
         return PE_MONKER_ERR_INVALID_HEADER;
     for (i = 0u; i < header->player_count; ++i)
-    {
         if (!pe_finite_double(header->committed[i]) ||
             header->committed[i] < 0.0 ||
             !pe_finite_double(header->stacks[i]) || header->stacks[i] < 0.0)
             return PE_MONKER_ERR_INVALID_HEADER;
-        if (header->committed[i] > largest)
-            largest = header->committed[i];
-    }
-    if (!(largest > 0.0))
-        return PE_MONKER_ERR_INVALID_HEADER;
     /* The file's money scale is not stated (see read_money); the big blind is
-     * the one amount both sides agree on, so it anchors the conversion. */
-    scale = big_blind / largest;
+     * the one amount both sides agree on, so it anchors the conversion.  Its
+     * seat is fixed by Monker's numbering, not by being the largest post: a
+     * straddle posts more.  Heads-up there is no non-blind seat to show an
+     * ante, so the whole post is the blind. */
+    big_blind_seat = header->player_count == 2u ? 1u : 2u;
+    ante = 0.0;
+    if (header->player_count > 2u)
+    {
+        ante = header->committed[0];
+        for (i = 1u; i < header->player_count; ++i)
+            if (header->committed[i] < ante)
+                ante = header->committed[i];
+    }
+    blind = header->committed[big_blind_seat] - ante;
+    if (!(blind > 0.0))
+        return PE_MONKER_ERR_INVALID_HEADER;
+    scale = big_blind / blind;
     for (i = 0u; i < header->player_count; ++i)
     {
         out_posts[i] = header->committed[i] * scale;
         out_stacks[i] = header->stacks[i] * scale;
     }
+    *out_dead_money = header->dead_money * scale;
     return PE_MONKER_OK;
 }
 

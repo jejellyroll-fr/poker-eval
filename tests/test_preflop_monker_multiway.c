@@ -20,6 +20,7 @@
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
 #include <poker_eval/solver/pe_monker.h>
 #include <poker_eval/solver/pe_preflop_allin_game.h>
+#include <poker_eval/solver/pe_rng.h>
 #include <poker_eval/solver/pe_storage.h>
 
 #include <math.h>
@@ -255,6 +256,7 @@ static void test_four_handed_monker_seats(void)
     mpf_tree_def_t *tree = NULL;
     double posts[PE_MONKER_MAX_PLAYERS];
     double stacks[PE_MONKER_MAX_PLAYERS];
+    double dead = -1.0;
     pe_preflop_allin_rules_t rules;
     pe_preflop_allin_game_t *game;
     pe_storage_t *storage = NULL;
@@ -275,13 +277,14 @@ static void test_four_handed_monker_seats(void)
           tree->nodes[0].acting_player);
 
     /* 1. Header -> posts and stacks in big blinds, seats untouched. */
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK,
           "preflop header did not convert");
     CHECK(posts[0] == 0.0 && posts[1] == 0.5 && posts[2] == 1.0 &&
               posts[3] == 0.0,
           "posts %g,%g,%g,%g, want 0,0.5,1,0",
           posts[0], posts[1], posts[2], posts[3]);
+    CHECK(dead == 0.0, "dead money %g, want 0", dead);
     for (int p = 0; p < 4; ++p)
         CHECK(stacks[p] == 5.0, "seat %d stack %g, want 5", p, stacks[p]);
 
@@ -301,6 +304,7 @@ static void test_four_handed_monker_seats(void)
     /* 3. Played in Monker's numbering. */
     base_rules(&rules, 4, tree);
     rules.has_root_posts = 1;
+    rules.tree_actors_from_betting = 1;
     rules.root_to_act = header.first_to_act;
     for (int p = 0; p < 4; ++p)
     {
@@ -370,6 +374,7 @@ static void test_heads_up_unchanged(void)
     mpf_tree_def_t *tree = NULL;
     double posts[PE_MONKER_MAX_PLAYERS];
     double stacks[PE_MONKER_MAX_PLAYERS];
+    double dead = -1.0;
     pe_preflop_allin_rules_t classic;
     pe_preflop_allin_rules_t seated;
     pe_preflop_allin_game_t *classic_game;
@@ -383,7 +388,7 @@ static void test_heads_up_unchanged(void)
     if (!tree)
         return;
     CHECK(count_decision_nodes(tree) == 2, "heads-up push/fold is not 2 nodes");
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
               PE_MONKER_OK && posts[0] == 0.5 && posts[1] == 1.0,
           "heads-up header did not convert to 0.5/1");
 
@@ -437,29 +442,257 @@ static void test_heads_up_unchanged(void)
     printf("  heads-up header seats: OK (same game as the classic root)\n");
 }
 
+/* The scale is anchored on the big blind seat, not on the largest post, and
+ * the ante (the smallest post at the table) is not part of the blind. */
+static void test_header_scaling(void)
+{
+    pe_monker_tree_header_t header;
+    double posts[PE_MONKER_MAX_PLAYERS];
+    double stacks[PE_MONKER_MAX_PLAYERS];
+    double dead;
+
+    /* UTG straddle: 0 / SB / BB / 2 BB. */
+    memset(&header, 0, sizeof(header));
+    header.player_count = 4u;
+    header.first_to_act = 0;
+    header.committed[1] = 1000.0;
+    header.committed[2] = 2000.0;
+    header.committed[3] = 4000.0;
+    header.dead_money = 1000.0;
+    for (int p = 0; p < 4; ++p)
+        header.stacks[p] = 200000.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+              PE_MONKER_OK,
+          "straddled header did not convert");
+    CHECK(posts[0] == 0.0 && posts[1] == 0.5 && posts[2] == 1.0 &&
+              posts[3] == 2.0 && stacks[0] == 100.0 && dead == 0.5,
+          "straddle read as %g,%g,%g,%g stack %g dead %g; want 0,0.5,1,2 "
+          "stack 100 dead 0.5",
+          posts[0], posts[1], posts[2], posts[3], stacks[0], dead);
+
+    /* A 100-unit ante on every seat does not inflate the blind. */
+    header.committed[0] = 100.0;
+    header.committed[1] = 1100.0;
+    header.committed[2] = 2100.0;
+    header.committed[3] = 100.0;
+    header.dead_money = 0.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+              PE_MONKER_OK &&
+              fabs(posts[0] - 0.05) < 1e-12 && fabs(posts[1] - 0.55) < 1e-12 &&
+              fabs(posts[2] - 1.05) < 1e-12 && fabs(posts[3] - 0.05) < 1e-12,
+          "ante header read as %g,%g,%g,%g; want 0.05,0.55,1.05,0.05",
+          posts[0], posts[1], posts[2], posts[3]);
+}
+
+/* Dead money sits in the root pot and goes to whoever wins it. */
+static void test_dead_money_in_pot(void)
+{
+    static const int32_t committed[4] = {0, 1000, 2000, 0};
+    unsigned char bytes[512];
+    size_t length = build_push_fold_tree(bytes, 4, 3, committed, 10000);
+    pe_monker_tree_header_t header;
+    mpf_tree_def_t *tree = NULL;
+    pe_preflop_allin_rules_t rules;
+    pe_preflop_allin_game_t *game;
+
+    CHECK(load_tree("poker_eval_monker_pf4_dead.tree", bytes, length, &header,
+                    &tree) == 0,
+          "dead-money fixture did not load");
+    if (!tree)
+        return;
+    base_rules(&rules, 4, tree);
+    rules.has_root_posts = 1;
+    rules.tree_actors_from_betting = 1;
+    rules.root_to_act = 3;
+    rules.root_posts[1] = 0.5;
+    rules.root_posts[2] = 1.0;
+    rules.root_dead_money = 0.5;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL, "dead-money game was not created");
+    if (game)
+    {
+        const pe_external_game_t *external = pe_preflop_allin_external(game);
+        pe_rng_t rng = pe_solver_rng_root(0xDEADu);
+        pe_chance_sample_t sample;
+        const void *states[4];
+        states[0] = external->sample_chance_child(external->root, &rng,
+                                                  &sample, external->user);
+        /* UTG, BTN and SB fold: the BB takes the blinds and the dead money. */
+        for (int i = 1; i < 4; ++i)
+            states[i] = states[i - 1]
+                ? external->apply_action(states[i - 1], 0u, external->user)
+                : NULL;
+        CHECK(states[3] != NULL, "the fold line did not play out");
+        if (states[3])
+        {
+            double bb = external->terminal_value(states[3], 2, external->user);
+            double sb = external->terminal_value(states[3], 1, external->user);
+            CHECK(fabs(bb - 1.0) < 1e-9 && fabs(sb + 0.5) < 1e-9,
+                  "fold-out paid BB %g and SB %g, want +1 and -0.5", bb, sb);
+        }
+        for (int i = 3; i >= 0; --i)
+            if (states[i])
+                external->release_state(states[i], external->user);
+        pe_preflop_allin_game_destroy(game);
+    }
+    rules.root_dead_money = -1.0;
+    CHECK(pe_preflop_allin_game_create(&rules, NULL) == NULL,
+          "negative dead money was accepted");
+    mpf_tree_free(tree);
+}
+
+/* 3-handed, 100 BB, BTN (seat 0) opens.  BTN folds, SB raises pot, BB
+ * re-raises pot: the action is back on the SB.  The reader labels that node
+ * "the seat after the BB", i.e. the folded BTN; the betting engine skips the
+ * folded seat.  Replaying the tree binds the node to the SB. */
+static void test_actor_wraps_past_fold(void)
+{
+    static const unsigned edges[] = {
+        2u,                         /* BTN: fold | all-in                 */
+        0u, 2u,                     /*  fold -> SB: fold | pot            */
+        0u, 0u,                     /*    fold -> leaf                    */
+        40100u, 3u,                 /*    pot -> BB: fold | call | pot    */
+        0u, 0u,                     /*      fold -> leaf                  */
+        1u, 0u,                     /*      call -> leaf                  */
+        40100u, 2u,                 /*      pot -> SB again: fold | call  */
+        0u, 0u, 1u, 0u,
+        3u, 2u,                     /*  all-in -> SB: fold | call         */
+        0u, 2u, 0u, 0u, 1u, 0u,     /*    fold -> BB: fold | call         */
+        1u, 2u, 0u, 0u, 1u, 0u      /*    call -> BB: fold | call         */
+    };
+    enum { SB_AGAIN = 6 };
+    unsigned char bytes[256];
+    size_t at = 0u;
+    pe_monker_tree_header_t header;
+    mpf_tree_def_t *tree = NULL;
+    double posts[PE_MONKER_MAX_PLAYERS];
+    double stacks[PE_MONKER_MAX_PLAYERS];
+    double dead;
+    pe_preflop_allin_rules_t rules;
+    pe_preflop_allin_game_t *game;
+    pe_storage_t *storage = NULL;
+    int reached = 0;
+
+    put_i64(bytes, &at, 33487);
+    put_i32(bytes, &at, 1);
+    put_i32(bytes, &at, 3);
+    put_i32(bytes, &at, 0);
+    put_i32(bytes, &at, 0);
+    put_i32(bytes, &at, 0);
+    put_i32(bytes, &at, 1000);
+    put_i32(bytes, &at, 2000);
+    put_i32(bytes, &at, 0);
+    for (int p = 0; p < 3; ++p)
+        put_i32(bytes, &at, 200000);
+    for (size_t i = 0u; i < sizeof(edges) / sizeof(edges[0]); ++i)
+        put_u16(bytes, &at, edges[i]);
+    bytes[at++] = 0u;
+
+    CHECK(load_tree("poker_eval_monker_wrap3.tree", bytes, at, &header,
+                    &tree) == 0,
+          "3-handed wrap fixture did not load");
+    if (!tree)
+        return;
+    CHECK(tree->node_count > SB_AGAIN &&
+              tree->nodes[SB_AGAIN].type == MPF_TREE_NODE_PLAYER &&
+              tree->nodes[SB_AGAIN].acting_player == 0,
+          "fixture drifted: node %d should be the reader's 'seat 0' guess",
+          (int)SB_AGAIN);
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+              PE_MONKER_OK,
+          "3-handed header did not convert");
+
+    base_rules(&rules, 3, tree);
+    rules.has_root_posts = 1;
+    rules.root_to_act = header.first_to_act;
+    for (int p = 0; p < 3; ++p)
+    {
+        rules.root_posts[p] = posts[p];
+        rules.stacks[p] = stacks[p];
+    }
+
+    /* The reader's labels alone: the SB node is bound to the folded BTN. */
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL, "3-handed game was not created");
+    if (game)
+    {
+        CHECK(pe_preflop_allin_tree_actor(game, SB_AGAIN) == 0,
+              "without the replay the node should keep the reader's label");
+        CHECK(run_solve(game, 20, 0x3u, &storage) != 0,
+              "the reader's label on node %d did not break the solve",
+              (int)SB_AGAIN);
+        pe_storage_destroy(storage);
+        storage = NULL;
+        pe_preflop_allin_game_destroy(game);
+    }
+
+    rules.tree_actors_from_betting = 1;
+    game = pe_preflop_allin_game_create(&rules, NULL);
+    CHECK(game != NULL, "replayed 3-handed game was not created");
+    if (!game)
+    {
+        mpf_tree_free(tree);
+        return;
+    }
+    CHECK(pe_preflop_allin_tree_actor(game, SB_AGAIN) == 1,
+          "node %d replayed to seat %d, want the SB (1)", (int)SB_AGAIN,
+          pe_preflop_allin_tree_actor(game, SB_AGAIN));
+    for (int n = 0; n < tree->node_count; ++n)
+        if (n != SB_AGAIN && tree->nodes[n].type == MPF_TREE_NODE_PLAYER)
+            CHECK(pe_preflop_allin_tree_actor(game, n) ==
+                      tree->nodes[n].acting_player,
+                  "node %d moved from seat %d to %d", n,
+                  tree->nodes[n].acting_player,
+                  pe_preflop_allin_tree_actor(game, n));
+    CHECK(run_solve(game, 300, 0x3u, &storage) == 0,
+          "the replayed 3-handed tree failed a traversal");
+    for (size_t i = 0u; i < pe_preflop_allin_infodesc_count(game); ++i)
+    {
+        pe_preflop_infodesc_view_t view;
+        if (pe_preflop_allin_infodesc_view_at(game, i, &view) != 0 ||
+            view.tree_node_index != SB_AGAIN)
+            continue;
+        reached = 1;
+        CHECK(view.actor == 1 && view.action_count == 2u,
+              "node %d played by seat %d with %u actions, want SB with 2",
+              (int)SB_AGAIN, view.actor, (unsigned)view.action_count);
+    }
+    CHECK(reached, "the solve never reached node %d", (int)SB_AGAIN);
+    pe_storage_destroy(storage);
+    pe_preflop_allin_game_destroy(game);
+    mpf_tree_free(tree);
+    printf("  3-handed wrap past a fold: OK (node %d bound to the SB)\n",
+           (int)SB_AGAIN);
+}
+
 /* A postflop header and a header with nothing posted have nothing to seat. */
 static void test_header_rejections(void)
 {
     pe_monker_tree_header_t header;
     double posts[PE_MONKER_MAX_PLAYERS];
     double stacks[PE_MONKER_MAX_PLAYERS];
+    double dead;
 
     memset(&header, 0, sizeof(header));
     header.player_count = 2u;
     header.stacks[0] = header.stacks[1] = 100.0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a header with no post was seated");
+    header.committed[0] = 1.0;
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
+              PE_MONKER_ERR_INVALID_HEADER,
+          "a heads-up header with nothing on the big blind seat was seated");
     header.committed[1] = 2.0;
     header.street = 1;
-    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a flop header was seated as preflop");
     header.street = 0;
-    CHECK(pe_monker_tree_preflop_posts(&header, 0.0, posts, stacks) ==
+    CHECK(pe_monker_tree_preflop_posts(&header, 0.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_INVALID_HEADER,
           "a zero big blind was accepted");
-    CHECK(pe_monker_tree_preflop_posts(NULL, 1.0, posts, stacks) ==
+    CHECK(pe_monker_tree_preflop_posts(NULL, 1.0, posts, stacks, &dead) ==
               PE_MONKER_ERR_NULL_ARGUMENT,
           "a NULL header was accepted");
 }
@@ -468,7 +701,10 @@ int main(void)
 {
     printf("test_preflop_monker_multiway\n");
     test_header_rejections();
+    test_header_scaling();
+    test_dead_money_in_pot();
     test_four_handed_monker_seats();
+    test_actor_wraps_past_fold();
     test_heads_up_unchanged();
     if (failures)
     {

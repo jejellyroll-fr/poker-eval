@@ -171,21 +171,24 @@ pe_monker_status_t pe_monker_tree_read_header(
 const char *pe_monker_status_string(pe_monker_status_t status);
 
 /**
- * Forced bets and starting stacks of a preflop (street 0) header, per seat,
- * in the caller's chip unit.
+ * Forced bets, starting stacks and dead money of a preflop (street 0)
+ * header, per seat, in the caller's chip unit.
  *
- * The header keeps Monker's own seat numbering -- past two players seat 1
- * posts the small blind, seat 2 the big blind, and first_to_act is the last
- * seat -- and money in the file's own scale.  Seats are returned as they are;
- * money is rescaled so that the largest post equals big_blind.  A stack the
- * header leaves at zero stays zero, for the caller to fill in.
+ * The header keeps Monker's own seat numbering -- heads-up seat 1 posts the
+ * big blind; past two players seat 1 posts the small blind, seat 2 the big
+ * blind, and first_to_act is the last seat -- and money in the file's own
+ * scale.  Seats are returned as they are; money is rescaled so that the big
+ * blind seat's post, less the ante every seat pays, equals big_blind.  The
+ * ante is the smallest post at the table (a non-blind seat's), so a straddle
+ * or any other post above the big blind does not move the scale.  A stack
+ * the header leaves at zero stays zero, for the caller to fill in.
  *
- * Returns PE_MONKER_ERR_INVALID_HEADER for a postflop header or one with no
- * positive post: there is nothing to seat.
+ * Returns PE_MONKER_ERR_INVALID_HEADER for a postflop header or one whose
+ * big blind seat posts nothing above the ante: there is no scale to anchor.
  */
 pe_monker_status_t pe_monker_tree_preflop_posts(
     const pe_monker_tree_header_t *header, double big_blind,
-    double *out_posts, double *out_stacks);
+    double *out_posts, double *out_stacks, double *out_dead_money);
 
 /**
  * Read the recursive node stream following the fixed header.

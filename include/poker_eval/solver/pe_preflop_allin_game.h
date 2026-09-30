@@ -82,6 +82,16 @@ typedef struct
      * multiway opens on 2) cannot express. */
     int has_root_posts;
     double root_posts[PE_PREFLOP_ALLIN_MAX_PLAYERS];
+    /* Money already in the pot that belongs to nobody (a Monker header's
+     * dead money).  Read only with has_root_posts. */
+    double root_dead_money;
+    /* The tree's actor labels are a guess, not data: replay the tree through
+     * the betting engine at creation and let each node act for the seat the
+     * engine hands the action to.  A Monker .tree stores no actor, and its
+     * reader's "next seat" label is wrong once the action wraps past a
+     * folded or all-in player.  Leave unset for trees that name their
+     * players (JSON), so a mislabelled node still fails loudly. */
+    int tree_actors_from_betting;
     /* Every player holds the complete range ("any hand").  The `ranges`
      * argument to pe_preflop_allin_game_create is then ignored and may be
      * NULL: deals are drawn straight from the live deck.
@@ -144,6 +154,12 @@ const pe_external_game_t *pe_preflop_allin_external(
     const pe_preflop_allin_game_t *game);
 
 int pe_preflop_allin_player_count(const pe_preflop_allin_game_t *game);
+
+/* Seat the tree node at node_index acts for, as play binds it: replayed
+ * through the betting engine under rules.tree_actors_from_betting, the
+ * tree's own label otherwise.  -1 without a tree or out of range. */
+int pe_preflop_allin_tree_actor(const pe_preflop_allin_game_t *game,
+                                int node_index);
 
 /* Attach the storage the solve loop updates. While set, the game answers
  * action_probability with the current regret-matching strategy so opponents
