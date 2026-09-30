@@ -85,6 +85,11 @@ typedef struct
     /* Money already in the pot that belongs to nobody (a Monker header's
      * dead money).  Read only with has_root_posts. */
     double root_dead_money;
+    /* The ante every seat's root_posts include (0 without one).  It is not
+     * part of the live bet: the root minimum raise is the largest post less
+     * it, so over a straddle of 2 a minimum raise goes to 4.  Read only
+     * with has_root_posts. */
+    double root_ante;
     /* The tree's actor labels are a guess, not data: replay the tree through
      * the betting engine at creation and let each node act for the seat the
      * engine hands the action to.  A Monker .tree stores no actor, and its

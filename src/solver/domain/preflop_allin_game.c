@@ -1030,10 +1030,30 @@ static double preflop_sampled_sidepot_value(
             return 0.0;
         }
     }
+    /* Money nobody invested this street (dead money, a postflop root's pot)
+     * is a main pot every live player contests: it goes by showdown equity,
+     * not in equal shares whatever the hands. */
     if (initial_pot > PREFLOP_EPSILON && active_count > 0)
+    {
+        uint8_t eligible[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0u};
+        double equity[PE_PREFLOP_ALLIN_MAX_PLAYERS] = {0.0};
         for (int p = 0; p < players; ++p)
-            if (betting->active[p])
-                payout[p] += initial_pot / (double)active_count;
+            eligible[p] = betting->active[p] ? 1u : 0u;
+        if (active_count == 1)
+        {
+            for (int p = 0; p < players; ++p)
+                if (eligible[p])
+                    payout[p] += initial_pot;
+        }
+        else if (preflop_showdown_equity_for_players(game, state->holes,
+                                                     eligible, equity) == 0)
+        {
+            for (int p = 0; p < players; ++p)
+                payout[p] += initial_pot * equity[p];
+        }
+        else
+            return 0.0;
+    }
     return payout[player] - betting->invested[player];
 }
 
@@ -1204,6 +1224,9 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
                 return -1;
             child->betting = source->betting;
             child->is_chance = 0;
+            /* The child is a fresh allocation: carry the tree position, or a
+             * tree whose root is not its first node restarts at node 0. */
+            child->tree_node_index = source->tree_node_index;
             for (int p = 0; p < game->rules.player_count; ++p)
                 child->holes[p] = deal.holes[p];
             child->board = source->board;
@@ -1211,6 +1234,18 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
             for (int p = 0; p < game->rules.player_count; ++p)
                 child->dead_cards |= deal.holes[p];
             child->street = source->street;
+            /* A root whose round is already over (every seat all in from its
+             * post, or the only live seat already matched) has no decision:
+             * go on to the board, or end on the river. */
+            if (child->betting.round_complete && !child->betting.terminal &&
+                (game->rules.postflop_streets || game->rules.tree_showdown))
+            {
+                child->tree_node_index = -1;
+                if (child->street == PE_HOLDEM_RIVER)
+                    child->betting.terminal = 1;
+                else
+                    child->is_chance = 1;
+            }
             sample->outcome = 0;
             sample->importance_ratio = deal.importance_ratio;
             return 0;
@@ -1369,7 +1404,9 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
                 largest = rules->root_posts[player];
         }
         if (!(largest > 0.0) || !(rules->root_dead_money >= 0.0) ||
-            rules->root_dead_money > DBL_MAX || rules->root_to_act < 0 ||
+            rules->root_dead_money > DBL_MAX ||
+            !(rules->root_ante >= 0.0) || !(rules->root_ante < largest) ||
+            rules->root_to_act < 0 ||
             rules->root_to_act >= rules->player_count)
             return NULL;
     }
@@ -1545,27 +1582,16 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
         int seated = rules->root_street == 0 && rules->has_root_posts;
         if (seated)
         {
-            double smallest = -1.0;
             first_to_act = rules->root_to_act;
             to_call = 0.0;
             for (player = 0; player < rules->player_count; ++player)
-            {
                 if (posts[player] > to_call)
                     to_call = posts[player];
-                /* A post that took the whole stack is capped, not the price
-                 * every seat pays: an all-in for less than the ante would
-                 * otherwise read as a smaller ante. */
-                if (posts[player] < rules->stacks[player] &&
-                    (smallest < 0.0 || posts[player] < smallest))
-                    smallest = posts[player];
-            }
             /* The largest post is the live bet a raise must beat by its own
              * size: over a straddle of 2 the minimum raise goes to 4, not to
-             * straddle + one big blind.  The smallest uncapped post is what
-             * every seat pays (an ante, or nothing) and is not part of that
-             * bet. */
-            if (smallest >= 0.0)
-                min_raise = to_call - smallest;
+             * straddle + one big blind.  The ante is in every post and is not
+             * part of that bet. */
+            min_raise = to_call - rules->root_ante;
         }
         if (pe_betting_state_init(&game->root_betting.betting,
                                   &game->betting_rules, stacks_after,
@@ -1602,10 +1628,17 @@ pe_preflop_allin_game_t *pe_preflop_allin_game_create(
             }
             for (player = 0; player < rules->player_count; ++player)
                 actionable += !betting->all_in[player];
-            if (actionable == 0)
+            /* Nobody left with a decision: every seat is all in from its
+             * post, or the one seat that is not has already matched the
+             * largest post (nobody behind it can raise).  The round is over
+             * before it starts; the deal goes straight to the board rollout
+             * or the showdown, as a Monker tree with a terminal root says. */
+            if (actionable == 0 ||
+                (actionable == 1 &&
+                 posts[betting->to_act] + PREFLOP_EPSILON >= to_call))
             {
-                pe_preflop_allin_game_destroy(game);
-                return NULL;
+                betting->round_complete = 1;
+                betting->to_act = -1;
             }
         }
     }

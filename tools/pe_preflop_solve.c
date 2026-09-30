@@ -1898,12 +1898,14 @@ int main(int argc, char **argv)
         double posts[PE_MONKER_MAX_PLAYERS];
         double stacks[PE_MONKER_MAX_PLAYERS];
         double dead_money = 0.0;
+        double ante = 0.0;
         if (pe_monker_tree_preflop_posts(&tree_header, options.small_blind,
                                          options.big_blind, posts, stacks,
-                                         &dead_money) == PE_MONKER_OK)
+                                         &dead_money, &ante) == PE_MONKER_OK)
         {
             rules.has_root_posts = 1;
             rules.root_dead_money = dead_money;
+            rules.root_ante = ante;
             printf("tree_seats=monker first_to_act=%d posts=", rules.root_to_act);
             for (int player = 0; player < options.players; ++player)
             {
@@ -1915,7 +1917,7 @@ int main(int argc, char **argv)
             printf(" stacks=");
             for (int player = 0; player < options.players; ++player)
                 printf("%s%g", player ? "," : "", rules.stacks[player]);
-            printf(" dead_money=%g\n", dead_money);
+            printf(" dead_money=%g ante=%g\n", dead_money, ante);
         }
         else
         {
@@ -1925,10 +1927,9 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "could not seat Monker tree %s: its header's posts give "
                     "no big blind to anchor on (the big blind seat -- seat %d "
-                    "-- posts nothing above the ante or is all in from its "
-                    "post%s)\n", options.tree, options.players == 2 ? 1 : 2,
-                    options.players == 2
-                        ? ", or the two posts do not fit --sb/--bb" : "");
+                    "-- is all in from its post, or no seat shows the ante "
+                    "and the blind posts do not fit --sb/--bb)\n",
+                    options.tree, options.players == 2 ? 1 : 2);
             goto fail;
         }
     }
