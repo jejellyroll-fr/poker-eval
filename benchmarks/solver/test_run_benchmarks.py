@@ -555,6 +555,63 @@ class TelemetryParsingTests(unittest.TestCase):
 
         self.assertIsNone(parsed["metrics"]["metrics_available"])
 
+    def test_br_estimator_trailing_field_is_tolerated_and_captured(self) -> None:
+        # Issue #274: pe_preflop_solve appends `br_estimator=<name>` after
+        # `metrics_available`. The guarantee regex is anchored at the end of
+        # the line, so an untolerated trailing field makes the whole line
+        # fail to match and every convergence metric reads as missing -- the
+        # regression this test pins.
+        stdout = (
+            "iterations=64 complete=1 infosets=375\n"
+            "guarantee=empirical exploitability_raw=4.828125 "
+            "exploitability_mbb=4828.125000 br_samples=16 br_mode=sampled "
+            "nash_conv_raw=4.828125 nash_conv_mbb=4828.125000 "
+            "max_br_gap_mbb=2898.437500 mean_br_gap_mbb=2414.062500 "
+            "unit=chips/game measurement_iteration=64 sample_count=64 "
+            "metrics_available=1 br_estimator=confidence-guided"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.55,
+            requested_iterations=64,
+            report_rows_requested=0,
+        )
+
+        metrics = parsed["metrics"]
+        self.assertEqual(metrics["guarantee"], "empirical")
+        self.assertAlmostEqual(metrics["exploitability_mbb_per_game"], 4828.125)
+        self.assertEqual(metrics["br_samples"], 16)
+        self.assertIs(metrics["metrics_available"], True)
+        self.assertEqual(metrics["br_estimator"], "confidence-guided")
+
+    def test_br_estimator_absent_for_old_binaries(self) -> None:
+        # A solver older than the field stops at metrics_available; None
+        # means "unknown", never a named estimator.
+        stdout = (
+            "iterations=1250 complete=0 infosets=2194\n"
+            "guarantee=unspecified exploitability_raw=0.000000 "
+            "exploitability_mbb=0.000000 br_samples=16 br_mode=sampled "
+            "nash_conv_raw=0.000000 nash_conv_mbb=0.000000 "
+            "max_br_gap_mbb=0.000000 mean_br_gap_mbb=0.000000 unit=chips/game "
+            "measurement_iteration=0 sample_count=0 metrics_available=0"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.55,
+            requested_iterations=20000,
+            report_rows_requested=0,
+        )
+
+        self.assertIsNone(parsed["metrics"]["br_estimator"])
+
     def test_throughput_uses_solve_time_not_full_process_time(self) -> None:
         stdout = "\n".join(
             [
