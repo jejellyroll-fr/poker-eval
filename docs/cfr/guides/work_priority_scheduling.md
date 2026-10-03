@@ -298,9 +298,37 @@ spots solve the same strategy under both policies and differ only in how they
 measure it. The script refuses to publish a row that violates that: the report's
 fields must agree outside the measurement's own numbers and the storage its own
 traversal grows, the training's visits, updates and chance draws must agree
-street by street, and the trained strategy's argmax must agree. That is also
-what makes the comparison paired — both arms of a spot see the same seed, hence
-the same solved strategy.
+street by street, and the trained strategy's per-decision frequencies must agree.
+
+That last check reads the report's hand table, and deliberately not `RANGE GRID`:
+the tool emits the grid only for Hold'em, so a fingerprint taken from it is empty
+on all three PLO spots, and two empty fingerprints compare equal whatever was
+trained — the guard would have been vacuous exactly where the workloads are
+hardest. The fingerprint is the multiset of `node`, `actor` and `frequencies`.
+The hand column is a canonical representative over the 24 loose suit permutations
+of hole and board, so it names a class of decisions rather than one decision; the
+EV column is the measurement's own sampled view and the board column is the
+sampled deal's runout. Neither belongs to the strategy. A multiset rather than a
+sequence, because `--report-rows` fills per-node quotas in storage-id order and
+the row *set* churns: on `plo4-3way` the two policies share 1,881 of 1,997 rows,
+and two FIFO runs at `--br-samples 20000` and `40000` share the same 1,881 — this
+projection is identical in all four cases while still separating a 500-iteration
+strategy from a 5,000-iteration one on all four spots. An empty fingerprint is
+refused rather than accepted, so a report format that dropped the hand table
+fails the guard instead of disarming it.
+
+The storage exemption is the same kind of narrow: the measurement resolves
+infosets the training never reached, and `storage_v2.c` derives the byte totals
+from `slot_capacity` and `meta_capacity`, both of which grow by doubling. A pair
+that straddles a doubling therefore moves `storage_bytes` and its parts while
+solving the identical strategy — reproduced on PLO4 heads-up, seed 1, 500
+iterations, `--br-samples 9000`, with the aware arm's cap pinned to 4 against
+FIFO's 64: 22,993 infosets on 65,536 hash slots against 22,936 on 32,768. Those
+byte totals are exempt; `recompute_calls` and `bytes_saved_vs_full` are not,
+because they answer to the memory policy rather than to the measurement.
+
+That is also what makes the comparison paired — both arms of a spot see the same
+seed, hence the same solved strategy.
 
 `pe-preflop-solve`, external MCCFR, 5,000 iterations, 4 showdown boards, 20,000
 BR trajectories per player, `--br-min-samples 4 --br-max-samples 64`, seeds

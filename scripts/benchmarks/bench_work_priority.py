@@ -87,14 +87,40 @@ MEASUREMENT_FIELDS = frozenset((
 # here CREATES the infoset". So the measurement's footprint outside itself is
 # the storage it grows, and how far it explores depends on the cap, hence on
 # the policy. This is not a training change and it predates the priority:
-# `--br-samples 4000` moves the same counters under FIFO alone. It is listed
-# rather than ignored so that the exemption stays visible and narrow.
+# `--br-samples 4000` moves the same counters under FIFO alone.
+#
+# Two halves. The counts and the two ratios move with every extra infoset. The
+# byte totals move only when a count crosses a capacity doubling: storage_v2.c
+# reports `hash_index_bytes = slot_capacity * sizeof(uint32_t)` (line 810),
+# `metadata_bytes += meta_capacity * sizeof(pe_infoset_meta_t)` (811), sums the
+# lot into `storage_bytes` (835), and grows both capacities by doubling. They
+# answer to the storage's capacities, not to the training, so a pair that
+# straddles a doubling refuses the comparison on a difference that is purely
+# measurement growth. Reproduced: plo4 heads-up, 500 iterations, seed 1,
+# `--br-samples 9000`, the aware arm given a bucket ratio large enough to pin
+# every item to bucket 0 (cap 4 against FIFO's 64) -- 22993 infosets on 65536
+# hash slots against 22936 on 32768, and `storage_bytes`, `hash_index_bytes`
+# and `retained_strategy_bytes` all differ. It is listed rather than ignored so
+# that the exemption stays visible and narrow. `recompute_calls` and
+# `bytes_saved_vs_full` are deliberately absent: they answer to the memory
+# policy, which the report already states outright in `memory_policy`.
 GROWTH_FIELDS = frozenset((
     "infosets",
     "memory.total_infosets",
     "memory.adapter_bytes",
     "memory.bytes_per_infoset",
     "memory.bytes_per_strategy_slot",
+    # Capacity-derived byte totals -- see above.
+    "memory.storage_bytes",
+    "memory.hash_index_bytes",
+    "memory.metadata_bytes",
+    "memory.regret_bytes",
+    "memory.average_bytes",
+    "memory.other_values_bytes",
+    "memory.staging_bytes",
+    "memory.allocator_overhead_bytes",
+    "memory.retained_strategy_bytes",
+    "memory.recomputable_strategy_bytes",
 ))
 
 EVALS_RE = re.compile(
@@ -119,13 +145,49 @@ def training_effort(text):
     return EFFORT_RE.findall(text)
 
 
-def strategy_grid(text):
-    """The report's range grid -- the highest-frequency action per hand, which
-    is the trained strategy's argmax. Coarser than the full table, but unlike
-    the hand table it does not depend on the order of a storage the measurement
-    grows, so it can be compared between two arms."""
-    start = text.find("RANGE GRID")
-    return text[start:].splitlines()[:48] if start >= 0 else []
+# The hand table, which is emitted for every game -- unlike the range grid.
+HAND_TABLE_HEADER = "hand\tnode\tactor\tfrequencies"
+HAND_TABLE_END = ("RANGE GRID", "report_phase", "board_query_rows=",
+                  "... report capped")
+
+
+def strategy_fingerprint(text):
+    """The trained strategy, as a multiset of (node, actor, frequencies).
+
+    `RANGE GRID` is the obvious fingerprint and the wrong one: the tool emits
+    it only for Hold'em (`pe_preflop_solve.c` gates it on `strcmp(options->game,
+    "holdem") == 0`), so on the three PLO spots it is absent and a guard that
+    reads it is vacuous there. The hand table is emitted for every game. Two of
+    its columns are unusable: the EV column is the measurement's own sampled
+    view, and the board column is the sampled deal's runout. The hand column is
+    a canonical representative over the 24 loose suit permutations of hole and
+    board (`preflop_op_infoset_key`), so it names a class of decisions rather
+    than one decision. That leaves node, actor and the frequency vector.
+
+    A multiset, not the sequence: `--report-rows` fills per-node quotas in
+    storage-id order, so which rows make the cut depends on a storage the
+    measurement grows, and the row *set* can differ between two arms that
+    trained identically. Measured on `plo4-3way` at seed 1: 1881 of 1997 rows
+    shared between the two policies, and between two FIFO runs at `--br-samples
+    20000` and `40000` -- and this projection identical in all four cases, while
+    still separating a 500-iteration strategy from a 5000-iteration one on all
+    four spots.
+    """
+    rows, inside = [], False
+    for line in text.splitlines():
+        if line.startswith(HAND_TABLE_HEADER):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if line.startswith(HAND_TABLE_END):
+            inside = False
+            continue
+        cells = line.split("\t")
+        # `ev_update` rows carry the same tab layout and are not strategy.
+        if len(cells) >= 4 and cells[0] != "ev_update":
+            rows.append((cells[1], cells[2], cells[3]))
+    return sorted(rows)
 
 
 def flatten(report, prefix=""):
@@ -205,7 +267,7 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
         "nash_conv": float(report["metrics"]["nash_conv_mbb_per_game"]),
         "priority": parse_priority(out),
         "effort": training_effort(out),
-        "grid": strategy_grid(out),
+        "strategy": strategy_fingerprint(out),
     }
 
 
@@ -215,8 +277,12 @@ def assert_same_training(spot, arm, run, baseline_run):
     Three checks, weakest to strongest evidence: the report's fields agree
     outside the measurement's own numbers and the storage it grows; the
     training's visits, updates and chance draws agree street by street; and
-    the trained strategy's argmax agrees. A policy that reached the training
-    would have to break all three at once to get past this."""
+    the trained strategy's frequencies agree decision by decision. A policy
+    that reached the training would have to break all three at once to get
+    past this. The third check refuses an empty fingerprint rather than
+    passing it: an empty list compares equal to another empty list, which is
+    how a game whose report format dropped the hand table would quietly lose
+    the guard instead of failing it."""
     a, b = flatten(run["report"]), flatten(baseline_run["report"])
     if set(a) != set(b):
         sys.exit("%s %s: the report's shape changed across policies (%s)"
@@ -231,10 +297,12 @@ def assert_same_training(spot, arm, run, baseline_run):
         sys.exit("%s %s: the training did different work under this policy: "
                  "%s vs %s" % (spot[0], arm, run["effort"],
                                baseline_run["effort"]))
-    if run["grid"] != baseline_run["grid"]:
-        sys.exit("%s %s: the trained strategy's argmax differs under this "
-                 "policy, so the arms are not measuring the same thing"
-                 % (spot[0], arm))
+    if not run["strategy"]:
+        sys.exit("%s %s: the report carries no hand table, so the arms cannot "
+                 "be shown to have trained the same strategy" % (spot[0], arm))
+    if run["strategy"] != baseline_run["strategy"]:
+        sys.exit("%s %s: the trained strategy differs under this policy, so "
+                 "the arms are not measuring the same thing" % (spot[0], arm))
 
 
 def check_estimator(spot, label, runs):
@@ -323,7 +391,8 @@ def main():
           % (args.iterations, args.samples, args.br_samples,
              args.br_min_samples, cap, args.seeds))
     print("Every arm of a spot solves the same strategy; the training counters "
-          "and the trained argmax are checked to agree.")
+          "and the trained strategy's per-decision frequencies are checked to "
+          "agree.")
     print()
     header = ("%-11s %-17s %8s %12s %10s %8s %9s %14s %19s"
               % ("spot", "policy", "wall s", "BR evals", "draws/dec",

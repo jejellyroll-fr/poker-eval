@@ -38,6 +38,44 @@ STREET_STATS = (
     "street_stats street=preflop policy=standard visits=882 updates=764 "
     "chance_samples=500 unique_infosets=8758 uniform_rows=8757")
 
+# A hand table as the CLI prints one. Copied from a real `plo4` run, which is
+# the point: `RANGE GRID` is emitted only for Hold'em, so on PLO this is the
+# only strategy evidence the report carries.
+HAND_TABLE_HEADER = "hand\tnode\tactor\tfrequencies\tEV by action"
+HAND_TABLE_ROWS = (
+    "7cTc7d8h\t-1\tP1\tfold=75.0%,all-in=25.0%\tfold=pending,all-in=pending\t-",
+    # Same tab layout, not strategy: the fingerprint has to skip it.
+    "ev_update\t7cTc7d8h\t-1\tP1\tfold=-0.50,all-in=1.00",
+    "4cJc8hTh\t-1\tP1\tfold=50.0%,all-in=50.0%\tfold=pending,all-in=pending\t-",
+)
+HAND_TABLE_TAIL = "report_phase=complete rows=2"
+
+
+def hand_table(*rows):
+    return "\n".join(("HAND TABLE", HAND_TABLE_HEADER, *rows, HAND_TABLE_TAIL))
+
+
+HAND_TABLE = hand_table(*HAND_TABLE_ROWS)
+
+
+def memory(**overrides):
+    """A `memory` block shaped like the CLI's."""
+    base = {
+        "total_infosets": 338,
+        "storage_bytes": 983040,
+        "hash_index_bytes": 65536,
+        "metadata_bytes": 393216,
+        "regret_bytes": 262144,
+        "average_bytes": 262144,
+        "retained_strategy_bytes": 983040,
+        "bytes_per_infoset": 113.4,
+        "bytes_per_strategy_slot": 56.7,
+        "recompute_calls": 0,
+        "bytes_saved_vs_full": 0,
+    }
+    base.update(overrides)
+    return base
+
 
 def report(**overrides):
     """A report shaped like the CLI's, with the fields the guard compares."""
@@ -46,7 +84,7 @@ def report(**overrides):
         "game": "holdem",
         "iterations": 5000,
         "infosets": 338,
-        "memory": {"total_infosets": 338, "storage_bytes": 983040},
+        "memory": memory(),
         "metrics": {
             "exploitability_mbb_per_game": 23770.8,
             "nash_conv_mbb_per_game": 23770.8,
@@ -66,8 +104,7 @@ def run(**overrides):
     measured = {
         "report": report(),
         "effort": bench.training_effort(STREET_STATS),
-        "grid": ["RANGE GRID (highest-frequency action; F=fold C=call R=raise)",
-                 "A  F F F"],
+        "strategy": bench.strategy_fingerprint(HAND_TABLE),
     }
     measured.update(overrides)
     return measured
@@ -123,6 +160,56 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(flat, {"a.b": 1, "c": "<list 3>", "d": 4})
 
 
+class StrategyFingerprintTests(unittest.TestCase):
+    def test_a_hand_table_without_a_range_grid_still_fingerprints(self) -> None:
+        # The regression this covers: `pe_preflop_solve.c` gates `RANGE GRID`
+        # on `strcmp(options->game, "holdem") == 0`, so a fingerprint read from
+        # it is empty on all three PLO spots and a guard comparing it is
+        # vacuous there -- both arms agree on the empty list whatever they
+        # trained. The hand table is emitted for every game.
+        self.assertNotIn("RANGE GRID", HAND_TABLE)
+        self.assertTrue(bench.strategy_fingerprint(HAND_TABLE))
+
+    def test_the_fingerprint_is_node_actor_and_frequencies(self) -> None:
+        self.assertEqual(bench.strategy_fingerprint(HAND_TABLE),
+                         [("-1", "P1", "fold=50.0%,all-in=50.0%"),
+                          ("-1", "P1", "fold=75.0%,all-in=25.0%")])
+
+    def test_ev_update_rows_are_not_strategy(self) -> None:
+        # They share the tab layout, so a parser that only splits on tabs
+        # would read the sampled EV line as a second opinion on the strategy.
+        self.assertEqual(len(bench.strategy_fingerprint(HAND_TABLE)), 2)
+
+    def test_the_sampled_columns_do_not_enter_the_fingerprint(self) -> None:
+        # Column 4 is the measurement's own sampled EV view and column 5 is
+        # the sampled deal's board: both belong to the measurement, not to the
+        # strategy, and neither may be compared between the arms.
+        moved = (HAND_TABLE
+                 .replace("fold=pending,all-in=pending", "fold=9.99,all-in=-9.99")
+                 .replace("\t-\n", "\tAsKdQc\n"))
+        self.assertNotEqual(moved, HAND_TABLE)
+        self.assertEqual(bench.strategy_fingerprint(HAND_TABLE),
+                         bench.strategy_fingerprint(moved))
+
+    def test_the_row_order_does_not_enter_the_fingerprint(self) -> None:
+        # `--report-rows` fills per-node quotas in storage-id order, so which
+        # rows make the cut churns between two arms that trained identically.
+        shuffled = hand_table(HAND_TABLE_ROWS[2], HAND_TABLE_ROWS[1],
+                              HAND_TABLE_ROWS[0])
+        self.assertNotEqual(shuffled, HAND_TABLE)
+        self.assertEqual(bench.strategy_fingerprint(HAND_TABLE),
+                         bench.strategy_fingerprint(shuffled))
+
+    def test_a_frequency_change_is_read(self) -> None:
+        changed = HAND_TABLE.replace("fold=75.0%,all-in=25.0%",
+                                     "fold=80.0%,all-in=20.0%")
+        self.assertNotEqual(bench.strategy_fingerprint(HAND_TABLE),
+                            bench.strategy_fingerprint(changed))
+
+    def test_a_report_without_a_hand_table_fingerprints_empty(self) -> None:
+        self.assertEqual(bench.strategy_fingerprint("no table here"), [])
+
+
 class TrainingGuardTests(unittest.TestCase):
     def assertRefused(self, spot, arm, candidate, baseline, needle) -> None:
         with self.assertRaises(SystemExit) as caught:
@@ -150,12 +237,27 @@ class TrainingGuardTests(unittest.TestCase):
     def test_the_storage_the_measurement_grows_is_allowed_to_move(self) -> None:
         # The exemption is narrow and deliberate: the measurement resolves
         # infosets with create=1, so the storage counters move with the policy.
+        # The byte totals move with them whenever a count crosses a capacity
+        # doubling -- storage_v2.c derives them from slot_capacity and
+        # meta_capacity, both of which double. Reproduced on plo4 heads-up at
+        # seed 1, 500 iterations and --br-samples 9000: 22993 infosets on
+        # 65536 hash slots against 22936 on 32768.
         base = run()
         grown = run(report=report(
-            infosets=8810,
-            memory={"total_infosets": 8810, "storage_bytes": 983040}))
-        bench.assert_same_training(("holdem-hu", "holdem", 2), "aware", grown,
-                                   base)
+            infosets=22993,
+            memory=memory(total_infosets=22993, storage_bytes=2097576,
+                          hash_index_bytes=262144, retained_strategy_bytes=2097152,
+                          bytes_per_infoset=91.2, bytes_per_strategy_slot=45.6)))
+        bench.assert_same_training(("plo4-hu", "plo4", 2), "aware", grown, base)
+
+    def test_a_memory_policy_counter_is_still_refused(self) -> None:
+        # The other side of that exemption: `recompute_calls` answers to the
+        # memory policy, not to the measurement, so exempting the byte totals
+        # must not have swallowed it.
+        base = run()
+        recomputed = run(report=report(memory=memory(recompute_calls=7)))
+        self.assertRefused(("plo4-hu", "plo4", 2), "aware", recomputed, base,
+                           "must not touch")
 
     def test_a_training_field_outside_the_exemption_is_refused(self) -> None:
         base = run()
@@ -180,10 +282,21 @@ class TrainingGuardTests(unittest.TestCase):
 
     def test_a_different_trained_strategy_is_refused(self) -> None:
         base = run()
-        other = run(grid=["RANGE GRID (highest-frequency action; F=fold C=call)",
-                          "A  C C C"])
-        self.assertRefused(("holdem-hu", "holdem", 2), "aware", other, base,
-                           "argmax differs")
+        other = run(strategy=bench.strategy_fingerprint(
+            HAND_TABLE.replace("fold=75.0%,all-in=25.0%",
+                               "fold=80.0%,all-in=20.0%")))
+        self.assertRefused(("plo4-hu", "plo4", 2), "aware", other, base,
+                           "strategy differs")
+
+    def test_an_empty_fingerprint_is_refused(self) -> None:
+        # An empty list compares equal to another empty list, so a report
+        # format that lost the hand table would silently disarm the guard
+        # rather than fail it. This is the failure mode the RANGE GRID
+        # fingerprint had on PLO without anyone noticing.
+        base = run()
+        blind = run(strategy=[])
+        self.assertRefused(("plo4-hu", "plo4", 2), "aware", blind, base,
+                           "no hand table")
 
 
 if __name__ == "__main__":
