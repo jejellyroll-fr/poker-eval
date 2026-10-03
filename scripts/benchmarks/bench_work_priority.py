@@ -71,6 +71,15 @@ import sys
 import tempfile
 import time
 
+# The report's row cap must not bind, because `strategy_fingerprint` is the
+# guard and a capped report turns it into a guard over a subset. The CLI's
+# default of 2,000 is enough at the published 5,000 iterations -- the trained
+# rows all fit -- but not once the solve is longer: on PLO4 heads-up at 50,000
+# iterations it emits 1,998 of 11,167 trained decisions. A large finite value is
+# used rather than `--report-rows 0`, which does not mean "no cap": with 0 the
+# two-sweep filter is disabled as well, so every row is printed twice.
+REPORT_ROWS = 10_000_000
+
 SPOTS = [
     # name, game, players (full private ranges)
     ("holdem-hu", "holdem", 2),
@@ -219,11 +228,17 @@ def strategy_fingerprint(text):
     against 5,000) moves 1% of the shared decisions on the least sensitive spot
     and 99% on the most sensitive.
 
-    A multiset, not the sequence: `--report-rows` fills per-node quotas in
+    A multiset, not the sequence: the row cap fills per-node quotas in
     storage-id order, so which rows make the cut depends on a storage the
-    measurement grows. The trained rows are never truncated by that quota in
-    these workloads -- the tool prints every row that carries a strategy before
-    it starts filling leftovers -- so the multiset is stable in practice.
+    measurement grows. The trained rows *can* be truncated by that quota, and
+    the measurement therefore asks for a cap that cannot bind and refuses a
+    report that was capped anyway -- see `REPORT_ROWS` and
+    `assert_report_uncapped`. Measured on PLO4 heads-up: the CLI's default
+    2,000-row report loses none of the 249 trained decisions at the published
+    5,000 iterations, but emits 1,998 of 11,167 of them at 50,000 and 1,998 of
+    28,496 at 200,000. An earlier version of this docstring asserted that the
+    trained rows were never truncated; that was true only of the published
+    regime, and it had not been measured.
     """
     rows, inside = [], False
     for line in text.splitlines():
@@ -240,6 +255,29 @@ def strategy_fingerprint(text):
         if len(cells) >= 4 and cells[0] != "ev_update" and trained(cells):
             rows.append((cells[0], cells[1], cells[2], cells[3]))
     return sorted(rows)
+
+
+def assert_report_uncapped(spot, arm, text):
+    """Refuse a report the row cap truncated.
+
+    The cap is enforced as a per-node quota filled in storage-id order, so a
+    node holding more infosets than its share loses whichever come last. The
+    trained rows are printed in the first of the two sweeps, so a long enough
+    solve loses *trained* decisions -- exactly the ones the fingerprint exists
+    to compare. Measured on PLO4 heads-up with the cap in force: 1,998 of
+    11,167 trained decisions emitted at 50,000 iterations, 1,998 of 28,496 at
+    200,000.
+
+    The tool prints "... report capped at N visible rows" exactly when its
+    budget ran out, and the quota loop can only truncate a node once the budget
+    is exhausted, so the absence of that line is the proof that nothing was
+    dropped. It is checked rather than assumed: the flag is requested above and
+    a workload that outgrows it must fail loudly, not compare a subset.
+    """
+    if "... report capped at" in text:
+        sys.exit("%s %s: the report was capped, so the strategy fingerprint "
+                 "would cover only part of the strategy -- raise REPORT_ROWS"
+                 % (spot[0], arm))
 
 
 def flatten(report, prefix=""):
@@ -288,7 +326,8 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
            "--br-min-samples", str(args.br_min_samples),
            "--br-max-samples", str(cap),
            "--exploitability-interval", str(args.iterations),
-           "--seed", str(seed), "--output", out_json]
+           "--seed", str(seed), "--output", out_json,
+           "--report-rows", str(REPORT_ROWS)]
     if policy is not None:
         cmd += ["--br-priority-policy", policy]
     start = time.perf_counter()
@@ -297,6 +336,7 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
     out = proc.stdout + proc.stderr
     if proc.returncode != 0:
         sys.exit("solve failed: %s\n%s" % (" ".join(cmd), out[-2000:]))
+    assert_report_uncapped(spot, policy, out)
     with open(out_json) as handle:
         report = json.load(handle)
     evals = EVALS_RE.findall(out)
@@ -395,9 +435,32 @@ T95 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
        2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042)
 
 
+def t95_expansion(df):
+    """The Cornish-Fisher Student-t quantile, accurate from df=10 upwards.
+
+    Agrees with `T95` to within 0.0004 over the whole overlap (df 10..30), and
+    with the published tables above it -- 2.0395 at df=31, 2.0211 at df=40,
+    1.9800 at df=120 -- before converging on the normal 1.95996.
+    """
+    z = 1.959963984540054  # the normal 97.5% quantile
+    z3, z5, z7 = z ** 3, z ** 5, z ** 7
+    return (z + (z3 + z) / (4.0 * df)
+            + (5.0 * z5 + 16.0 * z3 + 3.0 * z) / (96.0 * df * df)
+            + (3.0 * z7 + 19.0 * z5 + 17.0 * z3 - 15.0 * z) / (384.0 * df ** 3))
+
+
 def t95(df):
-    """Two-sided 95% Student-t quantile; the normal value beyond df=30."""
-    return T95[df - 1] if 1 <= df <= len(T95) else 1.96
+    """Two-sided 95% Student-t quantile.
+
+    The table is the authority for the small samples this benchmark actually
+    uses. Past it the flat normal quantile is not good enough: at 31 degrees of
+    freedom the quantile is 2.0395, not 1.96, so a 32-seed run would print an
+    interval 4% too narrow -- and the margin verdict is decided by whether that
+    interval fits inside a bound, so the error is not cosmetic.
+    """
+    if 1 <= df <= len(T95):
+        return T95[df - 1]
+    return t95_expansion(df)
 
 
 def paired_interval(diffs):

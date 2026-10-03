@@ -446,8 +446,11 @@ check that the reference is measuring the same thing.
 
 Criterion (1) is therefore supported as a bound rather than as an absence of
 evidence: the policy shifts the reported exploitability by at most 2.3% of the
-reported value, against a margin of 1.3-5.6%, while costing 14.4-20.9% fewer
-terminal evaluations. The bound is the **farthest interval endpoint**, not the
+reported value, against a margin of 1.3-5.6%, while costing 2.7-20.9% fewer
+terminal evaluations. The low end is `plo5-hu`, and it belongs in the range: the
+four workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only the three
+large ones would overstate the cheapest case by a factor of five. The bound is
+the **farthest interval endpoint**, not the
 half-width, and that is the same distinction the verdict above turns on: the
 half-widths are 1.2-1.7%, but the intervals are not centred on zero, so the
 largest shift the data admits is 2.26% on `holdem-hu` (its interval reaching

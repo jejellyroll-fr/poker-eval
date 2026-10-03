@@ -269,7 +269,26 @@ class StatisticsTests(unittest.TestCase):
         self.assertAlmostEqual(bench.t95(4), 2.776, places=3)
         self.assertAlmostEqual(bench.t95(1), 12.706, places=3)
         self.assertAlmostEqual(bench.t95(30), 2.042, places=3)
-        self.assertAlmostEqual(bench.t95(1000), 1.96, places=6)
+
+    def test_the_quantile_keeps_its_correction_past_the_table(self) -> None:
+        # The regression: beyond df=30 the function returned the flat normal
+        # 1.96. At 31 degrees of freedom the quantile is 2.0395, so a 32-seed
+        # run printed an interval 4% too narrow -- and the verdict is decided by
+        # whether that interval fits inside a bound, so it could flip.
+        self.assertAlmostEqual(bench.t95(31), 2.0395, places=3)
+        self.assertAlmostEqual(bench.t95(40), 2.0211, places=3)
+        self.assertAlmostEqual(bench.t95(120), 1.9800, places=3)
+        self.assertGreater(bench.t95(31), 1.96 + 0.07)
+        # Still monotone in the degrees of freedom, and still converges.
+        self.assertLess(bench.t95(31), bench.t95(30))
+        self.assertAlmostEqual(bench.t95(10 ** 6), 1.96, places=3)
+
+    def test_the_expansion_agrees_with_the_table_where_they_overlap(self) -> None:
+        # The table is the authority for the samples in use; the expansion takes
+        # over past it, so the two must not disagree in between.
+        for df in range(10, len(bench.T95) + 1):
+            self.assertAlmostEqual(bench.t95_expansion(df), bench.T95[df - 1],
+                                   places=3)
 
     def test_the_paired_interval_matches_a_hand_computed_case(self) -> None:
         mean, sd, half = bench.paired_interval([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -414,6 +433,27 @@ class TrainingGuardTests(unittest.TestCase):
         self.assertRefused(("plo4-hu", "plo4", 2), "aware", blind, base,
                            "no hand table")
 
+    def test_a_capped_report_is_refused(self) -> None:
+        # The cap is a per-node quota filled in storage-id order, so a node over
+        # quota loses the trained rows that come last -- the fingerprint would
+        # then cover part of the strategy and still compare equal. Measured:
+        # the CLI's default 2,000-row cap emits 1,998 of 11,167 trained
+        # decisions on PLO4 heads-up at 50,000 iterations.
+        with self.assertRaises(SystemExit) as caught:
+            bench.assert_report_uncapped(
+                ("plo4-hu", "plo4", 2), "fifo",
+                "... report capped at 2000 visible rows (--report-rows); the "
+                "solve storage still contains all 30134 infosets.")
+        self.assertIn("was capped", str(caught.exception))
+
+    def test_an_uncapped_report_is_accepted(self) -> None:
+        # The marker is the tool's own statement that its budget ran out, and
+        # the quota loop can only truncate once the budget is exhausted, so its
+        # absence is the proof that nothing was dropped.
+        self.assertIsNone(bench.assert_report_uncapped(
+            ("plo4-hu", "plo4", 2), "fifo",
+            "report_phase=complete rows=30134\n"))
+
 
 class PublishedBoundTests(unittest.TestCase):
     """The bound the guide states on the reported number, and where it comes
@@ -447,6 +487,13 @@ class PublishedBoundTests(unittest.TestCase):
         text = GUIDE.read_text(encoding="utf-8")
         self.assertIn("at most 2.3% of the", text)
         self.assertNotIn("at most 1.2-1.7%", text)
+
+    def test_the_savings_range_covers_the_smallest_saving(self) -> None:
+        # The four workloads save 14.4/14.6/2.7/20.9%, so a range that starts
+        # at 14.4% omits plo5-hu and overstates the cheapest case fivefold.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("costing 2.7-20.9% fewer", text)
+        self.assertNotIn("14.4-20.9%", text)
 
 
 if __name__ == "__main__":
