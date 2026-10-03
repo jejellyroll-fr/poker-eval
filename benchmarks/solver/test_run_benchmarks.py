@@ -555,6 +555,63 @@ class TelemetryParsingTests(unittest.TestCase):
 
         self.assertIsNone(parsed["metrics"]["metrics_available"])
 
+    def test_br_estimator_trailing_field_is_tolerated_and_captured(self) -> None:
+        # Issue #274: pe_preflop_solve appends `br_estimator=<name>` after
+        # `metrics_available`. The guarantee regex is anchored at the end of
+        # the line, so an untolerated trailing field makes the whole line
+        # fail to match and every convergence metric reads as missing -- the
+        # regression this test pins.
+        stdout = (
+            "iterations=64 complete=1 infosets=375\n"
+            "guarantee=empirical exploitability_raw=4.828125 "
+            "exploitability_mbb=4828.125000 br_samples=16 br_mode=sampled "
+            "nash_conv_raw=4.828125 nash_conv_mbb=4828.125000 "
+            "max_br_gap_mbb=2898.437500 mean_br_gap_mbb=2414.062500 "
+            "unit=chips/game measurement_iteration=64 sample_count=64 "
+            "metrics_available=1 br_estimator=confidence-guided"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.55,
+            requested_iterations=64,
+            report_rows_requested=0,
+        )
+
+        metrics = parsed["metrics"]
+        self.assertEqual(metrics["guarantee"], "empirical")
+        self.assertAlmostEqual(metrics["exploitability_mbb_per_game"], 4828.125)
+        self.assertEqual(metrics["br_samples"], 16)
+        self.assertIs(metrics["metrics_available"], True)
+        self.assertEqual(metrics["br_estimator"], "confidence-guided")
+
+    def test_br_estimator_absent_for_old_binaries(self) -> None:
+        # A solver older than the field stops at metrics_available; None
+        # means "unknown", never a named estimator.
+        stdout = (
+            "iterations=1250 complete=0 infosets=2194\n"
+            "guarantee=unspecified exploitability_raw=0.000000 "
+            "exploitability_mbb=0.000000 br_samples=16 br_mode=sampled "
+            "nash_conv_raw=0.000000 nash_conv_mbb=0.000000 "
+            "max_br_gap_mbb=0.000000 mean_br_gap_mbb=0.000000 unit=chips/game "
+            "measurement_iteration=0 sample_count=0 metrics_available=0"
+        )
+
+        parsed = bench.parse_stdout(
+            stdout,
+            {street: 0 for street in bench.STREETS},
+            {},
+            process_elapsed_seconds=1.0,
+            solve_elapsed_seconds=0.55,
+            requested_iterations=20000,
+            report_rows_requested=0,
+        )
+
+        self.assertIsNone(parsed["metrics"]["br_estimator"])
+
     def test_throughput_uses_solve_time_not_full_process_time(self) -> None:
         stdout = "\n".join(
             [
@@ -1028,6 +1085,139 @@ class ValidationTests(unittest.TestCase):
         self.assertIn(
             "native solver report schema='unexpected/v9', expected pe-preflop-solve/v1",
             failures,
+        )
+
+    def _complete_native_metrics(self) -> dict[str, object]:
+        return {
+            "guarantee": "empirical",
+            "exploitability_raw": 1.0,
+            "exploitability_mbb_per_game": 2.0,
+            "big_blind": 1.0,
+            "br_mode": "sampled",
+            "br_estimator": "confidence-guided",
+            "metrics_available": True,
+        }
+
+    def _complete_native_report(
+        self, metrics: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        return {
+            "schema": bench.NATIVE_REPORT_SCHEMA,
+            "game": "holdem",
+            "players": 2,
+            "algorithm": "cfr",
+            "backend": "cpu_ref",
+            "backend_validated": True,
+            "precision": "float64",
+            "simd_detected": "avx2",
+            "simd_cfr_integrated": False,
+            "iterations": 64,
+            "showdown_samples": 8,
+            "stack": 100.0,
+            "small_blind": 0.5,
+            "big_blind": 1.0,
+            "ante": 0.0,
+            "allow_nonallin_call": False,
+            "postflop_streets": True,
+            "br_samples": 16,
+            "infosets": 10,
+            "progress": {"iteration": 64, "complete": True},
+            "metrics": self._complete_native_metrics() if metrics is None else metrics,
+        }
+
+    def _native_result(
+        self, native_report: dict[str, object], metrics: dict[str, object]
+    ) -> dict[str, object]:
+        """A result whose command echoes the report, so the only failures a
+        test sees are the ones it is about."""
+        command = ["pe-preflop-solve"]
+        for option, field in (
+            ("--game", "game"),
+            ("--players", "players"),
+            ("--algorithm", "algorithm"),
+            ("--backend", "backend"),
+            ("--precision", "precision"),
+            ("--samples", "showdown_samples"),
+            ("--iterations", "iterations"),
+            ("--br-samples", "br_samples"),
+        ):
+            command += [option, str(native_report[field])]
+        return {
+            "command": command,
+            "benchmark": {
+                "actual_iterations": native_report["iterations"],
+                "requested_iterations": native_report["iterations"],
+                "metrics": metrics,
+                "memory": {},
+                "per_street": {},
+            },
+        }
+
+    def test_native_report_estimator_must_match_stdout(self) -> None:
+        # Issue #274: the estimator is named on stdout and in the archived
+        # report, and both describe one run. A report that disagrees with
+        # stdout would archive a one-rollout measurement under the
+        # confidence-guided label, which is exactly the confusion the field
+        # exists to remove.
+        report = self._complete_native_report()
+        result = self._native_result(
+            report,
+            {
+                **self._valid_convergence(),
+                "metrics_available": True,
+                "br_estimator": "one-rollout",
+            },
+        )
+
+        failures = bench.validate_native_report(report, result)
+
+        self.assertTrue(
+            any(
+                "metrics.br_estimator='confidence-guided' != stdout 'one-rollout'"
+                in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_native_report_estimator_missing_while_stdout_declares_it(self) -> None:
+        metrics = self._complete_native_metrics()
+        del metrics["br_estimator"]
+        report = self._complete_native_report(metrics=metrics)
+        result = self._native_result(
+            report,
+            {
+                **self._valid_convergence(),
+                "metrics_available": True,
+                "br_estimator": "confidence-guided",
+            },
+        )
+
+        failures = bench.validate_native_report(report, result)
+
+        self.assertTrue(
+            any(
+                "metrics.br_estimator is missing" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_native_report_estimator_absent_on_both_views_is_accepted(self) -> None:
+        # A solver older than the field states nothing on either surface;
+        # silence is not a contradiction.
+        metrics = self._complete_native_metrics()
+        del metrics["br_estimator"]
+        report = self._complete_native_report(metrics=metrics)
+        result = self._native_result(
+            report,
+            {**self._valid_convergence(), "metrics_available": True},
+        )
+
+        failures = bench.validate_native_report(report, result)
+
+        self.assertFalse(
+            any("br_estimator" in failure for failure in failures), failures
         )
 
 

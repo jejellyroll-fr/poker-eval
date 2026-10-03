@@ -263,6 +263,28 @@ def validate_native_report(
                 f"native solver report metrics.guarantee={guarantee!r} "
                 f"!= stdout {stdout_guarantee!r}"
             )
+        # Issue #274: the report names the estimator behind the exploitability
+        # (confidence-guided | one-rollout). Like metrics_available, the two
+        # views come from one run: a report that drops the field while stdout
+        # still declares it, or that disagrees with it, would archive a
+        # bounded-bias measurement indistinguishably from the historical
+        # one-rollout maximum. Both silent is a binary older than the field.
+        stdout_estimator = benchmark_metrics.get("br_estimator")
+        native_estimator = native_metrics.get("br_estimator")
+        if native_estimator is None and stdout_estimator is None:
+            pass
+        elif not isinstance(native_estimator, str) or not native_estimator:
+            failures.append(
+                "native solver report metrics.br_estimator is missing"
+            )
+        elif (
+            isinstance(stdout_estimator, str)
+            and native_estimator != stdout_estimator
+        ):
+            failures.append(
+                f"native solver report metrics.br_estimator="
+                f"{native_estimator!r} != stdout {stdout_estimator!r}"
+            )
         _compare_stdout_float(
             failures, native_metrics, benchmark_metrics, "exploitability_raw"
         )

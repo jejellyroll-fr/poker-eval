@@ -699,7 +699,8 @@ static void usage(FILE *stream)
         "                               max-samples, check-interval, confidence,\n"
         "                               absolute-tolerance, relative-tolerance\n"
         "  --br-KEY VALUE               confidence-guided BR decisions, same keys;\n"
-        "                               --br-max-samples N turns them on\n"
+        "                               on by default (issue #274), --br-max-samples 0\n"
+        "                               selects the historical one-rollout estimator\n"
         , DEFAULT_ITERATIONS);
     /* Split in two: one literal may not exceed the 4095 characters every C99
        compiler must accept. */
@@ -718,7 +719,8 @@ static void usage(FILE *stream)
         "                               decisions (issue #271): policy, min-visits,\n"
         "                               epsilon, buckets, bucket-ratio,\n"
         "                               aging-interval, assumed-stderr.  Needs the\n"
-        "                               --br-* settings above to be on.\n"
+        "                               confidence-guided BR on, which is the default\n"
+        "                               (issue #274); --br-max-samples 0 turns it off.\n"
         "  --target-mbb N               stop/report when empirical BR <= N mBB\n"
         "  --target-nash-conv-mbb N     stop when NashConv <= N mBB/game\n"
         "  --target-max-br-gap-mbb N    stop when the worst player's BR gap\n"
@@ -1122,6 +1124,10 @@ static int parse_options(int argc, char **argv, options_t *options)
     options->ante = 0.0;
     options->min_raise = DEFAULT_MIN_RAISE;
     options->br_samples = 256u;
+    /* Issue #274: the default measurement is the confidence-guided one,
+       whose bias is bounded; --br-max-samples 0 selects the historical
+       one-rollout estimator explicitly. */
+    options->br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES;
     options->exploitability_interval = 256u;
 options->checkpoint_interval =0u;
     options->target_mbb = 1.0;
@@ -1480,6 +1486,7 @@ static void write_report(const char *path, const options_t *options,
         "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
         "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g,"
         "\"br_mode\":\"%s\","
+        "\"br_estimator\":\"%s\","
         "\"nash_conv\":%.17g,\"nash_conv_unit\":\"%s\","
         "\"nash_conv_mbb_per_game\":%.17g,"
         "\"max_br_gap\":%.17g,\"mean_br_gap\":%.17g,"
@@ -1511,6 +1518,13 @@ static void write_report(const char *path, const options_t *options,
         guarantee_name(metrics->guarantee), metrics->exploitability_raw,
         metrics->exploitability_mbb_per_game, options->big_blind,
         pe_br_mode_name(metrics->br_mode),
+        /* Issue #274: the archived report names the estimator behind the
+           exploitability, exactly as the stdout line does, so a JSON report
+           produced under the confidence-guided default is distinguishable
+           from one produced with --br-max-samples 0 without knowing the
+           configuration that wrote it. */
+        pe_br_sampling_enabled(&options->br_sampling)
+            ? "confidence-guided" : "one-rollout",
         metrics->nash_conv, pe_metric_unit_name(metrics->nash_conv_unit),
         metrics->nash_conv_mbb_per_game,
         metrics->max_br_gap, metrics->mean_br_gap,
@@ -2196,7 +2210,7 @@ int main(int argc, char **argv)
         printf("guarantee=%s exploitability_raw=%.6f exploitability_mbb=%.6f br_samples=%llu br_mode=%s"
                " nash_conv_raw=%.6f nash_conv_mbb=%.6f max_br_gap_mbb=%.6f mean_br_gap_mbb=%.6f"
                " unit=%s measurement_iteration=%llu sample_count=%llu"
-               " metrics_available=%d\n",
+               " metrics_available=%d br_estimator=%s\n",
                guarantee_name(metrics.guarantee), metrics.exploitability_raw,
                metrics.exploitability_mbb_per_game,
                (unsigned long long)options.br_samples,
@@ -2209,7 +2223,12 @@ int main(int argc, char **argv)
                pe_metric_unit_name(metrics.nash_conv_unit),
                (unsigned long long)metrics.measurement_iteration,
                (unsigned long long)metrics.sample_count,
-               metrics_measured);
+               metrics_measured,
+               /* Issue #274: name the estimator behind the number, so the
+                  overshoot of the one-rollout maximum is visible rather
+                  than implicit. */
+               pe_br_sampling_enabled(&options.br_sampling)
+                   ? "confidence-guided" : "one-rollout");
         /* Issue #235: memory as a first-class diagnostic, separate from the
            convergence line so the Studio's fixed-prefix parse of
            "guarantee=" is untouched. bytes_per_infoset is the metric the

@@ -63,7 +63,13 @@ RE_GUARANTEE = re.compile(
     # Issue #249: the solver now states whether the convergence block was
     # measured at all, so a budget stop's zeros are not read as a measurement.
     # Optional, because lines from older solvers stop at sample_count.
-    r"(?:\s+metrics_available=([01]))?)?$"
+    r"(?:\s+metrics_available=([01]))?)?"
+    # Issue #274: the solver names the estimator behind the number
+    # (confidence-guided | one-rollout). Optional, so a line from a solver
+    # older than the field still parses; the trailing field must be tolerated
+    # or the anchored match fails and every convergence metric reads as
+    # missing.
+    r"(?:\s+br_estimator=(\S+))?$"
 )
 RE_LOOP_END = re.compile(
     r"solve_loop_end cause=(\S+)\s+iteration=(\d+)\s+"
@@ -715,6 +721,7 @@ def parse_stdout(
     measurement_iteration = None
     reported_sample_count = None
     metrics_available = None
+    br_estimator = None
     stop_cause = None
     final_memory_mb = None
     storage_mb = None
@@ -764,6 +771,9 @@ def parse_stdout(
             metrics_available = (
                 bool(int(match.group(13))) if match.group(13) else None
             )
+            # Issue #274: group 14 names the estimator that produced the
+            # number. None means the binary predates the field.
+            br_estimator = match.group(14)
             continue
         match = RE_MEMORY_LINE.match(line)
         if match:
@@ -933,6 +943,11 @@ def parse_stdout(
             # the marker, which the validator treats as "unknown", not as a
             # measurement.
             "metrics_available": metrics_available,
+            # Issue #274: which sampled BR estimator produced the number, so
+            # the archived evidence distinguishes the bounded-bias default
+            # from the historical one-rollout maximum. None for an older
+            # binary.
+            "br_estimator": br_estimator,
         },
         "report": {
             "requested_rows": report_rows_requested,
@@ -1309,7 +1324,8 @@ def write_summary(
         "infosets", "description_infosets", "infosets_per_1k_iterations",
         "peak_measured_bytes", "final_memory_bytes", "storage_bytes",
         "adapter_bytes", "bytes_per_infoset", "exploitability_mbb",
-        "br_samples_requested", "br_samples_reported", "stop_cause",
+        "br_samples_requested", "br_samples_reported", "br_estimator",
+        "stop_cause",
         "preflop_rows", "flop_rows", "turn_rows", "river_rows",
         "strategy_fingerprint_sha256", "valid",
     ]
@@ -1338,6 +1354,7 @@ def write_summary(
                 "exploitability_mbb": b["metrics"]["exploitability_mbb_per_game"],
                 "br_samples_requested": b["metrics"].get("requested_br_samples"),
                 "br_samples_reported": b["metrics"]["br_samples"],
+                "br_estimator": b["metrics"].get("br_estimator"),
                 "stop_cause": b["stop_cause"],
                 "preflop_rows": b["per_street"]["PREFLOP"]["strategy_rows"],
                 "flop_rows": b["per_street"]["FLOP"]["strategy_rows"],

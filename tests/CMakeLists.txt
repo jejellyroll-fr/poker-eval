@@ -797,6 +797,12 @@ set_tests_properties(test_pe_online_stats PROPERTIES LABELS "solver;sampling")
 # Issue #257: confidence-guided best-response decisions.
 add_poker_test(test_br_sampling)
 set_tests_properties(test_br_sampling PROPERTIES LABELS "solver;sampling;best-response")
+# Issue #274: the default sampled BR must not overstate the exploitability.
+# On Kuhn poker, whose exact gap is 3/8, the historical one-rollout estimator
+# stays far above it however many trajectories it is given, while the default
+# confidence-guided configuration tracks it.
+add_poker_test(test_br_default_bias)
+set_tests_properties(test_br_default_bias PROPERTIES LABELS "solver;sampling;best-response;iss274" TIMEOUT 60)
 # Issue #271: the priority layer driving the sampled BR's per-decision cap.
 # It asserts the invariant the design rests on (the cap never rises above the
 # configured maximum), the case where it is deliberately inert, and the case
@@ -2033,6 +2039,32 @@ if(TARGET pe-preflop-solve)
     set_tests_properties(mpf_lane_b_reports_runtime_metadata PROPERTIES
         LABELS "product;solver;lane-b;runtime"
         PASS_REGULAR_EXPRESSION "lane_b_runtime=backend_validated=1;simd_cfr=not-integrated"
+        TIMEOUT 60)
+    # Issue #274: a bare --lane-b run measures once at the end with the
+    # configured estimator, and the line carrying the number names it. Before
+    # this, the value was printed with no indication of which estimator
+    # produced it, so a reader could not tell the bounded-bias default from
+    # the historical one-rollout maximum without knowing the configuration.
+    add_test(NAME mpf_lane_b_names_the_confidence_guided_estimator
+        COMMAND mpf_run_with_metrics
+            --tree ${PROJECT_SOURCE_DIR}/examples/heads_up_river/tree.json
+            --lane-b
+            --iterations 1)
+    set_tests_properties(mpf_lane_b_names_the_confidence_guided_estimator
+        PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "lane_b_br_guarantee=[0-9]+ .*br_estimator=confidence-guided"
+        TIMEOUT 60)
+    # The explicit opt-out must be named as such, not left to the default.
+    add_test(NAME mpf_lane_b_names_the_one_rollout_estimator
+        COMMAND mpf_run_with_metrics
+            --tree ${PROJECT_SOURCE_DIR}/examples/heads_up_river/tree.json
+            --lane-b
+            --iterations 1
+            --br-max-samples 0)
+    set_tests_properties(mpf_lane_b_names_the_one_rollout_estimator PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "lane_b_br_guarantee=[0-9]+ .*br_estimator=one-rollout"
         TIMEOUT 60)
     add_test(NAME pe_preflop_solve_rejects_full_tree_preset
         COMMAND pe-preflop-solve

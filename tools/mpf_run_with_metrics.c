@@ -248,11 +248,13 @@ static void usage(const char *prog)
             "                          max-samples, check-interval, confidence,\n"
             "                          absolute-tolerance, relative-tolerance\n"
             "  --br-<key> <v>          Lane B: confidence-guided BR decisions,\n"
-            "                          same keys; --br-max-samples N turns it on\n"
+            "                          same keys; on by default (issue #274),\n"
+            "                          --br-max-samples 0 selects one rollout\n"
             "  --br-priority-<key> <v> Lane B: spread the BR sample cap over the\n"
             "                          decisions (issue #271); policy, min-visits,\n"
             "                          epsilon, buckets, bucket-ratio, aging-interval,\n"
-            "                          assumed-stderr.  Needs --br-<key> on.\n"
+            "                          assumed-stderr.  Needs the sampled BR on,\n"
+            "                          which is the default (issue #274).\n"
             "  --list-algorithms       List registered algorithm presets and exit\n"
             "  --list-backends         List registered compute backends and exit\n"
             "  --show-capabilities     Print the available capability bits and exit\n"
@@ -976,6 +978,9 @@ int main(int argc, char **argv)
     memset(&overrides, 0, sizeof(overrides));
     memset(&adaptive_settings, 0, sizeof(adaptive_settings));
     memset(&br_sampling, 0, sizeof(br_sampling));
+    /* Issue #274: confidence-guided by default; --br-max-samples 0 opts
+       back into the historical one-rollout estimator. */
+    br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES;
     memset(&br_priority, 0, sizeof(br_priority));
 
     for (int i = 1; i < argc; ++i)
@@ -2027,14 +2032,23 @@ int main(int argc, char **argv)
                    (unsigned long long)lane_progress.iteration);
         if (lane_solver && pe_solver_metrics(lane_solver, &lane_metrics) == PE_SOLVER_OK)
             printf("lane_b_br_guarantee=%d exploitability_mbb=%.6f"
-                   " nash_conv_mbb=%.6f max_br_gap_mbb=%.6f sample_count=%llu\n",
+                   " nash_conv_mbb=%.6f max_br_gap_mbb=%.6f sample_count=%llu"
+                   " br_estimator=%s\n",
                    (int)lane_metrics.guarantee,
                    lane_metrics.exploitability_mbb_per_game,
                    lane_metrics.nash_conv_mbb_per_game,
                    lane_metrics.big_blind > 0.0
                        ? lane_metrics.max_br_gap / lane_metrics.big_blind * 1000.0
                        : 0.0,
-                   (unsigned long long)lane_metrics.sample_count);
+                   (unsigned long long)lane_metrics.sample_count,
+                   /* Issue #274: a bare --lane-b run measures once at the end
+                      with the configured estimator, so name it on the line
+                      that carries the number -- as pe-preflop-solve does on
+                      its guarantee= line -- rather than leave the reader to
+                      guess whether the value is the bounded-bias default or
+                      the historical one-rollout maximum. */
+                   pe_br_sampling_enabled(&lane_cfg.br_sampling)
+                       ? "confidence-guided" : "one-rollout");
         if (benchmark_json_path)
         {
             FILE *benchmark_file = fopen(benchmark_json_path, "w");

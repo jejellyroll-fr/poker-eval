@@ -452,6 +452,11 @@ static double solve(pe_sampling_policy_t policy,
     cfg.problem.expected_actions = 2u;
     cfg.problem.expected_combos = 1u;
     cfg.seed = (uint32_t)seed;
+    /* Issue #274: the sampled BR runs the confidence-guided evaluation by
+       default, and its terminal evaluations would dominate the counter this
+       test compares. Disable it so the count is the training policy's work,
+       which is the subject here. */
+    cfg.br_sampling.max_samples = 0u;
     deps.external_game = &game;
     g_terminal_evals = 0;
     solver = pe_solver_create(&cfg, &deps);

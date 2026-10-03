@@ -59,14 +59,19 @@ def measure(binary, spot, args, seed, br_flags, out_json):
         sys.exit(f"solve failed: {' '.join(cmd)}\n{out[-2000:]}")
     with open(out_json) as f:
         metrics = json.load(f)["metrics"]
-    evals = re.findall(r"br_sampling terminal_evaluations=(\d+)", out)
+    evals = re.findall(
+        r"br_sampling (?:estimator=(\S+) )?terminal_evaluations=(\d+)", out)
     decisions = re.findall(
         r"br_decisions decisions=(\d+) samples=(\d+) avg_samples=([\d.]+) "
         r"early_stop_pct=([\d.]+)", out)
     last = decisions[-1] if decisions else None
     return {
         "wall": wall,
-        "evals": int(evals[-1]) if evals else 0,
+        # Issue #274: the estimator is the field before terminal_evaluations.
+        # Older solvers omit it, so the group is optional and None means
+        # "unknown", never a guess.
+        "estimator": evals[-1][0] if evals else None,
+        "evals": int(evals[-1][1]) if evals else 0,
         "nash_conv": float(metrics["nash_conv_mbb_per_game"]),
         "avg_draws": float(last[2]) if last else None,
         "early": float(last[3]) if last else None,
@@ -91,12 +96,21 @@ def main():
 
     binary = os.path.join(args.build, "tools", "pe-preflop-solve")
     n = str(args.max)
+    # Issue #274: the sampled BR defaults to the confidence-guided estimator,
+    # so the historical one has to be asked for explicitly -- otherwise this
+    # row silently becomes a second adaptive measurement and the published
+    # baseline is mislabeled. Each variant also names the estimator it
+    # expects, so a future change to the default fails loudly here rather
+    # than in the table.
     variants = [
-        ("one rollout", []),
-        (f"fixed {n}", ["--br-min-samples", n, "--br-max-samples", n]),
-        ("adaptive", ["--br-min-samples", "4", "--br-max-samples", n]),
+        ("one rollout", ["--br-max-samples", "0"], "one-rollout"),
+        (f"fixed {n}", ["--br-min-samples", n, "--br-max-samples", n],
+         "confidence-guided"),
+        ("adaptive", ["--br-min-samples", "4", "--br-max-samples", n],
+         "confidence-guided"),
         ("adaptive+tol", ["--br-min-samples", "4", "--br-max-samples", n,
-                          "--br-absolute-tolerance", str(args.tolerance)]),
+                          "--br-absolute-tolerance", str(args.tolerance)],
+         "confidence-guided"),
     ]
     spots = [s for s in SPOTS if not args.spot or s[0] in args.spot]
 
@@ -112,9 +126,17 @@ def main():
             runs = {label: [measure(binary, spot, args, 100 + k, flags,
                                     out_json)
                             for k in range(args.seeds)]
-                    for label, flags in variants}
+                    for label, flags, _ in variants}
+            # The row label is a claim about which estimator produced the
+            # numbers; refuse to publish it when the solver says otherwise.
+            for label, _, expected in variants:
+                for r in runs[label]:
+                    if r["estimator"] != expected:
+                        sys.exit(f"{spot[0]} {label}: expected the {expected} "
+                                 f"estimator, the solver reported "
+                                 f"{r['estimator']!r}")
             reference = runs[variants[1][0]]
-            for label, _ in variants:
+            for label, _, _ in variants:
                 rs = runs[label]
                 diffs = [r["nash_conv"] - f["nash_conv"]
                          for r, f in zip(rs, reference)]

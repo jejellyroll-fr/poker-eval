@@ -518,6 +518,10 @@ static void test_best_response(void)
     legacy.mode = fixed.mode = adaptive.mode = PE_BR_SAMPLED;
     legacy.samples = fixed.samples = adaptive.samples = 400u;
     legacy.seed = fixed.seed = adaptive.seed = 9u;
+    /* Issue #274: the default configuration is now the confidence-guided
+       evaluation, so the historical one-rollout estimator is selected
+       explicitly rather than inherited from the defaults. */
+    legacy.sampling.max_samples = 0u;
     /* A large fixed budget: 64 rollouts of every action, every time. */
     fixed.sampling.min_samples = 64u;
     fixed.sampling.max_samples = 64u;

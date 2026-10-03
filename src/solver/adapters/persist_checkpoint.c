@@ -4,6 +4,7 @@
 
 #include <poker_eval/solver/pe_persist.h>
 #include <poker_eval/solver/pe_rng.h>
+#include <poker_eval/solver/pe_solver_plan.h>
 
 #include <stdio.h>
 #include <math.h>
@@ -162,6 +163,30 @@ static int checksum_payload(FILE *file, long start, long end, uint64_t *out)
     return 0;
 }
 
+/* Issue #274: whether the sampled best-response settings can reach the
+   numbers a checkpoint records. Only the sampled lane measures through
+   them: pe_solver_run_vector -- which handles every traversal the sampled
+   lane does not -- measures with pe_best_response_vector_config_default()
+   and records PE_BR_EXACT, so a full-tree run never reads them, and an
+   explicit PE_BR_EXACT measures exactly and ignores them too. The traversal
+   that runs is the one the preset expands to, not the configured field:
+   every preset but CUSTOM stamps its own over it (pe_preset_expand), and
+   the library default is a full-tree one. Hashing an inert field would
+   refuse a checkpoint over settings the resume never reads; skipping a live
+   one would let a resume change the recorded numbers in silence. */
+static int config_runs_sampled_br(const pe_solver_config_t *config)
+{
+    pe_algorithm_config_t algo = config->algorithm;
+
+    if (pe_preset_expand(algo.preset, &algo) != 0)
+        algo = config->algorithm; /* the plan refuses this anyway */
+    if (algo.traversal != PE_TRAVERSAL_EXTERNAL_SAMPLING &&
+        algo.traversal != PE_TRAVERSAL_OUTCOME_SAMPLING)
+        return 0;
+    return config->br_mode != PE_BR_EXACT &&
+           pe_br_sampling_enabled(&config->br_sampling);
+}
+
 static uint64_t hash_config(const pe_solver_config_t *config)
 {
     uint64_t hash = 1469598103934665603ull;
@@ -208,12 +233,18 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->exploitability_interval);
     HASH_FIELD(config->br_samples);
     /* Issue #257: hashed like br_samples, field by field, and only when the
-       evaluation is on, so a checkpoint made without it keeps its hash. The
-       *resolved* settings are hashed rather than the raw ones: writing a
-       default out explicitly (--br-min-samples 4 for the implicit 4) is the
-       same configuration and must resume, where the raw fields would hash
-       differently for the same behaviour. */
-    if (config->br_sampling.max_samples != 0u)
+       evaluation is in effect, so a checkpoint made without it keeps its
+       hash. The *resolved* settings are hashed rather than the raw ones:
+       writing a default out explicitly (--br-min-samples 4 for the implicit
+       4) is the same configuration and must resume, where the raw fields
+       would hash differently for the same behaviour. Issue #274 raised the
+       default to a non-zero max_samples, which made "on" the common case and
+       retired "max_samples != 0" as a proxy for "in effect": the predicate is
+       now the one the solver actually applies (see config_runs_sampled_br),
+       because a full-tree traversal and an explicit PE_BR_EXACT both leave
+       these fields unread, and hashing them there would refuse checkpoints
+       written before the default changed. */
+    if (config_runs_sampled_br(config))
     {
         pe_br_sampling_config_t resolved;
         if (pe_br_sampling_resolve(&config->br_sampling, &resolved) != 0)
@@ -227,13 +258,13 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     }
     /* Issue #271: hashed like br_sampling, and again only when the feature is
        in effect - a non-FIFO policy over a sampled evaluation that is on and
-       that the BR mode can reach (EXACT never runs it; AUTO may fall back to
-       it) - so a checkpoint made under the default keeps its hash, and so
-       does one that only adds a policy nothing reads. The policy changes how
-       many draws each BR decision spends, so resuming under a different one
-       would not reproduce the numbers this checkpoint recorded. */
-    if (config->br_mode != PE_BR_EXACT &&
-        pe_br_sampling_enabled(&config->br_sampling) &&
+       that the traversal can reach - so a checkpoint made under the default
+       keeps its hash, and so does one that only adds a policy nothing reads.
+       The policy changes how many draws each BR decision spends, so resuming
+       under a different one would not reproduce the numbers this checkpoint
+       recorded. The allocation lives inside the sampled best response, so
+       "in effect" is a strict subset of config_runs_sampled_br(). */
+    if (config_runs_sampled_br(config) &&
         config->br_priority.policy != PE_WORK_SCHED_FIFO)
     {
         pe_work_priority_config_t resolved;

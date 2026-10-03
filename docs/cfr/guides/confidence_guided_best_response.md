@@ -17,10 +17,45 @@ resolved**. A clear decision stops after a handful of draws. A near tie gets
 more, up to a hard cap. Only this measurement changes: CFR training, and
 therefore the solved strategy, are untouched.
 
+## This is the default (issue #274)
+
+The one-rollout estimator's overshoot is a property of the *decision rule*,
+not of the sample size: every decision takes the maximum of one noisy draw per
+action, and averaging more trajectories estimates that same maximum. The
+reported exploitability therefore has a floor that no `--br-samples` value
+lowers. Measured on Kuhn poker, whose exact gap is `3/8`: the one-rollout
+mean is `0.620` at 256 trajectories and still `0.615` at 4,096, while the
+confidence-guided mean is `0.376`. `tests/test_br_default_bias.c` pins that.
+
+Since issue #274 `pe_solver_config_default()` and
+`pe_external_br_config_default()` enable the evaluation, so a bare sampled
+measurement (both `pe-preflop-solve` and `mpf_run_with_metrics --lane-b`)
+reports the bounded-bias estimate. This is a *measurement*, not training: the
+cost is the adaptive row of the benchmark below (for Hold'em heads-up, 55,625
+terminal evaluations against the one-rollout row's 11,244). `max_samples = 0` is the explicit opt-out
+back to the historical one-rollout estimator, and a checkpoint made under one
+estimator does not resume under the other.
+
+Both drivers name the estimator on the line that carries the number, so a
+reader need not know the configuration to tell the two apart:
+`pe-preflop-solve` appends `br_estimator=` to its `guarantee=` line and
+`mpf_run_with_metrics --lane-b` to its `lane_b_br_guarantee=` line.
+`pe-preflop-solve` writes the same field into its JSON report as
+`metrics.br_estimator`, because `metrics.br_mode` alone cannot separate the
+two: both estimators report `sampled`, and only the estimator name says
+whether the archived number carries the selection bias. The benchmark runner
+cross-checks the report against stdout, as it does for `metrics_available`
+(issue #249), so a report and the run that produced it cannot disagree. The
+per-decision `br_decisions` line and the `br_sampling` total stay behind the
+telemetry sink: `pe-preflop-solve` installs it unconditionally, while
+`mpf_run_with_metrics` turns it on with `--br-*`, `--br-priority-*` or
+`--sampling-policy`, so a bare `--lane-b` run keeps its output unchanged.
+
 ## Selecting it
 
 ```c
-cfg.br_sampling.max_samples = 64;        /* on; zero keeps one rollout per action */
+cfg.br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES; /* 64; already the default */
+cfg.br_sampling.max_samples = 0;         /* opt out: one rollout per action */
 cfg.br_sampling.absolute_tolerance = 0;  /* optional */
 ```
 
@@ -32,16 +67,25 @@ mpf_run_with_metrics --lane-b ... --br-max-samples 64
 
 | Setting | Default (when 0) | Meaning |
 |---|---|---|
-| `max_samples` | 0 = off | draws per action to decide, hard cap |
+| `max_samples` | `PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES` = 64 | draws per action to decide, hard cap; 0 selects the one-rollout estimator |
 | `min_samples` | 4 (at least 2) | draws per action before the first look |
 | `check_interval` | 4 | draws per surviving action between looks |
 | `confidence` | 0.95 | of the whole decision |
 | `absolute_tolerance` / `relative_tolerance` | 0 | a gap this small does not matter |
 
 The settings enter the checkpoint compatibility hash only when the evaluation
-is on, and as *resolved*: writing a default out explicitly (`--br-min-samples 4`
-for the implicit 4) leaves the hash unchanged, so the same configuration
-resumes. `pe_external_br_config_t::sampling` and `pe_solver_config_t::br_sampling`
+is on **and the traversal can reach it** — the sampled lane
+(`external-sampling`, `outcome-sampling`) under a BR mode other than
+`PE_BR_EXACT` — and as *resolved*: writing a default out explicitly
+(`--br-min-samples 4` for the implicit 4) leaves the hash unchanged, so the
+same configuration resumes. A full-tree traversal never runs the sampled best
+response at all: `pe_solver_run_vector` measures with
+`pe_best_response_vector_config_default()` and records `PE_BR_EXACT`, so its
+checkpoints ignore these settings and keep their hash. The traversal that
+counts is the one the preset *expands to*, not the configured field, because
+any preset but `CUSTOM` stamps its own over it — and the library default is
+exactly that case (`CUSTOM` + `full-scalar`).
+`pe_external_br_config_t::sampling` and `pe_solver_config_t::br_sampling`
 enlarge public structs, so the solver library moves to SOVERSION 7.
 
 ## The decision rule
@@ -115,8 +159,10 @@ seeded measurement is reproducible.
 
 ## Telemetry
 
-Each sampled measurement reports `br_sampling terminal_evaluations=N`. With
-the evaluation on, it also reports:
+Each sampled measurement reports
+`br_sampling estimator=<confidence-guided|one-rollout> terminal_evaluations=N`,
+naming the estimator first so the count is never read as coming from the
+other one. With the evaluation on, it also reports:
 
 ```text
 br_decisions decisions=307 samples=6308 avg_samples=20.547 early_stop_pct=99.67
@@ -203,6 +249,7 @@ decimal. The wall column is machine-dependent and indicative only.
   deterministic: it enumerates chance and iterates to a fixed point, with no
   Monte Carlo draws to stop early, so it has nothing to adapt.
 - **`mpf_run_with_metrics --lane-b`** accepts the settings and then measures
-  a best response at the final iteration. Its sampled solves
+  a best response at the final iteration, naming the estimator on its
+  `lane_b_br_guarantee=` line. Its sampled solves
   are still subject to the multiway postflop adapter's non-re-entrant state
   cache (see `adaptive_variance_sampling.md`).
