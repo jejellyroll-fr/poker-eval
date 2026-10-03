@@ -39,7 +39,13 @@ estimator does not resume under the other.
 Both drivers name the estimator on the line that carries the number, so a
 reader need not know the configuration to tell the two apart:
 `pe-preflop-solve` appends `br_estimator=` to its `guarantee=` line and
-`mpf_run_with_metrics --lane-b` to its `lane_b_br_guarantee=` line. The
+`mpf_run_with_metrics --lane-b` to its `lane_b_br_guarantee=` line.
+`pe-preflop-solve` writes the same field into its JSON report as
+`metrics.br_estimator`, because `metrics.br_mode` alone cannot separate the
+two: both estimators report `sampled`, and only the estimator name says
+whether the archived number carries the selection bias. The benchmark runner
+cross-checks the report against stdout, as it does for `metrics_available`
+(issue #249), so a report and the run that produced it cannot disagree. The
 per-decision `br_decisions` line and the `br_sampling` total stay behind the
 telemetry sink: `pe-preflop-solve` installs it unconditionally, while
 `mpf_run_with_metrics` turns it on with `--br-*`, `--br-priority-*` or

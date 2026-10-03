@@ -318,6 +318,12 @@ reads it from stdout, and `validate_native_report()` requires the native
 report's boolean to say the same thing — one run cannot archive two
 contradictory answers about whether its convergence block was measured.
 
+The estimator behind the exploitability is cross-checked the same way (issue
+#274): `metrics.br_estimator` in the report must agree with the
+`br_estimator=` field on stdout. `metrics.br_mode` alone cannot carry that
+statement, because both estimators report `sampled`; the name is what keeps a
+one-rollout maximum from being archived under the confidence-guided label.
+
 Per-street query latency — the phase-6 item that total solve time cannot
 show — is measured by `query_latency_probe.py`, which drives the solver's
 own `--interactive` protocol (one process per tier *and street*, then one

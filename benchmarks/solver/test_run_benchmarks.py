@@ -1087,6 +1087,139 @@ class ValidationTests(unittest.TestCase):
             failures,
         )
 
+    def _complete_native_metrics(self) -> dict[str, object]:
+        return {
+            "guarantee": "empirical",
+            "exploitability_raw": 1.0,
+            "exploitability_mbb_per_game": 2.0,
+            "big_blind": 1.0,
+            "br_mode": "sampled",
+            "br_estimator": "confidence-guided",
+            "metrics_available": True,
+        }
+
+    def _complete_native_report(
+        self, metrics: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        return {
+            "schema": bench.NATIVE_REPORT_SCHEMA,
+            "game": "holdem",
+            "players": 2,
+            "algorithm": "cfr",
+            "backend": "cpu_ref",
+            "backend_validated": True,
+            "precision": "float64",
+            "simd_detected": "avx2",
+            "simd_cfr_integrated": False,
+            "iterations": 64,
+            "showdown_samples": 8,
+            "stack": 100.0,
+            "small_blind": 0.5,
+            "big_blind": 1.0,
+            "ante": 0.0,
+            "allow_nonallin_call": False,
+            "postflop_streets": True,
+            "br_samples": 16,
+            "infosets": 10,
+            "progress": {"iteration": 64, "complete": True},
+            "metrics": self._complete_native_metrics() if metrics is None else metrics,
+        }
+
+    def _native_result(
+        self, native_report: dict[str, object], metrics: dict[str, object]
+    ) -> dict[str, object]:
+        """A result whose command echoes the report, so the only failures a
+        test sees are the ones it is about."""
+        command = ["pe-preflop-solve"]
+        for option, field in (
+            ("--game", "game"),
+            ("--players", "players"),
+            ("--algorithm", "algorithm"),
+            ("--backend", "backend"),
+            ("--precision", "precision"),
+            ("--samples", "showdown_samples"),
+            ("--iterations", "iterations"),
+            ("--br-samples", "br_samples"),
+        ):
+            command += [option, str(native_report[field])]
+        return {
+            "command": command,
+            "benchmark": {
+                "actual_iterations": native_report["iterations"],
+                "requested_iterations": native_report["iterations"],
+                "metrics": metrics,
+                "memory": {},
+                "per_street": {},
+            },
+        }
+
+    def test_native_report_estimator_must_match_stdout(self) -> None:
+        # Issue #274: the estimator is named on stdout and in the archived
+        # report, and both describe one run. A report that disagrees with
+        # stdout would archive a one-rollout measurement under the
+        # confidence-guided label, which is exactly the confusion the field
+        # exists to remove.
+        report = self._complete_native_report()
+        result = self._native_result(
+            report,
+            {
+                **self._valid_convergence(),
+                "metrics_available": True,
+                "br_estimator": "one-rollout",
+            },
+        )
+
+        failures = bench.validate_native_report(report, result)
+
+        self.assertTrue(
+            any(
+                "metrics.br_estimator='confidence-guided' != stdout 'one-rollout'"
+                in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_native_report_estimator_missing_while_stdout_declares_it(self) -> None:
+        metrics = self._complete_native_metrics()
+        del metrics["br_estimator"]
+        report = self._complete_native_report(metrics=metrics)
+        result = self._native_result(
+            report,
+            {
+                **self._valid_convergence(),
+                "metrics_available": True,
+                "br_estimator": "confidence-guided",
+            },
+        )
+
+        failures = bench.validate_native_report(report, result)
+
+        self.assertTrue(
+            any(
+                "metrics.br_estimator is missing" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_native_report_estimator_absent_on_both_views_is_accepted(self) -> None:
+        # A solver older than the field states nothing on either surface;
+        # silence is not a contradiction.
+        metrics = self._complete_native_metrics()
+        del metrics["br_estimator"]
+        report = self._complete_native_report(metrics=metrics)
+        result = self._native_result(
+            report,
+            {**self._valid_convergence(), "metrics_available": True},
+        )
+
+        failures = bench.validate_native_report(report, result)
+
+        self.assertFalse(
+            any("br_estimator" in failure for failure in failures), failures
+        )
+
 
 class SamplingPolicyCommandTests(unittest.TestCase):
     """ISS-232: the runner forwards per-case sampling policy settings."""

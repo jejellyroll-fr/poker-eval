@@ -1486,6 +1486,7 @@ static void write_report(const char *path, const options_t *options,
         "\"metrics\":{\"guarantee\":\"%s\",\"exploitability_raw\":%.17g,"
         "\"exploitability_mbb_per_game\":%.17g,\"big_blind\":%.17g,"
         "\"br_mode\":\"%s\","
+        "\"br_estimator\":\"%s\","
         "\"nash_conv\":%.17g,\"nash_conv_unit\":\"%s\","
         "\"nash_conv_mbb_per_game\":%.17g,"
         "\"max_br_gap\":%.17g,\"mean_br_gap\":%.17g,"
@@ -1517,6 +1518,13 @@ static void write_report(const char *path, const options_t *options,
         guarantee_name(metrics->guarantee), metrics->exploitability_raw,
         metrics->exploitability_mbb_per_game, options->big_blind,
         pe_br_mode_name(metrics->br_mode),
+        /* Issue #274: the archived report names the estimator behind the
+           exploitability, exactly as the stdout line does, so a JSON report
+           produced under the confidence-guided default is distinguishable
+           from one produced with --br-max-samples 0 without knowing the
+           configuration that wrote it. */
+        pe_br_sampling_enabled(&options->br_sampling)
+            ? "confidence-guided" : "one-rollout",
         metrics->nash_conv, pe_metric_unit_name(metrics->nash_conv_unit),
         metrics->nash_conv_mbb_per_game,
         metrics->max_br_gap, metrics->mean_br_gap,
