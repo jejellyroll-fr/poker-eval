@@ -144,8 +144,10 @@ seeded measurement is reproducible.
 
 ## Telemetry
 
-Each sampled measurement reports `br_sampling terminal_evaluations=N`. With
-the evaluation on, it also reports:
+Each sampled measurement reports
+`br_sampling estimator=<confidence-guided|one-rollout> terminal_evaluations=N`,
+naming the estimator first so the count is never read as coming from the
+other one. With the evaluation on, it also reports:
 
 ```text
 br_decisions decisions=307 samples=6308 avg_samples=20.547 early_stop_pct=99.67
