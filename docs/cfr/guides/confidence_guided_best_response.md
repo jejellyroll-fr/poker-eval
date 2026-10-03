@@ -36,6 +36,15 @@ terminal evaluations against the one-rollout row's 11,244). `max_samples = 0` is
 back to the historical one-rollout estimator, and a checkpoint made under one
 estimator does not resume under the other.
 
+Both drivers name the estimator on the line that carries the number, so a
+reader need not know the configuration to tell the two apart:
+`pe-preflop-solve` appends `br_estimator=` to its `guarantee=` line and
+`mpf_run_with_metrics --lane-b` to its `lane_b_br_guarantee=` line. The
+per-decision `br_decisions` line and the `br_sampling` total stay behind the
+telemetry sink: `pe-preflop-solve` installs it unconditionally, while
+`mpf_run_with_metrics` turns it on with `--br-*`, `--br-priority-*` or
+`--sampling-policy`, so a bare `--lane-b` run keeps its output unchanged.
+
 ## Selecting it
 
 ```c
@@ -223,6 +232,7 @@ decimal. The wall column is machine-dependent and indicative only.
   deterministic: it enumerates chance and iterates to a fixed point, with no
   Monte Carlo draws to stop early, so it has nothing to adapt.
 - **`mpf_run_with_metrics --lane-b`** accepts the settings and then measures
-  a best response at the final iteration. Its sampled solves
+  a best response at the final iteration, naming the estimator on its
+  `lane_b_br_guarantee=` line. Its sampled solves
   are still subject to the multiway postflop adapter's non-re-entrant state
   cache (see `adaptive_variance_sampling.md`).

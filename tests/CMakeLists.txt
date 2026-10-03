@@ -2040,6 +2040,32 @@ if(TARGET pe-preflop-solve)
         LABELS "product;solver;lane-b;runtime"
         PASS_REGULAR_EXPRESSION "lane_b_runtime=backend_validated=1;simd_cfr=not-integrated"
         TIMEOUT 60)
+    # Issue #274: a bare --lane-b run measures once at the end with the
+    # configured estimator, and the line carrying the number names it. Before
+    # this, the value was printed with no indication of which estimator
+    # produced it, so a reader could not tell the bounded-bias default from
+    # the historical one-rollout maximum without knowing the configuration.
+    add_test(NAME mpf_lane_b_names_the_confidence_guided_estimator
+        COMMAND mpf_run_with_metrics
+            --tree ${PROJECT_SOURCE_DIR}/examples/heads_up_river/tree.json
+            --lane-b
+            --iterations 1)
+    set_tests_properties(mpf_lane_b_names_the_confidence_guided_estimator
+        PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "lane_b_br_guarantee=[0-9]+ .*br_estimator=confidence-guided"
+        TIMEOUT 60)
+    # The explicit opt-out must be named as such, not left to the default.
+    add_test(NAME mpf_lane_b_names_the_one_rollout_estimator
+        COMMAND mpf_run_with_metrics
+            --tree ${PROJECT_SOURCE_DIR}/examples/heads_up_river/tree.json
+            --lane-b
+            --iterations 1
+            --br-max-samples 0)
+    set_tests_properties(mpf_lane_b_names_the_one_rollout_estimator PROPERTIES
+        LABELS "product;solver;lane-b;best-response"
+        PASS_REGULAR_EXPRESSION "lane_b_br_guarantee=[0-9]+ .*br_estimator=one-rollout"
+        TIMEOUT 60)
     add_test(NAME pe_preflop_solve_rejects_full_tree_preset
         COMMAND pe-preflop-solve
             --game holdem

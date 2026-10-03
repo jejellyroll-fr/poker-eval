@@ -2032,14 +2032,23 @@ int main(int argc, char **argv)
                    (unsigned long long)lane_progress.iteration);
         if (lane_solver && pe_solver_metrics(lane_solver, &lane_metrics) == PE_SOLVER_OK)
             printf("lane_b_br_guarantee=%d exploitability_mbb=%.6f"
-                   " nash_conv_mbb=%.6f max_br_gap_mbb=%.6f sample_count=%llu\n",
+                   " nash_conv_mbb=%.6f max_br_gap_mbb=%.6f sample_count=%llu"
+                   " br_estimator=%s\n",
                    (int)lane_metrics.guarantee,
                    lane_metrics.exploitability_mbb_per_game,
                    lane_metrics.nash_conv_mbb_per_game,
                    lane_metrics.big_blind > 0.0
                        ? lane_metrics.max_br_gap / lane_metrics.big_blind * 1000.0
                        : 0.0,
-                   (unsigned long long)lane_metrics.sample_count);
+                   (unsigned long long)lane_metrics.sample_count,
+                   /* Issue #274: a bare --lane-b run measures once at the end
+                      with the configured estimator, so name it on the line
+                      that carries the number -- as pe-preflop-solve does on
+                      its guarantee= line -- rather than leave the reader to
+                      guess whether the value is the bounded-bias default or
+                      the historical one-rollout maximum. */
+                   pe_br_sampling_enabled(&lane_cfg.br_sampling)
+                       ? "confidence-guided" : "one-rollout");
         if (benchmark_json_path)
         {
             FILE *benchmark_file = fopen(benchmark_json_path, "w");
