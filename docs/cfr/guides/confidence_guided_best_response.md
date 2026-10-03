@@ -74,9 +74,18 @@ mpf_run_with_metrics --lane-b ... --br-max-samples 64
 | `absolute_tolerance` / `relative_tolerance` | 0 | a gap this small does not matter |
 
 The settings enter the checkpoint compatibility hash only when the evaluation
-is on, and as *resolved*: writing a default out explicitly (`--br-min-samples 4`
-for the implicit 4) leaves the hash unchanged, so the same configuration
-resumes. `pe_external_br_config_t::sampling` and `pe_solver_config_t::br_sampling`
+is on **and the traversal can reach it** — the sampled lane
+(`external-sampling`, `outcome-sampling`) under a BR mode other than
+`PE_BR_EXACT` — and as *resolved*: writing a default out explicitly
+(`--br-min-samples 4` for the implicit 4) leaves the hash unchanged, so the
+same configuration resumes. A full-tree traversal never runs the sampled best
+response at all: `pe_solver_run_vector` measures with
+`pe_best_response_vector_config_default()` and records `PE_BR_EXACT`, so its
+checkpoints ignore these settings and keep their hash. The traversal that
+counts is the one the preset *expands to*, not the configured field, because
+any preset but `CUSTOM` stamps its own over it — and the library default is
+exactly that case (`CUSTOM` + `full-scalar`).
+`pe_external_br_config_t::sampling` and `pe_solver_config_t::br_sampling`
 enlarge public structs, so the solver library moves to SOVERSION 7.
 
 ## The decision rule

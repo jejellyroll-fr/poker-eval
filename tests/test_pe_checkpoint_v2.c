@@ -135,6 +135,11 @@ int main(void)
     config.problem.expected_infosets = 1u;
     config.problem.expected_actions = 2u;
     config.problem.expected_combos = 2u;
+    /* Issue #274: the BR settings are hashed only where the sampled lane
+       measures through them, so the fixtures that exercise that hashing have
+       to sit on the sampled lane. The library default is the opposite case
+       (CUSTOM + FULL_SCALAR, the vector lane) and is asserted separately. */
+    config.algorithm.traversal = PE_TRAVERSAL_EXTERNAL_SAMPLING;
     CHECK(path != NULL && ops != NULL && persist != NULL,
           "checkpoint dependencies unavailable");
     if (!path)
@@ -306,6 +311,67 @@ int main(void)
             CHECK(persist->load(NULL, &source, &sampled_off, ops, probe,
                                 &iteration) != 0,
                   "the historical opt-out was not hashed under a sampled BR");
+            ops->destroy(probe);
+        }
+        CHECK(persist->save(NULL, &target, &config, ops, left, 500u) == 0,
+              "checkpoint re-save failed");
+    }
+    /* Issue #274: a full-tree traversal never runs the sampled best response
+       at all -- pe_solver_run_vector measures with
+       pe_best_response_vector_config_default() and records PE_BR_EXACT -- so
+       both the sampling settings and the priority policy are inert there.
+       The library default is exactly this case, which is why neither field
+       may be hashed on the vector lane: an otherwise identical full-tree
+       checkpoint written before the default moved would otherwise be refused
+       over settings the resume never reads. */
+    {
+        pe_solver_config_t full_tree = config;
+        pe_solver_config_t full_tree_tuned;
+        void *probe = NULL;
+
+        full_tree.algorithm.traversal = PE_TRAVERSAL_FULL_SCALAR;
+        full_tree.br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES;
+        CHECK(persist->save(NULL, &target, &full_tree, ops, left, 500u) == 0,
+              "full-tree checkpoint save failed");
+        full_tree_tuned = full_tree;
+        full_tree_tuned.br_sampling.max_samples = 0u;
+        full_tree_tuned.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
+        CHECK(ops->create(&probe, 1u) == 0, "full-tree probe creation failed");
+        if (probe)
+        {
+            CHECK(persist->load(NULL, &source, &full_tree_tuned, ops, probe,
+                                &iteration) == 0,
+                  "an inert BR configuration under a full-tree traversal "
+                  "refused the resume");
+            ops->destroy(probe);
+        }
+        CHECK(persist->save(NULL, &target, &config, ops, left, 500u) == 0,
+              "checkpoint re-save failed");
+    }
+    /* The traversal that runs is the one the preset expands to, not the
+       configured field: any preset but CUSTOM stamps its own over it. A
+       predicate reading the raw field would call a live sampling config
+       inert here and let a resume change the recorded numbers in silence. */
+    {
+        pe_solver_config_t named = config;
+        pe_solver_config_t named_off;
+        void *probe = NULL;
+
+        named.algorithm.preset = PE_PRESET_EXTERNAL_MCCFR;
+        /* Overridden by the preset; set to the vector lane on purpose. */
+        named.algorithm.traversal = PE_TRAVERSAL_FULL_SCALAR;
+        named.br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES;
+        CHECK(persist->save(NULL, &target, &named, ops, left, 500u) == 0,
+              "preset checkpoint save failed");
+        named_off = named;
+        named_off.br_sampling.max_samples = 0u;
+        CHECK(ops->create(&probe, 1u) == 0, "preset probe creation failed");
+        if (probe)
+        {
+            CHECK(persist->load(NULL, &source, &named_off, ops, probe,
+                                &iteration) != 0,
+                  "a live BR sampling config under a preset that expands to a "
+                  "sampled traversal was not hashed");
             ops->destroy(probe);
         }
         CHECK(persist->save(NULL, &target, &config, ops, left, 500u) == 0,

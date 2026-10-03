@@ -434,10 +434,13 @@ the same keyless game still trains and measures under FIFO, and that it runs
 under exact BR with the policy configured.
 
 The checkpoint adapter hashes the policy only where it is in effect — a non-FIFO
-policy, the sampled evaluation on, **and** a BR mode other than `PE_BR_EXACT` —
-so a checkpoint made under the default, or under exact BR, still resumes after
-an inert `--br-priority-policy` is added, while one made under an active policy
-refuses a resume under another.
+policy over a sampled evaluation that is on, reachable by the traversal, **and**
+under a BR mode other than `PE_BR_EXACT` — so a checkpoint made under the
+default, or under exact BR, still resumes after an inert `--br-priority-policy`
+is added, while one made under an active policy refuses a resume under another.
+The allocation lives inside the sampled best response, so the traversal clause
+is the same one the sampling settings use: a full-tree traversal measures with
+the vector best response and never reaches this layer.
 
 The spread is fed as the layer's contract asks: the leader's and the
 runner-up's **standard errors**, which `pe_br_resolve_decision()` reports in
@@ -629,7 +632,10 @@ wide, so a decision that lost its only spread lands in the top bucket.
 
 The checkpoint hash is guarded in `test_pe_checkpoint_v2.c`: hashing the policy
 whenever it is not FIFO, whether or not the sampled evaluation is on, fails the
-"inert policy resumes" check.
+"inert policy resumes" check; hashing it on a full-tree traversal — the library
+default — fails the same check through the traversal clause, and reading the
+configured traversal instead of the preset-expanded one fails the check that a
+preset overriding it still hashes a live policy.
 
 Two rows need a word.
 
