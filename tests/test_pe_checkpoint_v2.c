@@ -262,6 +262,27 @@ int main(void)
                 ops->destroy(probe);
                 probe = NULL;
             }
+            /* Issue #274: the sampling config is inert under EXACT for the
+               same reason. An exact checkpoint written under the new default
+               (max_samples = 64) must resume under an exact config carrying
+               the historical opt-out (max_samples = 0), or every exact
+               checkpoint made before the default changed would be refused
+               over fields EXACT never reads. */
+            {
+                pe_solver_config_t exact_sampling_off = exact;
+                exact_sampling_off.br_sampling.max_samples = 0u;
+                CHECK(ops->create(&probe, 1u) == 0,
+                      "sampling probe creation failed");
+                if (probe)
+                {
+                    CHECK(persist->load(NULL, &source, &exact_sampling_off,
+                                        ops, probe, &iteration) == 0,
+                          "an inert BR sampling config under exact BR refused "
+                          "the resume");
+                    ops->destroy(probe);
+                    probe = NULL;
+                }
+            }
         }
         CHECK(persist->save(NULL, &target, &sampled, ops, left, 500u) == 0,
               "sampled checkpoint save failed");
@@ -271,6 +292,20 @@ int main(void)
             CHECK(persist->load(NULL, &source, &prioritised, ops, probe,
                                 &iteration) != 0,
                   "a BR priority policy in effect was not hashed");
+            ops->destroy(probe);
+            probe = NULL;
+        }
+        /* Converse of the exact case: over an enabled sampled evaluation the
+           sampling config does shape the draws, so the historical opt-out
+           must refuse a checkpoint that hashed the default. */
+        CHECK(ops->create(&probe, 1u) == 0, "sampling probe creation failed");
+        if (probe)
+        {
+            pe_solver_config_t sampled_off = sampled;
+            sampled_off.br_sampling.max_samples = 0u;
+            CHECK(persist->load(NULL, &source, &sampled_off, ops, probe,
+                                &iteration) != 0,
+                  "the historical opt-out was not hashed under a sampled BR");
             ops->destroy(probe);
         }
         CHECK(persist->save(NULL, &target, &config, ops, left, 500u) == 0,

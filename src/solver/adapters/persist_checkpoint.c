@@ -208,12 +208,18 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->exploitability_interval);
     HASH_FIELD(config->br_samples);
     /* Issue #257: hashed like br_samples, field by field, and only when the
-       evaluation is on, so a checkpoint made without it keeps its hash. The
-       *resolved* settings are hashed rather than the raw ones: writing a
-       default out explicitly (--br-min-samples 4 for the implicit 4) is the
-       same configuration and must resume, where the raw fields would hash
-       differently for the same behaviour. */
-    if (config->br_sampling.max_samples != 0u)
+       evaluation is in effect, so a checkpoint made without it keeps its
+       hash. The *resolved* settings are hashed rather than the raw ones:
+       writing a default out explicitly (--br-min-samples 4 for the implicit
+       4) is the same configuration and must resume, where the raw fields
+       would hash differently for the same behaviour. Issue #274 raised the
+       default to a non-zero max_samples, which made "on" the common case and
+       retired "max_samples != 0" as a proxy for "in effect": EXACT is now
+       excluded explicitly, like the priority policy below, because it never
+       runs the sampled evaluation, and hashing fields it does not read would
+       refuse every exact checkpoint written before the default changed. */
+    if (config->br_mode != PE_BR_EXACT &&
+        config->br_sampling.max_samples != 0u)
     {
         pe_br_sampling_config_t resolved;
         if (pe_br_sampling_resolve(&config->br_sampling, &resolved) != 0)
