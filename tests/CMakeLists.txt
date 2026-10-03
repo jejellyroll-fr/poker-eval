@@ -797,6 +797,12 @@ set_tests_properties(test_pe_online_stats PROPERTIES LABELS "solver;sampling")
 # Issue #257: confidence-guided best-response decisions.
 add_poker_test(test_br_sampling)
 set_tests_properties(test_br_sampling PROPERTIES LABELS "solver;sampling;best-response")
+# Issue #274: the default sampled BR must not overstate the exploitability.
+# On Kuhn poker, whose exact gap is 3/8, the historical one-rollout estimator
+# stays far above it however many trajectories it is given, while the default
+# confidence-guided configuration tracks it.
+add_poker_test(test_br_default_bias)
+set_tests_properties(test_br_default_bias PROPERTIES LABELS "solver;sampling;best-response;iss274" TIMEOUT 60)
 # Issue #271: the priority layer driving the sampled BR's per-decision cap.
 # It asserts the invariant the design rests on (the cap never rises above the
 # configured maximum), the case where it is deliberately inert, and the case

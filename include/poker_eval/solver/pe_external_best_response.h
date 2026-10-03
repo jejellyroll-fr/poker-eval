@@ -38,9 +38,12 @@ typedef struct {
        spent (0 = unlimited). */
     uint64_t max_br_time_ms;
     /* Issue #257, sampled mode: confidence-guided evaluation of the BR
-       decision. max_samples == 0 (the default) keeps one rollout per action;
-       otherwise each action is sampled until the best one is resolved (see
-       pe_br_sampling.h). */
+       decision. Issue #274: the default configuration enables it at
+       PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES, because the historical one rollout
+       per action is biased upward by the maximum of noisy draws and no
+       trajectory count removes that bias; max_samples == 0 is the explicit
+       opt-out. Otherwise each action is sampled until the best one is
+       resolved (see pe_br_sampling.h). */
     pe_br_sampling_config_t sampling;
     /* Issue #271, sampled mode: how the confidence-guided evaluation's own
        budget is spread over the decisions. The default (FIFO) changes

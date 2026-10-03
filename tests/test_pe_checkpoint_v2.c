@@ -216,9 +216,18 @@ int main(void)
        changing it must. */
     {
         pe_solver_config_t inert = config;
+        pe_solver_config_t disabled = config;
         pe_solver_config_t sampled = config;
         pe_solver_config_t prioritised;
         void *probe = NULL;
+        /* Issue #274: the default configuration enables the confidence-guided
+           evaluation, so "disabled" has to say so explicitly. It saves its
+           own checkpoint, because the compatibility hash of a disabled
+           evaluation differs from the default's. */
+        disabled.br_sampling.max_samples = 0u;
+        CHECK(persist->save(NULL, &target, &disabled, ops, left, 500u) == 0,
+              "disabled-evaluation checkpoint save failed");
+        inert.br_sampling.max_samples = 0u;
         inert.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
         CHECK(ops->create(&probe, 1u) == 0, "priority probe creation failed");
         if (probe)

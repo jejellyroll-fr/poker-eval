@@ -54,10 +54,25 @@ extern "C" {
 #define PE_BR_SAMPLING_MAX_ACTIONS 64u
 #define PE_BR_SAMPLING_HISTOGRAM 8u
 
+/*
+ * Issue #274: the default per-action cap. The historical one-rollout
+ * estimator (max_samples == 0) takes, at every best-response decision, the
+ * maximum of a single noisy draw per action. That selection bias is a
+ * property of the decision rule, not of the trajectory count: averaging more
+ * trajectories estimates the same overshoot, so no --br-samples value
+ * removes it, and the reported exploitability has a floor that no amount of
+ * training descends below. The confidence-guided evaluation is therefore the
+ * default, and max_samples == 0 is the explicit opt-out back to the
+ * historical estimator. See docs/cfr/guides/confidence_guided_best_response.md.
+ */
+#define PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES 64u
+
 /**
  * Budget and stopping rule. max_samples == 0 turns the adaptive evaluation
- * off (the caller's historical behaviour); any other value turns it on, and
- * the remaining zero fields take their defaults.
+ * off (the historical one-rollout estimator); any other value turns it on,
+ * and the remaining zero fields take their defaults. The library's default
+ * configuration enables it at PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES so that a
+ * bare sampled measurement does not carry the selection bias (issue #274).
  */
 typedef struct pe_br_sampling_config_t {
     uint32_t min_samples;       /* per action before the first look; 0 = 4, raised to 2 */

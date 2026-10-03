@@ -17,10 +17,30 @@ resolved**. A clear decision stops after a handful of draws. A near tie gets
 more, up to a hard cap. Only this measurement changes: CFR training, and
 therefore the solved strategy, are untouched.
 
+## This is the default (issue #274)
+
+The one-rollout estimator's overshoot is a property of the *decision rule*,
+not of the sample size: every decision takes the maximum of one noisy draw per
+action, and averaging more trajectories estimates that same maximum. The
+reported exploitability therefore has a floor that no `--br-samples` value
+lowers. Measured on Kuhn poker, whose exact gap is `3/8`: the one-rollout
+mean is `0.620` at 256 trajectories and still `0.615` at 4,096, while the
+confidence-guided mean is `0.376`. `tests/test_br_default_bias.c` pins that.
+
+Since issue #274 `pe_solver_config_default()` and
+`pe_external_br_config_default()` enable the evaluation, so a bare sampled
+measurement (both `pe-preflop-solve` and `mpf_run_with_metrics --lane-b`)
+reports the bounded-bias estimate. This is a *measurement*, not training: the
+cost is the adaptive row of the benchmark below (for Hold'em heads-up, 55,625
+terminal evaluations against the one-rollout row's 11,244). `max_samples = 0` is the explicit opt-out
+back to the historical one-rollout estimator, and a checkpoint made under one
+estimator does not resume under the other.
+
 ## Selecting it
 
 ```c
-cfg.br_sampling.max_samples = 64;        /* on; zero keeps one rollout per action */
+cfg.br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES; /* 64; already the default */
+cfg.br_sampling.max_samples = 0;         /* opt out: one rollout per action */
 cfg.br_sampling.absolute_tolerance = 0;  /* optional */
 ```
 
@@ -32,7 +52,7 @@ mpf_run_with_metrics --lane-b ... --br-max-samples 64
 
 | Setting | Default (when 0) | Meaning |
 |---|---|---|
-| `max_samples` | 0 = off | draws per action to decide, hard cap |
+| `max_samples` | `PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES` = 64 | draws per action to decide, hard cap; 0 selects the one-rollout estimator |
 | `min_samples` | 4 (at least 2) | draws per action before the first look |
 | `check_interval` | 4 | draws per surviving action between looks |
 | `confidence` | 0.95 | of the whole decision |

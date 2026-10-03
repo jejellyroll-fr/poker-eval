@@ -1364,9 +1364,14 @@ static pe_solver_status_t pe_solver_sampled_measure_br(
        traversal reports none of this. */
     if (measured_mode == PE_BR_SAMPLED)
     {
+        /* Issue #274: name the estimator that produced the number, so a
+           reader can tell a bounded-bias measurement from the historical
+           one-rollout maximum without knowing the configuration. */
         pe_telemetry_emitf(
             solver->deps.telemetry, PE_LOG_INFO, "solver", iteration,
-            "br_sampling terminal_evaluations=%" PRIu64 "\n",
+            "br_sampling estimator=%s terminal_evaluations=%" PRIu64 "\n",
+            pe_br_sampling_enabled(&br_config.sampling) ? "confidence-guided"
+                                                       : "one-rollout",
             br_totals.terminal_evaluations);
         if (pe_br_sampling_enabled(&br_config.sampling) && br_totals.decisions)
         {

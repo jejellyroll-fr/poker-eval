@@ -105,6 +105,12 @@ pe_solver_config_t pe_solver_config_default(void)
        measurement is a sampled estimate. Opt in to PE_BR_EXACT or PE_BR_AUTO
        when the game is small enough to traverse. */
     cfg.br_mode = PE_BR_SAMPLED;
+    /* Issue #274: the sampled measurement defaults to the confidence-guided
+       evaluation. The historical one-rollout estimator reports the maximum
+       of noisy draws at every decision, which overstates the exploitability
+       by a factor that does not shrink with --br-samples; set max_samples
+       back to 0 to select it explicitly. */
+    cfg.br_sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES;
 
     return cfg;
 }

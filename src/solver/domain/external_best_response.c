@@ -404,7 +404,11 @@ pe_external_br_config_t pe_external_br_config_default(void)
     config.max_depth = 128u;
     config.seed = 1u;
     config.mode = PE_BR_AUTO;
-    /* max_br_nodes, max_br_time_ms and sampling (off) stay zero. */
+    /* Issue #274: the confidence-guided evaluation is the default, so that a
+       bare sampled measurement does not report the upward-biased maximum of
+       one draw per action. max_samples 0 is the explicit opt-out. */
+    config.sampling.max_samples = PE_BR_SAMPLING_DEFAULT_MAX_SAMPLES;
+    /* max_br_nodes and max_br_time_ms stay zero. */
     return config;
 }
 

@@ -486,7 +486,7 @@ promotions.
 ### Selecting it
 
 ```c
-config.br_sampling.max_samples = 64;      /* issue #257: turns BR sampling on */
+config.br_sampling.max_samples = 64;      /* issue #257; already the default (issue #274) */
 config.br_sampling.min_samples = 4;
 config.br_priority.policy = PE_WORK_SCHED_UNCERTAINTY_AWARE;
 config.br_priority.buckets = 8;           /* the default */
@@ -495,8 +495,9 @@ config.br_priority.buckets = 8;           /* the default */
 Both CLI drivers expose it, as `--br-priority-KEY VALUE` on `pe-preflop-solve`
 and `--br-priority-<key> <value>` on `mpf_run_with_metrics`. The option is
 parsed *before* the `--br-` branch, which would otherwise claim the prefix. It
-needs the sampled best response on: with `--br-max-samples` unset the policy is
-inert, by design, and both help texts say so.
+needs the sampled best response on, which is the default since issue #274; the
+policy is inert under `--br-max-samples 0`, which selects the historical
+one-rollout estimator, and both help texts say so.
 
 An all-zero config is FIFO, and FIFO leaves every decision at `max_samples`.
 Measured on the shipped CLI (`pe-preflop-solve --iterations 20
