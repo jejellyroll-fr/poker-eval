@@ -304,18 +304,56 @@ That last check reads the report's hand table, and deliberately not `RANGE GRID`
 the tool emits the grid only for Hold'em, so a fingerprint taken from it is empty
 on all three PLO spots, and two empty fingerprints compare equal whatever was
 trained — the guard would have been vacuous exactly where the workloads are
-hardest. The fingerprint is the multiset of `node`, `actor` and `frequencies`.
-The hand column is a canonical representative over the 24 loose suit permutations
-of hole and board, so it names a class of decisions rather than one decision; the
-EV column is the measurement's own sampled view and the board column is the
-sampled deal's runout. Neither belongs to the strategy. A multiset rather than a
-sequence, because `--report-rows` fills per-node quotas in storage-id order and
-the row *set* churns: on `plo4-3way` the two policies share 1,881 of 1,997 rows,
-and two FIFO runs at `--br-samples 20000` and `40000` share the same 1,881 — this
-projection is identical in all four cases while still separating a 500-iteration
-strategy from a 5,000-iteration one on all four spots. An empty fingerprint is
-refused rather than accepted, so a report format that dropped the hand table
-fails the guard instead of disarming it.
+hardest. The fingerprint is the multiset of `hand`, `node`, `actor` and
+`frequencies`.
+
+The hand is what binds a frequency vector to a decision: without it the
+projection is a multiset of `(node, actor, frequencies)`, and two hands at the
+same node and actor that exchange their vectors leave it unchanged — a
+per-decision change the guard would wave through. The hand string is a canonical
+representative over the 24 loose suit permutations of hole and board
+(`preflop_op_infoset_key`), so it names a class of decisions rather than one, but
+it is a deterministic function of the infoset: measured stable for the same
+decision across the two policies and across two BR budgets, on 24 spot/seed pairs
+including `plo4-3way`, where only 1,867-1,881 of 1,997 rows are shared between
+two runs that solved the same strategy.
+
+Keeping the hand costs a second restriction, and finding it was the point of
+this paragraph. The report is emitted in two sweeps — rows that carry a strategy
+first, the untouched ones after — and every untouched row holds the uniform
+vector regret matching starts from. Which of them fill the leftover per-node
+quota depends on storage-id order, and the measurement grows the storage, so
+that tail churns: 135 of 1,998 rows on PLO4 heads-up at 500 iterations, *all of
+them uniform*. A `(node, actor, frequencies)` multiset collapses them and
+survives; adding the hand stops collapsing them and the guard refuses a
+comparison it should accept. So the fingerprint covers only the decisions that
+were actually trained. That costs nothing — a decision uniform in both arms is a
+decision that did not change, and one that leaves the uniform start enters the
+set and is seen. With every row the projection differs between the two policies
+on three of the four spots at 500 iterations; restricted to the trained rows it
+is identical in every regime tried, and still separates a 500-iteration strategy
+from a 5,000-iteration one on all four spots.
+
+The EV column is the measurement's own sampled view and the board column is the
+sampled deal's runout; neither belongs to the strategy. A multiset rather than a
+sequence, because `--report-rows` fills per-node quotas in storage-id order. An
+empty fingerprint is refused rather than accepted, so a report format that
+dropped the hand table fails the guard instead of disarming it — and so does a
+budget too low to have trained anything, which is a real regime: at 500
+iterations `plo5-hu` and `plo4-3way` have no trained decision at all, and the
+counts at 5,000 are 331, 251, 35 and 147 decisions for the four spots. The
+`plo5-hu` fingerprint therefore rests on 35 decisions, which is thin, and is why
+that spot's other evidence is read with the caveat below.
+
+The frequency column is the report's own `%.1f%%`, so the fingerprint resolves
+0.1 percentage points — that is the granularity of the check, and it is the
+report's limit, not the guard's. A divergence is caught as soon as one decision
+moves by that much: the smallest divergence measured here (500 iterations against
+5,000) moves 1% of the shared decisions on the least sensitive spot and 99% on
+the most sensitive, so the granularity is well below the size of a real training
+divergence. What the fingerprint does *not* catch is a change smaller than half a
+percentage point on every decision at once, and no run of this benchmark has
+produced one.
 
 The storage exemption is the same kind of narrow: the measurement resolves
 infosets the training never reached, and `storage_v2.c` derives the byte totals
@@ -346,12 +384,70 @@ BR trajectories per player, `--br-min-samples 4 --br-max-samples 64`, seeds
 | | uncertainty-aware | 1,245,611 | 21.3 | 85.7% | 7,938 | 51,117.8 | −221.4 ± 487.0 |
 
 **The measurement costs 14.4%, 14.6%, 2.7% and 20.9% fewer terminal evaluations,
-and the answer does not move.** The paired difference is under 0.75% of the
-reported exploitability on every spot, against a spread of 1.0-1.4%, so no
-systematic shift is distinguishable from the measurement's own noise at this
-budget — |t| ≤ 1.35 on four degrees of freedom, where 5% would need |t| > 2.78.
-That is issue #258's criterion (1) in cost terms: the same quality target,
-reached with less work.
+and the effect on the reported number is bounded.** What the table above may be
+read as is the load-bearing question, and the answer is *not* "the difference is
+zero". With five seeds, failing to reject that null at the 5% level would not be
+evidence of equivalence: a small sample is too weak to reject anything, and a
+modestly biased estimator passes the same test. So the script prints no
+significance verdict. It prints the 95% confidence interval of the paired
+difference, which is what bounds the effect, alongside each arm's own run-to-run
+spread across seeds:
+
+| Spot | paired mean | 95% CI (mBB) | CI half-width | margin (cross-seed sd) | verdict |
+|---|---|---|---|---|---|
+| `holdem-hu` | −92.2 | [−281.5, +97.1] | 1.52% | 5.62% | inside |
+| `plo4-hu` | +119.9 | [−135.2, +375.0] | 1.22% | 1.31% | inside |
+| `plo5-hu` | −0.3 | [−329.9, +329.3] | 1.68% | 1.27% | **wider** |
+| `plo4-3way` | −221.4 | [−826.0, +383.2] | 1.18% | 1.56% | inside |
+
+The margin is the larger of the two arms' spreads across seeds — the variation a
+reader already lives with when they change the seed — so "inside" means the
+policy's effect is smaller than one they could not have noticed, and the verdict
+is printed rather than left to the reader. On `plo5-hu` it is **not** inside:
+the saving there is 2.7% and the interval is wider than the noise, so at five
+seeds that spot supports "no effect detected", not equivalence. That is the
+honest reading and the table says so.
+
+A wider spread would be a regression in its own right, whatever the mean did, so
+the per-arm column is printed too. It is mixed rather than uniformly worse: the
+aware arm's spread is larger on `holdem-hu` (700.8 against 660.9) and `plo5-hu`
+(250.3 against 160.7) and smaller on `plo4-hu` (204.3 against 273.1) and
+`plo4-3way` (419.6 against 801.5). Five seeds estimate a standard deviation
+loosely, so this is reported as "no consistent inflation", not as a measured
+equality.
+
+The interval bounds the *effect*; it does not by itself say the aware arm's
+estimate is as close to the truth, which is a separate question and needs a
+reference. Each arm was therefore also scored against FIFO at ten times the
+budget — 200,000 BR trajectories per player, where the reference's own error is
+about three times smaller — paired by seed:
+
+| Spot | FIFO@20k mean \|error\| | aware@20k mean \|error\| | closer |
+|---|---|---|---|
+| `holdem-hu` | 80.4 | 137.1 | FIFO |
+| `plo4-hu` | 253.5 | 183.1 | aware |
+| `plo5-hu` | 178.9 | 272.0 | FIFO |
+| `plo4-3way` | 492.7 | 272.6 | aware |
+
+The answer is mixed, and it is reported as mixed. The aware arm is the less
+accurate one on `holdem-hu` and `plo5-hu` — the same two spots where the saving
+is smallest (14.4% and 2.7%), and one of them the spot that failed the margin
+above — and the more accurate one on `plo4-hu` and `plo4-3way`, where the saving
+is 14.6% and 20.9%. On `plo4-3way` the baseline is the badly biased arm: FIFO at
+20,000 trajectories overestimates the reference by 223.3 mBB on average, against
+2.0 for the aware arm. Five seeds estimate a mean absolute error loosely, so what
+this rules out is a *uniform* accuracy loss, not a per-spot one. The two arms
+also reproduce the published paired differences exactly (−92.2 ± 152.5,
++119.9 ± 205.5, −0.3 ± 265.5, −221.4 ± 487.0), which is the internal consistency
+check that the reference is measuring the same thing.
+
+Criterion (1) is therefore supported as a bound rather than as an absence of
+evidence: the policy shifts the reported exploitability by at most 1.2-1.7% of
+the reported value, against a margin of 1.3-5.6%, so the interval fits inside the
+measurement's own noise on three of the four spots — while costing 14.4-20.9%
+fewer terminal evaluations. The fourth spot, `plo5-hu`, supports only "no effect
+detected" at this sample size, and both its accuracy and its spread are the
+worse for the aware policy.
 
 Criterion (2) — better quality for the same compute budget — is **not** delivered
 on the three heads-up spots, and the cap curve is the evidence:

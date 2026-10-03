@@ -46,9 +46,12 @@ HAND_TABLE_ROWS = (
     "7cTc7d8h\t-1\tP1\tfold=75.0%,all-in=25.0%\tfold=pending,all-in=pending\t-",
     # Same tab layout, not strategy: the fingerprint has to skip it.
     "ev_update\t7cTc7d8h\t-1\tP1\tfold=-0.50,all-in=1.00",
-    "4cJc8hTh\t-1\tP1\tfold=50.0%,all-in=50.0%\tfold=pending,all-in=pending\t-",
+    "4cJc8hTh\t-1\tP1\tfold=60.0%,all-in=40.0%\tfold=pending,all-in=pending\t-",
+    # Uniform: a decision the training never reached. Its presence churns with
+    # the --report-rows quota, so it must not reach the fingerprint.
+    "KsQsJsTs\t0\tP2\tfold=50.0%,call=50.0%\tfold=pending,call=pending\t-",
 )
-HAND_TABLE_TAIL = "report_phase=complete rows=2"
+HAND_TABLE_TAIL = "report_phase=complete rows=3"
 
 
 def hand_table(*rows):
@@ -170,10 +173,50 @@ class StrategyFingerprintTests(unittest.TestCase):
         self.assertNotIn("RANGE GRID", HAND_TABLE)
         self.assertTrue(bench.strategy_fingerprint(HAND_TABLE))
 
-    def test_the_fingerprint_is_node_actor_and_frequencies(self) -> None:
+    def test_the_fingerprint_is_hand_node_actor_and_frequencies(self) -> None:
         self.assertEqual(bench.strategy_fingerprint(HAND_TABLE),
-                         [("-1", "P1", "fold=50.0%,all-in=50.0%"),
-                          ("-1", "P1", "fold=75.0%,all-in=25.0%")])
+                         [("4cJc8hTh", "-1", "P1", "fold=60.0%,all-in=40.0%"),
+                          ("7cTc7d8h", "-1", "P1", "fold=75.0%,all-in=25.0%")])
+
+    def test_a_uniform_decision_is_not_a_trained_strategy(self) -> None:
+        # The rows that churn with the --report-rows quota are exactly the ones
+        # the training never reached, and they all carry the uniform vector.
+        # Excluding them is what lets the hand be kept without the guard
+        # refusing a comparison it should accept.
+        self.assertFalse(bench.trained(HAND_TABLE_ROWS[3].split("\t")))
+        self.assertTrue(bench.trained(HAND_TABLE_ROWS[0].split("\t")))
+        self.assertNotIn("KsQsJsTs", "".join(
+            r[0] for r in bench.strategy_fingerprint(HAND_TABLE)))
+
+    def test_a_decision_leaving_the_uniform_start_is_seen(self) -> None:
+        # Excluding uniform rows must not make them permanently invisible: the
+        # moment one is trained it enters the fingerprint.
+        started = HAND_TABLE.replace("KsQsJsTs\t0\tP2\tfold=50.0%,call=50.0%",
+                                     "KsQsJsTs\t0\tP2\tfold=40.0%,call=60.0%")
+        self.assertNotEqual(started, HAND_TABLE)
+        self.assertEqual(len(bench.strategy_fingerprint(HAND_TABLE)), 2)
+        self.assertEqual(len(bench.strategy_fingerprint(started)), 3)
+
+    def test_two_hands_exchanging_their_frequencies_is_detected(self) -> None:
+        # The hand is what binds a frequency vector to a decision. Without it
+        # the projection is a multiset of (node, actor, frequencies), and two
+        # hands at the same node and actor that swap their vectors leave it
+        # unchanged -- a per-decision change the guard would wave through.
+        swapped = hand_table(
+            HAND_TABLE_ROWS[0].replace("fold=75.0%,all-in=25.0%",
+                                       "fold=60.0%,all-in=40.0%"),
+            HAND_TABLE_ROWS[1],
+            HAND_TABLE_ROWS[2].replace("fold=60.0%,all-in=40.0%",
+                                       "fold=75.0%,all-in=25.0%"),
+            HAND_TABLE_ROWS[3])
+        without_hand = sorted((r[1], r[2], r[3])
+                              for r in bench.strategy_fingerprint(HAND_TABLE))
+        without_hand_swapped = sorted(
+            (r[1], r[2], r[3]) for r in bench.strategy_fingerprint(swapped))
+        self.assertEqual(without_hand, without_hand_swapped,
+                         "the fixture must be a genuine exchange")
+        self.assertNotEqual(bench.strategy_fingerprint(HAND_TABLE),
+                            bench.strategy_fingerprint(swapped))
 
     def test_ev_update_rows_are_not_strategy(self) -> None:
         # They share the tab layout, so a parser that only splits on tabs
@@ -208,6 +251,43 @@ class StrategyFingerprintTests(unittest.TestCase):
 
     def test_a_report_without_a_hand_table_fingerprints_empty(self) -> None:
         self.assertEqual(bench.strategy_fingerprint("no table here"), [])
+
+
+class StatisticsTests(unittest.TestCase):
+    """The published claim is now an interval rather than a verdict, so the
+    interval is load-bearing and gets its own tests."""
+
+    def test_the_t_quantile_is_students_not_the_normal(self) -> None:
+        # At five seeds the normal quantile would understate the interval by a
+        # third, which is exactly the reading the reviewer objected to.
+        self.assertAlmostEqual(bench.t95(4), 2.776, places=3)
+        self.assertAlmostEqual(bench.t95(1), 12.706, places=3)
+        self.assertAlmostEqual(bench.t95(30), 2.042, places=3)
+        self.assertAlmostEqual(bench.t95(1000), 1.96, places=6)
+
+    def test_the_paired_interval_matches_a_hand_computed_case(self) -> None:
+        mean, sd, half = bench.paired_interval([1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertAlmostEqual(mean, 3.0)
+        self.assertAlmostEqual(sd, (2.5) ** 0.5)
+        # half = t(0.975, 4) * sd / sqrt(n), with t pinned by the test above.
+        self.assertAlmostEqual(half, 2.776 * sd / (5 ** 0.5), places=6)
+
+    def test_a_single_seed_yields_a_degenerate_interval(self) -> None:
+        # No spread can be estimated from one pair, so the interval is reported
+        # as zero-width rather than invented.
+        self.assertEqual(bench.paired_interval([7.0]), (7.0, 0.0, 0.0))
+
+    def test_a_wide_spread_cannot_establish_equivalence(self) -> None:
+        # The point of printing the interval: four seeds and a large spread
+        # leave a half-width of ~4, so an effect of 3 is not excluded even
+        # though a t-test would find nothing at the 5% level.
+        _, _, half = bench.paired_interval([-10.0, 5.0, 0.0, 8.0])
+        self.assertGreater(half, 3.0)
+
+    def test_sd_of_is_zero_for_a_single_run(self) -> None:
+        self.assertEqual(bench.sd_of([{"v": 1.0}], "v"), 0.0)
+        self.assertAlmostEqual(bench.sd_of([{"v": 1.0}, {"v": 3.0}], "v"),
+                               1.4142135623730951)
 
 
 class TrainingGuardTests(unittest.TestCase):

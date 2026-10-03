@@ -28,9 +28,20 @@ feature), the measurement's terminal evaluations and draws per decision (both
 deterministic for a fixed seed), the measured exploitability, and the priority
 layer's own bucket histogram -- the work distribution across infosets the issue
 asks for. The comparison against the baseline is *paired*: both arms of a spot
-see the same seed and therefore the same solved strategy, so the mean and
-spread of the per-seed difference separate a systematic shift from the
-measurement's own sampling noise.
+see the same seed and therefore the same solved strategy, so the per-seed
+difference removes the strategy and leaves the measurement.
+
+What that comparison may and may not be read as is printed with it, and this is
+deliberate. With five seeds, failing to reject "the difference is zero" at the
+5% level is *not* evidence that the two arms are equivalent -- a small sample is
+too weak to reject anything, and a modestly biased estimator would pass the same
+test. So no significance verdict is printed. Two numbers are: the 95%
+confidence interval of the paired difference, which bounds the effect the policy
+can be having, and each arm's own run-to-run spread across seeds, because a
+policy that widens the spread is a real regression even when its mean is
+unchanged. The interval is then compared against the larger of those spreads --
+the variation a reader already lives with when they change the seed -- and the
+verdict is stated.
 
 Two diagnostics are printed under each spot, because the size of the saving is
 not a constant:
@@ -50,6 +61,7 @@ not a constant:
 
 import argparse
 import json
+import math
 import os
 import re
 import statistics
@@ -151,27 +163,66 @@ HAND_TABLE_END = ("RANGE GRID", "report_phase", "board_query_rows=",
                   "... report capped")
 
 
+def trained(row):
+    """Does this row carry a strategy the training actually produced?
+
+    The report is emitted in two sweeps: rows that carry a strategy first, the
+    untouched ones after, and every untouched row holds the uniform vector regret
+    matching starts from. Which of them fill the leftover per-node quota depends
+    on storage-id order, and the measurement grows the storage, so that tail
+    churns between two arms that trained identically -- 135 of 1,998 rows on PLO4
+    heads-up at 500 iterations, all of them uniform. Keeping them in the
+    fingerprint makes it refuse a comparison it should accept. Dropping them
+    costs nothing: a decision that is uniform in both arms is a decision that did
+    not change, and a decision that leaves the uniform start enters the set and
+    is seen.
+    """
+    values = [part.split("=")[1] for part in row[3].split(",")]
+    return len(set(values)) > 1
+
+
 def strategy_fingerprint(text):
-    """The trained strategy, as a multiset of (node, actor, frequencies).
+    """The trained strategy, as a multiset of
+    (hand, node, actor, frequencies), over the decisions it was trained on.
 
     `RANGE GRID` is the obvious fingerprint and the wrong one: the tool emits
     it only for Hold'em (`pe_preflop_solve.c` gates it on `strcmp(options->game,
     "holdem") == 0`), so on the three PLO spots it is absent and a guard that
-    reads it is vacuous there. The hand table is emitted for every game. Two of
-    its columns are unusable: the EV column is the measurement's own sampled
-    view, and the board column is the sampled deal's runout. The hand column is
-    a canonical representative over the 24 loose suit permutations of hole and
-    board (`preflop_op_infoset_key`), so it names a class of decisions rather
-    than one decision. That leaves node, actor and the frequency vector.
+    reads it is vacuous there. The hand table is emitted for every game.
+
+    The hand is kept, and it is what binds a frequency vector to a decision.
+    Without it the projection is a multiset of (node, actor, frequencies), and
+    two hands at the same node and actor that exchange their frequency vectors
+    leave it unchanged -- a per-decision change the guard would wave through.
+    The hand string is a canonical representative over the 24 loose suit
+    permutations of hole and board (`preflop_op_infoset_key`), so it names a
+    class of decisions rather than one, but it is a *deterministic function of
+    the infoset*: measured stable for the same decision across the two policies
+    and across two BR budgets, on 24 spot/seed pairs including `plo4-3way`,
+    where only 1,867-1,881 of 1,997 rows are shared between two runs that
+    solved the same strategy.
+
+    Uniform rows are excluded, which is what lets the hand be kept: they are
+    exactly the rows whose presence churns (see `trained`), and including them
+    turns the churn into a false refusal. Measured: with every row the
+    projection differs between the two policies on three of the four spots at
+    500 iterations, and on `plo4-3way` at the published regime; restricted to
+    the trained rows it is identical in every regime tried, while still
+    separating a 500-iteration strategy from a 5,000-iteration one.
+
+    Two columns are still unusable: the EV column is the measurement's own
+    sampled view, and the board column is the sampled deal's runout. The
+    frequency column is the report's own `%.1f%%`, so the fingerprint resolves
+    0.1 percentage points -- a divergence is caught as soon as one decision
+    moves by that much, and the smallest divergence measured (500 iterations
+    against 5,000) moves 1% of the shared decisions on the least sensitive spot
+    and 99% on the most sensitive.
 
     A multiset, not the sequence: `--report-rows` fills per-node quotas in
     storage-id order, so which rows make the cut depends on a storage the
-    measurement grows, and the row *set* can differ between two arms that
-    trained identically. Measured on `plo4-3way` at seed 1: 1881 of 1997 rows
-    shared between the two policies, and between two FIFO runs at `--br-samples
-    20000` and `40000` -- and this projection identical in all four cases, while
-    still separating a 500-iteration strategy from a 5000-iteration one on all
-    four spots.
+    measurement grows. The trained rows are never truncated by that quota in
+    these workloads -- the tool prints every row that carries a strategy before
+    it starts filling leftovers -- so the multiset is stable in practice.
     """
     rows, inside = [], False
     for line in text.splitlines():
@@ -185,8 +236,8 @@ def strategy_fingerprint(text):
             continue
         cells = line.split("\t")
         # `ev_update` rows carry the same tab layout and are not strategy.
-        if len(cells) >= 4 and cells[0] != "ev_update":
-            rows.append((cells[1], cells[2], cells[3]))
+        if len(cells) >= 4 and cells[0] != "ev_update" and trained(cells):
+            rows.append((cells[0], cells[1], cells[2], cells[3]))
     return sorted(rows)
 
 
@@ -298,8 +349,11 @@ def assert_same_training(spot, arm, run, baseline_run):
                  "%s vs %s" % (spot[0], arm, run["effort"],
                                baseline_run["effort"]))
     if not run["strategy"]:
-        sys.exit("%s %s: the report carries no hand table, so the arms cannot "
-                 "be shown to have trained the same strategy" % (spot[0], arm))
+        sys.exit("%s %s: no decision in the report carries a trained strategy, "
+                 "so the arms cannot be shown to have solved the same one -- "
+                 "either the report has no hand table, or --iterations is too "
+                 "low for the strategy to have left the uniform start"
+                 % (spot[0], arm))
     if run["strategy"] != baseline_run["strategy"]:
         sys.exit("%s %s: the trained strategy differs under this policy, so "
                  "the arms are not measuring the same thing" % (spot[0], arm))
@@ -323,15 +377,83 @@ def mean_of(runs, key):
     return statistics.mean(run[key] for run in runs)
 
 
+def sd_of(runs, key):
+    """The arm's own run-to-run spread across seeds. Printed next to the paired
+    difference because "no significant difference" says nothing about whether
+    the arm got *noisier*, and a policy that widens the spread is a real
+    regression even when its mean is unchanged."""
+    values = [run[key] for run in runs]
+    return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
+# Two-sided 95% Student-t quantiles, df 1..30. The sample is five seeds, so the
+# normal quantile would understate the interval by a third at df=4 (1.96
+# against 2.776).
+T95 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+       2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+       2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042)
+
+
+def t95(df):
+    """Two-sided 95% Student-t quantile; the normal value beyond df=30."""
+    return T95[df - 1] if 1 <= df <= len(T95) else 1.96
+
+
+def paired_interval(diffs):
+    """The paired mean difference and its 95% confidence interval.
+
+    Reported *instead of* a significance verdict, and this is the whole point of
+    the line: with five seeds, failing to reject "the difference is zero" at the
+    5% level is not evidence that the two arms are equivalent -- a small sample
+    is simply too weak to reject anything. The interval is what the data
+    supports, and it bounds the effect the policy can be having. Its half-width
+    is then compared against the measurement's own run-to-run spread, which is
+    the variation a reader already lives with when they change the seed: an
+    effect smaller than that is one they could not have noticed."""
+    n = len(diffs)
+    mean = statistics.mean(diffs)
+    if n < 2:
+        return mean, 0.0, 0.0
+    sd = statistics.stdev(diffs)
+    return mean, sd, t95(n - 1) * sd / math.sqrt(n)
+
+
 def print_row(spot, label, runs, baseline):
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(runs, baseline)]
-    spread = statistics.stdev(diffs) if len(diffs) > 1 else 0.0
-    print("%-11s %-17s %8.2f %12s %10s %8s %9s %14.1f %+10.1f +- %5.1f"
+    _, spread, _ = paired_interval(diffs)
+    print("%-11s %-17s %8.2f %12s %10s %8s %9s %14.1f %8.1f %+10.1f +- %5.1f"
           % (spot[0], label, mean_of(runs, "wall"),
              "{:,}".format(int(mean_of(runs, "evals"))),
              fmt(mean_of(runs, "avg_draws")), fmt(mean_of(runs, "early")),
              "{:,}".format(int(mean_of(runs, "max_budget_hits"))),
-             mean_of(runs, "nash_conv"), statistics.mean(diffs), spread))
+             mean_of(runs, "nash_conv"), sd_of(runs, "nash_conv"),
+             statistics.mean(diffs), spread))
+    sys.stdout.flush()
+
+
+def print_equivalence(spot, baseline, aware):
+    """What the paired difference actually bounds, and against what.
+
+    The point of the line is to refuse the reading "the answer did not move":
+    a null result is not equivalence. Two numbers are printed instead -- the
+    95% confidence interval of the paired difference, and the measurement's own
+    run-to-run spread across seeds. The margin is the larger of the two arms'
+    spreads, so the comparison is against the variation a reader already has
+    when they change the seed, and the verdict is stated rather than implied."""
+    diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(aware, baseline)]
+    mean, _, half = paired_interval(diffs)
+    reference = mean_of(baseline, "nash_conv")
+    margin = max(sd_of(baseline, "nash_conv"), sd_of(aware, "nash_conv"))
+    verdict = ("inside the margin" if half <= margin
+               else "WIDER than the margin")
+    print("%-11s %-17s mean %+.1f mBB, 95%% CI [%+.1f, %+.1f] = [%+.2f%%, "
+          "%+.2f%%] of %s; cross-seed sd %.1f (fifo) %.1f (aware), margin "
+          "%.1f = %+.2f%% -- CI %s"
+          % (spot[0], "equivalence", mean, mean - half, mean + half,
+             100.0 * (mean - half) / reference, 100.0 * (mean + half) / reference,
+             "{:,.1f}".format(reference), sd_of(baseline, "nash_conv"),
+             sd_of(aware, "nash_conv"), margin, 100.0 * margin / reference,
+             verdict))
     sys.stdout.flush()
 
 
@@ -394,9 +516,10 @@ def main():
           "and the trained strategy's per-decision frequencies are checked to "
           "agree.")
     print()
-    header = ("%-11s %-17s %8s %12s %10s %8s %9s %14s %19s"
+    header = ("%-11s %-17s %8s %12s %10s %8s %9s %14s %8s %19s"
               % ("spot", "policy", "wall s", "BR evals", "draws/dec",
-                 "early %", "cap hits", "NashConv mBB", "vs fifo (paired)"))
+                 "early %", "cap hits", "NashConv mBB", "sd",
+                 "vs fifo (paired)"))
     print(header)
     print("-" * len(header))
 
@@ -417,6 +540,7 @@ def main():
             print_row(spot, "fifo", baseline, baseline)
             print_row(spot, "uncertainty-aware", aware, baseline)
             print_distribution(spot, "uncertainty-aware", aware)
+            print_equivalence(spot, baseline, aware)
 
             # Only a repeat visit is capped, so the saving tracks how often the
             # budget revisits a decision. One seed is enough to show the shape.
