@@ -39,9 +39,10 @@ test. So no significance verdict is printed. Two numbers are: the 95%
 confidence interval of the paired difference, which bounds the effect the policy
 can be having, and each arm's own run-to-run spread across seeds, because a
 policy that widens the spread is a real regression even when its mean is
-unchanged. The interval is then compared against the larger of those spreads --
-the variation a reader already lives with when they change the seed -- and the
-verdict is stated.
+unchanged. The whole interval is then compared against the larger of those
+spreads -- the variation a reader already lives with when they change the seed
+-- and the verdict is stated. Both the interval and the margin are built from a
+spread, so fewer than two seeds is refused rather than tabulated.
 
 Two diagnostics are printed under each spot, because the size of the saving is
 not a constant:
@@ -406,16 +407,41 @@ def paired_interval(diffs):
     the line: with five seeds, failing to reject "the difference is zero" at the
     5% level is not evidence that the two arms are equivalent -- a small sample
     is simply too weak to reject anything. The interval is what the data
-    supports, and it bounds the effect the policy can be having. Its half-width
-    is then compared against the measurement's own run-to-run spread, which is
-    the variation a reader already lives with when they change the seed: an
-    effect smaller than that is one they could not have noticed."""
+    supports, and it bounds the effect the policy can be having. Its *farthest
+    endpoint*, not its half-width, is the bound, because a nonzero mean leaves
+    the interval off-centre; both endpoints are then judged against the
+    measurement's own run-to-run spread, which is the variation a reader already
+    lives with when they change the seed: an effect smaller than that is one
+    they could not have noticed.
+
+    A single observation has no spread, so the interval degenerates to a point.
+    That is returned as-is -- the function does not invent a width -- and the
+    caller refuses to print it as a confidence interval: see
+    `require_paired_seeds`.
+    """
     n = len(diffs)
     mean = statistics.mean(diffs)
     if n < 2:
         return mean, 0.0, 0.0
     sd = statistics.stdev(diffs)
     return mean, sd, t95(n - 1) * sd / math.sqrt(n)
+
+
+def require_paired_seeds(seeds):
+    """At least two seeds, because one cannot estimate a spread.
+
+    With a single pair the interval is zero-width *and* the margin -- the larger
+    of the two arms' cross-seed spreads -- collapses to zero, so the printed
+    line reads "95% CI [+261.8, +261.8] ... margin 0.0 = +0.00%": a point
+    estimate labelled a confidence interval, and a margin of zero that turns the
+    verdict into a coin flip on the sign of the mean. Neither is a property of
+    the measurement, so the run is refused rather than tabulated.
+    """
+    if seeds < 2:
+        sys.exit("--seeds %d: the paired interval, the cross-seed spread and "
+                 "the margin it is judged against all need two seeds at least; "
+                 "one seed prints a zero-width interval labelled a 95%% CI. "
+                 "Use --seeds 2 for a quick run." % seeds)
 
 
 def print_row(spot, label, runs, baseline):
@@ -451,8 +477,9 @@ def print_equivalence(spot, baseline, aware):
     a null result is not equivalence. Two numbers are printed instead -- the
     95% confidence interval of the paired difference, and the measurement's own
     run-to-run spread across seeds. The margin is the larger of the two arms'
-    spreads, so the comparison is against the variation a reader already has
-    when they change the seed, and the verdict is stated rather than implied."""
+    spreads, so the judgement is against the variation a reader already has
+    when they change the seed; the *whole* interval is judged, both endpoints
+    at once, and the verdict is stated rather than implied."""
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(aware, baseline)]
     mean, _, half = paired_interval(diffs)
     reference = mean_of(baseline, "nash_conv")
@@ -511,9 +538,12 @@ def main():
                     help="draws per action for a settled decision")
     ap.add_argument("--br-max-samples", type=int, default=64,
                     help="draws per action for a fragile decision")
-    ap.add_argument("--seeds", type=int, default=5)
+    ap.add_argument("--seeds", type=int, default=5,
+                    help="paired seeds; two at least, since one cannot estimate "
+                         "the spread the interval and the margin are built from")
     ap.add_argument("--spot", action="append", help="only these spots")
     args = ap.parse_args()
+    require_paired_seeds(args.seeds)
 
     binary = os.path.join(args.build, "tools", "pe-preflop-solve")
     if not os.path.exists(binary):

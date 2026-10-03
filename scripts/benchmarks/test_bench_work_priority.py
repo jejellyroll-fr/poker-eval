@@ -17,6 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bench_work_priority as bench
 
+# The guide publishes the numbers this script prints, so a number that moves
+# here has to move there. It carried one that was wrong: the interval's
+# half-width, quoted as the largest shift the experiment admits.
+GUIDE = (Path(__file__).resolve().parents[2]
+         / "docs" / "cfr" / "guides" / "work_priority_scheduling.md")
+
 
 BR_SAMPLING = "br_sampling estimator=confidence-guided terminal_evaluations=44743"
 BR_SAMPLING_LEGACY = "br_sampling terminal_evaluations=65122"
@@ -277,6 +283,23 @@ class StatisticsTests(unittest.TestCase):
         # as zero-width rather than invented.
         self.assertEqual(bench.paired_interval([7.0]), (7.0, 0.0, 0.0))
 
+    def test_one_seed_is_refused_rather_than_tabulated(self) -> None:
+        # The degenerate interval above must never reach the printer. With one
+        # pair the margin collapses to zero as well, so the line reads
+        # "95% CI [+261.8, +261.8] ... margin 0.0 = +0.00%" -- a point estimate
+        # labelled a confidence interval, judged against nothing.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_paired_seeds(1)
+        self.assertIn("zero-width interval", str(caught.exception))
+
+    def test_no_seeds_are_refused_too(self) -> None:
+        with self.assertRaises(SystemExit):
+            bench.require_paired_seeds(0)
+
+    def test_two_seeds_are_enough_to_run(self) -> None:
+        self.assertIsNone(bench.require_paired_seeds(2))
+        self.assertIsNone(bench.require_paired_seeds(5))
+
     def test_a_wide_spread_cannot_establish_equivalence(self) -> None:
         # The point of printing the interval: four seeds and a large spread
         # leave a half-width of ~4, so an effect of 3 is not excluded even
@@ -390,6 +413,40 @@ class TrainingGuardTests(unittest.TestCase):
         blind = run(strategy=[])
         self.assertRefused(("plo4-hu", "plo4", 2), "aware", blind, base,
                            "no hand table")
+
+
+class PublishedBoundTests(unittest.TestCase):
+    """The bound the guide states on the reported number, and where it comes
+    from. Quoting the interval's half-width understates it, because the paired
+    mean is nonzero and the interval is off-centre."""
+
+    # The four published rows: spot, paired mean, half-width, reference.
+    PUBLISHED = (("holdem-hu", -92.2, 189.3, 12459.8),
+                 ("plo4-hu", 119.9, 255.1, 20861.9),
+                 ("plo5-hu", -0.3, 329.6, 19667.0),
+                 ("plo4-3way", -221.4, 604.6, 51339.2))
+
+    def test_the_bound_is_the_farthest_endpoint_not_the_half_width(self) -> None:
+        bounds = [100.0 * max(abs(mean - half), abs(mean + half)) / reference
+                  for _, mean, half, reference in self.PUBLISHED]
+        self.assertAlmostEqual(bounds[0], 2.26, places=2)
+        self.assertAlmostEqual(bounds[1], 1.80, places=2)
+        self.assertAlmostEqual(bounds[2], 1.68, places=2)
+        self.assertAlmostEqual(bounds[3], 1.61, places=2)
+        # The half-widths would have said 1.2-1.7%, understating the first by a
+        # third; the maximum over the four is what the guide may state.
+        half_widths = [100.0 * half / reference
+                       for _, _, half, reference in self.PUBLISHED]
+        self.assertAlmostEqual(half_widths[0], 1.52, places=2)
+        self.assertLess(max(half_widths), max(bounds))
+
+    def test_the_guide_states_the_corrected_bound(self) -> None:
+        # Pinned on the bound as stated, not on the bare figures: the guide
+        # still quotes the half-widths, correctly, as the thing the bound is
+        # *not* taken from.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("at most 2.3% of the", text)
+        self.assertNotIn("at most 1.2-1.7%", text)
 
 
 if __name__ == "__main__":

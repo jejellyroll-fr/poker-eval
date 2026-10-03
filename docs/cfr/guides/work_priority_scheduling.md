@@ -445,9 +445,14 @@ also reproduce the published paired differences exactly (−92.2 ± 152.5,
 check that the reference is measuring the same thing.
 
 Criterion (1) is therefore supported as a bound rather than as an absence of
-evidence: the policy shifts the reported exploitability by at most 1.2-1.7% of
-the reported value, against a margin of 1.3-5.6%, while costing 14.4-20.9% fewer
-terminal evaluations. Two readings have to be kept apart, and the table gives
+evidence: the policy shifts the reported exploitability by at most 2.3% of the
+reported value, against a margin of 1.3-5.6%, while costing 14.4-20.9% fewer
+terminal evaluations. The bound is the **farthest interval endpoint**, not the
+half-width, and that is the same distinction the verdict above turns on: the
+half-widths are 1.2-1.7%, but the intervals are not centred on zero, so the
+largest shift the data admits is 2.26% on `holdem-hu` (its interval reaching
+−281.5 against a reference of 12,459.8), 1.80% on `plo4-hu`, 1.68% on `plo5-hu`
+and 1.61% on `plo4-3way`. Two readings have to be kept apart, and the table gives
 both. No spot detects an effect: all four intervals contain zero, so none of
 them licenses "the policy moved the answer". Only `holdem-hu` establishes
 equivalence, its whole interval lying inside the margin. On the other three the
