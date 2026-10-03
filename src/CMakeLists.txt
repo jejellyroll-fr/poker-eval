@@ -243,10 +243,16 @@ endforeach()
 # the BR result - so the solver ABI bumps once more: SOVERSION 8.  Same
 # reasoning as #257: pe_solver_config_default() writes the whole struct, so a
 # caller compiled against the smaller layout would have its buffer overrun.
+# Issue #276: pe_preflop_betting_state_t grew a postflop_decision field, and
+# pe_preflop_betting_game_t embeds that state by value as its root, so both
+# grew (440 -> 448 and 752 -> 760 bytes on arm64).  pe_preflop_betting_game_init
+# memsets the whole game struct in the caller's allocation, so an application
+# built against the smaller layout would have its buffer overrun.  The solver
+# ABI bumps once more: SOVERSION 9.
 if(BUILD_SHARED_LIBS)
     set_target_properties(poker_solver PROPERTIES
-        VERSION 8.0.0
-        SOVERSION 8)
+        VERSION 9.0.0
+        SOVERSION 9)
 
     # Issue #236: mpf_config_t and mpf_tree_range_profile_t gained public
     # complete-range fields.  Keep old applications from passing their
