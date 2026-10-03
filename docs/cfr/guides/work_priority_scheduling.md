@@ -9,6 +9,10 @@ Issue #271 is the second half: the layer had no call site, and now it has one.
 to interpolate that decision's sample cap. Test: `tests/test_br_priority.c`. See
 "The call site" and "Measured: the cap in a solve" below.
 
+The solve-level benchmarks issue #258 asks for are in
+`scripts/benchmarks/bench_work_priority.py`; their output is tabulated under
+"Benchmarks: the four solve-level workloads".
+
 A solve spends the same work on every decision it has to make. That is wasteful
 in both directions: an action that wins by a mile is settled after a handful of
 samples, while a near tie is still a coin flip after thousands. The
@@ -282,21 +286,87 @@ and it broke the bucket bound the policy promises (see above). Use `balanced`
 for its bucket-level guarantee. When the worst delay per decision matters, use
 `uncertainty-aware` with aging.
 
-## Benchmarks: what is and is not measured
+## Benchmarks: the four solve-level workloads
 
-The issue asks for solve-level benchmarks — wall clock to a target
-exploitability on Hold'em heads-up, PLO4, PLO5 and a multiway Omaha solve. **They
-are still not produced.** Issue #258 measured nothing at solve level because the
-layer had no call site, and a table built on an invented harness would have
-measured the harness. Issue #271 gives it a call site (below), so those four
-benchmarks are now *possible* rather than blocked on wiring — but four solves to
-a target exploitability is a piece of work in its own right, and it is still
-owned by #258.
+Issue #258 asks for the layer to be benchmarked at solve level on Hold'em
+heads-up, PLO4 heads-up, PLO5 heads-up and a multiway Omaha solve.
+`scripts/benchmarks/bench_work_priority.py` is that measurement, and the tables
+below are its output, run twice with byte-identical deterministic columns.
 
-What #271 measures instead is one end-to-end demonstration on the shipped CLI,
-reported under "Measured: the cap in a solve" below. The workload table above
-remains the measurement of the allocation the layer makes, on a synthetic
-workload whose composition is known in advance.
+The call site only decides how many draws the *measurement* spends, so the four
+spots solve the same strategy under both policies and differ only in how they
+measure it. The script refuses to publish a row that violates that: the report's
+fields must agree outside the measurement's own numbers and the storage its own
+traversal grows, the training's visits, updates and chance draws must agree
+street by street, and the trained strategy's argmax must agree. That is also
+what makes the comparison paired — both arms of a spot see the same seed, hence
+the same solved strategy.
+
+`pe-preflop-solve`, external MCCFR, 5,000 iterations, 4 showdown boards, 20,000
+BR trajectories per player, `--br-min-samples 4 --br-max-samples 64`, seeds
+100-104:
+
+| Spot | Policy | BR terminal evals | draws/dec | early stop | cap hits | NashConv mBB | paired vs FIFO |
+|---|---|---|---|---|---|---|---|
+| `holdem-hu` | FIFO | 454,750 | 14.5 | 99.6% | 118 | 12,459.8 | — |
+| | uncertainty-aware | 389,290 | 12.1 | 94.9% | 1,398 | 12,367.6 | −92.2 ± 152.5 |
+| `plo4-hu` | FIFO | 633,019 | 18.9 | 100.0% | 0 | 20,861.9 | — |
+| | uncertainty-aware | 540,728 | 15.9 | 89.5% | 3,239 | 20,981.8 | +119.9 ± 205.5 |
+| `plo5-hu` | FIFO | 641,957 | 19.7 | 100.0% | 0 | 19,667.0 | — |
+| | uncertainty-aware | 624,766 | 19.1 | 98.0% | 611 | 19,666.7 | −0.3 ± 265.5 |
+| `plo4-3way` | FIFO | 1,574,437 | 27.3 | 95.4% | 2,565 | 51,339.2 | — |
+| | uncertainty-aware | 1,245,611 | 21.3 | 85.7% | 7,938 | 51,117.8 | −221.4 ± 487.0 |
+
+**The measurement costs 14.4%, 14.6%, 2.7% and 20.9% fewer terminal evaluations,
+and the answer does not move.** The paired difference is under 0.75% of the
+reported exploitability on every spot, against a spread of 1.0-1.4%, so no
+systematic shift is distinguishable from the measurement's own noise at this
+budget — |t| ≤ 1.35 on four degrees of freedom, where 5% would need |t| > 2.78.
+That is issue #258's criterion (1) in cost terms: the same quality target,
+reached with less work.
+
+Criterion (2) — better quality for the same compute budget — is **not** delivered
+on the three heads-up spots, and the cap curve is the evidence:
+
+```text
+holdem-hu   cap curve  1x 383,006  2x 385,646  4x 386,910  8x 389,690  16x 392,856  (fifo at 1x: 452,678)
+plo4-hu     cap curve  1x 541,937  2x 560,369  4x 584,595  8x 599,083  16x 619,203  (fifo at 1x: 633,843)
+plo5-hu     cap curve  1x 626,925  2x 655,613  4x 698,269  8x 727,981  16x 754,677  (fifo at 1x: 643,357)
+plo4-3way   cap curve  1x 1,242,466  2x 1,466,196  4x 1,774,180  8x 2,197,318  16x 2,647,162  (fifo at 1x: 1,573,060)
+```
+
+Raising the cap sixteen-fold buys 2.6% more work on `holdem-hu`: the confidence
+rule, not the cap, is what stops most decisions, so the saving has nowhere to go
+back to. On `plo4-3way` it does — the curve crosses the baseline at 4x, so there
+the saving *is* reinvestable. The three-way spot is also the one where the
+priority telemetry fills the ladder instead of the bottom two buckets
+(`35008,2684,468,78,17,44,29,25` against `holdem-hu`'s `272,52,13,0,0,0,0,0`),
+which is the same fact read from the other side.
+
+The size of the saving is not a constant, and the reason is structural. Only a
+*repeat* visit to a decision is capped: a decision below the coverage floor ranks
+in the top bucket, so its first visit keeps the full cap. A budget that visits
+most decisions once therefore has almost nothing to reallocate, and the revisit
+curve says so:
+
+```text
+holdem-hu   revisit curve  2,000 13.4%  5,000 14.8%  20,000 15.4%
+plo4-hu     revisit curve  2,000 1.9%   5,000 4.2%   20,000 14.5%
+plo5-hu     revisit curve  2,000 0.1%   5,000 0.3%   20,000 2.6%
+plo4-3way   revisit curve  2,000 1.8%   5,000 6.9%   20,000 21.0%
+```
+
+At the CLI's own default of 2,000 trajectories the saving is 0.1% on `plo5-hu`
+and 1.8% on `plo4-3way`; at 20,000 it is 2.6% and 21.0%. The script therefore
+defaults to 20,000 and prints the curve rather than quoting a single budget.
+`plo5-hu` — 28,148 decisions against `holdem-hu`'s 337 — is the spot where a
+given budget buys the fewest revisits, which is why it is also the spot where
+the priority has the least to do.
+
+What #271 measures as a demonstration, on one spot and 20 iterations, is below
+under "Measured: the cap in a solve"; the workload table under "Measured: does
+the priority do what it claims?" remains the measurement of the *allocation* the
+layer makes, on a synthetic workload whose composition is known in advance.
 
 ## The suite found a defect, and the guards bite
 
@@ -376,6 +446,13 @@ So `order()` has no consumer, and giving it one would have meant inventing the
 prefix semantics first. `pe_work_priority_bucket()` is the primitive that does
 have one: it is a pure function of a *single* decision's metadata, needs no
 batch, and answers "how much does this one deserve".
+
+The benchmarks confirm that reading from the outside. `PE_WORK_SCHED_BALANCED`
+and `PE_WORK_SCHED_UNCERTAINTY_AWARE` differ only in the *permutation* they
+return — `pe_work_priority_bucket()` ranks the two alike, because only FIFO is
+special-cased in it — so a solve run under either measures byte-identical
+terminal evaluations and NashConv. The two policies are indistinguishable at
+this call site, which is exactly what "the bucket, not the permutation" predicts.
 
 The site is `src/solver/domain/external_best_response.c`. In `br_rollout()`,
 `pe_br_resolve_decision()` already receives its `pe_br_sampling_config_t` **by
@@ -559,10 +636,10 @@ other side of the threshold difference above: `max_budget_hits` rises from 3 to
 87 — decisions stopped by their (lowered) cap before their `z`-wide intervals
 cleared.
 
-This is a demonstration, not the four solve-level benchmarks #258 asks for (see
-above): one spot, one game, 20 iterations. The numbers are machine-independent
-because they are sample *counts* rather than wall clock, but they are not a
-convergence study.
+This is a demonstration and not the four solve-level workloads, which are
+measured above: one spot, one game, 20 iterations. The numbers are
+machine-independent because they are sample *counts* rather than wall clock, but
+they are not a convergence study.
 
 ### The unit test's numbers
 
@@ -689,8 +766,11 @@ and the one-second granularity bites both.
   knows nothing about best responses.
 - **`pe_work_priority_order()` still has no consumer.** Nothing in a solve
   consumes a permutation, for the reason in the audit: the solve loop drains its
-  batch. The distributed scheduler is still not wired, and the benchmarks that
-  would justify wiring it are still #258's.
+  batch. The distributed scheduler is still not wired. The solve-level
+  benchmarks above measure the *bucket*, which is the half that has a consumer;
+  what would justify wiring the ordering half — a caller that services a prefix
+  of a batch under a finite budget — does not exist yet, and inventing it is not
+  part of #258.
 - **CFR training is untouched.** The layer only orders work, and the call site
   only changes how many draws a *measurement* spends. It computes no regrets and
   averages no strategies.
