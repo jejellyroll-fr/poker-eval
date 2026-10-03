@@ -284,6 +284,19 @@ class StatisticsTests(unittest.TestCase):
         _, _, half = bench.paired_interval([-10.0, 5.0, 0.0, 8.0])
         self.assertGreater(half, 3.0)
 
+    def test_the_verdict_uses_both_endpoints_not_the_half_width(self) -> None:
+        # The regression: comparing the half-width alone labels an interval that
+        # reaches past the bound as "inside". These are the published PLO4 and
+        # three-way rows, both of which the half-width test passed wrongly.
+        self.assertFalse(bench.equivalence_verdict(119.9, 255.1, 273.1))
+        self.assertFalse(bench.equivalence_verdict(-221.4, 604.6, 801.5))
+        # And the two that do hold: the whole interval is within the bounds.
+        self.assertTrue(bench.equivalence_verdict(-92.2, 189.3, 700.8))
+        self.assertFalse(bench.equivalence_verdict(-0.3, 329.6, 250.3))
+        # A zero mean degenerates to the half-width test, which is correct there.
+        self.assertTrue(bench.equivalence_verdict(0.0, 200.0, 250.0))
+        self.assertFalse(bench.equivalence_verdict(0.0, 300.0, 250.0))
+
     def test_sd_of_is_zero_for_a_single_run(self) -> None:
         self.assertEqual(bench.sd_of([{"v": 1.0}], "v"), 0.0)
         self.assertAlmostEqual(bench.sd_of([{"v": 1.0}, {"v": 3.0}], "v"),

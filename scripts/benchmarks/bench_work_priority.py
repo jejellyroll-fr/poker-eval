@@ -431,6 +431,19 @@ def print_row(spot, label, runs, baseline):
     sys.stdout.flush()
 
 
+def equivalence_verdict(mean, half, margin):
+    """Is the whole confidence interval inside [-margin, +margin]?
+
+    Both endpoints, not the half-width: a nonzero mean shifts the interval, and
+    comparing `half` alone labels an interval that reaches past the bound as
+    "inside". The published PLO4 row is the counter-example that caught this --
+    mean +119.9, half-width 255.1, margin 273.1, and an upper endpoint of +375.0.
+    The condition is the textbook one, `|mean| + half <= margin`, which is the
+    same as requiring both endpoints to lie within the bounds.
+    """
+    return abs(mean) + half <= margin
+
+
 def print_equivalence(spot, baseline, aware):
     """What the paired difference actually bounds, and against what.
 
@@ -444,8 +457,8 @@ def print_equivalence(spot, baseline, aware):
     mean, _, half = paired_interval(diffs)
     reference = mean_of(baseline, "nash_conv")
     margin = max(sd_of(baseline, "nash_conv"), sd_of(aware, "nash_conv"))
-    verdict = ("inside the margin" if half <= margin
-               else "WIDER than the margin")
+    verdict = ("inside the margin" if equivalence_verdict(mean, half, margin)
+               else "reaches past the margin")
     print("%-11s %-17s mean %+.1f mBB, 95%% CI [%+.1f, %+.1f] = [%+.2f%%, "
           "%+.2f%%] of %s; cross-seed sd %.1f (fifo) %.1f (aware), margin "
           "%.1f = %+.2f%% -- CI %s"

@@ -396,17 +396,20 @@ spread across seeds:
 | Spot | paired mean | 95% CI (mBB) | CI half-width | margin (cross-seed sd) | verdict |
 |---|---|---|---|---|---|
 | `holdem-hu` | −92.2 | [−281.5, +97.1] | 1.52% | 5.62% | inside |
-| `plo4-hu` | +119.9 | [−135.2, +375.0] | 1.22% | 1.31% | inside |
-| `plo5-hu` | −0.3 | [−329.9, +329.3] | 1.68% | 1.27% | **wider** |
-| `plo4-3way` | −221.4 | [−826.0, +383.2] | 1.18% | 1.56% | inside |
+| `plo4-hu` | +119.9 | [−135.2, +375.0] | 1.22% | 1.31% | reaches past |
+| `plo5-hu` | −0.3 | [−329.9, +329.3] | 1.68% | 1.27% | reaches past |
+| `plo4-3way` | −221.4 | [−826.0, +383.2] | 1.18% | 1.56% | reaches past |
 
 The margin is the larger of the two arms' spreads across seeds — the variation a
 reader already lives with when they change the seed — so "inside" means the
-policy's effect is smaller than one they could not have noticed, and the verdict
-is printed rather than left to the reader. On `plo5-hu` it is **not** inside:
-the saving there is 2.7% and the interval is wider than the noise, so at five
-seeds that spot supports "no effect detected", not equivalence. That is the
-honest reading and the table says so.
+policy's effect is smaller than one they could not have noticed. The verdict is
+the textbook equivalence condition, that the *whole* interval lies inside
+`[-margin, +margin]`, which is `|mean| + half-width <= margin`; comparing the
+half-width alone would pass an interval that reaches past the bound, and did:
+`plo4-hu` has an upper endpoint of +375.0 against a margin of 273.1, and
+`plo4-3way` a lower endpoint of −826.0 against 801.5. **One of the four spots is
+inside.** The other three support "no effect detected at this sample size", not
+equivalence, and the table says so rather than leaving it to the reader.
 
 A wider spread would be a regression in its own right, whatever the mean did, so
 the per-arm column is printed too. It is mixed rather than uniformly worse: the
@@ -443,11 +446,16 @@ check that the reference is measuring the same thing.
 
 Criterion (1) is therefore supported as a bound rather than as an absence of
 evidence: the policy shifts the reported exploitability by at most 1.2-1.7% of
-the reported value, against a margin of 1.3-5.6%, so the interval fits inside the
-measurement's own noise on three of the four spots — while costing 14.4-20.9%
-fewer terminal evaluations. The fourth spot, `plo5-hu`, supports only "no effect
-detected" at this sample size, and both its accuracy and its spread are the
-worse for the aware policy.
+the reported value, against a margin of 1.3-5.6%, while costing 14.4-20.9% fewer
+terminal evaluations. Two readings have to be kept apart, and the table gives
+both. No spot detects an effect: all four intervals contain zero, so none of
+them licenses "the policy moved the answer". Only `holdem-hu` establishes
+equivalence, its whole interval lying inside the margin. On the other three the
+interval reaches past the margin and the data supports only "no effect detected
+at this sample size" — for `plo5-hu` that is the whole story (smallest saving,
+2.7%, and both its accuracy and its spread are the worse for the aware policy),
+while `plo4-hu` and `plo4-3way` combine the largest savings with the better
+accuracy and simply carry too few seeds to narrow the interval further.
 
 Criterion (2) — better quality for the same compute budget — is **not** delivered
 on the three heads-up spots, and the cap curve is the evidence:
