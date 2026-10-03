@@ -24,6 +24,10 @@ typedef struct pe_preflop_betting_state_t
     /* Optional imported Monker preflop node.  -1 means that the generated
        betting rules are active (the historical behaviour). */
     int tree_node_index;
+    /* Set once a decision is applied on a postflop street.  A showdown that
+       no such decision depended on saw only a random board, so its payoff is
+       the exact multi-board expectation rather than a single-board sample. */
+    int postflop_decision;
 } pe_preflop_betting_state_t;
 
 typedef struct
