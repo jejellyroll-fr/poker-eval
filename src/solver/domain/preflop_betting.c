@@ -75,6 +75,7 @@ static const void *apply_action(const void *state, uint16_t action, void *user)
     child->board = source->board;
     child->dead_cards = source->dead_cards;
     child->street = source->street;
+    child->postflop_decision = source->postflop_decision;
     if (game->ops.after_action &&
         game->ops.after_action(source, &semantic, child, game->user) != 0)
     {
@@ -134,6 +135,7 @@ static const void *sample_chance_child(const void *state, pe_rng_t *rng,
         child->board = snapshot.board;
         child->dead_cards = snapshot.dead_cards;
         child->street = snapshot.street;
+        child->postflop_decision = snapshot.postflop_decision;
         sample.outcome = 0;
         sample.importance_ratio = deal.importance_ratio;
     }

@@ -1073,7 +1073,21 @@ static double preflop_op_terminal_value(const pe_preflop_betting_state_t *state,
     if ((game->rules.postflop_streets || game->rules.tree_showdown) &&
         state->betting.terminal &&
         state->street == PE_HOLDEM_RIVER)
+    {
+        /* A river terminal a tree rollout reached with no postflop decision
+         * behind it (everyone all in preflop, or a preflop-only tree) saw
+         * one random board only.  Its single-board payoff is a noisy, and
+         * through the best response's max-over-actions a biased, estimate of
+         * the same showdown the generated game resolves with showdown_samples
+         * boards.  Use that exact multi-board expectation, so a tree solve
+         * and the equivalent generated game measure the same exploitability.
+         * A postflop root or a board a strategy actually acted on keeps its
+         * known-board payoff. */
+        if (game->rules.root_street == (int)PE_HOLDEM_PREFLOP &&
+            !state->postflop_decision)
+            return preflop_sampled_sidepot_value(game, state, player);
         return preflop_known_board_value(game, state, player);
+    }
     if (betting->terminal)
     {
         int winner = betting->winner;
@@ -1105,6 +1119,13 @@ static int preflop_after_action(const pe_preflop_betting_state_t *source,
     pe_preflop_allin_game_t *game = user;
     if (!game || !child)
         return 0;
+    /* Remember that a decision was taken on a postflop street: from then on
+     * the board is not just a random draw, it is information the strategy
+     * used, so a showdown must keep that board's payoff.  A showdown reached
+     * without any postflop decision (a preflop all-in, a tree that ends
+     * before the flop) may instead use the exact multi-board expectation. */
+    child->postflop_decision = source->postflop_decision ||
+                               source->street != PE_HOLDEM_PREFLOP;
     /* Tree-bound transitions on any street the tree declares.  A node
      * only constrains states on its own street: anything else behaves
      * exactly like an unmapped node (legacy path below), which is what
@@ -1238,6 +1259,7 @@ static int preflop_chance_child(const pe_preflop_betting_state_t *source,
                 child->holes[p] = deal.holes[p];
             child->board = source->board;
             child->dead_cards = source->dead_cards;
+            child->postflop_decision = source->postflop_decision;
             for (int p = 0; p < game->rules.player_count; ++p)
                 child->dead_cards |= deal.holes[p];
             child->street = source->street;

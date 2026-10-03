@@ -55,7 +55,11 @@ typedef struct
     int postflop_streets;
     /* Optional imported Monker preflop tree.  Its terminal betting nodes are
        followed by automatic flop/turn/river dealing and showdown when
-       tree_showdown is set. */
+       tree_showdown is set.  A showdown that no postflop decision depended
+       on - a preflop all-in, or a tree that ends before the flop - is priced
+       with the same showdown_samples-board expectation the generated game
+       uses, so the single dealt board never biases the sampled best
+       response. */
     const struct mpf_tree_def_t *tree;
     int tree_showdown;
     /* Showdown resolution. */
