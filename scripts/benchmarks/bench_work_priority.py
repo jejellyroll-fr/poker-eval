@@ -599,6 +599,29 @@ def require_higher_reference(br_samples, reference_samples):
                  % (reference_samples, br_samples))
 
 
+def require_known_spots(selected):
+    """Every `--spot` name has to name a spot, or the run is refused.
+
+    The selection is `[s for s in SPOTS if s[0] in selected]`, so a name that
+    matches nothing is dropped in silence. Measured: `--spot bogus` printed the
+    header and exited **0** -- a typo read as a successful run -- and
+    `--spot bogus --spot holdem-hu` published `holdem-hu` alone without ever
+    mentioning the name it had discarded. Both are worse here than in an
+    ordinary tool, because the point of the script is to publish a number: a
+    partial benchmark and a complete one are the same output, and a reader who
+    sees one row where the issue names four cannot tell a typo from a decision.
+    The two neighbouring entry points already refuse rather than tabulate, and
+    this one has to as well.
+    """
+    if not selected:
+        return
+    known = [s[0] for s in SPOTS]
+    unknown = [name for name in selected if name not in known]
+    if unknown:
+        sys.exit("--spot %s: not a spot. The spots are %s."
+                 % (", ".join(unknown), ", ".join(known)))
+
+
 def print_row(spot, label, runs, baseline):
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(runs, baseline)]
     _, spread, _ = paired_interval(diffs)
@@ -792,9 +815,13 @@ def main():
                          "the comparison, and any value at or below --br-samples "
                          "is refused. The published table uses 200000, ten "
                          "times --br-samples, and takes about ten times as long")
-    ap.add_argument("--spot", action="append", help="only these spots")
+    ap.add_argument("--spot", action="append",
+                    help="only these spots, by exact name; a name that is not "
+                         "a spot is refused rather than dropped, so a typo "
+                         "cannot publish a partial benchmark in silence")
     args = ap.parse_args()
     require_paired_seeds(args.seeds)
+    require_known_spots(args.spot)
     if args.reference_samples > 0:
         require_higher_reference(args.br_samples, args.reference_samples)
 

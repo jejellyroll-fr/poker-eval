@@ -907,5 +907,62 @@ class WorkflowTriggerTests(unittest.TestCase):
         self.assertIn("unittest discover -s scripts/benchmarks", text)
 
 
+class SpotSelectorTests(unittest.TestCase):
+    """`--spot` must refuse a name that is not a spot, not drop it in silence.
+
+    The selection is `[s for s in SPOTS if s[0] in selected]`, so an unknown
+    name vanished without a word. Measured before the guard existed:
+    `--spot bogus` printed the header and exited **0**, and `--spot bogus
+    --spot holdem-hu` published `holdem-hu` alone. A benchmark whose whole
+    output is a table cannot let a typo look like a deliberately short run.
+    """
+
+    def assertRefused(self, selected, needle) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_known_spots(selected)
+        self.assertIn(needle, str(caught.exception))
+
+    def test_an_unknown_spot_is_refused(self) -> None:
+        self.assertRefused(["bogus"], "--spot bogus")
+
+    def test_the_refusal_names_the_spots_that_exist(self) -> None:
+        # A refusal that does not say what it accepts sends the reader back to
+        # the source; list every spot, derived from SPOTS rather than restated.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_known_spots(["bogus"])
+        message = str(caught.exception)
+        for name, _, _ in bench.SPOTS:
+            self.assertIn(name, message)
+
+    def test_a_mixed_selection_is_refused_rather_than_trimmed(self) -> None:
+        # The partial-benchmark case: one good name must not buy silence for a
+        # bad one.
+        self.assertRefused(["holdem-hu", "bogus"], "bogus")
+
+    def test_every_unknown_name_is_reported_not_just_the_first(self) -> None:
+        self.assertRefused(["bogus", "holdem-hu", "nope"], "bogus, nope")
+
+    def test_every_published_spot_is_accepted(self) -> None:
+        # The guard must not reject a workload it exists to allow, and the
+        # selection must keep exactly the name that was asked for. Counted per
+        # spot rather than trusted: an empty selection would pass a loop that
+        # only asserted the guard returns.
+        for name, _, _ in bench.SPOTS:
+            self.assertIsNone(bench.require_known_spots([name]))
+            kept = [s for s in bench.SPOTS if s[0] in [name]]
+            self.assertEqual([s[0] for s in kept], [name])
+
+    def test_no_selection_is_accepted(self) -> None:
+        # No `--spot` means every spot, which is not an unknown name.
+        self.assertIsNone(bench.require_known_spots(None))
+        self.assertIsNone(bench.require_known_spots([]))
+
+    def test_the_guard_is_called_from_main(self) -> None:
+        # Pinned on the call site: the helper alone would pass every test above
+        # and the run would still drop unknown names.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("require_known_spots(args.spot)", source)
+
+
 if __name__ == "__main__":
     unittest.main()
