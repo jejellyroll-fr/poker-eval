@@ -441,45 +441,54 @@ better. On `holdem-hu` a disjoint-seed reference reports a mean absolute error o
 strategy variation. A shared seed is not neutral either: the tool seeds its
 best-response RNG once and consumes trajectories in order
 (`external_best_response.c:1206-1215`), so a run at N is a *prefix* of the same
-policy's run at ten times N, and FIFO's error can cancel against FIFO's own
-stream while the aware arm — a different policy, hence a different stream — gets
-no such cancellation. So each arm is scored against *both* policies'
+policy's run at ten times N, and *both* arms' errors carry that prefix covariance
+with their own stream. So each arm is scored against *both* policies'
 higher-budget runs, and the symmetric comparison — each arm against its own — is
 separated from the crossed one:
 
-| Spot | FIFO@20k vs FIFO@200k | aware@20k vs aware@200k | closer |
+| Spot | FIFO@20k vs FIFO@200k | aware@20k vs aware@200k | own-policy gap |
 |---|---|---|---|
-| `holdem-hu` | 80.4 | 136.7 | FIFO |
-| `plo4-hu` | 253.5 | 187.2 | aware |
-| `plo5-hu` | 178.9 | 193.5 | FIFO |
-| `plo4-3way` | 492.7 | 615.4 | FIFO |
+| `holdem-hu` | 80.4 | 136.7 | 56.3 |
+| `plo4-hu` | 253.5 | 187.2 | 66.3 |
+| `plo5-hu` | 178.9 | 193.5 | 14.6 |
+| `plo4-3way` | 492.7 | 615.4 | 122.7 |
 
-| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k | closer | floor |
+| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k | floor | gap vs floor |
 |---|---|---|---|---|
-| `holdem-hu` | 78.4 | 137.1 | FIFO | 36.4 |
-| `plo4-hu` | 234.0 | 183.1 | aware | 93.6 |
-| `plo5-hu` | 154.7 | 272.0 | FIFO | 90.4 |
-| `plo4-3way` | 836.8 | 272.6 | aware | 613.5 |
+| `holdem-hu` | 78.4 | 137.1 | 36.4 | clears, 1.5× |
+| `plo4-hu` | 234.0 | 183.1 | 93.6 | within |
+| `plo5-hu` | 154.7 | 272.0 | 90.4 | within |
+| `plo4-3way` | 836.8 | 272.6 | 613.5 | within |
 
-The single table this replaces mixed the two readings: FIFO's *symmetric* error
-against the aware arm's *crossed* one. That is exactly the comparison the
-seed-sharing prefix makes unfair, and on `plo4-3way` it decides the answer — a
-220 mBB margin for the aware arm. Compare like with like and it reverses:
-symmetric, FIFO wins that spot by 123 mBB; crossed, the aware arm wins it by 564.
-The symmetric reading is the one to report, and on it the aware arm is the more
-accurate estimator on `plo4-hu` alone; the two readings agree on every other
-spot, which is why the defect needed a spot to be measured on rather than argued
-about.
+The single table this replaces mixed the two readings — FIFO's *symmetric* error
+beside the aware arm's *crossed* one. That is exactly the comparison the
+seed-sharing prefix makes unfair, and on `plo4-3way` it decided the answer: a
+220 mBB margin for the aware arm where the symmetric reading gives FIFO 123. That
+much the two readings do settle, because it is a statement about which number
+goes in which column.
 
-`plo4-3way` is also where neither reading should be trusted. Its two
-higher-budget runs disagree by 613.5 mBB on the *same* strategy — the same order
-as every error in either table — so an estimate at 20,000 trajectories is no more
-informative there than the disagreement between two estimates at ten times the
-budget. The floor is tabulated for that reason, and the other three spots sit at
-36.4, 93.6 and 90.4: small enough, against errors of 78 to 272, for the
-comparison to carry. Five seeds estimate a mean absolute error loosely, so what
-all of this rules out is a *uniform* accuracy loss, not a per-spot one. The two
-arms also reproduce the published paired differences exactly (−92.2 ± 152.5,
+What they do **not** settle is which arm is the more accurate estimator, and the
+table names no winner. Neither reading is neutral: both arms' errors carry a
+prefix covariance with their own RNG stream, and nothing here shows the two
+covariances are comparable, so the arm whose stream happened to be the more
+stable one could come out ahead without being the closer to the true NashConv.
+The gap column is what the table can carry instead: the two arms' own-policy
+errors differ by 56.3, 66.3, 14.6 and 122.7 mBB, against floors of 36.4, 93.6,
+90.4 and 613.5. The gap clears the floor on `holdem-hu` alone, and there by 1.5×
+on five seeds; on `plo4-hu` — the spot a ranking would have named for the aware
+arm — 66.3 sits well inside 93.6. Closing the question properly needs an
+evaluation RNG independent of the solve's, which the tool does not expose: its
+best-response seed *is* `--seed`, and that is what makes the strategy. So the
+accuracy question is left open rather than answered with a number the method
+cannot support.
+
+`plo4-3way` is the extreme case of the same problem. Its two higher-budget runs
+disagree by 613.5 mBB on the *same* strategy — the same order as every error in
+either table — so an estimate at 20,000 trajectories is no more informative there
+than the disagreement between two estimates at ten times the budget. Five seeds
+estimate a mean absolute error loosely, so what the block does support is a
+bound: no *uniform* accuracy loss, and no per-spot ranking either. The two arms
+also reproduce the published paired differences exactly (−92.2 ± 152.5,
 +119.9 ± 205.5, −0.3 ± 265.5, −221.4 ± 487.0), which is the internal consistency
 check that the reference is measuring the same thing.
 
@@ -500,11 +509,10 @@ them licenses "the policy moved the answer". Only `holdem-hu` has its whole
 interval inside the baseline's own spread. On the other three the
 interval reaches past it and the data supports only "no effect detected
 at this sample size" — for `plo5-hu` that is the whole story (smallest saving,
-2.7%, and both its accuracy and its spread are the worse for the aware policy),
+2.7%, and the widest spread, the aware arm's 250.3 against the baseline's 160.7),
 while `plo4-hu` and `plo4-3way` combine the largest savings with too few seeds
-to narrow the interval further. `plo4-hu` is also the one spot where the aware
-arm is the more accurate estimator; on `plo4-3way` that comparison is
-unresolvable, so the interval is all there is to read.
+to narrow the interval further. The accuracy comparison above names no winner on
+any of them, so the interval is all there is to read.
 
 Criterion (2) — better quality for the same compute budget — is **not** delivered
 on the three heads-up spots, and the cap curve is the evidence:

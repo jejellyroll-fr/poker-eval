@@ -62,13 +62,15 @@ not a constant:
                  decisions, so the saving cannot be spent back on a larger cap.
 
 `--reference-samples` adds a third block: each arm scored against a run at ten
-times the budget, which is what says whether the arm's *estimate* is as close to
-the truth rather than only whether the policy moved it. It is off by default
+times the budget, which is what says how far an arm's *estimate* moves when the
+budget grows rather than only whether the policy moved it. It is off by default
 because it costs about ten times as much as the rest. The reference has to share
 the arm's seed -- the seed drives the solve, so a disjoint seed scores a
 different strategy -- but a shared seed is not neutral either, so each arm is
 scored against both policies' higher-budget runs and the two are printed side by
-side.
+side. No winner is named: see `print_reference_accuracy` for why the block
+reports the scale instead. The reference must exceed `--br-samples`, or it is
+not a reference at all.
 
     scripts/benchmarks/bench_work_priority.py --build /tmp/pe-bench
     scripts/benchmarks/bench_work_priority.py --build /tmp/pe-bench \
@@ -572,6 +574,27 @@ def require_paired_seeds(seeds):
                  "Use --seeds 2 for a quick run." % seeds)
 
 
+def require_higher_reference(br_samples, reference_samples):
+    """The accuracy reference must be a *higher* budget than the arm it judges.
+
+    Nothing checked this, so `--reference-samples 1000` against the default
+    `--br-samples 20000` was accepted and printed in exactly the format a real
+    reference uses. Measured on `holdem-hu`: errors of 871.6 and 732.3 against a
+    1,000-trajectory "reference", whose two policies disagree by 417.4. A run at
+    or below the arm's budget is not a reference -- it scores the arm against an
+    estimate no more precise than itself, and the numbers cannot carry the
+    accuracy reading the flag promises. Refused before any solve starts, rather
+    than tabulated.
+    """
+    if reference_samples <= br_samples:
+        sys.exit("--reference-samples %d: the accuracy reference has to be a "
+                 "*higher* budget than --br-samples %d, otherwise the arm is "
+                 "scored against an estimate no more precise than itself and "
+                 "the block cannot say what it claims to. The published table "
+                 "uses ten times the arm's budget."
+                 % (reference_samples, br_samples))
+
+
 def print_row(spot, label, runs, baseline):
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(runs, baseline)]
     _, spread, _ = paired_interval(diffs)
@@ -677,42 +700,48 @@ def saving(baseline_evals, aware_evals):
 def print_reference_accuracy(spot, arms, references):
     """Each arm's distance from a higher-budget reference, under every reference.
 
+    `arms` and `references` are in the *same* order: arm i is the one whose own
+    policy produced reference i, so the symmetric reading -- each arm against
+    its own policy's higher-budget run -- is the diagonal.
+
     The paired interval says how far the policy moves the reported number; this
-    says whether the estimate each arm reports is as close to the truth, which is
-    a different question and needs a reference. A run at ten times the budget is
-    that reference, paired to the arm by seed.
+    says how far each arm's estimate moves when its budget grows tenfold, which
+    is a different question and needs a reference. Every reference is printed
+    for every arm, because the reference is not neutral -- the comment above the
+    spots records why -- and printing both turns that from a caveat into a
+    measurement.
 
-    Every reference is printed for every arm, because the reference is not
-    neutral and which one is used changes the answer. The comment above the spots
-    records why the seed must be shared, and why sharing it still leaves the FIFO
-    arm a bias the aware arm does not get. Printing the row of arms once per
-    reference turns that from a caveat into a measurement: on three of the four
-    published spots the two references agree on which arm is closer, and on
-    `plo4-3way` they do not -- which is why the guide reports the symmetric
-    reading separately rather than the single mixed table it used to carry.
-
-    The verdict is per reference, read off the mean absolute error, and the
-    floor -- how far the two references are from each other on the same strategy
-    -- is printed under them. No error below the floor means anything: on
-    `plo4-3way` the floor is the same order as every error in the table.
+    No winner is named, and that is the point. Neither reading is neutral: the
+    reference shares the arm's seed, so *both* arms' errors carry a prefix
+    covariance with their own stream, and nothing here shows the two covariances
+    are comparable. An arm whose stream happened to be the more stable one could
+    win without being the closer to the true NashConv. What is printed instead
+    is the scale: the floor, how far the two higher-budget runs sit apart on the
+    *same* strategy, and how far apart the two arms' own-policy errors are. On
+    the published run that difference clears the floor on one spot of four, so
+    the table does not rank the arms.
     """
+    rows = []
     for ref_label, refs in references:
         cells = []
         for arm_label, runs in arms:
             errors = [r["nash_conv"] - x["nash_conv"] for r, x in zip(runs, refs)]
             cells.append((arm_label, statistics.mean(abs(e) for e in errors),
                           statistics.mean(errors)))
-        closer = min(cells, key=lambda c: c[1])[0]
-        print("%-11s vs %-15s mean|err| %s -> %s closer"
+        rows.append(cells)
+        print("%-11s vs %-15s mean|err| %s"
               % (spot[0], ref_label,
-                 " ".join("%s %6.1f (mean %+7.1f)" % cell for cell in cells),
-                 closer))
-    if len(references) == 2:
+                 " ".join("%s %6.1f (mean %+7.1f)" % cell for cell in cells)))
+    if len(references) == 2 and len(arms) == 2:
         (first_label, first), (second_label, second) = references
         floor = statistics.mean(abs(a["nash_conv"] - b["nash_conv"])
                                 for a, b in zip(first, second))
-        print("%-11s floor |%s - %s| mean %.1f" % (spot[0], first_label,
-                                                   second_label, floor))
+        # The diagonal: arm 0 against reference 0, arm 1 against reference 1.
+        own = abs(rows[0][0][1] - rows[1][1][1])
+        print("%-11s floor |%s - %s| mean %.1f; own-policy errors differ by "
+              "%.1f -> %s" % (spot[0], first_label, second_label, floor, own,
+                              "clears the floor" if own > floor
+                              else "within the floor, no ranking"))
     sys.stdout.flush()
 
 
@@ -739,11 +768,14 @@ def main():
     ap.add_argument("--reference-samples", type=int, default=0,
                     help="BR trajectories for the higher-budget reference the "
                          "accuracy comparison scores each arm against; 0 skips "
-                         "the comparison. The published table uses 200000, ten "
+                         "the comparison, and any value at or below --br-samples "
+                         "is refused. The published table uses 200000, ten "
                          "times --br-samples, and takes about ten times as long")
     ap.add_argument("--spot", action="append", help="only these spots")
     args = ap.parse_args()
     require_paired_seeds(args.seeds)
+    if args.reference_samples > 0:
+        require_higher_reference(args.br_samples, args.reference_samples)
 
     binary = os.path.join(args.build, "tools", "pe-preflop-solve")
     if not os.path.exists(binary):
