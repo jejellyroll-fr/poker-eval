@@ -130,6 +130,18 @@ SPOTS = [
     ("plo4-3way", "plo4", 3),
 ]
 
+# The solver refuses a sampling cap above this: `BR_MAX_SAMPLES_CEILING` in
+# `src/solver/domain/br_sampling.c`, checked in `pe_br_sampling_resolve`. Both
+# `--br-max-samples` and the cap curve's multipliers have to respect it, so the
+# number lives here once. A test pins it against the C source rather than
+# trusting the copy.
+BR_MAX_SAMPLES_CEILING = 1 << 20
+
+# The cap curve is the aware arm's cost as the cap is raised by these factors.
+# A point whose product exceeds the ceiling cannot be run, so it is dropped --
+# see `cap_curve_multiples`.
+CAP_CURVE_MULTIPLES = (1, 2, 4, 8, 16)
+
 # The report fields the best-response measurement owns. Everything else has to
 # agree across the policies of a spot: the priority reallocates draws inside a
 # measurement, it does not change the strategy that measurement is taken on.
@@ -622,6 +634,26 @@ def require_known_spots(selected):
                  % (", ".join(unknown), ", ".join(known)))
 
 
+def require_supported_cap(br_max_samples):
+    """`--br-max-samples` has to be a cap the solver accepts, or the run is refused.
+
+    Unlike the curve's multipliers, this cap is used by the spot's *main*
+    measurements, so an out-of-range value cannot be degraded to something
+    runnable -- the user asked for a cap the solver will not honour and the run
+    has no honest way to continue. Refused up front, with the ceiling named,
+    rather than letting the solver reject it mid-sweep: the first measurement is
+    the expensive one.
+    """
+    if br_max_samples > BR_MAX_SAMPLES_CEILING:
+        sys.exit("--br-max-samples %d: the solver refuses a sampling cap above "
+                 "%d (`BR_MAX_SAMPLES_CEILING`, src/solver/domain/"
+                 "br_sampling.c), and the main measurements use this cap "
+                 "directly. Use --br-max-samples %d or less; the cap curve "
+                 "already drops the multipliers that would exceed the ceiling."
+                 % (br_max_samples, BR_MAX_SAMPLES_CEILING,
+                    BR_MAX_SAMPLES_CEILING))
+
+
 def print_row(spot, label, runs, baseline):
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(runs, baseline)]
     _, spread, _ = paired_interval(diffs)
@@ -741,6 +773,24 @@ def revisit_budgets(br_samples):
     return sorted({br_samples // 10, br_samples // 4, br_samples} - {0})
 
 
+def cap_curve_multiples(cap):
+    """The cap-curve multipliers whose product the solver will accept.
+
+    The curve scales `--br-max-samples` by a fixed ladder, and the solver refuses
+    any cap above `BR_MAX_SAMPLES_CEILING`. Measured: with `--br-max-samples
+    100000` the main rows and the revisit curve printed, then the 16x point asked
+    for 1,600,000 and the run died on `preflop solve failed: status=5`, losing
+    the cap curve and every later spot after the expensive work had been paid
+    for. Multipliers that would exceed the ceiling are dropped rather than the
+    run refused, because the curve is a diagnostic whose reading is that it
+    *saturates* -- a shorter curve still shows that, and each point keeps its
+    multiplier label, so a curve ending at 8x says which point it dropped. The
+    1x point is never dropped, so the curve always reports something.
+    """
+    return tuple(m for m in CAP_CURVE_MULTIPLES
+                 if cap * m <= BR_MAX_SAMPLES_CEILING)
+
+
 def print_reference_accuracy(spot, arms, references):
     """Each arm's distance from a higher-budget reference, under every reference.
 
@@ -822,6 +872,7 @@ def main():
     args = ap.parse_args()
     require_paired_seeds(args.seeds)
     require_known_spots(args.spot)
+    require_supported_cap(args.br_max_samples)
     if args.reference_samples > 0:
         require_higher_reference(args.br_samples, args.reference_samples)
 
@@ -898,9 +949,11 @@ def main():
                                       "  ".join(revisit)))
 
             # The saving is not spendable back through the cap: the confidence
-            # rule stops most decisions long before it.
+            # rule stops most decisions long before it. Multipliers the solver
+            # would refuse are dropped rather than asked for -- see
+            # cap_curve_multiples.
             caps = []
-            for multiple in (1, 2, 4, 8, 16):
+            for multiple in cap_curve_multiples(cap):
                 run = measure(binary, spot, args, seeds[0],
                               "uncertainty-aware", cap * multiple,
                               args.br_samples, out_json)

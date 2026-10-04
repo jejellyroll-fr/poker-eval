@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -19,11 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bench_work_priority as bench
 
+ROOT = Path(__file__).resolve().parents[2]
+
 # The guide publishes the numbers this script prints, so a number that moves
 # here has to move there. It carried one that was wrong: the interval's
 # half-width, quoted as the largest shift the experiment admits.
-GUIDE = (Path(__file__).resolve().parents[2]
-         / "docs" / "cfr" / "guides" / "work_priority_scheduling.md")
+GUIDE = ROOT / "docs" / "cfr" / "guides" / "work_priority_scheduling.md"
+
+# The solver's sampling ceiling lives in C; the runner copies it. See
+# CapCurveTests, which pins the copy against this file.
+BR_SAMPLING_C = ROOT / "src" / "solver" / "domain" / "br_sampling.c"
 
 
 BR_SAMPLING = "br_sampling estimator=confidence-guided terminal_evaluations=44743"
@@ -893,14 +899,13 @@ class WorkflowTriggerTests(unittest.TestCase):
     no signal at all.
     """
 
-    ROOT = Path(__file__).resolve().parents[2]
     WORKFLOW = ROOT / ".github" / "workflows" / "solver-benchmark-smoke.yml"
 
     def test_the_workflow_triggers_on_the_path_the_tests_read(self) -> None:
         # Derived from GUIDE rather than named again, so moving the guide cannot
         # leave the filter pointing at the old path.
         text = self.WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("'%s'" % GUIDE.relative_to(self.ROOT).as_posix(), text)
+        self.assertIn("'%s'" % GUIDE.relative_to(ROOT).as_posix(), text)
 
     def test_the_workflow_still_runs_the_work_priority_tests(self) -> None:
         text = self.WORKFLOW.read_text(encoding="utf-8")
@@ -962,6 +967,78 @@ class SpotSelectorTests(unittest.TestCase):
         # and the run would still drop unknown names.
         source = Path(bench.__file__).read_text()
         self.assertIn("require_known_spots(args.spot)", source)
+
+
+class CapCurveTests(unittest.TestCase):
+    """The cap curve must not ask the solver for a cap it refuses.
+
+    The curve scales `--br-max-samples` by a fixed ladder and the solver caps
+    sampling at `BR_MAX_SAMPLES_CEILING` (`1u << 20`). Measured before the fix:
+    `--br-max-samples 100000` printed the main rows and the revisit curve, then
+    the 16x point asked for 1,600,000 and the run died on
+    `preflop solve failed: status=5`, losing the cap curve and every later spot.
+    """
+
+    def test_the_ceiling_matches_the_solver(self) -> None:
+        # The runner copies a C constant, so the copy is pinned to its source: if
+        # `BR_MAX_SAMPLES_CEILING` moves, the curve would start asking for caps
+        # the solver rejects and nothing else in this file would notice.
+        source = BR_SAMPLING_C.read_text(encoding="utf-8")
+        found = re.search(
+            r"#define\s+BR_MAX_SAMPLES_CEILING\s+\(1u\s*<<\s*(\d+)\)", source)
+        self.assertIsNotNone(found, "BR_MAX_SAMPLES_CEILING not found")
+        self.assertEqual(bench.BR_MAX_SAMPLES_CEILING, 1 << int(found.group(1)))
+
+    def test_the_default_cap_keeps_the_published_five_points(self) -> None:
+        self.assertEqual(bench.cap_curve_multiples(64), (1, 2, 4, 8, 16))
+
+    def test_a_multiplier_that_exceeds_the_ceiling_is_dropped(self) -> None:
+        # The reproduced case: 100000 * 16 = 1,600,000, over the ceiling; 8x is
+        # 800,000 and stays.
+        self.assertEqual(bench.cap_curve_multiples(100000), (1, 2, 4, 8))
+
+    def test_the_largest_accepted_cap_keeps_only_the_first_point(self) -> None:
+        self.assertEqual(bench.cap_curve_multiples(bench.BR_MAX_SAMPLES_CEILING),
+                         (1,))
+
+    def test_no_point_ever_exceeds_the_ceiling(self) -> None:
+        # Every cap the guard accepts, plus the ones just above it, so the curve
+        # cannot ask for a rejected cap for any input the guard lets through.
+        for cap in list(range(1, 4096)) + [
+                65535, 65536, 65537, 100000, 1 << 20]:
+            for multiple in bench.cap_curve_multiples(cap):
+                self.assertLessEqual(cap * multiple,
+                                     bench.BR_MAX_SAMPLES_CEILING,
+                                     (cap, multiple))
+
+    def test_the_first_point_is_always_kept(self) -> None:
+        # A curve with no points prints an empty diagnostic; the 1x point is
+        # always runnable, since the guard refuses a cap above the ceiling.
+        for cap in range(1, 4096):
+            self.assertIn(1, bench.cap_curve_multiples(cap))
+
+    def test_the_curve_is_built_from_the_helper(self) -> None:
+        # Pinned on the call: an inline tuple could come back and every test
+        # above would still pass.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("for multiple in cap_curve_multiples(cap):", source)
+
+    def test_a_cap_above_the_ceiling_is_refused(self) -> None:
+        # This one cannot be degraded to something runnable: the main
+        # measurements use it directly.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_supported_cap(bench.BR_MAX_SAMPLES_CEILING + 1)
+        self.assertIn("--br-max-samples", str(caught.exception))
+        self.assertIn(str(bench.BR_MAX_SAMPLES_CEILING), str(caught.exception))
+
+    def test_the_ceiling_itself_is_accepted(self) -> None:
+        self.assertIsNone(
+            bench.require_supported_cap(bench.BR_MAX_SAMPLES_CEILING))
+        self.assertIsNone(bench.require_supported_cap(64))
+
+    def test_the_cap_guard_is_called_from_main(self) -> None:
+        source = Path(bench.__file__).read_text()
+        self.assertIn("require_supported_cap(args.br_max_samples)", source)
 
 
 if __name__ == "__main__":
