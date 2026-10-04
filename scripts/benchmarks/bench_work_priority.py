@@ -368,7 +368,9 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
     out, marked = drain_stream(proc.stdout, time.perf_counter)
     proc.wait()
     finished = time.perf_counter()
-    wall = (marked - start) if marked is not None else (finished - start)
+    # Not "wall": the report phase is deliberately excluded, so this is not
+    # comparable to the same-named column in the sibling benchmarks.
+    solve = (marked - start) if marked is not None else (finished - start)
     if proc.returncode != 0:
         sys.exit("solve failed: %s\n%s" % (" ".join(cmd), out[-2000:]))
     assert_report_uncapped(spot, policy, out)
@@ -380,7 +382,7 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
         sys.exit("no br_sampling/br_decisions line in: %s\n%s"
                  % (" ".join(cmd), out[-2000:]))
     return {
-        "wall": wall,
+        "solve": solve,
         "report": report,
         # Issue #274: the sampled BR defaults to the confidence-guided
         # estimator, so a row that silently measured the historical
@@ -546,7 +548,7 @@ def print_row(spot, label, runs, baseline):
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(runs, baseline)]
     _, spread, _ = paired_interval(diffs)
     print("%-11s %-17s %8.2f %12s %10s %8s %9s %14.1f %8.1f %+10.1f +- %5.1f"
-          % (spot[0], label, mean_of(runs, "wall"),
+          % (spot[0], label, mean_of(runs, "solve"),
              "{:,}".format(int(mean_of(runs, "evals"))),
              fmt(mean_of(runs, "avg_draws")), fmt(mean_of(runs, "early")),
              "{:,}".format(int(mean_of(runs, "max_budget_hits"))),
