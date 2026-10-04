@@ -500,15 +500,25 @@ paired differences exactly (−92.2 ± 152.5, +119.9 ± 205.5, −0.3 ± 265.5, 
 487.0), which is the internal consistency check that the reference is measuring
 the same thing.
 
-Criterion (1) — faster convergence to the same quality target — is supported by
-the interval table above, as a bound rather than as an absence of evidence: the
-policy shifts the reported exploitability by at most 2.3% of the reported value,
-while costing 2.7-20.9% fewer terminal evaluations against a baseline yardstick
-of 0.8-5.3%. The low end is `plo5-hu`, and it belongs in the
-range: the four workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only
-the three large ones would overstate the cheapest case by a factor of five. The
-bound is the **farthest interval endpoint**, not the
-half-width, and that is the same distinction the verdict above turns on: the
+Criterion (1) — faster convergence to the same quality target — is **not**
+established, and the reason is structural rather than a matter of sample size.
+The feature does not touch convergence: the Scope section below records that the
+training is untouched and the call site only changes how many draws a
+*measurement* spends, so the four workloads reach the same strategy in the same
+number of iterations under both policies. That is what the training-counter and
+fingerprint guards establish, and it is not something the interval measures. The
+paired interval bounds how far the *reported* value moves — a different question,
+and one it answers only partly, since on three spots it reaches past the
+baseline's own spread. So the benchmark shows neither policy reaching a quality
+target, and it shows no solver converging faster. What it does establish is the
+cost half of the issue and nothing more. The policy shifts the reported
+exploitability by at most 2.3% of the reported value, while costing 2.7-20.9%
+fewer terminal evaluations against a baseline yardstick of 0.8-5.3%. The low end
+is `plo5-hu`, and it belongs in the range: the four workloads save 14.4%, 14.6%,
+2.7% and 20.9%, and quoting only the three large ones would overstate the
+cheapest case by a factor of five. The bound is the **farthest interval
+endpoint**, not the half-width, and that is the same distinction the verdict
+above turns on: the
 half-widths are 1.2-1.7%, but the intervals are not centred on zero, so the
 largest shift the data admits is 2.26% on `holdem-hu` (its interval reaching
 −281.5 against a reference of 12,459.8), 1.80% on `plo4-hu`, 1.68% on `plo5-hu`

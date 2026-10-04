@@ -13,7 +13,11 @@ only decides how many draws the *best-response measurement* spends per decision
 (`external_best_response.c`, the per-decision cap); it never touches training.
 So the runs below solve the *same* strategy and differ only in how they measure
 it, and every claim here is about the measurement. The script enforces that
-rather than assuming it -- see `assert_same_training`.
+rather than assuming it -- see `assert_same_training`. Neither of the issue's
+two demonstrations follows from it, and the guide states both verdicts: the runs
+converge identically by construction, so nothing here shows faster convergence,
+and no spot detects an effect on the reported number, so nothing here shows
+better quality at the same budget.
 
 Each spot is measured twice, at a fixed cap of `--br-max-samples`:
 
@@ -697,6 +701,23 @@ def saving(baseline_evals, aware_evals):
     return 100.0 * (baseline_evals - aware_evals) / baseline_evals
 
 
+def revisit_budgets(br_samples):
+    """The budgets the revisit curve is drawn at: a tenth, a quarter, all of it.
+
+    Integer division can produce a *zero* budget -- `--br-samples 5` gives a
+    tenth of zero -- and the solver refuses `--br-samples 0` outright
+    (`tools/pe_preflop_solve.c:1250-1253`). The curve is drawn *after* the
+    spot's main measurements, so the abort used to land once the expensive work
+    was already done: measured with `--br-samples 5`, the four rows printed and
+    the run then died on `solve failed: ... --br-samples 0`, losing the curve,
+    the cap curve and every later spot with it. Only positive budgets are kept,
+    and the set drops the duplicates that small budgets collide into. Each
+    point is labelled with the budget it used, so a short curve says which of
+    the three it had to drop rather than silently drawing two.
+    """
+    return sorted({br_samples // 10, br_samples // 4, br_samples} - {0})
+
+
 def print_reference_accuracy(spot, arms, references):
     """Each arm's distance from a higher-budget reference, under every reference.
 
@@ -838,8 +859,7 @@ def main():
             # Only a repeat visit is capped, so the saving tracks how often the
             # budget revisits a decision. One seed is enough to show the shape.
             revisit = []
-            for budget in (args.br_samples // 10, args.br_samples // 4,
-                           args.br_samples):
+            for budget in revisit_budgets(args.br_samples):
                 fifo_run = measure(binary, spot, args, seeds[0], "fifo", cap,
                                    budget, out_json)
                 aware_run = measure(binary, spot, args, seeds[0],

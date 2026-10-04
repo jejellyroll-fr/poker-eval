@@ -699,8 +699,10 @@ class PublishedBoundTests(unittest.TestCase):
     def test_the_savings_range_covers_the_smallest_saving(self) -> None:
         # The four workloads save 14.4/14.6/2.7/20.9%, so a range that starts
         # at 14.4% omits plo5-hu and overstates the cheapest case fivefold.
+        # Asserted on the range alone, not on the words around it: pinning the
+        # sentence would make the test fail on a rewrap that changes nothing.
         text = GUIDE.read_text(encoding="utf-8")
-        self.assertIn("costing 2.7-20.9% fewer", text)
+        self.assertIn("2.7-20.9%", text)
         self.assertNotIn("14.4-20.9%", text)
 
 
@@ -821,14 +823,88 @@ class CriterionConclusionTests(unittest.TestCase):
         self.assertIn("a quality comparison at a matched budget", text)
         self.assertIn("this benchmark does not\nrun one", text)
 
-    def test_criterion_one_is_anchored_on_the_interval_table(self) -> None:
-        # The verdict used to read "Criterion (1) is therefore supported", which
-        # made it follow from the accuracy block -- a block that now concludes
-        # nothing. It rests on the paired interval and the cost column instead.
+    def test_criterion_one_is_stated_as_unestablished(self) -> None:
+        # The verdict once read "Criterion (1) is therefore supported", then
+        # "is supported by the interval table above". Neither holds: the feature
+        # changes the *measurement*, not convergence -- the guide's own Scope
+        # section says the training is untouched -- so nothing here shows a
+        # solver converging faster, and the interval bounds the reported value's
+        # shift rather than showing either policy reached a quality target.
         text = GUIDE.read_text(encoding="utf-8")
         self.assertNotIn("Criterion (1) is therefore supported", text)
+        self.assertNotIn("is supported by\nthe interval table above", text)
         self.assertIn("Criterion (1) — faster convergence to the same quality "
-                      "target — is supported by\nthe interval table above", text)
+                      "target — is **not**\nestablished", text)
+        self.assertIn("shows neither policy reaching a quality", text)
+        self.assertIn("no solver converging faster", text)
+        self.assertIn("cost half of the issue and nothing more", text)
+
+    def test_the_runner_states_the_two_verdicts(self) -> None:
+        # The runner's docstring quotes the issue's ask, so it has to say that
+        # neither demonstration follows from what it measures.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("Neither of the issue's\ntwo demonstrations follows "
+                      "from it", source)
+
+
+class RevisitBudgetTests(unittest.TestCase):
+    """The revisit curve must never ask the solver for a zero budget.
+
+    Integer division produced one: `--br-samples 5` gives a tenth of zero, and
+    the solver refuses `--br-samples 0` (`tools/pe_preflop_solve.c:1250-1253`).
+    The curve is drawn *after* the spot's main measurements, so the abort landed
+    once the expensive work was done -- reproduced with `--br-samples 5`, which
+    printed its four rows and then died on `solve failed: ... --br-samples 0`.
+    """
+
+    def test_the_nominal_budget_keeps_the_published_three_points(self) -> None:
+        self.assertEqual(bench.revisit_budgets(20000), [2000, 5000, 20000])
+
+    def test_a_tenth_that_rounds_to_zero_is_dropped(self) -> None:
+        # 5 // 10 == 0, which the solver refuses; 5 // 4 == 1 is kept.
+        self.assertEqual(bench.revisit_budgets(5), [1, 5])
+
+    def test_every_budget_is_positive_across_small_inputs(self) -> None:
+        for br_samples in range(1, 40):
+            budgets = bench.revisit_budgets(br_samples)
+            self.assertTrue(budgets, br_samples)
+            self.assertTrue(all(b > 0 for b in budgets), (br_samples, budgets))
+            # The full budget is always drawn, so the curve always reaches the
+            # published configuration.
+            self.assertIn(br_samples, budgets)
+
+    def test_duplicate_budgets_are_collapsed(self) -> None:
+        # 1 // 10 and 1 // 4 are both zero, so only the full budget survives.
+        self.assertEqual(bench.revisit_budgets(1), [1])
+        self.assertEqual(bench.revisit_budgets(3), [3])
+
+    def test_the_curve_is_built_from_the_helper(self) -> None:
+        # Pinned on the call, not on the helper alone: an inline tuple could
+        # come back and the helper would still pass its own tests.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("for budget in revisit_budgets(args.br_samples):", source)
+
+
+class WorkflowTriggerTests(unittest.TestCase):
+    """The workflow running these tests must trigger on what they read.
+
+    The assertions above read the guide, so a PR that changes only the guide has
+    to run them; otherwise the guide and the benchmark evidence drift apart with
+    no signal at all.
+    """
+
+    ROOT = Path(__file__).resolve().parents[2]
+    WORKFLOW = ROOT / ".github" / "workflows" / "solver-benchmark-smoke.yml"
+
+    def test_the_workflow_triggers_on_the_path_the_tests_read(self) -> None:
+        # Derived from GUIDE rather than named again, so moving the guide cannot
+        # leave the filter pointing at the old path.
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("'%s'" % GUIDE.relative_to(self.ROOT).as_posix(), text)
+
+    def test_the_workflow_still_runs_the_work_priority_tests(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("unittest discover -s scripts/benchmarks", text)
 
 
 if __name__ == "__main__":
