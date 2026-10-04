@@ -9,6 +9,8 @@ CLI actually prints.
 
 from __future__ import annotations
 
+import contextlib
+import io
 from pathlib import Path
 import sys
 import unittest
@@ -427,6 +429,92 @@ class SolveTimingTests(unittest.TestCase):
         self.assertIn("no marker here", text)
 
 
+class ReferenceAccuracyTests(unittest.TestCase):
+    """The accuracy comparison scores each arm against every reference.
+
+    The tool seeds its best-response RNG once from `config->seed` and consumes
+    trajectories in order (`external_best_response.c:1206-1215`), so a run at N
+    trajectories is a *prefix* of the same policy's run at ten times N under the
+    same seed. FIFO's error can therefore cancel against FIFO's own stream while
+    the aware arm -- a different policy, hence a different stream -- gets no such
+    cancellation. The reference cannot be taken at a disjoint seed instead: the
+    seed drives the *solve*, so a disjoint seed scores a different strategy
+    (measured on `holdem-hu`, 1308.7 against 101.3). Both references are printed
+    for both arms, which is what makes the asymmetry a measurement.
+    """
+
+    def render(self, arms, references) -> str:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            bench.print_reference_accuracy(("holdem-hu", "holdem", 2),
+                                           arms, references)
+        return buf.getvalue()
+
+    def test_every_arm_is_scored_against_every_reference(self) -> None:
+        arms = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@20,000", [{"nash_conv": 120.0}, {"nash_conv": 180.0}]))
+        refs = (("fifo@200,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@200,000", [{"nash_conv": 140.0}, {"nash_conv": 160.0}]))
+        text = self.render(arms, refs)
+        # One row per reference, each carrying both arms: the point of printing
+        # the pair is that the reader can see whether the reference's policy
+        # decides the answer.
+        self.assertEqual(text.count("vs fifo@200,000"), 1)
+        self.assertEqual(text.count("vs aware@200,000"), 1)
+        for line in text.splitlines()[:2]:
+            self.assertIn("fifo@20,000", line)
+            self.assertIn("aware@20,000", line)
+
+    def test_the_line_reports_the_mean_absolute_error_of_each_arm(self) -> None:
+        # fifo: errors 0, 0 -> mean|err| 0.0. aware: +20, -20 -> 20.0, mean 0.0.
+        arms = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@20,000", [{"nash_conv": 120.0}, {"nash_conv": 180.0}]))
+        refs = (("fifo@200,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),)
+        text = self.render(arms, refs)
+        self.assertRegex(text, r"fifo@20,000\s+0\.0 \(mean\s+\+0\.0\)")
+        self.assertRegex(text, r"aware@20,000\s+20\.0 \(mean\s+\+0\.0\)")
+        self.assertIn("fifo@20,000 closer", text)
+
+    def test_the_closer_verdict_is_read_off_each_reference(self) -> None:
+        # The two references disagree on purpose: against FIFO's own
+        # higher-budget run the aware arm is 20 away and FIFO is 0, but against
+        # the aware arm's higher-budget run it is FIFO that is 40 away and aware
+        # only 20. A hardcoded or arm-order verdict would print the same name
+        # twice; deriving it per reference prints a different name each row.
+        arms = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@20,000", [{"nash_conv": 120.0}, {"nash_conv": 180.0}]))
+        refs = (("fifo@200,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@200,000", [{"nash_conv": 140.0}, {"nash_conv": 160.0}]))
+        first, second = self.render(arms, refs).splitlines()[:2]
+        self.assertIn("fifo@20,000 closer", first)
+        self.assertIn("aware@20,000 closer", second)
+
+    def test_the_floor_is_the_distance_between_the_two_references(self) -> None:
+        # |100-140| and |200-160| -> mean 40.0. No error below this floor means
+        # anything: it is how far the two higher-budget runs sit apart on the
+        # same strategy.
+        arms = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@20,000", [{"nash_conv": 120.0}, {"nash_conv": 180.0}]))
+        refs = (("fifo@200,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+                ("aware@200,000", [{"nash_conv": 140.0}, {"nash_conv": 160.0}]))
+        text = self.render(arms, refs)
+        self.assertIn("floor |fifo@200,000 - aware@200,000| mean 40.0", text)
+
+    def test_a_lone_reference_prints_no_floor(self) -> None:
+        # With one reference there is nothing to take a distance from, and a
+        # floor of 0.0 would read as agreement rather than as an absence.
+        arms = (("fifo@20,000", [{"nash_conv": 100.0}]),)
+        refs = (("fifo@200,000", [{"nash_conv": 100.0}]),)
+        self.assertNotIn("floor", self.render(arms, refs))
+
+    def test_the_reference_shares_the_arm_seed(self) -> None:
+        # A disjoint seed would score a different strategy: the seed drives the
+        # solve, so it changes the hand table, not just the sampling error.
+        source = (Path(bench.__file__)).read_text()
+        self.assertNotIn("REFERENCE_SEED_OFFSET", source)
+        self.assertIn("the seed drives the *solve*", source)
+
+
 class TrainingGuardTests(unittest.TestCase):
     def assertRefused(self, spot, arm, candidate, baseline, needle) -> None:
         with self.assertRaises(SystemExit) as caught:
@@ -586,6 +674,78 @@ class PublishedBoundTests(unittest.TestCase):
         text = GUIDE.read_text(encoding="utf-8")
         self.assertIn("costing 2.7-20.9% fewer", text)
         self.assertNotIn("14.4-20.9%", text)
+
+
+class ReferenceTableTests(unittest.TestCase):
+    """The guide's accuracy table must not mix the two readings.
+
+    It originally scored both arms against FIFO at ten times the budget. That
+    reference shares the seed -- and it has to, because the seed drives the
+    solve -- but the tool then seeds its best-response RNG once and consumes
+    trajectories in order, so a run at N is a *prefix* of the same policy's run
+    at ten times N. FIFO's error cancels against FIFO's own stream and the aware
+    arm's does not, which made the old table a *symmetric* error for FIFO beside
+    a *crossed* one for the aware arm. On `plo4-3way` that decided the answer.
+    """
+
+    # spot, fifo@20k vs FIFO@200k and aware@20k vs aware@200k (symmetric),
+    #       fifo@20k vs aware@200k and aware@20k vs FIFO@200k (crossed), floor
+    PUBLISHED = (("holdem-hu", 80.4, 136.7, 78.4, 137.1, 36.4),
+                 ("plo4-hu", 253.5, 187.2, 234.0, 183.1, 93.6),
+                 ("plo5-hu", 178.9, 193.5, 154.7, 272.0, 90.4),
+                 ("plo4-3way", 492.7, 615.4, 836.8, 272.6, 613.5))
+
+    def winners(self, row):
+        _, fifo_sym, aware_sym, fifo_cross, aware_cross, _ = row
+        return ("fifo" if fifo_sym <= aware_sym else "aware",
+                "fifo" if fifo_cross <= aware_cross else "aware")
+
+    def test_the_two_readings_agree_everywhere_but_plo4_3way(self) -> None:
+        # The magnitudes move between the readings; the winner does not -- except
+        # on plo4-3way, the one spot where mixing them reversed the answer. That
+        # is why the guide separates the two tables rather than printing one.
+        for row in self.PUBLISHED[:3]:
+            self.assertEqual(self.winners(row)[0], self.winners(row)[1], row[0])
+        self.assertEqual(self.winners(self.PUBLISHED[3]), ("fifo", "aware"))
+
+    def test_the_published_plo4_3way_row_mixed_the_two_readings(self) -> None:
+        # It printed FIFO's symmetric error (492.7) beside the aware arm's
+        # crossed one (272.6) -- a 220 mBB margin for the aware arm that neither
+        # reading supports: symmetric gives FIFO a 123 mBB margin instead.
+        _, fifo_sym, aware_sym, _, aware_cross, _ = self.PUBLISHED[3]
+        self.assertAlmostEqual(fifo_sym - aware_cross, 220.1, places=1)
+        self.assertAlmostEqual(aware_sym - fifo_sym, 122.7, places=1)
+        self.assertLess(aware_cross, fifo_sym)   # crossed: the aware arm is closer
+        self.assertGreater(aware_sym, fifo_sym)  # symmetric: FIFO is closer
+
+    def test_the_floor_on_plo4_3way_is_larger_than_an_error_it_judges(self) -> None:
+        # 613.5 against errors of 273-837: the comparison is not resolvable
+        # there, so the guide has to say so rather than name a winner.
+        _, fifo_sym, _, _, aware_cross, floor = self.PUBLISHED[3]
+        self.assertGreater(floor, fifo_sym)
+        self.assertGreater(floor, aware_cross)
+
+    def test_the_guide_separates_the_two_readings(self) -> None:
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("| Spot | FIFO@20k vs FIFO@200k | aware@20k vs aware@200k |"
+                      " closer |", text)
+        self.assertIn("| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k |"
+                      " closer | floor |", text)
+        # The single-reference framing, and the claim it carried, are gone.
+        self.assertNotIn("scored against FIFO at ten times the", text)
+        self.assertNotIn("overestimates the reference by 223.3", text)
+
+    def test_the_guide_states_why_a_disjoint_seed_is_not_the_fix(self) -> None:
+        # The obvious remedy -- an independent reference seed -- does not work
+        # here, and the guide records the measurement rather than the guess.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("the seed drives the *solve*", text)
+        self.assertIn("1308.7", text)
+
+    def test_the_guide_prints_the_floor_with_the_table(self) -> None:
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("613.5", text)
+        self.assertIn("36.4, 93.6 and 90.4", text)
 
 
 if __name__ == "__main__":

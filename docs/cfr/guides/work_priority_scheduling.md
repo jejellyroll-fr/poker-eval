@@ -432,26 +432,54 @@ inflation", not as a measured equality, and it does not enter the yardstick.
 
 The interval bounds the *effect*; it does not by itself say the aware arm's
 estimate is as close to the truth, which is a separate question and needs a
-reference. Each arm was therefore also scored against FIFO at ten times the
-budget — 200,000 BR trajectories per player, where the reference's own error is
-about three times smaller — paired by seed:
+reference. Each arm was therefore also scored against a run at ten times the
+budget — 200,000 BR trajectories per player — paired by seed. The reference has
+to share the arm's seed: the seed drives the *solve*, so a reference at a
+disjoint seed scores a different strategy rather than the same one measured
+better. On `holdem-hu` a disjoint-seed reference reports a mean absolute error of
+1308.7 where a shared-seed one reports 101.3, a factor of thirteen, all of it
+strategy variation. A shared seed is not neutral either: the tool seeds its
+best-response RNG once and consumes trajectories in order
+(`external_best_response.c:1206-1215`), so a run at N is a *prefix* of the same
+policy's run at ten times N, and FIFO's error can cancel against FIFO's own
+stream while the aware arm — a different policy, hence a different stream — gets
+no such cancellation. So each arm is scored against *both* policies'
+higher-budget runs, and the symmetric comparison — each arm against its own — is
+separated from the crossed one:
 
-| Spot | FIFO@20k mean \|error\| | aware@20k mean \|error\| | closer |
+| Spot | FIFO@20k vs FIFO@200k | aware@20k vs aware@200k | closer |
 |---|---|---|---|
-| `holdem-hu` | 80.4 | 137.1 | FIFO |
-| `plo4-hu` | 253.5 | 183.1 | aware |
-| `plo5-hu` | 178.9 | 272.0 | FIFO |
-| `plo4-3way` | 492.7 | 272.6 | aware |
+| `holdem-hu` | 80.4 | 136.7 | FIFO |
+| `plo4-hu` | 253.5 | 187.2 | aware |
+| `plo5-hu` | 178.9 | 193.5 | FIFO |
+| `plo4-3way` | 492.7 | 615.4 | FIFO |
 
-The answer is mixed, and it is reported as mixed. The aware arm is the less
-accurate one on `holdem-hu` and `plo5-hu` — the same two spots where the saving
-is smallest (14.4% and 2.7%), and one of them the spot that failed the yardstick
-above — and the more accurate one on `plo4-hu` and `plo4-3way`, where the saving
-is 14.6% and 20.9%. On `plo4-3way` the baseline is the badly biased arm: FIFO at
-20,000 trajectories overestimates the reference by 223.3 mBB on average, against
-2.0 for the aware arm. Five seeds estimate a mean absolute error loosely, so what
-this rules out is a *uniform* accuracy loss, not a per-spot one. The two arms
-also reproduce the published paired differences exactly (−92.2 ± 152.5,
+| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k | closer | floor |
+|---|---|---|---|---|
+| `holdem-hu` | 78.4 | 137.1 | FIFO | 36.4 |
+| `plo4-hu` | 234.0 | 183.1 | aware | 93.6 |
+| `plo5-hu` | 154.7 | 272.0 | FIFO | 90.4 |
+| `plo4-3way` | 836.8 | 272.6 | aware | 613.5 |
+
+The single table this replaces mixed the two readings: FIFO's *symmetric* error
+against the aware arm's *crossed* one. That is exactly the comparison the
+seed-sharing prefix makes unfair, and on `plo4-3way` it decides the answer — a
+220 mBB margin for the aware arm. Compare like with like and it reverses:
+symmetric, FIFO wins that spot by 123 mBB; crossed, the aware arm wins it by 564.
+The symmetric reading is the one to report, and on it the aware arm is the more
+accurate estimator on `plo4-hu` alone; the two readings agree on every other
+spot, which is why the defect needed a spot to be measured on rather than argued
+about.
+
+`plo4-3way` is also where neither reading should be trusted. Its two
+higher-budget runs disagree by 613.5 mBB on the *same* strategy — the same order
+as every error in either table — so an estimate at 20,000 trajectories is no more
+informative there than the disagreement between two estimates at ten times the
+budget. The floor is tabulated for that reason, and the other three spots sit at
+36.4, 93.6 and 90.4: small enough, against errors of 78 to 272, for the
+comparison to carry. Five seeds estimate a mean absolute error loosely, so what
+all of this rules out is a *uniform* accuracy loss, not a per-spot one. The two
+arms also reproduce the published paired differences exactly (−92.2 ± 152.5,
 +119.9 ± 205.5, −0.3 ± 265.5, −221.4 ± 487.0), which is the internal consistency
 check that the reference is measuring the same thing.
 
@@ -473,8 +501,10 @@ interval inside the baseline's own spread. On the other three the
 interval reaches past it and the data supports only "no effect detected
 at this sample size" — for `plo5-hu` that is the whole story (smallest saving,
 2.7%, and both its accuracy and its spread are the worse for the aware policy),
-while `plo4-hu` and `plo4-3way` combine the largest savings with the better
-accuracy and simply carry too few seeds to narrow the interval further.
+while `plo4-hu` and `plo4-3way` combine the largest savings with too few seeds
+to narrow the interval further. `plo4-hu` is also the one spot where the aware
+arm is the more accurate estimator; on `plo4-3way` that comparison is
+unresolvable, so the interval is all there is to read.
 
 Criterion (2) — better quality for the same compute budget — is **not** delivered
 on the three heads-up spots, and the cap curve is the evidence:

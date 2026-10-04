@@ -61,7 +61,18 @@ not a constant:
                  the confidence rule, not the cap, is what stops most
                  decisions, so the saving cannot be spent back on a larger cap.
 
+`--reference-samples` adds a third block: each arm scored against a run at ten
+times the budget, which is what says whether the arm's *estimate* is as close to
+the truth rather than only whether the policy moved it. It is off by default
+because it costs about ten times as much as the rest. The reference has to share
+the arm's seed -- the seed drives the solve, so a disjoint seed scores a
+different strategy -- but a shared seed is not neutral either, so each arm is
+scored against both policies' higher-budget runs and the two are printed side by
+side.
+
     scripts/benchmarks/bench_work_priority.py --build /tmp/pe-bench
+    scripts/benchmarks/bench_work_priority.py --build /tmp/pe-bench \
+        --reference-samples 200000
 """
 
 import argparse
@@ -87,6 +98,23 @@ REPORT_ROWS = 10_000_000
 # Printed after the solve and the BR measurement, before the report: the point
 # at which the timed quantity ends. See `drain_stream`.
 SOLVE_PHASE_COMPLETE = "solver_phase=complete"
+
+# The accuracy comparison scores each arm against a higher-budget reference, and
+# the reference has to share the arm's seed: the seed drives the *solve*, so a
+# disjoint seed scores a different strategy rather than the same one measured
+# better. Measured on `holdem-hu`, a disjoint-seed reference reported mean|err|
+# 1308.7 where a same-seed one reported 101.3 -- a factor of thirteen, all of it
+# strategy variation. A shared seed is not neutral either: the tool seeds its
+# best-response RNG once from `config->seed` and consumes trajectories in order
+# (`external_best_response.c:1206-1215`), so a run at N trajectories is a
+# *prefix* of the same policy's run at ten times N. FIFO's error can therefore
+# cancel against FIFO's own stream while the aware arm -- a different policy,
+# hence a different stream -- gets no such cancellation. Both references are
+# printed for every arm, so the asymmetry is measured rather than assumed, and
+# the symmetric reading (each arm against its own policy's run) is kept apart
+# from the crossed one (against the other policy's): the single table this
+# replaces mixed them -- FIFO's symmetric error beside the aware arm's crossed
+# one -- and on `plo4-3way` that reversed the verdict.
 
 SPOTS = [
     # name, game, players (full private ranges)
@@ -646,6 +674,48 @@ def saving(baseline_evals, aware_evals):
     return 100.0 * (baseline_evals - aware_evals) / baseline_evals
 
 
+def print_reference_accuracy(spot, arms, references):
+    """Each arm's distance from a higher-budget reference, under every reference.
+
+    The paired interval says how far the policy moves the reported number; this
+    says whether the estimate each arm reports is as close to the truth, which is
+    a different question and needs a reference. A run at ten times the budget is
+    that reference, paired to the arm by seed.
+
+    Every reference is printed for every arm, because the reference is not
+    neutral and which one is used changes the answer. The comment above the spots
+    records why the seed must be shared, and why sharing it still leaves the FIFO
+    arm a bias the aware arm does not get. Printing the row of arms once per
+    reference turns that from a caveat into a measurement: on three of the four
+    published spots the two references agree on which arm is closer, and on
+    `plo4-3way` they do not -- which is why the guide reports the symmetric
+    reading separately rather than the single mixed table it used to carry.
+
+    The verdict is per reference, read off the mean absolute error, and the
+    floor -- how far the two references are from each other on the same strategy
+    -- is printed under them. No error below the floor means anything: on
+    `plo4-3way` the floor is the same order as every error in the table.
+    """
+    for ref_label, refs in references:
+        cells = []
+        for arm_label, runs in arms:
+            errors = [r["nash_conv"] - x["nash_conv"] for r, x in zip(runs, refs)]
+            cells.append((arm_label, statistics.mean(abs(e) for e in errors),
+                          statistics.mean(errors)))
+        closer = min(cells, key=lambda c: c[1])[0]
+        print("%-11s vs %-15s mean|err| %s -> %s closer"
+              % (spot[0], ref_label,
+                 " ".join("%s %6.1f (mean %+7.1f)" % cell for cell in cells),
+                 closer))
+    if len(references) == 2:
+        (first_label, first), (second_label, second) = references
+        floor = statistics.mean(abs(a["nash_conv"] - b["nash_conv"])
+                                for a, b in zip(first, second))
+        print("%-11s floor |%s - %s| mean %.1f" % (spot[0], first_label,
+                                                   second_label, floor))
+    sys.stdout.flush()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--build", required=True, help="CMake build directory")
@@ -666,6 +736,11 @@ def main():
                     help="paired seeds; two at least, since one cannot estimate "
                          "the spread the interval and the yardstick are built "
                          "from")
+    ap.add_argument("--reference-samples", type=int, default=0,
+                    help="BR trajectories for the higher-budget reference the "
+                         "accuracy comparison scores each arm against; 0 skips "
+                         "the comparison. The published table uses 200000, ten "
+                         "times --br-samples, and takes about ten times as long")
     ap.add_argument("--spot", action="append", help="only these spots")
     args = ap.parse_args()
     require_paired_seeds(args.seeds)
@@ -709,6 +784,24 @@ def main():
             print_row(spot, "uncertainty-aware", aware, baseline)
             print_distribution(spot, "uncertainty-aware", aware)
             print_paired_bound(spot, baseline, aware)
+
+            # The accuracy comparison, when asked for: each arm scored against a
+            # higher-budget run of *both* policies, so the reference's own bias
+            # is visible instead of assumed. See print_reference_accuracy.
+            if args.reference_samples > 0:
+                labels = ("fifo@%s" % "{:,}".format(args.br_samples),
+                          "aware@%s" % "{:,}".format(args.br_samples))
+                ref_labels = ("fifo@%s" % "{:,}".format(args.reference_samples),
+                              "aware@%s" % "{:,}".format(args.reference_samples))
+                references = []
+                for ref_label, policy in zip(ref_labels, ("fifo", "uncertainty-aware")):
+                    runs = [measure(binary, spot, args, seed, policy, cap,
+                                    args.reference_samples, out_json)
+                            for seed in seeds]
+                    references.append((ref_label, runs))
+                print_reference_accuracy(
+                    spot, ((labels[0], baseline), (labels[1], aware)),
+                    tuple(references))
 
             # Only a repeat visit is capped, so the saving tracks how often the
             # budget revisits a decision. One seed is enough to show the shape.
