@@ -486,16 +486,25 @@ cannot support.
 disagree by 613.5 mBB on the *same* strategy — the same order as every error in
 either table — so an estimate at 20,000 trajectories is no more informative there
 than the disagreement between two estimates at ten times the budget. Five seeds
-estimate a mean absolute error loosely, so what the block does support is a
-bound: no *uniform* accuracy loss, and no per-spot ranking either. The two arms
-also reproduce the published paired differences exactly (−92.2 ± 152.5,
-+119.9 ± 205.5, −0.3 ± 265.5, −221.4 ± 487.0), which is the internal consistency
-check that the reference is measuring the same thing.
+estimate a mean absolute error loosely, and the symmetric reading does put the
+aware arm further out on three spots of four; but the ordering that makes those
+errors "mixed" is the same ordering the paragraph above refuses to read, because
+the two prefix covariances are not shown to be comparable. Mixed errors are
+therefore not an absence of loss: if the order is unreadable, so is the claim
+that the loss is not uniform, and an accuracy loss on *every* workload is not
+excluded by what is printed. So the block carries no accuracy conclusion at all —
+not a per-spot ranking, and not the absence of a uniform loss. The question stays
+open until the arms are scored against a reference that does not share their
+stream, which the tool does not expose. The two arms do reproduce the published
+paired differences exactly (−92.2 ± 152.5, +119.9 ± 205.5, −0.3 ± 265.5, −221.4 ±
+487.0), which is the internal consistency check that the reference is measuring
+the same thing.
 
-Criterion (1) is therefore supported as a bound rather than as an absence of
-evidence: the policy shifts the reported exploitability by at most 2.3% of the
-reported value, while costing 2.7-20.9% fewer terminal evaluations against a
-baseline yardstick of 0.8-5.3%. The low end is `plo5-hu`, and it belongs in the
+Criterion (1) — faster convergence to the same quality target — is supported by
+the interval table above, as a bound rather than as an absence of evidence: the
+policy shifts the reported exploitability by at most 2.3% of the reported value,
+while costing 2.7-20.9% fewer terminal evaluations against a baseline yardstick
+of 0.8-5.3%. The low end is `plo5-hu`, and it belongs in the
 range: the four workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only
 the three large ones would overstate the cheapest case by a factor of five. The
 bound is the **farthest interval endpoint**, not the
@@ -514,8 +523,9 @@ while `plo4-hu` and `plo4-3way` combine the largest savings with too few seeds
 to narrow the interval further. The accuracy comparison above names no winner on
 any of them, so the interval is all there is to read.
 
-Criterion (2) — better quality for the same compute budget — is **not** delivered
-on the three heads-up spots, and the cap curve is the evidence:
+Criterion (2) — better quality for the same compute budget — is **not**
+established on any of the four spots. The cap curve says something about cost,
+not about quality:
 
 ```text
 holdem-hu   cap curve  1x 383,006  2x 385,646  4x 386,910  8x 389,690  16x 392,856  (fifo at 1x: 452,678)
@@ -526,8 +536,15 @@ plo4-3way   cap curve  1x 1,242,466  2x 1,466,196  4x 1,774,180  8x 2,197,318  1
 
 Raising the cap sixteen-fold buys 2.6% more work on `holdem-hu`: the confidence
 rule, not the cap, is what stops most decisions, so the saving has nowhere to go
-back to. On `plo4-3way` it does — the curve crosses the baseline at 4x, so there
-the saving *is* reinvestable. The three-way spot is also the one where the
+back to. On `plo4-3way` the cap does bind — the curve crosses the baseline at 4x,
+so the aware arm can spend more terminal evaluations than FIFO once the cap is
+lifted — and that is the whole of what the curve shows. It is a fact about cost:
+the saved evaluations are reallocatable there. It is not a fact about quality,
+because the curve reports no NashConv at a cap tuned to the same budget, and the
+interval table above already bounds this spot's reported movement at 1.61% with
+no effect detected. Criterion (2) needs a quality comparison at a matched budget
+— spend FIFO's evaluations, then compare the answer — and this benchmark does not
+run one, on this spot or on any other. The three-way spot is also the one where the
 priority telemetry fills the ladder instead of the bottom two buckets
 (`35008,2684,468,78,17,44,29,25` against `holdem-hu`'s `272,52,13,0,0,0,0,0`),
 which is the same fact read from the other side.

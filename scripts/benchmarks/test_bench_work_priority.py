@@ -751,7 +751,7 @@ class ReferenceTableTests(unittest.TestCase):
     def test_the_guide_names_no_winner(self) -> None:
         text = GUIDE.read_text(encoding="utf-8")
         start = text.index("The interval bounds the *effect*")
-        section = text[start:text.index("Criterion (1) is therefore supported")]
+        section = text[start:text.index("Criterion (1)")]
         # The verdict column and the arrow the runner used to print are gone.
         # ("closer" itself stays: the prose still says an arm is not the closer
         # to the truth, which is the opposite of naming a winner.)
@@ -778,6 +778,57 @@ class ReferenceTableTests(unittest.TestCase):
         text = GUIDE.read_text(encoding="utf-8")
         self.assertIn("the seed drives the *solve*", text)
         self.assertIn("1308.7", text)
+
+    def test_the_guide_withdraws_the_uniform_accuracy_conclusion(self) -> None:
+        # The guide used to read the mixed errors as "no *uniform* accuracy
+        # loss". That is a claim about the same ordering the block refuses to
+        # read: if the two prefix covariances are not comparable, the order that
+        # makes the errors mixed is unreadable too, and a loss on *every*
+        # workload is not excluded. The conclusion is withdrawn, not reworded.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertNotIn("no *uniform* accuracy loss", text)
+        self.assertIn("not the absence of a uniform loss", text)
+        self.assertIn("an accuracy loss on *every* workload is not", text)
+
+
+class CriterionConclusionTests(unittest.TestCase):
+    """The guide's two verdicts must rest on the evidence they name.
+
+    Issue #258 asks the feature to show *either* faster convergence to the same
+    quality target *or* better quality for the same compute budget. The cost
+    half is measured; the quality half is not, on any spot. The guide used to
+    imply the opposite for `plo4-3way`, where the cap curve crosses the baseline
+    at 4x: that crossing is a statement about terminal evaluations, and the
+    curve carries no NashConv at a cap tuned to the same budget, so it cannot
+    show that spending the saved work improves the answer -- and the interval
+    table already bounds this spot's reported movement at 1.61% with no effect
+    detected.
+    """
+
+    def test_the_guide_does_not_rank_quality_on_plo4_3way(self) -> None:
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertNotIn("the saving *is* reinvestable", text)
+        self.assertNotIn("not** delivered\non the three heads-up spots", text)
+        self.assertIn("established on any of the four spots", text)
+
+    def test_the_cap_curve_is_reported_as_a_cost_fact(self) -> None:
+        # Crossing the baseline shows the saved evaluations are reallocatable
+        # there; it does not show the answer improves. The guide has to say
+        # which of the two it measured.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("reports no NashConv at a cap tuned to the same budget",
+                      text)
+        self.assertIn("a quality comparison at a matched budget", text)
+        self.assertIn("this benchmark does not\nrun one", text)
+
+    def test_criterion_one_is_anchored_on_the_interval_table(self) -> None:
+        # The verdict used to read "Criterion (1) is therefore supported", which
+        # made it follow from the accuracy block -- a block that now concludes
+        # nothing. It rests on the paired interval and the cost column instead.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertNotIn("Criterion (1) is therefore supported", text)
+        self.assertIn("Criterion (1) — faster convergence to the same quality "
+                      "target — is supported by\nthe interval table above", text)
 
 
 if __name__ == "__main__":
