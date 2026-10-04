@@ -330,19 +330,101 @@ class StatisticsTests(unittest.TestCase):
         # The regression: comparing the half-width alone labels an interval that
         # reaches past the bound as "inside". These are the published PLO4 and
         # three-way rows, both of which the half-width test passed wrongly.
-        self.assertFalse(bench.equivalence_verdict(119.9, 255.1, 273.1))
-        self.assertFalse(bench.equivalence_verdict(-221.4, 604.6, 801.5))
-        # And the two that do hold: the whole interval is within the bounds.
-        self.assertTrue(bench.equivalence_verdict(-92.2, 189.3, 700.8))
-        self.assertFalse(bench.equivalence_verdict(-0.3, 329.6, 250.3))
+        self.assertFalse(bench.interval_within(119.9, 255.1, 273.1))
+        self.assertFalse(bench.interval_within(-221.4, 604.6, 801.5))
+        # And the one that does hold, judged against its baseline's own spread.
+        self.assertTrue(bench.interval_within(-92.2, 189.3, 660.9))
+        self.assertFalse(bench.interval_within(-0.3, 329.6, 160.7))
         # A zero mean degenerates to the half-width test, which is correct there.
-        self.assertTrue(bench.equivalence_verdict(0.0, 200.0, 250.0))
-        self.assertFalse(bench.equivalence_verdict(0.0, 300.0, 250.0))
+        self.assertTrue(bench.interval_within(0.0, 200.0, 250.0))
+        self.assertFalse(bench.interval_within(0.0, 300.0, 250.0))
+
+    def test_the_yardstick_is_the_baseline_arm_alone(self) -> None:
+        # The regression: the bound was max(sd_fifo, sd_aware), so a policy that
+        # increased run-to-run variance raised the bar it had to clear. Measured
+        # on the published run, the aware arm set the margin on two of the four
+        # spots -- holdem-hu 700.8 against the baseline's 660.9, plo5-hu 250.3
+        # against 160.7, an inflation of 56%. Neither flipped a verdict, but a
+        # spot whose effect sits between the two spreads would.
+        baseline = [{"nash_conv": v} for v in (0.0, 10.0, 20.0)]   # sd 10.0
+        aware = [{"nash_conv": v} for v in (0.0, 100.0, 200.0)]    # sd 100.0
+        self.assertAlmostEqual(bench.sd_of(aware, "nash_conv"), 100.0)
+        self.assertAlmostEqual(bench.paired_yardstick(baseline, aware), 10.0)
 
     def test_sd_of_is_zero_for_a_single_run(self) -> None:
         self.assertEqual(bench.sd_of([{"v": 1.0}], "v"), 0.0)
         self.assertAlmostEqual(bench.sd_of([{"v": 1.0}, {"v": 3.0}], "v"),
                                1.4142135623730951)
+
+
+class SolveTimingTests(unittest.TestCase):
+    """The timed quantity stops at the solve, not at the end of the report.
+
+    The report is generated after the solve and its cost is proportional to the
+    infosets the run materialized -- a count the two arms do not share, since
+    the measurement resolves infosets with `create=1`. Measured on PLO5
+    heads-up the report phase is 1.0-1.3 s, 44% of the invocation.
+    """
+
+    # The line the shipped CLI prints, verbatim.
+    MARKER = "solver_phase=complete stop_reason=max_iterations report=starting\n"
+
+    def test_the_reading_is_taken_at_the_marker_not_earlier(self) -> None:
+        # The marker is not the first line -- the solver prints its
+        # configuration before it -- so a reader keyed on "the first line" or
+        # "the first line after the start" would take the reading in the wrong
+        # place and still look correct. The clock records how much of the
+        # stream had been pulled when it was called, which pins the position.
+        pulled = []
+
+        def lines():
+            for i, line in enumerate(["preflop_solver=lane-b\n",
+                                      "sampling_policy=standard\n",
+                                      self.MARKER, "HAND TABLE\n",
+                                      "report_phase=complete rows=30134\n"]):
+                pulled.append(i)
+                yield line
+
+        reads = []
+
+        def clock():
+            reads.append(list(pulled))
+            return 11.0
+
+        text, marked = bench.drain_stream(lines(), clock)
+        self.assertEqual(marked, 11.0)
+        # Read once, with lines 0, 1 and 2 consumed: line 2 is the marker.
+        self.assertEqual(reads, [[0, 1, 2]])
+        # The whole stream is still returned: the guard and the fingerprint
+        # read the report that follows the marker.
+        self.assertIn("report_phase=complete", text)
+
+    def test_lines_after_the_marker_do_not_move_the_reading(self) -> None:
+        # The point of the change: with an uncapped report the tail is
+        # proportional to the infosets materialized, so a reading that moved
+        # with it would make the two arms' times incomparable.
+        def reading(tail):
+            calls = []
+
+            def clock():
+                calls.append(len(calls))
+                return 42.0 + len(calls)
+
+            marked = bench.drain_stream([self.MARKER] + ["row\n"] * tail,
+                                        clock)[1]
+            return marked, len(calls)
+
+        # A one-line tail and a ten-thousand-line tail read the same value, and
+        # each reads the clock exactly once.
+        self.assertEqual(reading(1), (43.0, 1))
+        self.assertEqual(reading(10000), (43.0, 1))
+
+    def test_a_run_without_the_marker_reports_no_reading(self) -> None:
+        # An older solver that never prints the marker must not lose the column:
+        # the caller falls back to its own final reading.
+        text, marked = bench.drain_stream(["no marker here\n"], lambda: 5.0)
+        self.assertIsNone(marked)
+        self.assertIn("no marker here", text)
 
 
 class TrainingGuardTests(unittest.TestCase):
@@ -487,6 +569,16 @@ class PublishedBoundTests(unittest.TestCase):
         text = GUIDE.read_text(encoding="utf-8")
         self.assertIn("at most 2.3% of the", text)
         self.assertNotIn("at most 1.2-1.7%", text)
+
+    def test_the_guide_states_the_yardstick_is_the_baseline_alone(self) -> None:
+        # The regression: the bound was max(sd_fifo, sd_aware), so a policy that
+        # increased run-to-run variance raised its own bar. The guide called it
+        # "the larger of the two arms' spreads" and read the result as an
+        # equivalence test rather than as a yardstick.
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("baseline arm's own", text)
+        self.assertNotIn("the larger of the two arms", text)
+        self.assertIn("yardstick, not a pre-specified equivalence margin", text)
 
     def test_the_savings_range_covers_the_smallest_saving(self) -> None:
         # The four workloads save 14.4/14.6/2.7/20.9%, so a range that starts

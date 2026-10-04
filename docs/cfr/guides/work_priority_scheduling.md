@@ -393,31 +393,42 @@ significance verdict. It prints the 95% confidence interval of the paired
 difference, which is what bounds the effect, alongside each arm's own run-to-run
 spread across seeds:
 
-| Spot | paired mean | 95% CI (mBB) | CI half-width | margin (cross-seed sd) | verdict |
+| Spot | paired mean | 95% CI (mBB) | CI half-width | baseline sd | verdict |
 |---|---|---|---|---|---|
-| `holdem-hu` | −92.2 | [−281.5, +97.1] | 1.52% | 5.62% | inside |
-| `plo4-hu` | +119.9 | [−135.2, +375.0] | 1.22% | 1.31% | reaches past |
-| `plo5-hu` | −0.3 | [−329.9, +329.3] | 1.68% | 1.27% | reaches past |
-| `plo4-3way` | −221.4 | [−826.0, +383.2] | 1.18% | 1.56% | reaches past |
+| `holdem-hu` | −92.2 | [−281.5, +97.1] | 1.52% | 5.30% | inside |
+| `plo4-hu` | +119.9 | [−135.2, +375.0] | 1.22% | 1.31% | wider |
+| `plo5-hu` | −0.3 | [−329.9, +329.3] | 1.68% | 0.82% | wider |
+| `plo4-3way` | −221.4 | [−826.0, +383.2] | 1.18% | 1.56% | wider |
 
-The margin is the larger of the two arms' spreads across seeds — the variation a
-reader already lives with when they change the seed — so "inside" means the
-policy's effect is smaller than one they could not have noticed. The verdict is
-the textbook equivalence condition, that the *whole* interval lies inside
-`[-margin, +margin]`, which is `|mean| + half-width <= margin`; comparing the
-half-width alone would pass an interval that reaches past the bound, and did:
-`plo4-hu` has an upper endpoint of +375.0 against a margin of 273.1, and
-`plo4-3way` a lower endpoint of −826.0 against 801.5. **One of the four spots is
-inside.** The other three support "no effect detected at this sample size", not
-equivalence, and the table says so rather than leaving it to the reader.
+The yardstick is the **baseline arm's own** spread across seeds — the variation a
+reader already lives with when they change the seed. It is deliberately *not* the
+wider of the two arms': taking the maximum would let the judged arm widen its own
+bound, since a policy that increases run-to-run variance would raise the bar it
+has to clear. On the published run that defect was live, the aware arm setting the
+yardstick on two of the four spots (`holdem-hu` 700.8 against 660.9, `plo5-hu`
+250.3 against 160.7, an inflation of 56%); no verdict flipped there, but a spot
+whose effect sat between the two spreads would have. The judgement is on the
+*whole* interval, `|mean| + half-width <= yardstick`, because comparing the
+half-width alone passes an interval that reaches past the bound, and did:
+`plo4-hu` has an upper endpoint of +375.0 against a yardstick of 273.1, and
+`plo4-3way` a lower endpoint of −826.0 against 801.5.
+
+This is a **yardstick, not a pre-specified equivalence margin**: it is estimated
+from the same five seeds being judged, and its own uncertainty is not accounted
+for. What "inside" supports is the weaker, honest statement that the policy's
+effect, at its widest, is smaller than the variation the baseline itself shows
+across seeds — a practical-significance reading, not a test. **One of the four
+spots is inside.** The other three support "no effect detected at this sample
+size" only, and the table says so rather than leaving it to the reader.
 
 A wider spread would be a regression in its own right, whatever the mean did, so
-the per-arm column is printed too. It is mixed rather than uniformly worse: the
-aware arm's spread is larger on `holdem-hu` (700.8 against 660.9) and `plo5-hu`
-(250.3 against 160.7) and smaller on `plo4-hu` (204.3 against 273.1) and
-`plo4-3way` (419.6 against 801.5). Five seeds estimate a standard deviation
-loosely, so this is reported as "no consistent inflation", not as a measured
-equality.
+the aware arm's spread is printed beside the yardstick, with the ratio. It is
+mixed rather than uniformly worse: larger on `holdem-hu` (700.8 against 660.9,
+ratio 1.06) and `plo5-hu` (250.3 against 160.7, ratio 1.56), smaller on `plo4-hu`
+(204.3 against 273.1) and `plo4-3way` (419.6 against 801.5). Five seeds estimate a
+standard deviation loosely — with four and four degrees of freedom an F-test needs
+a variance ratio near 6.4 to say anything — so this is reported as "no consistent
+inflation", not as a measured equality, and it does not enter the yardstick.
 
 The interval bounds the *effect*; it does not by itself say the aware arm's
 estimate is as close to the truth, which is a separate question and needs a
@@ -434,7 +445,7 @@ about three times smaller — paired by seed:
 
 The answer is mixed, and it is reported as mixed. The aware arm is the less
 accurate one on `holdem-hu` and `plo5-hu` — the same two spots where the saving
-is smallest (14.4% and 2.7%), and one of them the spot that failed the margin
+is smallest (14.4% and 2.7%), and one of them the spot that failed the yardstick
 above — and the more accurate one on `plo4-hu` and `plo4-3way`, where the saving
 is 14.6% and 20.9%. On `plo4-3way` the baseline is the badly biased arm: FIFO at
 20,000 trajectories overestimates the reference by 223.3 mBB on average, against
@@ -446,20 +457,20 @@ check that the reference is measuring the same thing.
 
 Criterion (1) is therefore supported as a bound rather than as an absence of
 evidence: the policy shifts the reported exploitability by at most 2.3% of the
-reported value, against a margin of 1.3-5.6%, while costing 2.7-20.9% fewer
-terminal evaluations. The low end is `plo5-hu`, and it belongs in the range: the
-four workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only the three
-large ones would overstate the cheapest case by a factor of five. The bound is
-the **farthest interval endpoint**, not the
+reported value, while costing 2.7-20.9% fewer terminal evaluations against a
+baseline yardstick of 0.8-5.3%. The low end is `plo5-hu`, and it belongs in the
+range: the four workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only
+the three large ones would overstate the cheapest case by a factor of five. The
+bound is the **farthest interval endpoint**, not the
 half-width, and that is the same distinction the verdict above turns on: the
 half-widths are 1.2-1.7%, but the intervals are not centred on zero, so the
 largest shift the data admits is 2.26% on `holdem-hu` (its interval reaching
 −281.5 against a reference of 12,459.8), 1.80% on `plo4-hu`, 1.68% on `plo5-hu`
 and 1.61% on `plo4-3way`. Two readings have to be kept apart, and the table gives
 both. No spot detects an effect: all four intervals contain zero, so none of
-them licenses "the policy moved the answer". Only `holdem-hu` establishes
-equivalence, its whole interval lying inside the margin. On the other three the
-interval reaches past the margin and the data supports only "no effect detected
+them licenses "the policy moved the answer". Only `holdem-hu` has its whole
+interval inside the baseline's own spread. On the other three the
+interval reaches past it and the data supports only "no effect detected
 at this sample size" — for `plo5-hu` that is the whole story (smallest saving,
 2.7%, and both its accuracy and its spread are the worse for the aware policy),
 while `plo4-hu` and `plo4-3way` combine the largest savings with the better

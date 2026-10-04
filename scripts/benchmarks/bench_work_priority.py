@@ -23,12 +23,13 @@ Each spot is measured twice, at a fixed cap of `--br-max-samples`:
                     bucket, so a settled decision is capped near
                     `--br-min-samples` and a fragile one keeps the maximum.
 
-Reported per spot: wall clock (machine-dependent, never a property of the
-feature), the measurement's terminal evaluations and draws per decision (both
-deterministic for a fixed seed), the measured exploitability, and the priority
-layer's own bucket histogram -- the work distribution across infosets the issue
-asks for. The comparison against the baseline is *paired*: both arms of a spot
-see the same seed and therefore the same solved strategy, so the per-seed
+Reported per spot: the solve-and-measurement time (machine-dependent, never a
+property of the feature, and deliberately excluding the report phase -- see
+`drain_stream`), the measurement's terminal evaluations and draws per decision
+(both deterministic for a fixed seed), the measured exploitability, and the
+priority layer's own bucket histogram -- the work distribution across infosets
+the issue asks for. The comparison against the baseline is *paired*: both arms of
+a spot see the same seed and therefore the same solved strategy, so the per-seed
 difference removes the strategy and leaves the measurement.
 
 What that comparison may and may not be read as is printed with it, and this is
@@ -39,10 +40,13 @@ test. So no significance verdict is printed. Two numbers are: the 95%
 confidence interval of the paired difference, which bounds the effect the policy
 can be having, and each arm's own run-to-run spread across seeds, because a
 policy that widens the spread is a real regression even when its mean is
-unchanged. The whole interval is then compared against the larger of those
-spreads -- the variation a reader already lives with when they change the seed
--- and the verdict is stated. Both the interval and the margin are built from a
-spread, so fewer than two seeds is refused rather than tabulated.
+unchanged. The whole interval is then compared against the *baseline* arm's
+spread -- the variation a reader already lives with when they change the seed --
+and the verdict is stated. The yardstick is the baseline's spread alone and not
+the larger of the two, so a policy cannot widen the bound it is judged against;
+it is still estimated from the same seeds, so it is a yardstick and not a
+pre-specified equivalence margin. Both the interval and the yardstick are built
+from a spread, so fewer than two seeds is refused rather than tabulated.
 
 Two diagnostics are printed under each spot, because the size of the saving is
 not a constant:
@@ -79,6 +83,10 @@ import time
 # used rather than `--report-rows 0`, which does not mean "no cap": with 0 the
 # two-sweep filter is disabled as well, so every row is printed twice.
 REPORT_ROWS = 10_000_000
+
+# Printed after the solve and the BR measurement, before the report: the point
+# at which the timed quantity ends. See `drain_stream`.
+SOLVE_PHASE_COMPLETE = "solver_phase=complete"
 
 SPOTS = [
     # name, game, players (full private ranges)
@@ -316,6 +324,30 @@ def parse_priority(text):
     }
 
 
+def drain_stream(lines, clock):
+    """Read every line, noting the clock when the solve declares itself done.
+
+    The tool prints `solver_phase=complete` after the solve *and* the BR
+    measurement and before the report, so a reading taken there is the solve and
+    the measurement and nothing else. Timing the whole invocation instead would
+    fold in the report, which with an uncapped report is 1.0-1.3 s on PLO5
+    heads-up and PLO4 three-way -- 44% of the invocation -- and which is
+    proportional to the infosets the run materialized, a count the two arms do
+    not share. Measured: the marker reads 1.447/1.433/1.385 s across report
+    sizes of 1, 2,000 and 10,000,000 rows, while the totals read 1.527/1.614/
+    2.408 s, so the reading is stable where the total is not.
+
+    Falls back to the caller's final reading if the marker never appears, which
+    is the old behaviour rather than a missing column.
+    """
+    text, marked = [], None
+    for line in lines:
+        if marked is None and line.startswith(SOLVE_PHASE_COMPLETE):
+            marked = clock()
+        text.append(line)
+    return "".join(text), marked
+
+
 def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
     _, game, players = spot
     cmd = [binary, "--game", game, "--players", str(players),
@@ -331,9 +363,12 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
     if policy is not None:
         cmd += ["--br-priority-policy", policy]
     start = time.perf_counter()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    wall = time.perf_counter() - start
-    out = proc.stdout + proc.stderr
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    out, marked = drain_stream(proc.stdout, time.perf_counter)
+    proc.wait()
+    finished = time.perf_counter()
+    wall = (marked - start) if marked is not None else (finished - start)
     if proc.returncode != 0:
         sys.exit("solve failed: %s\n%s" % (" ".join(cmd), out[-2000:]))
     assert_report_uncapped(spot, policy, out)
@@ -493,10 +528,10 @@ def paired_interval(diffs):
 def require_paired_seeds(seeds):
     """At least two seeds, because one cannot estimate a spread.
 
-    With a single pair the interval is zero-width *and* the margin -- the larger
-    of the two arms' cross-seed spreads -- collapses to zero, so the printed
-    line reads "95% CI [+261.8, +261.8] ... margin 0.0 = +0.00%": a point
-    estimate labelled a confidence interval, and a margin of zero that turns the
+    With a single pair the interval is zero-width *and* the yardstick -- the
+    baseline arm's cross-seed spread -- collapses to zero, so the printed line
+    reads "95% CI [+261.8, +261.8] ... baseline sd 0.0 = +0.00%": a point
+    estimate labelled a confidence interval, and a bound of zero that turns the
     verdict into a coin flip on the sign of the mean. Neither is a property of
     the measurement, so the run is refused rather than tabulated.
     """
@@ -520,43 +555,67 @@ def print_row(spot, label, runs, baseline):
     sys.stdout.flush()
 
 
-def equivalence_verdict(mean, half, margin):
-    """Is the whole confidence interval inside [-margin, +margin]?
+def interval_within(mean, half, bound):
+    """Is the whole confidence interval inside [-bound, +bound]?
 
     Both endpoints, not the half-width: a nonzero mean shifts the interval, and
     comparing `half` alone labels an interval that reaches past the bound as
     "inside". The published PLO4 row is the counter-example that caught this --
-    mean +119.9, half-width 255.1, margin 273.1, and an upper endpoint of +375.0.
-    The condition is the textbook one, `|mean| + half <= margin`, which is the
-    same as requiring both endpoints to lie within the bounds.
+    mean +119.9, half-width 255.1, bound 273.1, and an upper endpoint of +375.0.
+    The condition is `|mean| + half <= bound`, which is the same as requiring
+    both endpoints to lie within the bounds.
     """
-    return abs(mean) + half <= margin
+    return abs(mean) + half <= bound
 
 
-def print_equivalence(spot, baseline, aware):
-    """What the paired difference actually bounds, and against what.
+def paired_yardstick(baseline, aware):
+    """The bound the paired interval is judged against: the *baseline* arm's
+    cross-seed spread, and deliberately not the larger of the two arms'.
+
+    Taking the maximum lets the judged arm widen its own bound: a policy that
+    increases run-to-run variance raises the bar it has to clear. Measured on
+    the published run the aware arm set the margin on two of the four spots --
+    `holdem-hu` 700.8 against the baseline's 660.9, `plo5-hu` 250.3 against
+    160.7, an inflation of 56%. The aware arm's spread is still reported, as a
+    diagnostic -- a wider spread is a regression in its own right -- but it does
+    not enter the bound.
+
+    The bound is a yardstick, not a pre-specified equivalence margin: it is
+    estimated from the same seeds being judged, and its own uncertainty is not
+    accounted for. What it supports is "the effect, at its widest, is smaller
+    (or larger) than the variation the baseline policy itself shows across
+    seeds", which is a practical-significance statement and not a test.
+    """
+    return sd_of(baseline, "nash_conv")
+
+
+def print_paired_bound(spot, baseline, aware):
+    """What the paired difference bounds, against the baseline's own spread.
 
     The point of the line is to refuse the reading "the answer did not move":
-    a null result is not equivalence. Two numbers are printed instead -- the
-    95% confidence interval of the paired difference, and the measurement's own
-    run-to-run spread across seeds. The margin is the larger of the two arms'
-    spreads, so the judgement is against the variation a reader already has
-    when they change the seed; the *whole* interval is judged, both endpoints
-    at once, and the verdict is stated rather than implied."""
+    a null result is not equivalence. It prints the 95% confidence interval of
+    the paired difference and judges the *whole* interval, both endpoints at
+    once, against the baseline arm's own run-to-run spread across seeds -- the
+    variation a reader already lives with when they change the seed. See
+    `paired_yardstick` for why the bound is that arm's spread alone.
+    """
     diffs = [r["nash_conv"] - b["nash_conv"] for r, b in zip(aware, baseline)]
     mean, _, half = paired_interval(diffs)
     reference = mean_of(baseline, "nash_conv")
-    margin = max(sd_of(baseline, "nash_conv"), sd_of(aware, "nash_conv"))
-    verdict = ("inside the margin" if equivalence_verdict(mean, half, margin)
-               else "reaches past the margin")
+    sd_fifo = sd_of(baseline, "nash_conv")
+    sd_aware = sd_of(aware, "nash_conv")
+    yardstick = paired_yardstick(baseline, aware)
+    ratio = (sd_aware / sd_fifo) if sd_fifo else float("nan")
+    verdict = ("inside the baseline's spread"
+               if interval_within(mean, half, yardstick)
+               else "wider than the baseline's spread")
     print("%-11s %-17s mean %+.1f mBB, 95%% CI [%+.1f, %+.1f] = [%+.2f%%, "
-          "%+.2f%%] of %s; cross-seed sd %.1f (fifo) %.1f (aware), margin "
-          "%.1f = %+.2f%% -- CI %s"
-          % (spot[0], "equivalence", mean, mean - half, mean + half,
+          "%+.2f%%] of %s; cross-seed sd %.1f (fifo) %.1f (aware) ratio %.2f; "
+          "baseline sd %.1f = %+.2f%% -- CI %s"
+          % (spot[0], "paired bound", mean, mean - half, mean + half,
              100.0 * (mean - half) / reference, 100.0 * (mean + half) / reference,
-             "{:,.1f}".format(reference), sd_of(baseline, "nash_conv"),
-             sd_of(aware, "nash_conv"), margin, 100.0 * margin / reference,
-             verdict))
+             "{:,.1f}".format(reference), sd_fifo, sd_aware, ratio,
+             yardstick, 100.0 * yardstick / reference, verdict))
     sys.stdout.flush()
 
 
@@ -603,7 +662,8 @@ def main():
                     help="draws per action for a fragile decision")
     ap.add_argument("--seeds", type=int, default=5,
                     help="paired seeds; two at least, since one cannot estimate "
-                         "the spread the interval and the margin are built from")
+                         "the spread the interval and the yardstick are built "
+                         "from")
     ap.add_argument("--spot", action="append", help="only these spots")
     args = ap.parse_args()
     require_paired_seeds(args.seeds)
@@ -623,7 +683,7 @@ def main():
           "agree.")
     print()
     header = ("%-11s %-17s %8s %12s %10s %8s %9s %14s %8s %19s"
-              % ("spot", "policy", "wall s", "BR evals", "draws/dec",
+              % ("spot", "policy", "solve s", "BR evals", "draws/dec",
                  "early %", "cap hits", "NashConv mBB", "sd",
                  "vs fifo (paired)"))
     print(header)
@@ -646,7 +706,7 @@ def main():
             print_row(spot, "fifo", baseline, baseline)
             print_row(spot, "uncertainty-aware", aware, baseline)
             print_distribution(spot, "uncertainty-aware", aware)
-            print_equivalence(spot, baseline, aware)
+            print_paired_bound(spot, baseline, aware)
 
             # Only a repeat visit is capped, so the saving tracks how often the
             # budget revisits a decision. One seed is enough to show the shape.
