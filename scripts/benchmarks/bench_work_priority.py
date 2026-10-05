@@ -137,6 +137,13 @@ SPOTS = [
 # trusting the copy.
 BR_MAX_SAMPLES_CEILING = 1 << 20
 
+# The solver resolves `--br-min-samples` before it checks `min <= max`: an unset
+# (0) minimum becomes its own default of 4, and anything below 2 is lifted to 2
+# (`BR_DEFAULT_MIN` and the floor in `pe_br_sampling_resolve`). A test pins both
+# numbers against the C source.
+BR_MIN_SAMPLES_DEFAULT = 4
+BR_MIN_SAMPLES_FLOOR = 2
+
 # The cap curve is the aware arm's cost as the cap is raised by these factors.
 # A point whose product exceeds the ceiling cannot be run, so it is dropped --
 # see `cap_curve_multiples`.
@@ -602,6 +609,18 @@ def require_higher_reference(br_samples, reference_samples):
     accuracy reading the flag promises. Refused before any solve starts, rather
     than tabulated.
     """
+    if reference_samples < 0:
+        # A *message* branch, not a refusal branch: `reference_samples <=
+        # br_samples` below would refuse a negative anyway, since a negative is
+        # below every budget. What it adds is the reason -- "a negative budget is
+        # not a budget" rather than "score it against something higher". The
+        # refusal itself is pinned by the call site guarding on `!= 0`, without
+        # which neither branch ran at all. Measured with `--reference-samples -1`
+        # before the fix: the reference block was absent and the command exited 0.
+        sys.exit("--reference-samples %d: a negative budget is not a budget. "
+                 "0 skips the comparison; any other value has to be a *higher* "
+                 "budget than --br-samples %d."
+                 % (reference_samples, br_samples))
     if reference_samples <= br_samples:
         sys.exit("--reference-samples %d: the accuracy reference has to be a "
                  "*higher* budget than --br-samples %d, otherwise the arm is "
@@ -634,16 +653,54 @@ def require_known_spots(selected):
                  % (", ".join(unknown), ", ".join(known)))
 
 
-def require_supported_cap(br_max_samples):
-    """`--br-max-samples` has to be a cap the solver accepts, or the run is refused.
+def effective_min_samples(br_min_samples):
+    """The minimum the solver actually compares `--br-max-samples` against.
 
-    Unlike the curve's multipliers, this cap is used by the spot's *main*
-    measurements, so an out-of-range value cannot be degraded to something
-    runnable -- the user asked for a cap the solver will not honour and the run
-    has no honest way to continue. Refused up front, with the ceiling named,
-    rather than letting the solver reject it mid-sweep: the first measurement is
-    the expensive one.
+    `pe_br_sampling_resolve` replaces an unset (0) minimum with its own default
+    of 4 and lifts anything below 2 up to 2, both *before* the
+    `min_samples <= max_samples` check -- so the effective value is neither the
+    raw one nor a plain floor of it. Measured against the shipped solver, the
+    first cap that runs is 4 for `--br-min-samples 0`, and 2 for `1`, `2` and
+    `3`; the model reproduces all twelve combinations measured.
     """
+    if br_min_samples == 0:
+        return BR_MIN_SAMPLES_DEFAULT
+    return max(br_min_samples, BR_MIN_SAMPLES_FLOOR)
+
+
+def require_supported_caps(br_min_samples, br_max_samples):
+    """Both sampling caps have to be ones the solver will actually run.
+
+    The solver validates the *pair*, so there are three ways to be unrunnable
+    and all three used to surface only when the solver refused mid-sweep:
+
+    - `--br-max-samples 0` -- the solver *accepts* it (0 means "sampling off",
+      `tools/pe_preflop_solve.c:702`) but then emits no
+      `br_sampling`/`br_decisions` line, so `check_estimator` has nothing to
+      read. Measured: one solve ran and printed
+      `report_phase=complete rows=309`, then
+      `no br_sampling/br_decisions line in: ...`, exit 1.
+    - Above `BR_MAX_SAMPLES_CEILING` the solver rejects the cap outright.
+    - Below the effective minimum: the solver floors `min_samples` at 2 and then
+      requires `min <= max`, so `--br-max-samples 1` can never run (the floor
+      lifts min to 2), and on the shipped default `--br-min-samples 4` the first
+      cap that runs is 4. Measured: caps 1, 2 and 3 all die on
+      `preflop solve failed: status=5`, cap 4 is the first that completes.
+
+    Refused up front, because the first measurement is the expensive one and
+    none of the three can be degraded to something runnable -- the main
+    measurements use these caps directly.
+    """
+    if br_max_samples < 1:
+        # A *message* branch, not a refusal branch: the ordering check below
+        # would refuse 0 anyway, because the resolved minimum is never below 2.
+        # What it adds is the reason -- the metrics have no lines to be read from
+        # -- rather than "the smallest cap that runs here is 4", which would send
+        # the reader after the wrong argument.
+        sys.exit("--br-max-samples %d: the benchmark needs the confidence-guided "
+                 "best response on, and 0 turns it off -- the solver then emits "
+                 "no br_sampling/br_decisions line for the metrics to be read "
+                 "from. Use at least 1 (the default is 64)." % br_max_samples)
     if br_max_samples > BR_MAX_SAMPLES_CEILING:
         sys.exit("--br-max-samples %d: the solver refuses a sampling cap above "
                  "%d (`BR_MAX_SAMPLES_CEILING`, src/solver/domain/"
@@ -652,6 +709,13 @@ def require_supported_cap(br_max_samples):
                  "already drops the multipliers that would exceed the ceiling."
                  % (br_max_samples, BR_MAX_SAMPLES_CEILING,
                     BR_MAX_SAMPLES_CEILING))
+    floor = effective_min_samples(br_min_samples)
+    if br_max_samples < floor:
+        sys.exit("--br-max-samples %d: the solver resolves --br-min-samples %d "
+                 "to %d and then requires min_samples <= max_samples, so the "
+                 "smallest cap that runs here is %d. Raise --br-max-samples or "
+                 "lower --br-min-samples."
+                 % (br_max_samples, br_min_samples, floor, floor))
 
 
 def print_row(spot, label, runs, baseline):
@@ -852,9 +916,15 @@ def main():
                          "defaults to 2000, at which most decisions are "
                          "visited once and the revisit curve shows the cost")
     ap.add_argument("--br-min-samples", type=int, default=4,
-                    help="draws per action for a settled decision")
+                    help="draws per action for a settled decision; the solver "
+                         "resolves 0 to 4 and floors anything below 2 before it "
+                         "is compared with --br-max-samples")
     ap.add_argument("--br-max-samples", type=int, default=64,
-                    help="draws per action for a fragile decision")
+                    help="draws per action for a fragile decision; has to be at "
+                         "least the resolved --br-min-samples and at most "
+                         "1048576, since 0 turns the confidence-guided best "
+                         "response off and the benchmark reads its metrics from "
+                         "the lines that then go missing")
     ap.add_argument("--seeds", type=int, default=5,
                     help="paired seeds; two at least, since one cannot estimate "
                          "the spread the interval and the yardstick are built "
@@ -872,8 +942,12 @@ def main():
     args = ap.parse_args()
     require_paired_seeds(args.seeds)
     require_known_spots(args.spot)
-    require_supported_cap(args.br_max_samples)
-    if args.reference_samples > 0:
+    require_supported_caps(args.br_min_samples, args.br_max_samples)
+    # `!= 0`, not `> 0`: the help says 0 skips the comparison, so every other
+    # value has to be validated. Guarding on `> 0` let a negative budget through
+    # both this check and the execution guard below, and the run then skipped
+    # the requested block and exited 0.
+    if args.reference_samples != 0:
         require_higher_reference(args.br_samples, args.reference_samples)
 
     binary = os.path.join(args.build, "tools", "pe-preflop-solve")
@@ -919,6 +993,9 @@ def main():
             # The accuracy comparison, when asked for: each arm scored against a
             # higher-budget run of *both* policies, so the reference's own bias
             # is visible instead of assumed. See print_reference_accuracy.
+            # `> 0` here is the "is a budget running this block" question, not a
+            # validity check: `require_higher_reference` above has already
+            # refused every non-zero value it would not accept.
             if args.reference_samples > 0:
                 labels = ("fifo@%s" % "{:,}".format(args.br_samples),
                           "aware@%s" % "{:,}".format(args.br_samples))

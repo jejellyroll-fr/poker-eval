@@ -548,6 +548,27 @@ class ReferenceBudgetTests(unittest.TestCase):
         bench.require_higher_reference(20000, 200000)
         bench.require_higher_reference(2000, 2001)
 
+    def test_a_negative_reference_is_refused(self) -> None:
+        # Both call sites guarded on `> 0`, so a negative value made the validity
+        # check *and* the execution guard false: the block was skipped in
+        # silence and the run exited 0. Measured with `--reference-samples -1`:
+        # no reference block printed, command reported success.
+        self.assertRefused(20000, -1)
+        self.assertRefused(20000, -100)
+
+    def test_the_refusal_says_zero_skips_and_negatives_do_not(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_higher_reference(20000, -1)
+        message = str(caught.exception)
+        self.assertIn("negative", message)
+        self.assertIn("0 skips", message)
+
+    def test_the_reference_guard_is_called_for_every_non_zero_value(self) -> None:
+        # Pinned on `!= 0`: guarding on `> 0` is what let a negative budget
+        # through both this call and the execution guard below.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("if args.reference_samples != 0:", source)
+
 
 class TrainingGuardTests(unittest.TestCase):
     def assertRefused(self, spot, arm, candidate, baseline, needle) -> None:
@@ -969,14 +990,20 @@ class SpotSelectorTests(unittest.TestCase):
         self.assertIn("require_known_spots(args.spot)", source)
 
 
-class CapCurveTests(unittest.TestCase):
-    """The cap curve must not ask the solver for a cap it refuses.
+class CapGuardTests(unittest.TestCase):
+    """The sampling caps have to be ones the benchmark can actually run with.
 
-    The curve scales `--br-max-samples` by a fixed ladder and the solver caps
-    sampling at `BR_MAX_SAMPLES_CEILING` (`1u << 20`). Measured before the fix:
-    `--br-max-samples 100000` printed the main rows and the revisit curve, then
-    the 16x point asked for 1,600,000 and the run died on
+    Three ways to be unrunnable, all once discovered only when the solver
+    refused mid-sweep. The curve scales `--br-max-samples` by a fixed ladder and
+    the solver caps sampling at `BR_MAX_SAMPLES_CEILING` (`1u << 20`); measured
+    before the fix, `--br-max-samples 100000` printed the main rows and the
+    revisit curve, then the 16x point asked for 1,600,000 and the run died on
     `preflop solve failed: status=5`, losing the cap curve and every later spot.
+    At `0` the solver accepts the cap -- it means "sampling off" -- but the
+    report then carries no `br_sampling`/`br_decisions` line, so the parser
+    rejects results the benchmark cannot exist without. And below the resolved
+    `--br-min-samples` the ordering check fails, which is why the guard takes the
+    pair rather than the maximum alone.
     """
 
     def test_the_ceiling_matches_the_solver(self) -> None:
@@ -1023,22 +1050,110 @@ class CapCurveTests(unittest.TestCase):
         source = Path(bench.__file__).read_text()
         self.assertIn("for multiple in cap_curve_multiples(cap):", source)
 
+    # Measured against the shipped solver with `--spot holdem-hu --iterations
+    # 500 --samples 4 --br-samples 100`: does the run complete, or die on
+    # `preflop solve failed: status=5`? Replayed here so the guard's model of the
+    # solver stays tied to the measurement rather than to a reading of it.
+    MEASURED = [
+        (2, 1, False), (4, 1, False), (1, 1, False),
+        (2, 2, True), (4, 2, False), (1, 2, True), (0, 2, False),
+        (2, 3, True), (4, 3, False), (0, 3, False),
+        (2, 4, True), (4, 4, True), (0, 4, True),
+        (0, 5, True),
+    ]
+
+    def test_the_guard_replays_the_measured_matrix(self) -> None:
+        # Both verdicts have to appear, or the table proves nothing: a list of
+        # only-failing cases is passed by a guard that refuses everything.
+        self.assertTrue(any(runs for _, _, runs in self.MEASURED))
+        self.assertTrue(any(not runs for _, _, runs in self.MEASURED))
+        for br_min, br_max, runs in self.MEASURED:
+            if runs:
+                self.assertIsNone(
+                    bench.require_supported_caps(br_min, br_max),
+                    (br_min, br_max))
+            else:
+                with self.assertRaises(SystemExit, msg=(br_min, br_max)):
+                    bench.require_supported_caps(br_min, br_max)
+
+    def test_the_min_constants_match_the_solver(self) -> None:
+        # Copied from C, so pinned to it: `BR_DEFAULT_MIN` replaces an unset
+        # minimum and the floor lifts anything below it, both before the
+        # ordering check.
+        source = BR_SAMPLING_C.read_text(encoding="utf-8")
+        default = re.search(r"#define\s+BR_DEFAULT_MIN\s+(\d+)u", source)
+        self.assertIsNotNone(default, "BR_DEFAULT_MIN not found")
+        self.assertEqual(bench.BR_MIN_SAMPLES_DEFAULT, int(default.group(1)))
+        floor = re.search(
+            r"if \(r\.min_samples < (\d+)u\)\s*r\.min_samples = (\d+)u;",
+            source)
+        self.assertIsNotNone(floor, "the min_samples floor was not found")
+        self.assertEqual(floor.group(1), floor.group(2))
+        self.assertEqual(bench.BR_MIN_SAMPLES_FLOOR, int(floor.group(1)))
+
+    def test_the_effective_minimum_resolves_zero_to_the_solver_default(self) -> None:
+        self.assertEqual(bench.effective_min_samples(0),
+                         bench.BR_MIN_SAMPLES_DEFAULT)
+        self.assertEqual(bench.effective_min_samples(1),
+                         bench.BR_MIN_SAMPLES_FLOOR)
+        self.assertEqual(bench.effective_min_samples(4), 4)
+        self.assertEqual(bench.effective_min_samples(64), 64)
+
+    def test_one_is_never_usable_because_the_floor_lifts_min_to_two(self) -> None:
+        # "Require the cap to be at least 1" is not enough: the solver lifts a
+        # minimum of 1 up to 2 and then requires min <= max, so cap 1 fails even
+        # with `--br-min-samples 1`. Measured: exit 1 for (1, 1) and (2, 1).
+        self.assertEqual(bench.effective_min_samples(1), 2)
+        with self.assertRaises(SystemExit):
+            bench.require_supported_caps(1, 1)
+
+    def test_a_cap_below_the_resolved_minimum_is_refused(self) -> None:
+        # The shipped default is --br-min-samples 4, so cap 3 cannot run.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_supported_caps(4, 3)
+        message = str(caught.exception)
+        self.assertIn("--br-max-samples 3", message)
+        self.assertIn("min_samples <= max_samples", message)
+
+    def test_the_resolved_minimum_itself_is_accepted(self) -> None:
+        self.assertIsNone(bench.require_supported_caps(4, 4))
+        self.assertIsNone(bench.require_supported_caps(2, 2))
+        self.assertIsNone(bench.require_supported_caps(0, 4))
+
     def test_a_cap_above_the_ceiling_is_refused(self) -> None:
         # This one cannot be degraded to something runnable: the main
         # measurements use it directly.
         with self.assertRaises(SystemExit) as caught:
-            bench.require_supported_cap(bench.BR_MAX_SAMPLES_CEILING + 1)
+            bench.require_supported_caps(4, bench.BR_MAX_SAMPLES_CEILING + 1)
         self.assertIn("--br-max-samples", str(caught.exception))
         self.assertIn(str(bench.BR_MAX_SAMPLES_CEILING), str(caught.exception))
 
     def test_the_ceiling_itself_is_accepted(self) -> None:
         self.assertIsNone(
-            bench.require_supported_cap(bench.BR_MAX_SAMPLES_CEILING))
-        self.assertIsNone(bench.require_supported_cap(64))
+            bench.require_supported_caps(4, bench.BR_MAX_SAMPLES_CEILING))
+        self.assertIsNone(bench.require_supported_caps(4, 64))
+
+    def test_a_zero_cap_is_refused(self) -> None:
+        # The solver *accepts* 0 -- it means "sampling off" -- but then emits no
+        # br_sampling/br_decisions line, so the benchmark cannot read its
+        # metrics. Measured: one solve ran, then `no br_sampling/br_decisions
+        # line in: ...`, exit 1.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_supported_caps(4, 0)
+        message = str(caught.exception)
+        self.assertIn("--br-max-samples 0", message)
+        self.assertIn("at least 1", message)
+
+    def test_a_negative_cap_is_refused(self) -> None:
+        with self.assertRaises(SystemExit):
+            bench.require_supported_caps(4, -1)
 
     def test_the_cap_guard_is_called_from_main(self) -> None:
+        # Both caps, not just the maximum: the solver validates the pair.
         source = Path(bench.__file__).read_text()
-        self.assertIn("require_supported_cap(args.br_max_samples)", source)
+        self.assertIn(
+            "require_supported_caps(args.br_min_samples, args.br_max_samples)",
+            source)
 
 
 if __name__ == "__main__":
