@@ -144,6 +144,15 @@ BR_MAX_SAMPLES_CEILING = 1 << 20
 BR_MIN_SAMPLES_DEFAULT = 4
 BR_MIN_SAMPLES_FLOOR = 2
 
+# The solver reads `--br-samples` as a uint32: `pe_preflop_solve.c` rejects 0
+# and anything above `UINT32_MAX` before the solve starts (the
+# `options->br_samples > UINT32_MAX` clause). `--reference-samples` reaches the
+# solver through that same flag, so it shares the bound -- and because the
+# reference runs come *after* every main FIFO and aware run, an out-of-range
+# reference pays for the whole spot and then aborts. A test pins the number
+# against the C source rather than trusting the copy.
+BR_SAMPLES_MAX = (1 << 32) - 1
+
 # The cap curve is the aware arm's cost as the cap is raised by these factors.
 # A point whose product exceeds the ceiling cannot be run, so it is dropped --
 # see `cap_curve_multiples`.
@@ -608,6 +617,17 @@ def require_higher_reference(br_samples, reference_samples):
     estimate no more precise than itself, and the numbers cannot carry the
     accuracy reading the flag promises. Refused before any solve starts, rather
     than tabulated.
+
+    The budget also has to be one the *solver* will accept. `--reference-samples`
+    reaches the solver as `--br-samples`, which is a uint32 there
+    (`tools/pe_preflop_solve.c:1252`), so anything above `UINT32_MAX` is refused
+    -- and the ordering check above cannot see it, because an oversized value
+    trivially exceeds `--br-samples`. The cost of missing this is not symmetric
+    with the ordering defect: the reference runs come *after* every main FIFO and
+    aware run, so the typo would pay for the whole spot and then abort on the
+    first reference invocation without a block. Measured with
+    `--reference-samples 4294967296` before the fix: the four main rows printed,
+    then `solve failed: ... --br-samples 4294967296 ...`, exit 1.
     """
     if reference_samples < 0:
         # A *message* branch, not a refusal branch: `reference_samples <=
@@ -621,6 +641,17 @@ def require_higher_reference(br_samples, reference_samples):
                  "0 skips the comparison; any other value has to be a *higher* "
                  "budget than --br-samples %d."
                  % (reference_samples, br_samples))
+    if reference_samples > BR_SAMPLES_MAX:
+        # Placed before the ordering check, which an oversized value passes
+        # trivially -- so this is the only branch that can explain it. It also
+        # catches an oversized `--br-samples` when a reference is asked for, since
+        # the reference would then have to exceed the ceiling as well.
+        sys.exit("--reference-samples %d: the solver takes --br-samples up to "
+                 "%d and rejects anything above it, so the reference run cannot "
+                 "start. The reference runs come after every main FIFO and aware "
+                 "run, so this would pay for the whole spot and then abort "
+                 "without a reference block."
+                 % (reference_samples, BR_SAMPLES_MAX))
     if reference_samples <= br_samples:
         sys.exit("--reference-samples %d: the accuracy reference has to be a "
                  "*higher* budget than --br-samples %d, otherwise the arm is "
@@ -933,8 +964,12 @@ def main():
                     help="BR trajectories for the higher-budget reference the "
                          "accuracy comparison scores each arm against; 0 skips "
                          "the comparison, and any value at or below --br-samples "
-                         "is refused. The published table uses 200000, ten "
-                         "times --br-samples, and takes about ten times as long")
+                         "is refused. The solver takes --br-samples as a uint32, "
+                         "so a value above 4294967295 is refused too -- the "
+                         "reference runs come after the main ones, so a typo "
+                         "there would pay for the spot and then abort. The "
+                         "published table uses 200000, ten times --br-samples, "
+                         "and takes about ten times as long")
     ap.add_argument("--spot", action="append",
                     help="only these spots, by exact name; a name that is not "
                          "a spot is refused rather than dropped, so a typo "

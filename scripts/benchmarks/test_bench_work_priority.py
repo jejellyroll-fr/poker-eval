@@ -31,6 +31,12 @@ GUIDE = ROOT / "docs" / "cfr" / "guides" / "work_priority_scheduling.md"
 # CapCurveTests, which pins the copy against this file.
 BR_SAMPLING_C = ROOT / "src" / "solver" / "domain" / "br_sampling.c"
 
+# The solver's `--br-samples` bound lives here too -- it rejects 0 and anything
+# above `UINT32_MAX`. The reference budget is spent through that flag, so the
+# runner copies the bound; see ReferenceBudgetTests, which pins it against this
+# file.
+PREFLOP_SOLVE_C = ROOT / "tools" / "pe_preflop_solve.c"
+
 
 BR_SAMPLING = "br_sampling estimator=confidence-guided terminal_evaluations=44743"
 BR_SAMPLING_LEGACY = "br_sampling terminal_evaluations=65122"
@@ -529,6 +535,11 @@ class ReferenceBudgetTests(unittest.TestCase):
     `--br-samples 20000` was accepted and printed in exactly the format a real
     reference uses -- measured on `holdem-hu`, errors of 871.6 and 732.3 against
     a 1,000-trajectory "reference" whose own two policies disagree by 417.4.
+
+    It also has to be one the *solver* will accept: the budget is spent through
+    `--br-samples`, a uint32 there, so a value above `UINT32_MAX` passes the
+    ordering check and then dies on the first reference invocation -- after the
+    main runs have already been paid for.
     """
 
     def assertRefused(self, br_samples, reference_samples) -> None:
@@ -547,6 +558,41 @@ class ReferenceBudgetTests(unittest.TestCase):
     def test_a_reference_above_the_arm_budget_is_accepted(self) -> None:
         bench.require_higher_reference(20000, 200000)
         bench.require_higher_reference(2000, 2001)
+
+    def test_a_reference_above_the_solver_limit_is_refused(self) -> None:
+        # The ordering check cannot see it: an oversized value trivially exceeds
+        # --br-samples, so it passed every guard and died on the *first*
+        # reference invocation -- after the main FIFO and aware runs had been
+        # paid for, and without a reference block.
+        self.assertRefused(100, bench.BR_SAMPLES_MAX + 1)
+        self.assertRefused(20000, 4294967296)
+
+    def test_the_solver_limit_itself_is_accepted(self) -> None:
+        # The boundary, so the guard cannot pass by refusing everything. Nothing
+        # here runs a solve; the guard is what is under test.
+        bench.require_higher_reference(20000, bench.BR_SAMPLES_MAX)
+        bench.require_higher_reference(bench.BR_SAMPLES_MAX - 1,
+                                       bench.BR_SAMPLES_MAX)
+
+    def test_the_solver_limit_refusal_wins_over_the_ordering_message(self) -> None:
+        # Both branches apply only when the reference *and* the arm budget are
+        # above the limit: then the ordering check would read "higher" and hide
+        # the real reason. The solver-limit branch has to come first.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_higher_reference(bench.BR_SAMPLES_MAX + 1,
+                                           bench.BR_SAMPLES_MAX + 1)
+        message = str(caught.exception)
+        self.assertIn(str(bench.BR_SAMPLES_MAX), message)
+        self.assertIn("cannot start", message)
+        self.assertNotIn("higher", message)
+
+    def test_the_solver_limit_matches_the_solver(self) -> None:
+        # A uint32 ceiling enforced in C, so the copy is pinned to its source: if
+        # the solver ever widened it, the runner would start refusing budgets the
+        # solver would take.
+        source = PREFLOP_SOLVE_C.read_text(encoding="utf-8")
+        self.assertIn("options->br_samples > UINT32_MAX", source)
+        self.assertEqual(bench.BR_SAMPLES_MAX, (1 << 32) - 1)
 
     def test_a_negative_reference_is_refused(self) -> None:
         # Both call sites guarded on `> 0`, so a negative value made the validity
