@@ -273,6 +273,84 @@ class StrategyFingerprintTests(unittest.TestCase):
         self.assertEqual(bench.strategy_fingerprint("no table here"), [])
 
 
+class FingerprintBindingTests(unittest.TestCase):
+    """The fingerprint has to bind a frequency vector to a decision.
+
+    `(hand, node, actor)` does not do it: these runs pass no `--tree`, so `node`
+    is the field's zero-initialised value for every state but the root, and
+    measured on `plo4-3way` `distinct(hand, node, actor)` equals
+    `distinct(hand, actor)` on all 17,424 rows of a 5,000-iteration report --
+    the node never separates two rows the hand and actor do not already
+    separate. Two *distinct* decisions sharing a hand and an actor therefore
+    collapse onto one key, and exchanging their frequency vectors leaves the
+    multiset unchanged.
+    """
+
+    SPOT = ("plo4-3way", "plo4", 3)
+    COLLIDING = (
+        "7cTc7d8h\t0\tP1\tfold=75.0%,all-in=25.0%\tfold=pending,all-in=pending\t-",
+        "7cTc7d8h\t0\tP1\tfold=25.0%,call=75.0%\tfold=pending,call=pending\t-",
+    )
+
+    def assertRefused(self, rows) -> str:
+        with self.assertRaises(SystemExit) as caught:
+            bench.assert_fingerprint_binds(self.SPOT, "fifo", rows)
+        return str(caught.exception)
+
+    def test_two_trained_rows_sharing_a_key_with_different_vectors_are_refused(self) -> None:
+        rows = bench.strategy_fingerprint(hand_table(*self.COLLIDING))
+        self.assertEqual(len(rows), 2)
+        message = self.assertRefused(rows)
+        self.assertIn("7cTc7d8h", message)
+        self.assertIn("fold=75.0%,all-in=25.0%", message)
+        self.assertIn("fold=25.0%,call=75.0%", message)
+
+    def test_the_swap_is_invisible_without_the_guard(self) -> None:
+        # Why the guard exists rather than a stronger fingerprint: the two
+        # colliding rows are interchangeable in the multiset, so a report whose
+        # vectors were exchanged fingerprints identically. Measured on the real
+        # 20,000-iteration `plo4-3way` report, swapping the two vectors of
+        # `5c2hQhAs`/`P1` leaves `strategy_fingerprint` unchanged.
+        rows = bench.strategy_fingerprint(hand_table(*self.COLLIDING))
+        self.assertEqual(sorted(rows), sorted(reversed(rows)))
+
+    def test_two_rows_sharing_a_key_with_the_same_vector_are_accepted(self) -> None:
+        # Two copies of one tuple are unambiguous: changing either row moves the
+        # multiset, since it then holds two different tuples. Refusing this
+        # would be a guard that fires on a comparison it should accept.
+        rows = bench.strategy_fingerprint(
+            hand_table(self.COLLIDING[0], self.COLLIDING[0]))
+        self.assertEqual(len(rows), 2)
+        self.assertIsNone(
+            bench.assert_fingerprint_binds(self.SPOT, "fifo", rows))
+
+    def test_a_report_with_distinct_keys_is_accepted(self) -> None:
+        rows = bench.strategy_fingerprint(HAND_TABLE)
+        self.assertTrue(rows)
+        self.assertIsNone(
+            bench.assert_fingerprint_binds(("holdem-hu", "holdem", 2), "fifo",
+                                           rows))
+
+    def test_an_uniform_row_does_not_make_the_fingerprint_ambiguous(self) -> None:
+        # Uniform rows never reach the fingerprint, so a uniform row sharing a
+        # key with a trained one cannot make the comparison ambiguous.
+        table = hand_table(
+            self.COLLIDING[0],
+            self.COLLIDING[1].replace("fold=25.0%,call=75.0%",
+                                      "fold=50.0%,call=50.0%"))
+        rows = bench.strategy_fingerprint(table)
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(
+            bench.assert_fingerprint_binds(self.SPOT, "fifo", rows))
+
+    def test_the_guard_is_called_from_measure(self) -> None:
+        # Pinned on the call: the check is only load-bearing if a run whose
+        # report cannot bind its vectors is refused before it is tabulated.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("assert_fingerprint_binds(spot, policy, strategy)",
+                      source)
+
+
 class StatisticsTests(unittest.TestCase):
     """The published claim is now an interval rather than a verdict, so the
     interval is load-bearing and gets its own tests."""

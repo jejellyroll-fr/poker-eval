@@ -307,16 +307,36 @@ trained — the guard would have been vacuous exactly where the workloads are
 hardest. The fingerprint is the multiset of `hand`, `node`, `actor` and
 `frequencies`.
 
-The hand is what binds a frequency vector to a decision: without it the
-projection is a multiset of `(node, actor, frequencies)`, and two hands at the
-same node and actor that exchange their vectors leave it unchanged — a
-per-decision change the guard would wave through. The hand string is a canonical
-representative over the 24 loose suit permutations of hole and board
-(`preflop_op_infoset_key`), so it names a class of decisions rather than one, but
-it is a deterministic function of the infoset: measured stable for the same
-decision across the two policies and across two BR budgets, on 24 spot/seed pairs
-including `plo4-3way`, where only 1,867-1,881 of 1,997 rows are shared between
-two runs that solved the same strategy.
+The hand narrows the collision; it does not close it. Without it the projection
+is a multiset of `(node, actor, frequencies)`, and two hands at the same node and
+actor that exchange their vectors leave it unchanged — a per-decision change the
+guard would wave through. The hand string is a canonical representative over the
+24 loose suit permutations of hole and board (`preflop_op_infoset_key`), so it
+names a class of decisions rather than one, but it is a deterministic function of
+the infoset: measured stable for the same decision across the two policies and
+across two BR budgets, on 24 spot/seed pairs including `plo4-3way`, where only
+1,867-1,881 of 1,997 rows are shared between two runs that solved the same
+strategy.
+
+It is not sufficient on its own, and `node` does not make up the difference.
+These runs pass no `--tree`, so `tree_node_index` is `-1` at the root and the
+field's zero-initialised `0` for every other state; measured on `plo4-3way`,
+`distinct(hand, node, actor)` equals `distinct(hand, actor)` on all 17,424 rows
+of a 5,000-iteration report, so the node never separates two rows the hand and
+actor do not already separate. Two *distinct* decisions sharing a hand and an
+actor therefore collapse onto one key — 3,159 keys carry more than one row and
+1,514 of them carry different frequency vectors — and exchanging such a pair
+leaves the multiset unchanged. Verified directly rather than argued: swapping the
+two vectors of `5c2hQhAs`/`P1` in a 20,000-iteration `plo4-3way` report leaves
+the fingerprint identical. So `assert_fingerprint_binds` refuses a run whose
+trained rows hold such a key, rather than compare a fingerprint that cannot tell
+two decisions apart. The published regime has none on any of the four spots —
+checked at 5,000 iterations with `--br-samples 20000`, and again at the revisit
+curve's 2,000 and 5,000 — but at 20,000 iterations `plo4-3way` has two, so the
+guard is not hypothetical. Nothing in the report closes the hole: the tool
+computes the infoset key and a betting context (pot, to-call, current bet,
+raises) for every row but prints neither in the hand table, and emitting one
+would change the format `poker_eval_studio.c` parses.
 
 Keeping the hand costs a second restriction, and finding it was the point of
 this paragraph. The report is emitted in two sweeps — rows that carry a strategy

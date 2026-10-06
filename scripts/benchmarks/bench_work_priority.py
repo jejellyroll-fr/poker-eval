@@ -309,6 +309,12 @@ def strategy_fingerprint(text):
     28,496 at 200,000. An earlier version of this docstring asserted that the
     trained rows were never truncated; that was true only of the published
     regime, and it had not been measured.
+
+    The projection is injective only while no two trained rows share a
+    `(hand, node, actor)` key, and nothing in the report guarantees that: `node`
+    carries no decision identity on these runs. `assert_fingerprint_binds`
+    checks the condition and refuses rather than let a swap through -- read the
+    two together.
     """
     rows, inside = [], False
     for line in text.splitlines():
@@ -325,6 +331,61 @@ def strategy_fingerprint(text):
         if len(cells) >= 4 and cells[0] != "ev_update" and trained(cells):
             rows.append((cells[0], cells[1], cells[2], cells[3]))
     return sorted(rows)
+
+
+def assert_fingerprint_binds(spot, arm, rows):
+    """Refuse a fingerprint that cannot bind a frequency vector to a decision.
+
+    The projection is `(hand, node, actor, frequencies)` and `node` is the
+    solver's `tree_node_index`. These runs pass no `--tree`, so the column
+    carries no decision identity: measured on `plo4-3way` at 5,000 iterations it
+    takes only two values -- `-1` (the root, set explicitly in
+    `preflop_allin_game.c`) and `0` (every other state, the field's
+    zero-initialised value, which the no-tree path never writes) -- and
+    `distinct(hand, node, actor)` equals `distinct(hand, actor)` on all 17,424
+    rows of the report. The node never separates two rows the hand and actor do
+    not already separate, so it is not doing the work it was assumed to do.
+
+    Two *distinct* decisions that share a hand and an actor therefore collapse
+    onto one key. Measured on the same report: 3,159 keys carry more than one
+    row and 1,514 of those carry *different* frequency vectors -- e.g.
+    `TcQc8h3s`/`P1` holds both `fold=25.0%,call=75.0%` and
+    `fold=50.0%,all-in=50.0%`. Exchanging two such vectors leaves the multiset
+    unchanged, so `assert_same_training` accepts a per-decision change it exists
+    to catch; measured directly by swapping the two vectors of
+    `5c2hQhAs`/`P1` in a 20,000-iteration report, which leaves the fingerprint
+    identical. The published regime happens to have no such key among the
+    trained rows of any of the four spots -- checked at 5,000 iterations with
+    `--br-samples 20000`, and again at the revisit curve's 2,000 and 5,000 --
+    but a guard must not depend on that luck: at 20,000 iterations `plo4-3way`
+    has two.
+
+    Nothing in the report closes this. The tool computes the infoset key and a
+    betting context (pot, to-call, current bet, raises) for every row
+    (`preflop_desc_format`), but prints neither in the hand table, and every
+    column it does print is already in the projection. Emitting one of them
+    would change the format `poker_eval_studio.c` parses, so it is not this
+    script's change to make. Refuse rather than compare a fingerprint that
+    cannot tell two decisions apart: accepting one is exactly the silent pass
+    this guard exists to prevent.
+
+    A key whose rows all carry the *same* vector is fine and is accepted -- a
+    change to either row then moves the multiset, since it holds two copies of
+    one tuple and would hold two different ones.
+    """
+    by_key = {}
+    for hand, node, actor, frequencies in rows:
+        key = (hand, node, actor)
+        first = by_key.setdefault(key, frequencies)
+        if first != frequencies:
+            sys.exit("%s %s: two trained decisions share (hand=%s node=%s "
+                     "actor=%s) with different frequency vectors (%s against "
+                     "%s), so the strategy fingerprint cannot tell them apart "
+                     "and a swap between them would pass unnoticed. The report "
+                     "prints no infoset identity that would separate them; the "
+                     "trained rows have to be unambiguous for the comparison "
+                     "to mean what it says."
+                     % (spot[0], arm, hand, node, actor, first, frequencies))
 
 
 def assert_report_uncapped(spot, arm, text):
@@ -443,6 +504,11 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
     if not evals or not decisions:
         sys.exit("no br_sampling/br_decisions line in: %s\n%s"
                  % (" ".join(cmd), out[-2000:]))
+    # The comparison is only as strong as the fingerprint's ability to tell two
+    # decisions apart, and the report does not guarantee that -- see
+    # assert_fingerprint_binds.
+    strategy = strategy_fingerprint(out)
+    assert_fingerprint_binds(spot, policy, strategy)
     return {
         "solve": solve,
         "report": report,
@@ -458,7 +524,7 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
         "nash_conv": float(report["metrics"]["nash_conv_mbb_per_game"]),
         "priority": parse_priority(out),
         "effort": training_effort(out),
-        "strategy": strategy_fingerprint(out),
+        "strategy": strategy,
     }
 
 
