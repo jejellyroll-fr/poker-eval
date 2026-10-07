@@ -531,18 +531,22 @@ paired interval bounds how far the *reported* value moves — a different questi
 and one it answers only partly, since on three spots it reaches past the
 baseline's own spread. So the benchmark shows neither policy reaching a quality
 target, and it shows no solver converging faster. What it does establish is the
-cost half of the issue and nothing more. The policy shifts the reported
-exploitability by at most 2.3% of the reported value, while costing 2.7-20.9%
-fewer terminal evaluations against a baseline yardstick of 0.8-5.3%. The low end
-is `plo5-hu`, and it belongs in the range: the four workloads save 14.4%, 14.6%,
-2.7% and 20.9%, and quoting only the three large ones would overstate the
-cheapest case by a factor of five. The bound is the **farthest interval
+cost half of the issue and nothing more. The farthest of the four individual
+95% interval endpoints is 2.3% of that spot's reported value, while the policy
+costs 2.7-20.9% fewer terminal evaluations against a baseline yardstick of
+0.8-5.3%. The low end is `plo5-hu`, and it belongs in the range: the four
+workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only the three large
+ones would overstate the cheapest case by a factor of five. The figure is the **farthest interval
 endpoint**, not the half-width, and that is the same distinction the verdict
 above turns on: the
 half-widths are 1.2-1.7%, but the intervals are not centred on zero, so the
 largest shift the data admits is 2.26% on `holdem-hu` (its interval reaching
 −281.5 against a reference of 12,459.8), 1.80% on `plo4-hu`, 1.68% on `plo5-hu`
-and 1.61% on `plo4-3way`. Two readings have to be kept apart, and the table gives
+and 1.61% on `plo4-3way`. It is a **descriptive maximum over four separate
+intervals, not a simultaneous 95% bound**: each interval can miss its own
+parameter, so four of them do not carry 95% joint coverage and 2.3% is not a
+guaranteed accuracy limit on the effect — a simultaneous bound would be wider.
+Two readings have to be kept apart, and the table gives
 both. No spot detects an effect: all four intervals contain zero, so none of
 them licenses "the policy moved the answer". Only `holdem-hu` has its whole
 interval inside the baseline's own spread. On the other three the
@@ -565,15 +569,18 @@ plo4-3way   cap curve  1x 1,242,466  2x 1,466,196  4x 1,774,180  8x 2,197,318  1
 ```
 
 Raising the cap sixteen-fold buys 2.6% more work on `holdem-hu`: the confidence
-rule, not the cap, is what stops most decisions, so the saving has nowhere to go
-back to. On `plo4-3way` the cap does bind — the curve crosses the baseline at 4x,
-so the aware arm can spend more terminal evaluations than FIFO once the cap is
-lifted — and that is the whole of what the curve shows. It is a fact about cost:
-the saved evaluations are reallocatable there. It is not a fact about quality,
-because the curve reports no NashConv at a cap tuned to the same budget, and the
-interval table above already bounds this spot's reported movement at 1.61% with
-no effect detected. Criterion (2) needs a quality comparison at a matched budget
-— spend FIFO's evaluations, then compare the answer — and this benchmark does not
+rule, not the cap, is what stops most decisions there, so the saving has nowhere
+to go back to. Only that spot saturates. The other three keep climbing, and two
+cross the baseline — `plo5-hu` at 2x (655,613 against 643,357) and `plo4-3way`
+at 4x (1,774,180 against 1,573,060) — so there the cap does bind and the aware
+arm can spend more terminal evaluations than FIFO once the cap is lifted. That
+is the whole of what the curve shows. It is a fact about cost: the saved
+evaluations are reallocatable there. It is not a fact about quality, because the
+curve reports no NashConv at a cap tuned to the same budget, and the interval
+table above already bounds `plo4-3way`'s reported movement at 1.61% (and
+`plo5-hu`'s at 1.68%) with no effect detected. Criterion (2) needs
+a quality comparison at a matched budget — spend FIFO's evaluations, then
+compare the answer — and this benchmark does not
 run one, on this spot or on any other. The three-way spot is also the one where the
 priority telemetry fills the ladder instead of the bottom two buckets
 (`35008,2684,468,78,17,44,29,25` against `holdem-hu`'s `272,52,13,0,0,0,0,0`),

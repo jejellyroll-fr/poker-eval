@@ -61,9 +61,13 @@ not a constant:
                  so a budget that visits most decisions once has almost nothing
                  to reallocate. This is why `--br-samples` defaults here to
                  20000 rather than the CLI's 2000, and the curve shows both.
-  cap curve      the uncertainty-aware cost as the cap is raised. It saturates:
-                 the confidence rule, not the cap, is what stops most
-                 decisions, so the saving cannot be spent back on a larger cap.
+  cap curve      the uncertainty-aware cost as the cap is raised. How far it
+                 climbs is per workload, and only `holdem-hu` saturates: the
+                 confidence rule, not the cap, is what stops most decisions
+                 there, so the saving has nowhere to go back to. The other
+                 three keep climbing -- `plo5-hu` crosses the FIFO baseline at
+                 2x and `plo4-3way` at 4x, where the cap does bind and the saved
+                 evaluations are reallocatable.
 
 `--reference-samples` adds a third block: each arm scored against a run at ten
 times the budget, which is what says how far an arm's *estimate* moves when the
@@ -968,9 +972,11 @@ def cap_curve_multiples(cap):
     for 1,600,000 and the run died on `preflop solve failed: status=5`, losing
     the cap curve and every later spot after the expensive work had been paid
     for. Multipliers that would exceed the ceiling are dropped rather than the
-    run refused, because the curve is a diagnostic whose reading is that it
-    *saturates* -- a shorter curve still shows that, and each point keeps its
-    multiplier label, so a curve ending at 8x says which point it dropped. The
+    run refused, because the curve is a diagnostic whose reading is its *shape*
+    per workload -- saturating on `holdem-hu`, crossing the baseline on
+    `plo5-hu` and `plo4-3way`. A shorter curve still shows the shape, and each
+    point keeps its multiplier label, so a curve ending at 8x says which point
+    it dropped. The
     1x point is never dropped, so the curve always reports something.
     """
     return tuple(m for m in CAP_CURVE_MULTIPLES
@@ -1168,10 +1174,10 @@ def main():
             print("%-11s %-17s %s" % (spot[0], "revisit curve",
                                       "  ".join(revisit)))
 
-            # The saving is not spendable back through the cap: the confidence
-            # rule stops most decisions long before it. Multipliers the solver
-            # would refuse are dropped rather than asked for -- see
-            # cap_curve_multiples.
+            # How far the curve climbs is per workload: only `holdem-hu`
+            # saturates, while `plo5-hu` and `plo4-3way` cross the FIFO baseline
+            # and spend the saving back. Multipliers the solver would refuse are
+            # dropped rather than asked for -- see cap_curve_multiples.
             caps = []
             for multiple in cap_curve_multiples(cap):
                 run = measure(binary, spot, args, seeds[0],

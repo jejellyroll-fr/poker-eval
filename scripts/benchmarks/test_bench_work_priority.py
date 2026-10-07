@@ -806,9 +806,10 @@ class TrainingGuardTests(unittest.TestCase):
 
 
 class PublishedBoundTests(unittest.TestCase):
-    """The bound the guide states on the reported number, and where it comes
+    """The figure the guide states on the reported number, and where it comes
     from. Quoting the interval's half-width understates it, because the paired
-    mean is nonzero and the interval is off-centre."""
+    mean is nonzero and the interval is off-centre -- and the largest of four
+    individual endpoints is a descriptive maximum, not a simultaneous bound."""
 
     # The four published rows: spot, paired mean, half-width, reference.
     PUBLISHED = (("holdem-hu", -92.2, 189.3, 12459.8),
@@ -824,7 +825,8 @@ class PublishedBoundTests(unittest.TestCase):
         self.assertAlmostEqual(bounds[2], 1.68, places=2)
         self.assertAlmostEqual(bounds[3], 1.61, places=2)
         # The half-widths would have said 1.2-1.7%, understating the first by a
-        # third; the maximum over the four is what the guide may state.
+        # third; the maximum over the four is what the guide states -- as a
+        # descriptive maximum, not as a simultaneous bound over the four spots.
         half_widths = [100.0 * half / reference
                        for _, _, half, reference in self.PUBLISHED]
         self.assertAlmostEqual(half_widths[0], 1.52, places=2)
@@ -833,10 +835,15 @@ class PublishedBoundTests(unittest.TestCase):
     def test_the_guide_states_the_corrected_bound(self) -> None:
         # Pinned on the bound as stated, not on the bare figures: the guide
         # still quotes the half-widths, correctly, as the thing the bound is
-        # *not* taken from.
+        # *not* taken from. The old wording -- "at most 2.3% of the reported
+        # value" -- read as a bound on the true effect; the largest of four
+        # individual 95% endpoints is a descriptive maximum with no joint
+        # coverage, so the guide says which of the two it states.
         text = GUIDE.read_text(encoding="utf-8")
-        self.assertIn("at most 2.3% of the", text)
+        self.assertNotIn("at most 2.3% of the", text)
         self.assertNotIn("at most 1.2-1.7%", text)
+        self.assertIn("farthest of the four individual", text)
+        self.assertIn("not a simultaneous 95% bound", text)
 
     def test_the_guide_states_the_yardstick_is_the_baseline_alone(self) -> None:
         # The regression: the bound was max(sd_fifo, sd_aware), so a policy that
@@ -952,11 +959,11 @@ class CriterionConclusionTests(unittest.TestCase):
     quality target *or* better quality for the same compute budget. The cost
     half is measured; the quality half is not, on any spot. The guide used to
     imply the opposite for `plo4-3way`, where the cap curve crosses the baseline
-    at 4x: that crossing is a statement about terminal evaluations, and the
-    curve carries no NashConv at a cap tuned to the same budget, so it cannot
-    show that spending the saved work improves the answer -- and the interval
-    table already bounds this spot's reported movement at 1.61% with no effect
-    detected.
+    at 4x (and `plo5-hu` at 2x): that crossing is a statement about terminal
+    evaluations, and the curve carries no NashConv at a cap tuned to the same
+    budget, so it cannot show that spending the saved work improves the answer
+    -- and the interval table already bounds these spots' reported movement at
+    1.61% and 1.68% with no effect detected.
     """
 
     def test_the_guide_does_not_rank_quality_on_plo4_3way(self) -> None:
@@ -997,6 +1004,52 @@ class CriterionConclusionTests(unittest.TestCase):
         source = Path(bench.__file__).read_text()
         self.assertIn("Neither of the issue's\ntwo demonstrations follows "
                       "from it", source)
+
+
+class CapCurveSaturationTests(unittest.TestCase):
+    """How far the cap curve climbs is per workload, and the docs must say so.
+
+    The runner's docstring claimed the curve saturates and that the saving
+    "cannot be spent back on a larger cap". The published curve contradicts
+    that: only `holdem-hu` saturates (+2.6% over 16x), while `plo5-hu` crosses
+    the FIFO baseline at 2x and `plo4-3way` at 4x, so on those two the cap does
+    bind and the saved evaluations are reallocatable. Both curves were
+    reproduced byte-identically against the shipped binary.
+    """
+
+    # The published cap curve: 1x..16x terminal evaluations, and FIFO at 1x.
+    PUBLISHED = (("holdem-hu", (383006, 385646, 386910, 389690, 392856),
+                  452678),
+                 ("plo4-hu", (541937, 560369, 584595, 599083, 619203), 633843),
+                 ("plo5-hu", (626925, 655613, 698269, 727981, 754677), 643357),
+                 ("plo4-3way", (1242466, 1466196, 1774180, 2197318, 2647162),
+                  1573060))
+
+    def test_only_holdem_hu_saturates(self) -> None:
+        growth = {spot: 100.0 * (vals[-1] - vals[0]) / vals[0]
+                  for spot, vals, _ in self.PUBLISHED}
+        self.assertAlmostEqual(growth["holdem-hu"], 2.57, places=1)
+        self.assertGreater(growth["plo4-hu"], 14.0)
+        self.assertGreater(growth["plo5-hu"], 20.0)
+        self.assertGreater(growth["plo4-3way"], 100.0)
+
+    def test_two_spots_cross_the_baseline(self) -> None:
+        multiples = (1, 2, 4, 8, 16)
+        crosses = {spot: next((multiples[i] for i, value in enumerate(vals)
+                               if value > fifo), None)
+                   for spot, vals, fifo in self.PUBLISHED}
+        self.assertEqual(crosses["plo5-hu"], 2)
+        self.assertEqual(crosses["plo4-3way"], 4)
+        self.assertIsNone(crosses["holdem-hu"])
+        self.assertIsNone(crosses["plo4-hu"])
+
+    def test_the_docs_no_longer_claim_universal_saturation(self) -> None:
+        source = Path(bench.__file__).read_text()
+        self.assertNotIn("It saturates:", source)
+        self.assertNotIn("the saving cannot be spent back", source)
+        text = GUIDE.read_text(encoding="utf-8")
+        self.assertIn("Only that spot saturates", text)
+        self.assertIn("`plo5-hu` at 2x", text)
 
 
 class RevisitBudgetTests(unittest.TestCase):
