@@ -14,6 +14,7 @@ import io
 import re
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1182,6 +1183,9 @@ class CapGuardTests(unittest.TestCase):
         (2, 1, False), (4, 1, False), (1, 1, False),
         (2, 2, True), (4, 2, False), (1, 2, True), (0, 2, False),
         (2, 3, True), (4, 3, False), (0, 3, False),
+        # min 3 is the one the resolution model was documented wrong about: it
+        # is *not* floored to 2, so cap 3 runs and cap 2 does not.
+        (3, 3, True), (3, 2, False),
         (2, 4, True), (4, 4, True), (0, 4, True),
         (0, 5, True),
     ]
@@ -1220,6 +1224,10 @@ class CapGuardTests(unittest.TestCase):
                          bench.BR_MIN_SAMPLES_DEFAULT)
         self.assertEqual(bench.effective_min_samples(1),
                          bench.BR_MIN_SAMPLES_FLOOR)
+        # 3 is above the floor and is *not* lifted: measured, cap 3 completes
+        # and cap 2 dies, so the resolved minimum is 3. The docstring used to
+        # say 2 for 3 as well, and nothing measured it.
+        self.assertEqual(bench.effective_min_samples(3), 3)
         self.assertEqual(bench.effective_min_samples(4), 4)
         self.assertEqual(bench.effective_min_samples(64), 64)
 
@@ -1272,12 +1280,79 @@ class CapGuardTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             bench.require_supported_caps(4, -1)
 
+    def test_a_negative_minimum_is_refused(self) -> None:
+        # A negative minimum is not a small minimum: the solver's option parser
+        # refuses the token before `pe_br_sampling_resolve` ever floors it, so
+        # no cap makes the pair runnable. Measured with
+        # `--br-min-samples -1 --br-max-samples 64`: `missing value for
+        # --br-min-samples` and a usage dump. The guard used to accept it and
+        # the failure surfaced at the first measurement instead.
+        for cap in (2, 64, bench.BR_MAX_SAMPLES_CEILING):
+            with self.assertRaises(SystemExit) as caught:
+                bench.require_supported_caps(-1, cap)
+            self.assertIn("--br-min-samples -1", str(caught.exception))
+
+    def test_the_negative_minimum_is_refused_even_where_the_cap_would_pass(
+            self) -> None:
+        # Pins the branch, not the cap: 64 is a cap the guard accepts with a
+        # sane minimum, so a refusal here can only come from the minimum.
+        self.assertIsNone(bench.require_supported_caps(4, 64))
+        with self.assertRaises(SystemExit):
+            bench.require_supported_caps(-1, 64)
+
+    def test_the_cap_branch_wins_when_both_arguments_are_invalid(self) -> None:
+        # Both refusal branches apply to (-1, 0): the cap is 0 *and* the minimum
+        # is negative. The cap branch is checked first, so its message is the
+        # one printed. Only a fixture where both apply can see the order -- with
+        # any other cap the negative-minimum branch is the only one that fires,
+        # and swapping the two would go unnoticed.
+        with self.assertRaises(SystemExit) as caught:
+            bench.require_supported_caps(-1, 0)
+        message = str(caught.exception)
+        self.assertIn("--br-max-samples 0", message)
+        self.assertNotIn("--br-min-samples -1", message)
+
     def test_the_cap_guard_is_called_from_main(self) -> None:
         # Both caps, not just the maximum: the solver validates the pair.
         source = Path(bench.__file__).read_text()
         self.assertIn(
             "require_supported_caps(args.br_min_samples, args.br_max_samples)",
             source)
+
+
+class ConfigSummaryTests(unittest.TestCase):
+    """The header is the only configuration summary attached to the output."""
+
+    @staticmethod
+    def args(br_min_samples: int):
+        return SimpleNamespace(iterations=5000, samples=4, br_samples=20000,
+                               br_min_samples=br_min_samples, seeds=5)
+
+    def test_the_summary_prints_the_resolved_minimum_not_the_raw_one(self) -> None:
+        # Measured against the shipped solver: 0 runs at a minimum of 4, 1 at 2,
+        # 3 at 3. A header quoting the raw argument names a cap the run never
+        # used, and the saved output cannot be reproduced from it.
+        self.assertIn("cap 4..64",
+                      bench.config_summary(self.args(0), 64))
+        self.assertIn("cap 2..64",
+                      bench.config_summary(self.args(1), 64))
+        self.assertIn("cap 3..64",
+                      bench.config_summary(self.args(3), 64))
+
+    def test_the_default_minimum_is_printed_unchanged(self) -> None:
+        # The published regime uses --br-min-samples 4, so its header does not
+        # move: no number in the guide depends on this change.
+        self.assertIn("cap 4..64", bench.config_summary(self.args(4), 64))
+
+    def test_the_summary_keeps_the_rest_of_the_configuration(self) -> None:
+        text = bench.config_summary(self.args(4), 64)
+        for field in ("5000 iterations", "4 showdown boards",
+                      "20000 BR trajectories per player", "5 seeds"):
+            self.assertIn(field, text)
+
+    def test_the_summary_is_printed_from_main(self) -> None:
+        source = Path(bench.__file__).read_text()
+        self.assertIn("print(config_summary(args, cap))", source)
 
 
 if __name__ == "__main__":

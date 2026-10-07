@@ -757,8 +757,14 @@ def effective_min_samples(br_min_samples):
     of 4 and lifts anything below 2 up to 2, both *before* the
     `min_samples <= max_samples` check -- so the effective value is neither the
     raw one nor a plain floor of it. Measured against the shipped solver, the
-    first cap that runs is 4 for `--br-min-samples 0`, and 2 for `1`, `2` and
-    `3`; the model reproduces all twelve combinations measured.
+    first cap that runs is 4 for `--br-min-samples 0`, 2 for `1` and `2`, and 3
+    for `3` (cap 3 completes, cap 2 dies on `preflop solve failed: status=5`),
+    and the model reproduces every combination measured.
+
+    Only defined for a non-negative argument: a negative one never reaches
+    `pe_br_sampling_resolve`, because the solver's own option parser refuses it
+    ("missing value for --br-min-samples") -- `require_supported_caps` refuses
+    it up front instead.
     """
     if br_min_samples == 0:
         return BR_MIN_SAMPLES_DEFAULT
@@ -768,8 +774,8 @@ def effective_min_samples(br_min_samples):
 def require_supported_caps(br_min_samples, br_max_samples):
     """Both sampling caps have to be ones the solver will actually run.
 
-    The solver validates the *pair*, so there are three ways to be unrunnable
-    and all three used to surface only when the solver refused mid-sweep:
+    The solver validates the *pair*, so there are four ways to be unrunnable
+    and all four used to surface only when the solver refused mid-sweep:
 
     - `--br-max-samples 0` -- the solver *accepts* it (0 means "sampling off",
       `tools/pe_preflop_solve.c:702`) but then emits no
@@ -783,9 +789,16 @@ def require_supported_caps(br_min_samples, br_max_samples):
       lifts min to 2), and on the shipped default `--br-min-samples 4` the first
       cap that runs is 4. Measured: caps 1, 2 and 3 all die on
       `preflop solve failed: status=5`, cap 4 is the first that completes.
+    - A *negative* `--br-min-samples`, which no branch above covers: the
+      solver's own option parser refuses the token before `pe_br_sampling_resolve`
+      sees it, so it never gets to the floor. Measured with
+      `--br-min-samples -1 --br-max-samples 64`: `missing value for
+      --br-min-samples` and a usage dump, exit non-zero -- and the pair is
+      accepted by this guard, so it surfaced at the first measurement rather
+      than up front, which is what this function exists to prevent.
 
     Refused up front, because the first measurement is the expensive one and
-    none of the three can be degraded to something runnable -- the main
+    none of the four can be degraded to something runnable -- the main
     measurements use these caps directly.
     """
     if br_max_samples < 1:
@@ -806,6 +819,18 @@ def require_supported_caps(br_min_samples, br_max_samples):
                  "already drops the multipliers that would exceed the ceiling."
                  % (br_max_samples, BR_MAX_SAMPLES_CEILING,
                     BR_MAX_SAMPLES_CEILING))
+    if br_min_samples < 0:
+        # Placed after the cap branches and before the floor: a negative
+        # minimum is not a smaller minimum, it is an argument the solver's
+        # parser will not read at all, so there is no resolved value to compare
+        # against. `effective_min_samples` is therefore not consulted here --
+        # feeding it a negative would answer 2 and turn a parse failure into a
+        # plausible-looking cap.
+        sys.exit("--br-min-samples %d: the solver's option parser refuses a "
+                 "negative value before it is resolved (`missing value for "
+                 "--br-min-samples`, then a usage dump), so no run can start. "
+                 "Use 0 for the solver's default of 4, or any value from 2 up."
+                 % br_min_samples)
     floor = effective_min_samples(br_min_samples)
     if br_max_samples < floor:
         sys.exit("--br-max-samples %d: the solver resolves --br-min-samples %d "
@@ -1000,6 +1025,26 @@ def print_reference_accuracy(spot, arms, references):
     sys.stdout.flush()
 
 
+def config_summary(args, cap):
+    """The one-line configuration summary printed above the table.
+
+    Prints the *resolved* minimum, not the raw argument. `pe_br_sampling_resolve`
+    replaces an unset (0) minimum with 4 and lifts anything below 2 up to 2 --
+    measured against the shipped solver, `--br-min-samples 0` runs with a minimum
+    of 4 and `--br-min-samples 1` with 2 -- so a header quoting the raw argument
+    would name a cap the run never used. That matters here more than usual
+    because this line is the *only* configuration summary attached to the saved
+    output: the solver's own stdout is parsed for metrics and the fingerprint and
+    never printed, so `cap 0..64` next to a table produced at 4..64 cannot be
+    reproduced from what was saved. The resolved value can: passing it back gives
+    the identical run.
+    """
+    return ("pe-preflop-solve, external MCCFR, %d iterations, %d showdown "
+            "boards, %d BR trajectories per player, cap %d..%d, %d seeds"
+            % (args.iterations, args.samples, args.br_samples,
+               effective_min_samples(args.br_min_samples), cap, args.seeds))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--build", required=True, help="CMake build directory")
@@ -1057,10 +1102,7 @@ def main():
     cap = args.br_max_samples
     spots = [s for s in SPOTS if not args.spot or s[0] in args.spot]
 
-    print("pe-preflop-solve, external MCCFR, %d iterations, %d showdown "
-          "boards, %d BR trajectories per player, cap %d..%d, %d seeds"
-          % (args.iterations, args.samples, args.br_samples,
-             args.br_min_samples, cap, args.seeds))
+    print(config_summary(args, cap))
     print("Every arm of a spot solves the same strategy; the training counters "
           "and the trained strategy's per-decision frequencies are checked to "
           "agree.")
