@@ -473,12 +473,12 @@ separated from the crossed one:
 | `plo5-hu` | 178.9 | 193.5 | 14.6 |
 | `plo4-3way` | 492.7 | 615.4 | 122.7 |
 
-| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k | floor | gap vs floor |
-|---|---|---|---|---|
-| `holdem-hu` | 78.4 | 137.1 | 36.4 | clears, 1.5× |
-| `plo4-hu` | 234.0 | 183.1 | 93.6 | within |
-| `plo5-hu` | 154.7 | 272.0 | 90.4 | within |
-| `plo4-3way` | 836.8 | 272.6 | 613.5 | within |
+| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k | refs differ by |
+|---|---|---|---|
+| `holdem-hu` | 78.4 | 137.1 | 36.4 |
+| `plo4-hu` | 234.0 | 183.1 | 93.6 |
+| `plo5-hu` | 154.7 | 272.0 | 90.4 |
+| `plo4-3way` | 836.8 | 272.6 | 613.5 |
 
 The single table this replaces mixed the two readings — FIFO's *symmetric* error
 beside the aware arm's *crossed* one. That is exactly the comparison the
@@ -492,11 +492,20 @@ table names no winner. Neither reading is neutral: both arms' errors carry a
 prefix covariance with their own RNG stream, and nothing here shows the two
 covariances are comparable, so the arm whose stream happened to be the more
 stable one could come out ahead without being the closer to the true NashConv.
-The gap column is what the table can carry instead: the two arms' own-policy
-errors differ by 56.3, 66.3, 14.6 and 122.7 mBB, against floors of 36.4, 93.6,
-90.4 and 613.5. The gap clears the floor on `holdem-hu` alone, and there by 1.5×
-on five seeds; on `plo4-hu` — the spot a ranking would have named for the aware
-arm — 66.3 sits well inside 93.6. Closing the question properly needs an
+What the table carries instead is the two scales side by side: the two arms'
+own-policy errors differ by 56.3, 66.3, 14.6 and 122.7 mBB, beside reference
+spreads of 36.4, 93.6, 90.4 and 613.5. The two are stated and not compared, and
+the reason is measured rather than argued. They are taken at different budgets —
+the spread at ten times the arm's, the difference from the arm's own — and the
+spread shrinks as the estimator converges: measured on `holdem-hu`, the policy
+spread is 119.7 mBB at 20,000 trajectories against 36.4 at 200,000, so the 56.3
+gap exceeds the spread taken at 200,000 and is half the spread taken at 20,000,
+which is the budget the gap is derived from. And a spread between two estimates
+is not a difference between two mean absolute errors: holding the arms and their
+gap fixed and moving only the references changes which of the two numbers is the
+larger, with the references in exact agreement making the gap the larger one
+while both sit far from the truth. A comparison the references decide on their
+own is not evidence about the arms. Closing the question properly needs an
 evaluation RNG independent of the solve's, which the tool does not expose: its
 best-response seed *is* `--seed`, and that is what makes the strategy. So the
 accuracy question is left open rather than answered with a number the method

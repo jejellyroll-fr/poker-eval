@@ -1001,11 +1001,24 @@ def print_reference_accuracy(spot, arms, references):
     reference shares the arm's seed, so *both* arms' errors carry a prefix
     covariance with their own stream, and nothing here shows the two covariances
     are comparable. An arm whose stream happened to be the more stable one could
-    win without being the closer to the true NashConv. What is printed instead
-    is the scale: the floor, how far the two higher-budget runs sit apart on the
-    *same* strategy, and how far apart the two arms' own-policy errors are. On
-    the published run that difference clears the floor on one spot of four, so
-    the table does not rank the arms.
+    win without being the closer to the true NashConv.
+
+    What is printed instead is the scale: how far the two higher-budget runs
+    sit apart on the *same* strategy, and how far apart the two arms'
+    own-policy errors are. The two numbers are printed side by side and are
+    **not** put in a ratio, because the spread is not a null distribution for
+    the difference. Two reasons, both measured. They are taken at different
+    budgets -- the spread at ten times the arm's, the difference from the
+    arm's own -- and the spread shrinks as the estimator converges: on
+    `holdem-hu` the policy spread is 119.7 mBB at 20,000 trajectories against
+    36.4 at 200,000, so the gap of 56.3 exceeds the spread taken at 200,000
+    and is half the spread taken at 20,000, which is the budget the gap is
+    derived from. And a spread between two estimates is not a difference
+    between two mean absolute errors: holding the arms and their gap fixed at
+    0.2 and moving only the references changes which number is larger, with
+    the references in exact agreement making the gap the larger one while both
+    sit far from the truth. A comparison the references decide on their own is
+    not evidence about the arms.
     """
     rows = []
     for ref_label, refs in references:
@@ -1020,14 +1033,19 @@ def print_reference_accuracy(spot, arms, references):
                  " ".join("%s %6.1f (mean %+7.1f)" % cell for cell in cells)))
     if len(references) == 2 and len(arms) == 2:
         (first_label, first), (second_label, second) = references
-        floor = statistics.mean(abs(a["nash_conv"] - b["nash_conv"])
-                                for a, b in zip(first, second))
+        # The two references disagree on the *same* strategy by this much. It
+        # is printed because it is the scale of the reference choice; it is
+        # not compared with the gap on the same line, for the two measured
+        # reasons in the docstring. It used to be printed as a "floor" the gap
+        # either "cleared" or sat "within", which read the spread as a
+        # threshold.
+        spread = statistics.mean(abs(a["nash_conv"] - b["nash_conv"])
+                                 for a, b in zip(first, second))
         # The diagonal: arm 0 against reference 0, arm 1 against reference 1.
         own = abs(rows[0][0][1] - rows[1][1][1])
-        print("%-11s floor |%s - %s| mean %.1f; own-policy errors differ by "
-              "%.1f -> %s" % (spot[0], first_label, second_label, floor, own,
-                              "clears the floor" if own > floor
-                              else "within the floor, no ranking"))
+        print("%-11s refs differ by %.1f (|%s - %s|); own-policy errors differ "
+              "by %.1f (scale, not a threshold)"
+              % (spot[0], spread, first_label, second_label, own))
     sys.stdout.flush()
 
 

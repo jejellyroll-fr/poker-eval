@@ -532,8 +532,10 @@ class ReferenceAccuracyTests(unittest.TestCase):
     closer to the true NashConv. The reference cannot be taken at a disjoint
     seed instead either -- the seed drives the *solve*, so a disjoint seed scores
     a different strategy (measured on `holdem-hu`, 1308.7 against 101.3). So the
-    block prints the distances, the floor between the two references, and how
-    far apart the arms' own-policy errors are, and stops there.
+    block prints the distances, the spread between the two references, and how
+    far apart the arms' own-policy errors are, and stops there -- the spread is
+    not compared with the gap, because it is not a null distribution for it. See
+    `print_reference_accuracy` for the two measured reasons.
     """
 
     ARMS = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
@@ -572,32 +574,80 @@ class ReferenceAccuracyTests(unittest.TestCase):
         # than a ranking it cannot support.
         self.assertNotIn("closer", self.render(self.ARMS, self.REFS))
 
-    def test_the_gap_between_the_arms_is_compared_with_the_floor(self) -> None:
+    def test_the_gap_between_the_arms_is_printed_beside_the_spread(
+            self) -> None:
         # Own-policy errors 0.0 and 20.0 differ by 20.0; the two references are
-        # 40.0 apart. A difference smaller than the reference's own disagreement
-        # is not a ranking, and the line has to say so.
+        # 40.0 apart. Both numbers are reported; neither is compared with the
+        # other, and the line says so rather than leaving it to the reader.
         text = self.render(self.ARMS, self.REFS)
         self.assertIn("own-policy errors differ by 20.0", text)
-        self.assertIn("within the floor, no ranking", text)
+        self.assertIn("refs differ by 40.0", text)
+        self.assertIn("scale, not a threshold", text)
 
-    def test_a_gap_wider_than_the_floor_is_reported_as_clearing_it(self) -> None:
-        arms = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
+    def test_the_runner_docstring_states_why_the_two_are_not_compared(
+            self) -> None:
+        # The measured reason, not just the correction: the docstring carries
+        # the two budgets so the claim can be re-derived rather than trusted.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("is not a null distribution for", source)
+        self.assertRegex(source,
+                         r"119\.7\s+mBB at 20,000 trajectories against\s+36\.4")
+
+    def test_no_verdict_is_printed_about_the_comparison(self) -> None:
+        # The line used to read "clears the floor" or "within the floor, no
+        # ranking", which read the reference spread as a threshold for the gap.
+        # It is not one -- see the last test in this class.
+        wide = (("fifo@20,000", [{"nash_conv": 100.0}, {"nash_conv": 200.0}]),
                 ("aware@20,000", [{"nash_conv": 300.0}, {"nash_conv": 100.0}]))
-        text = self.render(arms, self.REFS)
-        # aware's own-policy error is |300-140|, |100-160| -> 110.0, against
-        # fifo's 0.0: a 110.0 gap over a 40.0 floor.
-        self.assertIn("own-policy errors differ by 110.0", text)
-        self.assertIn("clears the floor", text)
+        for arms in (self.ARMS, wide):
+            text = self.render(arms, self.REFS)
+            self.assertNotIn("clears", text)
+            self.assertNotIn("no ranking", text)
+            self.assertNotIn("floor", text)
 
-    def test_the_floor_is_the_distance_between_the_two_references(self) -> None:
+    def test_the_spread_is_the_distance_between_the_two_references(
+            self) -> None:
         text = self.render(self.ARMS, self.REFS)
-        self.assertIn("floor |fifo@200,000 - aware@200,000| mean 40.0", text)
+        self.assertIn("refs differ by 40.0 (|fifo@200,000 - aware@200,000|)",
+                      text)
 
-    def test_a_lone_reference_prints_no_floor(self) -> None:
+    def test_a_lone_reference_prints_no_spread(self) -> None:
         # With one reference there is nothing to take a distance from, and a
-        # floor of 0.0 would read as agreement rather than as an absence.
+        # spread of 0.0 would read as agreement rather than as an absence.
         text = self.render(self.ARMS, self.REFS[:1])
-        self.assertNotIn("floor", text)
+        self.assertNotIn("refs differ by", text)
+
+    def test_which_number_is_larger_is_decided_by_the_refs_not_the_arms(
+            self) -> None:
+        # The reason the line carries no verdict. Both cases have a gap of 0.2
+        # between the two arms' own-policy errors, and both arms sit about 100
+        # from the truth (T = 0, never printed). Only the aware reference moves,
+        # taking the spread from 0.0 to 5.0 -- and the aware arm with it, so its
+        # own-policy error stays 0.3. The gap is the larger number in the first
+        # case and the smaller one in the second, so a verdict would be a
+        # function of the references' mutual agreement, not of the arms.
+        agree_arms = (("fifo@20,000", [{"nash_conv": 100.1},
+                                       {"nash_conv": 99.9}]),
+                      ("aware@20,000", [{"nash_conv": 100.3},
+                                        {"nash_conv": 99.7}]))
+        agree_refs = (("fifo@200,000", [{"nash_conv": 100.0},
+                                        {"nash_conv": 100.0}]),
+                      ("aware@200,000", [{"nash_conv": 100.0},
+                                         {"nash_conv": 100.0}]))
+        shift_arms = (("fifo@20,000", [{"nash_conv": 100.1},
+                                       {"nash_conv": 99.9}]),
+                      ("aware@20,000", [{"nash_conv": 105.3},
+                                        {"nash_conv": 94.7}]))
+        shift_refs = (("fifo@200,000", [{"nash_conv": 100.0},
+                                        {"nash_conv": 100.0}]),
+                      ("aware@200,000", [{"nash_conv": 105.0},
+                                         {"nash_conv": 95.0}]))
+        first = self.render(agree_arms, agree_refs)
+        second = self.render(shift_arms, shift_refs)
+        self.assertIn("own-policy errors differ by 0.2", first)
+        self.assertIn("own-policy errors differ by 0.2", second)
+        self.assertIn("refs differ by 0.0", first)
+        self.assertIn("refs differ by 5.0", second)
 
     def test_the_reference_shares_the_arm_seed(self) -> None:
         # A disjoint seed would score a different strategy: the seed drives the
@@ -876,30 +926,56 @@ class ReferenceTableTests(unittest.TestCase):
     arm's *crossed* one, and on `plo4-3way` that decided the answer. Worse, even
     the symmetric reading is not neutral -- both arms carry a prefix covariance
     with their own stream -- so no reading can rank the arms at all, and the
-    guide now reports the distances, the gap and the floor instead.
+    guide now reports the distances, the gap and the reference spread instead.
+    The last two are stated side by side and not compared: the spread is taken
+    at ten times the arm's budget, where the estimator has converged further,
+    and a spread between two estimates is not a difference between two mean
+    absolute errors. See `print_reference_accuracy`.
     """
 
     # spot, fifo@20k vs FIFO@200k and aware@20k vs aware@200k (symmetric),
-    #       fifo@20k vs aware@200k and aware@20k vs FIFO@200k (crossed), floor
+    #       fifo@20k vs aware@200k and aware@20k vs FIFO@200k (crossed), and the
+    #       spread between the two references -- which is not a floor.
     PUBLISHED = (("holdem-hu", 80.4, 136.7, 78.4, 137.1, 36.4),
                  ("plo4-hu", 253.5, 187.2, 234.0, 183.1, 93.6),
                  ("plo5-hu", 178.9, 193.5, 154.7, 272.0, 90.4),
                  ("plo4-3way", 492.7, 615.4, 836.8, 272.6, 613.5))
 
-    def test_only_holdem_hu_has_a_gap_that_clears_the_floor(self) -> None:
-        # This is the whole reason no winner is named: on three spots of four the
-        # two arms' own-policy errors differ by less than the two references
-        # disagree on the *same* strategy, so the reference cannot resolve them.
-        clears = [spot for spot, fifo_sym, aware_sym, _, _, floor
-                  in self.PUBLISHED if abs(fifo_sym - aware_sym) > floor]
-        self.assertEqual(clears, ["holdem-hu"])
+    # The policy spread at the two budgets, measured on `holdem-hu` at the
+    # published regime (5,000 iterations, 20,000 / 200,000 trajectories, five
+    # seeds) by a harness that drives `measure` directly -- the runner prints
+    # neither number. The gap (56.3) comes from the 20,000-trajectory runs and
+    # sits *between* the two, so which side of the spread it falls on is decided
+    # by the budget the spread is taken at.
+    SPREAD_AT_ARM_BUDGET = 119.7
+    SPREAD_AT_REF_BUDGET = 36.4
 
-    def test_the_spot_a_ranking_would_have_named_is_inside_its_floor(self) -> None:
-        # plo4-hu: a gap of 66.3 against a floor of 93.6. The old guide named the
-        # aware arm there, and the withdrawn claim is pinned below.
-        _, fifo_sym, aware_sym, _, _, floor = self.PUBLISHED[1]
+    def test_the_gap_is_smaller_than_the_spread_at_its_own_budget(self) -> None:
+        # The reason the spread is not a threshold for the gap: it is taken ten
+        # times further along, where the estimator has converged, so it
+        # understates the spread at the budget the gap is derived from.
+        self.assertLess(self.SPREAD_AT_REF_BUDGET, 56.3)
+        self.assertGreater(self.SPREAD_AT_ARM_BUDGET, 56.3)
+
+    def test_the_measured_holdem_hu_row_reproduces_the_published_one(
+            self) -> None:
+        # The harness that measured the two spreads above reproduced this row
+        # exactly, which is what makes the comparison between them meaningful.
+        _, fifo_sym, aware_sym, _, _, spread = self.PUBLISHED[0]
+        self.assertAlmostEqual(fifo_sym, 80.4, places=1)
+        self.assertAlmostEqual(aware_sym, 136.7, places=1)
+        self.assertAlmostEqual(abs(fifo_sym - aware_sym), 56.3, places=1)
+        self.assertAlmostEqual(spread, self.SPREAD_AT_REF_BUDGET, places=1)
+
+    def test_the_spot_a_ranking_would_have_named_is_inside_its_spread(
+            self) -> None:
+        # plo4-hu: a gap of 66.3 against a spread of 93.6. The old guide named
+        # the aware arm there, and the withdrawn claim is pinned below. The
+        # spread is not the rebuttal -- it is not a threshold -- so the guide
+        # rests on the non-neutral reference instead.
+        _, fifo_sym, aware_sym, _, _, spread = self.PUBLISHED[1]
         self.assertAlmostEqual(abs(fifo_sym - aware_sym), 66.3, places=1)
-        self.assertLess(abs(fifo_sym - aware_sym), floor)
+        self.assertLess(abs(fifo_sym - aware_sym), spread)
 
     def test_the_published_plo4_3way_row_mixed_the_two_readings(self) -> None:
         # It printed FIFO's symmetric error (492.7) beside the aware arm's
@@ -920,17 +996,22 @@ class ReferenceTableTests(unittest.TestCase):
         self.assertNotIn("-> ", section)
         self.assertIn("names no winner", section)
         self.assertIn("own-policy gap", section)
-        self.assertIn("gap vs floor", section)
+        self.assertIn("refs differ by", section)
+        # The comparison that read the spread as a threshold for the gap is
+        # gone, from the table and from the prose.
+        self.assertNotIn("gap vs floor", section)
+        self.assertNotIn("clears the floor", text)
+        self.assertNotIn("within the floor", text)
         # The withdrawn claims, and the framing that carried them, are gone.
         self.assertNotIn("overestimates the reference by 223.3", text)
         self.assertNotIn("the more accurate estimator on `plo4-hu` alone", text)
         self.assertNotIn("the one spot where the aware arm is the more accurate",
                          text)
 
-    def test_the_guide_prints_the_gaps_and_the_floors(self) -> None:
+    def test_the_guide_prints_the_gaps_and_the_spreads(self) -> None:
         text = GUIDE.read_text(encoding="utf-8")
         for value in ("56.3", "66.3", "14.6", "122.7", "36.4", "93.6", "90.4",
-                      "613.5"):
+                      "613.5", "119.7"):
             self.assertIn(value, text)
 
     def test_the_guide_states_why_a_disjoint_seed_is_not_the_fix(self) -> None:
