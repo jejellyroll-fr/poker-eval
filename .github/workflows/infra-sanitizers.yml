@@ -95,9 +95,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
-          timeout 120s sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=8 -o Acquire::https::Timeout=8 || true
-          timeout 120s sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends valgrind || true
+          # Keep the runner's Azure-local mirror (the fast path here) and let
+          # apt retry the download; see the note in gpu-build.yml. A slow mirror
+          # must fail this step with the real apt error, not be masked by
+          # `|| true` and surface later as "valgrind: command not found".
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends valgrind
 
       - name: Configure (Release)
         run: |
@@ -179,9 +185,15 @@ jobs:
 
       - name: Install cppcheck
         run: |
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
-          timeout 120s sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=8 -o Acquire::https::Timeout=8 || true
-          timeout 120s sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cppcheck || true
+          # Same mirror/retry fix as the valgrind job above. The step is
+          # non-blocking at the job level, but a silently missing cppcheck would
+          # turn the report into an empty artifact, which is worse than a
+          # visible failure.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends cppcheck
 
       - name: Run cppcheck
         run: |
