@@ -300,6 +300,23 @@ fields must agree outside the measurement's own numbers and the storage its own
 traversal grows, the training's visits, updates and chance draws must agree
 street by street, and the trained strategy's per-decision frequencies must agree.
 
+A row is only read once the run that produced it is known to have finished.
+`--iterations` is what the header quotes, and what the solve time and the
+exploitability describe, and the solver can stop short of it on its own: the
+CLI arms a memory budget of 70% of physical RAM by default
+(`default_ram_budget_bytes` in `pe_preflop_solve.c`), this runner passes no
+`--max-ram`, and a solve that reaches the budget stops cleanly — it writes its
+report and exits 0 with the solve intact. Both arms of a spot share a seed, so
+the same solve and the same memory trajectory, so they stop at the same earlier
+iteration, agree on every field the checks above read, and would be published
+under a header quoting the requested count. The solver names the reason on the
+same line as the phase marker the timing is read at
+(`solver_phase=complete stop_reason=…`), so `assert_completed` reads it and
+refuses anything but `max_iterations`, and refuses a missing marker too: a run
+that does not state why it stopped cannot be shown to have reached the cap.
+Measured on `plo5-hu`: `--max-ram 1` stops at iteration 1 of the 300 requested,
+prints `stop_reason=memory_budget`, and exits 0.
+
 That last check reads the report's hand table, and deliberately not `RANGE GRID`:
 the tool emits the grid only for Hold'em, so a fingerprint taken from it is empty
 on all three PLO spots, and two empty fingerprints compare equal whatever was

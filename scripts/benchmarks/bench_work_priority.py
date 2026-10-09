@@ -13,7 +13,9 @@ only decides how many draws the *best-response measurement* spends per decision
 (`external_best_response.c`, the per-decision cap); it never touches training.
 So the runs below solve the *same* strategy and differ only in how they measure
 it, and every claim here is about the measurement. The script enforces that
-rather than assuming it -- see `assert_same_training`. Neither of the issue's
+rather than assuming it -- see `assert_same_training` -- and refuses a run that
+stopped before its iteration cap, since a partial solve would otherwise be
+published as a complete one -- see `assert_completed`. Neither of the issue's
 two demonstrations follows from it, and the guide states both verdicts: the runs
 converge identically by construction, so nothing here shows faster convergence,
 and no spot detects an effect on the reported number, so nothing here shows
@@ -234,6 +236,14 @@ PRIORITY_RE = re.compile(
 EFFORT_RE = re.compile(
     r"street_stats street=(\w+) policy=(\w+) visits=(\d+) updates=(\d+) "
     r"chance_samples=(\d+)")
+# The solver names why it stopped on the same line as the phase marker
+# (`pe_preflop_solve.c`, right after the solve and the measurement). The marker
+# is printed unconditionally and the reason is one of the names in
+# `pe_stop_cause_name` (`solver.c`), of which `max_iterations` is the only one
+# this benchmark asks for. `SOLVE_PHASE_COMPLETE` is the *prefix* of this line,
+# which is why the reason has to be read out of the full line rather than
+# inferred from the marker's presence -- see `assert_completed`.
+SOLVE_STOP_RE = re.compile(r"solver_phase=complete stop_reason=(\S+)")
 
 
 def training_effort(text):
@@ -415,6 +425,51 @@ def assert_report_uncapped(spot, arm, text):
                  % (spot[0], arm))
 
 
+def assert_completed(spot, arm, text):
+    """Refuse a solve that stopped before the iteration cap.
+
+    `--iterations` is the whole point of the run and the header quotes it, so a
+    solve that stopped early must not be published as one that ran it. The
+    solver stops for reasons other than the cap, and the one that is reachable
+    without anyone asking for it is the memory budget: the CLI arms a default of
+    70% of physical RAM (`default_ram_budget_bytes`, `pe_preflop_solve.c`) and
+    this runner never passes `--max-ram`, so a long enough solve trips
+    `PE_STOP_MEMORY_BUDGET` (`solver.c`), writes its report and exits 0 -- a
+    success as far as `returncode` is concerned, at whatever iteration it
+    reached. The marker names the cause (`stop_reason=%s`), and the reason is
+    what separates the two cases.
+
+    This is not caught downstream. Both arms of a spot share a seed and
+    therefore the same solve, so the same memory trajectory, so they stop at
+    the *same* earlier iteration: every field `assert_same_training` compares
+    agrees, the fingerprint agrees, and `config_summary()` still quotes the
+    requested `--iterations`. The timing read at the marker is then the time to
+    a partial solve, and the exploitability is that of a partial solve. Parse
+    the reason and refuse anything that is not `max_iterations`.
+
+    An absent marker is refused too, rather than trusted: `drain_stream`
+    tolerates one for the *reading* (it falls back to the caller's final
+    reading), but a run that does not state why it stopped cannot be shown to
+    have reached the cap, and the solver prints the line unconditionally, so its
+    absence is a version mismatch worth failing on rather than a reason to
+    guess.
+    """
+    match = SOLVE_STOP_RE.search(text)
+    if match is None:
+        sys.exit("%s %s: no `solver_phase=complete stop_reason=` line in the "
+                 "solver output, so the run cannot be shown to have reached "
+                 "--iterations. The solver prints it unconditionally; a build "
+                 "that omits it is too old for this benchmark."
+                 % (spot[0], arm))
+    reason = match.group(1)
+    if reason != "max_iterations":
+        sys.exit("%s %s: the solve stopped on %r, not on the iteration cap, so "
+                 "it did not run the requested --iterations -- a memory-budget "
+                 "stop exits 0 with a partial solve. Raise --max-ram (or cap "
+                 "the iterations to what fits) and re-run." % (spot[0], arm,
+                                                               reason))
+
+
 def flatten(report, prefix=""):
     """Every scalar leaf of a report, keyed by its dotted path. Lists are
     reduced to their length: the comparison is about the training, and a list
@@ -465,7 +520,9 @@ def drain_stream(lines, clock):
     2.408 s, so the reading is stable where the total is not.
 
     Falls back to the caller's final reading if the marker never appears, which
-    is the old behaviour rather than a missing column.
+    is the old behaviour rather than a missing column. That tolerance is about
+    the *reading* only: the benchmark refuses a run whose marker is absent or
+    names a reason other than `max_iterations` -- see `assert_completed`.
     """
     text, marked = [], None
     for line in lines:
@@ -500,6 +557,9 @@ def measure(binary, spot, args, seed, policy, cap, br_samples, out_json):
     solve = (marked - start) if marked is not None else (finished - start)
     if proc.returncode != 0:
         sys.exit("solve failed: %s\n%s" % (" ".join(cmd), out[-2000:]))
+    # A zero exit status is not proof the solve reached the cap: the memory
+    # budget stops it early and still exits 0 -- see assert_completed.
+    assert_completed(spot, policy, out)
     assert_report_uncapped(spot, policy, out)
     with open(out_json) as handle:
         report = json.load(handle)

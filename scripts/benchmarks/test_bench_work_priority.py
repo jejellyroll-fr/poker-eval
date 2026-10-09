@@ -38,6 +38,11 @@ BR_SAMPLING_C = ROOT / "src" / "solver" / "domain" / "br_sampling.c"
 # file.
 PREFLOP_SOLVE_C = ROOT / "tools" / "pe_preflop_solve.c"
 
+# The stop-reason names the runner has to recognise live here. See
+# StopReasonTests, which pins the one it accepts -- and the memory-budget name
+# it refuses -- against this file rather than trusting the copy.
+SOLVER_C = ROOT / "src" / "solver" / "domain" / "solver.c"
+
 
 BR_SAMPLING = "br_sampling estimator=confidence-guided terminal_evaluations=44743"
 BR_SAMPLING_LEGACY = "br_sampling terminal_evaluations=65122"
@@ -518,6 +523,89 @@ class SolveTimingTests(unittest.TestCase):
         text, marked = bench.drain_stream(["no marker here\n"], lambda: 5.0)
         self.assertIsNone(marked)
         self.assertIn("no marker here", text)
+
+
+class StopReasonTests(unittest.TestCase):
+    """A zero exit status is not proof the solve reached the iteration cap.
+
+    The CLI stops early on its own memory budget (70% of physical RAM, and the
+    runner passes no `--max-ram`), writes its report and exits 0. It names the
+    cause on the same line as the phase marker the timing is read at, and the
+    timing keys on that line's *prefix* -- so reading only its presence, as the
+    timing does, would publish a partial solve under a header quoting the
+    requested `--iterations`.
+    """
+
+    def test_a_run_that_reached_the_cap_is_accepted(self) -> None:
+        self.assertIsNone(bench.assert_completed(
+            ("holdem-hu", "holdem", 2), "fifo",
+            "iterations=5000 complete=1 infosets=338\n"
+            "solver_phase=complete stop_reason=max_iterations "
+            "report=starting\n"))
+
+    def test_a_memory_budget_stop_is_refused(self) -> None:
+        # The reachable early stop: the solve is intact and the exit is clean,
+        # so the reason is the only thing that separates it from a completed
+        # run. Both arms of a spot share a seed, hence the same memory
+        # trajectory, hence the same earlier iteration -- which is why no
+        # downstream comparison catches it.
+        with self.assertRaises(SystemExit) as caught:
+            bench.assert_completed(
+                ("plo4-3way", "plo4", 3), "aware",
+                "solver_phase=complete stop_reason=memory_budget "
+                "report=starting\n")
+        self.assertIn("memory-budget", str(caught.exception))
+
+    def test_a_target_stop_is_refused(self) -> None:
+        # Nothing in the runner asks for a target, so any reason other than the
+        # cap means the run stopped on something the benchmark did not request.
+        with self.assertRaises(SystemExit) as caught:
+            bench.assert_completed(
+                ("holdem-hu", "holdem", 2), "fifo",
+                "solver_phase=complete stop_reason=target report=starting\n")
+        self.assertIn("'target'", str(caught.exception))
+
+    def test_a_missing_marker_is_refused(self) -> None:
+        # drain_stream tolerates a missing marker for the *reading*; the guard
+        # does not, because a run that does not state its stop reason cannot be
+        # shown to have reached the cap.
+        with self.assertRaises(SystemExit) as caught:
+            bench.assert_completed(("holdem-hu", "holdem", 2), "fifo",
+                                   "report_phase=complete rows=338\n")
+        self.assertIn("unconditionally", str(caught.exception))
+
+    def test_the_reason_is_read_from_the_full_marker_line(self) -> None:
+        # The regex has to key on the reason, not on the prefix the timing uses:
+        # `SOLVE_PHASE_COMPLETE` alone matches a completed and a truncated run
+        # alike.
+        for reason in ("max_iterations", "memory_budget", "target"):
+            line = ("solver_phase=complete stop_reason=%s report=starting\n"
+                    % reason)
+            self.assertEqual(bench.SOLVE_STOP_RE.search(line).group(1), reason)
+
+    def test_the_marker_format_matches_the_shipped_cli(self) -> None:
+        # The parse is only as good as the line it reads, and the timing and the
+        # guard share that line. Pin the format string against the C source so a
+        # change there fails here rather than silently disarming the guard (the
+        # empty-PLO fingerprint lesson).
+        source = PREFLOP_SOLVE_C.read_text(encoding="utf-8")
+        self.assertIn(
+            '"solver_phase=complete stop_reason=%s report=starting\\n"', source)
+
+    def test_the_accepted_reason_matches_the_shipped_solver(self) -> None:
+        # The one reason the benchmark accepts has to be the solver's own name
+        # for the iteration cap, not a copy that drifted.
+        source = SOLVER_C.read_text(encoding="utf-8")
+        self.assertIn('case PE_STOP_ITERATIONS:     return "max_iterations";',
+                      source)
+        self.assertIn('case PE_STOP_MEMORY_BUDGET:  return "memory_budget";',
+                      source)
+
+    def test_the_guard_is_called_from_measure(self) -> None:
+        # Pinned on the call, like `assert_fingerprint_binds`: the check is only
+        # load-bearing if a partial solve is refused before it is tabulated.
+        source = Path(bench.__file__).read_text()
+        self.assertIn("assert_completed(spot, policy, out)", source)
 
 
 class ReferenceAccuracyTests(unittest.TestCase):
