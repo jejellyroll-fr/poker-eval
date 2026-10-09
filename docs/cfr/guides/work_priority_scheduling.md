@@ -9,6 +9,10 @@ Issue #271 is the second half: the layer had no call site, and now it has one.
 to interpolate that decision's sample cap. Test: `tests/test_br_priority.c`. See
 "The call site" and "Measured: the cap in a solve" below.
 
+The solve-level benchmarks issue #258 asks for are in
+`scripts/benchmarks/bench_work_priority.py`; their output is tabulated under
+"Benchmarks: the four solve-level workloads".
+
 A solve spends the same work on every decision it has to make. That is wasteful
 in both directions: an action that wins by a mile is settled after a handful of
 samples, while a near tie is still a coin flip after thousands. The
@@ -282,21 +286,356 @@ and it broke the bucket bound the policy promises (see above). Use `balanced`
 for its bucket-level guarantee. When the worst delay per decision matters, use
 `uncertainty-aware` with aging.
 
-## Benchmarks: what is and is not measured
+## Benchmarks: the four solve-level workloads
 
-The issue asks for solve-level benchmarks — wall clock to a target
-exploitability on Hold'em heads-up, PLO4, PLO5 and a multiway Omaha solve. **They
-are still not produced.** Issue #258 measured nothing at solve level because the
-layer had no call site, and a table built on an invented harness would have
-measured the harness. Issue #271 gives it a call site (below), so those four
-benchmarks are now *possible* rather than blocked on wiring — but four solves to
-a target exploitability is a piece of work in its own right, and it is still
-owned by #258.
+Issue #258 asks for the layer to be benchmarked at solve level on Hold'em
+heads-up, PLO4 heads-up, PLO5 heads-up and a multiway Omaha solve.
+`scripts/benchmarks/bench_work_priority.py` is that measurement, and the tables
+below are its output, run twice with byte-identical deterministic columns.
 
-What #271 measures instead is one end-to-end demonstration on the shipped CLI,
-reported under "Measured: the cap in a solve" below. The workload table above
-remains the measurement of the allocation the layer makes, on a synthetic
-workload whose composition is known in advance.
+The call site only decides how many draws the *measurement* spends, so the four
+spots solve the same strategy under both policies and differ only in how they
+measure it. The script refuses to publish a row that violates that: the report's
+fields must agree outside the measurement's own numbers and the storage its own
+traversal grows, the training's visits, updates and chance draws must agree
+street by street, and the trained strategy's per-decision frequencies must agree.
+
+A row is only read once the run that produced it is known to have finished.
+`--iterations` is what the header quotes, and what the solve time and the
+exploitability describe, and the solver can stop short of it on its own: the
+CLI arms a memory budget of 70% of physical RAM by default
+(`default_ram_budget_bytes` in `pe_preflop_solve.c`), this runner passes no
+`--max-ram`, and a solve that reaches the budget stops cleanly — it writes its
+report and exits 0 with the solve intact. Both arms of a spot share a seed, so
+the same solve and the same memory trajectory, so they stop at the same earlier
+iteration, agree on every field the checks above read, and would be published
+under a header quoting the requested count. The solver names the reason on the
+same line as the phase marker the timing is read at
+(`solver_phase=complete stop_reason=…`), so `assert_completed` reads it and
+refuses anything but `max_iterations`, and refuses a missing marker too: a run
+that does not state why it stopped cannot be shown to have reached the cap.
+Measured on `plo5-hu`: `--max-ram 1` stops at iteration 1 of the 300 requested,
+prints `stop_reason=memory_budget`, and exits 0.
+
+That last check reads the report's hand table, and deliberately not `RANGE GRID`:
+the tool emits the grid only for Hold'em, so a fingerprint taken from it is empty
+on all three PLO spots, and two empty fingerprints compare equal whatever was
+trained — the guard would have been vacuous exactly where the workloads are
+hardest. The fingerprint is the multiset of `hand`, `node`, `actor` and
+`frequencies`.
+
+The hand narrows the collision; it does not close it. Without it the projection
+is a multiset of `(node, actor, frequencies)`, and two hands at the same node and
+actor that exchange their vectors leave it unchanged — a per-decision change the
+guard would wave through. The hand string is a canonical representative over the
+24 loose suit permutations of hole and board (`preflop_op_infoset_key`), so it
+names a class of decisions rather than one, but it is a deterministic function of
+the infoset: measured stable for the same decision across the two policies and
+across two BR budgets, on 24 spot/seed pairs including `plo4-3way`, where only
+1,867-1,881 of 1,997 rows are shared between two runs that solved the same
+strategy.
+
+It is not sufficient on its own, and `node` does not make up the difference.
+These runs pass no `--tree`, so `tree_node_index` is `-1` at the root and the
+field's zero-initialised `0` for every other state; measured on `plo4-3way`,
+`distinct(hand, node, actor)` equals `distinct(hand, actor)` on all 17,424 rows
+of a 5,000-iteration report, so the node never separates two rows the hand and
+actor do not already separate. Two *distinct* decisions sharing a hand and an
+actor therefore collapse onto one key — 3,159 keys carry more than one row and
+1,514 of them carry different frequency vectors — and exchanging such a pair
+leaves the multiset unchanged. Verified directly rather than argued: swapping the
+two vectors of `5c2hQhAs`/`P1` in a 20,000-iteration `plo4-3way` report leaves
+the fingerprint identical. So `assert_fingerprint_binds` refuses a run whose
+trained rows hold such a key, rather than compare a fingerprint that cannot tell
+two decisions apart. The published regime has none on any of the four spots —
+checked at 5,000 iterations with `--br-samples 20000`, and again at the revisit
+curve's 2,000 and 5,000 — but at 20,000 iterations `plo4-3way` has two, so the
+guard is not hypothetical. Nothing in the report closes the hole: the tool
+computes the infoset key and a betting context (pot, to-call, current bet,
+raises) for every row but prints neither in the hand table, and emitting one
+would change the format `poker_eval_studio.c` parses.
+
+Keeping the hand costs a second restriction, and finding it was the point of
+this paragraph. The report is emitted in two sweeps — rows that carry a strategy
+first, the untouched ones after — and every untouched row holds the uniform
+vector regret matching starts from. Which of them fill the leftover per-node
+quota depends on storage-id order, and the measurement grows the storage, so
+that tail churns: 135 of 1,998 rows on PLO4 heads-up at 500 iterations, *all of
+them uniform*. A `(node, actor, frequencies)` multiset collapses them and
+survives; adding the hand stops collapsing them and the guard refuses a
+comparison it should accept. So the fingerprint covers only the decisions that
+were actually trained. That costs nothing — a decision uniform in both arms is a
+decision that did not change, and one that leaves the uniform start enters the
+set and is seen. With every row the projection differs between the two policies
+on three of the four spots at 500 iterations; restricted to the trained rows it
+is identical in every regime tried, and still separates a 500-iteration strategy
+from a 5,000-iteration one on all four spots.
+
+The EV column is the measurement's own sampled view and the board column is the
+sampled deal's runout; neither belongs to the strategy. A multiset rather than a
+sequence, because `--report-rows` fills per-node quotas in storage-id order. An
+empty fingerprint is refused rather than accepted, so a report format that
+dropped the hand table fails the guard instead of disarming it — and so does a
+budget too low to have trained anything, which is a real regime: at 500
+iterations `plo5-hu` and `plo4-3way` have no trained decision at all, and the
+counts at 5,000 are 331, 251, 35 and 147 decisions for the four spots. The
+`plo5-hu` fingerprint therefore rests on 35 decisions, which is thin, and is why
+that spot's other evidence is read with the caveat below.
+
+The frequency column is the report's own `%.1f%%`, so the fingerprint resolves
+0.1 percentage points — that is the granularity of the check, and it is the
+report's limit, not the guard's. A divergence is caught as soon as one decision
+moves by that much: the smallest divergence measured here (500 iterations against
+5,000) moves 1% of the shared decisions on the least sensitive spot and 99% on
+the most sensitive, so the granularity is well below the size of a real training
+divergence. What the fingerprint does *not* catch is a change smaller than a
+tenth of a percentage point on every decision at once — one bin of the column —
+and no run of this benchmark has produced one.
+
+The storage exemption is the same kind of narrow: the measurement resolves
+infosets the training never reached, and `storage_v2.c` derives the byte totals
+from `slot_capacity` and `meta_capacity`, both of which grow by doubling. A pair
+that straddles a doubling therefore moves `storage_bytes` and its parts while
+solving the identical strategy — reproduced on PLO4 heads-up, seed 1, 500
+iterations, `--br-samples 9000`, with the aware arm's cap pinned to 4 against
+FIFO's 64: 22,993 infosets on 65,536 hash slots against 22,936 on 32,768. Those
+byte totals are exempt; `recompute_calls` and `bytes_saved_vs_full` are not,
+because they answer to the memory policy rather than to the measurement.
+
+That is also what makes the comparison paired — both arms of a spot see the same
+seed, hence the same solved strategy.
+
+`pe-preflop-solve`, external MCCFR, 5,000 iterations, 4 showdown boards, 20,000
+BR trajectories per player, `--br-min-samples 4 --br-max-samples 64`, seeds
+100-104:
+
+| Spot | Policy | BR terminal evals | draws/dec | early stop | cap hits | NashConv mBB | paired vs FIFO |
+|---|---|---|---|---|---|---|---|
+| `holdem-hu` | FIFO | 454,750 | 14.5 | 99.6% | 118 | 12,459.8 | — |
+| | uncertainty-aware | 389,290 | 12.1 | 94.9% | 1,398 | 12,367.6 | −92.2 ± 152.5 |
+| `plo4-hu` | FIFO | 633,019 | 18.9 | 100.0% | 0 | 20,861.9 | — |
+| | uncertainty-aware | 540,728 | 15.9 | 89.5% | 3,239 | 20,981.8 | +119.9 ± 205.5 |
+| `plo5-hu` | FIFO | 641,957 | 19.7 | 100.0% | 0 | 19,667.0 | — |
+| | uncertainty-aware | 624,766 | 19.1 | 98.0% | 611 | 19,666.7 | −0.3 ± 265.5 |
+| `plo4-3way` | FIFO | 1,574,437 | 27.3 | 95.4% | 2,565 | 51,339.2 | — |
+| | uncertainty-aware | 1,245,611 | 21.3 | 85.7% | 7,938 | 51,117.8 | −221.4 ± 487.0 |
+
+**The measurement costs 14.4%, 14.6%, 2.7% and 20.9% fewer terminal evaluations,
+and the effect on the reported number is bounded.** What the table above may be
+read as is the load-bearing question, and the answer is *not* "the difference is
+zero". With five seeds, failing to reject that null at the 5% level would not be
+evidence of equivalence: a small sample is too weak to reject anything, and a
+modestly biased estimator passes the same test. So the script prints no
+significance verdict. It prints the 95% confidence interval of the paired
+difference, which is what bounds the effect, alongside each arm's own run-to-run
+spread across seeds:
+
+| Spot | paired mean | 95% CI (mBB) | CI half-width | baseline sd | verdict |
+|---|---|---|---|---|---|
+| `holdem-hu` | −92.2 | [−281.5, +97.1] | 1.52% | 5.30% | inside |
+| `plo4-hu` | +119.9 | [−135.2, +375.0] | 1.22% | 1.31% | wider |
+| `plo5-hu` | −0.3 | [−329.9, +329.3] | 1.68% | 0.82% | wider |
+| `plo4-3way` | −221.4 | [−826.0, +383.2] | 1.18% | 1.56% | wider |
+
+The yardstick is the **baseline arm's own** spread across seeds — the variation a
+reader already lives with when they change the seed. It is deliberately *not* the
+wider of the two arms': taking the maximum would let the judged arm widen its own
+bound, since a policy that increases run-to-run variance would raise the bar it
+has to clear. On the published run that defect was live, the aware arm setting the
+yardstick on two of the four spots (`holdem-hu` 700.8 against 660.9, `plo5-hu`
+250.3 against 160.7, an inflation of 56%); no verdict flipped there, but a spot
+whose effect sat between the two spreads would have. The judgement is on the
+*whole* interval, `|mean| + half-width <= yardstick`, because comparing the
+half-width alone passes an interval that reaches past the bound, and did:
+`plo4-hu` has an upper endpoint of +375.0 against a yardstick of 273.1, and
+`plo4-3way` a lower endpoint of −826.0 against 801.5.
+
+This is a **yardstick, not a pre-specified equivalence margin**: it is estimated
+from the same five seeds being judged, and its own uncertainty is not accounted
+for. What "inside" supports is the weaker, honest statement that the policy's
+effect, at its widest, is smaller than the variation the baseline itself shows
+across seeds — a practical-significance reading, not a test. **One of the four
+spots is inside.** The other three support "no effect detected at this sample
+size" only, and the table says so rather than leaving it to the reader.
+
+A wider spread would be a regression in its own right, whatever the mean did, so
+the aware arm's spread is printed beside the yardstick, with the ratio. It is
+mixed rather than uniformly worse: larger on `holdem-hu` (700.8 against 660.9,
+ratio 1.06) and `plo5-hu` (250.3 against 160.7, ratio 1.56), smaller on `plo4-hu`
+(204.3 against 273.1) and `plo4-3way` (419.6 against 801.5). Five seeds estimate a
+standard deviation loosely — with four and four degrees of freedom an F-test needs
+a variance ratio near 6.4 to say anything — so this is reported as "no consistent
+inflation", not as a measured equality, and it does not enter the yardstick.
+
+The interval bounds the *effect*; it does not by itself say the aware arm's
+estimate is as close to the truth, which is a separate question and needs a
+reference. Each arm was therefore also scored against a run at ten times the
+budget — 200,000 BR trajectories per player — paired by seed. The reference has
+to share the arm's seed: the seed drives the *solve*, so a reference at a
+disjoint seed scores a different strategy rather than the same one measured
+better. On `holdem-hu` a disjoint-seed reference reports a mean absolute error of
+1308.7 where a shared-seed one reports 101.3, a factor of thirteen, all of it
+strategy variation. A shared seed is not neutral either: the tool seeds its
+best-response RNG once and consumes trajectories in order
+(`external_best_response.c:1206-1215`), so a run at N is a *prefix* of the same
+policy's run at ten times N, and *both* arms' errors carry that prefix covariance
+with their own stream. So each arm is scored against *both* policies'
+higher-budget runs, and the symmetric comparison — each arm against its own — is
+separated from the crossed one:
+
+| Spot | FIFO@20k vs FIFO@200k | aware@20k vs aware@200k | own-policy gap |
+|---|---|---|---|
+| `holdem-hu` | 80.4 | 136.7 | 56.3 |
+| `plo4-hu` | 253.5 | 187.2 | 66.3 |
+| `plo5-hu` | 178.9 | 193.5 | 14.6 |
+| `plo4-3way` | 492.7 | 615.4 | 122.7 |
+
+| Spot | FIFO@20k vs aware@200k | aware@20k vs FIFO@200k | refs differ by |
+|---|---|---|---|
+| `holdem-hu` | 78.4 | 137.1 | 36.4 |
+| `plo4-hu` | 234.0 | 183.1 | 93.6 |
+| `plo5-hu` | 154.7 | 272.0 | 90.4 |
+| `plo4-3way` | 836.8 | 272.6 | 613.5 |
+
+The single table this replaces mixed the two readings — FIFO's *symmetric* error
+beside the aware arm's *crossed* one. That is exactly the comparison the
+seed-sharing prefix makes unfair, and on `plo4-3way` it decided the answer: a
+220 mBB margin for the aware arm where the symmetric reading gives FIFO 123. That
+much the two readings do settle, because it is a statement about which number
+goes in which column.
+
+What they do **not** settle is which arm is the more accurate estimator, and the
+table names no winner. Neither reading is neutral: both arms' errors carry a
+prefix covariance with their own RNG stream, and nothing here shows the two
+covariances are comparable, so the arm whose stream happened to be the more
+stable one could come out ahead without being the closer to the true NashConv.
+What the table carries instead is the two scales side by side: the two arms'
+own-policy errors differ by 56.3, 66.3, 14.6 and 122.7 mBB, beside reference
+spreads of 36.4, 93.6, 90.4 and 613.5. The two are stated and not compared, and
+the reason is measured rather than argued. They are taken at different budgets —
+the spread at ten times the arm's, the difference from the arm's own — and the
+spread shrinks as the estimator converges: measured on `holdem-hu`, the policy
+spread is 119.7 mBB at 20,000 trajectories against 36.4 at 200,000, so the 56.3
+gap exceeds the spread taken at 200,000 and is half the spread taken at 20,000,
+which is the budget the gap is derived from. And a spread between two estimates
+is not a difference between two mean absolute errors: holding the arms and their
+gap fixed and moving only the references changes which of the two numbers is the
+larger, with the references in exact agreement making the gap the larger one
+while both sit far from the truth. A comparison the references decide on their
+own is not evidence about the arms. Closing the question properly needs an
+evaluation RNG independent of the solve's, which the tool does not expose: its
+best-response seed *is* `--seed`, and that is what makes the strategy. So the
+accuracy question is left open rather than answered with a number the method
+cannot support.
+
+`plo4-3way` is the extreme case of the same problem. Its two higher-budget runs
+disagree by 613.5 mBB on the *same* strategy — the same order as every error in
+either table — so an estimate at 20,000 trajectories is no more informative there
+than the disagreement between two estimates at ten times the budget. Five seeds
+estimate a mean absolute error loosely, and the symmetric reading does put the
+aware arm further out on three spots of four; but the ordering that makes those
+errors "mixed" is the same ordering the paragraph above refuses to read, because
+the two prefix covariances are not shown to be comparable. Mixed errors are
+therefore not an absence of loss: if the order is unreadable, so is the claim
+that the loss is not uniform, and an accuracy loss on *every* workload is not
+excluded by what is printed. So the block carries no accuracy conclusion at all —
+not a per-spot ranking, and not the absence of a uniform loss. The question stays
+open until the arms are scored against a reference that does not share their
+stream, which the tool does not expose. The two arms do reproduce the published
+paired differences exactly (−92.2 ± 152.5, +119.9 ± 205.5, −0.3 ± 265.5, −221.4 ±
+487.0), which is the internal consistency check that the reference is measuring
+the same thing.
+
+Criterion (1) — faster convergence to the same quality target — is **not**
+established, and the reason is structural rather than a matter of sample size.
+The feature does not touch convergence: the Scope section below records that the
+training is untouched and the call site only changes how many draws a
+*measurement* spends, so the four workloads reach the same strategy in the same
+number of iterations under both policies. That is what the training-counter and
+fingerprint guards establish, and it is not something the interval measures. The
+paired interval bounds how far the *reported* value moves — a different question,
+and one it answers only partly, since on three spots it reaches past the
+baseline's own spread. So the benchmark shows neither policy reaching a quality
+target, and it shows no solver converging faster. What it does establish is the
+cost half of the issue and nothing more. The farthest of the four individual
+95% interval endpoints is 2.3% of that spot's reported value, while the policy
+costs 2.7-20.9% fewer terminal evaluations against a baseline yardstick of
+0.8-5.3%. The low end is `plo5-hu`, and it belongs in the range: the four
+workloads save 14.4%, 14.6%, 2.7% and 20.9%, and quoting only the three large
+ones would overstate the cheapest case by a factor of five. The figure is the **farthest interval
+endpoint**, not the half-width, and that is the same distinction the verdict
+above turns on: the
+half-widths are 1.2-1.7%, but the intervals are not centred on zero, so the
+largest shift the data admits is 2.26% on `holdem-hu` (its interval reaching
+−281.5 against a reference of 12,459.8), 1.80% on `plo4-hu`, 1.68% on `plo5-hu`
+and 1.61% on `plo4-3way`. It is a **descriptive maximum over four separate
+intervals, not a simultaneous 95% bound**: each interval can miss its own
+parameter, so four of them do not carry 95% joint coverage and 2.3% is not a
+guaranteed accuracy limit on the effect — a simultaneous bound would be wider.
+Two readings have to be kept apart, and the table gives
+both. No spot detects an effect: all four intervals contain zero, so none of
+them licenses "the policy moved the answer". Only `holdem-hu` has its whole
+interval inside the baseline's own spread. On the other three the
+interval reaches past it and the data supports only "no effect detected
+at this sample size" — for `plo5-hu` that is the whole story (smallest saving,
+2.7%, and the widest spread, the aware arm's 250.3 against the baseline's 160.7),
+while `plo4-hu` and `plo4-3way` combine the largest savings with too few seeds
+to narrow the interval further. The accuracy comparison above names no winner on
+any of them, so the interval is all there is to read.
+
+Criterion (2) — better quality for the same compute budget — is **not**
+established on any of the four spots. The cap curve says something about cost,
+not about quality:
+
+```text
+holdem-hu   cap curve  1x 383,006  2x 385,646  4x 386,910  8x 389,690  16x 392,856  (fifo at 1x: 452,678)
+plo4-hu     cap curve  1x 541,937  2x 560,369  4x 584,595  8x 599,083  16x 619,203  (fifo at 1x: 633,843)
+plo5-hu     cap curve  1x 626,925  2x 655,613  4x 698,269  8x 727,981  16x 754,677  (fifo at 1x: 643,357)
+plo4-3way   cap curve  1x 1,242,466  2x 1,466,196  4x 1,774,180  8x 2,197,318  16x 2,647,162  (fifo at 1x: 1,573,060)
+```
+
+Raising the cap sixteen-fold buys 2.6% more work on `holdem-hu`: the confidence
+rule, not the cap, is what stops most decisions there, so the saving has nowhere
+to go back to. Only that spot saturates. The other three keep climbing, and two
+cross the baseline — `plo5-hu` at 2x (655,613 against 643,357) and `plo4-3way`
+at 4x (1,774,180 against 1,573,060) — so there the cap does bind and the aware
+arm can spend more terminal evaluations than FIFO once the cap is lifted. That
+is the whole of what the curve shows. It is a fact about cost: the saved
+evaluations are reallocatable there. It is not a fact about quality, because the
+curve reports no NashConv at a cap tuned to the same budget, and the interval
+table above already bounds `plo4-3way`'s reported movement at 1.61% (and
+`plo5-hu`'s at 1.68%) with no effect detected. Criterion (2) needs
+a quality comparison at a matched budget — spend FIFO's evaluations, then
+compare the answer — and this benchmark does not
+run one, on this spot or on any other. The three-way spot is also the one where the
+priority telemetry fills the ladder instead of the bottom two buckets
+(`35008,2684,468,78,17,44,29,25` against `holdem-hu`'s `272,52,13,0,0,0,0,0`),
+which is the same fact read from the other side.
+
+The size of the saving is not a constant, and the reason is structural. Only a
+*repeat* visit to a decision is capped: a decision below the coverage floor ranks
+in the top bucket, so its first visit keeps the full cap. A budget that visits
+most decisions once therefore has almost nothing to reallocate, and the revisit
+curve says so:
+
+```text
+holdem-hu   revisit curve  2,000 13.4%  5,000 14.8%  20,000 15.4%
+plo4-hu     revisit curve  2,000 1.9%   5,000 4.2%   20,000 14.5%
+plo5-hu     revisit curve  2,000 0.1%   5,000 0.3%   20,000 2.6%
+plo4-3way   revisit curve  2,000 1.8%   5,000 6.9%   20,000 21.0%
+```
+
+At the CLI's own default of 2,000 trajectories the saving is 0.1% on `plo5-hu`
+and 1.8% on `plo4-3way`; at 20,000 it is 2.6% and 21.0%. The script therefore
+defaults to 20,000 and prints the curve rather than quoting a single budget.
+`plo5-hu` — 28,148 decisions against `holdem-hu`'s 337 — is the spot where a
+given budget buys the fewest revisits, which is why it is also the spot where
+the priority has the least to do.
+
+What #271 measures as a demonstration, on one spot and 20 iterations, is below
+under "Measured: the cap in a solve"; the workload table under "Measured: does
+the priority do what it claims?" remains the measurement of the *allocation* the
+layer makes, on a synthetic workload whose composition is known in advance.
 
 ## The suite found a defect, and the guards bite
 
@@ -376,6 +715,13 @@ So `order()` has no consumer, and giving it one would have meant inventing the
 prefix semantics first. `pe_work_priority_bucket()` is the primitive that does
 have one: it is a pure function of a *single* decision's metadata, needs no
 batch, and answers "how much does this one deserve".
+
+The benchmarks confirm that reading from the outside. `PE_WORK_SCHED_BALANCED`
+and `PE_WORK_SCHED_UNCERTAINTY_AWARE` differ only in the *permutation* they
+return — `pe_work_priority_bucket()` ranks the two alike, because only FIFO is
+special-cased in it — so a solve run under either measures byte-identical
+terminal evaluations and NashConv. The two policies are indistinguishable at
+this call site, which is exactly what "the bucket, not the permutation" predicts.
 
 The site is `src/solver/domain/external_best_response.c`. In `br_rollout()`,
 `pe_br_resolve_decision()` already receives its `pe_br_sampling_config_t` **by
@@ -559,10 +905,10 @@ other side of the threshold difference above: `max_budget_hits` rises from 3 to
 87 — decisions stopped by their (lowered) cap before their `z`-wide intervals
 cleared.
 
-This is a demonstration, not the four solve-level benchmarks #258 asks for (see
-above): one spot, one game, 20 iterations. The numbers are machine-independent
-because they are sample *counts* rather than wall clock, but they are not a
-convergence study.
+This is a demonstration and not the four solve-level workloads, which are
+measured above: one spot, one game, 20 iterations. The numbers are
+machine-independent because they are sample *counts* rather than wall clock, but
+they are not a convergence study.
 
 ### The unit test's numbers
 
@@ -689,8 +1035,11 @@ and the one-second granularity bites both.
   knows nothing about best responses.
 - **`pe_work_priority_order()` still has no consumer.** Nothing in a solve
   consumes a permutation, for the reason in the audit: the solve loop drains its
-  batch. The distributed scheduler is still not wired, and the benchmarks that
-  would justify wiring it are still #258's.
+  batch. The distributed scheduler is still not wired. The solve-level
+  benchmarks above measure the *bucket*, which is the half that has a consumer;
+  what would justify wiring the ordering half — a caller that services a prefix
+  of a batch under a finite budget — does not exist yet, and inventing it is not
+  part of #258.
 - **CFR training is untouched.** The layer only orders work, and the call site
   only changes how many draws a *measurement* spends. It computes no regrets and
   averages no strategies.

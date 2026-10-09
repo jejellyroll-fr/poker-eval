@@ -5,6 +5,11 @@ on:
     branches: [ master ]
     paths:
       - 'benchmarks/solver/**'
+      - 'scripts/benchmarks/**'
+      # test_bench_work_priority.py reads this guide and asserts its published
+      # bounds, savings and reference conclusions, so a guide-only change has to
+      # run the step that checks them.
+      - 'docs/cfr/guides/work_priority_scheduling.md'
       - 'examples/nlhe_hu/**'
       - 'examples/plo_hu_streets/**'
       - 'tools/pe_preflop_solve.c'
@@ -60,6 +65,11 @@ jobs:
           python3 -m py_compile benchmarks/solver/run_benchmarks.py
           python3 -m unittest discover -s benchmarks/solver -p 'test_*.py'
           python3 benchmarks/solver/run_benchmarks.py --suite smoke --list
+
+      - name: Validate work-priority benchmark
+        run: |
+          python3 -m py_compile scripts/benchmarks/bench_work_priority.py
+          python3 -m unittest discover -s scripts/benchmarks -p 'test_*.py'
 
       - name: Run deterministic structural smoke corpus twice
         run: |

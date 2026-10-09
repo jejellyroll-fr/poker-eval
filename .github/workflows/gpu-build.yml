@@ -24,9 +24,19 @@ jobs:
       - name: Install OpenCL (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/apt-mirrors.txt 2>/dev/null || true
-          timeout 120s sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=8 -o Acquire::https::Timeout=8 || true
-          timeout 120s sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends opencl-headers ocl-icd-opencl-dev || true
+          # The runner's own sources point at the Azure-local mirror, which is
+          # the fast path from a GitHub-hosted runner. An earlier workaround
+          # rewrote them to the public archive, sending every fetch over the
+          # open internet; a 120 s cap with a single retry then turned a slow
+          # mirror into a hard failure, and `|| true` swallowed it so the job
+          # died later on a missing header with no trace of the cause. Keep the
+          # runner default, let apt retry the download itself, and fail here if
+          # the headers cannot be fetched.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends opencl-headers ocl-icd-opencl-dev
 
       - name: Configure
         run: |
