@@ -310,7 +310,8 @@ def strategy_fingerprint(text):
     0.1 percentage points -- a divergence is caught as soon as one decision
     moves by that much, and the smallest divergence measured (500 iterations
     against 5,000) moves 1% of the shared decisions on the least sensitive spot
-    and 99% on the most sensitive.
+    and 99% on the most sensitive. What it cannot catch is a change smaller than
+    that one bin on every decision at once.
 
     A multiset, not the sequence: the row cap fills per-node quotas in
     storage-id order, so which rows make the cut depends on a storage the

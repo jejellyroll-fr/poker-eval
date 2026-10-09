@@ -279,6 +279,72 @@ class StrategyFingerprintTests(unittest.TestCase):
         self.assertEqual(bench.strategy_fingerprint("no table here"), [])
 
 
+class FingerprintResolutionTests(unittest.TestCase):
+    """The fingerprint's resolution is the report's, so the guide states it.
+
+    `pe_preflop_solve.c` prints the frequency column with `%.1f%%`, and
+    `strategy_fingerprint` takes the printed token verbatim, so the guard cannot
+    resolve what the report did not print: one bin is 0.1 percentage points. The
+    guide claimed the check misses "half a percentage point" -- five bins -- and
+    the contradiction was internal, since the same paragraph had just stated the
+    0.1-point granularity. A reader can falsify the wrong claim from the report
+    itself, where 49.5% and 49.7% sit side by side.
+    """
+
+    STEP = 1e-5   # in probability: 0.001 percentage points
+
+    @staticmethod
+    def printed(probability):
+        return "%.1f" % (probability * 100.0)
+
+    def test_the_report_prints_the_column_to_a_tenth(self) -> None:
+        # The measurement below is about this format, so pin it at the source: a
+        # `%.2f` column would move the bin, and the guide's threshold with it.
+        source = PREFLOP_SOLVE_C.read_text(encoding="utf-8")
+        self.assertIn('printf("%s%s=%.1f%%", a ? "," : "",', source)
+
+    def test_one_bin_is_a_tenth_of_a_point(self) -> None:
+        # Derived from the format rather than asserted: the widest run of
+        # probabilities that print identically is one bin wide.
+        widest, start, previous = 0.0, 0.0, None
+        p = 0.0
+        while p <= 1.0 + self.STEP / 2.0:
+            current = self.printed(p)
+            if previous is None:
+                start = p
+            elif current != previous:
+                widest = max(widest, (p - start) * 100.0)
+                start = p
+            previous = current
+            p += self.STEP
+        self.assertGreater(widest, 0.09)
+        self.assertLessEqual(widest, 0.1 + 2.0 * self.STEP * 100.0)
+
+    def test_four_tenths_of_a_point_always_shows(self) -> None:
+        # The example the wrong claim turned on: 0.4 points is four bins wide,
+        # so no probability in the range can hide it.
+        hidden, p = [], 0.0
+        while p + 0.004 <= 1.0:
+            if self.printed(p) == self.printed(p + 0.004):
+                hidden.append(p)
+            p += self.STEP
+        self.assertEqual(hidden, [])
+
+    def test_a_fifth_of_a_point_shows(self) -> None:
+        # Two frequencies the published report actually prints.
+        self.assertNotEqual(self.printed(0.495), self.printed(0.497))
+
+    def test_the_guide_states_the_bin_and_not_a_half_point(self) -> None:
+        # Normalised first: the paragraph is wrapped, and a literal substring
+        # search over a wrapped line cannot see the phrase it guards -- the old
+        # claim read "half a\npercentage point", which the raw text does not
+        # contain.
+        text = " ".join(GUIDE.read_text(encoding="utf-8").split())
+        self.assertNotIn("half a percentage point", text)
+        self.assertIn("smaller than a tenth of a percentage point on every "
+                      "decision at once", text)
+
+
 class FingerprintBindingTests(unittest.TestCase):
     """The fingerprint has to bind a frequency vector to a decision.
 

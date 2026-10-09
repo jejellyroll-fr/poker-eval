@@ -388,9 +388,9 @@ report's limit, not the guard's. A divergence is caught as soon as one decision
 moves by that much: the smallest divergence measured here (500 iterations against
 5,000) moves 1% of the shared decisions on the least sensitive spot and 99% on
 the most sensitive, so the granularity is well below the size of a real training
-divergence. What the fingerprint does *not* catch is a change smaller than half a
-percentage point on every decision at once, and no run of this benchmark has
-produced one.
+divergence. What the fingerprint does *not* catch is a change smaller than a
+tenth of a percentage point on every decision at once — one bin of the column —
+and no run of this benchmark has produced one.
 
 The storage exemption is the same kind of narrow: the measurement resolves
 infosets the training never reached, and `storage_v2.c` derives the byte totals
