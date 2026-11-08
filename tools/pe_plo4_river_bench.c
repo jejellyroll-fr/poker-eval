@@ -227,6 +227,7 @@ static bench_heap_t heap_measure(void)
 
 static double heap_now(const bench_heap_t *heap)
 {
+    (void)heap;
 #if defined(__APPLE__)
     malloc_statistics_t stats;
     memset(&stats, 0, sizeof(stats));
@@ -236,7 +237,6 @@ static double heap_now(const bench_heap_t *heap)
     struct mallinfo2 info = mallinfo2();
     return (double)info.uordblks;
 #else
-    (void)heap;
     return 0.0;
 #endif
 }
@@ -407,7 +407,7 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
     setup_seconds = monotonic_seconds() - setup_start;
 
     for (index = 0u; index < combos; ++index)
-        if (fixture.opp_reach[index] == 0.0)
+        if (!(fixture.opp_reach[index] > 0.0))
             ++fixture.zero_reach;
 
     heap = heap_measure();

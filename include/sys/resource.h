@@ -5,6 +5,13 @@
 #ifndef POKER_EVAL_SYS_RESOURCE_H
 #define POKER_EVAL_SYS_RESOURCE_H
 
+/* This shim forwards to the C library header with #include_next, which strict
+ * -Wpedantic builds reject as a compiler extension.  Treat it as a system
+ * header so consumers can keep including <sys/resource.h> under -Werror. */
+#if defined(__GNUC__)
+#pragma GCC system_header
+#endif
+
 #if defined(_WIN32)
 struct rusage
 {
