@@ -26,6 +26,7 @@
 #include <poker_eval/solver/pe_showdown.h>
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,14 +89,19 @@ typedef struct
 
 static int g_failures;
 
-#define BENCH_FAIL(...)                          \
-    do                                           \
-    {                                            \
-        fprintf(stderr, "pe-plo4-river-bench: "); \
-        fprintf(stderr, __VA_ARGS__);            \
-        fputc('\n', stderr);                     \
-        ++g_failures;                            \
-    } while (0)
+static void bench_fail(const char *format, ...)
+{
+    char message[512];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    fprintf(stderr, "pe-plo4-river-bench: %s\n", message);
+    ++g_failures;
+}
+
+#define BENCH_FAIL(...) bench_fail(__VA_ARGS__)
 
 static uint64_t lcg_next(uint64_t *state)
 {
@@ -292,10 +298,14 @@ static uint64_t fingerprint_values(const double *values, size_t count)
 
     for (index = 0u; index < count; ++index)
     {
-        uint64_t bits;
+        union
+        {
+            double value;
+            uint64_t bits;
+        } pun;
 
-        memcpy(&bits, &values[index], sizeof(bits));
-        hash ^= bits;
+        pun.value = values[index];
+        hash ^= pun.bits;
         hash *= 1099511628211ULL;
     }
     return hash;
@@ -441,7 +451,8 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
             deterministic = 0;
     }
 
-    memcpy(sorted_durations, durations, repetitions * sizeof(double));
+    for (repeat = 0u; repeat < repetitions; ++repeat)
+        sorted_durations[repeat] = durations[repeat];
     eval_median = median_of(sorted_durations, repetitions);
     eval_min = sorted_durations[0];
     eval_max = sorted_durations[repetitions - 1u];
