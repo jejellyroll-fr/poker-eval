@@ -26,7 +26,6 @@
 #include <poker_eval/solver/pe_showdown.h>
 
 #include <math.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,19 +88,19 @@ typedef struct
 
 static int g_failures;
 
-static void bench_fail(const char *format, ...)
+static void bench_fail(const char *id, const char *message)
 {
-    char message[512];
-    va_list args;
-
-    va_start(args, format);
-    vsnprintf(message, sizeof(message), format, args);
-    va_end(args);
-    fprintf(stderr, "pe-plo4-river-bench: %s\n", message);
+    fprintf(stderr, "pe-plo4-river-bench: %s: %s\n", id, message);
     ++g_failures;
 }
 
-#define BENCH_FAIL(...) bench_fail(__VA_ARGS__)
+static void bench_fail_repetition(const char *id, const char *message,
+                                  size_t repetition)
+{
+    fprintf(stderr, "pe-plo4-river-bench: %s: %s on repetition %zu\n", id,
+            message, repetition);
+    ++g_failures;
+}
 
 static uint64_t lcg_next(uint64_t *state)
 {
@@ -394,12 +393,12 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
         !fixture.hero_strength || !fixture.opp_strength || !fixture.opp_reach ||
         !durations || !sorted_durations)
     {
-        BENCH_FAIL("%s: allocation failed", id);
+        bench_fail(id, "allocation failed");
         goto cleanup;
     }
     if (pe_vec_alloc(&values, combos) != PE_SOLVER_OK)
     {
-        BENCH_FAIL("%s: output allocation failed", id);
+        bench_fail(id, "output allocation failed");
         goto cleanup;
     }
 
@@ -424,7 +423,7 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
                            fixture.opp_n, dead, 63.0, &values, &path) !=
         PE_SOLVER_OK)
     {
-        BENCH_FAIL("%s: showdown failed", id);
+        bench_fail(id, "showdown failed");
         goto cleanup;
     }
     heap_after = heap_now(&heap);
@@ -440,7 +439,7 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
                                fixture.opp_n, dead, 63.0, &values, &path) !=
             PE_SOLVER_OK)
         {
-            BENCH_FAIL("%s: showdown failed on repetition %zu", id, repeat);
+            bench_fail_repetition(id, "showdown failed", repeat);
             goto cleanup;
         }
         durations[repeat] = monotonic_seconds() - start;
