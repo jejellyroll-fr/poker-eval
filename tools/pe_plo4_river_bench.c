@@ -270,11 +270,9 @@ static double monotonic_seconds(void)
 
 /* Peak resident set size in bytes, or 0 when the platform does not expose it.
  * ru_maxrss is bytes on macOS and kilobytes on Linux. */
+#if !defined(_WIN32)
 static uint64_t peak_rss_bytes(void)
 {
-#if defined(_WIN32)
-    return 0u;
-#else
     struct rusage usage;
 
     if (getrusage(RUSAGE_SELF, &usage) != 0)
@@ -284,8 +282,8 @@ static uint64_t peak_rss_bytes(void)
 #else
     return (uint64_t)usage.ru_maxrss * 1024u;
 #endif
-#endif
 }
+#endif
 
 static uint64_t fingerprint_values(const double *values, size_t count)
 {
@@ -478,11 +476,19 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
            (unsigned long long)fingerprint);
     printf("      \"deterministic_across_repetitions\": %s,\n",
            deterministic ? "true" : "false");
-    if (peak_rss_bytes() != 0u)
-        printf("      \"peak_rss_bytes\": %llu,\n",
-               (unsigned long long)peak_rss_bytes());
-    else
-        printf("      \"peak_rss_bytes\": null,\n");
+#if defined(_WIN32)
+    printf("      \"peak_rss_bytes\": null,\n");
+#else
+    {
+        uint64_t peak_rss = peak_rss_bytes();
+
+        if (peak_rss != 0u)
+            printf("      \"peak_rss_bytes\": %llu,\n",
+                   (unsigned long long)peak_rss);
+        else
+            printf("      \"peak_rss_bytes\": null,\n");
+    }
+#endif
     printf("      \"allocations\": {\"available\": %s",
            heap.available ? "true" : "false");
     if (heap.available)
