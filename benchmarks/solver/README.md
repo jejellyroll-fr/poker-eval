@@ -355,13 +355,56 @@ The product solver does not expose a retained private-deal sample count today.
 The benchmark intentionally emits `null` instead of inferring or fabricating a
 number.
 
+### PLO4 river oracle and baseline (issue #280)
+
+`test_plo4_river_oracle` is the correctness side. Small deterministic river
+fixtures with 4-card private hands pin the Omaha rule (exactly two hole cards
+plus three board cards) against an explicit 2+3 enumeration, check that
+4-card hands take the pairwise fallback, and cross-check blockers, legal reach
+mass, win/tie/loss payouts and per-combo EV against an independent
+enumeration. The heads-up river terminal is compared deal by deal on a
+tractable fixture. Every fixture is exhaustive; nothing in that test is
+sampled.
+
+`tools/pe_plo4_river_bench.c` is the performance side. It evaluates the full
+Cartesian product of two deterministic ranges (16, 128 and 512 combos per
+player) on the checked-in `Ks9d4c2hTs` river board through the product
+`pe_showdown_vector()`, which for 4-card hands is the pairwise fallback. Setup
+(range construction plus hand-strength evaluation) and evaluation are timed
+separately:
+
+```bash
+cmake --build build --target pe-plo4-river-bench --parallel
+python3 benchmarks/solver/plo4_river_probe.py \
+  --bench build/tools/pe-plo4-river-bench \
+  --repeat 2 \
+  --output build/plo4-river-baseline.json
+```
+
+The emitted document is `pe-plo4-river-baseline/v1`. It carries the measured
+wall clocks, the OS peak RSS high-water mark where available, and the reported
+showdown path. The fingerprint hashes the per-combo values, so the
+deterministic part is reproducible across runs and machines while the timings
+are explicitly machine-specific evidence, not a CI speed gate.
+
+The checked-in `benchmarks/baseline/pe_plo4_river.json` is one such
+machine-specific artifact, alongside the other `benchmarks/baseline/` reports.
+
+The allocation figure is a **net heap delta measured around one evaluation**
+(blocks on macOS, bytes on glibc). It is not a count of allocation calls, and
+on platforms without a heap counter it is reported unavailable with the reason
+instead of being inferred. `evaluated_pairs` counts the blocker-legal
+hero/opponent pairs the pairwise fallback actually compares.
+
 ## CI policy
 
 `.github/workflows/solver-benchmark-smoke.yml` builds only the product solver
 and runs two complementary checks:
 
 - the five-case cross-variant structural smoke twice at 64 iterations;
-- a deterministic `holdem_flop` learning probe twice at 10,000 iterations.
+- a deterministic `holdem_flop` learning probe twice at 10,000 iterations;
+- the bounded PLO4 river microbenchmark twice, whose deterministic fields and
+  value fingerprints must match (wall clocks are recorded, not gated).
 
 The job fails when:
 
@@ -380,7 +423,9 @@ The job fails when:
 - an uncapped exhaustive report does not contain one normalized row per solver
   infoset;
 - deterministic fingerprints/metrics differ between repetitions;
-- the learning probe still contains zero non-uniform strategy rows.
+- the learning probe still contains zero non-uniform strategy rows;
+- the PLO4 baseline is sampled, leaves the pairwise path for 4-card hands, or
+  its value fingerprint changes between repetitions.
 
 It does **not** gate on wall-clock speed because shared GitHub runners are not
 performance-identical. Longer performance qualification remains a manual

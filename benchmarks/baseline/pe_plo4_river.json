@@ -1,0 +1,104 @@
+{
+  "schema": "pe-plo4-river-baseline/v1",
+  "issue": 280,
+  "bench_binary": "build/tools/pe-plo4-river-bench",
+  "board": "Ks9d4c2hTs",
+  "pot": 63,
+  "seed": 20260906,
+  "repetitions_per_run": 5,
+  "runs": 2,
+  "exact": true,
+  "sampled": false,
+  "machine": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "processor": "arm",
+    "python": "3.9.6"
+  },
+  "reproducibility": {
+    "checked": true,
+    "fingerprints_match": true,
+    "mismatches": []
+  },
+  "timings_are_machine_specific": true,
+  "results": [
+    {
+      "id": "small",
+      "hero_combos": 16,
+      "opp_combos": 16,
+      "zero_reach_opp_combos": 1,
+      "evaluated_pairs": 169,
+      "blocked_pairs": 87,
+      "showdown_path": "pairwise",
+      "exact": true,
+      "values_fingerprint": "b20b518015f12c43",
+      "setup_seconds": 2.8541499999999998e-05,
+      "eval_seconds_median": 2.29e-07,
+      "eval_seconds_min": 1.25e-07,
+      "eval_seconds_max": 5e-07,
+      "pair_evaluations_per_second": 811004997.792,
+      "peak_rss_bytes": 2342912,
+      "allocations": {
+        "available": true,
+        "counter": "malloc_default_zone.blocks_in_use",
+        "unit": "blocks",
+        "before": 52,
+        "after": 52,
+        "net": 0,
+        "per_evaluation": 0.0
+      }
+    },
+    {
+      "id": "medium",
+      "hero_combos": 128,
+      "opp_combos": 128,
+      "zero_reach_opp_combos": 11,
+      "evaluated_pairs": 11230,
+      "blocked_pairs": 5154,
+      "showdown_path": "pairwise",
+      "exact": true,
+      "values_fingerprint": "b0f13dd72ff38983",
+      "setup_seconds": 0.0001100835,
+      "eval_seconds_median": 1.0104e-05,
+      "eval_seconds_min": 8.333e-06,
+      "eval_seconds_max": 1.9042e-05,
+      "pair_evaluations_per_second": 1182110747.857,
+      "peak_rss_bytes": 2342912,
+      "allocations": {
+        "available": true,
+        "counter": "malloc_default_zone.blocks_in_use",
+        "unit": "blocks",
+        "before": 55,
+        "after": 55,
+        "net": 0,
+        "per_evaluation": 0.0
+      }
+    },
+    {
+      "id": "larger",
+      "hero_combos": 512,
+      "opp_combos": 512,
+      "zero_reach_opp_combos": 46,
+      "evaluated_pairs": 181114,
+      "blocked_pairs": 81030,
+      "showdown_path": "pairwise",
+      "exact": true,
+      "values_fingerprint": "fd070fd50d3f1b83",
+      "setup_seconds": 0.0004973125,
+      "eval_seconds_median": 0.00046460399999999997,
+      "eval_seconds_min": 0.000398833,
+      "eval_seconds_max": 0.000557167,
+      "pair_evaluations_per_second": 437649526.948,
+      "peak_rss_bytes": 2392064,
+      "allocations": {
+        "available": true,
+        "counter": "malloc_default_zone.blocks_in_use",
+        "unit": "blocks",
+        "before": 55,
+        "after": 55,
+        "net": 0,
+        "per_evaluation": 0.0
+      }
+    }
+  ]
+}
