@@ -84,8 +84,6 @@ typedef struct
     int available;
     const char *counter;
     const char *unit;
-    double before;
-    double after;
 } bench_heap_t;
 
 static int g_failures;
