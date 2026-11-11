@@ -61,8 +61,19 @@ struct pe_persist_ops_t {
                 uint64_t *out_iteration);
 };
 
-/** The portable v2 checkpoint adapter. The returned table is static. */
+/** The portable checkpoint adapter at the current format version. */
 const pe_persist_ops_t *pe_persist_checkpoint_ops(void);
+
+/**
+ * The same adapter at an explicit format version, for compatibility testing
+ * and migration diagnostics. Version 2 writes the pre-widening flat layout:
+ * 16-bit combo counts and no sampler-state section, and it refuses an infoset
+ * wider than UINT16_MAX rather than truncating it. The current version writes
+ * 32-bit combo counts. Every other version returns NULL, including the packed
+ * legacy layout and version 3, which this format's reader does not accept.
+ * The returned table is static.
+ */
+const pe_persist_ops_t *pe_persist_checkpoint_ops_versioned(uint32_t version);
 
 #ifdef __cplusplus
 }

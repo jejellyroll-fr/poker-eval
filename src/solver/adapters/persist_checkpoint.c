@@ -456,10 +456,24 @@ fail:
     return -1;
 }
 
-static int checkpoint_save(void *self, const pe_persist_target_t *target,
-                           const pe_solver_config_t *config,
-                           const pe_storage_ops_t *storage, void *storage_self,
-                           uint64_t iteration)
+/* Version 3 and later share the flat entry layout; version 4 widens the combo
+   count to 32 bits, so the writer refuses a v3 file it cannot represent. */
+static int write_combo_count(FILE *file, uint32_t version,
+                             pe_combo_count_t combos)
+{
+    if (version >= 4u)
+        return write_u32(file, combos);
+    if (combos > UINT16_MAX)
+        return -1;
+    return write_u16(file, (uint16_t)combos);
+}
+
+static int checkpoint_save_version(void *self,
+                                   const pe_persist_target_t *target,
+                                   const pe_solver_config_t *config,
+                                   const pe_storage_ops_t *storage,
+                                   void *storage_self, uint64_t iteration,
+                                   uint32_t version)
 {
     FILE *file;
     size_t count;
@@ -473,6 +487,12 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
         !storage || !storage_self || !storage->count || !storage->key_at ||
         !storage->shape || !storage->values_const)
         return -1;
+    /* Version 2 is the pre-widening flat layout: the same records with a
+       16-bit combo count and no sampler section. Version 1 and the packed
+       legacy layout are not emitted here, and neither is version 3, which no
+       reader of this format accepts. */
+    if (version != 2u && version != PE_CHECKPOINT_VERSION)
+        return -1;
     count = storage->count(storage_self);
     if (count > PE_CHECKPOINT_MAX_ENTRIES)
         return -1;
@@ -482,7 +502,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
     hash = hash_config(config);
     rng = pe_solver_rng_stream(config->seed, 0u, iteration, 0u, 0u);
     if (write_bytes(file, PE_CHECKPOINT_MAGIC, 8u) != 0 ||
-        write_u32(file, PE_CHECKPOINT_VERSION) != 0 ||
+        write_u32(file, version) != 0 ||
         write_u32(file, PE_CHECKPOINT_ENDIAN) != 0 ||
         write_u64(file, iteration) != 0 ||
         write_u64(file, (uint64_t)count) != 0 ||
@@ -512,7 +532,8 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
                                       (pe_value_array_t)which, NULL) != NULL)
                 array_mask |= (uint8_t)(1u << which);
         if (write_u64(file, key) != 0 || write_u16(file, actions) != 0 ||
-            write_u32(file, combos) != 0 || write_bytes(file, &street, 1u) != 0 ||
+            write_combo_count(file, version, combos) != 0 ||
+            write_bytes(file, &street, 1u) != 0 ||
             write_bytes(file, &array_mask, 1u) != 0 || write_u16(file, 0u) != 0 ||
             write_u64(file, (uint64_t)slots) != 0)
             goto fail;
@@ -538,9 +559,11 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
                     goto fail;
         }
     }
+    if (version >= 3u)
     {
         /* Sampler state: its length, then its bytes (none is a length of 0).
-           Inside the checksummed payload. */
+           Inside the checksummed payload. Version 2 predates the section, and
+           its reader stops after the entries. */
         size_t state_size = target->sampler_state ? target->sampler_state_size : 0u;
         if (state_size > PE_CHECKPOINT_MAX_SAMPLER_STATE ||
             write_u64(file, (uint64_t)state_size) != 0 ||
@@ -750,6 +773,25 @@ fail:
     return -1;
 }
 
+static int checkpoint_save(void *self, const pe_persist_target_t *target,
+                           const pe_solver_config_t *config,
+                           const pe_storage_ops_t *storage, void *storage_self,
+                           uint64_t iteration)
+{
+    return checkpoint_save_version(self, target, config, storage,
+                                   storage_self, iteration,
+                                   PE_CHECKPOINT_VERSION);
+}
+
+static int checkpoint_save_v2(void *self, const pe_persist_target_t *target,
+                              const pe_solver_config_t *config,
+                              const pe_storage_ops_t *storage,
+                              void *storage_self, uint64_t iteration)
+{
+    return checkpoint_save_version(self, target, config, storage,
+                                   storage_self, iteration, 2u);
+}
+
 const pe_persist_ops_t *pe_persist_checkpoint_ops(void)
 {
     static const pe_persist_ops_t ops = {
@@ -758,4 +800,18 @@ const pe_persist_ops_t *pe_persist_checkpoint_ops(void)
         checkpoint_load
     };
     return &ops;
+}
+
+const pe_persist_ops_t *pe_persist_checkpoint_ops_versioned(uint32_t version)
+{
+    static const pe_persist_ops_t v2 = {
+        "checkpoint-v2-writer",
+        checkpoint_save_v2,
+        checkpoint_load
+    };
+    if (version == PE_CHECKPOINT_VERSION)
+        return pe_persist_checkpoint_ops();
+    if (version == 2u)
+        return &v2;
+    return NULL;
 }
