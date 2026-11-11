@@ -99,11 +99,31 @@ jobs:
           # apt retry the download; see the note in gpu-build.yml. A slow mirror
           # must fail this step with the real apt error, not be masked by
           # `|| true` and surface later as "valgrind: command not found".
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update \
-            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            --no-install-recommends valgrind
+          #
+          # The mirror is occasionally unresolvable from the runner
+          # ("Temporary failure resolving 'azure.archive.ubuntu.com'"); retry
+          # the whole install and, after the second failure, point the job at
+          # public resolvers before the last attempt.
+          set -u
+          install_valgrind() {
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 &&
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends valgrind
+          }
+          for attempt in 1 2 3; do
+            if install_valgrind; then exit 0; fi
+            echo "apt attempt ${attempt} failed" >&2
+            if [ "${attempt}" = 2 ]; then
+              echo "apt still failing; using public resolvers" >&2
+              printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' |
+                sudo tee /etc/resolv.conf >/dev/null
+            fi
+            sleep 10
+          done
+          echo "could not install valgrind" >&2
+          exit 1
 
       - name: Configure (Release)
         run: |
