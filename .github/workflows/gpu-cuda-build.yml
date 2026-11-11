@@ -28,7 +28,7 @@ jobs:
       # archive at all.
       - name: Install build tools
         run: |
-          set -uo pipefail
+          set -u
           have_cmake() { command -v cmake >/dev/null 2>&1; }
 
           if ! have_cmake; then
