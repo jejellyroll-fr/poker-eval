@@ -179,7 +179,7 @@ int pe_monker_tree_vector_init(
     pe_monker_tree_vector_t *out,
     const mpf_tree_def_t *tree,
     uint8_t player_count,
-    uint16_t combo_count,
+    pe_combo_count_t combo_count,
     pe_monker_tree_terminal_values_fn terminal_values,
     void *user)
 {

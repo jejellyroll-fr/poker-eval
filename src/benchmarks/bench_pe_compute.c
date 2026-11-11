@@ -54,7 +54,7 @@ static const pe_compute_ops_t *select_backend(const char *name)
 }
 
 static void print_row(const char *backend, const char *kernel,
-                      size_t batch, uint16_t actions, uint16_t combos,
+                      size_t batch, uint16_t actions, pe_combo_count_t combos,
                       double seconds, size_t elements)
 {
     double ns_per_element = elements != 0u && seconds > 0.0
@@ -283,7 +283,7 @@ int main(int argc, char **argv)
     void *backend = NULL;
     const size_t batches[] = {1000u, 100000u, 1000000u};
     const uint16_t action_counts[] = {2u, 3u, 5u, 9u};
-    const uint16_t combo_counts[] = {169u, 1326u, 65535u};
+    const pe_combo_count_t combo_counts[] = {169u, 1326u, 65535u};
     size_t b;
     size_t a;
     size_t c;

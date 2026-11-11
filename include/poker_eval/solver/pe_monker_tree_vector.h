@@ -10,6 +10,7 @@
 #define POKER_EVAL_PE_MONKER_TREE_VECTOR_H
 
 #include <poker_eval/engine/solvers/cfr/mpf_tree.h>
+#include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_traversal.h>
 
 #ifdef __cplusplus
@@ -51,7 +52,7 @@ int pe_monker_tree_vector_init(
     pe_monker_tree_vector_t *out,
     const mpf_tree_def_t *tree,
     uint8_t player_count,
-    uint16_t combo_count,
+    pe_combo_count_t combo_count,
     pe_monker_tree_terminal_values_fn terminal_values,
     void *user);
 

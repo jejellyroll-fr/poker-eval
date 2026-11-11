@@ -34,6 +34,7 @@
 #define POKER_EVAL_PE_VECTOR_H
 
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_storage_port.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -53,25 +54,9 @@ typedef struct {
     size_t n;
 } pe_vec_t;
 
-/**
- * Private-combo identity and range width (VEC-02).
- *
- * A heads-up PLO4 river range holds C(47,4) = 178,365 combos, which does not
- * fit in 16 bits. Combo ids and counts are therefore 32 bits throughout the
- * vector lane: wide enough for every Omaha river range, narrow enough that a
- * per-combo table stays cache-friendly and that `combo * action` products are
- * computed in 64 bits at the call site. Action ids, chance outcome ids and
- * player indices keep their narrow types; only private-combo indexing is
- * widened.
- *
- * PE_COMBO_COUNT_MAX is the largest count an init or best-response entry
- * point accepts. It is a checked bound, not a promise that the allocation
- * succeeds: beyond it the API returns a documented error instead of
- * overflowing an index or silently truncating one.
- */
-typedef uint32_t pe_combo_id_t;
-typedef uint32_t pe_combo_count_t;
-#define PE_COMBO_COUNT_MAX 16777216u
+/* The private-combo vocabulary (pe_combo_id_t, pe_combo_count_t,
+ * PE_COMBO_COUNT_MAX) lives in pe_storage_port.h: batch and storage records
+ * index combos too, so the port header is the one place both lanes agree on. */
 
 /** Reach probabilities: non-negative, multiplied along a path. */
 typedef pe_vec_t pe_reach_vec_t;

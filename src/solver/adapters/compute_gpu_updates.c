@@ -25,7 +25,7 @@ static int pack_alloc(pe_gpu_update_pack_t *pack, size_t group_count,
         group_count + 1u, sizeof(*pack->offsets));
     pack->action_counts = (uint16_t *)calloc(
         group_count, sizeof(*pack->action_counts));
-    pack->combo_counts = (uint16_t *)calloc(
+    pack->combo_counts = (pe_combo_count_t *)calloc(
         group_count, sizeof(*pack->combo_counts));
     pack->slots = (uint32_t *)calloc(update_count, sizeof(*pack->slots));
     pack->regret_deltas = (float *)calloc(
@@ -297,7 +297,7 @@ int pe_gpu_update_pack_build(const pe_compute_config_t *config,
             const pe_update_group_t *source = &batch->soa.groups[i];
             size_t values;
             uint16_t actions;
-            uint16_t combos;
+            pe_combo_count_t combos;
 
             if (source->actions == 0u || source->combos == 0u ||
                 source->offset > batch->soa.value_count ||

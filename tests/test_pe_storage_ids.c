@@ -199,7 +199,7 @@ static double cell(int i, int a, int c)
 }
 
 static void fill_and_verify(const char *label, int n_infosets,
-                            uint16_t (*actions_of)(int), uint16_t (*combos_of)(int))
+                            uint16_t (*actions_of)(int), pe_combo_count_t (*combos_of)(int))
 {
     pe_storage_t *s = pe_storage_create((size_t)n_infosets);
     int i;
@@ -278,9 +278,12 @@ static void fill_and_verify(const char *label, int n_infosets,
 }
 
 static uint16_t scalar_actions(int i) { return (uint16_t)(2 + (i % 7)); }
-static uint16_t scalar_combos(int i)  { (void)i; return 1; }
+static pe_combo_count_t scalar_combos(int i) { (void)i; return 1u; }
 static uint16_t vector_actions(int i) { return (uint16_t)(2 + (i % 4)); }
-static uint16_t vector_combos(int i)  { return (uint16_t)(1 + (i % 5) * 331); }
+static pe_combo_count_t vector_combos(int i)
+{
+    return (pe_combo_count_t)(1 + (i % 5) * 331);
+}
 
 static void test_slab_layout(void)
 {

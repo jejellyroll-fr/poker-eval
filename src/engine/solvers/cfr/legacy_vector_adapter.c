@@ -126,7 +126,7 @@ static int adapter_terminal_values(const void *state,
     pe_legacy_vector_adapter_t *adapter =
         (pe_legacy_vector_adapter_t *)user;
     uint8_t player;
-    uint16_t combo;
+    pe_combo_id_t combo;
     (void)reach;
     for (player = 0u; player < players; ++player) {
         double value = adapter->legacy->get_utility(
@@ -189,7 +189,7 @@ static const void *adapter_apply_chance(const void *state, int outcome,
 
 int pe_legacy_vector_adapter_init(pe_legacy_vector_adapter_t *adapter,
                                   cfr_game_t *legacy,
-                                  uint16_t combo_count)
+                                  pe_combo_count_t combo_count)
 {
     int players;
     if (!adapter || !legacy || combo_count == 0u || !legacy->initial_state ||

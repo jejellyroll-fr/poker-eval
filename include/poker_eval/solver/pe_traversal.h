@@ -135,12 +135,10 @@ typedef struct
 } pe_chance_vector_ctx_t;
 
 /* Both entry points reject a game whose combo_count exceeds
- * PE_COMBO_COUNT_MAX. pe_traversal_ctx_set_storage additionally rejects a
- * game wider than UINT16_MAX: the update batch and storage records (and the
- * checkpoint v2 format they serialize) still index combos with 16 bits, so a
- * wider range is refused at that boundary instead of being truncated. The
- * in-memory traversal and best-response lanes carry the full 178,365-combo
- * PLO4 river range. */
+ * PE_COMBO_COUNT_MAX. Beyond that bound the API returns a documented error
+ * rather than overflowing an index or truncating one. The update batch,
+ * storage records and the v4 checkpoint format all carry 32-bit combo counts,
+ * so a full 178,365-combo PLO4 river range fits every lane. */
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game);
 int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,

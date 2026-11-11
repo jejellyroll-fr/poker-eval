@@ -4,6 +4,7 @@
 #define POKER_EVAL_LEGACY_VECTOR_ADAPTER_H
 
 #include <poker_eval/engine/solvers/cfr/cfr_core.h>
+#include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_traversal.h>
 
 #include <stddef.h>
@@ -32,7 +33,7 @@ typedef struct pe_legacy_vector_adapter_t {
  */
 int pe_legacy_vector_adapter_init(pe_legacy_vector_adapter_t *adapter,
                                   cfr_game_t *legacy,
-                                  uint16_t combo_count);
+                                  pe_combo_count_t combo_count);
 
 /** Release tracked child states and clear the adapter. */
 void pe_legacy_vector_adapter_destroy(pe_legacy_vector_adapter_t *adapter);

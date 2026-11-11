@@ -43,7 +43,7 @@ static int g_failures = 0;
         }                                                      \
     } while (0)
 
-static pe_solver_config_t sized(uint64_t infosets, uint16_t actions, uint16_t combos)
+static pe_solver_config_t sized(uint64_t infosets, uint16_t actions, pe_combo_count_t combos)
 {
     pe_solver_config_t cfg = pe_solver_config_default();
     cfg.problem.expected_infosets = infosets;
@@ -57,7 +57,7 @@ static pe_solver_config_t sized(uint64_t infosets, uint16_t actions, uint16_t co
  * ------------------------------------------------------------------ */
 
 static void compare_against_reality(const char *label, uint64_t infosets,
-                                    uint16_t actions, uint16_t combos)
+                                    uint16_t actions, pe_combo_count_t combos)
 {
     pe_solver_config_t cfg = sized(infosets, actions, combos);
     pe_solver_t *solver;

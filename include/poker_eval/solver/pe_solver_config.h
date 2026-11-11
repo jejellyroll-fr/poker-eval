@@ -22,6 +22,7 @@
 #define POKER_EVAL_PE_SOLVER_CONFIG_H
 
 #include <poker_eval/solver/pe_sampling_policy.h>
+#include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_br_sampling.h>
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_storage_policy.h>
@@ -285,7 +286,7 @@ typedef struct {
     uint64_t expected_infosets;
     uint16_t expected_actions;
     /** 1 outside the vector lane. */
-    uint16_t expected_combos;
+    pe_combo_count_t expected_combos;
 } pe_problem_config_t;
 
 /* ------------------------------------------------------------------ *

@@ -21,7 +21,7 @@ typedef struct
 {
     pe_infoset_id_t infoset;
     uint16_t action;
-    uint16_t combo;
+    pe_combo_id_t combo;
     double delta;
     double average_delta;
 } pe_update_t;
@@ -39,7 +39,7 @@ typedef struct
 {
     pe_infoset_id_t infoset;
     uint16_t actions;
-    uint16_t combos;
+    pe_combo_count_t combos;
     uint32_t offset;
 } pe_update_group_t;
 
@@ -105,7 +105,7 @@ void pe_update_soa_destroy(pe_update_soa_t *soa);
 int pe_update_batch_soa_begin_group(pe_update_batch_t *batch,
                                     pe_infoset_id_t infoset,
                                     uint16_t actions,
-                                    uint16_t combos,
+                                    pe_combo_count_t combos,
                                     double **out_deltas,
                                     double **out_average_deltas);
 

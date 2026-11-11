@@ -66,7 +66,7 @@ typedef struct
 
     /** 1 outside the vector lane. Never 0: an infoset with no value is not
         stored at all. */
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
 
     int8_t street;
     uint8_t flags;
@@ -160,7 +160,7 @@ pe_infoset_id_t pe_storage_find(const pe_storage_t *storage, uint64_t key);
 pe_infoset_id_t pe_storage_resolve(pe_storage_t *storage,
                                    uint64_t key,
                                    uint16_t action_count,
-                                   uint16_t combo_count,
+                                   pe_combo_count_t combo_count,
                                    int8_t street);
 
 /**

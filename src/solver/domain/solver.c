@@ -634,7 +634,7 @@ static int pe_solver_vector_strategy_from_storage(
     pe_solver_vector_strategy_adapter_t *adapter =
         (pe_solver_vector_strategy_adapter_t *)user;
     uint16_t action_count;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
     pe_infoset_id_t id;
     const double *average;
     size_t length = 0u;
@@ -668,12 +668,12 @@ static int pe_solver_vector_strategy_from_storage(
     {
         double total = 0.0;
         double value = average[pe_storage_slot_at(
-            combo_count, action, (uint16_t)combo)];
+            combo_count, action, (pe_combo_id_t)combo)];
         uint16_t candidate;
         for (candidate = 0u; candidate < action_count; ++candidate)
         {
             double candidate_value = average[pe_storage_slot_at(
-                combo_count, candidate, (uint16_t)combo)];
+                combo_count, candidate, (pe_combo_id_t)combo)];
             if (!finite_double(candidate_value) || candidate_value < 0.0)
                 return -1;
             total += candidate_value;
@@ -1886,7 +1886,8 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
             for (size_t next_id = 0; next_id < infoset_count; ++next_id)
             {
                 pe_infoset_id_t id = (pe_infoset_id_t)next_id;
-                uint16_t actions = 0u, combos = 0u;
+                uint16_t actions = 0u;
+                pe_combo_count_t combos = 0u;
                 int8_t street = PE_STREET_UNKNOWN;
                 const double *average;
                 if (solver->storage->shape(solver->storage_self, id,
@@ -2236,7 +2237,7 @@ pe_solver_status_t pe_solver_strategy(const pe_solver_t *solver,
         solver->strategy_cache->values = grown;
         solver->strategy_cache->capacity = out->count;
     }
-    for (uint16_t combo = 0u; combo < out->combo_count; ++combo)
+    for (pe_combo_id_t combo = 0u; combo < out->combo_count; ++combo)
     {
         double total = 0.0;
         for (uint16_t action = 0u; action < out->action_count; ++action)

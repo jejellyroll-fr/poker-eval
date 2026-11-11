@@ -6,6 +6,7 @@
 #define POKER_EVAL_PE_REGRET_H
 
 #include <stdint.h>
+#include <poker_eval/solver/pe_storage_port.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -22,7 +23,7 @@ extern "C" {
  * @return 0 on success, -1 for NULL arrays or a zero dimension.
  */
 int pe_regret_match_vector(const double *regrets, double *strategy,
-                           uint16_t action_count, uint16_t combo_count);
+                           uint16_t action_count, pe_combo_count_t combo_count);
 
 /**
  * Apply one regret-delta batch using CFR+ semantics.
@@ -39,7 +40,7 @@ int pe_regret_plus_apply_delta(double *regrets, const double *delta,
 
 /** Compute regret-matching+ probabilities from a clamped regret span. */
 int pe_regret_match_plus_vector(const double *regrets, double *strategy,
-                               uint16_t action_count, uint16_t combo_count);
+                               uint16_t action_count, pe_combo_count_t combo_count);
 
 #ifdef __cplusplus
 }

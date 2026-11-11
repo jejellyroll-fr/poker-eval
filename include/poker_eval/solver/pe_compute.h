@@ -6,6 +6,7 @@
 #define POKER_EVAL_PE_COMPUTE_H
 
 #include <poker_eval/solver/pe_batch.h>
+#include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_capabilities.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_vector.h>
@@ -80,7 +81,7 @@ typedef struct pe_infoset_layout_t
     const pe_infoset_id_t *infosets;
     const uint32_t *offsets;       /* count + 1 entries                    */
     const uint16_t *action_counts; /* count entries                        */
-    const uint16_t *combo_counts;  /* count entries                        */
+    const pe_combo_count_t *combo_counts;  /* count entries                        */
 } pe_infoset_layout_t;
 
 /**

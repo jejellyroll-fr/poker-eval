@@ -2941,7 +2941,7 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
     ctx->game.root = root;
     ctx->game.user = ctx;
     ctx->game.player_count = (uint8_t)players;
-    ctx->game.combo_count = (uint16_t)combos;
+    ctx->game.combo_count = (pe_combo_count_t)combos;
     ctx->game.is_terminal = py_solver_v3_is_terminal;
     ctx->game.acting_player = py_solver_v3_acting_player;
     ctx->game.action_count = py_solver_v3_action_count;
@@ -2966,7 +2966,7 @@ static PyObject *py_solver_v3_create(PyObject *self, PyObject *args,
     config.exploitability_interval = (uint64_t)interval;
     config.problem.expected_infosets = (uint64_t)expected_infosets;
     config.problem.expected_actions = (uint16_t)expected_actions;
-    config.problem.expected_combos = (uint16_t)combos;
+    config.problem.expected_combos = (pe_combo_count_t)combos;
     deps = pe_solver_deps_default();
     deps.vector_game = &ctx->game;
     ctx->solver = pe_solver_create(&config, &deps);

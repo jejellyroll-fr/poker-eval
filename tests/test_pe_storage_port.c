@@ -57,7 +57,7 @@ typedef struct
 {
     uint64_t key[TOY_MAX_INFOSETS];
     uint16_t actions[TOY_MAX_INFOSETS];
-    uint16_t combos[TOY_MAX_INFOSETS];
+    pe_combo_count_t combos[TOY_MAX_INFOSETS];
     int8_t street[TOY_MAX_INFOSETS];
     uint8_t flags[TOY_MAX_INFOSETS];
     size_t offset[TOY_MAX_INFOSETS];
@@ -97,7 +97,7 @@ static pe_infoset_id_t toy_find(const void *self, uint64_t key)
 }
 
 static pe_infoset_id_t toy_resolve(void *self, uint64_t key, uint16_t na,
-                                   uint16_t nc, int8_t street)
+                                   pe_combo_count_t nc, int8_t street)
 {
     toy_t *t = (toy_t *)self;
     pe_infoset_id_t id;
@@ -127,7 +127,7 @@ static pe_infoset_id_t toy_resolve(void *self, uint64_t key, uint16_t na,
 }
 
 static int toy_shape(const void *self, pe_infoset_id_t id, uint16_t *na,
-                     uint16_t *nc, int8_t *street)
+                     pe_combo_count_t *nc, int8_t *street)
 {
     const toy_t *t = (const toy_t *)self;
     if (!t || (size_t)id >= t->count)
@@ -241,7 +241,8 @@ static void run_contract(const pe_storage_ops_t *ops)
                           : (uint16_t)1;
         pe_infoset_id_t id = ops->resolve(s, 0x5000ull + (uint64_t)i, na, nc,
                                           (int8_t)(i % 4));
-        uint16_t got_a = 0, got_c = 0;
+        uint16_t got_a = 0;
+        pe_combo_count_t got_c = 0;
         int8_t got_s = 0;
         double *v;
 
@@ -273,7 +274,8 @@ static void run_contract(const pe_storage_ops_t *ops)
        dense ids make one unnecessary, and this is where that is used. */
     for (i = 0; i < (int)ops->count(s); ++i)
     {
-        uint16_t na = 0, nc = 0;
+        uint16_t na = 0;
+        pe_combo_count_t nc = 0;
         const double *v;
         int bad = 0;
 
@@ -313,7 +315,8 @@ static void run_contract(const pe_storage_ops_t *ops)
     CHECK(ops->values_const(s, 0, PE_VALUES_LOCKED, NULL) == NULL,
           "an untouched array was readable");
     {
-        uint16_t na = 0, nc = 0;
+        uint16_t na = 0;
+        pe_combo_count_t nc = 0;
         size_t n, k;
         double *locked;
         const double *reread;

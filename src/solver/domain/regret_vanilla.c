@@ -5,10 +5,10 @@
 #include <poker_eval/solver/pe_regret.h>
 
 int pe_regret_match_vector(const double *regrets, double *strategy,
-                           uint16_t action_count, uint16_t combo_count)
+                           uint16_t action_count, pe_combo_count_t combo_count)
 {
     uint16_t action;
-    uint16_t combo;
+    pe_combo_id_t combo;
 
     if (!regrets || !strategy || action_count == 0u || combo_count == 0u)
         return -1;

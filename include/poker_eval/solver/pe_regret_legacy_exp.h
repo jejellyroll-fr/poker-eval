@@ -10,6 +10,7 @@
 #define POKER_EVAL_PE_REGRET_LEGACY_EXP_H
 
 #include <stdint.h>
+#include <poker_eval/solver/pe_storage_port.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,7 +30,7 @@ extern "C" {
  */
 int pe_regret_match_legacy_exp_vector(const double *regrets, double *strategy,
                                       uint16_t action_count,
-                                      uint16_t combo_count,
+                                      pe_combo_count_t combo_count,
                                       double lambda);
 
 #ifdef __cplusplus

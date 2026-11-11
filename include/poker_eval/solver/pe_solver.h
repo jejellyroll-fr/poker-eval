@@ -285,7 +285,7 @@ struct pe_strategy_view_t {
     const double *values;
     size_t count;
     uint16_t action_count;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
 };
 
 /* ------------------------------------------------------------------ *

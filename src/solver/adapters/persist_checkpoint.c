@@ -14,8 +14,13 @@
 #include "../domain/finite_double.h"
 
 /* Version 3 appends a length-prefixed sampler-state section after the
-   entries (issue #256); version 2 files, which have none, still load. */
-#define PE_CHECKPOINT_VERSION 3u
+   entries (issue #256); version 2 files, which have none, still load.
+
+   Version 4 (issue #281) widens the stored combo count from 16 to 32 bits so
+   a full PLO4 river range of 178,365 combos round-trips intact. Versions 1-3
+   are still read: their combo field is 16 bits. The magic is unchanged
+   because the version field, not the magic, selects the record layout. */
+#define PE_CHECKPOINT_VERSION 4u
 #define PE_CHECKPOINT_MAX_SAMPLER_STATE (1u << 20)
 #define PE_CHECKPOINT_ENDIAN  0x01020304u
 #define PE_CHECKPOINT_MAX_ENTRIES 10000000u
@@ -27,7 +32,7 @@ typedef struct
 {
     uint64_t key;
     uint16_t actions;
-    uint16_t combos;
+    pe_combo_count_t combos;
     int8_t street;
     uint8_t flags;
     uint8_t present;
@@ -77,6 +82,23 @@ static int read_u16(FILE *file, uint16_t *out)
         return -1;
     *out = (uint16_t)((uint16_t)bytes[0] |
                       (uint16_t)((uint16_t)bytes[1] << 8));
+    return 0;
+}
+
+static int read_u32(FILE *file, uint32_t *out);
+
+/* Combo counts are 32-bit from version 4 on; earlier files stored 16. */
+static int read_combo_count(FILE *file, uint32_t version,
+                            pe_combo_count_t *out)
+{
+    uint16_t narrow;
+    if (!out)
+        return -1;
+    if (version >= 4u)
+        return read_u32(file, out);
+    if (read_u16(file, &narrow) != 0)
+        return -1;
+    *out = (pe_combo_count_t)narrow;
     return 0;
 }
 
@@ -306,7 +328,7 @@ static int apply_entries(const checkpoint_entry_t *entries, size_t count,
             storage_self, entries[i].key, entries[i].actions,
             entries[i].combos, entries[i].street);
         uint16_t stored_actions;
-        uint16_t stored_combos;
+        pe_combo_count_t stored_combos;
         uint8_t which;
         if (id == PE_INFOSET_ID_INVALID ||
             storage->shape(storage_self, id, &stored_actions,
@@ -352,7 +374,7 @@ static int checkpoint_load_legacy(FILE *file,
         read_bytes(file, &capacity, sizeof(capacity)) != 0 ||
         read_bytes(file, &count64, sizeof(count64)) != 0 ||
         read_bytes(file, &iteration, sizeof(iteration)) != 0 ||
-        (version != 1u && version != 2u && version != 3u) ||
+        (version < 1u || version > PE_CHECKPOINT_VERSION) ||
         capacity == 0u || (capacity & (capacity - 1u)) != 0u ||
         capacity > ((uint64_t)1u << 26) || count64 > capacity ||
         count64 > PE_CHECKPOINT_MAX_ENTRIES || count64 > SIZE_MAX)
@@ -474,7 +496,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
     {
         uint64_t key;
         uint16_t actions;
-        uint16_t combos;
+        pe_combo_count_t combos;
         int8_t street;
         uint8_t array_mask = 0u;
         uint8_t metadata_flags = 0u;
@@ -490,7 +512,7 @@ static int checkpoint_save(void *self, const pe_persist_target_t *target,
                                       (pe_value_array_t)which, NULL) != NULL)
                 array_mask |= (uint8_t)(1u << which);
         if (write_u64(file, key) != 0 || write_u16(file, actions) != 0 ||
-            write_u16(file, combos) != 0 || write_bytes(file, &street, 1u) != 0 ||
+            write_u32(file, combos) != 0 || write_bytes(file, &street, 1u) != 0 ||
             write_bytes(file, &array_mask, 1u) != 0 || write_u16(file, 0u) != 0 ||
             write_u64(file, (uint64_t)slots) != 0)
             goto fail;
@@ -610,7 +632,7 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
         size_t slot;
         if (read_u64(file, &entries[i].key) != 0 ||
             read_u16(file, &entries[i].actions) != 0 ||
-            read_u16(file, &entries[i].combos) != 0 ||
+            read_combo_count(file, version, &entries[i].combos) != 0 ||
             read_bytes(file, &entries[i].street, 1u) != 0 ||
             read_bytes(file, &array_mask, 1u) != 0 ||
             read_u16(file, &reserved16) != 0 || read_u64(file, &count64) != 0 ||
@@ -691,7 +713,7 @@ static int checkpoint_load(void *self, const pe_persist_source_t *source,
             storage_self, entries[i].key, entries[i].actions,
             entries[i].combos, entries[i].street);
         uint16_t stored_actions;
-        uint16_t stored_combos;
+        pe_combo_count_t stored_combos;
         uint8_t which;
         if (id == PE_INFOSET_ID_INVALID ||
             storage->shape(storage_self, id, &stored_actions,

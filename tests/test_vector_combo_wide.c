@@ -14,10 +14,14 @@
  */
 
 #include <poker_eval/solver/pe_best_response.h>
+#include <poker_eval/solver/pe_persist.h>
+#include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_traversal.h>
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define WIDE_COMBOS 178365u
@@ -241,6 +245,124 @@ static void test_wide_combo_ids_in_callbacks(void)
           capture.max_opponent_combo);
 }
 
+static void test_wide_storage_binding(void)
+{
+    pe_vector_game_t game;
+    pe_traversal_ctx_t ctx;
+    const pe_storage_ops_t *ops = pe_storage_ram_ops();
+    void *storage = NULL;
+    wide_capture_t capture = {0};
+
+    memset(&ctx, 0, sizeof(ctx));
+    wide_init_game(&game, &WIDE_LEAF, (pe_combo_count_t)WIDE_COMBOS,
+                   &capture);
+    CHECK(pe_traversal_ctx_init(&ctx, &game) == 0,
+          "wide traversal init failed");
+    if (ctx.initialized && ops != NULL)
+    {
+        CHECK(ops->create(&storage, 1u) == 0, "storage creation failed");
+        CHECK(pe_traversal_ctx_set_storage(&ctx, ops, storage) == 0,
+              "a 178,365-combo game was refused by storage binding");
+        ops->destroy(storage);
+    }
+    pe_traversal_ctx_destroy(&ctx);
+}
+
+static const char *wide_checkpoint_path(void)
+{
+    static char path[512];
+    const char *directory = getenv("PE_TEST_TMPDIR");
+    int written;
+
+    if (!directory || !*directory)
+        directory = ".";
+    written = snprintf(path, sizeof(path), "%s/wide_combo_checkpoint.bin",
+                       directory);
+    if (written < 0 || (size_t)written >= sizeof(path))
+        return NULL;
+    return path;
+}
+
+/* Storage and checkpoint records carry the combo count too: the wide range
+ * must survive resolve, shape, values and a v4 checkpoint round-trip. */
+static void test_wide_storage_and_checkpoint(void)
+{
+    const pe_storage_ops_t *ops = pe_storage_ram_ops();
+    const pe_persist_ops_t *persist = pe_persist_checkpoint_ops();
+    pe_solver_config_t config = pe_solver_config_default();
+    const char *path = wide_checkpoint_path();
+    pe_persist_target_t target = {0};
+    pe_persist_source_t source = {0};
+    pe_infoset_id_t id;
+    pe_infoset_id_t restored_id;
+    pe_combo_count_t combos = 0u;
+    uint16_t actions = 0u;
+    size_t length = 0u;
+    uint64_t iteration = 0u;
+    double *regret;
+    const double *restored;
+    void *left = NULL;
+    void *right = NULL;
+
+    CHECK(path != NULL && ops != NULL && persist != NULL,
+          "wide checkpoint dependencies unavailable");
+    if (!path || !ops || !persist)
+        return;
+    target.path = path;
+    target.game_hash = UINT64_C(0x11112222);
+    target.tree_hash = UINT64_C(0x33334444);
+    source.path = path;
+    source.game_hash = UINT64_C(0x11112222);
+    source.tree_hash = UINT64_C(0x33334444);
+    config.problem.expected_infosets = 1u;
+    config.problem.expected_actions = 1u;
+    config.problem.expected_combos = (pe_combo_count_t)WIDE_COMBOS;
+    CHECK(ops->create(&left, 1u) == 0 && ops->create(&right, 1u) == 0,
+          "wide storage creation failed");
+    if (!left || !right)
+        goto done;
+    id = ops->resolve(left, UINT64_C(0x281), 1u,
+                      (pe_combo_count_t)WIDE_COMBOS, 3);
+    CHECK(id != PE_INFOSET_ID_INVALID, "wide infoset resolution failed");
+    if (id == PE_INFOSET_ID_INVALID)
+        goto done;
+    CHECK(ops->shape(left, id, &actions, &combos, NULL) == 0 &&
+              actions == 1u && combos == (pe_combo_count_t)WIDE_COMBOS,
+          "wide storage shape is %u x %u", actions, combos);
+    regret = ops->values(left, id, PE_VALUES_REGRET, &length);
+    CHECK(regret != NULL && length == (size_t)WIDE_COMBOS,
+          "wide regret slab has %zu slots", length);
+    if (!regret)
+        goto done;
+    regret[0] = 1.5;
+    regret[WIDE_COMBOS - 1u] = -2.5;
+    CHECK(persist->save(NULL, &target, &config, ops, left, 700u) == 0,
+          "wide checkpoint save failed");
+    CHECK(persist->load(NULL, &source, &config, ops, right, &iteration) == 0,
+          "wide checkpoint load failed");
+    CHECK(iteration == 700u, "wide checkpoint restored iteration %llu",
+          (unsigned long long)iteration);
+    restored_id = ops->find(right, UINT64_C(0x281));
+    CHECK(restored_id != PE_INFOSET_ID_INVALID,
+          "wide infoset was not restored");
+    combos = 0u;
+    CHECK(ops->shape(right, restored_id, &actions, &combos, NULL) == 0 &&
+              combos == (pe_combo_count_t)WIDE_COMBOS,
+          "restored combo count is %u", combos);
+    restored = ops->values_const(right, restored_id, PE_VALUES_REGRET,
+                                 &length);
+    CHECK(restored != NULL && length == (size_t)WIDE_COMBOS &&
+              fabs(restored[WIDE_COMBOS - 1u] + 2.5) < 1e-15,
+          "the last combo's value did not round-trip");
+done:
+    if (ops != NULL)
+    {
+        ops->destroy(left);
+        ops->destroy(right);
+    }
+    remove(path);
+}
+
 static void test_oversized_combo_count_rejected(void)
 {
     pe_vector_game_t game;
@@ -265,6 +387,8 @@ int main(void)
     test_wide_terminal_traversal();
     test_wide_best_response();
     test_wide_combo_ids_in_callbacks();
+    test_wide_storage_binding();
+    test_wide_storage_and_checkpoint();
     test_oversized_combo_count_rejected();
     if (failures != 0)
     {

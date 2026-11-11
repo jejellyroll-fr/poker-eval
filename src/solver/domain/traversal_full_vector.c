@@ -418,11 +418,8 @@ int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,
     if (!ctx || !ctx->initialized || !storage || !storage_self ||
         !storage->resolve || !storage->values)
         return -1;
-    /* The batch and storage records still index combos with 16 bits, and the
-     * checkpoint format stores them that way. Refuse the combination instead
-     * of truncating a wide range's ids on the way into storage; the in-memory
-     * traversal and best response above 65,535 combos stay available. */
-    if (ctx->game == NULL || ctx->game->combo_count > UINT16_MAX)
+    if (ctx->game == NULL ||
+        ctx->game->combo_count > PE_COMBO_COUNT_MAX)
         return -1;
     ctx->storage = storage;
     ctx->storage_self = storage_self;
@@ -577,11 +574,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         key = game->infoset_key(state, game->user);
     if (ctx->storage != NULL)
     {
-        /* Storage records still carry 16-bit combo ids (checkpoint format v2);
-         * pe_traversal_ctx_set_storage refuses a wider game, so this cast is
-         * checked at the boundary rather than truncating silently. */
         infoset = ctx->storage->resolve(ctx->storage_self, key, actions,
-                                        (uint16_t)game->combo_count,
+                                        game->combo_count,
                                         PE_STREET_UNKNOWN);
         if (infoset == PE_INFOSET_ID_INVALID)
             return -1;
@@ -611,8 +605,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         double *regrets = ctx->storage->values(
             ctx->storage_self, infoset, PE_VALUES_REGRET, NULL);
         if (regrets == NULL || pe_regret_match_vector(
-                regrets, strategies, actions,
-                (uint16_t)game->combo_count) != 0)
+                regrets, strategies, actions, game->combo_count) != 0)
         {
             free(strategies);
             free(child_values);
@@ -795,7 +788,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                     }
         }
         if (pe_update_batch_soa_begin_group(
-                out_batch, infoset, actions, (uint16_t)game->combo_count,
+                out_batch, infoset, actions, game->combo_count,
                 &deltas, &average_deltas) != 0)
         {
             pe_vec_free(&opponent);
