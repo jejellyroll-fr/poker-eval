@@ -2602,9 +2602,9 @@ static const void *py_solver_v3_apply_action(const void *state,
 }
 
 static int py_solver_v3_combo_compatible(const void *state, uint8_t player,
-                                         uint16_t player_combo,
+                                         pe_combo_id_t player_combo,
                                          uint8_t opponent,
-                                         uint16_t opponent_combo, void *user)
+                                         pe_combo_id_t opponent_combo, void *user)
 {
     py_solver_v3_context_t *ctx = (py_solver_v3_context_t *)user;
     PyObject *args = Py_BuildValue("(OKKKK)", py_solver_v3_object(state),

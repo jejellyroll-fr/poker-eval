@@ -780,8 +780,8 @@ static void pe_solver_vector_measure_release_state(const void *state,
 }
 
 static int pe_solver_vector_measure_combo_compatible(
-    const void *state, uint8_t player, uint16_t player_combo,
-    uint8_t opponent, uint16_t opponent_combo, void *user)
+    const void *state, uint8_t player, pe_combo_id_t player_combo,
+    uint8_t opponent, pe_combo_id_t opponent_combo, void *user)
 {
     pe_solver_vector_strategy_adapter_t *adapter =
         (pe_solver_vector_strategy_adapter_t *)user;

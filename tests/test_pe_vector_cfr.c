@@ -414,8 +414,9 @@ static const void *sampled_action_apply(const void *state, uint16_t action,
 }
 
 static int sampled_action_compatible(const void *state, uint8_t player,
-                                     uint16_t player_combo, uint8_t opponent,
-                                     uint16_t opponent_combo, void *user)
+                                     pe_combo_id_t player_combo,
+                                     uint8_t opponent,
+                                     pe_combo_id_t opponent_combo, void *user)
 {
     (void)state;
     (void)user;

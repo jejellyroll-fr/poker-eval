@@ -37,7 +37,7 @@ typedef struct pe_monker_strategy_t pe_monker_strategy_t;
 
 /** Map one vector-lane combo in a game state to a tree node and four cards. */
 typedef int (*pe_monker_combo_decoder_fn)(const void *state,
-                                          uint16_t combo,
+                                          pe_combo_id_t combo,
                                           int *out_node,
                                           int out_cards[4],
                                           void *user);

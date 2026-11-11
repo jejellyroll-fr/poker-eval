@@ -210,7 +210,8 @@ static int vector_valid(const pe_vector_game_t *game)
 {
     return game && game->root && game->player_count > 0 &&
            game->player_count <= PE_TRAVERSAL_MAX_PLAYERS &&
-           game->combo_count > 0 && game->is_terminal &&
+           game->combo_count > 0 &&
+           game->combo_count <= PE_COMBO_COUNT_MAX && game->is_terminal &&
            game->acting_player && game->action_count && game->apply_action;
 }
 
@@ -273,9 +274,9 @@ static int vector_visit(pe_traversal_ctx_t *ctx, const void *state,
 
 static int vector_combo_is_compatible(const pe_vector_game_t *game,
                                       const void *state, uint8_t player,
-                                      uint16_t player_combo,
+                                      pe_combo_id_t player_combo,
                                       uint8_t opponent,
-                                      uint16_t opponent_combo)
+                                      pe_combo_id_t opponent_combo)
 {
     int compatible;
 
@@ -289,11 +290,11 @@ static int vector_combo_is_compatible(const pe_vector_game_t *game,
 static int vector_action_weight_for_combo(
     const pe_vector_game_t *game, const void *state,
     const pe_reach_vec_t *reach, uint8_t acting, const double *strategy,
-    uint8_t player, uint16_t combo, double *out_weight)
+    uint8_t player, pe_combo_id_t combo, double *out_weight)
 {
     double compatible_reach = 0.0;
     double action_reach = 0.0;
-    uint16_t acting_combo;
+    pe_combo_id_t acting_combo;
 
     if (!game || !reach || !strategy || !out_weight ||
         acting >= game->player_count || player >= game->player_count ||
@@ -335,9 +336,10 @@ static int vector_joint_opponent_reach(
     const pe_vector_game_t *game, const void *state,
     const pe_reach_vec_t *reach, uint8_t acting,
     const uint8_t *opponents, uint8_t opponent_count, uint8_t depth,
-    uint16_t own_combo, uint16_t *selected, double partial, double *out)
+    pe_combo_id_t own_combo, pe_combo_id_t *selected, double partial,
+    double *out)
 {
-    uint16_t opponent_combo;
+    pe_combo_id_t opponent_combo;
 
     if (depth == opponent_count)
     {
@@ -415,6 +417,12 @@ int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,
 {
     if (!ctx || !ctx->initialized || !storage || !storage_self ||
         !storage->resolve || !storage->values)
+        return -1;
+    /* The batch and storage records still index combos with 16 bits, and the
+     * checkpoint format stores them that way. Refuse the combination instead
+     * of truncating a wide range's ids on the way into storage; the in-memory
+     * traversal and best response above 65,535 combos stay available. */
+    if (ctx->game == NULL || ctx->game->combo_count > UINT16_MAX)
         return -1;
     ctx->storage = storage;
     ctx->storage_self = storage_self;
@@ -547,7 +555,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             {
                 pe_value_vec_t *child = &child_values[
                     (size_t)outcome * game->player_count + p];
-                for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+                for (pe_combo_id_t combo = 0u; combo < game->combo_count;
+                     ++combo)
                     out_values[p].v[combo] += weight * child->v[combo];
             }
         }
@@ -568,8 +577,12 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         key = game->infoset_key(state, game->user);
     if (ctx->storage != NULL)
     {
+        /* Storage records still carry 16-bit combo ids (checkpoint format v2);
+         * pe_traversal_ctx_set_storage refuses a wider game, so this cast is
+         * checked at the boundary rather than truncating silently. */
         infoset = ctx->storage->resolve(ctx->storage_self, key, actions,
-                                        game->combo_count, PE_STREET_UNKNOWN);
+                                        (uint16_t)game->combo_count,
+                                        PE_STREET_UNKNOWN);
         if (infoset == PE_INFOSET_ID_INVALID)
             return -1;
         /* Allocate the average slab on first sight. The update/averaging
@@ -598,7 +611,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         double *regrets = ctx->storage->values(
             ctx->storage_self, infoset, PE_VALUES_REGRET, NULL);
         if (regrets == NULL || pe_regret_match_vector(
-                regrets, strategies, actions, game->combo_count) != 0)
+                regrets, strategies, actions,
+                (uint16_t)game->combo_count) != 0)
         {
             free(strategies);
             free(child_values);
@@ -688,7 +702,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         {
             pe_value_vec_t *child = &child_values[
                 (size_t)action * game->player_count + p];
-            for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+            for (pe_combo_id_t combo = 0u; combo < game->combo_count;
+                 ++combo)
             {
                 /* terminal_values returns a value conditional on the
                    player's own combo. Weight every value by the action
@@ -736,10 +751,10 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
             return -1;
         }
         opponent_reach = opponent.v;
-        for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+        for (pe_combo_id_t combo = 0u; combo < game->combo_count; ++combo)
         {
             uint8_t opponents[PE_TRAVERSAL_MAX_PLAYERS];
-            uint16_t selected[PE_TRAVERSAL_MAX_PLAYERS];
+            pe_combo_id_t selected[PE_TRAVERSAL_MAX_PLAYERS];
             uint8_t opponent_count = 0u;
 
             for (p = 0u; p < game->player_count; ++p)
@@ -771,7 +786,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                     if (p != (uint8_t)player)
                     {
                         double compatible_reach = 0.0;
-                        uint16_t opponent_combo;
+                        pe_combo_id_t opponent_combo;
                         for (opponent_combo = 0u;
                              opponent_combo < game->combo_count;
                              ++opponent_combo)
@@ -780,7 +795,7 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
                     }
         }
         if (pe_update_batch_soa_begin_group(
-                out_batch, infoset, actions, game->combo_count,
+                out_batch, infoset, actions, (uint16_t)game->combo_count,
                 &deltas, &average_deltas) != 0)
         {
             pe_vec_free(&opponent);
@@ -805,7 +820,8 @@ static int vector_visit_impl(pe_traversal_ctx_t *ctx, const void *state,
         {
             pe_value_vec_t *action_values = &child_values[
                 (size_t)action * game->player_count + player];
-            for (uint16_t combo = 0u; combo < game->combo_count; ++combo)
+            for (pe_combo_id_t combo = 0u; combo < game->combo_count;
+                 ++combo)
             {
                 size_t slot = (size_t)action * game->combo_count + combo;
                 deltas[slot] += chance_reach * opponent_reach[combo] *

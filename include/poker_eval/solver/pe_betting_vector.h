@@ -52,7 +52,7 @@ pe_betting_status_t pe_betting_vector_game_init(
     pe_betting_vector_game_t *out,
     const pe_betting_rules_t *rules,
     const pe_betting_state_t *root,
-    uint16_t combo_count,
+    pe_combo_count_t combo_count,
     const pe_betting_vector_ops_t *ops,
     void *user);
 

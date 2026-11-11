@@ -32,12 +32,13 @@ typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
 
 /* Return non-zero when two private-combo entries can coexist in `state`.
  * A missing callback means that the combo dimensions are independent and all
- * entries are considered compatible. */
+ * entries are considered compatible. Combo ids are pe_combo_id_t (VEC-02), so
+ * the full 178,365-combo PLO4 river range arrives without truncation. */
 typedef int (*pe_vector_combo_compatible_fn)(const void *state,
                                              uint8_t player,
-                                             uint16_t player_combo,
+                                             pe_combo_id_t player_combo,
                                              uint8_t opponent,
-                                             uint16_t opponent_combo,
+                                             pe_combo_id_t opponent_combo,
                                              void *user);
 
 /*
@@ -51,7 +52,7 @@ typedef struct pe_vector_game_t
     const void *root;
     void *user;
     uint8_t player_count;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
 
     /* Exact chance enumeration is optional. A game with these callbacks
      * unset has no chance nodes; outcome weights are normalized per state. */
@@ -133,6 +134,13 @@ typedef struct
     int initialized;
 } pe_chance_vector_ctx_t;
 
+/* Both entry points reject a game whose combo_count exceeds
+ * PE_COMBO_COUNT_MAX. pe_traversal_ctx_set_storage additionally rejects a
+ * game wider than UINT16_MAX: the update batch and storage records (and the
+ * checkpoint v2 format they serialize) still index combos with 16 bits, so a
+ * wider range is refused at that boundary instead of being truncated. The
+ * in-memory traversal and best-response lanes carry the full 178,365-combo
+ * PLO4 river range. */
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game);
 int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,

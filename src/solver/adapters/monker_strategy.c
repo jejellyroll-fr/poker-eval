@@ -252,8 +252,9 @@ static int game_terminal_values(const void *state,
 }
 
 static int game_combo_compatible(const void *state, uint8_t player,
-                                 uint16_t player_combo,
-                                 uint8_t opponent, uint16_t opponent_combo,
+                                 pe_combo_id_t player_combo,
+                                 uint8_t opponent,
+                                 pe_combo_id_t opponent_combo,
                                  void *user)
 {
     pe_monker_strategy_game_t *adapter = strategy_game(user);
@@ -266,7 +267,7 @@ static int game_strategy(const void *state, uint64_t infoset_key,
                          uint16_t action, pe_value_vec_t *out, void *user)
 {
     pe_monker_strategy_game_t *adapter = strategy_game(user);
-    uint16_t combo;
+    pe_combo_id_t combo;
     (void)infoset_key;
 
     if (!out || out->n != adapter->game.combo_count ||

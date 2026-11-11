@@ -408,7 +408,7 @@ static void monker_cli_free(monker_cli_t *state)
     memset(state, 0, sizeof(*state));
 }
 
-static int monker_cli_decode_combo(const void *state, uint16_t combo,
+static int monker_cli_decode_combo(const void *state, pe_combo_id_t combo,
                                    int *out_node, int out_cards[4],
                                    void *user)
 {

@@ -86,7 +86,7 @@ static int strategy_game_values(const void *state,
     return 0;
 }
 
-static int strategy_decode_combo(const void *state, uint16_t combo,
+static int strategy_decode_combo(const void *state, pe_combo_id_t combo,
                                  int *out_node, int out_cards[4], void *user)
 {
     (void)state;
@@ -100,7 +100,7 @@ static int strategy_decode_combo(const void *state, uint16_t combo,
     return 0;
 }
 
-static int tree_decode_combo(const void *state, uint16_t combo,
+static int tree_decode_combo(const void *state, pe_combo_id_t combo,
                              int *out_node, int out_cards[4], void *user)
 {
     const pe_monker_tree_state_t *tree_state =
