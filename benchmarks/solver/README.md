@@ -390,8 +390,9 @@ are explicitly machine-specific evidence, not a CI speed gate.
 The checked-in `benchmarks/baseline/pe_plo4_river.json` is one such
 machine-specific artifact, alongside the other `benchmarks/baseline/` reports.
 
-The allocation figure is a **net heap delta measured around one evaluation**
-(blocks on macOS, bytes on glibc). It is not a count of allocation calls, and
+The allocation figure is a **net heap delta measured across the timed repetitions
+and reported per evaluation** (blocks on macOS, bytes on glibc), so it does not
+move when `--repetitions` changes. It is not a count of allocation calls, and
 on platforms without a heap counter it is reported unavailable with the reason
 instead of being inferred. `evaluated_pairs` counts the blocker-legal
 hero/opponent pairs the pairwise fallback actually compares.

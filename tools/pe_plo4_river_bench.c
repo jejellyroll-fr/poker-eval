@@ -15,9 +15,9 @@
  * Hand strengths come from the product Omaha evaluator; the showdown path is
  * reported by the API itself, not assumed.  Peak RSS is the OS high-water mark
  * where the platform exposes one.  The allocation figure is a net heap delta
- * measured around one evaluation (blocks on Apple, bytes on glibc); it is not
- * a count of allocation calls, and it is reported as unavailable rather than
- * guessed on platforms without a counter.
+ * measured across the timed repetitions and normalised per evaluation (blocks
+ * on Apple, bytes on glibc); it is not a count of allocation calls, and it is
+ * reported as unavailable rather than guessed on platforms without a counter.
  */
 
 #include <poker_eval/core/modern_cardmask.h>
@@ -408,15 +408,20 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
     fill_range(board, combos,
                PE_BENCH_SEED ^ (uint64_t)(0x9e37u + scenario_index),
                fixture.opp_masks, fixture.opp_strength, fixture.opp_reach);
-    count_pairs(&fixture, dead);
+    /* Pair counting is benchmark bookkeeping, not range construction.  It is
+     * kept out of the setup window so setup_seconds describes the work a
+     * production caller actually does before the showdown. */
     setup_seconds = monotonic_seconds() - setup_start;
+
+    count_pairs(&fixture, dead);
 
     for (index = 0u; index < combos; ++index)
         if (!(fixture.opp_reach[index] > 0.0))
             ++fixture.zero_reach;
 
     heap = heap_measure();
-    heap_before = heap_now(&heap);
+    /* Warm-up call: fail before the timed loop and keep its allocations out of
+     * the heap window used for the per-evaluation figure. */
     if (pe_showdown_vector(fixture.hero_masks, fixture.hero_strength,
                            fixture.hero_n, fixture.opp_masks,
                            fixture.opp_strength, fixture.opp_reach,
@@ -426,7 +431,7 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
         bench_fail(id, "showdown failed");
         goto cleanup;
     }
-    heap_after = heap_now(&heap);
+    heap_before = heap_now(&heap);
 
     for (repeat = 0u; repeat < repetitions; ++repeat)
     {
@@ -449,6 +454,9 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
         else if (run_fingerprint != fingerprint)
             deterministic = 0;
     }
+    /* The heap window spans every timed repetition, so the per-evaluation
+     * figure does not change when --repetitions changes. */
+    heap_after = heap_now(&heap);
 
     for (repeat = 0u; repeat < repetitions; ++repeat)
         sorted_durations[repeat] = durations[repeat];
