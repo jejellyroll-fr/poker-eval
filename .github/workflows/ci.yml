@@ -264,10 +264,15 @@ jobs:
     name: Native Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # An unbounded --parallel build exhausts the process limit of the small
+    # arm64 runners: clang fails to spawn with "posix_spawn: Resource
+    # temporarily unavailable" while linking test binaries.
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04-arm, macos-14]
+        os: [ubuntu-24.04-arm, macos-15]
 
     steps:
     - uses: actions/checkout@v5

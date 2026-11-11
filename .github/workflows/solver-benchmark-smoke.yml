@@ -13,6 +13,7 @@ on:
       - 'examples/nlhe_hu/**'
       - 'examples/plo_hu_streets/**'
       - 'tools/pe_preflop_solve.c'
+      - 'tools/pe_plo4_river_bench.c'
       - 'CMakeLists.txt'
       - '**/CMakeLists.txt'
       - 'cmake/**'
@@ -71,6 +72,16 @@ jobs:
           python3 -m py_compile scripts/benchmarks/bench_work_priority.py
           python3 -m unittest discover -s scripts/benchmarks -p 'test_*.py'
 
+      - name: Build PLO4 river microbenchmark
+        run: cmake --build build --target pe-plo4-river-bench --parallel
+
+      - name: Run PLO4 river baseline twice
+        run: |
+          python3 benchmarks/solver/plo4_river_probe.py \
+            --bench build/tools/pe-plo4-river-bench \
+            --repeat 2 \
+            --output build/plo4-river-baseline.json
+
       - name: Run deterministic structural smoke corpus twice
         run: |
           python3 benchmarks/solver/run_benchmarks.py \
@@ -122,4 +133,5 @@ jobs:
           path: |
             build/solver-benchmarks
             build/solver-benchmarks-learned
+            build/plo4-river-baseline.json
           if-no-files-found: warn
