@@ -1,6 +1,8 @@
 #include <poker_eval/solver/pe_omaha_river.h>
 
 #include <float.h>
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int finite_double(double value)
@@ -11,6 +13,8 @@ static int finite_double(double value)
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/solver/pe_pots.h>
+#include <poker_eval/solver/pe_showdown.h>
+#include <poker_eval/solver/pe_vector.h>
 
 #define PE_OMAHA_RIVER_MAX_PLAYERS 8u
 
@@ -176,6 +180,150 @@ static int omaha_callback(const mask_t *holes, uint8_t player_count,
     return 0;
 }
 
+/* Heads-up, high-only river through the vector showdown kernel.
+ *
+ * Every combo is evaluated once against the board, and the per-combo share
+ * comes from pe_showdown_vector_mass(), so a four-card range takes the
+ * blocker-aware sweep instead of the deal-by-deal product.  The result keeps
+ * this terminal's convention: net of the player's investment and divided by
+ * the reach mass of the legal deals.  A second, unit-reach pass with the hero
+ * above every possible hand yields the deal count, which the enumeration path
+ * reports and the caller expects to stay exact.
+ *
+ * Returns 0 with the outputs filled, 1 when the shape is outside this path so
+ * the caller falls back to enumeration, or -1 on error.
+ */
+static int omaha_heads_up_values(const mask_t board,
+                                 const pe_omaha_range_t *ranges,
+                                 const pe_betting_state_t *state,
+                                 const pe_pot_slice_t *slices,
+                                 uint8_t slice_count, double *out_values,
+                                 size_t *out_deal_count,
+                                 double *out_weight_sum)
+{
+    const pe_omaha_range_t *hero_range = &ranges[0];
+    const pe_omaha_range_t *opp_range = &ranges[1];
+    size_t hero_n = hero_range->count;
+    size_t opp_n = opp_range->count;
+    StdDeck_CardMask std_board = to_std_mask(board);
+    mask_t *hero_masks = NULL;
+    mask_t *opp_masks = NULL;
+    int64_t *hero_strength = NULL;
+    int64_t *opp_strength = NULL;
+    int64_t *count_strength = NULL;
+    double *hero_reach = NULL;
+    double *opp_reach = NULL;
+    double *opp_count_reach = NULL;
+    double *mass = NULL;
+    pe_value_vec_t shares = {0};
+    pe_value_vec_t counts = {0};
+    pe_showdown_path_t path = PE_SHOWDOWN_PATH_NONE;
+    double weight_sum = 0.0;
+    double net[2] = {0.0, 0.0};
+    size_t deal_count = 0u;
+    size_t i;
+    int status = 1;
+
+    if (slice_count != 1u || slices[0].eligible_mask != 0x03u ||
+        !(slices[0].amount > 0.0) || hero_n == 0u || opp_n == 0u)
+        return 1;
+
+    hero_masks = (mask_t *)malloc(hero_n * sizeof(*hero_masks));
+    opp_masks = (mask_t *)malloc(opp_n * sizeof(*opp_masks));
+    hero_strength = (int64_t *)malloc(hero_n * sizeof(*hero_strength));
+    opp_strength = (int64_t *)malloc(opp_n * sizeof(*opp_strength));
+    count_strength = (int64_t *)malloc(hero_n * sizeof(*count_strength));
+    hero_reach = (double *)malloc(hero_n * sizeof(*hero_reach));
+    opp_reach = (double *)malloc(opp_n * sizeof(*opp_reach));
+    opp_count_reach = (double *)malloc(opp_n * sizeof(*opp_count_reach));
+    mass = (double *)calloc(hero_n, sizeof(*mass));
+    if (!hero_masks || !opp_masks || !hero_strength || !opp_strength ||
+        !count_strength || !hero_reach || !opp_reach || !opp_count_reach ||
+        !mass)
+    {
+        status = -1;
+        goto done;
+    }
+
+    for (i = 0u; i < hero_n; ++i)
+    {
+        mask_t hole = hero_range->combos[i].cards;
+        HandVal value = HandVal_NOTHING;
+        int valid = mask_popcount(hole) == 4 && (hole & board) == 0u &&
+                    StdDeck_OmahaHi_EVAL(to_std_mask(hole), std_board,
+                                         &value) == 0;
+
+        hero_masks[i] = valid ? hole : (mask_t)(hole | board);
+        hero_strength[i] = valid ? (int64_t)value : 0;
+        hero_reach[i] = hero_range->combos[i].weight;
+    }
+    for (i = 0u; i < opp_n; ++i)
+    {
+        mask_t hole = opp_range->combos[i].cards;
+        HandVal value = HandVal_NOTHING;
+        int valid = mask_popcount(hole) == 4 && (hole & board) == 0u &&
+                    StdDeck_OmahaHi_EVAL(to_std_mask(hole), std_board,
+                                         &value) == 0;
+        double weight = opp_range->combos[i].weight;
+
+        opp_masks[i] = hole;
+        opp_strength[i] = valid ? (int64_t)value : 0;
+        opp_reach[i] = valid && weight > 0.0 ? weight : 0.0;
+        opp_count_reach[i] = valid && weight > 0.0 ? 1.0 : 0.0;
+    }
+
+    if (pe_vec_alloc(&shares, hero_n) != PE_SOLVER_OK ||
+        pe_vec_alloc(&counts, hero_n) != PE_SOLVER_OK)
+    {
+        status = -1;
+        goto done;
+    }
+    if (pe_showdown_vector_mass(hero_masks, hero_strength, hero_n, opp_masks,
+                                opp_strength, opp_reach, opp_n, board,
+                                slices[0].amount, &shares, mass, &path) !=
+        PE_SOLVER_OK)
+        goto done;
+
+    for (i = 0u; i < hero_n; ++i)
+        count_strength[i] = INT64_MAX;
+    if (pe_showdown_vector(hero_masks, count_strength, hero_n, opp_masks,
+                           opp_strength, opp_count_reach, opp_n, board, 1.0,
+                           &counts, &path) != PE_SOLVER_OK)
+        goto done;
+
+    for (i = 0u; i < hero_n; ++i)
+    {
+        double weight = hero_reach[i];
+
+        weight_sum += weight * mass[i];
+        net[0] += weight * (shares.v[i] - state->invested[0] * mass[i]);
+        net[1] += weight * (slices[0].amount * mass[i] - shares.v[i] -
+                            state->invested[1] * mass[i]);
+        deal_count += (size_t)(counts.v[i] + 0.5);
+    }
+    if (!(weight_sum > 0.0))
+        goto done;
+    out_values[0] = net[0] / weight_sum;
+    out_values[1] = net[1] / weight_sum;
+    *out_deal_count = deal_count;
+    *out_weight_sum = weight_sum;
+    status = 0;
+
+done:
+    pe_vec_free(&counts);
+    pe_vec_free(&shares);
+    free(mass);
+    free(opp_count_reach);
+    free(opp_reach);
+    free(hero_reach);
+    free(count_strength);
+    free(opp_strength);
+    free(hero_strength);
+    free(opp_masks);
+    free(hero_masks);
+    return status;
+}
+
 static int omaha_river_range_values(
     const EvalContext *context,
     mask_t board,
@@ -186,7 +334,8 @@ static int omaha_river_range_values(
     double *out_values,
     uint8_t player_count,
     size_t *out_deal_count,
-    double *out_weight_sum)
+    double *out_weight_sum,
+    pe_showdown_path_t *out_path)
 {
     pe_pot_slice_t slices[PE_OMAHA_RIVER_MAX_PLAYERS];
     omaha_showdown_ctx_t callback_context;
@@ -206,6 +355,26 @@ static int omaha_river_range_values(
                                  &slice_count);
     if (status != 0)
         return status;
+    /* Four-card heads-up high-only ranges go through the vector showdown, with
+       strengths evaluated once per combo against this board.  Smaller ranges
+       keep the enumeration path, which is where the exact deal count and the
+       independent oracle live. */
+    if (!hilo8 && player_count == 2u && hole_cards == 4u &&
+        ranges[0].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS &&
+        ranges[1].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS)
+    {
+        int fast = omaha_heads_up_values(board, ranges, state, slices,
+                                         slice_count, out_values,
+                                         out_deal_count, out_weight_sum);
+        if (fast == 0)
+        {
+            if (out_path)
+                *out_path = PE_SHOWDOWN_PATH_PLO4;
+            return 0;
+        }
+        if (fast < 0)
+            return -1;
+    }
     memset(&callback_context, 0, sizeof(callback_context));
     callback_context.context = context;
     callback_context.board = board;
@@ -224,7 +393,26 @@ static int omaha_river_range_values(
         return status != 0 ? status : -1;
     for (player = 0u; player < player_count; ++player)
         out_values[player] /= *out_weight_sum;
+    if (out_path)
+        *out_path = PE_SHOWDOWN_PATH_NONE;
     return 0;
+}
+
+int pe_omaha_river_range_values_with_path(
+    const EvalContext *context,
+    mask_t board,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum,
+    pe_showdown_path_t *out_path)
+{
+    return omaha_river_range_values(context, board, ranges, state, hole_cards,
+                                    0, out_values, player_count, out_deal_count,
+                                    out_weight_sum, out_path);
 }
 
 int pe_omaha_river_range_values(
@@ -240,7 +428,7 @@ int pe_omaha_river_range_values(
 {
     return omaha_river_range_values(context, board, ranges, state, hole_cards,
                                     0, out_values, player_count, out_deal_count,
-                                    out_weight_sum);
+                                    out_weight_sum, NULL);
 }
 
 int pe_omaha_hilo8_river_range_values(
@@ -256,5 +444,5 @@ int pe_omaha_hilo8_river_range_values(
 {
     return omaha_river_range_values(context, board, ranges, state, hole_cards,
                                     1, out_values, player_count, out_deal_count,
-                                    out_weight_sum);
+                                    out_weight_sum, NULL);
 }

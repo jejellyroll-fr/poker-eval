@@ -78,6 +78,31 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
 /** Minimum opponent count before the four-card sweep is worth its setup. */
 #define PE_SHOWDOWN_PLO4_MIN_OPPONENTS 32u
 
+/**
+ * Same as pe_showdown_vector(), and also reports the compatible opponent reach
+ * mass per hero combo: the sum of `opp_reach` over the opponents that share no
+ * card with the hero hand and are not blocked by `dead`.
+ *
+ * Terminals that pay out net of a player's investment need that mass to
+ * subtract `invested * mass` and to normalise, and recovering it separately
+ * would repeat the whole blocker computation. `out_mass` may be NULL.
+ *
+ * A hero hand blocked by `dead` gets zero for both outputs.
+ */
+pe_solver_status_t pe_showdown_vector_mass(
+    const mask_t *hero_masks,
+    const int64_t *hero_strength,
+    size_t hero_n,
+    const mask_t *opp_masks,
+    const int64_t *opp_strength,
+    const double *opp_reach,
+    size_t opp_n,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    double *out_mass,
+    pe_showdown_path_t *out_path);
+
 /** Independent O(hero_n * opp_n) reference implementation. */
 pe_solver_status_t pe_showdown_vector_pairwise(const mask_t *hero_masks,
                                                const int64_t *hero_strength,

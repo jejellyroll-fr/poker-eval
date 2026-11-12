@@ -390,7 +390,8 @@ static pe_solver_status_t showdown_plo4(const showdown_entry_t *entries,
                                         const mask_t *hero_masks,
                                         const int64_t *hero_strength,
                                         size_t hero_n, mask_t dead, double pot,
-                                        pe_value_vec_t *out_values)
+                                        pe_value_vec_t *out_values,
+                                        double *out_mass)
 {
     plo4_hero_t *heroes;
     double *wins;
@@ -481,10 +482,16 @@ static pe_solver_status_t showdown_plo4(const showdown_entry_t *entries,
         hero_cursor = hero_end;
     }
 
+    /* The sweep table now holds every opponent, so the compatible mass comes
+       from the same inclusion-exclusion as the values. */
     for (size_t i = 0u; i < hero_n; ++i)
+    {
         out_values->v[i] = (hero_masks[i] & dead) != 0
                                ? 0.0
                                : pot * (wins[i] + 0.5 * ties[i]);
+        if (out_mass)
+            out_mass[i] = plo4_compatible_mass(&below, hero_masks[i], dead);
+    }
     status = PE_SOLVER_OK;
 
 done:
@@ -496,17 +503,36 @@ done:
     return status;
 }
 
-pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
-                                      const int64_t *hero_strength,
-                                      size_t hero_n,
-                                      const mask_t *opp_masks,
-                                      const int64_t *opp_strength,
-                                      const double *opp_reach,
-                                      size_t opp_n,
-                                      mask_t dead,
-                                      double pot,
-                                      pe_value_vec_t *out_values,
-                                      pe_showdown_path_t *out_path)
+/* Compatible reach mass for the pairwise fallbacks: the same set the pairwise
+   loop sums, so a terminal can subtract the invested share without a second
+   blocker computation. */
+static double pairwise_compatible_mass(const mask_t *opp_masks,
+                                       const double *opp_reach, size_t opp_n,
+                                       mask_t hero, mask_t dead)
+{
+    double mass = 0.0;
+    size_t j;
+
+    if ((hero & dead) != 0)
+        return 0.0;
+    for (j = 0; j < opp_n; ++j)
+        if ((opp_masks[j] & dead) == 0 && (opp_masks[j] & hero) == 0)
+            mass += opp_reach[j];
+    return mass;
+}
+
+pe_solver_status_t pe_showdown_vector_mass(const mask_t *hero_masks,
+                                           const int64_t *hero_strength,
+                                           size_t hero_n,
+                                           const mask_t *opp_masks,
+                                           const int64_t *opp_strength,
+                                           const double *opp_reach,
+                                           size_t opp_n,
+                                           mask_t dead,
+                                           double pot,
+                                           pe_value_vec_t *out_values,
+                                           double *out_mass,
+                                           pe_showdown_path_t *out_path)
 {
     showdown_entry_t *entries = NULL;
     double *prefix = NULL;
@@ -555,7 +581,7 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
         }
         qsort(wide, opp_n, sizeof(*wide), entry_compare);
         status = showdown_plo4(wide, opp_n, hero_masks, hero_strength,
-                               hero_n, dead, pot, out_values);
+                               hero_n, dead, pot, out_values, out_mass);
         free(wide);
         if (status == PE_SOLVER_OK && out_path)
             *out_path = PE_SHOWDOWN_PATH_PLO4;
@@ -565,9 +591,17 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
     {
         if (out_path)
             *out_path = PE_SHOWDOWN_PATH_PAIRWISE;
-        return pe_showdown_vector_pairwise(hero_masks, hero_strength, hero_n,
-                                           opp_masks, opp_strength, opp_reach,
-                                           opp_n, dead, pot, out_values);
+        status = pe_showdown_vector_pairwise(hero_masks, hero_strength,
+                                             hero_n, opp_masks, opp_strength,
+                                             opp_reach, opp_n, dead, pot,
+                                             out_values);
+        if (status == PE_SOLVER_OK && out_mass)
+            for (i = 0; i < hero_n; ++i)
+                out_mass[i] = pairwise_compatible_mass(
+                    opp_masks, opp_reach, opp_n, hero_masks[i], dead);
+        if (out_path)
+            *out_path = PE_SHOWDOWN_PATH_PAIRWISE;
+        return status;
     }
 
     entries = (showdown_entry_t *)calloc(opp_n, sizeof(*entries));
@@ -623,9 +657,16 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
             free(entries);
             if (out_path)
                 *out_path = PE_SHOWDOWN_PATH_PAIRWISE;
-            return pe_showdown_vector_pairwise(hero_masks, hero_strength, hero_n,
-                                               opp_masks, opp_strength, opp_reach,
-                                               opp_n, dead, pot, out_values);
+            status = pe_showdown_vector_pairwise(
+                hero_masks, hero_strength, hero_n, opp_masks, opp_strength,
+                opp_reach, opp_n, dead, pot, out_values);
+            if (status == PE_SOLVER_OK && out_mass)
+                for (i = 0; i < hero_n; ++i)
+                    out_mass[i] = pairwise_compatible_mass(
+                        opp_masks, opp_reach, opp_n, hero_masks[i], dead);
+            if (out_path)
+                *out_path = PE_SHOWDOWN_PATH_PAIRWISE;
+            return status;
         }
         pair_position[cards[0] * (int)PE_SHOWDOWN_DECK + cards[1]] = (int64_t)i;
         pair_position[cards[1] * (int)PE_SHOWDOWN_DECK + cards[0]] = (int64_t)i;
@@ -653,6 +694,10 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
                             0, lower, cards[0], cards[1]);
         ties = prefix_range(prefix, card_prefix, pair_position, pair_reach,
                             lower, upper, cards[0], cards[1]);
+        if (out_mass)
+            out_mass[i] = prefix_range(prefix, card_prefix, pair_position,
+                                       pair_reach, 0, opp_n, cards[0],
+                                       cards[1]);
         out_values->v[i] = pot * (wins + 0.5 * ties);
     }
 
@@ -662,6 +707,23 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
     if (out_path)
         *out_path = PE_SHOWDOWN_PATH_SORTED;
     return PE_SOLVER_OK;
+}
+
+pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
+                                      const int64_t *hero_strength,
+                                      size_t hero_n,
+                                      const mask_t *opp_masks,
+                                      const int64_t *opp_strength,
+                                      const double *opp_reach,
+                                      size_t opp_n,
+                                      mask_t dead,
+                                      double pot,
+                                      pe_value_vec_t *out_values,
+                                      pe_showdown_path_t *out_path)
+{
+    return pe_showdown_vector_mass(hero_masks, hero_strength, hero_n, opp_masks,
+                                   opp_strength, opp_reach, opp_n, dead, pot,
+                                   out_values, NULL, out_path);
 }
 
 typedef struct
