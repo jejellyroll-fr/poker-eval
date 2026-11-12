@@ -41,6 +41,10 @@ add_executable(pe-plo4-river-bench pe_plo4_river_bench.c)
 target_include_directories(pe-plo4-river-bench PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-plo4-river-bench PRIVATE poker_eval_modular m)
 
+add_executable(pe-plo4-certify pe_plo4_certify.c)
+target_include_directories(pe-plo4-certify PRIVATE ${TOOLS_COMMON_INCLUDES})
+target_link_libraries(pe-plo4-certify PRIVATE poker_eval_modular m)
+
 add_executable(pe-hand-history-import pe_hand_history_import.c)
 target_include_directories(pe-hand-history-import PRIVATE ${TOOLS_COMMON_INCLUDES})
 target_link_libraries(pe-hand-history-import PRIVATE poker_eval_modular m)
