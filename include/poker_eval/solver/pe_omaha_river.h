@@ -23,6 +23,10 @@
 extern "C" {
 #endif
 
+/* Both entry points report `*out_deal_count` exactly on the enumeration path.
+ * The heads-up four-card high-only vector path does not count deals: it reports
+ * 0 there, because the field is telemetry and counting the compatible pairs is
+ * work the payoff does not need.  `*out_weight_sum` is exact on both paths. */
 int pe_omaha_river_range_values(
     const EvalContext *context,
     mask_t board,

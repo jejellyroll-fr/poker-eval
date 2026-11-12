@@ -179,149 +179,6 @@ static int omaha_callback(const mask_t *holes, uint8_t player_count,
     return 0;
 }
 
-/* Card-subset multiplicity table for the deal count.
- *
- * The number of opponents compatible with one hero hand is
- *   total - sum_c A(c) + sum_{c<d} A(c,d) - sum_{c<d<e} A(c,d,e) + A(hand),
- * where A(S) counts the opponents containing S.  Building it costs one pass of
- * fifteen insertions per opponent and no second showdown sweep.
- */
-#define OMAHA_COUNT_SUBSET_LIMIT 294203u /* C(52,1) + ... + C(52,4) */
-#define OMAHA_COUNT_MAX_CAPACITY ((size_t)1u << 20)
-
-typedef struct
-{
-    uint64_t key;
-    uint32_t count;
-} omaha_count_slot_t;
-
-typedef struct
-{
-    omaha_count_slot_t *slots;
-    size_t capacity;
-    uint64_t total;
-} omaha_count_table_t;
-
-static int omaha_take_cards(mask_t hand, int cards[4])
-{
-    int card;
-    int count = 0;
-
-    for (card = 0; card < MODERN_DECK_SIZE && count < 4; ++card)
-        if (mask_is_set(hand, card))
-            cards[count++] = card;
-    return count;
-}
-
-static uint64_t omaha_count_mix(uint64_t key)
-{
-    key ^= key >> 30;
-    key *= UINT64_C(0xbf58476d1ce4e5b9);
-    key ^= key >> 27;
-    key *= UINT64_C(0x94d049bb133111eb);
-    key ^= key >> 31;
-    return key;
-}
-
-static int omaha_count_table_init(omaha_count_table_t *table, size_t entries)
-{
-    size_t hint = entries * 15u;
-    size_t capacity = 16u;
-
-    if (hint > OMAHA_COUNT_SUBSET_LIMIT)
-        hint = OMAHA_COUNT_SUBSET_LIMIT;
-    while (capacity < hint * 2u && capacity < OMAHA_COUNT_MAX_CAPACITY)
-        capacity <<= 1u;
-    table->slots = (omaha_count_slot_t *)calloc(capacity,
-                                                sizeof(*table->slots));
-    if (!table->slots)
-        return -1;
-    table->capacity = capacity;
-    table->total = 0u;
-    return 0;
-}
-
-static void omaha_count_add(omaha_count_table_t *table, mask_t hand)
-{
-    int cards[4];
-    size_t index_mask = table->capacity - 1u;
-    unsigned subset;
-    unsigned bit;
-
-    if (omaha_take_cards(hand, cards) != 4)
-        return;
-    for (subset = 1u; subset < 16u; ++subset)
-    {
-        uint64_t key = 0u;
-        size_t slot;
-
-        for (bit = 0u; bit < 4u; ++bit)
-            if ((subset & (1u << bit)) != 0u)
-                key |= UINT64_C(1) << cards[bit];
-        slot = (size_t)omaha_count_mix(key) & index_mask;
-        while (table->slots[slot].key != 0u && table->slots[slot].key != key)
-            slot = (slot + 1u) & index_mask;
-        if (table->slots[slot].key == 0u)
-        {
-            table->slots[slot].key = key;
-            table->slots[slot].count = 0u;
-        }
-        ++table->slots[slot].count;
-    }
-    ++table->total;
-}
-
-static uint32_t omaha_count_lookup(const omaha_count_table_t *table,
-                                   uint64_t key)
-{
-    size_t index_mask;
-    size_t slot;
-    size_t probes;
-
-    if (!table->slots || table->capacity == 0u)
-        return 0u;
-    index_mask = table->capacity - 1u;
-    slot = (size_t)omaha_count_mix(key) & index_mask;
-    for (probes = 0u; probes < table->capacity; ++probes)
-    {
-        if (table->slots[slot].key == 0u)
-            return 0u;
-        if (table->slots[slot].key == key)
-            return table->slots[slot].count;
-        slot = (slot + 1u) & index_mask;
-    }
-    return 0u;
-}
-
-static uint64_t omaha_compatible_count(const omaha_count_table_t *table,
-                                       mask_t hand)
-{
-    int cards[4];
-    int64_t count = (int64_t)table->total;
-    unsigned subset;
-    unsigned bit;
-
-    if (omaha_take_cards(hand, cards) != 4)
-        return 0u;
-    for (subset = 1u; subset < 16u; ++subset)
-    {
-        uint64_t key = 0u;
-        unsigned bits = 0u;
-
-        for (bit = 0u; bit < 4u; ++bit)
-            if ((subset & (1u << bit)) != 0u)
-            {
-                key |= UINT64_C(1) << cards[bit];
-                ++bits;
-            }
-        if ((bits & 1u) != 0u)
-            count -= (int64_t)omaha_count_lookup(table, key);
-        else
-            count += (int64_t)omaha_count_lookup(table, key);
-    }
-    return count < 0 ? 0u : (uint64_t)count;
-}
-
 /* Heads-up, high-only river through the vector showdown kernel.
  *
  * Every combo is evaluated once against the board, and the per-combo share
@@ -330,10 +187,9 @@ static uint64_t omaha_compatible_count(const omaha_count_table_t *table,
  * this terminal's convention: net of the player's investment and divided by
  * the reach mass of the legal deals.
  *
- * The deal count is exact as well, but it is counted instead of swept: a table
- * of card-subset multiplicities over the legal opponents answers "how many
- * opponent hands avoid this hero hand" in fifteen lookups, which is the same
- * inclusion-exclusion at a fraction of a showdown pass.
+ * out_deal_count is reporting-only and stays 0 on this path: counting the
+ * compatible pairs is not what the payoff needs, and the enumeration path
+ * already reports it exactly.
  *
  * Returns 0 with the outputs filled, 1 when the shape is outside this path so
  * the caller falls back to enumeration, or -1 on error.
@@ -359,11 +215,9 @@ static int omaha_heads_up_values(const mask_t board,
     double *opp_reach = NULL;
     double *mass = NULL;
     pe_value_vec_t shares = {0};
-    omaha_count_table_t count_table = {NULL, 0u, 0u};
     pe_showdown_path_t path = PE_SHOWDOWN_PATH_NONE;
     double weight_sum = 0.0;
     double net[2] = {0.0, 0.0};
-    size_t deal_count = 0u;
     size_t i;
     int status = 1;
 
@@ -411,15 +265,6 @@ static int omaha_heads_up_values(const mask_t board,
         opp_reach[i] = valid && weight > 0.0 ? weight : 0.0;
     }
 
-    if (omaha_count_table_init(&count_table, opp_n) != 0)
-    {
-        status = -1;
-        goto done;
-    }
-    for (i = 0u; i < opp_n; ++i)
-        if (opp_reach[i] > 0.0)
-            omaha_count_add(&count_table, opp_masks[i]);
-
     if (pe_vec_alloc(&shares, hero_n) != PE_SOLVER_OK)
     {
         status = -1;
@@ -439,20 +284,16 @@ static int omaha_heads_up_values(const mask_t board,
         net[0] += weight * (shares.v[i] - state->invested[0] * mass[i]);
         net[1] += weight * (slices[0].amount * mass[i] - shares.v[i] -
                             state->invested[1] * mass[i]);
-        if ((hero_masks[i] & board) == 0u)
-            deal_count +=
-                (size_t)omaha_compatible_count(&count_table, hero_masks[i]);
     }
     if (!(weight_sum > 0.0))
         goto done;
     out_values[0] = net[0] / weight_sum;
     out_values[1] = net[1] / weight_sum;
-    *out_deal_count = deal_count;
+    *out_deal_count = 0u;
     *out_weight_sum = weight_sum;
     status = 0;
 
 done:
-    free(count_table.slots);
     pe_vec_free(&shares);
     free(mass);
     free(opp_reach);
