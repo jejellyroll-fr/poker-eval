@@ -1017,7 +1017,12 @@ add_poker_test(test_mpf_ranges)
 add_poker_test(test_pe_vector)
 add_poker_test(test_pe_blockers)
 add_poker_test(test_pe_showdown_plo4_scale)
-set_tests_properties(test_pe_showdown_plo4_scale PROPERTIES LABELS "solver;solver-v3;perf" TIMEOUT 120)
+# A full river range on both sides (178,365 x 178,365) plus its 16 MiB subset
+# table: correct under instrumentation, but far slower, and the ASan shadow and
+# quarantine dwarf the RSS growth the test asserts on. Quarantined like the
+# other slow sanitizer cases; it keeps running in the unsanitized suite.
+set_tests_properties(test_pe_showdown_plo4_scale PROPERTIES
+    LABELS "solver;solver-v3;perf;sanitizer-skip" TIMEOUT 120)
 add_poker_test(test_pe_showdown)
 add_poker_test(test_pe_holdem_river_ranges)
 add_poker_test(test_plo4_river_oracle)

@@ -25,6 +25,23 @@
 #include <sys/resource.h>
 #endif
 
+/* AddressSanitizer inflates allocations and keeps freed memory quarantined, so
+   the RSS growth measured here would stop describing the sweep. The sanitizer
+   jobs already exclude this test through the sanitizer-skip label; this guard
+   covers a direct sanitized run, where the timing and correctness checks are
+   still meaningful. */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define PE_SHOWDOWN_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(memory_sanitizer)
+#define PE_SHOWDOWN_SANITIZED 1
+#endif
+#endif
+#ifndef PE_SHOWDOWN_SANITIZED
+#define PE_SHOWDOWN_SANITIZED 0
+#endif
+
 #define LIVE_CARDS 47
 #define RANGE_COMBOS 178365u /* C(47, 4) */
 #define SAMPLE_HEROES 64u
@@ -191,9 +208,14 @@ int main(void)
     }
     /* The subset table is capped at 2^20 slots and the two tie tables exist
        alongside it; 64 MiB is a loose ceiling that still catches an accidental
-       per-pair allocation. */
-    CHECK(rss_after - rss_before < 64.0,
-          "sweep grew peak RSS by %.1f MiB", rss_after - rss_before);
+       per-pair allocation. Instrumented memory is not a statement about the
+       sweep, so the bound is not asserted there. */
+    if (PE_SHOWDOWN_SANITIZED)
+        puts("test_pe_showdown_plo4_scale: RSS bound not asserted under a "
+             "sanitizer");
+    else
+        CHECK(rss_after - rss_before < 64.0,
+              "sweep grew peak RSS by %.1f MiB", rss_after - rss_before);
 
 done:
     pe_vec_free(&oracle);
