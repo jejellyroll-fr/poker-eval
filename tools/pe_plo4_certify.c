@@ -17,6 +17,7 @@
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_plo4_certification.h>
 
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -63,13 +64,16 @@ static int card_value(char rank, char suit)
 
 static int parse_cards(const char *text, mask_t *out)
 {
-    size_t length;
+    size_t length = 0u;
     mask_t cards = MASK_EMPTY;
     size_t i = 0u;
 
     if (!text || !out)
         return -1;
-    length = strlen(text);
+    while (length < 64u && text[length] != '\0')
+        ++length;
+    if (length == 64u)
+        return -1;
     while (i < length)
     {
         int card;
@@ -119,7 +123,7 @@ static int parse_double(const char *text, double *out)
     if (!text || !out)
         return -1;
     value = strtod(text, &end);
-    if (!end || *end != '\0' || !isfinite(value))
+    if (!end || *end != '\0' || !(value <= DBL_MAX && value >= -DBL_MAX))
         return -1;
     *out = value;
     return 0;
