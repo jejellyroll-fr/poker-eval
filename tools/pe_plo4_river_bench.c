@@ -3,8 +3,10 @@
  *
  * The baseline is intentionally exact: every scenario evaluates the full
  * Cartesian product of the two ranges through pe_showdown_vector(), which for
- * 4-card private hands is the pairwise fallback.  Nothing is sampled and no
- * result is inferred from a solver run.
+ * 4-card private hands is the pairwise fallback below
+ * PE_SHOWDOWN_PLO4_MIN_OPPONENTS opponents and the blocker-aware PLO4 sweep at
+ * or above it.  The report carries whichever path ran.  Nothing is sampled and
+ * no result is inferred from a solver run.
  *
  * The tool emits one JSON document on stdout (schema
  * pe-plo4-river-bench/v1).  Setup (range construction plus hand strength
@@ -478,7 +480,9 @@ static int run_scenario(const char *id, size_t combos, size_t repetitions,
     printf("      \"showdown_path\": \"%s\",\n",
            path == PE_SHOWDOWN_PATH_PAIRWISE
                ? "pairwise"
-               : (path == PE_SHOWDOWN_PATH_SORTED ? "sorted" : "other"));
+               : (path == PE_SHOWDOWN_PATH_SORTED
+                      ? "sorted"
+                      : (path == PE_SHOWDOWN_PATH_PLO4 ? "plo4" : "other")));
     printf("      \"setup_seconds\": %.9f,\n", setup_seconds);
     printf("      \"eval_seconds\": {\"min\": %.9f, \"median\": %.9f, "
            "\"max\": %.9f, \"total\": %.9f},\n",

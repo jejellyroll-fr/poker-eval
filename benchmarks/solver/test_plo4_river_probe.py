@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plo4_river_probe as probe
 
 
-def good_report() -> dict:
+def good_report(*, opp: int = 16, path: str = "pairwise") -> dict:
+    pairs = 200 if opp == 16 else (opp * opp * 3) // 5
     return {
         "schema": probe.BENCH_SCHEMA,
         "exact": True,
@@ -27,12 +28,12 @@ def good_report() -> dict:
             {
                 "id": "small",
                 "exact": True,
-                "hero_combos": 16,
-                "opp_combos": 16,
+                "hero_combos": opp,
+                "opp_combos": opp,
                 "zero_reach_opp_combos": 1,
-                "evaluated_pairs": 200,
-                "blocked_pairs": 56,
-                "showdown_path": "pairwise",
+                "evaluated_pairs": pairs,
+                "blocked_pairs": opp * opp - pairs,
+                "showdown_path": path,
                 "setup_seconds": 0.001,
                 "eval_seconds": {
                     "min": 0.002,
@@ -69,9 +70,24 @@ class ValidateBenchReportTests(unittest.TestCase):
         with self.assertRaises(probe.BenchValidationError):
             probe.validate_bench_report(report)
 
+    def test_accepts_exact_plo4_sweep_report(self) -> None:
+        probe.validate_bench_report(good_report(opp=256, path="plo4"))
+
+    def test_accepts_the_sweep_threshold_boundary(self) -> None:
+        probe.validate_bench_report(good_report(opp=probe.PLO4_SWEEP_MIN_OPPONENTS, path="plo4"))
+
     def test_rejects_sorted_path_for_four_card_hands(self) -> None:
-        report = good_report()
-        report["results"][0]["showdown_path"] = "sorted"
+        for report in (good_report(path="sorted"), good_report(opp=256, path="sorted")):
+            with self.assertRaises(probe.BenchValidationError):
+                probe.validate_bench_report(report)
+
+    def test_rejects_pairwise_path_at_or_above_sweep_threshold(self) -> None:
+        report = good_report(opp=256, path="pairwise")
+        with self.assertRaises(probe.BenchValidationError):
+            probe.validate_bench_report(report)
+
+    def test_rejects_plo4_path_below_sweep_threshold(self) -> None:
+        report = good_report(opp=16, path="plo4")
         with self.assertRaises(probe.BenchValidationError):
             probe.validate_bench_report(report)
 
