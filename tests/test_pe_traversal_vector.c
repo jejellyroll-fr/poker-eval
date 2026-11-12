@@ -82,8 +82,8 @@ static const void *toy_apply_action(const void *state, uint16_t action,
 }
 
 static int toy_combo_compatible(const void *state, uint8_t player,
-                                uint16_t player_combo, uint8_t opponent,
-                                uint16_t opponent_combo, void *user)
+                                pe_combo_id_t player_combo, uint8_t opponent,
+                                pe_combo_id_t opponent_combo, void *user)
 {
     (void)state;
     (void)user;

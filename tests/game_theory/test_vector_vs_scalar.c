@@ -30,7 +30,7 @@ typedef struct
     const char *name;
     uint8_t game_id;
     uint8_t player_count;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
     uint16_t action_count;
     uint16_t depth;
     uint32_t iterations;

@@ -32,12 +32,13 @@ typedef const void *(*pe_vector_apply_chance_fn)(const void *state,
 
 /* Return non-zero when two private-combo entries can coexist in `state`.
  * A missing callback means that the combo dimensions are independent and all
- * entries are considered compatible. */
+ * entries are considered compatible. Combo ids are pe_combo_id_t (VEC-02), so
+ * the full 178,365-combo PLO4 river range arrives without truncation. */
 typedef int (*pe_vector_combo_compatible_fn)(const void *state,
                                              uint8_t player,
-                                             uint16_t player_combo,
+                                             pe_combo_id_t player_combo,
                                              uint8_t opponent,
-                                             uint16_t opponent_combo,
+                                             pe_combo_id_t opponent_combo,
                                              void *user);
 
 /*
@@ -51,7 +52,7 @@ typedef struct pe_vector_game_t
     const void *root;
     void *user;
     uint8_t player_count;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
 
     /* Exact chance enumeration is optional. A game with these callbacks
      * unset has no chance nodes; outcome weights are normalized per state. */
@@ -133,6 +134,11 @@ typedef struct
     int initialized;
 } pe_chance_vector_ctx_t;
 
+/* Both entry points reject a game whose combo_count exceeds
+ * PE_COMBO_COUNT_MAX. Beyond that bound the API returns a documented error
+ * rather than overflowing an index or truncating one. The update batch,
+ * storage records and the v4 checkpoint format all carry 32-bit combo counts,
+ * so a full 178,365-combo PLO4 river range fits every lane. */
 int pe_traversal_ctx_init(pe_traversal_ctx_t *ctx,
                           const pe_vector_game_t *game);
 int pe_traversal_ctx_set_storage(pe_traversal_ctx_t *ctx,

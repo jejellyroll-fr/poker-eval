@@ -12,7 +12,7 @@ typedef struct
 {
     pe_infoset_id_t id;
     uint16_t actions;
-    uint16_t combos;
+    pe_combo_count_t combos;
     size_t length;
     double *regrets;
     double *averages;
@@ -28,7 +28,7 @@ typedef struct
     pe_infoset_id_t *infosets;
     uint32_t *offsets;
     uint16_t *action_counts;
-    uint16_t *combo_counts;
+    pe_combo_count_t *combo_counts;
 
     float *regrets;
     float *averages;

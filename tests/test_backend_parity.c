@@ -65,7 +65,8 @@ static int make_batch(pe_update_batch_t *batch,
                                  (double)combo * 0.00390625;
                 if (pe_update_batch_push(batch,
                                          (pe_update_t){id, (uint16_t)action,
-                                                       (uint16_t)combo, delta,
+                                                       (pe_combo_id_t)combo,
+                                                       delta,
                                                        average}) != 0)
                     return -1;
             }

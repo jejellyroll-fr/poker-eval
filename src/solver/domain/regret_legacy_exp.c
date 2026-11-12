@@ -11,11 +11,11 @@
 
 int pe_regret_match_legacy_exp_vector(const double *regrets, double *strategy,
                                       uint16_t action_count,
-                                      uint16_t combo_count,
+                                      pe_combo_count_t combo_count,
                                       double lambda)
 {
     uint16_t action;
-    uint16_t combo;
+    pe_combo_id_t combo;
 
     if (!regrets || !strategy || action_count == 0u || combo_count == 0u ||
         !pe_finite_double(lambda) || lambda <= 0.0)

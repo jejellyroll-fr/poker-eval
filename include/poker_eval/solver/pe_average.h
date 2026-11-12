@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <poker_eval/solver/pe_storage_port.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,12 +28,12 @@ int pe_average_accumulate_vector(double *weighted, double *normalizer,
                                  const double *strategy,
                                  const double *reach,
                                  uint16_t action_count,
-                                 uint16_t combo_count, double weight);
+                                 pe_combo_count_t combo_count, double weight);
 
 /** Add one sampled observation with an inverse sampling-probability weight. */
 int pe_average_accumulate_importance_vector(
     double *weighted, double *normalizer, const double *strategy,
-    const double *reach, uint16_t action_count, uint16_t combo_count,
+    const double *reach, uint16_t action_count, pe_combo_count_t combo_count,
     double sampling_probability, double weight);
 
 /**
@@ -44,7 +45,7 @@ int pe_average_accumulate_importance_vector(
  */
 int pe_average_accumulate_delayed_linear_vector(
     double *weighted, double *normalizer, const double *strategy,
-    const double *reach, uint16_t action_count, uint16_t combo_count,
+    const double *reach, uint16_t action_count, pe_combo_count_t combo_count,
     uint64_t iteration, uint64_t averaging_delay);
 
 /**
@@ -58,7 +59,7 @@ int pe_average_accumulate_delayed_linear_vector(
 int pe_average_finalize_vector(const double *weighted, const double *normalizer,
                                double *out_strategy,
                                uint16_t action_count,
-                               uint16_t combo_count);
+                               pe_combo_count_t combo_count);
 
 #ifdef __cplusplus
 }

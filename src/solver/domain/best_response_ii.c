@@ -21,7 +21,7 @@ typedef struct
 {
     uint64_t key;
     uint16_t action_count;
-    uint16_t *selected;
+    pe_combo_id_t *selected;
     double *action_values;
     int used;
 } pe_br_info_t;
@@ -30,7 +30,7 @@ typedef struct
 {
     const pe_vector_game_t *game;
     uint8_t br_player;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
     pe_br_info_t *table;
     size_t table_capacity;
     size_t count;
@@ -119,8 +119,8 @@ static pe_br_info_t *br_find_info(pe_br_ctx_t *ctx, uint64_t key,
                     SIZE_MAX / sizeof(*entry->action_values))
                 return NULL;
             memset(entry, 0, sizeof(*entry));
-            entry->selected = (uint16_t *)calloc(ctx->combo_count,
-                                                 sizeof(*entry->selected));
+            entry->selected = (pe_combo_id_t *)calloc(
+                ctx->combo_count, sizeof(*entry->selected));
             values_count = (size_t)action_count * ctx->combo_count;
             entry->action_values = (double *)calloc(
                 values_count, sizeof(*entry->action_values));
@@ -164,7 +164,7 @@ static void br_release_child(const pe_vector_game_t *game,
 
 static int br_copy_reach(const pe_reach_vec_t *source,
                          pe_reach_vec_t *destination,
-                         uint8_t player_count, uint16_t combo_count)
+                         uint8_t player_count, pe_combo_count_t combo_count)
 {
     uint8_t player;
     memset(destination, 0, PE_TRAVERSAL_MAX_PLAYERS * sizeof(*destination));
@@ -182,8 +182,8 @@ static int br_copy_reach(const pe_reach_vec_t *source,
 
 static int br_combo_is_compatible(const pe_vector_game_t *game,
                                   const void *state, uint8_t player,
-                                  uint16_t player_combo, uint8_t opponent,
-                                  uint16_t opponent_combo)
+                                  pe_combo_id_t player_combo, uint8_t opponent,
+                                  pe_combo_id_t opponent_combo)
 {
     int compatible;
 
@@ -197,10 +197,10 @@ static int br_combo_is_compatible(const pe_vector_game_t *game,
 static int br_joint_opponent_reach(
     const pe_vector_game_t *game, const void *state,
     const pe_reach_vec_t *reach, uint8_t acting, const uint8_t *opponents,
-    uint8_t opponent_count, uint8_t depth, uint16_t own_combo,
-    uint16_t *selected, double partial, double *out)
+    uint8_t opponent_count, uint8_t depth, pe_combo_id_t own_combo,
+    pe_combo_id_t *selected, double partial, double *out)
 {
-    uint16_t opponent_combo;
+    pe_combo_id_t opponent_combo;
 
     if (depth == opponent_count)
     {
@@ -251,11 +251,11 @@ static int br_joint_opponent_reach(
 static int br_aggregate_opponent_reach(const pe_vector_game_t *game,
                                        const void *state,
                                        const pe_reach_vec_t *reach,
-                                       uint8_t acting, uint16_t own_combo,
+                                       uint8_t acting, pe_combo_id_t own_combo,
                                        double *out)
 {
     uint8_t opponents[PE_TRAVERSAL_MAX_PLAYERS];
-    uint16_t selected[PE_TRAVERSAL_MAX_PLAYERS];
+    pe_combo_id_t selected[PE_TRAVERSAL_MAX_PLAYERS];
     uint8_t opponent_count = 0u;
     uint8_t player;
 
@@ -274,6 +274,7 @@ static int br_validate(const pe_vector_game_t *game, uint8_t br_player,
     return game && game->root && game->player_count > 0 &&
            game->player_count <= PE_TRAVERSAL_MAX_PLAYERS &&
            br_player < game->player_count && game->combo_count > 0 &&
+           game->combo_count <= PE_COMBO_COUNT_MAX &&
            game->is_terminal && game->acting_player && game->action_count &&
            game->infoset_key && game->apply_action && game->terminal_values &&
            config && config->max_iterations > 0 && config->tie_tolerance >= 0.0 &&
@@ -302,13 +303,13 @@ static int br_chance_node(const pe_vector_game_t *game, const void *state,
 typedef struct
 {
     const pe_vector_game_t *game;
-    uint16_t combo_count;
+    pe_combo_count_t combo_count;
     size_t visited_nodes;
 } pe_policy_ctx_t;
 
 static int policy_copy_reach(const pe_reach_vec_t *source,
                              pe_reach_vec_t *destination,
-                             uint8_t player_count, uint16_t combo_count)
+                             uint8_t player_count, pe_combo_count_t combo_count)
 {
     uint8_t player;
 
@@ -367,7 +368,7 @@ static int policy_value(pe_policy_ctx_t *ctx, const void *state,
         }
         for (p = 0u; p < game->player_count; ++p)
         {
-            uint16_t combo;
+            pe_combo_id_t combo;
             for (combo = 0u; combo < ctx->combo_count; ++combo)
             {
                 double weight = reach[p].v[combo];
@@ -536,7 +537,7 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
             {
                 if (br_aggregate_opponent_reach(
                         game, state, reach, ctx->br_player,
-                        (uint16_t)combo, &weight) != 0)
+                        (pe_combo_id_t)combo, &weight) != 0)
                 {
                     for (player = 0; player < game->player_count; ++player)
                         pe_vec_free(&terminal[player]);
@@ -659,7 +660,7 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
             }
             if (player == (int)ctx->br_player)
             {
-                uint16_t combo;
+                pe_combo_id_t combo;
                 for (combo = 0u; combo < ctx->combo_count; ++combo)
                     if (entry->selected[combo] == action)
                         out->v[combo] += child_value.v[combo];
@@ -752,7 +753,7 @@ static int br_collect(pe_br_ctx_t *ctx, const void *state,
                 return -1;
             }
             {
-                uint16_t combo;
+                pe_combo_id_t combo;
                 for (combo = 0u; combo < ctx->combo_count; ++combo)
                     entry->action_values[(size_t)action * ctx->combo_count +
                                          combo] +=
@@ -852,11 +853,12 @@ pe_solver_status_t pe_best_response_vector(
                 uint16_t best = 0u;
                 uint16_t action;
                 double best_value = 0.0;
-                for (uint16_t combo = 0u; combo < ctx.combo_count; ++combo)
+                for (pe_combo_id_t combo = 0u; combo < ctx.combo_count;
+                     ++combo)
                     best_value += entry->action_values[combo];
                 for (action = 1u; action < entry->action_count; ++action)
                 {
-                    uint16_t combo;
+                    pe_combo_id_t combo;
                     double candidate = 0.0;
                     for (combo = 0u; combo < ctx.combo_count; ++combo)
                         candidate += entry->action_values[
@@ -867,7 +869,8 @@ pe_solver_status_t pe_best_response_vector(
                         best_value = candidate;
                     }
                 }
-                for (uint16_t combo = 0u; combo < ctx.combo_count; ++combo)
+                for (pe_combo_id_t combo = 0u; combo < ctx.combo_count;
+                     ++combo)
                 {
                     if (best != entry->selected[combo])
                     {
@@ -878,7 +881,7 @@ pe_solver_status_t pe_best_response_vector(
             }
             else
             {
-                uint16_t combo;
+                pe_combo_id_t combo;
                 for (combo = 0u; combo < ctx.combo_count; ++combo)
                 {
                     uint16_t best = 0u;

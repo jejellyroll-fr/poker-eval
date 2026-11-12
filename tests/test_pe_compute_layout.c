@@ -23,7 +23,7 @@ int main(void)
     const pe_infoset_id_t infosets[] = {41u, 7u};
     const uint32_t offsets[] = {0u, 6u, 10u};
     const uint16_t actions[] = {2u, 1u};
-    const uint16_t combos[] = {3u, 4u};
+    const pe_combo_count_t combos[] = {3u, 4u};
     const pe_infoset_layout_t layout = {
         2u, infosets, offsets, actions, combos
     };

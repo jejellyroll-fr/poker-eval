@@ -34,7 +34,7 @@ static void test_per_combo_normalization(void)
     };
     double strategy[sizeof(regrets) / sizeof(regrets[0])];
     uint16_t action;
-    uint16_t combo;
+    pe_combo_id_t combo;
 
     CHECK(pe_regret_match_vector(regrets, strategy, 3u, 4u) == 0,
           "vector regret matching failed");
@@ -95,7 +95,7 @@ static void test_reach_weighted_average(void)
     double normalizer[3] = {0};
     double average[6] = {0};
     uint16_t action;
-    uint16_t combo;
+    pe_combo_id_t combo;
 
     /* Three observations of A and one observation of B, with reach differing
        per combo. The reach must affect numerator and denominator equally, so
@@ -414,8 +414,9 @@ static const void *sampled_action_apply(const void *state, uint16_t action,
 }
 
 static int sampled_action_compatible(const void *state, uint8_t player,
-                                     uint16_t player_combo, uint8_t opponent,
-                                     uint16_t opponent_combo, void *user)
+                                     pe_combo_id_t player_combo,
+                                     uint8_t opponent,
+                                     pe_combo_id_t opponent_combo, void *user)
 {
     (void)state;
     (void)user;

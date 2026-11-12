@@ -33,7 +33,7 @@ int pe_regret_plus_apply_delta(double *regrets, const double *delta,
 }
 
 int pe_regret_match_plus_vector(const double *regrets, double *strategy,
-                               uint16_t action_count, uint16_t combo_count)
+                               uint16_t action_count, pe_combo_count_t combo_count)
 {
     return pe_regret_match_vector(regrets, strategy,
                                   action_count, combo_count);

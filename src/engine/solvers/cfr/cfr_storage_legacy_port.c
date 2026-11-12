@@ -133,7 +133,7 @@ static pe_infoset_id_t legacy_find(const void *self, uint64_t key)
 }
 
 static pe_infoset_id_t legacy_resolve(void *self, uint64_t key,
-                                      uint16_t action_count, uint16_t combo_count,
+                                      uint16_t action_count, pe_combo_count_t combo_count,
                                       int8_t street)
 {
     legacy_t *l = (legacy_t *)self;
@@ -167,7 +167,7 @@ static pe_infoset_id_t legacy_resolve(void *self, uint64_t key,
 }
 
 static int legacy_shape(const void *self, pe_infoset_id_t id,
-                        uint16_t *out_actions, uint16_t *out_combos,
+                        uint16_t *out_actions, pe_combo_count_t *out_combos,
                         int8_t *out_street)
 {
     const legacy_t *l = (const legacy_t *)self;

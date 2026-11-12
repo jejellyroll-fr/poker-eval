@@ -39,6 +39,24 @@ extern "C" {
 
 typedef uint32_t pe_infoset_id_t;
 
+/**
+ * Private-combo identity and range width (VEC-02).
+ *
+ * A heads-up PLO4 river range holds C(47,4) = 178,365 combos, which does not
+ * fit in 16 bits. Combo ids and counts are 32 bits from the batch and storage
+ * records down to the traversal: wide enough for every Omaha river range,
+ * narrow enough that a per-combo table stays compact. Action ids, chance
+ * outcome ids and player indices keep their narrow types.
+ *
+ * PE_COMBO_COUNT_MAX is the largest count an init, storage or best-response
+ * entry point accepts. It is a checked bound, not a promise that the
+ * allocation succeeds: beyond it the API returns a documented error instead
+ * of overflowing an index or silently truncating one.
+ */
+typedef uint32_t pe_combo_id_t;
+typedef uint32_t pe_combo_count_t;
+#define PE_COMBO_COUNT_MAX 16777216u
+
 /** Returned when an infoset is absent, or when resolving one fails. */
 #define PE_INFOSET_ID_INVALID ((pe_infoset_id_t)0xFFFFFFFFu)
 
@@ -68,9 +86,9 @@ typedef enum {
  * and the slab degenerates to one value per action. This is the one place that
  * knows the rule.
  */
-static inline size_t pe_storage_slot_at(uint16_t combo_count,
+static inline size_t pe_storage_slot_at(pe_combo_count_t combo_count,
                                         uint16_t action,
-                                        uint16_t combo)
+                                        pe_combo_id_t combo)
 {
     return (size_t)action * (size_t)combo_count + (size_t)combo;
 }
@@ -202,7 +220,7 @@ typedef struct pe_storage_ops_t
      *                  NULL, which pe_storage_serves() is the readable way to
      *                  ask about.
      */
-    uint16_t max_combo_count;
+    pe_combo_count_t max_combo_count;
     uint8_t value_arrays;
 
     /**
@@ -221,7 +239,8 @@ typedef struct pe_storage_ops_t
      * @return The id, or PE_INFOSET_ID_INVALID on refusal or failure.
      */
     pe_infoset_id_t (*resolve)(void *self, uint64_t key,
-                               uint16_t action_count, uint16_t combo_count,
+                               uint16_t action_count,
+                               pe_combo_count_t combo_count,
                                int8_t street);
 
     /** Id of an existing infoset, or PE_INFOSET_ID_INVALID. Creates nothing. */
@@ -232,7 +251,8 @@ typedef struct pe_storage_ops_t
      * @return 0 on success, -1 when the id is out of range.
      */
     int (*shape)(const void *self, pe_infoset_id_t id,
-                 uint16_t *out_actions, uint16_t *out_combos, int8_t *out_street);
+                 uint16_t *out_actions, pe_combo_count_t *out_combos,
+                 int8_t *out_street);
 
     /**
      * Writable span of one value array, and its length in slots.
@@ -307,7 +327,7 @@ static inline int pe_storage_serves(const pe_storage_ops_t *ops, pe_value_array_
 
 /** Whether an adapter accepts an infoset this wide. */
 static inline int pe_storage_accepts_width(const pe_storage_ops_t *ops,
-                                           uint16_t combo_count)
+                                           pe_combo_count_t combo_count)
 {
     if (ops == NULL || combo_count == 0)
         return 0;

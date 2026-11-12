@@ -19,8 +19,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # The devel image ships the CUDA toolkit but no CMake, and its package
+      # lists come from archive.ubuntu.com. That host is occasionally
+      # unresolvable from the runner ("Could not resolve
+      # 'archive.ubuntu.com'"), which used to fail the job before it compiled
+      # anything. Retry with IPv4 pinned, fall back to a public resolver, and
+      # finally install CMake from PyPI, which does not need the Ubuntu
+      # archive at all.
       - name: Install build tools
-        run: apt-get update && apt-get install -y cmake git
+        run: |
+          set -u
+          have_cmake() { command -v cmake >/dev/null 2>&1; }
+
+          if ! have_cmake; then
+            for attempt in 1 2 3; do
+              if apt-get update -o Acquire::ForceIPv4=true -o Acquire::Retries=3 &&
+                 apt-get install -y --no-install-recommends cmake; then
+                break
+              fi
+              echo "apt attempt ${attempt} failed; retrying in 10s" >&2
+              sleep 10
+              if [ "${attempt}" = 2 ]; then
+                echo "apt still failing; using public resolvers" >&2
+                printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+              fi
+            done
+          fi
+
+          if ! have_cmake; then
+            echo "apt could not install CMake; falling back to PyPI" >&2
+            python3 -m pip install --no-cache-dir 'cmake>=3.20'
+          fi
+
+          cmake --version
+          git --version || echo "git missing, but checkout already succeeded"
 
       - name: Configure
         run: |

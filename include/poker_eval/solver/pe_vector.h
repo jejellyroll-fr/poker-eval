@@ -34,8 +34,10 @@
 #define POKER_EVAL_PE_VECTOR_H
 
 #include <poker_eval/solver/pe_solver.h>
+#include <poker_eval/solver/pe_storage_port.h>
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +53,10 @@ typedef struct {
     double *v;
     size_t n;
 } pe_vec_t;
+
+/* The private-combo vocabulary (pe_combo_id_t, pe_combo_count_t,
+ * PE_COMBO_COUNT_MAX) lives in pe_storage_port.h: batch and storage records
+ * index combos too, so the port header is the one place both lanes agree on. */
 
 /** Reach probabilities: non-negative, multiplied along a path. */
 typedef pe_vec_t pe_reach_vec_t;

@@ -137,7 +137,7 @@ static int soa_index_reserve(pe_update_soa_t *soa)
    keys on all three fields. */
 static size_t soa_index_find(const pe_update_soa_t *soa,
                              pe_infoset_id_t infoset,
-                             uint16_t actions, uint16_t combos)
+                             uint16_t actions, pe_combo_count_t combos)
 {
     size_t slot;
 
@@ -191,7 +191,7 @@ size_t pe_update_soa_value_count(const pe_update_soa_t *soa)
 int pe_update_batch_soa_begin_group(pe_update_batch_t *batch,
                                     pe_infoset_id_t infoset,
                                     uint16_t actions,
-                                    uint16_t combos,
+                                    pe_combo_count_t combos,
                                     double **out_deltas,
                                     double **out_average_deltas)
 {

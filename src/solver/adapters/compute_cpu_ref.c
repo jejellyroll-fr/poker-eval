@@ -150,7 +150,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
     {
         const pe_update_group_t *group = &batch->soa.groups[group_index];
         uint16_t actions;
-        uint16_t combos;
+        pe_combo_count_t combos;
         size_t regret_length;
         size_t average_length;
         double *regrets;
@@ -471,7 +471,7 @@ static int cpu_ref_apply_update_batch(void *self,
             return -1;
         if (backend->config.storage != NULL) {
             uint16_t actions;
-            uint16_t combos;
+            pe_combo_count_t combos;
             size_t regret_length;
             size_t average_length;
             size_t slot;

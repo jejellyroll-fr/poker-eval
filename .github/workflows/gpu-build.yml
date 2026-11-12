@@ -32,11 +32,31 @@ jobs:
           # died later on a missing header with no trace of the cause. Keep the
           # runner default, let apt retry the download itself, and fail here if
           # the headers cannot be fetched.
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update \
-            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            --no-install-recommends opencl-headers ocl-icd-opencl-dev
+          #
+          # The mirror is occasionally unresolvable from the runner
+          # ("Temporary failure resolving 'azure.archive.ubuntu.com'"); retry
+          # the whole install and, after the second failure, point the job at
+          # public resolvers before the last attempt.
+          set -u
+          install_opencl() {
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 &&
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              --no-install-recommends opencl-headers ocl-icd-opencl-dev
+          }
+          for attempt in 1 2 3; do
+            if install_opencl; then exit 0; fi
+            echo "apt attempt ${attempt} failed" >&2
+            if [ "${attempt}" = 2 ]; then
+              echo "apt still failing; using public resolvers" >&2
+              printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' |
+                sudo tee /etc/resolv.conf >/dev/null
+            fi
+            sleep 10
+          done
+          echo "could not install the OpenCL headers" >&2
+          exit 1
 
       - name: Configure
         run: |

@@ -14,11 +14,12 @@ static int chance_game_valid(const pe_vector_game_t *game)
 {
     return game && game->root && game->player_count > 0u &&
            game->player_count <= PE_TRAVERSAL_MAX_PLAYERS &&
-           game->combo_count > 0u && game->is_terminal;
+           game->combo_count > 0u &&
+           game->combo_count <= PE_COMBO_COUNT_MAX && game->is_terminal;
 }
 
 static int allocate_values(pe_value_vec_t *values, uint8_t player_count,
-                           uint16_t combo_count)
+                           pe_combo_count_t combo_count)
 {
     uint8_t player;
     for (player = 0u; player < player_count; ++player)
@@ -44,12 +45,12 @@ static int action_weight_for_combo(const pe_vector_game_t *game,
                                    const void *state,
                                    const pe_reach_vec_t *reach,
                                    int acting, const pe_value_vec_t *strategy,
-                                   uint8_t player, uint16_t combo,
+                                   uint8_t player, pe_combo_id_t combo,
                                    double *out_weight)
 {
     double compatible_reach = 0.0;
     double action_reach = 0.0;
-    uint16_t acting_combo;
+    pe_combo_id_t acting_combo;
 
     if (!game || !reach || !strategy || !out_weight || acting < 0 ||
         acting >= (int)game->player_count || player >= game->player_count ||
@@ -216,7 +217,7 @@ static int visit_sampled(pe_chance_vector_ctx_t *ctx,
             }
             for (p = 0u; p < game->player_count; ++p)
             {
-                uint16_t combo;
+                pe_combo_id_t combo;
                 for (combo = 0u; combo < game->combo_count; ++combo)
                 {
                     double weight;

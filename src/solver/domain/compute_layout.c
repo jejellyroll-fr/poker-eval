@@ -10,7 +10,7 @@ int pe_infoset_layout_slot_at(const pe_infoset_layout_t *layout, size_t index,
     uint32_t begin;
     uint32_t end;
     uint16_t actions;
-    uint16_t combos;
+    pe_combo_count_t combos;
     uint64_t relative;
     uint64_t slot;
 

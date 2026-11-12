@@ -623,7 +623,7 @@ static double *pe_low_precision_values(pe_storage_t *s, pe_infoset_id_t id,
 pe_infoset_id_t pe_storage_resolve(pe_storage_t *s,
                                    uint64_t key,
                                    uint16_t action_count,
-                                   uint16_t combo_count,
+                                   pe_combo_count_t combo_count,
                                    int8_t street)
 {
     size_t i;

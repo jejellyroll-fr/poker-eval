@@ -51,8 +51,8 @@ static int vector_terminal_values(const void *state,
 }
 
 static int vector_combo_compatible(const void *state, uint8_t player,
-                                   uint16_t player_combo, uint8_t opponent,
-                                   uint16_t opponent_combo, void *user)
+                                   pe_combo_id_t player_combo, uint8_t opponent,
+                                   pe_combo_id_t opponent_combo, void *user)
 {
     pe_betting_vector_game_t *game = (pe_betting_vector_game_t *)user;
     if (!game->ops.combo_compatible)
@@ -132,13 +132,14 @@ pe_betting_status_t pe_betting_vector_game_init(
     pe_betting_vector_game_t *out,
     const pe_betting_rules_t *rules,
     const pe_betting_state_t *root,
-    uint16_t combo_count,
+    pe_combo_count_t combo_count,
     const pe_betting_vector_ops_t *ops,
     void *user)
 {
     if (!out || !rules || !root || !ops)
         return PE_BETTING_ERR_NULL_ARGUMENT;
-    if (combo_count == 0u || !ops->action_count || !ops->action_at ||
+    if (combo_count == 0u || combo_count > PE_COMBO_COUNT_MAX ||
+        !ops->action_count || !ops->action_at ||
         !ops->infoset_key || !ops->terminal_values ||
         pe_betting_state_validate(root, rules) != PE_BETTING_OK)
         return PE_BETTING_ERR_INVALID_STATE;

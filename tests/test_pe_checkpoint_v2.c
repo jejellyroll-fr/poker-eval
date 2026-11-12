@@ -124,7 +124,7 @@ int main(void)
     uint64_t iteration = 0u;
     uint64_t key = 0u;
     uint16_t actions = 0u;
-    uint16_t combos = 0u;
+    pe_combo_count_t combos = 0u;
     uint8_t flags = 0u;
     size_t length = 0u;
     double *regret;

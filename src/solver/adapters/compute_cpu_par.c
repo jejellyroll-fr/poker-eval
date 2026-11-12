@@ -319,7 +319,7 @@ static int cpu_par_apply_update_batch(void *self,
         {
             const pe_update_group_t *group = &batch->soa.groups[group_index];
             uint16_t actions;
-            uint16_t combos;
+            pe_combo_count_t combos;
             size_t values;
             if (group->actions == 0u || group->combos == 0u ||
                 group->offset > batch->soa.value_count ||
@@ -624,7 +624,7 @@ static int cpu_par_apply_update_batch(void *self,
         if (backend->config.storage != NULL && backend->config.storage_self != NULL)
         {
             uint16_t actions;
-            uint16_t combos;
+            pe_combo_count_t combos;
             size_t regret_len;
             size_t average_len;
             const pe_update_t *update = &batch->items[i];
