@@ -9,7 +9,9 @@ report, the same split the rest of `benchmarks/solver/` uses.
 What it enforces:
 
 - every scenario is exact (`exact: true`, `sampled: false`);
-- four-card private hands take the pairwise fallback, not the sorted path;
+- the reported showdown path is the documented one for the range size: the
+  pairwise fallback below ``PLO4_SWEEP_MIN_OPPONENTS`` opponents and the
+  blocker-aware PLO4 sweep at or above it, never the sorted path;
 - the deterministic fields (combination counts, blocker counts, evaluated
   pairs, showdown path and the value fingerprint) are identical across
   repeated runs.
@@ -36,6 +38,9 @@ from typing import Any
 BENCH_SCHEMA = "pe-plo4-river-bench/v1"
 BASELINE_SCHEMA = "pe-plo4-river-baseline/v1"
 FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+# Mirrors PE_SHOWDOWN_PLO4_MIN_OPPONENTS: at or above it pe_showdown_vector()
+# takes the blocker-aware PLO4 sweep instead of the pairwise fallback.
+PLO4_SWEEP_MIN_OPPONENTS = 32
 DETERMINISTIC_FIELDS = (
     "id",
     "hero_combos",
@@ -107,9 +112,13 @@ def validate_bench_report(report: Any) -> None:
             isinstance(blocked, int) and blocked == hero * opp - pairs,
             f"{result_id}: blocked_pairs must account for the rest of the product",
         )
+        expected_path = (
+            "plo4" if opp >= PLO4_SWEEP_MIN_OPPONENTS else "pairwise"
+        )
         _require(
-            result.get("showdown_path") == "pairwise",
-            f"{result_id}: four-card hands must report the pairwise fallback",
+            result.get("showdown_path") == expected_path,
+            f"{result_id}: {opp} opponent combos must report the "
+            f"{expected_path} path, got {result.get('showdown_path')!r}",
         )
         _require(
             result.get("deterministic_across_repetitions") is True,

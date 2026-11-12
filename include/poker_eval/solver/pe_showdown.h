@@ -20,7 +20,10 @@ typedef enum {
     PE_SHOWDOWN_PATH_NONE = 0,
     PE_SHOWDOWN_PATH_SORTED,
     PE_SHOWDOWN_PATH_PAIRWISE,
-    PE_SHOWDOWN_PATH_MULTIWAY
+    PE_SHOWDOWN_PATH_MULTIWAY,
+    /* Four-card ranges through the blocker-aware sweep: opponent reach is
+       accumulated per card subset and removed by inclusion-exclusion. */
+    PE_SHOWDOWN_PATH_PLO4
 } pe_showdown_path_t;
 
 typedef struct
@@ -42,8 +45,23 @@ typedef struct
  *
  * Strengths are ordered from worst to best. A win pays `pot`, a tie pays half
  * and a loss pays zero. Opponent reach is removed for board and hand blockers.
- * Two-card ranges use a sorted prefix path; wider or duplicated opponent
- * combos use the exact pairwise fallback.
+ * Two-card ranges use a sorted prefix path; four-card ranges of at least
+ * PE_SHOWDOWN_PLO4_MIN_OPPONENTS entries use the inclusion-exclusion sweep
+ * ("PLO4" path); anything else uses the exact pairwise fallback.
+ *
+ * The sweep sorts both ranges once and then walks opponent strengths in
+ * ascending order, accumulating reach per nonempty card subset of each
+ * opponent hand. For a hero hand the reach of every compatible opponent is
+ * total minus the reach of the opponents sharing at least one card with it,
+ * expanded over the hero's 15 nonempty subsets. Cost is O((opp_n + hero_n) *
+ * log + 15 * (opp_n + hero_n)); memory is the subset table, bounded by the
+ * number of distinct card subsets, not by opp_n * heroes.
+ *
+ * The inclusion-exclusion sum subtracts positive terms from a larger one, so
+ * a compatible mass that is mathematically zero can come back slightly
+ * negative; the sweep reports zero when the residue stays within
+ * 1e-9 * (1 + accumulated reach) of it. Results otherwise agree with the
+ * pairwise oracle to floating-point rounding.
  */
 pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
                                       const int64_t *hero_strength,
@@ -56,6 +74,34 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
                                       double pot,
                                       pe_value_vec_t *out_values,
                                       pe_showdown_path_t *out_path);
+
+/** Minimum opponent count before the four-card sweep is worth its setup. */
+#define PE_SHOWDOWN_PLO4_MIN_OPPONENTS 32u
+
+/**
+ * Same as pe_showdown_vector(), and also reports the compatible opponent reach
+ * mass per hero combo: the sum of `opp_reach` over the opponents that share no
+ * card with the hero hand and are not blocked by `dead`.
+ *
+ * Terminals that pay out net of a player's investment need that mass to
+ * subtract `invested * mass` and to normalise, and recovering it separately
+ * would repeat the whole blocker computation. `out_mass` may be NULL.
+ *
+ * A hero hand blocked by `dead` gets zero for both outputs.
+ */
+pe_solver_status_t pe_showdown_vector_mass(
+    const mask_t *hero_masks,
+    const int64_t *hero_strength,
+    size_t hero_n,
+    const mask_t *opp_masks,
+    const int64_t *opp_strength,
+    const double *opp_reach,
+    size_t opp_n,
+    mask_t dead,
+    double pot,
+    pe_value_vec_t *out_values,
+    double *out_mass,
+    pe_showdown_path_t *out_path);
 
 /** Independent O(hero_n * opp_n) reference implementation. */
 pe_solver_status_t pe_showdown_vector_pairwise(const mask_t *hero_masks,

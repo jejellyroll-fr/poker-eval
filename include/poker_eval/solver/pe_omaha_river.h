@@ -17,11 +17,16 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/solver/pe_betting_state.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
+#include <poker_eval/solver/pe_showdown.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Both entry points report `*out_deal_count` exactly on the enumeration path.
+ * The heads-up four-card high-only vector path does not count deals: it reports
+ * 0 there, because the field is telemetry and counting the compatible pairs is
+ * work the payoff does not need.  `*out_weight_sum` is exact on both paths. */
 int pe_omaha_river_range_values(
     const EvalContext *context,
     mask_t board,
@@ -32,6 +37,22 @@ int pe_omaha_river_range_values(
     uint8_t player_count,
     size_t *out_deal_count,
     double *out_weight_sum);
+
+/* Same terminal, and reports which evaluation path ran: PE_SHOWDOWN_PATH_PLO4
+ * for the heads-up four-card vector path (precomputed strengths through
+ * pe_showdown_vector()), PE_SHOWDOWN_PATH_NONE for deal enumeration.
+ * `out_path` may be NULL. */
+int pe_omaha_river_range_values_with_path(
+    const EvalContext *context,
+    mask_t board,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum,
+    pe_showdown_path_t *out_path);
 
 /* Omaha Hi/Lo 8-or-better, same policy, ranges and reporting as above.
  *

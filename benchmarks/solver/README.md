@@ -360,7 +360,9 @@ number.
 `test_plo4_river_oracle` is the correctness side. Small deterministic river
 fixtures with 4-card private hands pin the Omaha rule (exactly two hole cards
 plus three board cards) against an explicit 2+3 enumeration, check that
-4-card hands take the pairwise fallback, and cross-check blockers, legal reach
+4-card hands take the documented showdown path for their size (the pairwise
+fallback below 32 opponents, the blocker-aware PLO4 sweep at or above), and
+cross-check blockers, legal reach
 mass, win/tie/loss payouts and per-combo EV against an independent
 enumeration. The heads-up river terminal is compared deal by deal on a
 tractable fixture. Every fixture is exhaustive; nothing in that test is
@@ -369,9 +371,11 @@ sampled.
 `tools/pe_plo4_river_bench.c` is the performance side. It evaluates the full
 Cartesian product of two deterministic ranges (16, 128 and 512 combos per
 player) on the checked-in `Ks9d4c2hTs` river board through the product
-`pe_showdown_vector()`, which for 4-card hands is the pairwise fallback. Setup
-(range construction plus hand-strength evaluation) and evaluation are timed
-separately:
+`pe_showdown_vector()`, which for 4-card hands is the pairwise fallback below
+32 opponents and the blocker-aware PLO4 sweep at or above. The report records
+whichever path ran, and the probe rejects a report whose path does not match the
+range size it measured. Setup (range construction plus hand-strength
+evaluation) and evaluation are timed separately:
 
 ```bash
 cmake --build build --target pe-plo4-river-bench --parallel
@@ -425,8 +429,9 @@ The job fails when:
   infoset;
 - deterministic fingerprints/metrics differ between repetitions;
 - the learning probe still contains zero non-uniform strategy rows;
-- the PLO4 baseline is sampled, leaves the pairwise path for 4-card hands, or
-  its value fingerprint changes between repetitions.
+- the PLO4 baseline is sampled, reports a showdown path that does not match its
+  range size (pairwise below 32 opponents, PLO4 sweep at or above), or its value
+  fingerprint changes between repetitions.
 
 It does **not** gate on wall-clock speed because shared GitHub runners are not
 performance-identical. Longer performance qualification remains a manual

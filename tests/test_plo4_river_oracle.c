@@ -625,12 +625,162 @@ static void test_river_terminal_matches_independent_deals(void)
     eval_context_destroy(context);
 }
 
+/* ------------------------------------------------------------------ *
+ * The vector path (>= PE_SHOWDOWN_PLO4_MIN_OPPONENTS combos)
+ * ------------------------------------------------------------------ */
+
+/* The fixtures above are three combos a side, so they stay on the enumeration
+ * path.  This one builds 40 x 40 legal combos -- with a zero hero weight, a
+ * zero opponent weight and a duplicated opponent hand -- which forces the
+ * terminal through the precomputed-strength + pe_showdown_vector path, and
+ * checks it against a direct deal loop over the independent evaluator. */
+static void test_river_terminal_fast_path_matches_enumeration(void)
+{
+    enum { RANGE = 40 };
+    const mask_t board = mask_of("2c7dThJsQc");
+    pe_omaha_combo_t hero[RANGE];
+    pe_omaha_combo_t opp[RANGE];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state = {0};
+    double values[2] = {0.0, 0.0};
+    double independent[2] = {0.0, 0.0};
+    double mass = 0.0;
+    size_t deals = 0u;
+    size_t product_deals = 0u;
+    double product_mass = 0.0;
+    EvalConfig config = eval_config_holdem();
+    EvalContext *context;
+    size_t i;
+    size_t j;
+
+    CHECK(board != MASK_EMPTY, "fast-path board fixture is empty");
+    {
+        int live[MODERN_DECK_SIZE];
+        int live_count = 0;
+        int card;
+        uint32_t bits = 0x9E3779B9u;
+        size_t n;
+
+        for (card = 0; card < MODERN_DECK_SIZE; ++card)
+            if (!mask_is_set(board, card))
+                live[live_count++] = card;
+        /* Spread the hands over the deck instead of taking the lexicographic
+           prefix, which would put every hand on the same low cards and leave
+           almost no compatible pair. */
+        for (n = 0u; n < 2u * RANGE; ++n)
+        {
+            mask_t hand = MASK_EMPTY;
+            size_t slot;
+
+            while (mask_popcount(hand) < PLO4_HOLE_CARDS)
+            {
+                bits = bits * 1664525u + 1013904223u;
+                slot = (size_t)(bits % (uint32_t)live_count);
+                hand = mask_set(hand, live[slot]);
+            }
+            if (n < RANGE)
+            {
+                hero[n].cards = hand;
+                hero[n].weight = 0.4 + 0.2 * (double)(n % 3u);
+            }
+            else
+            {
+                opp[n - RANGE].cards = hand;
+                opp[n - RANGE].weight = 0.3 + 0.1 * (double)((n - RANGE) % 4u);
+            }
+        }
+    }
+    hero[5].weight = 0.0;
+    opp[7].weight = 0.0;
+    opp[9] = opp[3];
+    opp[9].weight = 0.7;
+
+    for (i = 0; i < RANGE; ++i)
+        for (j = 0; j < RANGE; ++j)
+        {
+            HandVal hero_value;
+            HandVal opp_value;
+            double award;
+            double weight;
+
+            if (opp[j].weight <= 0.0)
+                continue;
+            if ((hero[i].cards & board) != 0 ||
+                (opp[j].cards & board) != 0)
+                continue;
+            if ((hero[i].cards & opp[j].cards) != 0)
+                continue;
+            hero_value = independent_omaha_value(hero[i].cards, board);
+            opp_value = independent_omaha_value(opp[j].cards, board);
+            weight = hero[i].weight * opp[j].weight;
+            award = hero_value > opp_value ? 20.0
+                    : hero_value == opp_value ? 10.0
+                                              : 0.0;
+            independent[0] += weight * (award - 10.0);
+            independent[1] += weight * (20.0 - award - 10.0);
+            mass += weight;
+            ++deals;
+        }
+    CHECK(deals > 0u && mass > 0.0, "fast-path fixture produced no deals");
+    if (deals == 0u || mass <= 0.0)
+        return;
+    independent[0] /= mass;
+    independent[1] /= mass;
+
+    ranges[0].combos = hero;
+    ranges[0].count = RANGE;
+    ranges[1].combos = opp;
+    ranges[1].count = RANGE;
+    state.player_count = 2u;
+    state.winner = -1;
+    state.active[0] = 1;
+    state.active[1] = 1;
+    state.invested[0] = 10.0;
+    state.invested[1] = 10.0;
+    state.pot = 20.0;
+
+    context = eval_context_create(&config);
+    CHECK(context != NULL, "fast-path context creation failed");
+    if (!context)
+        return;
+    {
+        pe_showdown_path_t path = PE_SHOWDOWN_PATH_NONE;
+
+        CHECK(pe_omaha_river_range_values_with_path(
+                  context, board, ranges, &state, 4u, values, 2u,
+                  &product_deals, &product_mass, &path) == 0,
+              "PLO4 river terminal fast path failed");
+        CHECK(path == PE_SHOWDOWN_PATH_PLO4,
+              "40-combo ranges took path %d instead of the vector sweep",
+              (int)path);
+    }
+    /* The vector path reports 0 deals on purpose: the field is telemetry and
+       counting pairs is work the payoff does not need.  The enumeration path,
+       covered by the 3x3 fixtures, still reports it exactly. */
+    CHECK(product_deals == 0u,
+          "vector path reported %zu deals, expected the documented 0",
+          product_deals);
+    CHECK(fabs(product_mass - mass) <= 1e-12 * (1.0 + mass),
+          "fast path reach mass %.17g, enumeration %.17g", product_mass,
+          mass);
+    CHECK(fabs(values[0] - independent[0]) <= 1e-9,
+          "fast path player 0 EV %.17g, enumeration %.17g", values[0],
+          independent[0]);
+    CHECK(fabs(values[1] - independent[1]) <= 1e-9,
+          "fast path player 1 EV %.17g, enumeration %.17g", values[1],
+          independent[1]);
+    CHECK(fabs(values[0] + values[1]) <= 1e-9,
+          "fast path terminal is not zero-sum (%.17g)", values[0] + values[1]);
+    eval_context_destroy(context);
+}
+
 int main(void)
 {
     test_omaha_ranking_uses_two_hole_cards();
     test_showdown_vector_matches_enumeration();
     test_showdown_vector_honours_extra_dead_cards();
     test_river_terminal_matches_independent_deals();
+    test_river_terminal_fast_path_matches_enumeration();
     if (g_failures != 0)
     {
         fprintf(stderr, "test_plo4_river_oracle: %d failure(s)\n", g_failures);
