@@ -398,7 +398,12 @@ int main(int argc, char **argv)
         fail("board must hold five distinct cards");
         return 2;
     }
-    if (options.bet_size == 0.0)
+    if (options.bet_size < 0.0)
+    {
+        fail("--bet-size must not be negative");
+        return 2;
+    }
+    if (!(options.bet_size > 0.0))
         options.bet_size = options.stacks[0] < options.stacks[1]
                                ? options.stacks[0]
                                : options.stacks[1];
