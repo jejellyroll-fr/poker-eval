@@ -190,6 +190,312 @@ static size_t upper_bound_strength(const showdown_entry_t *entries,
     return first;
 }
 
+/* --------------------------------------------------------------------------
+ * Four-card ranges: inclusion-exclusion sweep (PLO4)
+ *
+ * For one hero hand H and one strength threshold, the reach of the compatible
+ * opponents is
+ *
+ *   total - sum_{c in H} A(c) + sum_{c<d in H} A(c,d)
+ *         - sum_{c<d<e in H} A(c,d,e) + A(H)
+ *
+ * where A(S) is the accumulated reach of the opponents whose hand contains S.
+ * Balaying opponent strengths from worst to best keeps one subset table for
+ * "strictly below the current strength" and a second, rebuilt per tie group,
+ * for "equal to it". No table has one entry per (opponent, hero) pair.
+ * ------------------------------------------------------------------------ */
+
+#define PE_SHOWDOWN_HOLE_CARDS 4u
+#define PE_SHOWDOWN_SUBSET_COUNT 16u
+/* C(52,1) + C(52,2) + C(52,3) + C(52,4): every subset a four-card hand can
+   contain, and therefore the most distinct keys the table can ever hold. */
+#define PE_SHOWDOWN_SUBSET_LIMIT 294203u
+#define PE_SHOWDOWN_MAX_TABLE_CAPACITY ((size_t)1u << 20)
+
+typedef struct
+{
+    uint64_t key;
+    double sum;
+} plo4_slot_t;
+
+typedef struct
+{
+    plo4_slot_t *slots;
+    size_t capacity;
+    double total;
+} plo4_subsets_t;
+
+typedef struct
+{
+    int64_t strength;
+    size_t index;
+} plo4_hero_t;
+
+static uint64_t plo4_mix(uint64_t key)
+{
+    key ^= key >> 30;
+    key *= UINT64_C(0xbf58476d1ce4e5b9);
+    key ^= key >> 27;
+    key *= UINT64_C(0x94d049bb133111eb);
+    key ^= key >> 31;
+    return key;
+}
+
+static int plo4_subsets_reserve(plo4_subsets_t *subsets, size_t hint)
+{
+    size_t capacity = 16u;
+
+    if (hint > PE_SHOWDOWN_SUBSET_LIMIT)
+        hint = PE_SHOWDOWN_SUBSET_LIMIT;
+    while (capacity < hint * 2u && capacity < PE_SHOWDOWN_MAX_TABLE_CAPACITY)
+        capacity <<= 1u;
+    subsets->slots = (plo4_slot_t *)calloc(capacity, sizeof(*subsets->slots));
+    if (!subsets->slots)
+        return -1;
+    subsets->capacity = capacity;
+    subsets->total = 0.0;
+    return 0;
+}
+
+static void plo4_subsets_reset(plo4_subsets_t *subsets)
+{
+    if (subsets->slots)
+        memset(subsets->slots, 0, subsets->capacity * sizeof(*subsets->slots));
+    subsets->total = 0.0;
+}
+
+static void plo4_subsets_free(plo4_subsets_t *subsets)
+{
+    free(subsets->slots);
+    subsets->slots = NULL;
+    subsets->capacity = 0u;
+    subsets->total = 0.0;
+}
+
+static uint64_t plo4_subset_key(const int *cards, unsigned subset)
+{
+    uint64_t key = 0u;
+    unsigned bit;
+
+    for (bit = 0u; bit < PE_SHOWDOWN_HOLE_CARDS; ++bit)
+        if ((subset & (1u << bit)) != 0u)
+            key |= UINT64_C(1) << cards[bit];
+    return key;
+}
+
+static void plo4_subsets_add(plo4_subsets_t *subsets, mask_t mask, double weight)
+{
+    int cards[PE_SHOWDOWN_HOLE_CARDS];
+    size_t index_mask;
+    unsigned subset;
+
+    if (mask_card_count(mask, cards, (int)PE_SHOWDOWN_HOLE_CARDS) !=
+        (int)PE_SHOWDOWN_HOLE_CARDS)
+        return;
+    index_mask = subsets->capacity - 1u;
+    for (subset = 1u; subset < PE_SHOWDOWN_SUBSET_COUNT; ++subset)
+    {
+        uint64_t key = plo4_subset_key(cards, subset);
+        size_t slot = (size_t)plo4_mix(key) & index_mask;
+
+        while (subsets->slots[slot].key != 0u &&
+               subsets->slots[slot].key != key)
+            slot = (slot + 1u) & index_mask;
+        if (subsets->slots[slot].key == 0u)
+        {
+            subsets->slots[slot].key = key;
+            subsets->slots[slot].sum = 0.0;
+        }
+        subsets->slots[slot].sum += weight;
+    }
+    subsets->total += weight;
+}
+
+static double plo4_subsets_sum(const plo4_subsets_t *subsets, uint64_t key)
+{
+    size_t index_mask;
+    size_t slot;
+    size_t probes;
+
+    if (!subsets->slots || subsets->capacity == 0u)
+        return 0.0;
+    index_mask = subsets->capacity - 1u;
+    slot = (size_t)plo4_mix(key) & index_mask;
+    for (probes = 0u; probes < subsets->capacity; ++probes)
+    {
+        if (subsets->slots[slot].key == 0u)
+            return 0.0;
+        if (subsets->slots[slot].key == key)
+            return subsets->slots[slot].sum;
+        slot = (slot + 1u) & index_mask;
+    }
+    return 0.0;
+}
+
+/* Reach of the compatible opponents, with the compatible mass clamped when
+   cancellation leaves a residue that is zero up to rounding. */
+static double plo4_compatible_mass(const plo4_subsets_t *subsets,
+                                   mask_t hero_mask, mask_t dead)
+{
+    int cards[PE_SHOWDOWN_HOLE_CARDS];
+    double mass;
+    unsigned subset;
+
+    if ((hero_mask & dead) != 0)
+        return 0.0;
+    if (mask_card_count(hero_mask, cards, (int)PE_SHOWDOWN_HOLE_CARDS) !=
+        (int)PE_SHOWDOWN_HOLE_CARDS)
+        return 0.0;
+    mass = subsets->total;
+    for (subset = 1u; subset < PE_SHOWDOWN_SUBSET_COUNT; ++subset)
+    {
+        double part = plo4_subsets_sum(subsets, plo4_subset_key(cards, subset));
+        unsigned bits = 0u;
+        unsigned bit;
+
+        for (bit = 0u; bit < PE_SHOWDOWN_HOLE_CARDS; ++bit)
+            if ((subset & (1u << bit)) != 0u)
+                ++bits;
+        if ((bits & 1u) != 0u)
+            mass -= part;
+        else
+            mass += part;
+    }
+    if (mass < 0.0 && mass > -1e-9 * (1.0 + subsets->total))
+        mass = 0.0;
+    return mass;
+}
+
+static int plo4_hero_compare(const void *left, const void *right)
+{
+    const plo4_hero_t *a = (const plo4_hero_t *)left;
+    const plo4_hero_t *b = (const plo4_hero_t *)right;
+
+    if (a->strength < b->strength)
+        return -1;
+    if (a->strength > b->strength)
+        return 1;
+    return 0;
+}
+
+static size_t plo4_table_hint(size_t entries)
+{
+    size_t hint = entries * (PE_SHOWDOWN_SUBSET_COUNT - 1u);
+
+    return hint > PE_SHOWDOWN_SUBSET_LIMIT ? PE_SHOWDOWN_SUBSET_LIMIT : hint;
+}
+
+static pe_solver_status_t showdown_plo4(const showdown_entry_t *entries,
+                                        size_t opp_n,
+                                        const mask_t *hero_masks,
+                                        const int64_t *hero_strength,
+                                        size_t hero_n, mask_t dead, double pot,
+                                        pe_value_vec_t *out_values)
+{
+    plo4_hero_t *heroes;
+    double *wins;
+    double *ties;
+    plo4_subsets_t below;
+    plo4_subsets_t equal;
+    size_t hero_cursor = 0u;
+    size_t entry_cursor = 0u;
+    size_t max_tie_group = 0u;
+    pe_solver_status_t status = PE_SOLVER_ERR_OUT_OF_MEMORY;
+
+    heroes = (plo4_hero_t *)malloc(hero_n * sizeof(*heroes));
+    wins = (double *)calloc(hero_n, sizeof(*wins));
+    ties = (double *)calloc(hero_n, sizeof(*ties));
+    below.slots = NULL;
+    below.capacity = 0u;
+    below.total = 0.0;
+    equal.slots = NULL;
+    equal.capacity = 0u;
+    equal.total = 0.0;
+    if (!heroes || !wins || !ties)
+        goto done;
+    if (plo4_subsets_reserve(&below, plo4_table_hint(opp_n)) != 0)
+        goto done;
+    /* The tie table is sized once, for the largest group of equal strengths:
+       growing it mid-sweep would either overflow the probe sequence or force
+       a rehash this path does not need. */
+    for (size_t i = 0u; i < opp_n;)
+    {
+        size_t run = i + 1u;
+        while (run < opp_n && entries[run].strength == entries[i].strength)
+            ++run;
+        if (run - i > max_tie_group)
+            max_tie_group = run - i;
+        i = run;
+    }
+    if (plo4_subsets_reserve(&equal, plo4_table_hint(max_tie_group)) != 0)
+        goto done;
+
+    for (size_t i = 0u; i < hero_n; ++i)
+    {
+        heroes[i].strength = hero_strength[i];
+        heroes[i].index = i;
+    }
+    qsort(heroes, hero_n, sizeof(*heroes), plo4_hero_compare);
+
+    while (hero_cursor < hero_n)
+    {
+        int64_t strength = heroes[hero_cursor].strength;
+        size_t hero_end = hero_cursor;
+        size_t tie_end;
+
+        while (hero_end < hero_n && heroes[hero_end].strength == strength)
+            ++hero_end;
+        while (entry_cursor < opp_n &&
+               entries[entry_cursor].strength < strength)
+        {
+            if (entries[entry_cursor].reach > 0.0)
+                plo4_subsets_add(&below, entries[entry_cursor].mask,
+                                 entries[entry_cursor].reach);
+            ++entry_cursor;
+        }
+        tie_end = entry_cursor;
+        while (tie_end < opp_n && entries[tie_end].strength == strength)
+            ++tie_end;
+        if (tie_end > entry_cursor)
+        {
+            plo4_subsets_reset(&equal);
+            for (size_t i = entry_cursor; i < tie_end; ++i)
+                if (entries[i].reach > 0.0)
+                    plo4_subsets_add(&equal, entries[i].mask, entries[i].reach);
+        }
+        for (size_t i = hero_cursor; i < hero_end; ++i)
+        {
+            size_t index = heroes[i].index;
+
+            if ((hero_masks[index] & dead) != 0)
+                continue;
+            wins[index] = plo4_compatible_mass(&below, hero_masks[index], dead);
+            if (tie_end > entry_cursor)
+                ties[index] = plo4_compatible_mass(&equal, hero_masks[index],
+                                                   dead);
+        }
+        for (size_t i = entry_cursor; i < tie_end; ++i)
+            if (entries[i].reach > 0.0)
+                plo4_subsets_add(&below, entries[i].mask, entries[i].reach);
+        entry_cursor = tie_end;
+        hero_cursor = hero_end;
+    }
+
+    for (size_t i = 0u; i < hero_n; ++i)
+        out_values->v[i] = (hero_masks[i] & dead) != 0
+                               ? 0.0
+                               : pot * (wins[i] + 0.5 * ties[i]);
+    status = PE_SOLVER_OK;
+
+done:
+    plo4_subsets_free(&below);
+    plo4_subsets_free(&equal);
+    free(ties);
+    free(wins);
+    free(heroes);
+    return status;
+}
+
 pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
                                       const int64_t *hero_strength,
                                       size_t hero_n,
@@ -210,18 +516,51 @@ pe_solver_status_t pe_showdown_vector(const mask_t *hero_masks,
     pe_solver_status_t status;
     size_t i;
     int two_card_only = 1;
+    int four_card_only = 1;
+    int hero_wide;
 
     status = validate_input(hero_masks, hero_strength, hero_n, opp_masks,
                             opp_strength, opp_reach, opp_n, pot, out_values);
     if (status != PE_SOLVER_OK)
         return status;
 
-    for (i = 0; i < hero_n && two_card_only; ++i)
-        if (mask_card_count(hero_masks[i], NULL, 0) != 2)
+    for (i = 0; i < hero_n && (two_card_only || four_card_only); ++i)
+    {
+        int cards = mask_card_count(hero_masks[i], NULL, 0);
+        if (cards != 2)
             two_card_only = 0;
-    for (i = 0; i < opp_n && two_card_only; ++i)
-        if (mask_card_count(opp_masks[i], NULL, 0) != 2)
+        if (cards != 4)
+            four_card_only = 0;
+    }
+    for (i = 0; i < opp_n && (two_card_only || four_card_only); ++i)
+    {
+        int cards = mask_card_count(opp_masks[i], NULL, 0);
+        if (cards != 2)
             two_card_only = 0;
+        if (cards != 4)
+            four_card_only = 0;
+    }
+    hero_wide = four_card_only && opp_n >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS;
+    if (hero_wide)
+    {
+        showdown_entry_t *wide =
+            (showdown_entry_t *)calloc(opp_n, sizeof(*wide));
+        if (!wide)
+            return PE_SOLVER_ERR_OUT_OF_MEMORY;
+        for (i = 0; i < opp_n; ++i)
+        {
+            wide[i].mask = opp_masks[i];
+            wide[i].strength = opp_strength[i];
+            wide[i].reach = (opp_masks[i] & dead) == 0 ? opp_reach[i] : 0.0;
+        }
+        qsort(wide, opp_n, sizeof(*wide), entry_compare);
+        status = showdown_plo4(wide, opp_n, hero_masks, hero_strength,
+                               hero_n, dead, pot, out_values);
+        free(wide);
+        if (status == PE_SOLVER_OK && out_path)
+            *out_path = PE_SHOWDOWN_PATH_PLO4;
+        return status;
+    }
     if (!two_card_only)
     {
         if (out_path)
