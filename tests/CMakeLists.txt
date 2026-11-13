@@ -996,6 +996,19 @@ if(TARGET pe-vector-sim)
             --range1 9c8d5c6c7c8c)
     set_tests_properties(pe_vector_sim_plo6 PROPERTIES LABELS "solver;cli;vector;plo6")
 endif()
+if(TARGET pe-plo4-certify)
+    # Issue #283: the CLI must emit a certified exact certificate for the
+    # deterministic ranges and strategy it generates itself.
+    add_test(NAME pe_plo4_certify_cli
+        COMMAND $<TARGET_FILE:pe-plo4-certify>
+            --combos 32
+            --strategy mixed)
+    set_tests_properties(pe_plo4_certify_cli PROPERTIES
+        LABELS "solver;cli;plo4;river;certification;iss283"
+        PASS_REGULAR_EXPRESSION "\"verdict\": \"certified\""
+        FAIL_REGULAR_EXPRESSION "\"reason\": \"not_converged\""
+        TIMEOUT 120)
+endif()
 if(POKER_EVAL_WITH_ZLIB)
     add_poker_test(test_monker_mkr)
     target_link_libraries(test_monker_mkr PRIVATE ZLIB::ZLIB)
@@ -1026,6 +1039,7 @@ set_tests_properties(test_pe_showdown_plo4_scale PROPERTIES
 add_poker_test(test_pe_showdown)
 add_poker_test(test_pe_holdem_river_ranges)
 add_poker_test(test_plo4_river_oracle)
+add_poker_test(test_plo4_certification)
 add_poker_test(test_pe_holdem_round)
 add_poker_test(test_pe_variant)
 add_poker_test(test_pe_variant_terminal)
@@ -1054,6 +1068,7 @@ set_tests_properties(test_pe_storage_ids PROPERTIES LABELS "solver;solver-v3;sto
 set_tests_properties(test_pe_showdown PROPERTIES LABELS "solver;solver-v3;vec06")
 set_tests_properties(test_pe_holdem_river_ranges PROPERTIES LABELS "solver;solver-v3;vec10")
 set_tests_properties(test_plo4_river_oracle PROPERTIES LABELS "solver;solver-v3;plo4;river;oracle;showdown;iss280" TIMEOUT 120)
+set_tests_properties(test_plo4_certification PROPERTIES LABELS "solver;solver-v3;plo4;river;certification;iss283" TIMEOUT 120)
 set_tests_properties(test_pe_traversal_vector PROPERTIES LABELS "solver;solver-v3;vec02")
 set_tests_properties(test_vector_combo_wide PROPERTIES LABELS "solver;solver-v3;vec02;combo-width" TIMEOUT 120)
 set_tests_properties(test_pe_vector_cfr PROPERTIES LABELS "solver;solver-v3;vec03;vec08")

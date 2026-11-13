@@ -17,6 +17,7 @@ can jump directly to the topic you need.
 | Uncertainty-Aware Work Prioritisation | ordering work by how undecided a decision is: the gap/spread score, geometric buckets, the coverage tier, aging, telemetry, why it is a layer rather than a change to `pe_work_schedule()` (issue #258), the call site that spends the bucket on the sampled BR's per-decision sample cap (issue #271), and the solve-level benchmarks on the four workloads (issue #258) | ✅ — see `work_priority_scheduling.md` |
 | PLO Hand Features | PLO4/5/6 made hands, draws, blockers and private structure under two-plus-three; bucket keys; strategy aggregation (issue #238) | ✅ — see `plo_hand_features.md` |
 | Omaha Hi/Lo 8-or-Better | PLO4/5/6 Hi/Lo showdowns: selecting it, two-plus-three for both halves, side-pot splitting, rake order, what is refused (issue #237) | ✅ — see `omaha_hilo8.md` |
+| PLO4 River Certificate | heads-up PLO4 river exploitability: declared tree and ranges, exact vs not_certified labels, the `pe-plo4-certification/v1` schema and a certified example (issue #283) | ✅ — see `plo4_river_certification.md` |
 | CFR Export Results | Post-run result exports (JSON / CSV) | planned — see `mpf_dump_results` |
 | CFR Performance | Perf counters & instrumentation tips | planned |
 | CFR Data Pipeline | End-to-end walkthrough: build tree → run → monitor → export | planned — see `examples/4way_postflop/` |

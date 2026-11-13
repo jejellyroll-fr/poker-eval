@@ -155,6 +155,44 @@ static void br_free_reach(pe_reach_vec_t *reach, uint8_t player_count)
         pe_vec_free(&reach[player]);
 }
 
+/* Root reach: the caller's private-combo priors when the game declares them,
+ * and one per combo otherwise. Seeding the reach is what lets a weighted
+ * range be measured without teaching the strategy callback about chance. */
+static pe_solver_status_t br_seed_root_reach(const pe_vector_game_t *game,
+                                             pe_reach_vec_t *reach)
+{
+    uint8_t player;
+
+    memset(reach, 0, PE_TRAVERSAL_MAX_PLAYERS * sizeof(*reach));
+    for (player = 0; player < game->player_count; ++player)
+    {
+        pe_combo_id_t combo;
+
+        if (pe_vec_alloc(&reach[player], game->combo_count) != PE_SOLVER_OK)
+        {
+            br_free_reach(reach, player);
+            return PE_SOLVER_ERR_OUT_OF_MEMORY;
+        }
+        if (!game->combo_prior)
+        {
+            pe_vec_fill(&reach[player], 1.0);
+            continue;
+        }
+        for (combo = 0u; combo < game->combo_count; ++combo)
+        {
+            double weight = 0.0;
+            if (game->combo_prior(player, combo, &weight, game->user) != 0 ||
+                !pe_finite_double(weight) || weight < 0.0)
+            {
+                br_free_reach(reach, (uint8_t)(player + 1u));
+                return PE_SOLVER_ERR_INVALID_CONFIG;
+            }
+            reach[player].v[combo] = weight;
+        }
+    }
+    return PE_SOLVER_OK;
+}
+
 static void br_release_child(const pe_vector_game_t *game,
                              const void *child)
 {
@@ -549,7 +587,12 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
                 for (player = 0; player < game->player_count; ++player)
                     if (player != (int)ctx->br_player)
                         weight *= reach[player].v[combo];
-            out->v[combo] = terminal[ctx->br_player].v[combo] * weight;
+            /* The BR player's own reach never shrinks along the counterfactual
+             * tree, so it is exactly its prior mass: weighting the value by it
+             * puts the best-response value on the same range prior as the
+             * policy value. Without priors it is 1 and changes nothing. */
+            out->v[combo] = terminal[ctx->br_player].v[combo] * weight *
+                            reach[ctx->br_player].v[combo];
         }
         for (player = 0; player < game->player_count; ++player)
             pe_vec_free(&terminal[player]);
@@ -803,7 +846,7 @@ pe_solver_status_t pe_best_response_vector(
     pe_reach_vec_t root_reach[PE_TRAVERSAL_MAX_PLAYERS] = {{0}};
     pe_vec_t root_value = {0};
     uint32_t iteration;
-    uint8_t player;
+    pe_solver_status_t seed_status;
 
     if (!out_result)
         return PE_SOLVER_ERR_NULL_ARGUMENT;
@@ -816,16 +859,9 @@ pe_solver_status_t pe_best_response_vector(
     ctx.game = game;
     ctx.br_player = br_player;
     ctx.combo_count = game->combo_count;
-    for (player = 0; player < game->player_count; ++player)
-    {
-        if (pe_vec_alloc(&root_reach[player], game->combo_count) !=
-            PE_SOLVER_OK)
-        {
-            br_free_reach(root_reach, player);
-            return PE_SOLVER_ERR_OUT_OF_MEMORY;
-        }
-        pe_vec_fill(&root_reach[player], 1.0);
-    }
+    seed_status = br_seed_root_reach(game, root_reach);
+    if (seed_status != PE_SOLVER_OK)
+        return seed_status;
 
     for (iteration = 0; iteration < config->max_iterations; ++iteration)
     {
@@ -954,15 +990,10 @@ pe_solver_status_t pe_exploitability_vector(
         config->max_iterations == 0u || config->tie_tolerance < 0.0 ||
         !pe_finite_double(config->tie_tolerance))
         return PE_SOLVER_ERR_INVALID_CONFIG;
-    for (player = 0u; player < game->player_count; ++player)
     {
-        if (pe_vec_alloc(&root_reach[player], game->combo_count) !=
-            PE_SOLVER_OK)
-        {
-            br_free_reach(root_reach, player);
-            return PE_SOLVER_ERR_OUT_OF_MEMORY;
-        }
-        pe_vec_fill(&root_reach[player], 1.0);
+        pe_solver_status_t seed_status = br_seed_root_reach(game, root_reach);
+        if (seed_status != PE_SOLVER_OK)
+            return seed_status;
     }
     if (policy_value(&policy, game->root, root_reach, policy_values) != 0)
     {

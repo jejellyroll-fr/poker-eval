@@ -66,6 +66,10 @@ pe_solver_status_t pe_best_response_vector(
  * Each best-response value then replaces one player's policy, consistently at
  * information sets. `br_gap` is the unilateral gain and
  * `exploitability_raw` is their sum (NashConv for multiway games).
+ *
+ * When the game declares `combo_prior`, the root reach starts from those
+ * per-combo weights and both values share that range prior. Terminal values
+ * stay conditional on the hero's own combo, exactly as without a prior.
  */
 pe_solver_status_t pe_exploitability_vector(
     const struct pe_vector_game_t *game,
