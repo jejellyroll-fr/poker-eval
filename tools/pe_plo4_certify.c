@@ -18,7 +18,6 @@
 #include <poker_eval/solver/pe_plo4_certification.h>
 
 #include <float.h>
-#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,11 +26,6 @@
 #define PE_CERTIFY_DEFAULT_COMBOS 64u
 #define PE_CERTIFY_MAX_COMBOS 4096u
 #define PE_CERTIFY_DEFAULT_ITERATIONS 64u
-
-typedef struct
-{
-    int mixed;
-} strategy_ctx_t;
 
 typedef struct
 {
@@ -123,7 +117,7 @@ static int parse_double(const char *text, double *out)
     if (!text || !out)
         return -1;
     value = strtod(text, &end);
-    if (!end || *end != '\0' || !(value <= DBL_MAX && value >= -DBL_MAX))
+    if (*end != '\0' || !(value <= DBL_MAX && value >= -DBL_MAX))
         return -1;
     *out = value;
     return 0;
@@ -137,7 +131,7 @@ static int parse_size(const char *text, size_t *out)
     if (!text || !out)
         return -1;
     value = strtoul(text, &end, 10);
-    if (!end || *end != '\0' || value == 0ul)
+    if (*end != '\0' || value == 0ul)
         return -1;
     *out = (size_t)value;
     return 0;
@@ -162,8 +156,7 @@ static uint64_t next_random(uint64_t *state)
 /* Deterministic sample of distinct four-card hands off the board.  A
  * lexicographic prefix would put nearly all combos on the same low cards and
  * leave the ranges with no legal pair at all, so the tool samples instead. */
-static size_t enumerate_hands(mask_t board, size_t count,
-                              pe_omaha_combo_t *out)
+static void enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
 {
     int live[MODERN_DECK_SIZE];
     size_t live_count = 0u;
@@ -198,21 +191,20 @@ static size_t enumerate_hands(mask_t board, size_t count,
         out[produced].weight = 1.0;
         ++produced;
     }
-    return produced;
 }
 
 static int cert_strategy(void *user, uint16_t infoset, uint16_t action,
                          pe_value_vec_t *out)
 {
-    strategy_ctx_t *ctx = (strategy_ctx_t *)user;
+    const int *mixed = (const int *)user;
     size_t combo;
 
-    if (!ctx || !out || action >= PE_PLO4_CERT_ACTION_COUNT)
+    if (!mixed || !out || action >= PE_PLO4_CERT_ACTION_COUNT)
         return -1;
     for (combo = 0u; combo < out->n; ++combo)
     {
         double open =
-            ctx->mixed
+            *mixed
                 ? 0.15 + 0.7 * (double)((infoset * 13u + combo * 5u) % 7u) / 6.0
                 : 0.5;
         out->v[combo] = action == 0u ? open : 1.0 - open;
@@ -265,10 +257,15 @@ static void usage(const char *program)
             program);
 }
 
+static int usage_error(const char *program)
+{
+    usage(program);
+    return 2;
+}
+
 int main(int argc, char **argv)
 {
     options_t options;
-    strategy_ctx_t strategy;
     pe_omaha_combo_t *combos = NULL;
     pe_omaha_range_t ranges[2];
     pe_plo4_cert_spec_t spec;
@@ -276,8 +273,6 @@ int main(int argc, char **argv)
     pe_best_response_vector_config_t config;
     pe_solver_status_t status;
     mask_t board = MASK_EMPTY;
-    size_t available;
-    size_t generated;
     size_t index;
     int arg;
     int exit_code = 1;
@@ -311,70 +306,46 @@ int main(int argc, char **argv)
             continue;
         }
         if (!value)
-        {
-            usage(argv[0]);
-            return 2;
-        }
+            return usage_error(argv[0]);
         if (strcmp(name, "--board") == 0)
             options.board_text = value;
         else if (strcmp(name, "--pot") == 0)
         {
             if (parse_double(value, &options.pot) != 0)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
         }
         else if (strcmp(name, "--invested") == 0)
         {
             if (parse_double(value, &options.invested[0]) != 0)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
             options.invested[1] = options.invested[0];
         }
         else if (strcmp(name, "--stack") == 0)
         {
             if (parse_double(value, &options.stacks[0]) != 0)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
             options.stacks[1] = options.stacks[0];
         }
         else if (strcmp(name, "--bet-size") == 0)
         {
             if (parse_double(value, &options.bet_size) != 0)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
         }
         else if (strcmp(name, "--big-blind") == 0)
         {
             if (parse_double(value, &options.big_blind) != 0)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
         }
         else if (strcmp(name, "--combos") == 0)
         {
             if (parse_size(value, &options.combos) != 0 ||
                 options.combos > PE_CERTIFY_MAX_COMBOS)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
         }
         else if (strcmp(name, "--max-iterations") == 0)
         {
             if (parse_iterations(value, &options.max_iterations) != 0)
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
         }
         else if (strcmp(name, "--strategy") == 0)
         {
@@ -383,16 +354,10 @@ int main(int argc, char **argv)
             else if (strcmp(value, "mixed") == 0)
                 options.mixed_strategy = 1;
             else
-            {
-                usage(argv[0]);
-                return 2;
-            }
+                return usage_error(argv[0]);
         }
         else
-        {
-            usage(argv[0]);
-            return 2;
-        }
+            return usage_error(argv[0]);
         ++arg;
     }
 
@@ -412,8 +377,7 @@ int main(int argc, char **argv)
                                ? options.stacks[0]
                                : options.stacks[1];
 
-    available = pe_omaha_combo_count(board, 4u);
-    if (options.combos > available)
+    if (options.combos > pe_omaha_combo_count(board, 4u))
     {
         fail("--combos exceeds the number of legal four-card hands");
         return 2;
@@ -424,23 +388,16 @@ int main(int argc, char **argv)
         fail("allocation failed");
         return 1;
     }
-    generated = enumerate_hands(board, options.combos, combos);
-    if (generated != options.combos)
-    {
-        fail("range generation produced fewer combos than requested");
-        goto cleanup;
-    }
+    enumerate_hands(board, options.combos, combos);
     if (options.weighted)
-        for (index = 0u; index < generated; ++index)
-            if (index % 5u == 3u)
-                combos[index].weight = 0.25;
+        for (index = 3u; index < options.combos; index += 5u)
+            combos[index].weight = 0.25;
 
     ranges[0].combos = combos;
-    ranges[0].count = generated;
+    ranges[0].count = options.combos;
     ranges[1].combos = combos;
-    ranges[1].count = generated;
+    ranges[1].count = options.combos;
 
-    strategy.mixed = options.mixed_strategy;
     memset(&spec, 0, sizeof(spec));
     spec.board = board;
     spec.ranges = ranges;
@@ -452,7 +409,7 @@ int main(int argc, char **argv)
     spec.bet_size = options.bet_size;
     spec.big_blind = options.big_blind;
     spec.strategy = cert_strategy;
-    spec.strategy_user = &strategy;
+    spec.strategy_user = &options.mixed_strategy;
 
     config = pe_best_response_vector_config_default();
     config.max_iterations = options.max_iterations;
@@ -491,13 +448,7 @@ int main(int argc, char **argv)
            result.joint_mass);
     printf("  \"br_iterations\": [%u, %u],\n",
            result.br_iterations[0], result.br_iterations[1]);
-    printf("  \"policy_value\": {\"chips\": [%.17g, %.17g], "
-           "\"bb\": [%.17g, %.17g], \"mbb_per_game\": [%.17g, %.17g]},\n",
-           result.policy_value[0], result.policy_value[1],
-           result.policy_value[0] / result.big_blind,
-           result.policy_value[1] / result.big_blind,
-           result.policy_value[0] / result.big_blind * 1000.0,
-           result.policy_value[1] / result.big_blind * 1000.0);
+    print_value("policy_value", result.policy_value, result.big_blind);
     print_value("br_value", result.br_value, result.big_blind);
     print_value("br_gap", result.br_gap, result.big_blind);
     printf("  \"nashconv\": {\"chips\": %.17g, \"bb\": %.17g, "
