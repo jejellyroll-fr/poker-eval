@@ -1022,6 +1022,17 @@ if(TARGET pe-plo4-certify)
         set_tests_properties(plo4_certify_docs_example PROPERTIES
             LABELS "solver;cli;plo4;river;certification;docs;iss283"
             TIMEOUT 120)
+        # Issue #283, full-combo tranche: the certificate must cover the whole
+        # C(47,4) = 178,365-combo river range, not only a prefix of it. The
+        # run takes seconds unsanitized; instrumented trees are quarantined
+        # like the other full-range case.
+        add_test(NAME plo4_certify_full_range
+            COMMAND Python3::Interpreter
+                ${CMAKE_CURRENT_SOURCE_DIR}/plo4_certify_full_range.py
+                $<TARGET_FILE:pe-plo4-certify>)
+        set_tests_properties(plo4_certify_full_range PROPERTIES
+            LABELS "solver;cli;plo4;river;certification;full-range;iss283;sanitizer-skip"
+            TIMEOUT 300)
     else()
         message(STATUS
             "Skipping plo4_certify_docs_example: Python 3 interpreter not found")

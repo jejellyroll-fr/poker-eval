@@ -29,6 +29,9 @@ typedef struct
                            pe_value_vec_t *out_values, uint8_t player_count,
                            void *user);
     pe_vector_combo_compatible_fn combo_compatible;
+    int (*combo_mass)(const pe_betting_state_t *state,
+                      const pe_reach_vec_t *reach, uint8_t player,
+                      pe_value_vec_t *out_mass, void *user);
 } pe_betting_vector_ops_t;
 
 typedef struct

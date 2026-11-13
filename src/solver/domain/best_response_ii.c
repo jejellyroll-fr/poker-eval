@@ -306,6 +306,25 @@ static int br_aggregate_opponent_reach(const pe_vector_game_t *game,
         selected, 1.0, out);
 }
 
+/* Per-combo compatible mass for `acting`, prefilled into `out`.  The aggregate
+ * callback turns the pair enumeration into one pass over the range, which is
+ * what lets a full PLO4 river range finish; games without it keep the exact
+ * pairwise fallback. */
+static int br_compatible_mass(const pe_vector_game_t *game, const void *state,
+                              const pe_reach_vec_t *reach, uint8_t acting,
+                              pe_vec_t *out)
+{
+    pe_combo_id_t combo;
+
+    if (game->combo_mass)
+        return game->combo_mass(state, reach, acting, out, game->user);
+    for (combo = 0u; combo < game->combo_count; ++combo)
+        if (br_aggregate_opponent_reach(game, state, reach, acting, combo,
+                                        &out->v[combo]) != 0)
+            return -1;
+    return 0;
+}
+
 static int br_validate(const pe_vector_game_t *game, uint8_t br_player,
                        const pe_best_response_vector_config_t *config)
 {
@@ -407,30 +426,35 @@ static int policy_value(pe_policy_ctx_t *ctx, const void *state,
         for (p = 0u; p < game->player_count; ++p)
         {
             pe_combo_id_t combo;
-            for (combo = 0u; combo < ctx->combo_count; ++combo)
+            if (game->combo_mass || game->combo_compatible)
             {
-                double weight = reach[p].v[combo];
-                uint8_t opponent;
-                if (game->combo_compatible)
+                pe_vec_t mass = {0};
+                if (pe_vec_alloc(&mass, ctx->combo_count) != PE_SOLVER_OK ||
+                    br_compatible_mass(game, state, reach, p, &mass) != 0)
                 {
-                    double opponents = 0.0;
-                    if (br_aggregate_opponent_reach(
-                            game, state, reach, p, combo, &opponents) != 0)
-                    {
-                        for (opponent = 0u; opponent < game->player_count;
-                             ++opponent)
-                            pe_vec_free(&terminal[opponent]);
-                        return -1;
-                    }
-                    weight *= opponents;
+                    uint8_t opponent;
+                    for (opponent = 0u; opponent < game->player_count;
+                         ++opponent)
+                        pe_vec_free(&terminal[opponent]);
+                    pe_vec_free(&mass);
+                    return -1;
                 }
-                else
+                for (combo = 0u; combo < ctx->combo_count; ++combo)
+                    out_values[p] += terminal[p].v[combo] * reach[p].v[combo] *
+                                     mass.v[combo];
+                pe_vec_free(&mass);
+            }
+            else
+                for (combo = 0u; combo < ctx->combo_count; ++combo)
+                {
+                    double weight = reach[p].v[combo];
+                    uint8_t opponent;
                     for (opponent = 0u; opponent < game->player_count;
                          ++opponent)
                         if (opponent != p)
                             weight *= reach[opponent].v[combo];
-                out_values[p] += terminal[p].v[combo] * weight;
-            }
+                    out_values[p] += terminal[p].v[combo] * weight;
+                }
             out_values[p] /= (double)ctx->combo_count;
             pe_vec_free(&terminal[p]);
         }
@@ -568,32 +592,38 @@ static int br_value(pe_br_ctx_t *ctx, const void *state,
             pe_vec_free(out);
             return -1;
         }
-        for (combo = 0; combo < ctx->combo_count; ++combo)
+        if (game->combo_mass || game->combo_compatible)
         {
-            double weight = 1.0;
-            if (game->combo_compatible)
+            pe_vec_t mass = {0};
+            if (pe_vec_alloc(&mass, ctx->combo_count) != PE_SOLVER_OK ||
+                br_compatible_mass(game, state, reach, ctx->br_player, &mass) !=
+                    0)
             {
-                if (br_aggregate_opponent_reach(
-                        game, state, reach, ctx->br_player,
-                        (pe_combo_id_t)combo, &weight) != 0)
-                {
-                    for (player = 0; player < game->player_count; ++player)
-                        pe_vec_free(&terminal[player]);
-                    pe_vec_free(out);
-                    return -1;
-                }
+                for (player = 0; player < game->player_count; ++player)
+                    pe_vec_free(&terminal[player]);
+                pe_vec_free(&mass);
+                pe_vec_free(out);
+                return -1;
             }
-            else
+            for (combo = 0; combo < ctx->combo_count; ++combo)
+                /* The BR player's own reach never shrinks along the
+                 * counterfactual tree, so it is exactly its prior mass:
+                 * weighting the value by it puts the best-response value on
+                 * the same range prior as the policy value. */
+                out->v[combo] = terminal[ctx->br_player].v[combo] *
+                                mass.v[combo] * reach[ctx->br_player].v[combo];
+            pe_vec_free(&mass);
+        }
+        else
+            for (combo = 0; combo < ctx->combo_count; ++combo)
+            {
+                double weight = 1.0;
                 for (player = 0; player < game->player_count; ++player)
                     if (player != (int)ctx->br_player)
                         weight *= reach[player].v[combo];
-            /* The BR player's own reach never shrinks along the counterfactual
-             * tree, so it is exactly its prior mass: weighting the value by it
-             * puts the best-response value on the same range prior as the
-             * policy value. Without priors it is 1 and changes nothing. */
-            out->v[combo] = terminal[ctx->br_player].v[combo] * weight *
-                            reach[ctx->br_player].v[combo];
-        }
+                out->v[combo] = terminal[ctx->br_player].v[combo] * weight *
+                                reach[ctx->br_player].v[combo];
+            }
         for (player = 0; player < game->player_count; ++player)
             pe_vec_free(&terminal[player]);
         return 0;

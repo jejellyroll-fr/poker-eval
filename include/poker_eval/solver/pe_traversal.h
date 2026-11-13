@@ -86,6 +86,16 @@ typedef struct pe_vector_game_t
        opponent reach. It is deliberately separate from terminal_values so
        the traversal can weight regrets without guessing from combo indexes. */
     pe_vector_combo_compatible_fn combo_compatible;
+    /* Optional per-combo compatible opponent mass, the same quantity the
+       compatibility callback defines by enumeration. `player` is the combo
+       owner; out_mass->v[combo] must receive the product of every other
+       player's reach over the combos compatible with it. When set, the best
+       response and policy value use one call per terminal instead of one
+       compatibility check per (own combo, opponent combo) pair, which is what
+       keeps a full 178,365-combo PLO4 range tractable. A non-zero return
+       fails the measurement. */
+    int (*combo_mass)(const void *state, const pe_reach_vec_t *reach,
+                      uint8_t player, pe_value_vec_t *out_mass, void *user);
     /* Optional private-combo prior mass (issue #283). Returning a weight per
        combo lets a range carry non-uniform weights: the best-response and
        exploitability entry points seed their root reach with it instead of

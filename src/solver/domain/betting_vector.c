@@ -50,6 +50,15 @@ static int vector_terminal_values(const void *state,
                                      out_values, player_count, game->user);
 }
 
+static int vector_combo_mass(const void *state, const pe_reach_vec_t *reach,
+                             uint8_t player, pe_value_vec_t *out_mass,
+                             void *user)
+{
+    pe_betting_vector_game_t *game = (pe_betting_vector_game_t *)user;
+    return game->ops.combo_mass((const pe_betting_state_t *)state, reach,
+                                player, out_mass, game->user);
+}
+
 static int vector_combo_compatible(const void *state, uint8_t player,
                                    pe_combo_id_t player_combo, uint8_t opponent,
                                    pe_combo_id_t opponent_combo, void *user)
@@ -162,6 +171,7 @@ pe_betting_status_t pe_betting_vector_game_init(
     out->vector.release_state = vector_release_state;
     out->vector.combo_compatible = ops->combo_compatible
         ? vector_combo_compatible : NULL;
+    out->vector.combo_mass = ops->combo_mass ? vector_combo_mass : NULL;
     return PE_BETTING_OK;
 }
 
