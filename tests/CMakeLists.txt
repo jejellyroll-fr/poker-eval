@@ -1008,6 +1008,24 @@ if(TARGET pe-plo4-certify)
         PASS_REGULAR_EXPRESSION "\"verdict\": \"certified\""
         FAIL_REGULAR_EXPRESSION "\"reason\": \"not_converged\""
         TIMEOUT 120)
+    # Issue #283: the certified example in the guide must stay the real CLI
+    # output, so documentation cannot drift from the tool.  Floating-point
+    # fields are compared with a tolerance since the showdown kernel sums in a
+    # platform-dependent order.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME plo4_certify_docs_example
+            COMMAND Python3::Interpreter
+                ${CMAKE_CURRENT_SOURCE_DIR}/plo4_certify_docs_example.py
+                $<TARGET_FILE:pe-plo4-certify>
+                ${CMAKE_CURRENT_SOURCE_DIR}/../docs/cfr/guides/plo4_river_certification.md)
+        set_tests_properties(plo4_certify_docs_example PROPERTIES
+            LABELS "solver;cli;plo4;river;certification;docs;iss283"
+            TIMEOUT 120)
+    else()
+        message(STATUS
+            "Skipping plo4_certify_docs_example: Python 3 interpreter not found")
+    endif()
 endif()
 if(POKER_EVAL_WITH_ZLIB)
     add_poker_test(test_monker_mkr)
