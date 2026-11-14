@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import io
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -106,17 +110,63 @@ class ParsingTests(unittest.TestCase):
 class CommandTests(unittest.TestCase):
     def test_command_pins_the_game_and_schedule(self) -> None:
         command = probe.build_command(
-            Path("solver"), Path("/repo"), "hs30", 7, 5000.0, 100, 8, 25,
+            Path("solver"), "hs30", 7, 5000.0, 100, 8, 512,
             Path("out.json"),
         )
         self.assertIn("--dcfr-schedule", command)
         self.assertEqual(command[command.index("--dcfr-schedule") + 1], "hs30")
         self.assertEqual(command[command.index("--board") + 1], probe.BOARD)
-        self.assertEqual(command[command.index("--pot") + 1], str(probe.POT))
+        self.assertEqual(command[command.index("--pot") + 1], f"{probe.POT:.17g}")
+        self.assertEqual(command[command.index("--combos") + 1], "512")
         self.assertEqual(
             command[command.index("--target-mbb") + 1], f"{5000.0:.17g}"
         )
-        self.assertEqual(command[command.index("--game") + 1], "plo4")
+        self.assertEqual(command[command.index("--algorithm") + 1], "dcfr")
+
+
+class MainTests(unittest.TestCase):
+    def _main(self, exploitability_by_schedule: dict[str, float]) -> int:
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            return {
+                "schedule": schedule,
+                "seed": seed,
+                "target_mbb": target,
+                "requested_schedule": schedule,
+                "horizon": 1000,
+                "seconds": 0.1,
+                "reached": True,
+                "exploitability_mbb_per_game":
+                    exploitability_by_schedule[schedule],
+                "measurement_iteration": 10,
+                "iterations_run": 10,
+                "br_mode": "exact",
+                "guarantee": "nash",
+                "infosets": 4,
+                "storage_bytes": 1024,
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "report.json"
+            with mock.patch.object(probe, "run_once", side_effect=fake_run_once):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    return probe.main([
+                        "probe", "--solver", str(solver), "--targets", "1000",
+                        "--seeds", "1", "--iterations", "10",
+                        "--output", str(output),
+                    ])
+
+    def test_inert_schedules_fail_the_run(self) -> None:
+        self.assertEqual(
+            self._main({"fixed": 800.0, "hs15": 800.0, "hs30": 800.0}), 1
+        )
+
+    def test_active_schedules_succeed(self) -> None:
+        self.assertEqual(
+            self._main({"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}), 0
+        )
 
 
 if __name__ == "__main__":

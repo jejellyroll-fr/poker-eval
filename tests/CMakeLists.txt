@@ -1002,6 +1002,31 @@ if(TARGET pe-vector-sim)
             --range1 9c8d5c6c7c8c)
     set_tests_properties(pe_vector_sim_plo6 PROPERTIES LABELS "solver;cli;vector;plo6")
 endif()
+if(TARGET pe-plo4-lane-a)
+    # Issue #284: the lane A driver must solve through the v3 preset and label
+    # the measurement as the exact vector-lane best response.
+    add_test(NAME pe_plo4_lane_a_cli
+        COMMAND $<TARGET_FILE:pe-plo4-lane-a>
+            --combos 32
+            --iterations 2
+            --exploitability-interval 2
+            --dcfr-schedule hs30)
+    set_tests_properties(pe_plo4_lane_a_cli PROPERTIES
+        LABELS "solver;cli;plo4;river;lane-a;dcfr;iss284"
+        PASS_REGULAR_EXPRESSION "\"br_mode\":\"exact\".*\"guarantee\":\"nash\""
+        TIMEOUT 120)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        # Issue #284: fixed and hs30 must produce different measurements.
+        add_test(NAME pe_plo4_lane_a_schedules
+            COMMAND Python3::Interpreter
+                ${CMAKE_SOURCE_DIR}/benchmarks/solver/check_lane_a_schedules.py
+                --solver $<TARGET_FILE:pe-plo4-lane-a>)
+        set_tests_properties(pe_plo4_lane_a_schedules PROPERTIES
+            LABELS "solver;cli;plo4;river;lane-a;dcfr;iss284"
+            TIMEOUT 120)
+    endif()
+endif()
 if(TARGET pe-plo4-certify)
     # Issue #283: the CLI must emit a certified exact certificate for the
     # deterministic ranges and strategy it generates itself.

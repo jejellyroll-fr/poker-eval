@@ -14,6 +14,8 @@
  */
 
 #include <poker_eval/solver/pe_plo4_certification.h>
+#include <poker_eval/solver/pe_ports.h>
+#include <poker_eval/solver/pe_solver.h>
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/eval_omaha.h>
@@ -92,11 +94,12 @@ static mask_t board_padding(mask_t board)
     return padding;
 }
 
-static int valid_spec(const pe_plo4_cert_spec_t *spec)
+static int valid_spec(const pe_plo4_cert_spec_t *spec, int require_strategy)
 {
     uint8_t player;
 
-    if (!spec || !spec->ranges || !spec->strategy)
+    if (!spec || !spec->ranges || spec->first_to_act > 1u ||
+        (require_strategy && !spec->strategy))
         return 0;
     if (!mask_is_valid(spec->board) ||
         mask_popcount(spec->board) != (int)PE_PLO4_CERT_BOARD_CARDS)
@@ -503,8 +506,8 @@ static pe_solver_status_t init_game(plo4_cert_ctx_t *ctx,
     pe_betting_rules_default(rules, PE_PLO4_CERT_PLAYERS);
     rules->min_raise = spec->bet_size;
     if (pe_betting_state_init(root, rules, spec->stacks,
-                              PE_PLO4_CERT_PLAYERS, 0, spec->pot, 0.0) !=
-        PE_BETTING_OK)
+                              PE_PLO4_CERT_PLAYERS, spec->first_to_act,
+                              spec->pot, 0.0) != PE_BETTING_OK)
         return PE_SOLVER_ERR_INVALID_CONFIG;
     root->invested[0] = spec->invested[0];
     root->invested[1] = spec->invested[1];
@@ -548,7 +551,7 @@ pe_solver_status_t pe_plo4_cert_evaluate(
                 PE_PLO4_CERT_REASON_INVALID_GAME);
     out_result->game_scope =
         "heads-up PLO4 river, one fixed bet size, no rake, declared private ranges";
-    if (!valid_spec(spec))
+    if (!valid_spec(spec, 1))
         return PE_SOLVER_ERR_INVALID_CONFIG;
     if (!config)
     {
@@ -624,6 +627,113 @@ pe_solver_status_t pe_plo4_cert_evaluate(
                                       : PE_PLO4_CERT_VERDICT_NOT_CERTIFIED,
                 out_result->converged ? PE_PLO4_CERT_REASON_NONE
                                       : PE_PLO4_CERT_REASON_NOT_CONVERGED);
+    free_ctx(&ctx);
+    return PE_SOLVER_OK;
+}
+
+pe_solver_status_t pe_plo4_cert_solve(
+    const pe_plo4_cert_spec_t *spec, const pe_solver_config_t *config,
+    pe_plo4_cert_solve_result_t *out_result)
+{
+    plo4_cert_ctx_t ctx;
+    pe_betting_rules_t rules;
+    pe_betting_state_t root;
+    pe_betting_vector_game_t game;
+    pe_solver_config_t cfg;
+    pe_solver_deps_t deps;
+    pe_solver_t *solver = NULL;
+    pe_progress_t progress = {0};
+    pe_metrics_t metrics;
+    pe_showdown_path_t path = PE_SHOWDOWN_PATH_NONE;
+    pe_solver_status_t status;
+    double joint_mass = 0.0;
+    double requested_target;
+    double scale;
+    uint8_t player;
+
+    if (!out_result)
+        return PE_SOLVER_ERR_NULL_ARGUMENT;
+    memset(out_result, 0, sizeof(*out_result));
+    if (!valid_spec(spec, 0))
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    cfg = config ? *config : pe_solver_config_default();
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.spec = spec;
+    status = build_ranges(&ctx);
+    if (status == PE_SOLVER_OK)
+        status = root_joint_mass(&ctx, &joint_mass, &path);
+    if (status == PE_SOLVER_OK)
+        status = init_game(&ctx, &rules, &root, &game);
+    if (status != PE_SOLVER_OK)
+    {
+        free_ctx(&ctx);
+        return status;
+    }
+
+    /* The solver owns the regrets: it must not read the fixed-strategy
+       callback the measurement path installs. */
+    game.vector.strategy = NULL;
+    cfg.problem.expected_infosets = PE_PLO4_CERT_INFOSET_COUNT;
+    cfg.problem.expected_actions = PE_PLO4_CERT_ACTION_COUNT;
+    cfg.problem.expected_combos = ctx.combo_count;
+    cfg.execution.big_blind = spec->big_blind;
+
+    /* The target arrives in chips-per-hand mbb, while the solver compares the
+       vector lane's per-combo gap sum. One fixed factor converts the two. */
+    requested_target = cfg.target_exploitability_mbb;
+    if (requested_target > 0.0)
+        cfg.target_exploitability_mbb =
+            requested_target * 2.0 * joint_mass / (double)ctx.combo_count;
+
+    deps = pe_solver_deps_default();
+    deps.vector_game = &game.vector;
+    solver = pe_solver_create(&cfg, &deps);
+    if (!solver)
+    {
+        pe_betting_vector_game_destroy(&game);
+        free_ctx(&ctx);
+        return PE_SOLVER_ERR_INVALID_CONFIG;
+    }
+    status = pe_solver_run(solver);
+    if (status == PE_SOLVER_OK)
+        status = pe_solver_progress(solver, &progress);
+    if (status == PE_SOLVER_OK)
+        status = pe_solver_metrics(solver, &metrics);
+    if (status != PE_SOLVER_OK)
+    {
+        pe_solver_destroy(solver);
+        pe_betting_vector_game_destroy(&game);
+        free_ctx(&ctx);
+        return status;
+    }
+
+    scale = (double)ctx.combo_count / joint_mass;
+    out_result->metrics = metrics;
+    out_result->metrics.exploitability_raw = metrics.exploitability_raw * scale;
+    out_result->metrics.nash_conv = out_result->metrics.exploitability_raw;
+    out_result->metrics.nash_conv_bb_per_game =
+        out_result->metrics.exploitability_raw / spec->big_blind;
+    out_result->metrics.nash_conv_mbb_per_game =
+        out_result->metrics.nash_conv_bb_per_game * 1000.0;
+    out_result->nash_conv = out_result->metrics.exploitability_raw;
+    for (player = 0u; player < PE_PLO4_CERT_PLAYERS; ++player)
+        out_result->metrics.br_gap[player] = metrics.br_gap[player] * scale;
+    out_result->exploitability = out_result->nash_conv * 0.5;
+    out_result->exploitability_mbb_per_game =
+        out_result->exploitability / spec->big_blind * 1000.0;
+    out_result->exploitability_pct_of_pot =
+        out_result->exploitability / spec->pot * 100.0;
+    out_result->iterations = progress.iteration;
+    out_result->complete = progress.complete;
+    out_result->target_reached =
+        requested_target > 0.0 &&
+        out_result->exploitability_mbb_per_game <= requested_target;
+    out_result->combo_count = ctx.combo_count;
+    out_result->joint_mass = joint_mass;
+
+    pe_solver_destroy(solver);
+    pe_betting_vector_game_destroy(&game);
     free_ctx(&ctx);
     return PE_SOLVER_OK;
 }

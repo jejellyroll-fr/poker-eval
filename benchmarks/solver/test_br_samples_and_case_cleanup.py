@@ -19,7 +19,9 @@ class CasefoldCleanupTests(unittest.TestCase):
             out_dir = Path(tmp)
             for case_id in ("Foo", "foo"):
                 run_dir = out_dir / case_id / "run-1"
-                run_dir.mkdir(parents=True)
+                # On a case-insensitive filesystem "Foo" and "foo" are the
+                # same directory, so the second spelling cannot be created.
+                run_dir.mkdir(parents=True, exist_ok=True)
                 (run_dir / "benchmark.json").write_text("stale", encoding="utf-8")
 
             (out_dir / "selection.json").write_text(

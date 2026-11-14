@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Time-to-target exploitability probe for a fixed PLO4 heads-up river spot.
+"""Time-to-target exploitability probe for the PLO4 heads-up river spot.
 
 Issue #284: iterations per second is not a quality metric. This probe holds the
-game, the ranges, the betting tree, the backend, the precision and the best
-response evaluator constant, and measures the wall-clock time each supported
-algorithm configuration needs to reach a fixed exploitability target. It is a
-measurement harness, not a solver: every run is the product-facing
-`pe-preflop-solve` binary and every number comes from its native JSON report.
+game, the ranges, the betting tree and the best-response evaluator constant and
+measures the wall-clock time each DCFR schedule needs to reach a fixed
+exploitability target.
+
+Runs use the lane A driver `pe-plo4-lane-a`: the v3 vector solver updates the
+regrets, and every convergence measurement is the exact best response of the
+vector lane (`br_mode=exact`, `guarantee=nash`). Nothing is sampled, so a
+target is a measured value and not an estimate.
 
 What it records, per (schedule, target, seed):
 
@@ -14,14 +17,11 @@ What it records, per (schedule, target, seed):
   fields the report carries (`measurement_iteration`, `br_mode`, `guarantee`);
 * the exploitability in mbb/game and whether the target was reached;
 * the solver-managed memory (`storage_bytes` and `infosets`);
-* the seed actually used, so repeated stochastic runs are reproducible.
+* the seed, so repeated runs are reproducible.
 
-The report labels best-response quality explicitly: a sampled estimate is
-`br_mode=sample`, `guarantee=empirical` and is not presented as an exact
-certificate. Targets that no seed reached are marked, never interpolated.
-
-The compared schedules are DCFR's fixed exponents (the control) and the
-training-free HS-DCFR(15)/HS-DCFR(30) schedules of Zhang et al. (AAAI 2026).
+Targets that no seed reached are marked, never interpolated. The compared
+schedules are DCFR's fixed exponents (the control) and the training-free
+HS-DCFR(15)/HS-DCFR(30) schedules of Zhang et al. (AAAI 2026).
 """
 
 from __future__ import annotations
@@ -36,73 +36,64 @@ import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "pe-plo4-time-to-target/v1"
+SCHEMA = "pe-plo4-time-to-target/v2"
 GAME = "plo4"
 BOARD = "Ks9d4c2hTs"
-POT = 63
-STREET = "river"
-TREE = "examples/plo_hu_streets/plo5_hu_river.tree.json"
+POT = 63.0
+STACK = 68.5
+BET_SIZE = 63.0
+BIG_BLIND = 2.0
+FIRST_TO_ACT = 1
+COMBOS = 512
 SCHEDULES = ("fixed", "hs15", "hs30")
 DEFAULT_SEEDS = (11, 23, 37)
-DEFAULT_TARGETS = (15000.0, 5000.0, 1000.0)
-DEFAULT_ITERATIONS = 1000
-DEFAULT_BR_SAMPLES = 16
-DEFAULT_INTERVAL = 50
+DEFAULT_TARGETS = (1000.0, 500.0, 250.0)
+DEFAULT_ITERATIONS = 300
+DEFAULT_INTERVAL = 10
 
 
 def build_command(
     solver: Path,
-    repo_root: Path,
     schedule: str,
     seed: int,
     target_mbb: float,
     iterations: int,
-    br_samples: int,
     interval: int,
+    combos: int,
     output: Path,
 ) -> list[str]:
     return [
         str(solver),
-        "--game", GAME,
-        "--players", "2",
-        "--iterations", str(iterations),
-        "--samples", "1",
-        "--br-samples", str(br_samples),
-        "--exploitability-interval", str(interval),
-        "--algorithm", "external-dcfr",
-        "--dcfr-schedule", schedule,
-        "--backend", "cpu_ref",
-        "--precision", "f64",
-        "--threads", "1",
-        "--target-mbb", f"{target_mbb:.17g}",
-        "--seed", str(seed),
-        "--max-ram", "512",
-        "--desc-limit", "64",
-        "--range0", "100%",
-        "--range1", "100%",
-        "--tree", str((repo_root / TREE).resolve()),
-        "--street", STREET,
         "--board", BOARD,
-        "--pot", str(POT),
+        "--pot", f"{POT:.17g}",
+        "--stack", f"{STACK:.17g}",
+        "--bet-size", f"{BET_SIZE:.17g}",
+        "--big-blind", f"{BIG_BLIND:.17g}",
+        "--combos", str(combos),
+        "--first-to-act", str(FIRST_TO_ACT),
+        "--iterations", str(iterations),
+        "--exploitability-interval", str(interval),
+        "--target-mbb", f"{target_mbb:.17g}",
+        "--algorithm", "dcfr",
+        "--dcfr-schedule", schedule,
+        "--seed", str(seed),
         "--output", str(output),
     ]
 
 
 def run_once(
     solver: Path,
-    repo_root: Path,
     schedule: str,
     seed: int,
     target_mbb: float,
     iterations: int,
-    br_samples: int,
     interval: int,
+    combos: int,
     workdir: Path,
 ) -> dict[str, Any]:
     output = workdir / f"report-{schedule}-{int(target_mbb)}-{seed}.json"
     command = build_command(
-        solver, repo_root, schedule, seed, target_mbb, iterations, br_samples,
-        interval, output,
+        solver, schedule, seed, target_mbb, iterations, interval, combos, output,
     )
     started = time.perf_counter()
     completed = subprocess.run(
@@ -111,7 +102,7 @@ def run_once(
     elapsed = time.perf_counter() - started
     if completed.returncode != 0:
         raise RuntimeError(
-            f"pe-preflop-solve exited with {completed.returncode} for "
+            f"pe-plo4-lane-a exited with {completed.returncode} for "
             f"{schedule} target {target_mbb}: {completed.stderr.strip()}"
         )
     with open(output, encoding="utf-8") as report_file:
@@ -122,7 +113,6 @@ def run_once(
     if exploitability is None:
         raise RuntimeError(f"the {schedule} run reported no exploitability")
     progress = report.get("progress", {})
-    memory = report.get("memory", {})
     return {
         "schedule": schedule,
         "seed": seed,
@@ -130,18 +120,14 @@ def run_once(
         "requested_schedule": report.get("dcfr_schedule"),
         "horizon": report.get("dcfr_horizon"),
         "seconds": elapsed,
-        "reached": float(exploitability) <= target_mbb,
+        "reached": bool(progress.get("target_reached")),
         "exploitability_mbb_per_game": float(exploitability),
         "measurement_iteration": metrics.get("measurement_iteration"),
         "iterations_run": progress.get("iteration"),
         "br_mode": metrics.get("br_mode"),
         "guarantee": metrics.get("guarantee"),
-        "br_samples": report.get("br_samples"),
-        "sample_count": metrics.get("sample_count"),
-        "seed_used": metrics.get("seed"),
-        "infosets": report.get("infosets"),
-        "storage_bytes": memory.get("storage_bytes"),
-        "adapter_bytes": memory.get("adapter_bytes"),
+        "infosets": metrics.get("infosets"),
+        "storage_bytes": metrics.get("storage_bytes"),
     }
 
 
@@ -263,8 +249,8 @@ def parse_seeds(text: str) -> list[int]:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--solver", default="build/local/tools/pe-preflop-solve",
-        help="path to pe-preflop-solve",
+        "--solver", default="build/local/tools/pe-plo4-lane-a",
+        help="path to pe-plo4-lane-a",
     )
     parser.add_argument(
         "--iterations", type=int, default=DEFAULT_ITERATIONS,
@@ -279,12 +265,12 @@ def main(argv: list[str]) -> int:
         help="comma-separated seeds",
     )
     parser.add_argument(
-        "--br-samples", type=int, default=DEFAULT_BR_SAMPLES,
-        help="sampled BR draws per measurement",
+        "--combos", type=int, default=COMBOS,
+        help="combos per range (exact enumeration or deterministic sample)",
     )
     parser.add_argument(
         "--interval", type=int, default=DEFAULT_INTERVAL,
-        help="iterations between quality measurements",
+        help="iterations between exact-BR measurements",
     )
     parser.add_argument(
         "--output", default="build/plo4-time-to-target.json",
@@ -296,7 +282,6 @@ def main(argv: list[str]) -> int:
     if not solver.is_file():
         print(f"missing solver: {solver}", file=sys.stderr)
         return 2
-    repo_root = Path(__file__).resolve().parents[2]
     workdir = Path(options.output).resolve().parent
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -307,9 +292,9 @@ def main(argv: list[str]) -> int:
                 try:
                     runs.append(
                         run_once(
-                            solver, repo_root, schedule, seed, target,
-                            options.iterations, options.br_samples,
-                            options.interval, workdir,
+                            solver, schedule, seed, target,
+                            options.iterations, options.interval,
+                            options.combos, workdir,
                         )
                     )
                 except RuntimeError as error:
@@ -325,13 +310,12 @@ def main(argv: list[str]) -> int:
             "game": GAME,
             "board": BOARD,
             "pot": POT,
-            "street": STREET,
-            "tree": TREE,
-            "ranges": ["100%", "100%"],
-            "algorithm": "external-dcfr",
-            "backend": "cpu_ref",
-            "precision": "f64",
-            "threads": 1,
+            "stack": STACK,
+            "bet_size": BET_SIZE,
+            "big_blind": BIG_BLIND,
+            "first_to_act": FIRST_TO_ACT,
+            "combos": options.combos,
+            "algorithm": "dcfr",
             "iterations_cap": options.iterations,
             "exploitability_interval": options.interval,
             "targets_mbb_per_game": options.targets,
@@ -345,10 +329,9 @@ def main(argv: list[str]) -> int:
         "br_quality": {
             "mode": sorted({run["br_mode"] for run in runs}),
             "guarantee": sorted({run["guarantee"] for run in runs}),
-            "br_samples": options.br_samples,
             "note": (
-                "Sampled best responses are empirical estimates, not exact "
-                "certificates; the per-run fields carry the mode and guarantee."
+                "Lane A measures exact best responses; a reached target is a "
+                "measured value, not a sampled estimate."
             ),
         },
         "diagnostics": {
@@ -371,14 +354,15 @@ def main(argv: list[str]) -> int:
         output_file.write("\n")
 
     print(render_markdown(summary, options.targets))
+    print(f"wrote {output}")
     if inert:
         print(
-            "warning: every schedule produced the same measurement; this "
+            "error: every schedule produced the same measurement; this "
             "driver applied a single update rule, so the rows above are not "
             "an algorithm comparison",
             file=sys.stderr,
         )
-    print(f"wrote {output}")
+        return 1
     return 0
 
 
