@@ -23,10 +23,15 @@ if(Python3_FOUND)
         ${Python3_INCLUDE_DIRS}
     )
 
-    # Set properties for Python module
+    # Set properties for Python module.  Python 3.15 headers use C11 features
+    # such as _Generic, so the extension follows the interpreter's language
+    # level instead of the project-wide C99 default; clang rejects those
+    # headers under -Werror otherwise.
     set_target_properties(pypokereval PROPERTIES
         PREFIX ""
         OUTPUT_NAME "pypokereval"
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
     )
 
     # Platform-specific settings
