@@ -225,6 +225,10 @@ static uint64_t hash_config(const pe_solver_config_t *config)
     HASH_FIELD(config->algorithm.dcfr_alpha);
     HASH_FIELD(config->algorithm.dcfr_beta);
     HASH_FIELD(config->algorithm.dcfr_gamma);
+    /* The schedule changes the discount trajectory itself, so a checkpoint
+       must not resume under a different one (issue #284). */
+    HASH_FIELD(config->algorithm.dcfr_schedule);
+    HASH_FIELD(config->algorithm.dcfr_schedule_horizon);
     HASH_FIELD(config->algorithm.exponential_lambda);
     HASH_FIELD(config->algorithm.averaging_delay);
     HASH_FIELD(config->algorithm.outcome_epsilon);

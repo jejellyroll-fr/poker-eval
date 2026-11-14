@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Validation coverage for the PLO4 time-to-target probe (issue #284)."""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import plo4_time_to_target as probe
+
+
+def run(schedule: str, seed: int, target: float, seconds: float,
+        exploitability: float, iteration: int = 50) -> dict:
+    return {
+        "schedule": schedule,
+        "seed": seed,
+        "target_mbb": target,
+        "seconds": seconds,
+        "reached": exploitability <= target,
+        "exploitability_mbb_per_game": exploitability,
+        "measurement_iteration": iteration,
+    }
+
+
+class SummaryTests(unittest.TestCase):
+    def test_median_and_spread_over_reached_seeds(self) -> None:
+        runs = [
+            run("hs30", 1, 5000.0, 0.30, 4200.0),
+            run("hs30", 2, 5000.0, 0.10, 4500.0),
+            run("hs30", 3, 5000.0, 0.20, 4800.0),
+        ]
+        summary = probe.summarize(runs, [5000.0])
+        entry = summary["hs30"]["5000"]
+        self.assertEqual(entry["runs"], 3)
+        self.assertEqual(entry["reached"], 3)
+        self.assertTrue(entry["all_reached"])
+        self.assertAlmostEqual(entry["median_seconds"], 0.20)
+        self.assertAlmostEqual(entry["min_seconds"], 0.10)
+        self.assertAlmostEqual(entry["max_seconds"], 0.30)
+
+    def test_partial_reach_is_not_reported_as_complete(self) -> None:
+        runs = [
+            run("fixed", 1, 1000.0, 0.40, 900.0),
+            run("fixed", 2, 1000.0, 0.50, 1200.0),
+        ]
+        entry = probe.summarize(runs, [1000.0])["fixed"]["1000"]
+        self.assertEqual(entry["reached"], 1)
+        self.assertFalse(entry["all_reached"])
+        self.assertAlmostEqual(entry["median_seconds"], 0.40)
+        self.assertEqual(entry["exploitability_mbb_per_game"], [900.0, 1200.0])
+
+    def test_unreached_target_has_no_time(self) -> None:
+        runs = [run("hs15", 1, 100.0, 1.0, 300.0)]
+        entry = probe.summarize(runs, [100.0])["hs15"]["100"]
+        self.assertEqual(entry["reached"], 0)
+        self.assertFalse(entry["all_reached"])
+        self.assertIsNone(entry["median_seconds"])
+        self.assertIsNone(entry["min_seconds"])
+
+    def test_markdown_marks_unreached(self) -> None:
+        runs = [run("hs15", 1, 100.0, 1.0, 300.0)]
+        summary = probe.summarize(runs, [100.0])
+        table = probe.render_markdown(summary, [100.0])
+        self.assertIn("| 100 | hs15 | 0/1 | unreached |", table)
+
+
+class InertScheduleTests(unittest.TestCase):
+    def test_identical_measurements_flag_the_schedule_dimension(self) -> None:
+        runs = [
+            run(schedule, seed, 5000.0, 0.10, 750.0, 60)
+            for schedule in probe.SCHEDULES for seed in (1, 2)
+        ]
+        self.assertTrue(probe.schedules_are_inert(runs))
+
+    def test_different_measurements_are_a_comparison(self) -> None:
+        runs = [
+            run("fixed", 1, 5000.0, 0.10, 750.0, 60),
+            run("hs15", 1, 5000.0, 0.12, 740.0, 60),
+            run("hs30", 1, 5000.0, 0.09, 730.0, 50),
+        ]
+        self.assertFalse(probe.schedules_are_inert(runs))
+
+    def test_missing_schedules_are_not_called_inert(self) -> None:
+        runs = [run("fixed", 1, 5000.0, 0.10, 750.0)]
+        self.assertFalse(probe.schedules_are_inert(runs))
+
+
+class ParsingTests(unittest.TestCase):
+    def test_targets_are_sorted_and_positive(self) -> None:
+        self.assertEqual(probe.parse_targets("1000,15000,5000"),
+                         [15000.0, 5000.0, 1000.0])
+        with self.assertRaises(Exception):
+            probe.parse_targets("0")
+        with self.assertRaises(Exception):
+            probe.parse_targets("-5")
+
+    def test_seeds_reject_negatives(self) -> None:
+        self.assertEqual(probe.parse_seeds("1,2,3"), [1, 2, 3])
+        with self.assertRaises(Exception):
+            probe.parse_seeds("-1")
+
+
+class CommandTests(unittest.TestCase):
+    def test_command_pins_the_game_and_schedule(self) -> None:
+        command = probe.build_command(
+            Path("solver"), Path("/repo"), "hs30", 7, 5000.0, 100, 8, 25,
+            Path("out.json"),
+        )
+        self.assertIn("--dcfr-schedule", command)
+        self.assertEqual(command[command.index("--dcfr-schedule") + 1], "hs30")
+        self.assertEqual(command[command.index("--board") + 1], probe.BOARD)
+        self.assertEqual(command[command.index("--pot") + 1], str(probe.POT))
+        self.assertEqual(
+            command[command.index("--target-mbb") + 1], f"{5000.0:.17g}"
+        )
+        self.assertEqual(command[command.index("--game") + 1], "plo4")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -437,3 +437,45 @@ It does **not** gate on wall-clock speed because shared GitHub runners are not
 performance-identical. Longer performance qualification remains a manual
 benchmark run; the resulting JSON/CSV is suitable for storing machine-specific
 baselines.
+
+## HS-DCFR schedules and time-to-target (issue #284)
+
+Discounted CFR's fixed exponents are the control. The training-free schedules
+of Zhang et al. (AAAI 2026) replace them per iteration:
+
+    alpha(t) = 1 + 3 * min(t, n) / n
+    beta(t)  = -1 - 2 * min(t, n) / n
+    gamma(t) = G - 5 * min(t, n) / n       G = 15 or 30
+
+`n` is the horizon (`--dcfr-horizon`, default 1000) and the parameters are
+clamped at the horizon instead of extrapolated. Negative `beta` is legal under
+these schedules; `alpha` and `gamma` stay non-negative. The product driver
+exposes them as `--dcfr-schedule fixed|hs15|hs30` and records the choice in the
+JSON report as `dcfr_schedule` / `dcfr_horizon`.
+
+`plo4_time_to_target.py` measures time-to-target exploitability on the PLO4
+heads-up river spot (`Ks9d4c2hTs`, pot 63, the `plo5_hu_river` tree) at 100 %
+ranges and `cpu_ref`/f64, with the same game, tree, backend and best-response
+evaluator for every run:
+
+    python3 benchmarks/solver/plo4_time_to_target.py \
+        --solver build/local/tools/pe-preflop-solve \
+        --targets 15000,5000,1000 --seeds 11,23,37 \
+        --output build/plo4-time-to-target.json
+
+Each run records wall-clock seconds, the exploitability and measurement
+iteration, the best-response mode and guarantee (`br_mode`, `guarantee`), the
+solver-reported storage bytes and infosets, and the seed. The JSON keeps every
+run plus per-schedule/per-target medians and spreads. A target counts as
+reached only when every seed reached it; unreached targets have no time and are
+marked in the Markdown table. Sampled best responses are empirical estimates,
+not certificates, and the report says so.
+
+**Current limitation.** `pe-preflop-solve` runs the sampled external lane,
+which applies one update rule regardless of `--algorithm`: `external-mccfr`,
+`external-dcfr` and every `--alpha`/`--beta`/`--gamma`/`--dcfr-schedule` choice
+produce the same strategy and the same exploitability on this spot. The probe
+detects that and writes `diagnostics.schedules_are_inert = true`, so identical
+rows are never presented as an algorithm comparison. Time-to-target across
+algorithms needs a driver that actually applies the v3 preset, which is
+follow-up work on #284.

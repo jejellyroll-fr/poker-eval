@@ -126,6 +126,8 @@ typedef struct {
     int have_dcfr_alpha;
     int have_dcfr_beta;
     int have_dcfr_gamma;
+    pe_dcfr_schedule_t dcfr_schedule;
+    uint64_t dcfr_schedule_horizon;
     pe_compute_kind_t backend;
     pe_precision_mode_t precision;
     pe_storage_policy_t memory_policy;
@@ -691,6 +693,10 @@ static void usage(FILE *stream)
         "                               (full-tree cfr/cfr+/dcfr presets are\n"
         "                               rejected by this sampled driver)\n"
         "  --policy NAME                regret-matching or exponential\n"
+        "  --dcfr-schedule NAME         fixed (default), hs15 or hs30: fixed DCFR\n"
+        "                               exponents, or the training-free\n"
+        "                               hyperparameter schedules (issue #284)\n"
+        "  --dcfr-horizon N             n in the schedule equations (default 1000)\n"
         "  --sampling-policy NAME       standard (default), street-balanced or\n"
         "                               adaptive-variance\n"
         "  --street-replicates A,B,C,D  chance draws per visit, preflop..river\n"
@@ -1143,6 +1149,8 @@ options->checkpoint_interval =0u;
     options->dcfr_alpha = 1.5;
     options->dcfr_beta = 0.0;
     options->dcfr_gamma = 2.0;
+    options->dcfr_schedule = PE_DCFR_SCHEDULE_FIXED;
+    options->dcfr_schedule_horizon = 1000u;
     options->backend = PE_COMPUTE_AUTO;
     options->precision = PE_PREC_F64;
     options->memory_policy = PE_STORAGE_FULL;
@@ -1379,6 +1387,15 @@ options->checkpoint_interval =0u;
             if (parse_nonnegative_double(value, &options->dcfr_gamma) != 0)
                 return -1;
             options->have_dcfr_gamma = 1;
+        } else if (strcmp(arg, "--dcfr-schedule") == 0) {
+            if (pe_dcfr_schedule_parse(value, &options->dcfr_schedule) != 0) {
+                fprintf(stderr, "unknown DCFR schedule: %s\n", value);
+                return -1;
+            }
+        } else if (strcmp(arg, "--dcfr-horizon") == 0) {
+            if (parse_u64(value, &options->dcfr_schedule_horizon) != 0 ||
+                options->dcfr_schedule_horizon == 0u)
+                return -1;
         } else if (strcmp(arg, "--backend") == 0) {
             options->backend = pe_compute_kind_from_name(value);
             if (options->backend == PE_COMPUTE_COUNT) return -1;
@@ -1475,7 +1492,8 @@ static void write_report(const char *path, const options_t *options,
     write_report_root(file, options, rules, game);
     fprintf(file,
         "\"game\":\"%s\",\"players\":%d,"
-        "\"algorithm\":\"%s\",\"backend\":\"%s\","
+        "\"algorithm\":\"%s\",\"dcfr_schedule\":\"%s\","
+        "\"dcfr_horizon\":%" PRIu64 ",\"backend\":\"%s\","
         "\"backend_validated\":true,\"precision\":\"%s\","
         "\"memory_policy\":\"%s\","
         "\"simd_detected\":\"%s\",\"simd_cfr_integrated\":false,"
@@ -1504,6 +1522,8 @@ static void write_report(const char *path, const options_t *options,
         "\"bytes_per_infoset\":%.17g,"
         "\"bytes_per_strategy_slot\":%.17g}}\n",
         options->game, options->players, pe_preset_name(options->algorithm),
+        pe_dcfr_schedule_name(options->dcfr_schedule),
+        options->dcfr_schedule_horizon,
         pe_compute_kind_name(options->backend),
         pe_precision_name(options->precision),
         pe_storage_policy_name(metrics->storage_memory_policy),
@@ -2015,6 +2035,8 @@ int main(int argc, char **argv)
         config.algorithm.dcfr_beta = options.dcfr_beta;
     if (options.have_dcfr_gamma)
         config.algorithm.dcfr_gamma = options.dcfr_gamma;
+    config.algorithm.dcfr_schedule = options.dcfr_schedule;
+    config.algorithm.dcfr_schedule_horizon = options.dcfr_schedule_horizon;
     config.execution.backend = options.backend;
     config.execution.stages.traversal = options.backend;
     config.execution.stages.update = options.backend;

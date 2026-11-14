@@ -145,6 +145,7 @@ static int pack_effective_update(const pe_compute_config_t *config,
 {
     double next_regret;
     double next_average;
+    double next_gamma;
 
     if (config == NULL || regret == NULL || average == NULL ||
         out_delta == NULL || out_average_delta == NULL ||
@@ -153,14 +154,21 @@ static int pack_effective_update(const pe_compute_config_t *config,
         return -1;
     next_regret = *regret;
     next_average = *average;
-    if (config->regret_mode == PE_REGRET_DCFR)
     {
-        pe_dcfr_params_t params = {
+        pe_dcfr_params_t fixed = {
             config->dcfr_alpha, config->dcfr_beta, config->dcfr_gamma
         };
-        if (pe_dcfr_discount_regrets(&next_regret, 1u, iteration,
+        pe_dcfr_params_t params;
+
+        if (pe_dcfr_params_resolve(&fixed, config->dcfr_schedule,
+                                   config->dcfr_schedule_horizon,
+                                   iteration ? iteration : 1u, &params) != 0)
+            return -1;
+        if (config->regret_mode == PE_REGRET_DCFR &&
+            pe_dcfr_discount_regrets(&next_regret, 1u, iteration,
                                      &params) != 0)
             return -1;
+        next_gamma = params.gamma;
     }
     next_regret += delta;
     if (config->regret_mode == PE_REGRET_PLUS && next_regret < 0.0)
@@ -175,8 +183,7 @@ static int pack_effective_update(const pe_compute_config_t *config,
         break;
     case PE_AVG_POWER: {
         double weight;
-        if (pe_dcfr_average_weight(iteration, config->dcfr_gamma,
-                                   &weight) != 0)
+        if (pe_dcfr_average_weight(iteration, next_gamma, &weight) != 0)
             return -1;
         average_delta *= weight;
         break;

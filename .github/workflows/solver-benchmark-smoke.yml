@@ -82,6 +82,16 @@ jobs:
             --repeat 2 \
             --output build/plo4-river-baseline.json
 
+      - name: Run HS-DCFR time-to-target probe
+        run: |
+          python3 benchmarks/solver/plo4_time_to_target.py \
+            --solver build/tools/pe-preflop-solve \
+            --targets 15000,1000 \
+            --iterations 200 \
+            --interval 25 \
+            --seeds 11,23 \
+            --output build/plo4-time-to-target.json
+
       - name: Run deterministic structural smoke corpus twice
         run: |
           python3 benchmarks/solver/run_benchmarks.py \

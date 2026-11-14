@@ -41,6 +41,11 @@ pe_solver_config_t pe_solver_config_default(void)
     cfg.algorithm.dcfr_beta  = 0.0;
     cfg.algorithm.dcfr_gamma = 2.0;
 
+    /* Fixed DCFR is the control; the horizon only matters once a schedule is
+       selected, and 1000 is the value the HS paper uses. */
+    cfg.algorithm.dcfr_schedule = PE_DCFR_SCHEDULE_FIXED;
+    cfg.algorithm.dcfr_schedule_horizon = 1000u;
+
     /* Neutral temperature: exp(r/lambda) with lambda = 1. */
     cfg.algorithm.exponential_lambda = 1.0;
 
