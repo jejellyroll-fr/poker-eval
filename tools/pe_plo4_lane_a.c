@@ -19,6 +19,7 @@
 #include <poker_eval/solver/pe_plo4_certification.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,7 +186,7 @@ static int parse_double(const char *text, double *out)
     if (!text || !out)
         return -1;
     value = strtod(text, &end);
-    if (end == text || *end != '\0' || value != value)
+    if (end == text || *end != '\0' || !isfinite(value))
         return -1;
     *out = value;
     return 0;
