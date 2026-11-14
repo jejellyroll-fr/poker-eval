@@ -7,8 +7,9 @@
  * publishes an exact certificate or labels the measurement not_certified with
  * the reason.
  *
- * Ranges are generated deterministically: the first N legal four-card hands in
- * lexicographic card order, weighted uniformly unless --weighted is given.
+ * Ranges are generated deterministically.  A full range (C(47,4) = 178,365
+ * hands) is enumerated in lexicographic card order; a partial one is sampled
+ * without replacement, weighted uniformly unless --weighted is given.
  * The strategy is uniform or a deterministic per-combo mix, so a run of the
  * tool is reproducible without a strategy file.
  */
@@ -24,7 +25,8 @@
 #include <string.h>
 
 #define PE_CERTIFY_DEFAULT_COMBOS 64u
-#define PE_CERTIFY_MAX_COMBOS 4096u
+/* C(47, 4): every legal four-card hand on a five-card river board. */
+#define PE_CERTIFY_MAX_COMBOS 178365u
 #define PE_CERTIFY_DEFAULT_ITERATIONS 64u
 
 typedef struct
@@ -153,25 +155,64 @@ static uint64_t next_random(uint64_t *state)
     return *state >> 33;
 }
 
-/* Deterministic sample of distinct four-card hands off the board.  A
- * lexicographic prefix would put nearly all combos on the same low cards and
- * leave the ranges with no legal pair at all, so the tool samples instead. */
-static void enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+static size_t live_cards(mask_t board, int *live)
 {
-    int live[MODERN_DECK_SIZE];
     size_t live_count = 0u;
-    size_t produced = 0u;
-    uint64_t state = 0x5eed2026u;
     int card;
 
     for (card = 0; card < MODERN_DECK_SIZE; ++card)
         if (!mask_is_set(board, card))
             live[live_count++] = card;
+    return live_count;
+}
+
+/* Every legal four-card hand, in lexicographic card order.  Only valid when
+ * `count` is the whole C(live, 4) space, which is the full-range case. */
+static void enumerate_all_hands(const int *live, size_t live_count,
+                                pe_omaha_combo_t *out)
+{
+    size_t produced = 0u;
+    size_t a, b, c, d;
+
+    for (a = 0u; a < live_count; ++a)
+        for (b = a + 1u; b < live_count; ++b)
+            for (c = b + 1u; c < live_count; ++c)
+                for (d = c + 1u; d < live_count; ++d)
+                {
+                    mask_t hand = mask_set(MASK_EMPTY, live[a]);
+                    hand = mask_set(hand, live[b]);
+                    hand = mask_set(hand, live[c]);
+                    hand = mask_set(hand, live[d]);
+                    out[produced].cards = hand;
+                    out[produced].weight = 1.0;
+                    ++produced;
+                }
+}
+
+/* Deterministic sample of distinct four-card hands off the board.  A
+ * lexicographic prefix would put nearly all combos on the same low cards and
+ * leave the ranges with no legal pair at all, so a partial range samples
+ * instead.  The open-addressing set keeps the duplicate check linear per
+ * draw; scanning the hands produced so far would be quadratic and unusable
+ * for ranges in the hundreds of thousands. */
+static int sample_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+{
+    int live[MODERN_DECK_SIZE];
+    size_t live_count = live_cards(board, live);
+    size_t capacity = 16u;
+    size_t produced = 0u;
+    uint64_t state = 0x5eed2026u;
+    mask_t *seen;
+
+    while (capacity < count * 2u)
+        capacity <<= 1u;
+    seen = (mask_t *)calloc(capacity, sizeof(*seen));
+    if (!seen)
+        return -1;
     while (produced < count)
     {
         mask_t hand = MASK_EMPTY;
-        size_t duplicate = 0u;
-        size_t other;
+        size_t slot;
 
         while (mask_popcount(hand) < 4)
         {
@@ -179,18 +220,34 @@ static void enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
                                    (uint64_t)live_count);
             hand = mask_set(hand, live[pick]);
         }
-        for (other = 0u; other < produced; ++other)
-            if (out[other].cards == hand)
-            {
-                duplicate = 1u;
-                break;
-            }
-        if (duplicate)
+        /* Hash the hand rather than drawing again: the sampled sequence stays
+           the one the documented example was produced with. */
+        slot = (size_t)(hand ^ (hand >> 32)) & (capacity - 1u);
+        slot = (slot * 2654435761u) & (capacity - 1u);
+        while (seen[slot] != MASK_EMPTY && seen[slot] != hand)
+            slot = (slot + 1u) & (capacity - 1u);
+        if (seen[slot] == hand)
             continue;
+        seen[slot] = hand;
         out[produced].cards = hand;
         out[produced].weight = 1.0;
         ++produced;
     }
+    free(seen);
+    return 0;
+}
+
+static int enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+{
+    int live[MODERN_DECK_SIZE];
+    size_t live_count = live_cards(board, live);
+
+    if (count == pe_omaha_combo_count(board, 4u))
+    {
+        enumerate_all_hands(live, live_count, out);
+        return 0;
+    }
+    return sample_hands(board, count, out);
 }
 
 static int cert_strategy(void *user, uint16_t infoset, uint16_t action,
@@ -245,7 +302,7 @@ static void usage(const char *program)
             "  --stack CHIPS        remaining stack per player (default 40)\n"
             "  --bet-size CHIPS     the single bet size (default: the stack)\n"
             "  --big-blind CHIPS    unit for bb/mbb (default 2)\n"
-            "  --combos N           generated combos per range (default 64)\n"
+            "  --combos N           combos per range up to 178365 (default 64)\n"
             "  --max-iterations N   BR convergence budget (default 64)\n"
             "  --strategy MODE      uniform or mixed (default uniform)\n"
             "  --weighted           give the generated range a deterministic\n"
@@ -388,7 +445,12 @@ int main(int argc, char **argv)
         fail("allocation failed");
         return 1;
     }
-    enumerate_hands(board, options.combos, combos);
+    if (enumerate_hands(board, options.combos, combos) != 0)
+    {
+        fail("allocation failed");
+        free(combos);
+        return 1;
+    }
     if (options.weighted)
         for (index = 3u; index < options.combos; index += 5u)
             combos[index].weight = 0.25;

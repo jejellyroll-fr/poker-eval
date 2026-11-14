@@ -24,7 +24,7 @@ cmake --build build --target pe-plo4-certify --parallel
 | `--stack CHIPS` | chips behind for each player | `40` |
 | `--bet-size CHIPS` | the single bet size offered at each decision | the smaller stack |
 | `--big-blind CHIPS` | unit for the bb/mbb conversions | `2` |
-| `--combos N` | four-card hands per range (max 4096) | `64` |
+| `--combos N` | four-card hands per range (max 178365) | `64` |
 | `--max-iterations N` | BR fixed-point budget | `64` |
 | `--strategy uniform\|mixed` | uniform, or a deterministic per-combo mix | `uniform` |
 | `--weighted` | give every fifth generated combo a weight of 0.25 | off |
@@ -153,10 +153,46 @@ not certified. An invalid board, a bet larger than a stack, an unnormalised
 strategy row or a range with no live weight makes the tool exit with status 2
 and no document.
 
+## Full river range
+
+A five-card board leaves 47 live cards, so a complete four-card range holds
+C(47, 4) = 178,365 combos. `--combos 178365` measures exactly that range; the
+tool enumerates it in lexicographic card order instead of sampling, so the run
+is reproducible input-wise as well.
+
+On a Release build of the development machine it certifies in about 8 seconds
+with a peak resident set near 80 MiB, after two best-response iterations per
+player:
+
+```bash
+./build/tools/pe-plo4-certify --combos 178365 --strategy mixed --weighted
+```
+
+```json
+  "mode": "exact",
+  "verdict": "certified",
+  "converged": true,
+  "combos": {"declared": [178365, 178365], "width": 178365, "live": [178365, 178365], "joint_mass": 15899133476.625},
+  "br_iterations": [2, 2],
+  "exploitability": {"chips": 13.57363210698194, "bb": 6.7868160534909698, "mbb_per_game": 6786.8160534909703, "percent_of_reference_pot": 21.545447788860223},
+```
+
+The memory is dominated by the showdown sweep's subset table (2^20 slots,
+16 MiB); the certification arrays scale linearly with the range width. The
+best-response lane weights terminal values with the sweep's compatible mass
+through the optional `combo_mass` callback on `pe_vector_game_t`, so it runs
+once per terminal rather than once per (hero, opponent) pair. Without that
+callback the same run enumerates 3.2 × 10^10 pairs and does not finish in a
+useful time.
+
+The full-range test is quarantined under sanitizers (`sanitizer-skip`), like
+the other 178,365-combo case: it is exact but slow under instrumentation.
+
 ## Scope
 
-This version measures one fixed bet size on one street, with no rake, and
-accepts at most 4096 generated combos. The full 178,365-combo range under
-explicit memory and time budgets is tranche 2 of the issue. The API adds an
-optional `combo_prior` callback to `pe_vector_game_t`, so a weighted range is
-measured with the same root prior in the policy and the best response.
+This version measures one fixed bet size on one street, with no rake. It
+accepts ranges up to the full 178,365-combo river and reports `not_certified`
+with a reason whenever enumeration is incomplete or a best response does not
+converge. The API adds an optional `combo_prior` callback to
+`pe_vector_game_t`, so a weighted range is measured with the same root prior in
+the policy and the best response.

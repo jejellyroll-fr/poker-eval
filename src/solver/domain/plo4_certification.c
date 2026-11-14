@@ -1,8 +1,10 @@
 /*
  * plo4_certification.c - heads-up PLO4 river exploitability certificate
  *
- * Issue #283, first tranche.  See pe_plo4_certification.h for the game
- * contract and for the definition of every reported number.
+ * Issue #283.  See pe_plo4_certification.h for the game contract and for the
+ * definition of every reported number.  Ranges scale to the full C(47,4) river
+ * width because both the terminal values and the best-response weighting use
+ * the showdown sweep's compatible mass instead of pair enumeration.
  *
  * The module never samples: the declared river tree is traversed completely
  * and every private-combo pair is either counted by the showdown kernel's
@@ -317,6 +319,38 @@ static int plo4_terminal_values(const pe_betting_state_t *state,
     return 0;
 }
 
+/* Compatible opponent reach per hero combo, taken from the same showdown
+ * sweep the terminal values use.  The generic best-response lane would
+ * otherwise run one compatibility callback per (hero, opponent) pair, which
+ * is quadratic and cannot finish a full river range. */
+static int plo4_combo_mass(const pe_betting_state_t *state,
+                           const pe_reach_vec_t *reach, uint8_t player,
+                           pe_value_vec_t *out_mass, void *user)
+{
+    plo4_cert_ctx_t *ctx = (plo4_cert_ctx_t *)user;
+    size_t width;
+    size_t base;
+    size_t opponent_base;
+    pe_value_vec_t scratch;
+
+    (void)state;
+    if (!ctx || !reach || !out_mass || player >= PE_PLO4_CERT_PLAYERS)
+        return -1;
+    width = (size_t)ctx->combo_count;
+    if (out_mass->n != width || reach[1u - player].n != width)
+        return -1;
+    base = (size_t)player * width;
+    opponent_base = (size_t)(1u - player) * width;
+    scratch = pe_vec_wrap(ctx->shares, width);
+    if (pe_showdown_vector_mass(
+            ctx->masks + base, ctx->strength + base, width,
+            ctx->masks + opponent_base, ctx->strength + opponent_base,
+            reach[1u - player].v, width, ctx->spec->board, 1.0, &scratch,
+            out_mass->v, NULL) != PE_SOLVER_OK)
+        return -1;
+    return 0;
+}
+
 static int plo4_combo_compatible(const void *state, uint8_t player,
                                  pe_combo_id_t player_combo, uint8_t opponent,
                                  pe_combo_id_t opponent_combo, void *user)
@@ -482,6 +516,7 @@ static pe_solver_status_t init_game(plo4_cert_ctx_t *ctx,
     ops.strategy = plo4_strategy;
     ops.terminal_values = plo4_terminal_values;
     ops.combo_compatible = plo4_combo_compatible;
+    ops.combo_mass = plo4_combo_mass;
     if (pe_betting_vector_game_init(game, rules, root, ctx->combo_count, &ops,
                                     ctx) != PE_BETTING_OK)
         return PE_SOLVER_ERR_INVALID_CONFIG;
