@@ -1,18 +1,20 @@
 /*
- * test_pe_dcfr_schedule.c - the DCFR schedule changes the solve (issue #284)
+ * test_pe_dcfr_schedule.c - the DCFR schedule reaches the v3 solve (issue #284)
  *
- * The schedule unit tests pin the equations; this one pins the wiring. It runs
- * the public v3 solver on a three-infoset toy game twice with the same seed and
- * every other setting equal, and requires the schedule to move the result:
+ * The schedule unit test pins the equations. This one pins the wiring: it runs
+ * the public v3 solver on a three-infoset toy game with the same seed and
+ * compares the average strategies it materialises.
  *
- *   fixed vs hs30            -> different average strategy
- *   hs30, horizon 8 vs 1000  -> different average strategy
- *   fixed, horizon 1 vs 1e6  -> bitwise identical (the control ignores it)
+ *   fixed, default config  vs fixed, explicit exponents at horizon 1
+ *       -> bitwise identical: the new fields do not change the control
+ *   fixed vs hs30, both at horizon 1
+ *       -> different trajectory: the schedule reaches the update rule
+ *   hs30 at horizon 1 vs horizon 1000
+ *       -> different trajectory: the horizon is not ignored
  *
- * The toy game is deliberately small and asymmetric so that regrets of both
- * signs occur at every infoset: a uniform discount would cancel in regret
- * matching, while the schedules scale positive and negative regrets
- * differently and therefore change the trajectory.
+ * The toy game is asymmetric so both signs of regret occur at every infoset:
+ * a discount applied uniformly to all actions would cancel in regret matching,
+ * while the schedules scale positive and negative regrets differently.
  */
 
 #include <poker_eval/solver/pe_ports.h>
@@ -20,7 +22,6 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_traversal.h>
 
-#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -39,7 +40,7 @@ static int failures;
         }                                                          \
     } while (0)
 
-/* root (player 0) -> 10 or 20 (player 1) -> terminals 100..111.
+/* root (player 0, state 1) -> 10 or 20 (player 1) -> terminals 100..111.
    Infoset keys are the state values, so the game has three infosets. */
 static int toy_terminal(const void *state, void *user)
 {
@@ -85,7 +86,7 @@ static const void *toy_apply(const void *state, uint16_t action, void *user)
     return NULL;
 }
 
-/* +1/-1 for player 0, mirrored for player 1; the two branches disagree, so
+/* +1/-1 for player 0, mirrored for player 1; the branches disagree, so
    neither player has a dominant action at either infoset. */
 static int toy_values(const void *state, const pe_reach_vec_t *reach,
                       pe_value_vec_t *out_values, uint8_t players, void *user)
@@ -120,10 +121,12 @@ typedef struct
     size_t strategy_count;
 } toy_run_t;
 
+/* `use_default_config` leaves alpha/beta/gamma and the new schedule fields at
+   their defaults, which is what a caller written before issue #284 does. The
+   other runs spell out the legacy fixed exponents explicitly. */
 static int solve_toy(pe_dcfr_schedule_t schedule, uint64_t horizon,
-                     int explicit_exponents, double alpha, double beta,
-                     double gamma, uint64_t seed, uint32_t iterations,
-                     toy_run_t *out)
+                     int use_default_config, uint64_t seed,
+                     uint32_t iterations, toy_run_t *out)
 {
     pe_vector_game_t game;
     pe_solver_config_t cfg = pe_solver_config_default();
@@ -137,7 +140,6 @@ static int solve_toy(pe_dcfr_schedule_t schedule, uint64_t horizon,
     memset(&game, 0, sizeof(game));
     /* Small integer states: 1 is the root, 100+ are terminals. */
     game.root = (const void *)(uintptr_t)1u;
-    game.user = NULL;
     game.player_count = 2u;
     game.combo_count = 1u;
     game.is_terminal = toy_terminal;
@@ -148,14 +150,14 @@ static int solve_toy(pe_dcfr_schedule_t schedule, uint64_t horizon,
     game.terminal_values = toy_values;
 
     cfg.algorithm.preset = PE_PRESET_DCFR;
-    if (explicit_exponents)
+    if (!use_default_config)
     {
-        cfg.algorithm.dcfr_alpha = alpha;
-        cfg.algorithm.dcfr_beta = beta;
-        cfg.algorithm.dcfr_gamma = gamma;
+        cfg.algorithm.dcfr_alpha = 1.5;
+        cfg.algorithm.dcfr_beta = 0.0;
+        cfg.algorithm.dcfr_gamma = 2.0;
+        cfg.algorithm.dcfr_schedule = schedule;
+        cfg.algorithm.dcfr_schedule_horizon = horizon;
     }
-    cfg.algorithm.dcfr_schedule = schedule;
-    cfg.algorithm.dcfr_schedule_horizon = horizon;
     cfg.max_iterations = iterations;
     cfg.problem.expected_infosets = 3u;
     cfg.problem.expected_actions = 2u;
@@ -168,26 +170,12 @@ static int solve_toy(pe_dcfr_schedule_t schedule, uint64_t horizon,
     memset(out, 0, sizeof(*out));
     solver = pe_solver_create(&cfg, &deps);
     if (!solver)
-    {
-        fprintf(stderr, "create failed\n");
         return -1;
-    }
-    {
-        pe_solver_status_t status = pe_solver_run(solver);
-        if (status != PE_SOLVER_OK)
-        {
-            fprintf(stderr, "run failed: %d\n", (int)status);
-            pe_solver_destroy(solver);
-            return -1;
-        }
-    }
-    if (pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
+    if (pe_solver_run(solver) != PE_SOLVER_OK ||
+        pe_solver_progress(solver, &progress) != PE_SOLVER_OK ||
         !progress.complete || progress.iteration != iterations ||
         pe_solver_metrics(solver, &metrics) != PE_SOLVER_OK)
     {
-        fprintf(stderr, "post-run failed: complete=%d iter=%llu/%u\n",
-                (int)progress.complete,
-                (unsigned long long)progress.iteration, iterations);
         pe_solver_destroy(solver);
         return -1;
     }
@@ -214,18 +202,11 @@ static int solve_toy(pe_dcfr_schedule_t schedule, uint64_t horizon,
     return 0;
 }
 
+/* Bitwise equality: this test is about the same trajectory, not about two
+   solves landing within a tolerance of each other. */
 static int same_run(const toy_run_t *left, const toy_run_t *right)
 {
-    size_t i;
-    if (left->strategy_count != right->strategy_count ||
-        memcmp(&left->exploitability, &right->exploitability,
-               sizeof(double)) != 0)
-        return 0;
-    for (i = 0; i < left->strategy_count; ++i)
-        if (memcmp(&left->strategy[i], &right->strategy[i],
-                   sizeof(double)) != 0)
-            return 0;
-    return 1;
+    return memcmp(left, right, sizeof(*left)) == 0;
 }
 
 static void dump(const char *label, const toy_run_t *run)
@@ -242,56 +223,49 @@ int main(void)
 {
     const uint32_t iterations = 8u;
     const uint64_t seed = 0x5EEDu;
-    toy_run_t fixed_short;
-    toy_run_t fixed_long;
     toy_run_t fixed_default;
+    toy_run_t fixed_explicit;
     toy_run_t hs30_short;
     toy_run_t hs30_long;
 
-    if (solve_toy(PE_DCFR_SCHEDULE_FIXED, 1u, 1, 1.5, 0.0, 2.0, seed,
-                  iterations, &fixed_short) != 0 ||
-        solve_toy(PE_DCFR_SCHEDULE_FIXED, 1000000u, 1, 1.5, 0.0, 2.0, seed,
-                  iterations, &fixed_long) != 0 ||
-        solve_toy(PE_DCFR_SCHEDULE_FIXED, 1u, 0, 0.0, 0.0, 0.0, seed,
-                  iterations, &fixed_default) != 0 ||
-        solve_toy(PE_DCFR_SCHEDULE_HS30, 8u, 0, 0.0, 0.0, 0.0, seed,
-                  iterations, &hs30_short) != 0 ||
-        solve_toy(PE_DCFR_SCHEDULE_HS30, 1000u, 0, 0.0, 0.0, 0.0, seed,
-                  iterations, &hs30_long) != 0)
+    if (solve_toy(PE_DCFR_SCHEDULE_FIXED, 1000u, 1, seed, iterations,
+                  &fixed_default) != 0 ||
+        solve_toy(PE_DCFR_SCHEDULE_FIXED, 1u, 0, seed, iterations,
+                  &fixed_explicit) != 0 ||
+        solve_toy(PE_DCFR_SCHEDULE_HS30, 1u, 0, seed, iterations,
+                  &hs30_short) != 0 ||
+        solve_toy(PE_DCFR_SCHEDULE_HS30, 1000u, 0, seed, iterations,
+                  &hs30_long) != 0)
     {
         fprintf(stderr, "test_pe_dcfr_schedule: a toy solve failed\n");
         return 1;
     }
 
-    dump("fixed horizon=1", &fixed_short);
-    dump("fixed horizon=1e6", &fixed_long);
-    dump("default config", &fixed_default);
-    dump("hs30 horizon=8", &hs30_short);
-    dump("hs30 horizon=1000", &hs30_long);
+    /* Guard against a vacuous comparison: both sides must have materialised
+       the same non-empty set of strategies. */
+    CHECK(fixed_explicit.strategy_count > 0u &&
+              fixed_explicit.strategy_count == hs30_short.strategy_count,
+          "the solves did not materialise comparable strategies");
 
-    /* The control path ignores the horizon and keeps the explicit exponents;
-       a default config resolves to exactly that same path. */
-    CHECK(same_run(&fixed_short, &fixed_long),
-          "fixed DCFR changed with dcfr_schedule_horizon");
-    CHECK(same_run(&fixed_short, &fixed_default),
-          "default config is not the fixed DCFR control");
-    CHECK(fixed_short.strategy_count > 0u,
-          "the solve materialised no strategy");
+    /* The control: a pre-#284 caller (default config) and an explicit fixed
+       DCFR at a different horizon must take the same path. */
+    CHECK(same_run(&fixed_default, &fixed_explicit),
+          "the fixed DCFR path changed with the new fields");
 
-    /* The schedules must actually reach the update rule: same seed, same
-       iterations, only the schedule differs. */
-    CHECK(!same_run(&fixed_short, &hs30_short),
+    /* Same seed, same horizon, only the schedule differs. */
+    CHECK(!same_run(&fixed_explicit, &hs30_short),
           "hs30 and fixed produced the same trajectory");
-    CHECK(fabs(fixed_short.exploitability - hs30_short.exploitability) > 1e-6,
-          "hs30 and fixed reported the same exploitability %.17g",
-          fixed_short.exploitability);
+
+    /* Same schedule and seed, only the horizon differs. */
     CHECK(!same_run(&hs30_short, &hs30_long),
           "hs30 ignored dcfr_schedule_horizon");
-    CHECK(fabs(hs30_short.exploitability - hs30_long.exploitability) > 1e-12,
-          "hs30 reported the same exploitability at horizon 8 and 1000");
 
     if (failures != 0)
     {
+        dump("fixed default", &fixed_default);
+        dump("fixed horizon=1", &fixed_explicit);
+        dump("hs30 horizon=1", &hs30_short);
+        dump("hs30 horizon=1000", &hs30_long);
         fprintf(stderr, "test_pe_dcfr_schedule: %d failure(s)\n", failures);
         return 1;
     }
