@@ -19,7 +19,7 @@
 #include <poker_eval/solver/pe_plo4_certification.h>
 #include <poker_eval/solver/pe_solver_plan.h>
 
-#include <math.h>
+#include <float.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -186,7 +186,10 @@ static int parse_double(const char *text, double *out)
     if (!text || !out)
         return -1;
     value = strtod(text, &end);
-    if (end == text || *end != '\0' || !isfinite(value))
+    /* Bounds reject NaN and both infinities without a float comparison;
+       MinGW routes isfinite(double) through a float overload. */
+    if (end == text || *end != '\0' ||
+        !(value <= DBL_MAX && value >= -DBL_MAX))
         return -1;
     *out = value;
     return 0;
