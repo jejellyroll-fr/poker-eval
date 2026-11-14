@@ -14,6 +14,7 @@ on:
       - 'examples/plo_hu_streets/**'
       - 'tools/pe_preflop_solve.c'
       - 'tools/pe_plo4_river_bench.c'
+      - 'tools/pe_plo4_lane_a.c'
       - 'CMakeLists.txt'
       - '**/CMakeLists.txt'
       - 'cmake/**'
@@ -59,7 +60,7 @@ jobs:
             -DENABLE_OPENMP=OFF
 
       - name: Build product solver
-        run: cmake --build build --target pe-preflop-solve --parallel
+        run: cmake --build build --target pe-preflop-solve pe-plo4-lane-a --parallel
 
       - name: Validate benchmark runner
         run: |
@@ -85,12 +86,18 @@ jobs:
       - name: Run HS-DCFR time-to-target probe
         run: |
           python3 benchmarks/solver/plo4_time_to_target.py \
-            --solver build/tools/pe-preflop-solve \
-            --targets 15000,1000 \
-            --iterations 200 \
-            --interval 25 \
+            --solver build/tools/pe-plo4-lane-a \
+            --targets 1000,500 \
+            --combos 256 \
+            --iterations 100 \
+            --interval 10 \
             --seeds 11,23 \
             --output build/plo4-time-to-target.json
+
+      - name: Verify DCFR schedules change the solve
+        run: |
+          python3 benchmarks/solver/check_lane_a_schedules.py \
+            --solver build/tools/pe-plo4-lane-a
 
       - name: Run deterministic structural smoke corpus twice
         run: |

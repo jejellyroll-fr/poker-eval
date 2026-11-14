@@ -59,6 +59,7 @@
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/solver/pe_best_response.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
+#include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_showdown.h>
 #include <poker_eval/solver/pe_vector.h>
 
@@ -120,6 +121,9 @@ typedef struct
     double big_blind;
     pe_plo4_cert_strategy_fn strategy;
     void *strategy_user;
+    /* Seat that acts first at the root: 0 (default) or 1. The tree is the
+       same river value/bluff tree either way. */
+    uint8_t first_to_act;
 } pe_plo4_cert_spec_t;
 
 typedef struct
@@ -157,6 +161,42 @@ typedef struct
     /* Best-response fixed-point iterations used for each player. */
     uint32_t br_iterations[2];
 } pe_plo4_cert_result_t;
+
+/*
+ * Solve the declared game with the v3 solver instead of measuring a fixed
+ * strategy. The vector game built for pe_plo4_cert_evaluate is handed to
+ * pe_solver_create; the engine's regret updates drive the solve and every
+ * convergence measurement is the exact best response of
+ * pe_exploitability_vector (br_mode=exact, guarantee=nash).
+ *
+ * `config` may be NULL for the v3 defaults. Its algorithm block selects the
+ * preset and the DCFR schedule. `target_exploitability_mbb`, when positive, is
+ * expressed in the same chips-per-hand mbb unit pe_plo4_cert_evaluate reports,
+ * and is converted to the solver's internal vector-combo scale here. The
+ * problem-size fields and the big blind are filled from the declared game.
+ */
+typedef struct
+{
+    /* Iterations actually run and whether the run stopped on its target. */
+    uint64_t iterations;
+    int complete;
+    int target_reached;
+    /* Combo width of the vector game and total weight of legal pairs. */
+    pe_combo_count_t combo_count;
+    double joint_mass;
+    /* Chips per hand under the declared joint range distribution. */
+    double nash_conv;
+    double exploitability;
+    double exploitability_mbb_per_game;
+    double exploitability_pct_of_pot;
+    /* The solver's exact measurement, scaled to chips per hand. */
+    pe_metrics_t metrics;
+} pe_plo4_cert_solve_result_t;
+
+pe_solver_status_t pe_plo4_cert_solve(
+    const pe_plo4_cert_spec_t *spec,
+    const pe_solver_config_t *config,
+    pe_plo4_cert_solve_result_t *out_result);
 
 /*
  * Measure the fixed strategy against both best responses.

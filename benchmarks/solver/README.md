@@ -453,14 +453,20 @@ these schedules; `alpha` and `gamma` stay non-negative. The product driver
 exposes them as `--dcfr-schedule fixed|hs15|hs30` and records the choice in the
 JSON report as `dcfr_schedule` / `dcfr_horizon`.
 
-`plo4_time_to_target.py` measures time-to-target exploitability on the PLO4
-heads-up river spot (`Ks9d4c2hTs`, pot 63, the `plo5_hu_river` tree) at 100 %
-ranges and `cpu_ref`/f64, with the same game, tree, backend and best-response
-evaluator for every run:
+`pe-plo4-lane-a` is the lane A driver for the same spot: it builds the
+certification river game (`Ks9d4c2hTs`, pot 63, stack 68.5, one pot-sized bet,
+512 combos per range by default) and hands it to the v3 vector solver under the
+requested preset and DCFR schedule. Every convergence measurement is the exact
+best response of the vector lane, so the report says `br_mode=exact` and
+`guarantee=nash`; the `--target-mbb` value is expressed in chips per hand and
+the driver converts it to the solver's vector-combo scale internally.
+
+`plo4_time_to_target.py` measures time-to-target exploitability with that
+driver, holding game, ranges, bet size and best-response evaluator constant:
 
     python3 benchmarks/solver/plo4_time_to_target.py \
-        --solver build/local/tools/pe-preflop-solve \
-        --targets 15000,5000,1000 --seeds 11,23,37 \
+        --solver build/local/tools/pe-plo4-lane-a \
+        --targets 1000,500,250 --combos 512 --seeds 11,23,37 \
         --output build/plo4-time-to-target.json
 
 Each run records wall-clock seconds, the exploitability and measurement
@@ -468,14 +474,16 @@ iteration, the best-response mode and guarantee (`br_mode`, `guarantee`), the
 solver-reported storage bytes and infosets, and the seed. The JSON keeps every
 run plus per-schedule/per-target medians and spreads. A target counts as
 reached only when every seed reached it; unreached targets have no time and are
-marked in the Markdown table. Sampled best responses are empirical estimates,
-not certificates, and the report says so.
+marked in the Markdown table. An exact measurement is a measured value, not an
+estimate. The probe still writes `diagnostics.schedules_are_inert` and warns if
+a driver ever applies one update rule for every schedule, so identical rows are
+never presented as an algorithm comparison, and the probe then exits non-zero so CI fails instead of
+publishing identical rows.
 
-**Current limitation.** `pe-preflop-solve` runs the sampled external lane,
-which applies one update rule regardless of `--algorithm`: `external-mccfr`,
-`external-dcfr` and every `--alpha`/`--beta`/`--gamma`/`--dcfr-schedule` choice
-produce the same strategy and the same exploitability on this spot. The probe
-detects that and writes `diagnostics.schedules_are_inert = true`, so identical
-rows are never presented as an algorithm comparison. Time-to-target across
-algorithms needs a driver that actually applies the v3 preset, which is
-follow-up work on #284.
+`check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
+`fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`
+and `guarantee=nash` on every report, and fails unless exploitability or the
+best-response gaps differ at at least one checkpoint.
+
+`pe-plo4-lane-a --help` lists the spot overrides (`--board`, `--pot`,
+`--stack`, `--bet-size`, `--combos`, `--first-to-act`, `--dcfr-horizon`).

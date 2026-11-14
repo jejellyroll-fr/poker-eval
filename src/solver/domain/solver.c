@@ -790,6 +790,25 @@ static int pe_solver_vector_measure_combo_compatible(
         adapter->game->user);
 }
 
+static int pe_solver_vector_measure_combo_mass(
+    const void *state, const pe_reach_vec_t *reach, uint8_t player,
+    pe_value_vec_t *out_mass, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->combo_mass(state, reach, player, out_mass,
+                                     adapter->game->user);
+}
+
+static int pe_solver_vector_measure_combo_prior(
+    uint8_t player, pe_combo_id_t combo, double *out_weight, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->combo_prior(player, combo, out_weight,
+                                      adapter->game->user);
+}
+
 static void pe_solver_drop_recomputable(const pe_solver_t *solver);
 
 static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
@@ -983,6 +1002,10 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 measured_game.combo_compatible =
                     measured_game.combo_compatible
                     ? pe_solver_vector_measure_combo_compatible : NULL;
+                measured_game.combo_mass = measured_game.combo_mass
+                    ? pe_solver_vector_measure_combo_mass : NULL;
+                measured_game.combo_prior = measured_game.combo_prior
+                    ? pe_solver_vector_measure_combo_prior : NULL;
                 measured_game.user = &strategy_adapter;
             }
             if (pe_exploitability_vector(&measured_game,
