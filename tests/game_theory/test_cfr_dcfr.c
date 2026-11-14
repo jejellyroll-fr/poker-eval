@@ -68,9 +68,20 @@ static void test_rejects_invalid_input_without_mutation(void)
     double regrets[] = {2.0, -2.0};
     const double before[] = {2.0, -2.0};
 
+    /* HS-DCFR schedules drive beta negative (issue #284): a finite negative
+       exponent is legal, a non-finite one is not. */
     params.beta = -1.0;
+    CHECK(pe_dcfr_discount_regrets(regrets, 2u, 1u, &params) == 0,
+          "a finite negative beta must be accepted");
+    CHECK(fabs(regrets[0] - 1.0) <= 1e-12 &&
+              fabs(regrets[1] + 1.0) <= 1e-12,
+          "beta=-1 discount is incorrect");
+
+    regrets[0] = before[0];
+    regrets[1] = before[1];
+    params.beta = NAN;
     CHECK(pe_dcfr_discount_regrets(regrets, 2u, 1u, &params) == -1,
-          "negative beta must be rejected");
+          "a non-finite beta must be rejected");
     CHECK(fabs(regrets[0] - before[0]) <= 1e-12 &&
               fabs(regrets[1] - before[1]) <= 1e-12,
           "invalid DCFR parameters must not mutate regrets");

@@ -54,16 +54,25 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
 {
     double regret = old_regret;
     double average_delta;
+    pe_dcfr_params_t fixed;
+    pe_dcfr_params_t params;
 
     if (!config || !batch || !update || !out_regret || !out_average ||
         !pe_finite_double(old_regret) || !pe_finite_double(old_average))
         return -1;
+    fixed.alpha = config->dcfr_alpha;
+    fixed.beta = config->dcfr_beta;
+    fixed.gamma = config->dcfr_gamma;
     average_delta = update->average_delta;
+    /* Iteration zero is only reached by non-DCFR modes; resolving at t=1 keeps
+       the FIXED control exact and the schedules defined. */
+    if (pe_dcfr_params_resolve(&fixed, config->dcfr_schedule,
+                               config->dcfr_schedule_horizon,
+                               batch->iteration ? batch->iteration : 1u,
+                               &params) != 0)
+        return -1;
 
     if (config->regret_mode == PE_REGRET_DCFR) {
-        pe_dcfr_params_t params = {
-            config->dcfr_alpha, config->dcfr_beta, config->dcfr_gamma
-        };
         if (pe_dcfr_discount_regrets(&regret, 1u, batch->iteration,
                                      &params) != 0)
             return -1;
@@ -80,7 +89,7 @@ static int cpu_ref_update_values(const pe_compute_config_t *config,
         break;
     case PE_AVG_POWER: {
         double weight;
-        if (pe_dcfr_average_weight(batch->iteration, config->dcfr_gamma,
+        if (pe_dcfr_average_weight(batch->iteration, params.gamma,
                                    &weight) != 0)
             return -1;
         average_delta *= weight;
@@ -200,6 +209,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
             double positive_factor = 1.0;
             double negative_factor = 1.0;
             double average_scale = 1.0;
+            double fast_gamma = backend->config.dcfr_gamma;
             int weighted_mode =
                 backend->config.regret_mode == PE_REGRET_VANILLA ||
                 backend->config.regret_mode == PE_REGRET_PLUS ||
@@ -212,22 +222,32 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
             int fast_safe = weighted_mode;
             size_t check_index;
 
-            if (backend->config.regret_mode == PE_REGRET_DCFR)
             {
-                double factors[2] = {1.0, -1.0};
-                pe_dcfr_params_t params = {
+                pe_dcfr_params_t fixed = {
                     backend->config.dcfr_alpha,
                     backend->config.dcfr_beta,
                     backend->config.dcfr_gamma
                 };
-                if (pe_dcfr_discount_regrets(
-                        factors, 2u, batch->iteration, &params) != 0)
+                pe_dcfr_params_t params;
+                double factors[2] = {1.0, -1.0};
+
+                if (pe_dcfr_params_resolve(
+                        &fixed, backend->config.dcfr_schedule,
+                        backend->config.dcfr_schedule_horizon,
+                        batch->iteration ? batch->iteration : 1u,
+                        &params) != 0)
                     fast_safe = 0;
-                else
+                else if (backend->config.regret_mode == PE_REGRET_DCFR &&
+                         pe_dcfr_discount_regrets(
+                             factors, 2u, batch->iteration, &params) != 0)
+                    fast_safe = 0;
+                else if (backend->config.regret_mode == PE_REGRET_DCFR)
                 {
                     positive_factor = factors[0];
                     negative_factor = -factors[1];
                 }
+                if (backend->config.averaging_mode == PE_AVG_POWER)
+                    fast_gamma = params.gamma;
             }
 
             switch (backend->config.averaging_mode)
@@ -240,7 +260,7 @@ static int cpu_ref_apply_soa(const pe_cpu_ref_t *backend,
                 break;
             case PE_AVG_POWER:
                 if (pe_dcfr_average_weight(
-                        batch->iteration, backend->config.dcfr_gamma,
+                        batch->iteration, fast_gamma,
                         &average_scale) != 0)
                     fast_safe = 0;
                 break;

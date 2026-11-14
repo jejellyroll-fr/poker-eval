@@ -871,6 +871,9 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     compute_config.dcfr_alpha = solver->config.algorithm.dcfr_alpha;
     compute_config.dcfr_beta = solver->config.algorithm.dcfr_beta;
     compute_config.dcfr_gamma = solver->config.algorithm.dcfr_gamma;
+    compute_config.dcfr_schedule = solver->config.algorithm.dcfr_schedule;
+    compute_config.dcfr_schedule_horizon =
+        solver->config.algorithm.dcfr_schedule_horizon;
     compute_config.averaging_delay = solver->config.algorithm.averaging_delay;
     compute_config.exponential_lambda =
         solver->config.algorithm.exponential_lambda;
@@ -1558,6 +1561,9 @@ static pe_solver_status_t pe_solver_run_sampled(pe_solver_t *solver,
     compute_config.dcfr_alpha = solver->config.algorithm.dcfr_alpha;
     compute_config.dcfr_beta = solver->config.algorithm.dcfr_beta;
     compute_config.dcfr_gamma = solver->config.algorithm.dcfr_gamma;
+    compute_config.dcfr_schedule = solver->config.algorithm.dcfr_schedule;
+    compute_config.dcfr_schedule_horizon =
+        solver->config.algorithm.dcfr_schedule_horizon;
     compute_config.averaging_delay = solver->config.algorithm.averaging_delay;
     compute_config.exponential_lambda =
         solver->config.algorithm.exponential_lambda;

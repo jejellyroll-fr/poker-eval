@@ -21,6 +21,7 @@
 #ifndef POKER_EVAL_PE_SOLVER_CONFIG_H
 #define POKER_EVAL_PE_SOLVER_CONFIG_H
 
+#include <poker_eval/solver/pe_regret_dcfr.h>
 #include <poker_eval/solver/pe_sampling_policy.h>
 #include <poker_eval/solver/pe_storage_port.h>
 #include <poker_eval/solver/pe_br_sampling.h>
@@ -223,6 +224,15 @@ typedef struct {
     /* Issue #256: settings of PE_SAMPLING_ADAPTIVE_VARIANCE. All-zero selects
        the defaults; read only when sampling_policy selects it. */
     pe_adaptive_sampling_t adaptive;
+
+    /* Issue #284: how the DCFR exponents change over iterations. FIXED keeps
+       dcfr_alpha/beta/gamma for the whole solve and is the control; HS15 and
+       HS30 are the training-free hyperparameter schedules, where the horizon
+       is n in the schedule equations (1000 in the paper's experiments). Read
+       only when regret is PE_REGRET_DCFR; the averaging weight uses the
+       scheduled gamma when averaging is PE_AVG_POWER. */
+    pe_dcfr_schedule_t dcfr_schedule;
+    uint64_t dcfr_schedule_horizon;
 } pe_algorithm_config_t;
 
 /* ------------------------------------------------------------------ *

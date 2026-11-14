@@ -407,6 +407,30 @@ static void pe_check_ranges(const pe_solver_config_t *cfg, pe_diagnostics_t *dia
                     "exponential_lambda must be positive, got %f",
                     a->exponential_lambda);
 
+    if (a->dcfr_schedule < PE_DCFR_SCHEDULE_FIXED ||
+        a->dcfr_schedule >= PE_DCFR_SCHEDULE_COUNT)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "unknown DCFR schedule %d", (int)a->dcfr_schedule);
+    else if (a->dcfr_schedule != PE_DCFR_SCHEDULE_FIXED &&
+             a->dcfr_schedule_horizon == 0u)
+        pe_diag_add(diag, PE_VALID_ERROR,
+                    "DCFR schedule %s needs a positive horizon",
+                    pe_dcfr_schedule_name(a->dcfr_schedule));
+    else if (a->dcfr_schedule == PE_DCFR_SCHEDULE_FIXED)
+    {
+        pe_dcfr_params_t fixed = {
+            a->dcfr_alpha, a->dcfr_beta, a->dcfr_gamma
+        };
+        pe_dcfr_params_t resolved;
+
+        if (pe_dcfr_params_resolve(&fixed, PE_DCFR_SCHEDULE_FIXED, 0u, 1u,
+                                   &resolved) != 0)
+            pe_diag_add(diag, PE_VALID_ERROR,
+                        "DCFR exponents are invalid: alpha %f, beta %f, "
+                        "gamma %f", a->dcfr_alpha, a->dcfr_beta,
+                        a->dcfr_gamma);
+    }
+
     if (cfg->execution.cpu_threads < 0)
         pe_diag_add(diag, PE_VALID_ERROR,
                     "cpu_threads must not be negative, got %d",

@@ -43,6 +43,8 @@ typedef struct pe_compute_config_t
     double dcfr_alpha;
     double dcfr_beta;
     double dcfr_gamma;
+    pe_dcfr_schedule_t dcfr_schedule;
+    uint64_t dcfr_schedule_horizon;
     int averaging_delay;
     double exponential_lambda;
 } pe_compute_config_t;
