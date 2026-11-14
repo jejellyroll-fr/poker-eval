@@ -124,6 +124,47 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(command[command.index("--algorithm") + 1], "dcfr")
 
 
+class TargetBracketTests(unittest.TestCase):
+    def test_bracket_reports_last_above_and_first_below(self) -> None:
+        checkpoints = [
+            {"iteration": 5, "elapsed_seconds": 0.1,
+             "exploitability_mbb_per_game": 2500.0},
+            {"iteration": 10, "elapsed_seconds": 0.3,
+             "exploitability_mbb_per_game": 1271.0},
+            {"iteration": 15, "elapsed_seconds": 0.5,
+             "exploitability_mbb_per_game": 800.0},
+        ]
+
+        bracket = probe.target_bracket(checkpoints, 1000.0)
+
+        self.assertTrue(bracket["bracketed"])
+        self.assertEqual(bracket["last_above"]["iteration"], 10)
+        self.assertEqual(bracket["last_above"]["exploitability_mbb_per_game"],
+                         1271.0)
+        self.assertEqual(bracket["first_below"]["iteration"], 15)
+        self.assertEqual(bracket["first_below"]["elapsed_seconds"], 0.5)
+
+    def test_unreached_target_has_no_first_below(self) -> None:
+        bracket = probe.target_bracket(
+            [{"iteration": 5, "elapsed_seconds": 0.1,
+              "exploitability_mbb_per_game": 2500.0}], 1000.0
+        )
+
+        self.assertFalse(bracket["bracketed"])
+        self.assertEqual(bracket["last_above"]["iteration"], 5)
+        self.assertIsNone(bracket["first_below"])
+
+    def test_target_already_met_has_no_last_above(self) -> None:
+        bracket = probe.target_bracket(
+            [{"iteration": 5, "elapsed_seconds": 0.1,
+              "exploitability_mbb_per_game": 800.0}], 1000.0
+        )
+
+        self.assertTrue(bracket["bracketed"])
+        self.assertIsNone(bracket["last_above"])
+        self.assertEqual(bracket["first_below"]["iteration"], 5)
+
+
 class MainTests(unittest.TestCase):
     def _main(self, exploitability_by_schedule: dict[str, float]) -> int:
         def fake_run_once(solver, schedule, seed, target,

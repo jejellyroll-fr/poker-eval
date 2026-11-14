@@ -50,6 +50,17 @@ struct pe_vector_game_t;
 struct pe_external_game_t;
 
 /*
+ * Optional observer for exact vector-lane measurements. It runs after the
+ * metrics and target decision for a measurement are complete, before the next
+ * iteration. Times are seconds: elapsed since this run started, solve time
+ * with the best-response measurements excluded, and the cost of this
+ * measurement. The metrics pointer is borrowed and only valid for the call.
+ */
+typedef void (*pe_solver_measurement_fn)(
+    uint64_t iteration, double elapsed_seconds, double solve_seconds,
+    double br_seconds, const pe_metrics_t *metrics, void *user);
+
+/*
  * Completes the tag forward-declared in pe_solver.h.
  *
  * Every member is a borrowed pointer: the solver keeps it but never owns it,
@@ -92,6 +103,11 @@ struct pe_solver_deps_t {
        sampled preflop solve from being forced through the exhaustive vector
        surface. */
     const struct pe_external_game_t *external_game;
+
+    /* Optional exact-measurement observer (appended for ABI compatibility).
+       NULL keeps the historical silent path. */
+    pe_solver_measurement_fn on_measurement;
+    void *measurement_user;
 };
 
 /**

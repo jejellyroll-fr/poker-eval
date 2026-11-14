@@ -15,6 +15,8 @@ What it records, per (schedule, target, seed):
 
 * wall-clock seconds for the whole process, separately from the solve quality
   fields the report carries (`measurement_iteration`, `br_mode`, `guarantee`);
+* the solver checkpoint history with its timing decomposition, and the
+  checkpoint bracket around the target;
 * the exploitability in mbb/game and whether the target was reached;
 * the solver-managed memory (`storage_bytes` and `infosets`);
 * the seed, so repeated runs are reproducible.
@@ -81,6 +83,39 @@ def build_command(
     ]
 
 
+def target_bracket(
+    checkpoints: list[dict[str, Any]], target_mbb: float
+) -> dict[str, Any]:
+    """Bracket one target with the last checkpoint above and first below it.
+
+    The measurement interval means the exact crossing time is unknown; these
+    two checkpoints are the honest bounds, not an interpolated time.
+    """
+    last_above: dict[str, Any] | None = None
+    for checkpoint in checkpoints:
+        entry = {
+            "iteration": checkpoint.get("iteration"),
+            "elapsed_seconds": checkpoint.get("elapsed_seconds"),
+            "exploitability_mbb_per_game": checkpoint.get(
+                "exploitability_mbb_per_game"
+            ),
+        }
+        if float(entry["exploitability_mbb_per_game"]) <= target_mbb:
+            return {
+                "target_mbb": target_mbb,
+                "last_above": last_above,
+                "first_below": entry,
+                "bracketed": True,
+            }
+        last_above = entry
+    return {
+        "target_mbb": target_mbb,
+        "last_above": last_above,
+        "first_below": None,
+        "bracketed": False,
+    }
+
+
 def run_once(
     solver: Path,
     schedule: str,
@@ -113,6 +148,7 @@ def run_once(
     if exploitability is None:
         raise RuntimeError(f"the {schedule} run reported no exploitability")
     progress = report.get("progress", {})
+    checkpoints = report.get("checkpoints", [])
     return {
         "schedule": schedule,
         "seed": seed,
@@ -128,6 +164,9 @@ def run_once(
         "guarantee": metrics.get("guarantee"),
         "infosets": metrics.get("infosets"),
         "storage_bytes": metrics.get("storage_bytes"),
+        "timing": report.get("timing", {}),
+        "checkpoints": checkpoints,
+        "target_bracket": target_bracket(checkpoints, target_mbb),
     }
 
 
@@ -155,6 +194,10 @@ def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any
                 run["measurement_iteration"] for run in reached
                 if run["measurement_iteration"] is not None
             ]
+            first_below = [
+                run["target_bracket"]["first_below"] for run in reached
+                if run.get("target_bracket", {}).get("first_below")
+            ]
             by_target[f"{target:.17g}"] = {
                 "runs": len(matching),
                 "reached": len(reached),
@@ -164,6 +207,14 @@ def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any
                 "max_seconds": max(times) if times else None,
                 "median_measurement_iteration": _median(
                     [float(value) for value in iterations]
+                ),
+                "median_seconds_to_first_below": _median(
+                    [float(entry["elapsed_seconds"]) for entry in first_below]
+                    if first_below else []
+                ),
+                "median_iteration_to_first_below": _median(
+                    [float(entry["iteration"]) for entry in first_below]
+                    if first_below else []
                 ),
                 "exploitability_mbb_per_game": [
                     run["exploitability_mbb_per_game"] for run in matching

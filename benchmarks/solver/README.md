@@ -480,6 +480,15 @@ a driver ever applies one update rule for every schedule, so identical rows are
 never presented as an algorithm comparison, and the probe then exits non-zero so CI fails instead of
 publishing identical rows.
 
+The lane A report carries a `checkpoints` array, one entry per exact-BR
+measurement with `elapsed_seconds`, `solve_seconds` (regret updates), and
+`br_seconds` (that measurement), plus a `timing` summary. The probe derives
+`target_bracket` from those checkpoints for every run: the last checkpoint
+above the target and the first one at or below it. The exact crossing time
+between those two measurements is not interpolated, so the bracket is the
+honest resolution of the configured interval; the summary also reports the
+median checkpoint time and iteration to the first below-target measurement.
+
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`
 and `guarantee=nash` on every report, and fails unless exploitability or the

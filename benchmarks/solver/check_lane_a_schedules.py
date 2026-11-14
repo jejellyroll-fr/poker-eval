@@ -64,6 +64,56 @@ def measurement(
     gaps = tuple(float(gap) for gap in metrics["br_gap"])
     if not all(math.isfinite(value) for value in (exploitability, *gaps)):
         raise AssertionError(f"{schedule}: non-finite measurement")
+    checkpoints = report.get("checkpoints")
+    if not checkpoints:
+        raise AssertionError(f"{schedule}: no checkpoint history")
+    previous_iteration = -1
+    previous_elapsed = -1.0
+    for checkpoint in checkpoints:
+        values = (
+            float(checkpoint["elapsed_seconds"]),
+            float(checkpoint["solve_seconds"]),
+            float(checkpoint["br_seconds"]),
+            float(checkpoint["exploitability_mbb_per_game"]),
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise AssertionError(f"{schedule}: non-finite checkpoint")
+        iteration = int(checkpoint["iteration"])
+        if iteration <= previous_iteration:
+            raise AssertionError(f"{schedule}: checkpoints are not ordered")
+        if values[0] < 0.0 or values[0] < previous_elapsed:
+            raise AssertionError(f"{schedule}: checkpoint time went backwards")
+        if values[1] < 0.0 or values[2] < 0.0:
+            raise AssertionError(f"{schedule}: negative solve or BR time")
+        if values[1] + values[2] > values[0] + 1e-6:
+            raise AssertionError(f"{schedule}: solve + BR exceeds elapsed")
+        previous_iteration = iteration
+        previous_elapsed = values[0]
+    if abs(values[3] - exploitability) > 1e-6:
+        raise AssertionError(f"{schedule}: last checkpoint disagrees with metrics")
+    if iteration != int(metrics.get("measurement_iteration", -1)):
+        raise AssertionError(
+            f"{schedule}: last checkpoint iteration disagrees with metrics"
+        )
+    timing = report.get("timing")
+    if not isinstance(timing, dict):
+        raise AssertionError(f"{schedule}: no timing summary")
+    if int(timing.get("checkpoints", -1)) != len(checkpoints):
+        raise AssertionError(f"{schedule}: timing summary has the wrong count")
+    timing_values = (
+        float(timing.get("elapsed_seconds", -1.0)),
+        float(timing.get("solve_seconds", -1.0)),
+        float(timing.get("br_seconds", -1.0)),
+    )
+    if not all(math.isfinite(value) for value in timing_values):
+        raise AssertionError(f"{schedule}: non-finite timing summary")
+    if abs(timing_values[0] - previous_elapsed) > 1e-6:
+        raise AssertionError(f"{schedule}: timing elapsed disagrees with history")
+    if abs(timing_values[1] - values[1]) > 1e-6:
+        raise AssertionError(f"{schedule}: timing solve disagrees with history")
+    total_br = sum(float(item["br_seconds"]) for item in checkpoints)
+    if abs(timing_values[2] - total_br) > 1e-6:
+        raise AssertionError(f"{schedule}: timing BR disagrees with history")
     return exploitability, gaps
 
 

@@ -29,6 +29,59 @@
 
 typedef struct
 {
+    uint64_t iteration;
+    double elapsed_seconds;
+    double solve_seconds;
+    double br_seconds;
+    double exploitability_raw;
+    double br_gap[2];
+} lane_checkpoint_t;
+
+typedef struct
+{
+    lane_checkpoint_t *items;
+    size_t count;
+    size_t capacity;
+    int failed;
+} lane_history_t;
+
+static void lane_history_add(const pe_plo4_cert_checkpoint_t *checkpoint,
+                             void *user)
+{
+    lane_history_t *history = (lane_history_t *)user;
+    lane_checkpoint_t *grown;
+    size_t capacity;
+
+    if (!history || !checkpoint)
+        return;
+    if (history->count == history->capacity)
+    {
+        capacity = history->capacity ? history->capacity * 2u : 16u;
+        grown = (lane_checkpoint_t *)realloc(
+            history->items, capacity * sizeof(*grown));
+        if (!grown)
+        {
+            history->failed = 1;
+            return;
+        }
+        history->items = grown;
+        history->capacity = capacity;
+    }
+    history->items[history->count].iteration = checkpoint->iteration;
+    history->items[history->count].elapsed_seconds =
+        checkpoint->elapsed_seconds;
+    history->items[history->count].solve_seconds =
+        checkpoint->solve_seconds;
+    history->items[history->count].br_seconds = checkpoint->br_seconds;
+    history->items[history->count].exploitability_raw =
+        checkpoint->metrics.exploitability_raw;
+    history->items[history->count].br_gap[0] = checkpoint->metrics.br_gap[0];
+    history->items[history->count].br_gap[1] = checkpoint->metrics.br_gap[1];
+    ++history->count;
+}
+
+typedef struct
+{
     const char *board_text;
     const char *output;
     double pot;
@@ -232,17 +285,59 @@ static void usage(const char *program)
             program);
 }
 
+static void write_checkpoints(FILE *file, const lane_history_t *history,
+                              double scale, double big_blind, double pot)
+{
+    size_t index;
+
+    fputc('[', file);
+    for (index = 0u; index < history->count; ++index)
+    {
+        const lane_checkpoint_t *checkpoint = &history->items[index];
+        double nash_conv = checkpoint->exploitability_raw * scale;
+        double exploitability = nash_conv * 0.5;
+
+        if (index > 0u)
+            fputc(',', file);
+        fprintf(file,
+                "{\"iteration\":%llu,\"elapsed_seconds\":%.17g,"
+                "\"solve_seconds\":%.17g,\"br_seconds\":%.17g,"
+                "\"nash_conv\":%.17g,\"exploitability\":%.17g,"
+                "\"exploitability_mbb_per_game\":%.17g,"
+                "\"exploitability_pct_of_pot\":%.17g,"
+                "\"br_gap\":[%.17g,%.17g]}",
+                (unsigned long long)checkpoint->iteration,
+                checkpoint->elapsed_seconds, checkpoint->solve_seconds,
+                checkpoint->br_seconds, nash_conv, exploitability,
+                exploitability / big_blind * 1000.0,
+                exploitability / pot * 100.0,
+                checkpoint->br_gap[0] * scale,
+                checkpoint->br_gap[1] * scale);
+    }
+    fputc(']', file);
+}
+
 static int write_report(const char *path, const options_t *options,
-                        const char *board_text,
+                        const char *board_text, const lane_history_t *history,
                         const pe_plo4_cert_solve_result_t *result)
 {
     FILE *file = path ? fopen(path, "w") : stdout;
     const pe_metrics_t *metrics = &result->metrics;
+    double total_br_seconds = 0.0;
+    double last_elapsed_seconds = 0.0;
+    double last_solve_seconds = 0.0;
+    size_t index;
 
     if (!file)
     {
         fprintf(stderr, "pe-plo4-lane-a: cannot write %s\n", path);
         return -1;
+    }
+    for (index = 0u; index < history->count; ++index)
+    {
+        total_br_seconds += history->items[index].br_seconds;
+        last_elapsed_seconds = history->items[index].elapsed_seconds;
+        last_solve_seconds = history->items[index].solve_seconds;
     }
     fprintf(file,
             "{\"schema\":\"pe-plo4-lane-a/v1\",\"game\":\"plo4\","
@@ -250,7 +345,7 @@ static int write_report(const char *path, const options_t *options,
             "\"bet_size\":%.17g,\"big_blind\":%.17g,\"combos\":%zu,"
             "\"first_to_act\":%d,"
             "\"algorithm\":\"%s\",\"dcfr_schedule\":\"%s\","
-            "\"dcfr_horizon\":%llu,\"seed\":%llu,"
+            "\"dcfr_horizon\":%llu,\"seed\":%llu,\"target_mbb\":%.17g,"
             "\"progress\":{\"iteration\":%llu,\"complete\":%s,"
             "\"target_reached\":%s},"
             "\"metrics\":{\"exploitability_mbb_per_game\":%.17g,"
@@ -258,13 +353,17 @@ static int write_report(const char *path, const options_t *options,
             "\"br_mode\":\"%s\",\"guarantee\":\"%s\","
             "\"br_gap\":[%.17g,%.17g],\"measurement_iteration\":%llu,"
             "\"sample_count\":%llu,\"storage_bytes\":%llu,"
-            "\"infosets\":%llu}}\n",
+            "\"infosets\":%llu},"
+            "\"timing\":{\"elapsed_seconds\":%.17g,"
+            "\"solve_seconds\":%.17g,\"br_seconds\":%.17g,"
+            "\"checkpoints\":%zu},\"checkpoints\":",
             board_text, options->pot, options->stacks[0], options->bet_size,
             options->big_blind, options->combos, options->first_to_act,
             pe_preset_name(options->algorithm),
             pe_dcfr_schedule_name(options->schedule),
             (unsigned long long)options->horizon,
             (unsigned long long)options->seed,
+            options->target_mbb,
             (unsigned long long)result->iterations,
             result->complete ? "true" : "false",
             result->target_reached ? "true" : "false",
@@ -275,7 +374,16 @@ static int write_report(const char *path, const options_t *options,
             (unsigned long long)metrics->measurement_iteration,
             (unsigned long long)metrics->sample_count,
             (unsigned long long)metrics->storage_memory.storage_bytes,
-            (unsigned long long)metrics->storage_memory.total_infosets);
+            (unsigned long long)metrics->storage_memory.total_infosets,
+            last_elapsed_seconds, last_solve_seconds, total_br_seconds,
+            history->count);
+    {
+        double scale = (double)result->combo_count / result->joint_mass;
+
+        write_checkpoints(file, history, scale, options->big_blind,
+                          options->pot);
+    }
+    fputs("}\n", file);
     if (path)
         fclose(file);
     return 0;
@@ -287,6 +395,8 @@ int main(int argc, char **argv)
     pe_plo4_cert_spec_t spec;
     pe_solver_config_t config = pe_solver_config_default();
     pe_plo4_cert_solve_result_t result;
+    lane_history_t history = {0};
+    pe_plo4_cert_observer_t observer;
     pe_omaha_range_t ranges[2];
     pe_omaha_combo_t *combos = NULL;
     mask_t board = MASK_EMPTY;
@@ -454,17 +564,31 @@ int main(int argc, char **argv)
     config.target_exploitability_mbb = options.target_mbb;
     config.seed = options.seed;
 
-    if (pe_plo4_cert_solve(&spec, &config, &result) != PE_SOLVER_OK)
+    observer.on_checkpoint = lane_history_add;
+    observer.user = &history;
+    if (pe_plo4_cert_solve_observed(&spec, &config, &observer, &result) !=
+        PE_SOLVER_OK)
     {
         fprintf(stderr, "pe-plo4-lane-a: solve failed\n");
+        free(history.items);
         free(combos);
         return 1;
     }
-    if (write_report(options.output, &options, options.board_text, &result) != 0)
+    if (history.failed)
     {
+        fprintf(stderr, "pe-plo4-lane-a: checkpoint allocation failed\n");
+        free(history.items);
         free(combos);
         return 1;
     }
+    if (write_report(options.output, &options, options.board_text, &history,
+                     &result) != 0)
+    {
+        free(history.items);
+        free(combos);
+        return 1;
+    }
+    free(history.items);
     free(combos);
     return 0;
 }

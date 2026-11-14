@@ -193,9 +193,36 @@ typedef struct
     pe_metrics_t metrics;
 } pe_plo4_cert_solve_result_t;
 
+/* One exact measurement taken during a solve, before the range scaling the
+ * public result applies. `metrics` is the solver's raw vector-lane reading;
+ * an observer that wants chips per hand must apply the same
+ * combo_count/joint_mass scale as pe_plo4_cert_solve. */
+typedef struct
+{
+    uint64_t iteration;
+    double elapsed_seconds;
+    double solve_seconds;
+    double br_seconds;
+    pe_metrics_t metrics;
+} pe_plo4_cert_checkpoint_t;
+
+typedef struct
+{
+    void (*on_checkpoint)(const pe_plo4_cert_checkpoint_t *checkpoint,
+                          void *user);
+    void *user;
+} pe_plo4_cert_observer_t;
+
 pe_solver_status_t pe_plo4_cert_solve(
     const pe_plo4_cert_spec_t *spec,
     const pe_solver_config_t *config,
+    pe_plo4_cert_solve_result_t *out_result);
+
+/* Same solve, additionally reporting every exact checkpoint in order. */
+pe_solver_status_t pe_plo4_cert_solve_observed(
+    const pe_plo4_cert_spec_t *spec,
+    const pe_solver_config_t *config,
+    const pe_plo4_cert_observer_t *observer,
     pe_plo4_cert_solve_result_t *out_result);
 
 /*

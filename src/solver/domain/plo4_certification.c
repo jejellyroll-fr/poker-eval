@@ -631,8 +631,27 @@ pe_solver_status_t pe_plo4_cert_evaluate(
     return PE_SOLVER_OK;
 }
 
-pe_solver_status_t pe_plo4_cert_solve(
+static void pe_plo4_cert_forward_checkpoint(
+    uint64_t iteration, double elapsed_seconds, double solve_seconds,
+    double br_seconds, const pe_metrics_t *metrics, void *user)
+{
+    const pe_plo4_cert_observer_t *observer =
+        (const pe_plo4_cert_observer_t *)user;
+    pe_plo4_cert_checkpoint_t checkpoint;
+
+    if (!observer || !observer->on_checkpoint || !metrics)
+        return;
+    checkpoint.iteration = iteration;
+    checkpoint.elapsed_seconds = elapsed_seconds;
+    checkpoint.solve_seconds = solve_seconds;
+    checkpoint.br_seconds = br_seconds;
+    checkpoint.metrics = *metrics;
+    observer->on_checkpoint(&checkpoint, observer->user);
+}
+
+static pe_solver_status_t pe_plo4_cert_solve_impl(
     const pe_plo4_cert_spec_t *spec, const pe_solver_config_t *config,
+    const pe_plo4_cert_observer_t *observer,
     pe_plo4_cert_solve_result_t *out_result)
 {
     plo4_cert_ctx_t ctx;
@@ -641,6 +660,7 @@ pe_solver_status_t pe_plo4_cert_solve(
     pe_betting_vector_game_t game;
     pe_solver_config_t cfg;
     pe_solver_deps_t deps;
+    pe_plo4_cert_observer_t observer_copy;
     pe_solver_t *solver = NULL;
     pe_progress_t progress = {0};
     pe_metrics_t metrics;
@@ -688,6 +708,12 @@ pe_solver_status_t pe_plo4_cert_solve(
 
     deps = pe_solver_deps_default();
     deps.vector_game = &game.vector;
+    if (observer && observer->on_checkpoint)
+    {
+        observer_copy = *observer;
+        deps.on_measurement = pe_plo4_cert_forward_checkpoint;
+        deps.measurement_user = &observer_copy;
+    }
     solver = pe_solver_create(&cfg, &deps);
     if (!solver)
     {
@@ -736,6 +762,21 @@ pe_solver_status_t pe_plo4_cert_solve(
     pe_betting_vector_game_destroy(&game);
     free_ctx(&ctx);
     return PE_SOLVER_OK;
+}
+
+pe_solver_status_t pe_plo4_cert_solve(
+    const pe_plo4_cert_spec_t *spec, const pe_solver_config_t *config,
+    pe_plo4_cert_solve_result_t *out_result)
+{
+    return pe_plo4_cert_solve_impl(spec, config, NULL, out_result);
+}
+
+pe_solver_status_t pe_plo4_cert_solve_observed(
+    const pe_plo4_cert_spec_t *spec, const pe_solver_config_t *config,
+    const pe_plo4_cert_observer_t *observer,
+    pe_plo4_cert_solve_result_t *out_result)
+{
+    return pe_plo4_cert_solve_impl(spec, config, observer, out_result);
 }
 
 const char *pe_plo4_cert_verdict_name(pe_plo4_cert_verdict_t verdict)

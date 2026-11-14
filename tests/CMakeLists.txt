@@ -1015,6 +1015,18 @@ if(TARGET pe-plo4-lane-a)
         LABELS "solver;cli;plo4;river;lane-a;dcfr;iss284"
         PASS_REGULAR_EXPRESSION "\"br_mode\":\"exact\".*\"guarantee\":\"nash\""
         TIMEOUT 120)
+    # Issue #284: the driver must report checkpoint history and its timing
+    # decomposition, not only the final measurement.
+    add_test(NAME pe_plo4_lane_a_checkpoints
+        COMMAND $<TARGET_FILE:pe-plo4-lane-a>
+            --combos 32
+            --iterations 20
+            --exploitability-interval 5
+            --target-mbb 1000)
+    set_tests_properties(pe_plo4_lane_a_checkpoints PROPERTIES
+        LABELS "solver;cli;plo4;river;lane-a;dcfr;iss284"
+        PASS_REGULAR_EXPRESSION "\"timing\":\\{.*\"checkpoints\":\\[\\{.*\"solve_seconds\".*\"br_seconds\""
+        TIMEOUT 120)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
         # Issue #284: fixed and hs30 must produce different measurements.
