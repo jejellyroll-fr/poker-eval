@@ -118,6 +118,26 @@ first combo of each range is shown in the output table.
 
 #define MAX_RANGE_SPEC 1024
 
+/* The universal deck stores each card at its own bit position (the id space
+ * shared by Universal_StringToCard() and StdDeck_MAKE_CARD()), while a
+ * StdDeck_CardMask packs the four suits into 13-bit fields in a different
+ * order. Copying the 64 bits through the .std union member therefore relabels
+ * every card, so rebuild the mask card by card instead. Joker decks keep their
+ * own layout (the joker bit is off the standard grid) and are still handed
+ * over as-is. */
+static StdDeck_CardMask enum_std_mask(UniversalCardMask mask, deck_type_t deckType) {
+  StdDeck_CardMask std;
+  int card;
+
+  if (deckType == UNIVERSAL_DECK_JOKER)
+    return mask.std;
+  StdDeck_CardMask_RESET(std);
+  for (card = 0; card < StdDeck_N_CARDS; card++)
+    if (mask.cards & ((pe_card_mask_t)1 << card))
+      StdDeck_CardMask_SET(std, card);
+  return std;
+}
+
 /* Fusion-specific helper functions */
 static int fusion_get_expected_pocket_cards(int nboard) {
     switch (nboard) {
@@ -125,13 +145,23 @@ static int fusion_get_expected_pocket_cards(int nboard) {
         case 3: return 3;  /* flop */
         case 4:
         case 5: return 4;  /* turn/river */
-        default: return 2; /* default to preflop */
+        default: return -1; /* no Fusion configuration for this board */
     }
 }
 
 static int fusion_validate_pocket_cards(int ncards, int nboard) {
     int expected = fusion_get_expected_pocket_cards(nboard);
     return ncards == expected ? 0 : 1;
+}
+
+/* pe_range_parse() has no per-stage hole-card width for Fusion, so a range
+ * argument can only fail later with a misleading pocket-count error. */
+static int fusion_has_range(char rangeSpecs[][MAX_RANGE_SPEC], int npockets) {
+    int i;
+    for (i = 0; i < npockets; i++)
+        if (rangeSpecs[i][0] != '\0')
+            return 1;
+    return 0;
 }
 
 /* Post-parsing validation for Fusion poker */
@@ -529,6 +559,13 @@ main(int argc, char **argv) {
         printf("streaming usage: %s -i < argsfile\n", argv[0]);
       }
       err = 1;
+    } else if (game == game_fusion && fusion_has_range(rangeSpecs, npockets)) {
+      if (fromStdin)
+        printf("ERROR\n");
+      else
+        printf("ERROR: range syntax is not supported for Fusion; give each "
+               "player's hole cards\n");
+      err = 1;
     } else if (game == game_fusion && fusion_validate_parsed_hands(pockets, npockets, nboard)) {
       if (fromStdin) {
         printf("ERROR: Invalid Fusion hand configuration\n");
@@ -537,6 +574,7 @@ main(int argc, char **argv) {
         printf("  Preflop (no board): 2 pocket cards per player\n");
         printf("  Flop (3 board cards): 3 pocket cards per player\n");
         printf("  Turn/River (4-5 board cards): 4 pocket cards per player\n");
+        printf("  (the board must be empty or have 3, 4 or 5 cards)\n");
       }
       err = 1;
     } else {
@@ -549,15 +587,15 @@ main(int argc, char **argv) {
       double *rangeWeights[ENUM_MAXPLAYERS] = {0};
       int anyRange = 0;
       for (int i = 0; i < npockets; ++i) {
-        spockets[i] = pockets[i].std;
+        spockets[i] = enum_std_mask(pockets[i], deckType);
         parsedRanges[i] = NULL;
         rangeHands[i] = NULL;
         rangeWeights[i] = NULL;
         if (rangeSpecs[i][0] != '\0')
           anyRange = 1;
       }
-      sboard = board.std;
-      sdead = dead.std;
+      sboard = enum_std_mask(board, deckType);
+      sdead = enum_std_mask(dead, deckType);
       if (anyRange) {
         if (deckType == UNIVERSAL_DECK_JOKER) {
           if (fromStdin)
@@ -674,10 +712,10 @@ main(int argc, char **argv) {
         for (int i = 0; i < npockets; ++i) {
           if (rangeSpecs[i][0] != '\0') spockets_print[i] = spockets[i];
           else if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(pockets[i].joker, &spockets_print[i]);
-          else spockets_print[i] = pockets[i].std;
+          else spockets_print[i] = enum_std_mask(pockets[i], deckType);
         }
         if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(board.joker, &sboard_print);
-        else sboard_print = board.std;
+        else sboard_print = enum_std_mask(board, deckType);
 
         /* CalculateEquityForRanges keeps ev normalized (0..1), while the
          * legacy printers divide ev and the win/tie/lose counters by

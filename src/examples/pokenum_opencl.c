@@ -137,6 +137,26 @@ static void ensure_rng_seeded(void)
   }
 }
 
+/* The universal deck stores each card at its own bit position (the id space
+ * shared by Universal_StringToCard() and StdDeck_MAKE_CARD()), while a
+ * StdDeck_CardMask packs the four suits into 13-bit fields in a different
+ * order. Copying the 64 bits through the .std union member therefore relabels
+ * every card, so rebuild the mask card by card instead. Joker decks keep their
+ * own layout (the joker bit is off the standard grid) and are still handed
+ * over as-is. */
+static StdDeck_CardMask enum_std_mask(UniversalCardMask mask, deck_type_t deckType) {
+  StdDeck_CardMask std;
+  int card;
+
+  if (deckType == UNIVERSAL_DECK_JOKER)
+    return mask.std;
+  StdDeck_CardMask_RESET(std);
+  for (card = 0; card < StdDeck_N_CARDS; card++)
+    if (mask.cards & ((pe_card_mask_t)1 << card))
+      StdDeck_CardMask_SET(std, card);
+  return std;
+}
+
 static int run_opencl_monte_carlo(
     enum_game_t game,
     UniversalCardMask pockets[],
@@ -165,9 +185,9 @@ static int run_opencl_monte_carlo(
 
   StdDeck_CardMask spockets[ENUM_MAXPLAYERS];
   for (int i = 0; i < npockets; ++i)
-    spockets[i] = pockets[i].std;
-  StdDeck_CardMask sboard = board.std;
-  StdDeck_CardMask sdead = dead.std;
+    spockets[i] = enum_std_mask(pockets[i], deckType);
+  StdDeck_CardMask sboard = enum_std_mask(board, deckType);
+  StdDeck_CardMask sdead = enum_std_mask(dead, deckType);
 
   StdDeck_CardMask used = sdead;
   for (int i = 0; i < npockets; ++i)
@@ -327,7 +347,7 @@ static int fusion_get_expected_pocket_cards(int nboard) {
         case 3: return 3;  /* flop */
         case 4:
         case 5: return 4;  /* turn/river */
-        default: return 2; /* default to preflop */
+        default: return -1; /* no Fusion configuration for this board */
     }
 }
 
@@ -696,6 +716,7 @@ main(int argc, char **argv) {
         printf("  Preflop (no board): 2 pocket cards per player\n");
         printf("  Flop (3 board cards): 3 pocket cards per player\n");
         printf("  Turn/River (4-5 board cards): 4 pocket cards per player\n");
+        printf("  (the board must be empty or have 3, 4 or 5 cards)\n");
       }
       err = 1;
     } else {
@@ -713,9 +734,9 @@ main(int argc, char **argv) {
         // For JokerDeck games, we still use StdDeck_CardMask in the enumeration functions
         // The conversion to JokerDeck is handled internally in enumerate.c
         StdDeck_CardMask spockets[ENUM_MAXPLAYERS], sboard, sdead;
-        for (int i = 0; i < npockets; ++i) spockets[i] = pockets[i].std;
-        sboard = board.std;
-        sdead = dead.std;
+        for (int i = 0; i < npockets; ++i) spockets[i] = enum_std_mask(pockets[i], deckType);
+        sboard = enum_std_mask(board, deckType);
+        sdead = enum_std_mask(dead, deckType);
         if (enumType == ENUM_EXHAUSTIVE) {
           err = enumExhaustive_dispatch(game, spockets, sboard, sdead, npockets, nboard, orderflag, &result);
         } else if (enumType == ENUM_SAMPLE) {
@@ -725,9 +746,9 @@ main(int argc, char **argv) {
         }
       } else {
         StdDeck_CardMask spockets[ENUM_MAXPLAYERS], sboard, sdead;
-        for (int i = 0; i < npockets; ++i) spockets[i] = pockets[i].std;
-        sboard = board.std;
-        sdead = dead.std;
+        for (int i = 0; i < npockets; ++i) spockets[i] = enum_std_mask(pockets[i], deckType);
+        sboard = enum_std_mask(board, deckType);
+        sdead = enum_std_mask(dead, deckType);
         if (enumType == ENUM_EXHAUSTIVE) {
           err = enumExhaustive_dispatch(game, spockets, sboard, sdead, npockets, nboard, orderflag, &result);
         } else if (enumType == ENUM_SAMPLE) {
@@ -745,10 +766,10 @@ main(int argc, char **argv) {
         StdDeck_CardMask spockets_print[ENUM_MAXPLAYERS], sboard_print;
         for (int i = 0; i < npockets; ++i) {
           if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(pockets[i].joker, &spockets_print[i]);
-          else spockets_print[i] = pockets[i].std;
+          else spockets_print[i] = enum_std_mask(pockets[i], deckType);
         }
         if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(board.joker, &sboard_print);
-        else sboard_print = board.std;
+        else sboard_print = enum_std_mask(board, deckType);
 
         if (terse)
           enumResultPrintTerse(&result, spockets_print, sboard_print);
