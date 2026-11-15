@@ -3759,6 +3759,19 @@ enumResultPrintOrdering(enum_result_t *result, int terse)
     printf("\n");
 }
 
+/* Hands reach the printers as StdDeck masks. A joker game carries its joker in
+ * the mask's joker slot (see Universal_ConvertToStd), so render those with the
+ * joker deck, where that slot comes out as "Xx". */
+static const char *enum_mask_string(enum_game_t game, StdDeck_CardMask mask) {
+  if (Universal_DetermineRequiredDeckType(game) == UNIVERSAL_DECK_JOKER) {
+    JokerDeck_CardMask joker;
+
+    Universal_ConvertStdToJoker(mask, &joker);
+    return DmaskString(JokerDeck, joker);
+  }
+  return DmaskString(StdDeck, mask);
+}
+
 void enumResultPrint(enum_result_t *result, StdDeck_CardMask pockets[],
                      StdDeck_CardMask board)
 {
@@ -3778,7 +3791,7 @@ void enumResultPrint(enum_result_t *result, StdDeck_CardMask pockets[],
          (gp->maxboard > 0) ? "board" : "outcome",
          (result->nsamples == 1 ? "" : "s"));
   if (!StdDeck_CardMask_IS_EMPTY(board))
-    printf(" containing %s", DmaskString(StdDeck, board));
+    printf(" containing %s", enum_mask_string(result->game, board));
   printf("\n");
 
   if (gp->haslopot && gp->hashipot)
@@ -3791,7 +3804,7 @@ void enumResultPrint(enum_result_t *result, StdDeck_CardMask pockets[],
     for (i = 0; i < result->nplayers; i++)
     {
       printf("%*s %7d   %7d %7d %7d   %7d %7d %7d   %5.3f\n",
-             -width, DmaskString(StdDeck, pockets[i]), result->nscoop[i],
+             -width, enum_mask_string(result->game, pockets[i]), result->nscoop[i],
              result->nwinhi[i], result->nlosehi[i], result->ntiehi[i],
              result->nwinlo[i], result->nloselo[i], result->ntielo[i],
              result->ev[i] / result->nsamples);
@@ -3826,7 +3839,7 @@ void enumResultPrint(enum_result_t *result, StdDeck_CardMask pockets[],
       for (i = 0; i < result->nplayers; i++)
       {
         printf("%*s %7d %6.2f   %7d %6.2f   %7d %6.2f     %5.3f\n",
-               -width, DmaskString(StdDeck, pockets[i]),
+               -width, enum_mask_string(result->game, pockets[i]),
                result->nwinlo[i], 100.0 * result->nwinlo[i] / result->nsamples,
                result->nloselo[i], 100.0 * result->nloselo[i] / result->nsamples,
                result->ntielo[i], 100.0 * result->ntielo[i] / result->nsamples,
@@ -3838,7 +3851,7 @@ void enumResultPrint(enum_result_t *result, StdDeck_CardMask pockets[],
       for (i = 0; i < result->nplayers; i++)
       {
         printf("%*s %7d %6.2f   %7d %6.2f   %7d %6.2f     %5.3f\n",
-               -width, DmaskString(StdDeck, pockets[i]),
+               -width, enum_mask_string(result->game, pockets[i]),
                result->nwinhi[i], 100.0 * result->nwinhi[i] / result->nsamples,
                result->nlosehi[i], 100.0 * result->nlosehi[i] / result->nsamples,
                result->ntiehi[i], 100.0 * result->ntiehi[i] / result->nsamples,

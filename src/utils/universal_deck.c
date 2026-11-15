@@ -47,11 +47,33 @@ static const pe_deck_spec_t *pe_universal_spec(deck_type_t type) {
   return (type == UNIVERSAL_DECK_JOKER) ? &joker_spec : &std_spec;
 }
 
+/* Convert a universal mask, whose cards sit at their own id bits, into a
+ * StdDeck_CardMask, whose suits are packed into 13-bit fields.
+ *
+ * The joker is not a standard card and has no StdDeck bit of its own, so it
+ * is carried in the joker slot of the same 64-bit word; the four suit fields
+ * end below it. Universal_ConvertStdToJoker() turns that slot back into the
+ * joker card, which is why a hand written this way can be enumerated and
+ * printed as a joker-deck hand. */
+void Universal_ConvertToStd(UniversalCardMask mask, StdDeck_CardMask *std) {
+  int card;
+
+  StdDeck_CardMask_RESET(*std);
+  for (card = 0; card < StdDeck_N_CARDS; card++)
+    if (mask.cards & ((pe_card_mask_t)1u << card))
+      StdDeck_CardMask_SET(*std, card);
+  if (mask.cards & ((pe_card_mask_t)1u << JokerDeck_JOKER))
+    std->cards_n |= JokerDeck_cardMasksTable[JokerDeck_JOKER].cards_n;
+}
+
 /* Convert StdDeck_CardMask to JokerDeck_CardMask.
- * Joker bit is not set when converting from a standard deck. */
+ * Joker bit is not set when converting from a standard deck, but a joker
+ * carried in the joker slot (see Universal_ConvertToStd) is kept. */
 void Universal_ConvertStdToJoker(StdDeck_CardMask std,
                                  JokerDeck_CardMask *joker) {
   JokerDeck_CardMask_fromStd(*joker, std);
+  if (std.cards_n & JokerDeck_cardMasksTable[JokerDeck_JOKER].cards_n)
+    JokerDeck_CardMask_SET_JOKER(*joker, 1);
 }
 
 /* Convert JokerDeck_CardMask to StdDeck_CardMask.

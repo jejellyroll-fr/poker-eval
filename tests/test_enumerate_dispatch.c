@@ -11,6 +11,7 @@
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/universal_deck.h>
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/core/enumerate.h> /* enumerate_dispatch.h does not exist */
 
@@ -18,6 +19,16 @@
 static void add_card(StdDeck_CardMask *mask, int rank, int suit)
 {
     StdDeck_CardMask_SET(*mask, StdDeck_MAKE_CARD(rank, suit));
+}
+
+/* Helper to add a card by name to a universal mask */
+static void add_universal_card(UniversalCardMask *mask, const char *text)
+{
+    int card;
+    deck_type_t type;
+
+    TEST_ASSERT_TRUE(Universal_StringToCard(text, &card, &type) > 0);
+    Universal_CardMask_SET(mask, card, type);
 }
 
 /* Build dead cards from pockets and board */
@@ -713,6 +724,48 @@ void test_dispatch_a5_triple_draw_uses_eedc(void)
     TEST_ASSERT_EQUAL_INT(enum_dispatch_backend_eedc, enum_dispatch_last_backend());
 }
 
+/*
+ * A 5-card draw hand that contains the joker has to be enumerated with it: five
+ * cards are five cards, so nothing is dealt, and the joker decides the hand.
+ * When the joker was lost in the StdDeck conversion, such a hand looked like
+ * four cards and the enumerator dealt it an extra one from the deck.
+ */
+void test_dispatch_5draw_keeps_the_joker(void)
+{
+    UniversalCardMask jpockets[2];
+    StdDeck_CardMask pockets[2], board, dead;
+    enum_result_t result;
+    int err;
+
+    /* Player 1: Xx As Ad 2c 3h -- the joker with two aces */
+    Universal_CardMask_RESET(&jpockets[0], UNIVERSAL_DECK_JOKER);
+    add_universal_card(&jpockets[0], "Xx");
+    add_universal_card(&jpockets[0], "As");
+    add_universal_card(&jpockets[0], "Ad");
+    add_universal_card(&jpockets[0], "2c");
+    add_universal_card(&jpockets[0], "3h");
+
+    /* Player 2: Kh Kc 7d 8d 4s */
+    Universal_CardMask_RESET(&jpockets[1], UNIVERSAL_DECK_JOKER);
+    add_universal_card(&jpockets[1], "Kh");
+    add_universal_card(&jpockets[1], "Kc");
+    add_universal_card(&jpockets[1], "7d");
+    add_universal_card(&jpockets[1], "8d");
+    add_universal_card(&jpockets[1], "4s");
+
+    Universal_ConvertToStd(jpockets[0], &pockets[0]);
+    Universal_ConvertToStd(jpockets[1], &pockets[1]);
+
+    StdDeck_CardMask_RESET(board);
+    build_dead(&dead, pockets, 2, board);
+
+    err = enumExhaustive_dispatch(game_5draw, pockets, board, dead, 2, 0, 0, &result);
+    TEST_ASSERT_EQUAL_INT(0, err);
+    TEST_ASSERT_EQUAL_INT(1, (int)result.nsamples);
+    TEST_ASSERT_EQUAL_INT(1, result.nwinhi[0]);
+    TEST_ASSERT_EQUAL_INT(0, result.nwinhi[1]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -747,6 +800,7 @@ int main(void)
     RUN_TEST(test_dispatch_results_match_classic);
     RUN_TEST(test_dispatch_omaha_ev_has_no_low_split);
     RUN_TEST(test_dispatch_3player);
+    RUN_TEST(test_dispatch_5draw_keeps_the_joker);
 
     return UNITY_END();
 }

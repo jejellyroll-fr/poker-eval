@@ -118,20 +118,6 @@ first combo of each range is shown in the output table.
 
 #define MAX_RANGE_SPEC 1024
 
-/* A universal mask keeps each card at its own id bit, while a StdDeck_CardMask
- * packs the four suits into separate 13-bit fields: copying the 64 bits (the
- * .std union member) relabels every card, so rebuild the mask card by card. */
-static StdDeck_CardMask rebuild_std_mask(UniversalCardMask mask) {
-  StdDeck_CardMask std;
-  int card;
-
-  StdDeck_CardMask_RESET(std);
-  for (card = 0; card < StdDeck_N_CARDS; card++)
-    if (mask.cards & ((pe_card_mask_t)1u << card))
-      StdDeck_CardMask_SET(std, card);
-  return std;
-}
-
 /* Fusion-specific helper functions */
 static int fusion_get_expected_pocket_cards(int nboard) {
     switch (nboard) {
@@ -580,18 +566,17 @@ main(int argc, char **argv) {
       StdDeck_CardMask *rangeHands[ENUM_MAXPLAYERS] = {0};
       double *rangeWeights[ENUM_MAXPLAYERS] = {0};
       int anyRange = 0;
-      /* Joker masks keep their own layout and are handed over unchanged. */
-      int jokerDeck = deckType == UNIVERSAL_DECK_JOKER;
       for (int i = 0; i < npockets; ++i) {
-        spockets[i] = jokerDeck ? pockets[i].std : rebuild_std_mask(pockets[i]);
+        /* Copying the 64 bits relabels every card; the joker keeps its slot. */
+        Universal_ConvertToStd(pockets[i], &spockets[i]);
         parsedRanges[i] = NULL;
         rangeHands[i] = NULL;
         rangeWeights[i] = NULL;
         if (rangeSpecs[i][0] != '\0')
           anyRange = 1;
       }
-      sboard = jokerDeck ? board.std : rebuild_std_mask(board);
-      sdead = jokerDeck ? dead.std : rebuild_std_mask(dead);
+      Universal_ConvertToStd(board, &sboard);
+      Universal_ConvertToStd(dead, &sdead);
       if (anyRange) {
         if (deckType == UNIVERSAL_DECK_JOKER) {
           if (fromStdin)
@@ -707,11 +692,9 @@ main(int argc, char **argv) {
         StdDeck_CardMask spockets_print[ENUM_MAXPLAYERS], sboard_print;
         for (int i = 0; i < npockets; ++i) {
           if (rangeSpecs[i][0] != '\0') spockets_print[i] = spockets[i];
-          else if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(pockets[i].joker, &spockets_print[i]);
-          else spockets_print[i] = rebuild_std_mask(pockets[i]);
+          else Universal_ConvertToStd(pockets[i], &spockets_print[i]);
         }
-        if (deckType == UNIVERSAL_DECK_JOKER) Universal_ConvertJokerToStd(board.joker, &sboard_print);
-        else sboard_print = rebuild_std_mask(board);
+        Universal_ConvertToStd(board, &sboard_print);
 
         /* CalculateEquityForRanges keeps ev normalized (0..1), while the
          * legacy printers divide ev and the win/tie/lose counters by
