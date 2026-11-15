@@ -36,6 +36,7 @@
 #endif
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #pragma GCC diagnostic push
@@ -358,6 +359,54 @@ static inline LowHandVal py_eval_low8_joker_qualified(JokerDeck_CardMask cards)
     err = 0;                                                   \
   })
 
+/* The game names the bindings accept.  This is the only list: the lookup below
+ * and the "not a valid value" message both come from it, so adding a game is a
+ * one-line change instead of one per entry point. */
+static const struct
+{
+  const char *name;
+  enum_game_t game;
+} py_game_names[] = {
+    {"holdem", game_holdem},       {"holdem8", game_holdem8},
+    {"omaha", game_omaha},         {"omaha8", game_omaha8},
+    {"7stud", game_7stud},         {"7stud8", game_7stud8},
+    {"7studnsq", game_7studnsq},   {"razz", game_razz},
+    {"5draw", game_5draw},         {"5draw8", game_5draw8},
+    {"5drawnsq", game_5drawnsq},   {"lowball", game_lowball},
+    {"lowball27", game_lowball27}, {"fusion", game_fusion},
+};
+
+/* Parameters of a named game, or NULL when the name is unknown. */
+static enum_gameparams_t *py_game_params(const char *name)
+{
+  size_t i;
+
+  for (i = 0; i < sizeof(py_game_names) / sizeof(py_game_names[0]); ++i)
+    if (strcmp(name, py_game_names[i].name) == 0)
+      return enumGameParams(py_game_names[i].game);
+  return NULL;
+}
+
+/* Reports an unknown game name, listing every name that is accepted. */
+static void py_set_invalid_game_error(const char *name)
+{
+  char accepted[256];
+  size_t used = 0;
+  size_t i;
+
+  accepted[0] = '\0';
+  for (i = 0; i < sizeof(py_game_names) / sizeof(py_game_names[0]); ++i)
+  {
+    int written = snprintf(accepted + used, sizeof(accepted) - used, "%s%s",
+                           i == 0 ? "" : ", ", py_game_names[i].name);
+    if (written < 0 || (size_t)written >= sizeof(accepted) - used)
+      break;
+    used += (size_t)written;
+  }
+  PyErr_Format(PyExc_RuntimeError, "game %s is not a valid value (%s)", name,
+               accepted);
+}
+
 static int
 pyenumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
                  int numToDeal[],
@@ -371,6 +420,12 @@ pyenumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
   memset(cardsDealt, 0, sizeof(StdDeck_CardMask) * (ENUM_MAXPLAYERS + 1));
   if (sizeToDeal - 1 > ENUM_MAXPLAYERS)
     return 1;
+  /* Fusion deals the board *and* each player's future hole cards, a plan the
+     fixed numToDeal split cannot express, so the enumerator that owns those
+     rules deals this one. */
+  if (game == game_fusion)
+    return enumExhaustive(game, pockets, board, dead, sizeToDeal - 1,
+                          StdDeck_numCards(board), 0, result);
   for (i = 0; i < sizeToDeal; i++)
     totalToDeal += numToDeal[i];
 
@@ -508,6 +563,10 @@ pyenumSample(enum_game_t game, StdDeck_CardMask pockets[],
   memset(cardsDealt, 0, sizeof(StdDeck_CardMask) * (ENUM_MAXPLAYERS + 1));
   if (sizeToDeal - 1 > ENUM_MAXPLAYERS)
     return 1;
+  /* See pyenumExhaustive: Fusion owns its own dealing plan. */
+  if (game == game_fusion)
+    return enumSample(game, pockets, board, dead, sizeToDeal - 1,
+                      StdDeck_numCards(board), iterations, 0, result);
 
   /*
    * Cards in pockets or in the board must not be dealt
@@ -1181,65 +1240,10 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
                                    &game, &pypockets, &pyboard, &pydead, &fill_pockets, &iterations))
     return NULL;
 
-  if (!strcmp(game, "holdem"))
-  {
-    params = enumGameParams(game_holdem);
-  }
-  else if (!strcmp(game, "holdem8"))
-  {
-    params = enumGameParams(game_holdem8);
-  }
-  else if (!strcmp(game, "omaha"))
-  {
-    params = enumGameParams(game_omaha);
-  }
-  else if (!strcmp(game, "omaha8"))
-  {
-    params = enumGameParams(game_omaha8);
-  }
-  else if (!strcmp(game, "7stud"))
-  {
-    params = enumGameParams(game_7stud);
-  }
-  else if (!strcmp(game, "7stud8"))
-  {
-    params = enumGameParams(game_7stud8);
-  }
-  else if (!strcmp(game, "7studnsq"))
-  {
-    params = enumGameParams(game_7studnsq);
-  }
-  else if (!strcmp(game, "razz"))
-  {
-    params = enumGameParams(game_razz);
-  }
-  else if (!strcmp(game, "5draw"))
-  {
-    params = enumGameParams(game_5draw);
-  }
-  else if (!strcmp(game, "5draw8"))
-  {
-    params = enumGameParams(game_5draw8);
-  }
-  else if (!strcmp(game, "5drawnsq"))
-  {
-    params = enumGameParams(game_5drawnsq);
-  }
-  else if (!strcmp(game, "lowball"))
-  {
-    params = enumGameParams(game_lowball);
-  }
-  else if (!strcmp(game, "lowball27"))
-  {
-    params = enumGameParams(game_lowball27);
-  }
-  else if (!strcmp(game, "fusion"))
-  {
-    params = enumGameParams(game_fusion);
-  }
+  params = py_game_params(game);
   if (params == 0)
   {
-    PyErr_Format(PyExc_RuntimeError, "game %s is not a valid value (holdem, holdem8, omaha, omaha8, 7stud, 7stud8, 7studnsq, razz, 5draw, 5draw8, 5drawnsq, lowball, lowball27, fusion)", game);
+    py_set_invalid_game_error(game);
     goto err;
   }
 
@@ -1296,22 +1300,7 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
     int err;
     memset(&cresult, '\0', sizeof(enum_result_t));
 
-    if (params->game == game_fusion)
-    {
-      /* Fusion deals the board and the players' future hole cards, which is a
-         per-board plan the fixed numToDeal cards above cannot express, so it
-         goes through the enumerator that owns those rules. */
-      int nboard_cards = StdDeck_numCards(board_cards);
-      if (iterations > 0)
-      {
-        err = enumSample(game_fusion, pockets, board_cards, dead_cards, pockets_size, nboard_cards, iterations, 0, &cresult);
-      }
-      else
-      {
-        err = enumExhaustive(game_fusion, pockets, board_cards, dead_cards, pockets_size, nboard_cards, 0, &cresult);
-      }
-    }
-    else if (iterations > 0)
+    if (iterations > 0)
     {
       err = pyenumSample(params->game, pockets, numToDeal, board_cards, dead_cards, pockets_size + 1, iterations, &cresult);
     }
@@ -1658,7 +1647,9 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   enum_result_t aggregated_results;
   bool agg_results_allocated = false;
 
-  if (!PyArg_ParseTuple(args, "sOOOiib|i",
+  /* One specifier per argument: the dead cards are an optional object, not a
+     bool, and the integer arguments start right after the board. */
+  if (!PyArg_ParseTuple(args, "sOOiii|Oi",
                         &game_name_str,
                         &py_list_of_player_ranges,
                         &py_board_list,
@@ -1674,75 +1665,13 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   enum_game_t game;
   enum_gameparams_t *params = NULL;
 
-  // Convert game name to enum
-  if (!strcmp(game_name_str, "holdem"))
-  {
-    game = game_holdem;
-  }
-  else if (!strcmp(game_name_str, "holdem8"))
-  {
-    game = game_holdem8;
-  }
-  else if (!strcmp(game_name_str, "omaha"))
-  {
-    game = game_omaha;
-  }
-  else if (!strcmp(game_name_str, "omaha8"))
-  {
-    game = game_omaha8;
-  }
-  else if (!strcmp(game_name_str, "7stud"))
-  {
-    game = game_7stud;
-  }
-  else if (!strcmp(game_name_str, "7stud8"))
-  {
-    game = game_7stud8;
-  }
-  else if (!strcmp(game_name_str, "7studnsq"))
-  {
-    game = game_7studnsq;
-  }
-  else if (!strcmp(game_name_str, "razz"))
-  {
-    game = game_razz;
-  }
-  else if (!strcmp(game_name_str, "5draw"))
-  {
-    game = game_5draw;
-  }
-  else if (!strcmp(game_name_str, "5draw8"))
-  {
-    game = game_5draw8;
-  }
-  else if (!strcmp(game_name_str, "5drawnsq"))
-  {
-    game = game_5drawnsq;
-  }
-  else if (!strcmp(game_name_str, "lowball"))
-  {
-    game = game_lowball;
-  }
-  else if (!strcmp(game_name_str, "lowball27"))
-  {
-    game = game_lowball27;
-  }
-  else if (!strcmp(game_name_str, "fusion"))
-  {
-    game = game_fusion;
-  }
-  else
+  params = py_game_params(game_name_str);
+  if (params == NULL)
   {
     PyErr_Format(PyExc_ValueError, "Invalid game name: %s", game_name_str);
     return NULL;
   }
-
-  params = enumGameParams(game);
-  if (params == NULL)
-  {
-    PyErr_Format(PyExc_ValueError, "Failed to get game parameters for: %s", game_name_str);
-    return NULL;
-  }
+  game = params->game;
   bool use_montecarlo = (use_montecarlo_int != 0);
 
   if (!PyList_Check(py_list_of_player_ranges))
@@ -2025,7 +1954,10 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
   int orderflag = 0;
   int total_matchups;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sOO|OOiii", (char **)(void *)kwlist,
+  /* One format specifier per kwlist entry: without the trailing "i" for
+     orderflag every call fails with "More keyword list entries than format
+     specifiers". */
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sOO|OOiiii", (char **)(void *)kwlist,
                                    &game_name_str,
                                    &py_list_of_player_ranges,
                                    &py_invested_list,
@@ -2064,50 +1996,15 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
 
   enum_game_t game;
   enum_gameparams_t *params = NULL;
-  if (!strcmp(game_name_str, "holdem"))
-    game = game_holdem;
-  else if (!strcmp(game_name_str, "holdem8"))
-    game = game_holdem8;
-  else if (!strcmp(game_name_str, "omaha"))
-    game = game_omaha;
-  else if (!strcmp(game_name_str, "omaha8"))
-    game = game_omaha8;
-  else if (!strcmp(game_name_str, "7stud"))
-    game = game_7stud;
-  else if (!strcmp(game_name_str, "7stud8"))
-    game = game_7stud8;
-  else if (!strcmp(game_name_str, "7studnsq"))
-    game = game_7studnsq;
-  else if (!strcmp(game_name_str, "razz"))
-    game = game_razz;
-  else if (!strcmp(game_name_str, "5draw"))
-    game = game_5draw;
-  else if (!strcmp(game_name_str, "5draw8"))
-    game = game_5draw8;
-  else if (!strcmp(game_name_str, "5drawnsq"))
-    game = game_5drawnsq;
-  else if (!strcmp(game_name_str, "lowball"))
-    game = game_lowball;
-  else if (!strcmp(game_name_str, "lowball27"))
-    game = game_lowball27;
-  else if (!strcmp(game_name_str, "fusion"))
-    game = game_fusion;
-  else
+  params = py_game_params(game_name_str);
+  if (params == NULL)
   {
     if (owned_board_list)
       Py_DECREF(owned_board_list);
     PyErr_Format(PyExc_ValueError, "Invalid game name: %s", game_name_str);
     return NULL;
   }
-
-  params = enumGameParams(game);
-  if (!params)
-  {
-    if (owned_board_list)
-      Py_DECREF(owned_board_list);
-    PyErr_Format(PyExc_ValueError, "Failed to get game parameters for: %s", game_name_str);
-    return NULL;
-  }
+  game = params->game;
 
   int num_players = (int)PyList_Size(py_list_of_player_ranges);
   if (num_players <= 0 || num_players > ENUM_MAXPLAYERS)
