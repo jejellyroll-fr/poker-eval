@@ -49,3 +49,7 @@ BUILD_TESTS = false
 # Homebrew's, built for macOS 15, which delocate rightly refuses to ship in a
 # wheel targeting macOS 11 / 10.9. The Linux image never had it either.
 ENABLE_ZSTD = false
+# A wheel runs on any CPU of its platform tag, not on the runner that built it:
+# -march=native would let the compiler emit e.g. AVX-512 from the CI host and
+# crash with an illegal instruction elsewhere. SIMD paths dispatch at runtime.
+ENABLE_NATIVE_ARCH = false

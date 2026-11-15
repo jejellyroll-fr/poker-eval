@@ -25,10 +25,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Distributed binaries must not be tuned to the runner's CPU
+          # (-march=native); SIMD paths dispatch at runtime.
           - name: Linux x86_64
             os: ubuntu-latest
             asset_suffix: linux-x86_64.tar.gz
-            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=ON"
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=ON -DENABLE_NATIVE_ARCH=OFF"
           - name: macOS ARM64
             os: macos-15
             asset_suffix: macos-arm64.tar.gz
@@ -109,7 +111,8 @@ jobs:
             -DBUILD_TESTS=OFF \
             -DBUILD_C_API=ON \
             -DBUILD_STATIC_LIBS=ON \
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON \
+            -DENABLE_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build build --parallel
