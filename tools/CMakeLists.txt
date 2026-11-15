@@ -79,7 +79,9 @@ target_link_libraries(pe-preflop-tree PRIVATE poker_eval_modular m)
 
 add_executable(pe-preflop-solve pe_preflop_solve.c)
 target_include_directories(pe-preflop-solve PRIVATE ${TOOLS_COMMON_INCLUDES})
-target_link_libraries(pe-preflop-solve PRIVATE poker_eval_modular m)
+# It starts its own stop-watcher thread. glibc and macOS keep pthread_create in
+# libc, but FreeBSD's is in libthr, so the link fails there without this.
+target_link_libraries(pe-preflop-solve PRIVATE poker_eval_modular Threads::Threads m)
 
 set(PE_SDL2_ROOT "" CACHE PATH
     "SDL2 installation root used by the portable desktop GUI")

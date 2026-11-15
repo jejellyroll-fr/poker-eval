@@ -1,0 +1,57 @@
+name: Release Build Check
+
+# Replays, on every pull request, the release builds that the regular CI does
+# not cover, without publishing anything. v1.3.0 shipped without its Linux and
+# macOS wheels and its FreeBSD package because each broke only here: GCC 10's
+# -Wconversion in the manylinux image, delocate refusing a Homebrew libzstd
+# built for macOS 15, and FreeBSD keeping pthread_create out of libc.
+#
+# The steps mirror release.yml; keep the two in step when either changes.
+# Wheels are built for one Python version only: the failures above depend on
+# the platform, not on the interpreter.
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+concurrency:
+  group: release-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: Wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build wheel via cibuildwheel
+        uses: pypa/cibuildwheel@fa04202e88ea28b84d5d4d20696ee8dfc0119436 # v2.23.0
+        env:
+          CIBW_BUILD: "cp311-*"
+          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_*"
+
+  freebsd:
+    name: Build (FreeBSD x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build in FreeBSD VM
+        uses: vmactions/freebsd-vm@f0552d3b69211736abd97f02ff3d4674c56b73b1 # v1
+        with:
+          usesh: true
+          prepare: pkg install -y cmake gmake
+          run: |
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            cmake --build build

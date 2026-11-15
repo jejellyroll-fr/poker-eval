@@ -95,8 +95,12 @@ int pe_pot_slices_build(const pe_betting_state_t *state,
             amount += dead_money;
         for (player = 0u; player < state->player_count; ++player)
         {
-            if (state->invested[player] + 1e-9 >= levels[index])
-                eligible |= state->active[player] ? (uint8_t)(1u << player) : 0u;
+            /* Cast the whole result: `x |= c ? (uint8_t)b : 0u` is computed
+             * in unsigned int, and GCC 10's -Wconversion rejects narrowing
+             * it back into eligible. */
+            if (state->invested[player] + 1e-9 >= levels[index] &&
+                state->active[player])
+                eligible = (uint8_t)(eligible | (1u << player));
         }
         /* Contributions below this level do not pay into this slice. */
         {
