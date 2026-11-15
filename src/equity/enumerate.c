@@ -842,6 +842,28 @@ static LowHandVal high_value_as_low(HandVal value)
   return (LowHandVal)((LowHandVal_NOTHING - 1u) - (uint32_t)value);
 }
 
+/* Cards to deal to complete each Drawmaha pocket to five cards, then the
+   board to five, in numToDeal[0..npockets].  Returns 1 when some pocket
+   misses a card, 0 when every pocket is complete, -1 on an oversized hand. */
+static int drawmaha_deal_plan(StdDeck_CardMask pockets[], int npockets,
+                              int nboard, int numToDeal[])
+{
+  int missing = 0;
+
+  if (nboard < 0 || nboard > 5)
+    return -1;
+  for (int p = 0; p < npockets; ++p)
+  {
+    numToDeal[p] = 5 - StdDeck_numCards(pockets[p]);
+    if (numToDeal[p] < 0)
+      return -1;
+    if (numToDeal[p] > 0)
+      missing = 1;
+  }
+  numToDeal[npockets] = 5 - nboard;
+  return missing;
+}
+
 static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t variant)
 {
   if (variant == game_drawmaha_dugi)
@@ -867,12 +889,12 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
                       ((unsigned int)StdDeck_StdRules_EVAL_N(hand, 5) & 0xFFFFU));
 }
 
-#define INNER_LOOP_DRAWMAHA                                             \
-  INNER_LOOP({                                                          \
-    StdDeck_CardMask _finalBoard;                                       \
-    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);               \
-    int nboard = StdDeck_numCards(_finalBoard);                         \
-    if (nboard < 3)                                                     \
+/* Evaluates one Drawmaha hand: the Omaha hand on the high side, the
+   five-card hand on the low side. */
+#define DRAWMAHA_EVAL(_pocket, _finalBoard)                             \
+  do                                                                    \
+  {                                                                     \
+    if (StdDeck_numCards(_finalBoard) < 3)                              \
     {                                                                   \
       /* Not enough board cards for Drawmaha evaluation */              \
       hival[i] = HandVal_NOTHING;                                       \
@@ -881,15 +903,33 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     }                                                                   \
     else                                                                \
     {                                                                   \
-      err = StdDeck_DrawmahaRules_EVAL_OPTIMAL(pockets[i], _finalBoard, \
+      err = StdDeck_DrawmahaRules_EVAL_OPTIMAL(_pocket, _finalBoard,    \
                                                &hival[i], &loval[i]);   \
       /* The second half plays the five-card hand: the best draw hand  \
          for Drawmaha, reversed so the low side can award it. */        \
       if (err == 0 && game == game_drawmaha)                            \
-        loval[i] = high_value_as_low(StdDeck_StdRules_EVAL_N(pockets[i], 5)); \
+        loval[i] = high_value_as_low(StdDeck_StdRules_EVAL_N(_pocket, 5)); \
       else if (err == 0)                                                \
-        loval[i] = drawmaha_variant_low(pockets[i], game);              \
+        loval[i] = drawmaha_variant_low(_pocket, game);                 \
     }                                                                   \
+  } while (0)
+
+#define INNER_LOOP_DRAWMAHA                                             \
+  INNER_LOOP({                                                          \
+    StdDeck_CardMask _finalBoard;                                       \
+    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);               \
+    DRAWMAHA_EVAL(pockets[i], _finalBoard);                             \
+  })
+
+/* Drawmaha with pockets still to complete: unsharedCards[i] completes
+   pocket i and unsharedCards[npockets] completes the board. */
+#define INNER_LOOP_DRAWMAHA_DEALT                                       \
+  INNER_LOOP({                                                          \
+    StdDeck_CardMask _pocket;                                           \
+    StdDeck_CardMask _finalBoard;                                       \
+    StdDeck_CardMask_OR(_pocket, pockets[i], unsharedCards[i]);         \
+    StdDeck_CardMask_OR(_finalBoard, board, unsharedCards[npockets]);   \
+    DRAWMAHA_EVAL(_pocket, _finalBoard);                                \
   })
 
 #define INNER_LOOP_7STUD                                      \
@@ -2575,7 +2615,21 @@ static int enumExhaustive_with_override(
            game == game_drawmaha_zero || game == game_drawmaha_dugi)
   {
     StdDeck_CardMask sharedCards;
-    if (nboard == 0)
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS + 1];
+    int numToDeal[ENUM_MAXPLAYERS + 1];
+    int plan = drawmaha_deal_plan(pockets, npockets, nboard, numToDeal);
+    if (plan < 0)
+    {
+      return 1;
+    }
+    else if (plan > 0)
+    {
+      /* Some pocket is incomplete: deal the pockets and the board together. */
+      ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets + 1, numToDeal,
+                                             effective_dead, unsharedCards,
+                                             INNER_LOOP_DRAWMAHA_DEALT);
+    }
+    else if (nboard == 0)
     {
       ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(5, effective_dead, sharedCards, INNER_LOOP_DRAWMAHA);
     }
@@ -3158,8 +3212,22 @@ static int enumSample_with_override(
            game == game_drawmaha_zero || game == game_drawmaha_dugi)
   {
     StdDeck_CardMask sharedCards;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS + 1];
+    int numToDeal[ENUM_MAXPLAYERS + 1];
+    int plan = drawmaha_deal_plan(pockets, npockets, nboard, numToDeal);
     numCards = 5 - nboard;
-    if (numCards > 0)
+    if (plan < 0)
+    {
+      return 1;
+    }
+    else if (plan > 0)
+    {
+      /* Some pocket is incomplete: deal the pockets and the board together. */
+      DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets + 1,
+                                     numToDeal, effective_dead, niter,
+                                     INNER_LOOP_DRAWMAHA_DEALT);
+    }
+    else if (numCards > 0)
     {
       DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_DRAWMAHA);

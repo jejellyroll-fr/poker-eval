@@ -164,6 +164,29 @@ class TestOtherDrawGames(unittest.TestCase):
         # Low-Dugi: T-9-7-3 badugi beats K-Q-2-A.
         self.assertEqual(self.showdown("drawmaha_dugi", pockets, board), {"hi": [0], "low": [1]})
 
+    def test_drawmaha_incomplete_pocket(self):
+        # One card to come in the first pocket: 14 cards known, 38 left.
+        pockets = [["As", "Ah", "Kd", "Qc", "__"], ["7s", "8s", "9d", "Tc", "3h"]]
+        river = ["Ad", "Ac", "5s", "6d", "Jc"]
+        for game in ("drawmaha", "drawmaha49", "drawmaha_zero", "drawmaha_dugi"):
+            with self.subTest(game=game):
+                result = self.pe.poker_eval(game=game, pockets=pockets, board=river)
+                self.assertEqual(result["info"][0], 38)
+                # Quad aces take the Omaha half whatever comes.
+                self.assertEqual(result["eval"][0]["winhi"], 38)
+                # Pocket and board cards are dealt together: 40 cards left
+                # after the flop, one to the pocket, then two to the board.
+                flop = self.pe.poker_eval(game=game, pockets=pockets, board=river[:3] + ["__", "__"])
+                self.assertEqual(flop["info"][0], 40 * 39 * 38 // 2)
+                sampled = self.pe.poker_eval(game=game, pockets=pockets, board=river,
+                                             iterations=200, seed=303)
+                self.assertEqual(sampled["info"][0], 200)
+        # Drawmaha 49: A-A-K-Q is 27 points, so any card up to a nine keeps
+        # the first hand under the second's 37.  No ace is left: the 26 cards
+        # from two to nine not already dealt win the low side.
+        result = self.pe.poker_eval(game="drawmaha49", pockets=pockets, board=river)
+        self.assertEqual(result["eval"][0]["winlo"], 26)
+
     def test_triple_draw_never_redeals_pocket_cards(self):
         pockets = [["2s", "3d", "4c", "5h", "__"], ["7s", "8d", "9c", "Th", "Jh"]]
         for game in ("27_triple_draw", "a5_triple_draw", "archie"):
