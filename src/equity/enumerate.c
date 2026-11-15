@@ -1620,10 +1620,13 @@ static int fusion_prepare(StdDeck_CardMask pockets[], StdDeck_CardMask board,
   return 0;
 }
 
-/* niter > 0 samples, niter == 0 enumerates every deal. */
+/* sample != 0 draws niter trials (none when niter <= 0, as for every other
+ * game); sample == 0 enumerates every deal and ignores niter. The mode is its
+ * own argument so a zero or negative sampling budget can never fall into the
+ * exhaustive walk, which preflop is far too large to finish. */
 static int enum_fusion(StdDeck_CardMask pockets[], StdDeck_CardMask board,
                        StdDeck_CardMask dead, int npockets, int nboard,
-                       int niter, enum_result_t *result)
+                       int sample, int niter, enum_result_t *result)
 {
   fusion_deal_t deal;
   StdDeck_CardMask avail;
@@ -1632,7 +1635,7 @@ static int enum_fusion(StdDeck_CardMask pockets[], StdDeck_CardMask board,
 
   if (err != 0)
     return err;
-  if (niter > 0)
+  if (sample)
     return fusion_sample(&deal, dead, niter);
   StdDeck_CardMask_NOT(avail, dead);
   return fusion_deal_group(&deal, 0, avail);
@@ -2323,7 +2326,7 @@ static int enumExhaustive_with_override(
     /* Deal the missing board cards and future hole cards, then evaluate the
        showdown with Omaha Hi rules. */
     int fusion_err = enum_fusion(pockets, board, effective_dead, npockets,
-                                 nboard, 0, result);
+                                 nboard, 0, 0, result);
     if (fusion_err != 0)
       return fusion_err;
   }
@@ -3232,7 +3235,7 @@ static int enumSample_with_override(
     /* Sample the missing board cards and future hole cards, then evaluate the
        showdown with Omaha Hi rules. */
     int fusion_err = enum_fusion(pockets, board, effective_dead, npockets,
-                                 nboard, niter, result);
+                                 nboard, 1, niter, result);
     if (fusion_err != 0)
       return fusion_err;
   }

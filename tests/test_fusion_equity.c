@@ -276,6 +276,34 @@ static void test_preflop_sampling_deals_future_hole_cards(void)
   enumResultFree(&second);
 }
 
+/* 5. A sampling budget of zero or less draws no trials, as it does for every
+ * other game. It must not be read as a request for exhaustive enumeration:
+ * preflop that would walk the whole deal space and effectively hang. */
+static void test_nonpositive_sample_budget_draws_nothing(void)
+{
+  StdDeck_CardMask pockets[2], board, dead;
+  const int budgets[] = {0, -1};
+  size_t b;
+
+  pockets[0] = mask_of("AsAd");
+  pockets[1] = mask_of("KhKc");
+  StdDeck_CardMask_RESET(board);
+  StdDeck_CardMask_RESET(dead);
+
+  for (b = 0; b < sizeof(budgets) / sizeof(budgets[0]); ++b)
+  {
+    enum_result_t result;
+
+    memset(&result, 0, sizeof(result));
+    CHECK(enumSample(game_fusion, pockets, board, dead, 2, 0, budgets[b], 0,
+                     &result) == 0,
+          "preflop fusion sampling with niter=%d failed", budgets[b]);
+    CHECK(result.nsamples == 0, "niter=%d drew %u trials", budgets[b],
+          result.nsamples);
+    enumResultFree(&result);
+  }
+}
+
 int main(void)
 {
   test_river_matches_omaha();
@@ -284,6 +312,7 @@ int main(void)
   test_flop_all_in_deals_future_hole_cards();
   test_stage_card_count_is_enforced();
   test_preflop_sampling_deals_future_hole_cards();
+  test_nonpositive_sample_budget_draws_nothing();
 
   if (failures != 0)
   {
