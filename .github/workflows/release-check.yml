@@ -55,5 +55,5 @@ jobs:
           usesh: true
           prepare: pkg install -y cmake gmake
           run: |
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DENABLE_NATIVE_ARCH=OFF
             cmake --build build
