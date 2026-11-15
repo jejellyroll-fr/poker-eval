@@ -266,7 +266,7 @@ static void test_preflop_sampling_deals_future_hole_cards(void)
         first.nsamples, iterations);
   CHECK(fabs(equity_of(&first, 0) + equity_of(&first, 1) - 1.0) < 1e-9,
         "equities sum to %f", equity_of(&first, 0) + equity_of(&first, 1));
-  CHECK(equity_of(&first, 0) > 0.52, "aces should lead kings preflop, got %f",
+  CHECK(equity_of(&first, 0) > 0.60, "aces should lead kings preflop, got %f",
         equity_of(&first, 0));
   CHECK(fabs(equity_of(&first, 0) - equity_of(&second, 0)) < 0.02,
         "two runs differ: %f vs %f", equity_of(&first, 0),

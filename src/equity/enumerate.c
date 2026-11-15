@@ -1395,14 +1395,14 @@ static int chinese13_evaluate_rows(StdDeck_CardMask hand, chinese13_rows_t *out)
  * player, which is far too large to finish; those spots want enumSample().
  * ------------------------------------------------------------------------- */
 
-/* Hole cards a Fusion player holds at showdown.  A trial always completes
- * every player to this count: a flop all-in still has to deal the turn card. */
-#define FUSION_SHOWDOWN_HOLE_CARDS 4
+/* Hole cards a Fusion player holds at showdown.  Every trial completes each
+ * player to this count, so a flop all-in still receives its turn card. */
+#define FUSION_HOLE_CARDS 4
 
-/* Hole cards a Fusion player holds once the board shows `nboard` cards, which
- * is also the most a caller can know at that point.  Returns -1 for board sizes
- * Fusion never has (1, 2, or more than 5). */
-static int fusion_hole_cards_for_board(int nboard)
+/* Hole cards a player can already hold once the board shows `nboard` cards: two
+ * preflop, three on the flop, four from the turn on.  Anything more is not a
+ * Fusion state.  Returns -1 for board sizes Fusion never has. */
+static int fusion_stage_hole_cards(int nboard)
 {
   switch (nboard)
   {
@@ -1418,9 +1418,6 @@ static int fusion_hole_cards_for_board(int nboard)
   }
 }
 
-/* One completed Fusion showdown.  The local `pockets`, `board`, `npockets` and
- * `result` names are what INNER_LOOP reads, so the equity accounting is the
- * same code every other game uses. */
 #define INNER_LOOP_FUSION                                                   \
   INNER_LOOP({                                                              \
     StdDeck_CardMask _finalBoard;                                           \
@@ -1434,13 +1431,16 @@ typedef struct
   enum_result_t *result;
   int npockets;
   StdDeck_CardMask board;
-  int board_need;
-  int hole_need[ENUM_MAXPLAYERS];
+  int board_need;                               /* board cards still to deal */
+  int hole_need[ENUM_MAXPLAYERS];               /* hole cards still to deal */
   StdDeck_CardMask pockets[ENUM_MAXPLAYERS];    /* cards the caller supplied */
   StdDeck_CardMask extra_board;                 /* board cards dealt per trial */
   StdDeck_CardMask extra_hole[ENUM_MAXPLAYERS]; /* hole cards dealt per trial */
 } fusion_deal_t;
 
+/* One completed Fusion showdown.  INNER_LOOP reads `pockets`, `board`,
+ * `npockets` and `result` from its own scope, so they are named here exactly as
+ * every other game names them and the equity accounting stays shared. */
 static int fusion_eval_trial(const fusion_deal_t *deal)
 {
   enum_result_t *result = deal->result;
@@ -1460,10 +1460,10 @@ static int fusion_eval_trial(const fusion_deal_t *deal)
 static int fusion_deal_group(fusion_deal_t *deal, int group,
                              StdDeck_CardMask avail);
 
-/* Places `need` of the cards still available into the group being dealt,
- * keeping the picks in increasing order so each set is visited exactly once,
- * then continues with the next group.  Removing the picks from `avail` is what
- * guarantees no card is dealt to two places. */
+/* Chooses `need` of the cards in `avail` for the group being dealt, keeping the
+ * picks in increasing order so each set is visited exactly once, and hands what
+ * is left to the next group.  Each pick leaves `avail`, which is what keeps a
+ * card from being dealt to two places. */
 static int fusion_pick_cards(fusion_deal_t *deal, int group,
                              StdDeck_CardMask avail, StdDeck_CardMask chosen,
                              int need, int first)
@@ -1472,19 +1472,16 @@ static int fusion_pick_cards(fusion_deal_t *deal, int group,
 
   if (need == 0)
   {
-    StdDeck_CardMask not_chosen, remaining;
-    StdDeck_CardMask_NOT(not_chosen, chosen);
-    StdDeck_CardMask_AND(remaining, avail, not_chosen);
     if (group == 0)
       deal->extra_board = chosen;
     else
       deal->extra_hole[group - 1] = chosen;
-    return fusion_deal_group(deal, group + 1, remaining);
+    return fusion_deal_group(deal, group + 1, avail);
   }
 
   for (card = first; card < StdDeck_N_CARDS; ++card)
   {
-    StdDeck_CardMask next;
+    StdDeck_CardMask next, rest;
     int err;
 
     if (!StdDeck_CardMask_CARD_IS_SET(avail, card))
@@ -1492,39 +1489,41 @@ static int fusion_pick_cards(fusion_deal_t *deal, int group,
     StdDeck_CardMask_RESET(next);
     StdDeck_CardMask_SET(next, card);
     StdDeck_CardMask_OR(next, next, chosen);
-    err = fusion_pick_cards(deal, group, avail, next, need - 1, card + 1);
+    rest = avail;
+    StdDeck_CardMask_UNSET(rest, card);
+    err = fusion_pick_cards(deal, group, rest, next, need - 1, card + 1);
     if (err != 0)
       return err;
   }
   return 0;
 }
 
-/* Group 0 is the remaining board, group p+1 is player p's future hole cards. */
+/* Group 0 completes the board, group p+1 completes player p's hole cards.  A
+ * group with nothing to deal is cleared and skipped, and the group past the
+ * last player evaluates one showdown. */
 static int fusion_deal_group(fusion_deal_t *deal, int group,
                              StdDeck_CardMask avail)
 {
   StdDeck_CardMask none;
   int need;
-  int player;
 
   if (group == 0)
+  {
     need = deal->board_need;
+    if (need == 0)
+      StdDeck_CardMask_RESET(deal->extra_board);
+  }
   else
   {
-    player = group - 1;
+    int player = group - 1;
     if (player >= deal->npockets)
       return fusion_eval_trial(deal);
     need = deal->hole_need[player];
-  }
-
-  if (need == 0)
-  {
-    if (group == 0)
-      StdDeck_CardMask_RESET(deal->extra_board);
-    else
+    if (need == 0)
       StdDeck_CardMask_RESET(deal->extra_hole[player]);
-    return fusion_deal_group(deal, group + 1, avail);
   }
+  if (need == 0)
+    return fusion_deal_group(deal, group + 1, avail);
 
   StdDeck_CardMask_RESET(none);
   return fusion_pick_cards(deal, group, avail, none, need, 0);
@@ -1584,18 +1583,18 @@ static int fusion_sample(fusion_deal_t *deal, StdDeck_CardMask dead, int niter)
 }
 
 /* Validates a Fusion request and records what each trial still has to deal.
- * A player may supply fewer hole cards than the board implies (those get
- * dealt) but never more than the stage allows, and every player is completed
- * to four hole cards because that is what the showdown is evaluated from. */
+ * A player may supply fewer hole cards than the stage dealt him (those are
+ * dealt) but never more, and every player is completed to FUSION_HOLE_CARDS
+ * because that is what the showdown is evaluated from. */
 static int fusion_prepare(StdDeck_CardMask pockets[], StdDeck_CardMask board,
                           StdDeck_CardMask dead, int npockets, int nboard,
                           enum_result_t *result, fusion_deal_t *deal)
 {
-  int required = fusion_hole_cards_for_board(nboard);
+  int stage_max = fusion_stage_hole_cards(nboard);
   int total;
   int p;
 
-  if (required < 0 || npockets <= 0 || npockets > ENUM_MAXPLAYERS)
+  if (stage_max < 0 || npockets <= 0 || npockets > ENUM_MAXPLAYERS)
     return 1;
   if (StdDeck_numCards(board) != nboard)
     return 1;
@@ -1609,10 +1608,10 @@ static int fusion_prepare(StdDeck_CardMask pockets[], StdDeck_CardMask board,
   for (p = 0; p < npockets; ++p)
   {
     int held = StdDeck_numCards(pockets[p]);
-    if (held > required)
+    if (held > stage_max)
       return 1;
     deal->pockets[p] = pockets[p];
-    deal->hole_need[p] = FUSION_SHOWDOWN_HOLE_CARDS - held;
+    deal->hole_need[p] = FUSION_HOLE_CARDS - held;
     total += deal->hole_need[p];
     StdDeck_CardMask_RESET(deal->extra_hole[p]);
   }
