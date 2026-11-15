@@ -11,7 +11,8 @@ regrets, and every convergence measurement is the exact best response of the
 vector lane (`br_mode=exact`, `guarantee=nash`). Nothing is sampled, so a
 target is a measured value and not an estimate.
 
-What it records, per (schedule, target, seed):
+What it records, per (schedule, target, seed), or per (schedule, seed) in
+fixed-horizon mode:
 
 * wall-clock seconds for the whole process, separately from the solve quality
   fields the report carries (`measurement_iteration`, `br_mode`, `guarantee`);
@@ -24,6 +25,11 @@ What it records, per (schedule, target, seed):
 Targets that no seed reached are marked, never interpolated. The compared
 schedules are DCFR's fixed exponents (the control) and the training-free
 HS-DCFR(15)/HS-DCFR(30) schedules of Zhang et al. (AAAI 2026).
+
+With --fixed-horizon, the same seeded runs stop at --iterations even when a
+target would have stopped them earlier. The report then summarizes final
+exploitability and the separate solve/BR timing per schedule, which makes a
+common-iteration comparison possible without target-detection latency.
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "pe-plo4-time-to-target/v2"
+SCHEMA = "pe-plo4-time-to-target/v3"
 GAME = "plo4"
 BOARD = "Ks9d4c2hTs"
 POT = 63.0
@@ -58,13 +64,13 @@ def build_command(
     solver: Path,
     schedule: str,
     seed: int,
-    target_mbb: float,
+    target_mbb: float | None,
     iterations: int,
     interval: int,
     combos: int,
     output: Path,
 ) -> list[str]:
-    return [
+    command = [
         str(solver),
         "--board", BOARD,
         "--pot", f"{POT:.17g}",
@@ -75,12 +81,16 @@ def build_command(
         "--first-to-act", str(FIRST_TO_ACT),
         "--iterations", str(iterations),
         "--exploitability-interval", str(interval),
-        "--target-mbb", f"{target_mbb:.17g}",
+    ]
+    if target_mbb is not None:
+        command += ["--target-mbb", f"{target_mbb:.17g}"]
+    command += [
         "--algorithm", "dcfr",
         "--dcfr-schedule", schedule,
         "--seed", str(seed),
         "--output", str(output),
     ]
+    return command
 
 
 def target_bracket(
@@ -120,13 +130,14 @@ def run_once(
     solver: Path,
     schedule: str,
     seed: int,
-    target_mbb: float,
+    target_mbb: float | None,
     iterations: int,
     interval: int,
     combos: int,
     workdir: Path,
 ) -> dict[str, Any]:
-    output = workdir / f"report-{schedule}-{int(target_mbb)}-{seed}.json"
+    label = "fixed" if target_mbb is None else f"{int(target_mbb)}"
+    output = workdir / f"report-{schedule}-{label}-{seed}.json"
     command = build_command(
         solver, schedule, seed, target_mbb, iterations, interval, combos, output,
     )
@@ -156,7 +167,11 @@ def run_once(
         "requested_schedule": report.get("dcfr_schedule"),
         "horizon": report.get("dcfr_horizon"),
         "seconds": elapsed,
-        "reached": bool(progress.get("target_reached")),
+        "complete": bool(progress.get("complete")),
+        "reached": (
+            bool(progress.get("target_reached"))
+            if target_mbb is not None else None
+        ),
         "exploitability_mbb_per_game": float(exploitability),
         "measurement_iteration": metrics.get("measurement_iteration"),
         "iterations_run": progress.get("iteration"),
@@ -166,12 +181,19 @@ def run_once(
         "storage_bytes": metrics.get("storage_bytes"),
         "timing": report.get("timing", {}),
         "checkpoints": checkpoints,
-        "target_bracket": target_bracket(checkpoints, target_mbb),
+        "target_bracket": (
+            target_bracket(checkpoints, target_mbb)
+            if target_mbb is not None else None
+        ),
     }
 
 
 def _median(values: list[float]) -> float | None:
     return statistics.median(values) if values else None
+
+
+def _format_optional(value: float | None, digits: int) -> str:
+    return f"{value:.{digits}f}" if value is not None else "-"
 
 
 def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any]:
@@ -222,6 +244,96 @@ def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any
             }
         summary[schedule] = by_target
     return summary
+
+
+def summarize_fixed(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize a fixed-horizon campaign per schedule.
+
+    Every run is expected to stop at the same iteration cap rather than at a
+    target. The final checkpoint supplies the solver-only timing, so the exact
+    best-response cost is kept separate from the per-iteration solve cost.
+    """
+    summary: dict[str, Any] = {}
+    for schedule in SCHEDULES:
+        matching = [run for run in runs if run["schedule"] == schedule]
+        completed = [run for run in matching if run.get("complete")]
+        measured: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for run in completed:
+            checkpoints = run.get("checkpoints") or []
+            if not checkpoints:
+                continue
+            checkpoint = checkpoints[-1]
+            if int(checkpoint.get("iteration", 0)) <= 0:
+                continue
+            measured.append((run, checkpoint))
+
+        walls = [float(run["seconds"]) for run, _ in measured]
+        exploitations = [
+            float(checkpoint["exploitability_mbb_per_game"])
+            for _, checkpoint in measured
+        ]
+        iterations = [float(checkpoint["iteration"]) for _, checkpoint in measured]
+        solves = [float(checkpoint["solve_seconds"]) for _, checkpoint in measured]
+        elapsed = [
+            float(checkpoint["elapsed_seconds"]) for _, checkpoint in measured
+        ]
+        solve_per_iteration = [
+            solve / iteration * 1000.0
+            for solve, iteration in zip(solves, iterations)
+        ]
+        br_seconds = [
+            max(0.0, total - solve) for total, solve in zip(elapsed, solves)
+        ]
+
+        summary[schedule] = {
+            "runs": len(matching),
+            "completed": len(completed),
+            "all_completed": bool(matching) and len(completed) == len(matching),
+            "median_seconds": _median(walls),
+            "min_seconds": min(walls) if walls else None,
+            "max_seconds": max(walls) if walls else None,
+            "median_exploitability_mbb_per_game": _median(exploitations),
+            "median_final_iteration": _median(iterations),
+            "median_solve_seconds": _median(solves),
+            "median_solve_ms_per_iteration": _median(solve_per_iteration),
+            "median_br_seconds": _median(br_seconds),
+        }
+    return summary
+
+
+def render_fixed_markdown(summary: dict[str, Any]) -> str:
+    header = (
+        "| schedule | completed | final iter | median exploitability | "
+        "solve ms/iter | solve s | BR s | wall s |"
+    )
+    lines = [
+        header,
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for schedule in SCHEDULES:
+        entry = summary[schedule]
+        final_iteration = entry["median_final_iteration"]
+        lines.append(
+            "| {schedule} | {completed}/{runs} | {iteration} | {expl} | "
+            "{solve_iter} | {solve} | {br} | {wall} |".format(
+                schedule=schedule,
+                completed=entry["completed"],
+                runs=entry["runs"],
+                iteration=(
+                    f"{final_iteration:.0f}" if final_iteration is not None else "-"
+                ),
+                expl=_format_optional(
+                    entry["median_exploitability_mbb_per_game"], 3
+                ),
+                solve_iter=_format_optional(
+                    entry["median_solve_ms_per_iteration"], 3
+                ),
+                solve=_format_optional(entry["median_solve_seconds"], 3),
+                br=_format_optional(entry["median_br_seconds"], 3),
+                wall=_format_optional(entry["median_seconds"], 3),
+            )
+        )
+    return "\n".join(lines)
 
 
 def schedules_are_inert(runs: list[dict[str, Any]]) -> bool:
@@ -305,9 +417,14 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--iterations", type=int, default=DEFAULT_ITERATIONS,
-        help="iteration cap when a target is not reached",
+        help="iteration cap; exact horizon with --fixed-horizon",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--fixed-horizon", action="store_true",
+        help="run every schedule to --iterations without stopping on a target",
+    )
+    mode.add_argument(
         "--targets", type=parse_targets, default=DEFAULT_TARGETS,
         help="comma-separated exploitability targets in mbb/game",
     )
@@ -324,21 +441,41 @@ def main(argv: list[str]) -> int:
         help="iterations between exact-BR measurements",
     )
     parser.add_argument(
-        "--output", default="build/plo4-time-to-target.json",
+        "--output", default=None,
         help="JSON destination",
     )
     options = parser.parse_args(argv[1:])
+
+    if options.iterations <= 0:
+        parser.error("--iterations must be positive")
+    if options.interval <= 0:
+        parser.error("--interval must be positive")
+    fixed_horizon = options.fixed_horizon
+    if fixed_horizon and options.iterations % options.interval != 0:
+        parser.error(
+            "--iterations must be a multiple of --interval in fixed-horizon mode"
+        )
+    output = Path(
+        options.output
+        or (
+            "build/plo4-fixed-horizon.json"
+            if fixed_horizon else "build/plo4-time-to-target.json"
+        )
+    )
 
     solver = Path(options.solver)
     if not solver.is_file():
         print(f"missing solver: {solver}", file=sys.stderr)
         return 2
-    workdir = Path(options.output).resolve().parent
+    workdir = output.resolve().parent
     workdir.mkdir(parents=True, exist_ok=True)
 
     runs: list[dict[str, Any]] = []
+    targets: list[float | None] = (
+        [None] if fixed_horizon else list(options.targets)
+    )
     for schedule in SCHEDULES:
-        for target in options.targets:
+        for target in targets:
             for seed in options.seeds:
                 try:
                     runs.append(
@@ -352,11 +489,31 @@ def main(argv: list[str]) -> int:
                     print(str(error), file=sys.stderr)
                     return 1
 
-    summary = summarize(runs, options.targets)
+    if fixed_horizon:
+        missing = [
+            run for run in runs
+            if (
+                not run.get("complete")
+                or not run.get("checkpoints")
+                or int(run["checkpoints"][-1].get("iteration", 0))
+                != options.iterations
+            )
+        ]
+        if missing:
+            print(
+                "fixed-horizon run did not produce a final checkpoint at the horizon",
+                file=sys.stderr,
+            )
+            return 1
+
+    summary = summarize_fixed(runs) if fixed_horizon else summarize(
+        runs, options.targets
+    )
     inert = schedules_are_inert(runs)
     document = {
         "schema": SCHEMA,
         "issue": 284,
+        "campaign_mode": "fixed-horizon" if fixed_horizon else "time-to-target",
         "game": {
             "game": GAME,
             "board": BOARD,
@@ -368,8 +525,9 @@ def main(argv: list[str]) -> int:
             "combos": options.combos,
             "algorithm": "dcfr",
             "iterations_cap": options.iterations,
+            "fixed_horizon": fixed_horizon,
             "exploitability_interval": options.interval,
-            "targets_mbb_per_game": options.targets,
+            "targets_mbb_per_game": [] if fixed_horizon else options.targets,
             "seeds": options.seeds,
         },
         "environment": {
@@ -381,6 +539,9 @@ def main(argv: list[str]) -> int:
             "mode": sorted({run["br_mode"] for run in runs}),
             "guarantee": sorted({run["guarantee"] for run in runs}),
             "note": (
+                "Lane A measures exact best responses; the fixed horizon is "
+                "an iteration count, not a reached target."
+                if fixed_horizon else
                 "Lane A measures exact best responses; a reached target is a "
                 "measured value, not a sampled estimate."
             ),
@@ -392,19 +553,21 @@ def main(argv: list[str]) -> int:
                 "at the same iteration: the driver applies one update rule "
                 "and the schedule dimension is not a comparison."
             ) if inert else (
-                "Schedules produced different measurements; the per-target "
-                "summary is a comparison."
+                "Schedules produced different measurements; the summary is a "
+                "comparison."
             ),
         },
         "runs": runs,
         "summary": summary,
     }
-    output = Path(options.output)
     with open(output, "w", encoding="utf-8") as output_file:
         json.dump(document, output_file, indent=2, sort_keys=True)
         output_file.write("\n")
 
-    print(render_markdown(summary, options.targets))
+    print(
+        render_fixed_markdown(summary)
+        if fixed_horizon else render_markdown(summary, options.targets)
+    )
     print(f"wrote {output}")
     if inert:
         print(
