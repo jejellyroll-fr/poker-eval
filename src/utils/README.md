@@ -26,7 +26,6 @@ This module contains utilities, helper functions, table management, and auxiliar
 - `icm_calculator.c` - Independent Chip Model (ICM) tournament calculator
 - `poker_eval_modern.c` - Modern evaluation interface and helpers
 - `poker_wrapper.c` - High-level C wrappers for the library
-- `universal_deck.c` - Universal deck utility implementation
 
 ### Static Tables & Auxiliary Generators (`src/utils/tables/`)
 - `tables/t_botfivecardsj.c`

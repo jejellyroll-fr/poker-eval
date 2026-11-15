@@ -45,6 +45,10 @@ typedef struct {
 } UniversalDeckContext;
 
 /* Conversion functions */
+/* Universal mask (cards at their id bits) -> StdDeck mask (packed suits). A
+ * joker travels in the word's joker slot; Universal_ConvertStdToJoker()
+ * restores it. */
+POKEREVAL_EXPORT void Universal_ConvertToStd(UniversalCardMask mask, StdDeck_CardMask *std);
 POKEREVAL_EXPORT void Universal_ConvertStdToJoker(StdDeck_CardMask std, JokerDeck_CardMask *joker);
 POKEREVAL_EXPORT void Universal_ConvertJokerToStd(JokerDeck_CardMask joker, StdDeck_CardMask *std);
 

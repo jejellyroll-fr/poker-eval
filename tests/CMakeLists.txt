@@ -1721,9 +1721,28 @@ add_unity_test(test_pokenum_integration test_pokenum_integration.c)
 set_tests_properties(test_pokenum_integration PROPERTIES
     LABELS "equity;integration;coverage;phase5" TIMEOUT 120)
 
+# pokenum must print joker hands as typed, with the joker as "Xx": twice a mask
+# conversion made it print (and evaluate) cards that were never entered.
+if(TARGET pokenum)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME pokenum_joker_display
+            COMMAND Python3::Interpreter
+                ${CMAKE_CURRENT_SOURCE_DIR}/pokenum_joker_display.py
+                $<TARGET_FILE:pokenum>)
+        set_tests_properties(pokenum_joker_display PROPERTIES
+            LABELS "equity;integration;joker;pokenum" TIMEOUT 60)
+    endif()
+endif()
+
 add_unity_test(test_enumerate_edge_cases test_enumerate_edge_cases.c)
 set_tests_properties(test_enumerate_edge_cases PROPERTIES
     LABELS "enumerate;coverage;phase5" TIMEOUT 120)
+
+# Fusion equity deals future hole cards and evaluates Omaha Hi (issue #295).
+add_poker_test(test_fusion_equity)
+set_tests_properties(test_fusion_equity PROPERTIES
+    LABELS "equity;games;fusion" TIMEOUT 120)
 
 add_unity_test(test_range_equity_coverage test_range_equity_coverage.c)
 set_tests_properties(test_range_equity_coverage PROPERTIES

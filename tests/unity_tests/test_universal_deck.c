@@ -6,6 +6,8 @@
  */
 
 #include "unity.h"
+#include <stdio.h>
+#include <string.h>
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/universal_deck.h>
 #include <poker_eval/deck/deck_joker.h>
@@ -312,6 +314,194 @@ static void test_delegation_string(void) {
   TEST_ASSERT_EQUAL_STRING(pbuf, ubuf);
 }
 
+/* pokenum reads its arguments through the universal deck but hands the
+ * enumerator a StdDeck_CardMask. The two do not share a bit layout: the
+ * universal mask keeps a card at its own id bit, while StdDeck_CardMask packs
+ * the four suits into separate fields. Copying the 64 bits (the .std union
+ * member) therefore relabels the cards, so the conversion has to rebuild the
+ * mask card by card. The tests below pin both halves of that invariant. */
+
+typedef struct {
+  int rank;
+  int suit;
+} test_card_t;
+
+typedef struct {
+  const char *text;
+  test_card_t cards[5];
+  int ncards;
+} test_hand_t;
+
+/* Hands covering all four suits and several stages. */
+static const test_hand_t mask_hands[] = {
+    {"As", {{StdDeck_Rank_ACE, StdDeck_Suit_SPADES}}, 1},
+    {"2h", {{StdDeck_Rank_2, StdDeck_Suit_HEARTS}}, 1},
+    {"Kc", {{StdDeck_Rank_KING, StdDeck_Suit_CLUBS}}, 1},
+    {"Td", {{StdDeck_Rank_TEN, StdDeck_Suit_DIAMONDS}}, 1},
+    {"As Ad",
+     {{StdDeck_Rank_ACE, StdDeck_Suit_SPADES},
+      {StdDeck_Rank_ACE, StdDeck_Suit_DIAMONDS}},
+     2},
+    {"2h 3h",
+     {{StdDeck_Rank_2, StdDeck_Suit_HEARTS},
+      {StdDeck_Rank_3, StdDeck_Suit_HEARTS}},
+     2},
+    {"As Ks Qd Jc",
+     {{StdDeck_Rank_ACE, StdDeck_Suit_SPADES},
+      {StdDeck_Rank_KING, StdDeck_Suit_SPADES},
+      {StdDeck_Rank_QUEEN, StdDeck_Suit_DIAMONDS},
+      {StdDeck_Rank_JACK, StdDeck_Suit_CLUBS}},
+     4},
+    {"2h 3h 4d 5s Ts",
+     {{StdDeck_Rank_2, StdDeck_Suit_HEARTS},
+      {StdDeck_Rank_3, StdDeck_Suit_HEARTS},
+      {StdDeck_Rank_4, StdDeck_Suit_DIAMONDS},
+      {StdDeck_Rank_5, StdDeck_Suit_SPADES},
+      {StdDeck_Rank_TEN, StdDeck_Suit_SPADES}},
+     5}};
+
+static const int mask_hand_count =
+    (int)(sizeof(mask_hands) / sizeof(mask_hands[0]));
+
+/* Parse "As Ks" into a universal mask, the way pokenum parses its arguments. */
+static void universal_mask_from_text(const char *text,
+                                     UniversalCardMask *mask) {
+  char buf[64];
+  char *token;
+  int card;
+  deck_type_t type;
+
+  Universal_CardMask_RESET(mask, UNIVERSAL_DECK_STANDARD);
+  snprintf(buf, sizeof(buf), "%s", text);
+  for (token = strtok(buf, " "); token != NULL; token = strtok(NULL, " ")) {
+    TEST_ASSERT_TRUE(Universal_StringToCard(token, &card, &type) > 0);
+    TEST_ASSERT_EQUAL_INT(UNIVERSAL_DECK_STANDARD, type);
+    Universal_CardMask_SET(mask, card, type);
+  }
+}
+
+/* The hand as asked for, built from rank and suit only. */
+static StdDeck_CardMask expected_std_mask(const test_card_t *cards, int ncards) {
+  StdDeck_CardMask std;
+  int i;
+
+  StdDeck_CardMask_RESET(std);
+  for (i = 0; i < ncards; i++)
+    StdDeck_CardMask_SET(std, StdDeck_MAKE_CARD(cards[i].rank, cards[i].suit));
+  return std;
+}
+
+/* The conversion pokenum needs: visit every card and set it through the
+ * StdDeck API instead of copying the universal bits. */
+static StdDeck_CardMask rebuilt_std_mask(UniversalCardMask mask) {
+  StdDeck_CardMask std;
+  int card;
+
+  StdDeck_CardMask_RESET(std);
+  for (card = 0; card < StdDeck_N_CARDS; card++)
+    if (mask.cards & ((pe_card_mask_t)1 << card))
+      StdDeck_CardMask_SET(std, card);
+  return std;
+}
+
+/* Like universal_mask_from_text(), but the joker card is allowed. */
+static void joker_mask_from_text(const char *text, UniversalCardMask *mask) {
+  char buf[64];
+  char *token;
+  int card;
+  deck_type_t type;
+
+  Universal_CardMask_RESET(mask, UNIVERSAL_DECK_JOKER);
+  snprintf(buf, sizeof(buf), "%s", text);
+  for (token = strtok(buf, " "); token != NULL; token = strtok(NULL, " ")) {
+    TEST_ASSERT_TRUE(Universal_StringToCard(token, &card, &type) > 0);
+    Universal_CardMask_SET(mask, card, type);
+  }
+}
+
+/* A hand that contains the joker keeps it: the universal mask holds it at its
+ * own id bit, Universal_ConvertToStd carries it in the joker slot, and
+ * Universal_ConvertStdToJoker turns that slot back into the joker card. A
+ * 5-card draw hand would otherwise look like four cards and get a free card. */
+static void test_joker_hand_survives_conversion(void) {
+  UniversalCardMask umask;
+  StdDeck_CardMask std;
+  JokerDeck_CardMask joker;
+  char text[32];
+
+  joker_mask_from_text("Xx As Ad 2c 3h", &umask);
+  TEST_ASSERT_EQUAL_INT(5, Universal_numCards(umask, UNIVERSAL_DECK_JOKER));
+
+  Universal_ConvertToStd(umask, &std);
+  TEST_ASSERT_TRUE(StdDeck_CardMask_CARD_IS_SET(
+      std, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_SPADES)));
+  TEST_ASSERT_TRUE(StdDeck_CardMask_CARD_IS_SET(
+      std, StdDeck_MAKE_CARD(StdDeck_Rank_ACE, StdDeck_Suit_DIAMONDS)));
+  TEST_ASSERT_TRUE(StdDeck_CardMask_CARD_IS_SET(
+      std, StdDeck_MAKE_CARD(StdDeck_Rank_3, StdDeck_Suit_HEARTS)));
+
+  Universal_ConvertStdToJoker(std, &joker);
+  TEST_ASSERT_EQUAL_INT(5, JokerDeck_numCards(joker));
+  TEST_ASSERT_TRUE(JokerDeck_CardMask_JOKER(joker) != 0);
+  snprintf(text, sizeof(text), "%s", JokerDeck_maskString(joker));
+  TEST_ASSERT_NOT_NULL(strstr(text, "Xx"));
+  TEST_ASSERT_NOT_NULL(strstr(text, "As"));
+  TEST_ASSERT_NOT_NULL(strstr(text, "Ad"));
+  TEST_ASSERT_NOT_NULL(strstr(text, "2c"));
+  TEST_ASSERT_NOT_NULL(strstr(text, "3h"));
+
+  /* A hand without a joker must not grow one. */
+  joker_mask_from_text("As Ad", &umask);
+  Universal_ConvertToStd(umask, &std);
+  Universal_ConvertStdToJoker(std, &joker);
+  TEST_ASSERT_EQUAL_INT(0, JokerDeck_CardMask_JOKER(joker));
+  TEST_ASSERT_EQUAL_INT(2, JokerDeck_numCards(joker));
+}
+
+/* No standard-deck card keeps its universal id bit in a StdDeck_CardMask, so a
+ * raw copy can never be right. If this ever fails because the two layouts were
+ * unified, the conversion becomes an identity and this test should go away. */
+static void test_mask_layouts_do_not_share_bits(void) {
+  int card;
+
+  for (card = 0; card < StdDeck_N_CARDS; card++) {
+    StdDeck_CardMask single;
+
+    StdDeck_CardMask_RESET(single);
+    StdDeck_CardMask_SET(single, card);
+    TEST_ASSERT_EQUAL_INT(1, StdDeck_numCards(single));
+    TEST_ASSERT_TRUE_MESSAGE(((single.cards_n >> card) & 1u) == 0,
+                             "a card kept its universal id bit");
+  }
+}
+
+/* Rebuilding gives back exactly the requested hands, while copying the
+ * universal bits gives a different hand for every case here. */
+static void test_rebuild_returns_requested_hands(void) {
+  int i;
+
+  for (i = 0; i < mask_hand_count; i++) {
+    UniversalCardMask umask;
+    StdDeck_CardMask expected, rebuilt, copied;
+    int ncards = mask_hands[i].ncards;
+
+    universal_mask_from_text(mask_hands[i].text, &umask);
+    expected = expected_std_mask(mask_hands[i].cards, ncards);
+    rebuilt = rebuilt_std_mask(umask);
+    copied = umask.std; /* what the pokenum bug did */
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        ncards, Universal_numCards(umask, UNIVERSAL_DECK_STANDARD),
+        mask_hands[i].text);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(ncards, StdDeck_numCards(rebuilt),
+                                  mask_hands[i].text);
+    TEST_ASSERT_TRUE_MESSAGE(StdDeck_CardMask_EQUAL(rebuilt, expected),
+                             mask_hands[i].text);
+    TEST_ASSERT_FALSE_MESSAGE(StdDeck_CardMask_EQUAL(copied, expected),
+                              mask_hands[i].text);
+  }
+}
+
 int main(void) {
   UNITY_BEGIN();
 
@@ -347,6 +537,12 @@ int main(void) {
   RUN_TEST(test_delegation_joker_mask);
   RUN_TEST(test_delegation_or);
   RUN_TEST(test_delegation_string);
+
+  /* Universal and StdDeck masks use different bit layouts: the conversion
+   * must rebuild the mask card by card (pokenum regression guard). */
+  RUN_TEST(test_mask_layouts_do_not_share_bits);
+  RUN_TEST(test_rebuild_returns_requested_hands);
+  RUN_TEST(test_joker_hand_survives_conversion);
 
   return UNITY_END();
 }

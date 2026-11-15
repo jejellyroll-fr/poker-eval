@@ -11,6 +11,7 @@
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/universal_deck.h>
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/core/enumerate.h> /* enumerate_dispatch.h does not exist */
 
@@ -18,6 +19,16 @@
 static void add_card(StdDeck_CardMask *mask, int rank, int suit)
 {
     StdDeck_CardMask_SET(*mask, StdDeck_MAKE_CARD(rank, suit));
+}
+
+/* Helper to add a card by name to a universal mask */
+static void add_universal_card(UniversalCardMask *mask, const char *text)
+{
+    int card;
+    deck_type_t type;
+
+    TEST_ASSERT_TRUE(Universal_StringToCard(text, &card, &type) > 0);
+    Universal_CardMask_SET(mask, card, type);
 }
 
 /* Build dead cards from pockets and board */
@@ -514,6 +525,69 @@ void test_dispatch_results_match_classic(void)
 }
 
 /*
+ * Hi-only Omaha has no low half.
+ *
+ * The optimized Omaha backend shares one evaluator that also returns low
+ * hands; keeping that low for game_omaha split every pot in two and halved
+ * its ev (a 12-in-40 win printed 0.150 instead of 0.300). Compare it with the
+ * classic path on a turn board where an 8-or-better low exists.
+ */
+void test_dispatch_omaha_ev_has_no_low_split(void)
+{
+    StdDeck_CardMask pockets[2], board, dead;
+    enum_result_t dispatch_result, classic_result;
+    int dispatch_err, classic_err, i;
+    double ev_sum = 0.0;
+
+    /* Player 1: AsKsQdJc */
+    StdDeck_CardMask_RESET(pockets[0]);
+    add_card(&pockets[0], StdDeck_Rank_ACE, StdDeck_Suit_SPADES);
+    add_card(&pockets[0], StdDeck_Rank_KING, StdDeck_Suit_SPADES);
+    add_card(&pockets[0], StdDeck_Rank_QUEEN, StdDeck_Suit_DIAMONDS);
+    add_card(&pockets[0], StdDeck_Rank_JACK, StdDeck_Suit_CLUBS);
+
+    /* Player 2: 9h9d8c7c */
+    StdDeck_CardMask_RESET(pockets[1]);
+    add_card(&pockets[1], StdDeck_Rank_9, StdDeck_Suit_HEARTS);
+    add_card(&pockets[1], StdDeck_Rank_9, StdDeck_Suit_DIAMONDS);
+    add_card(&pockets[1], StdDeck_Rank_8, StdDeck_Suit_CLUBS);
+    add_card(&pockets[1], StdDeck_Rank_7, StdDeck_Suit_CLUBS);
+
+    /* Board: 2h3hTs4d */
+    StdDeck_CardMask_RESET(board);
+    add_card(&board, StdDeck_Rank_2, StdDeck_Suit_HEARTS);
+    add_card(&board, StdDeck_Rank_3, StdDeck_Suit_HEARTS);
+    add_card(&board, StdDeck_Rank_TEN, StdDeck_Suit_SPADES);
+    add_card(&board, StdDeck_Rank_4, StdDeck_Suit_DIAMONDS);
+
+    build_dead(&dead, pockets, 2, board);
+
+    dispatch_err = enumExhaustive_dispatch(game_omaha, pockets, board, dead, 2, 4, 0, &dispatch_result);
+    classic_err = enumExhaustive(game_omaha, pockets, board, dead, 2, 4, 0, &classic_result);
+
+    TEST_ASSERT_EQUAL_INT(0, dispatch_err);
+    TEST_ASSERT_EQUAL_INT(0, classic_err);
+    TEST_ASSERT_EQUAL_INT(enum_dispatch_backend_eedc_omaha_opt, enum_dispatch_last_backend());
+
+    TEST_ASSERT_EQUAL_INT(classic_result.nsamples, dispatch_result.nsamples);
+    for (i = 0; i < 2; i++) {
+        TEST_ASSERT_EQUAL_INT(classic_result.nwinhi[i], dispatch_result.nwinhi[i]);
+        TEST_ASSERT_EQUAL_INT(classic_result.nlosehi[i], dispatch_result.nlosehi[i]);
+        TEST_ASSERT_EQUAL_INT(classic_result.nwinlo[i], dispatch_result.nwinlo[i]);
+        TEST_ASSERT_EQUAL_INT(classic_result.nloselo[i], dispatch_result.nloselo[i]);
+        TEST_ASSERT_DOUBLE_WITHIN(1e-9, classic_result.ev[i], dispatch_result.ev[i]);
+        ev_sum += dispatch_result.ev[i] / dispatch_result.nsamples;
+    }
+
+    /* One pot per board: no low counters, and every win is worth a full
+     * sample instead of half of one. */
+    TEST_ASSERT_EQUAL_INT(0, dispatch_result.nwinlo[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, (double)dispatch_result.nwinhi[0],
+                              dispatch_result.ev[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, ev_sum);
+}
+
+/*
  * Test dispatch with 3 players
  */
 void test_dispatch_3player(void)
@@ -650,6 +724,48 @@ void test_dispatch_a5_triple_draw_uses_eedc(void)
     TEST_ASSERT_EQUAL_INT(enum_dispatch_backend_eedc, enum_dispatch_last_backend());
 }
 
+/*
+ * A 5-card draw hand that contains the joker has to be enumerated with it: five
+ * cards are five cards, so nothing is dealt, and the joker decides the hand.
+ * When the joker was lost in the StdDeck conversion, such a hand looked like
+ * four cards and the enumerator dealt it an extra one from the deck.
+ */
+void test_dispatch_5draw_keeps_the_joker(void)
+{
+    UniversalCardMask jpockets[2];
+    StdDeck_CardMask pockets[2], board, dead;
+    enum_result_t result;
+    int err;
+
+    /* Player 1: Xx As Ad 2c 3h -- the joker with two aces */
+    Universal_CardMask_RESET(&jpockets[0], UNIVERSAL_DECK_JOKER);
+    add_universal_card(&jpockets[0], "Xx");
+    add_universal_card(&jpockets[0], "As");
+    add_universal_card(&jpockets[0], "Ad");
+    add_universal_card(&jpockets[0], "2c");
+    add_universal_card(&jpockets[0], "3h");
+
+    /* Player 2: Kh Kc 7d 8d 4s */
+    Universal_CardMask_RESET(&jpockets[1], UNIVERSAL_DECK_JOKER);
+    add_universal_card(&jpockets[1], "Kh");
+    add_universal_card(&jpockets[1], "Kc");
+    add_universal_card(&jpockets[1], "7d");
+    add_universal_card(&jpockets[1], "8d");
+    add_universal_card(&jpockets[1], "4s");
+
+    Universal_ConvertToStd(jpockets[0], &pockets[0]);
+    Universal_ConvertToStd(jpockets[1], &pockets[1]);
+
+    StdDeck_CardMask_RESET(board);
+    build_dead(&dead, pockets, 2, board);
+
+    err = enumExhaustive_dispatch(game_5draw, pockets, board, dead, 2, 0, 0, &result);
+    TEST_ASSERT_EQUAL_INT(0, err);
+    TEST_ASSERT_EQUAL_INT(1, (int)result.nsamples);
+    TEST_ASSERT_EQUAL_INT(1, result.nwinhi[0]);
+    TEST_ASSERT_EQUAL_INT(0, result.nwinhi[1]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -682,7 +798,9 @@ int main(void)
 
     /* Result correctness */
     RUN_TEST(test_dispatch_results_match_classic);
+    RUN_TEST(test_dispatch_omaha_ev_has_no_low_split);
     RUN_TEST(test_dispatch_3player);
+    RUN_TEST(test_dispatch_5draw_keeps_the_joker);
 
     return UNITY_END();
 }

@@ -201,6 +201,13 @@ int enumExhaustive_eedc_omaha_opt(enum_game_t game, StdDeck_CardMask pockets[],
   result->nplayers = npockets;
   result->sampleType = ENUM_EXHAUSTIVE;
 
+  /* StdDeck_OmahaHiLow8_EVAL() always returns a low hand when one exists, but
+   * the hi-only variants (game_omaha, game_omaha5, game_omaha6) have no low
+   * half. Keeping it would split every pot in two and halve their EV, so drop
+   * it for them, exactly as INNER_LOOP_OMAHA does in the classic path. */
+  const enum_gameparams_t *params = enumGameParams(game);
+  const int has_low_half = params != NULL && params->haslopot != 0;
+
   // Construire l'ensemble des cartes interdites (dead + pockets + board)
   StdDeck_CardMask effective_dead = dead;
   for (int i = 0; i < npockets; ++i) {
@@ -324,6 +331,8 @@ int enumExhaustive_eedc_omaha_opt(enum_game_t game, StdDeck_CardMask pockets[],
         err = eval_omaha_cached(pockets[i], fullBoard, &hival[i], &loval[i]);
         if (err != 0)
           break;
+        if (!has_low_half)
+          loval[i] = LowHandVal_NOTHING;
 
         if (hival[i] != HandVal_NOTHING) {
           if (hival[i] > besthi) {

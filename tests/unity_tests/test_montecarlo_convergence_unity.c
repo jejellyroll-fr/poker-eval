@@ -125,8 +125,11 @@ static void test_irish_converges(void) {
   assert_converges(game_irish, "irish", "AsAdKsQd", "7h8h9c6c", "2s5s9d");
 }
 
+/* From the turn on a Fusion player holds four hole cards, so nothing is left
+   to deal and both paths evaluate the same Omaha Hi showdowns.  The spots that
+   do deal future hole cards are covered by test_fusion_equity. */
 static void test_fusion_converges(void) {
-  assert_converges(game_fusion, "fusion", "AsAd", "7h8h", "2s5s9h");
+  assert_converges(game_fusion, "fusion", "AsAdKsQd", "7h8h9c6c", "2s5s9hTd");
 }
 
 /* The sampled board must never collide with a hole card or a board card. This

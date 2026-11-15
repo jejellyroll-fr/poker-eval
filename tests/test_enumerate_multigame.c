@@ -672,10 +672,16 @@ static void test_enumerate_fusion(void) {
     StdDeck_CardMask_RESET(pockets[1]);
     StdDeck_CardMask_RESET(board);
 
+    /* A Fusion player holds four hole cards from the turn on, so a river spot
+       has nothing left to deal and enumerates exactly one showdown. */
     add_card(&pockets[0], StdDeck_Rank_ACE, StdDeck_Suit_SPADES);
     add_card(&pockets[0], StdDeck_Rank_KING, StdDeck_Suit_HEARTS);
+    add_card(&pockets[0], StdDeck_Rank_QUEEN, StdDeck_Suit_SPADES);
+    add_card(&pockets[0], StdDeck_Rank_QUEEN, StdDeck_Suit_HEARTS);
     add_card(&pockets[1], StdDeck_Rank_QUEEN, StdDeck_Suit_CLUBS);
     add_card(&pockets[1], StdDeck_Rank_JACK, StdDeck_Suit_DIAMONDS);
+    add_card(&pockets[1], StdDeck_Rank_TEN, StdDeck_Suit_HEARTS);
+    add_card(&pockets[1], StdDeck_Rank_9, StdDeck_Suit_SPADES);
 
     add_card(&board, StdDeck_Rank_2, StdDeck_Suit_CLUBS);
     add_card(&board, StdDeck_Rank_3, StdDeck_Suit_DIAMONDS);
