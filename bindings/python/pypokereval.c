@@ -376,7 +376,46 @@ static const struct
     {"5draw", game_5draw},         {"5draw8", game_5draw8},
     {"5drawnsq", game_5drawnsq},   {"lowball", game_lowball},
     {"lowball27", game_lowball27}, {"fusion", game_fusion},
+    /* Five-card draw on the standard 52-card deck; "5draw*" above are the
+       joker variants, which can deal the joker when cards are still to come. */
+    {"5draw_std", game_5draw_std},
+    {"5draw8_std", game_5draw8_std},
+    {"5drawnsq_std", game_5drawnsq_std},
+    {"27_triple_draw", game_27_triple_draw},
+    {"a5_triple_draw", game_a5_triple_draw},
+    {"archie", game_archie},
+    {"badugi", game_badugi},
+    {"badugi_hilo", game_badugi_hilo},
+    {"drawmaha", game_drawmaha},
+    {"drawmaha49", game_drawmaha49},
+    {"drawmaha_zero", game_drawmaha_zero},
+    {"drawmaha_dugi", game_drawmaha_dugi},
 };
+
+/* Games whose dealing plan the binding's own loops cannot express: the core
+   enumerator deals them from the pockets and board as given.  Fusion deals the
+   board and future hole cards; the draw games deal each pocket up to its full
+   size, from a JokerDeck for the joker variants of five-card draw. */
+static const enum_game_t py_core_enumerated_games[] = {
+    game_fusion,         game_5draw,          game_5draw8,
+    game_5drawnsq,       game_5draw_std,      game_5draw8_std,
+    game_5drawnsq_std,   game_27_triple_draw, game_a5_triple_draw,
+    game_archie,         game_badugi,         game_badugi_hilo,
+    game_drawmaha,       game_drawmaha49,     game_drawmaha_zero,
+    game_drawmaha_dugi,
+};
+
+static int py_game_uses_core_enumerator(enum_game_t game)
+{
+  size_t i;
+
+  for (i = 0; i < sizeof(py_core_enumerated_games) /
+                      sizeof(py_core_enumerated_games[0]);
+       ++i)
+    if (py_core_enumerated_games[i] == game)
+      return 1;
+  return 0;
+}
 
 /* Parameters of a named game, or NULL when the name is unknown. */
 static enum_gameparams_t *py_game_params(const char *name)
@@ -392,7 +431,7 @@ static enum_gameparams_t *py_game_params(const char *name)
 /* Reports an unknown game name, listing every name that is accepted. */
 static void py_set_invalid_game_error(const char *name)
 {
-  char accepted[256];
+  char accepted[1024];
   size_t used = 0;
   size_t i;
 
@@ -422,10 +461,11 @@ pyenumExhaustive(enum_game_t game, StdDeck_CardMask pockets[],
   memset(cardsDealt, 0, sizeof(StdDeck_CardMask) * (ENUM_MAXPLAYERS + 1));
   if (sizeToDeal - 1 > ENUM_MAXPLAYERS)
     return 1;
-  /* Fusion deals the board *and* each player's future hole cards, a plan the
-     fixed numToDeal split cannot express, so the enumerator that owns those
-     rules deals this one. */
-  if (game == game_fusion)
+  /* Fusion deals the board *and* each player's future hole cards, and the draw
+     games deal each pocket up to its full size; the fixed numToDeal split
+     cannot express either, so the enumerator that owns those rules deals
+     them. */
+  if (py_game_uses_core_enumerator(game))
     return enumExhaustive(game, pockets, board, dead, sizeToDeal - 1,
                           StdDeck_numCards(board), 0, result);
   for (i = 0; i < sizeToDeal; i++)
@@ -565,8 +605,8 @@ pyenumSample(enum_game_t game, StdDeck_CardMask pockets[],
   memset(cardsDealt, 0, sizeof(StdDeck_CardMask) * (ENUM_MAXPLAYERS + 1));
   if (sizeToDeal - 1 > ENUM_MAXPLAYERS)
     return 1;
-  /* See pyenumExhaustive: Fusion owns its own dealing plan. */
-  if (game == game_fusion)
+  /* See pyenumExhaustive: these games own their dealing plan. */
+  if (py_game_uses_core_enumerator(game))
     return enumSample(game, pockets, board, dead, sizeToDeal - 1,
                       StdDeck_numCards(board), iterations, 0, result);
 
