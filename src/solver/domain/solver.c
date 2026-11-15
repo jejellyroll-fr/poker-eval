@@ -31,6 +31,7 @@
 #include <poker_eval/solver/pe_external_best_response.h>
 #include <poker_eval/solver/pe_outcome_traversal.h>
 #include <poker_eval/core/pthread_compat.h>
+#include <poker_eval/core/time_compat.h>
 
 #include "../adapters/storage_ram.h"
 
@@ -46,6 +47,15 @@
 static int finite_double(double value)
 {
     return value >= -DBL_MAX && value <= DBL_MAX;
+}
+
+static double pe_solver_now_seconds(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0.0;
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
 }
 
 typedef struct
@@ -790,6 +800,25 @@ static int pe_solver_vector_measure_combo_compatible(
         adapter->game->user);
 }
 
+static int pe_solver_vector_measure_combo_mass(
+    const void *state, const pe_reach_vec_t *reach, uint8_t player,
+    pe_value_vec_t *out_mass, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->combo_mass(state, reach, player, out_mass,
+                                     adapter->game->user);
+}
+
+static int pe_solver_vector_measure_combo_prior(
+    uint8_t player, pe_combo_id_t combo, double *out_weight, void *user)
+{
+    pe_solver_vector_strategy_adapter_t *adapter =
+        (pe_solver_vector_strategy_adapter_t *)user;
+    return adapter->game->combo_prior(player, combo, out_weight,
+                                      adapter->game->user);
+}
+
 static void pe_solver_drop_recomputable(const pe_solver_t *solver);
 
 static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
@@ -805,6 +834,8 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
     uint64_t completed_iterations;
     int target_reached = 0;
     const int target_enabled = pe_solver_any_target(solver);
+    double run_start_seconds;
+    double br_seconds_total = 0.0;
     int rc;
 
     if (solver->deps.vector_game == NULL ||
@@ -892,6 +923,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
 
     pe_solver_set_state(solver, PE_SOLVER_STATE_RUNNING);
     completed_iterations = pe_solver_iteration(solver);
+    run_start_seconds = pe_solver_now_seconds();
     for (iteration = completed_iterations;
          (solver->config.max_iterations == 0u ||
           iteration < solver->config.max_iterations) && !target_reached &&
@@ -940,6 +972,7 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             double gaps[PE_SOLVER_MAX_PLAYERS] = {0.0};
             uint8_t player;
             int reached = 0;
+            double measurement_start_seconds = pe_solver_now_seconds();
 
             if (compute_ops->sync != NULL && compute_ops->sync(compute_self) != 0)
             {
@@ -983,6 +1016,10 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
                 measured_game.combo_compatible =
                     measured_game.combo_compatible
                     ? pe_solver_vector_measure_combo_compatible : NULL;
+                measured_game.combo_mass = measured_game.combo_mass
+                    ? pe_solver_vector_measure_combo_mass : NULL;
+                measured_game.combo_prior = measured_game.combo_prior
+                    ? pe_solver_vector_measure_combo_prior : NULL;
                 measured_game.user = &strategy_adapter;
             }
             if (pe_exploitability_vector(&measured_game,
@@ -1018,6 +1055,18 @@ static pe_solver_status_t pe_solver_run_vector(pe_solver_t *solver,
             solver->metrics.measurement_iteration = iteration;
             solver->metrics_available = 1;
             target_reached = reached;
+            {
+                double br_seconds = pe_solver_now_seconds() -
+                                    measurement_start_seconds;
+                double elapsed_seconds = pe_solver_now_seconds() -
+                                         run_start_seconds;
+                br_seconds_total += br_seconds;
+                if (solver->deps.on_measurement)
+                    solver->deps.on_measurement(
+                        iteration, elapsed_seconds,
+                        elapsed_seconds - br_seconds_total, br_seconds,
+                        &solver->metrics, solver->deps.measurement_user);
+            }
         }
         /* Full-tree traversal can spend substantial time between BR checks.
            Publish the iteration heartbeat independently so frontends never
