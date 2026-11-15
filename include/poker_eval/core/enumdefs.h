@@ -81,6 +81,11 @@ typedef enum {
   game_drawmaha_dugi,
   game_doubleboard_omaha85,
   game_chinese13,
+  /* Five-card draw dealt from the standard 52-card deck (#303).  game_5draw*
+     above are the joker variants and deal from a 53-card JokerDeck. */
+  game_5draw_std,
+  game_5draw8_std,
+  game_5drawnsq_std,
   game_NUMGAMES
 } enum_game_t;
 

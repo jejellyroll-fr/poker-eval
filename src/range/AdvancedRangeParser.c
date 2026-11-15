@@ -659,6 +659,9 @@ static int arp_is_omaha_game(enum_game_t game_type)
     case game_5draw:
     case game_5draw8:
     case game_5drawnsq:
+    case game_5draw_std:
+    case game_5draw8_std:
+    case game_5drawnsq_std:
     case game_lowball:
     case game_lowball27:
     case game_sdholdem:

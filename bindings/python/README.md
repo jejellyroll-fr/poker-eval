@@ -64,3 +64,32 @@ thread's stream. Exhaustive enumeration (no `iterations`) ignores the seed.
 - Python 3.7+
 - C compiler (GCC, Clang, or MSVC)
 - CMake 3.15+ (if building via CMake)
+
+## Draw games
+
+`poker_eval` and `winners` accept the draw games the core enumerates:
+
+| Name | Game | Sides |
+| --- | --- | --- |
+| `5draw_std`, `5draw8_std`, `5drawnsq_std` | Five-card draw on the standard 52-card deck (high, hi/lo 8-or-better, hi/lo no qualifier) | hi, hi/lo |
+| `5draw`, `5draw8`, `5drawnsq` | The same with a joker: a 53-card deck | hi, hi/lo |
+| `27_triple_draw`, `a5_triple_draw` | 2-7 and A-5 lowball | low |
+| `archie` | Archie triple draw hi/lo | hi/lo |
+| `badugi`, `badugi_hilo` | Badugi, Badugi hi/lo | low, hi/lo |
+| `drawmaha`, `drawmaha49`, `drawmaha_zero`, `drawmaha_dugi` | Omaha hand on the high side, five-card hand on the low side | hi/lo |
+
+With complete hands the joker and standard variants rank the same.  When
+cards are still to come (`"__"` in a pocket), `5draw*` can deal the joker:
+use the `_std` names for standard five-card draw.
+
+```python
+pe.winners(game="5draw_std",
+           pockets=[["As", "Ks", "Qd", "7c", "2h"], ["Ah", "Kh", "Qc", "8d", "3s"]],
+           board=[])
+# {'hi': [1]}
+
+# One card to come, sampled reproducibly:
+pe.poker_eval(game="5draw_std",
+              pockets=[["As", "Ad", "Kc", "__", "__"], ["Qs", "Qd", "Jc", "Jh", "2s"]],
+              board=[], iterations=20000, seed=303)
+```

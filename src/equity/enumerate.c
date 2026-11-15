@@ -101,7 +101,7 @@ static enum_gameparams_t enum_gameparams[] = {
     {game_lowball27, 0, 5, 0, 1, 0, LOW_QUALIFIER_NONE, "5-card Draw 2-7 Lowball"},
     {game_sdholdem, 2, 2, 5, 0, 1, LOW_QUALIFIER_NONE, "ShortDeck Holdem NL Hi"},
     {game_doubleflop_holdem, 2, 2, 10, 0, 1, LOW_QUALIFIER_NONE, "Double Flop Holdem Hi"},
-    {game_drawmaha, 5, 5, 5, 0, 1, LOW_QUALIFIER_NONE, "Drawmaha (Sviten Special)"},
+    {game_drawmaha, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Drawmaha (Sviten Special)"},
     {game_pineapple, 3, 3, 5, 0, 1, LOW_QUALIFIER_NONE, "Pineapple Holdem"},
     {game_pineapple8, 3, 3, 5, 1, 1, LOW_QUALIFIER_8, "Pineapple Hi/Lo"},
     {game_27_triple_draw, 5, 5, 0, 1, 0, LOW_QUALIFIER_NONE, "2-7 Triple Draw"},
@@ -124,11 +124,14 @@ static enum_gameparams_t enum_gameparams[] = {
     {game_italian, 2, 2, 5, 0, 1, LOW_QUALIFIER_NONE, "Italian Poker"},
     {game_archie, 5, 5, 0, 1, 1, LOW_QUALIFIER_8, "Archie Triple Draw Hi/Lo"},
     {game_badugi_hilo, 4, 4, 0, 1, 1, LOW_QUALIFIER_NONE, "Badugi Hi/Lo"},
-    {game_drawmaha49, 5, 5, 5, 0, 1, LOW_QUALIFIER_NONE, "Drawmaha 49"},
+    {game_drawmaha49, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Drawmaha 49"},
     {game_drawmaha_zero, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Drawmaha Zero"},
     {game_drawmaha_dugi, 5, 5, 5, 1, 1, LOW_QUALIFIER_NONE, "Drawmaha Low-Dugi"},
     {game_doubleboard_omaha85, 5, 5, 10, 1, 1, LOW_QUALIFIER_8, "Double-board Omaha 5 Hi/Lo"},
     {game_chinese13, 13, 13, 0, 0, 1, LOW_QUALIFIER_NONE, "Classic Chinese Poker 13-card"},
+    {game_5draw_std, 0, 5, 0, 0, 1, LOW_QUALIFIER_NONE, "5-card Draw Hi"},
+    {game_5draw8_std, 0, 5, 0, 1, 1, LOW_QUALIFIER_8, "5-card Draw Hi/Low 8-or-better"},
+    {game_5drawnsq_std, 0, 5, 0, 1, 1, LOW_QUALIFIER_NONE, "5-card Draw Hi/Low no qualifier"},
 };
 
 /* INNER_LOOP is executed in every iteration of the combinatorial enumerator
@@ -812,15 +815,60 @@ int pe_crazy_pineapple_commit(StdDeck_CardMask pockets[], int npockets,
     }                                                         \
   })
 
+/* The enum engine awards the low side to the *smallest* LowHandVal, and only
+ * to values below LowHandVal_NOTHING.  These map high-is-better values onto
+ * that range, reversed, so they can be played on the low side.
+ *
+ * A Badugi value keeps its hand type (0..3) in bits 28-31 and its cards in
+ * bits 9-24: packing the type down to bits 25-26 gives at most 0x07FFFFFF,
+ * below LowHandVal_NOTHING, while keeping the order. */
+static LowHandVal badugi_low_value(BadugiHandVal badugi)
+{
+  uint32_t packed;
+
+  if (badugi == BadugiHandVal_NOTHING)
+    return LowHandVal_NOTHING;
+  packed = ((uint32_t)BadugiHandVal_HANDTYPE(badugi) << 25) |
+           (badugi & 0x01FFFFFFu);
+  return (LowHandVal)(0x07FFFFFFu - packed);
+}
+
+/* A standard high HandVal never exceeds LowHandVal_NOTHING - 1 (a royal
+ * flush), so reversing it inside that range keeps every value playable. */
+static LowHandVal high_value_as_low(HandVal value)
+{
+  if (value == HandVal_NOTHING)
+    return LowHandVal_NOTHING;
+  return (LowHandVal)((LowHandVal_NOTHING - 1u) - (uint32_t)value);
+}
+
+/* Cards to deal to complete each Drawmaha pocket to five cards, then the
+   board to five, in numToDeal[0..npockets].  Returns 1 when some pocket
+   misses a card, 0 when every pocket is complete, -1 on an oversized hand. */
+static int drawmaha_deal_plan(StdDeck_CardMask pockets[], int npockets,
+                              int nboard, int numToDeal[])
+{
+  int missing = 0;
+
+  if (nboard < 0 || nboard > 5)
+    return -1;
+  for (int p = 0; p < npockets; ++p)
+  {
+    numToDeal[p] = 5 - StdDeck_numCards(pockets[p]);
+    if (numToDeal[p] < 0)
+      return -1;
+    if (numToDeal[p] > 0)
+      missing = 1;
+  }
+  numToDeal[npockets] = 5 - nboard;
+  return missing;
+}
+
 static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t variant)
 {
   if (variant == game_drawmaha_dugi)
-  {
-    BadugiHandVal badugi = StdDeck_BadugiRules_EVAL_N(hand, StdDeck_numCards(hand));
-    return badugi == BadugiHandVal_NOTHING
-               ? LowHandVal_NOTHING
-               : (LowHandVal)(UINT32_MAX - badugi);
-  }
+    return badugi_low_value(
+        StdDeck_BadugiRules_EVAL_N(hand, StdDeck_numCards(hand)));
 
   if (variant == game_drawmaha_zero)
     return pe_eval_low_a5(hand);
@@ -841,12 +889,12 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
                       ((unsigned int)StdDeck_StdRules_EVAL_N(hand, 5) & 0xFFFFU));
 }
 
-#define INNER_LOOP_DRAWMAHA                                             \
-  INNER_LOOP({                                                          \
-    StdDeck_CardMask _finalBoard;                                       \
-    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);               \
-    int nboard = StdDeck_numCards(_finalBoard);                         \
-    if (nboard < 3)                                                     \
+/* Evaluates one Drawmaha hand: the Omaha hand on the high side, the
+   five-card hand on the low side. */
+#define DRAWMAHA_EVAL(_pocket, _finalBoard)                             \
+  do                                                                    \
+  {                                                                     \
+    if (StdDeck_numCards(_finalBoard) < 3)                              \
     {                                                                   \
       /* Not enough board cards for Drawmaha evaluation */              \
       hival[i] = HandVal_NOTHING;                                       \
@@ -855,11 +903,33 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     }                                                                   \
     else                                                                \
     {                                                                   \
-      err = StdDeck_DrawmahaRules_EVAL_OPTIMAL(pockets[i], _finalBoard, \
+      err = StdDeck_DrawmahaRules_EVAL_OPTIMAL(_pocket, _finalBoard,    \
                                                &hival[i], &loval[i]);   \
-      if (err == 0 && game != game_drawmaha)                            \
-        loval[i] = drawmaha_variant_low(pockets[i], game);              \
+      /* The second half plays the five-card hand: the best draw hand  \
+         for Drawmaha, reversed so the low side can award it. */        \
+      if (err == 0 && game == game_drawmaha)                            \
+        loval[i] = high_value_as_low(StdDeck_StdRules_EVAL_N(_pocket, 5)); \
+      else if (err == 0)                                                \
+        loval[i] = drawmaha_variant_low(_pocket, game);                 \
     }                                                                   \
+  } while (0)
+
+#define INNER_LOOP_DRAWMAHA                                             \
+  INNER_LOOP({                                                          \
+    StdDeck_CardMask _finalBoard;                                       \
+    StdDeck_CardMask_OR(_finalBoard, board, sharedCards);               \
+    DRAWMAHA_EVAL(pockets[i], _finalBoard);                             \
+  })
+
+/* Drawmaha with pockets still to complete: unsharedCards[i] completes
+   pocket i and unsharedCards[npockets] completes the board. */
+#define INNER_LOOP_DRAWMAHA_DEALT                                       \
+  INNER_LOOP({                                                          \
+    StdDeck_CardMask _pocket;                                           \
+    StdDeck_CardMask _finalBoard;                                       \
+    StdDeck_CardMask_OR(_pocket, pockets[i], unsharedCards[i]);         \
+    StdDeck_CardMask_OR(_finalBoard, board, unsharedCards[npockets]);   \
+    DRAWMAHA_EVAL(_pocket, _finalBoard);                                \
   })
 
 #define INNER_LOOP_7STUD                                      \
@@ -908,13 +978,15 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     err = 0;                                                  \
   })
 
+/* Badugi is a lowball game: its game parameters declare a low pot only, so
+   the hand plays on the low side. */
 #define INNER_LOOP_BADUGI                                     \
   INNER_LOOP({                                                \
     StdDeck_CardMask _hand;                                   \
     StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
-    hival[i] = (HandVal)StdDeck_BadugiRules_EVAL_N(            \
-        _hand, StdDeck_numCards(_hand));                      \
-    loval[i] = LowHandVal_NOTHING;                            \
+    hival[i] = HandVal_NOTHING;                               \
+    loval[i] = badugi_low_value(StdDeck_BadugiRules_EVAL_N(    \
+        _hand, StdDeck_numCards(_hand)));                     \
     err = 0;                                                  \
   })
 
@@ -949,6 +1021,36 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     JokerDeck_CardMask_OR(_hand, _jpocket, unsharedCards[i]); \
     hival[i] = JokerDeck_JokerRules_EVAL_N(_hand, 5);         \
     loval[i] = JokerDeck_Lowball_EVAL(_hand, 5);              \
+    err = 0;                                                  \
+  })
+
+/* Five-card draw on the standard deck: the pocket plus the cards still to come
+   is exactly five cards, evaluated as such. */
+#define INNER_LOOP_5DRAW_STD                                  \
+  INNER_LOOP({                                                \
+    StdDeck_CardMask _hand;                                   \
+    StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
+    hival[i] = StdDeck_StdRules_EVAL_N(_hand, 5);             \
+    loval[i] = LowHandVal_NOTHING;                            \
+    err = 0;                                                  \
+  })
+
+#define INNER_LOOP_5DRAW8_STD                                  \
+  INNER_LOOP({                                                 \
+    StdDeck_CardMask _hand;                                    \
+    StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]);  \
+    hival[i] = StdDeck_StdRules_EVAL_N(_hand, 5);              \
+    loval[i] = StdDeck_Lowball8_EVAL(_hand, 5);                \
+    loval[i] = apply_low_qualifier(loval[i], LOW_QUALIFIER_8); \
+    err = 0;                                                   \
+  })
+
+#define INNER_LOOP_5DRAWNSQ_STD                               \
+  INNER_LOOP({                                                \
+    StdDeck_CardMask _hand;                                   \
+    StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]); \
+    hival[i] = StdDeck_StdRules_EVAL_N(_hand, 5);             \
+    loval[i] = pe_eval_low_a5(_hand);                         \
     err = 0;                                                  \
   })
 
@@ -1032,9 +1134,7 @@ static HandVal archie_high_value(StdDeck_CardMask hand)
     hival[i] = (_badugi == BadugiHandVal_NOTHING)             \
                    ? HandVal_NOTHING                          \
                    : (HandVal)_badugi;                        \
-    loval[i] = (_badugi == BadugiHandVal_NOTHING)             \
-                   ? LowHandVal_NOTHING                        \
-                   : (LowHandVal)(UINT32_MAX - _badugi);     \
+    loval[i] = badugi_low_value(_badugi);                     \
     err = 0;                                                  \
   })
 
@@ -1726,6 +1826,7 @@ static int enumExhaustive_with_override(
     case game_7stud:
     case game_astud:
     case game_5draw:
+    case game_5draw_std:
     case game_sdholdem:
       mode = enum_ordering_mode_hi;
       break;
@@ -1742,6 +1843,8 @@ static int enumExhaustive_with_override(
     case game_7studnsq:
     case game_5draw8:
     case game_5drawnsq:
+    case game_5draw8_std:
+    case game_5drawnsq_std:
     case game_pineapple8:
     case game_archie:
     case game_badugi_hilo:
@@ -2443,6 +2546,36 @@ static int enumExhaustive_with_override(
 
     ENUM_JOKERDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, jdead_5drawnsq, unsharedCards, INNER_LOOP_5DRAWNSQ);
   }
+  else if (game == game_5draw_std || game == game_5draw8_std ||
+           game == game_5drawnsq_std)
+  {
+    /* Standard 52-card deck: no joker can be dealt. */
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    if (nboard != 0)
+      return 1;
+    for (idx = 0; idx < npockets; idx++)
+    {
+      numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
+      if (numToDeal[idx] < 0)
+        return 1;
+    }
+    if (game == game_5draw_std)
+    {
+      ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
+                                             unsharedCards, INNER_LOOP_5DRAW_STD);
+    }
+    else if (game == game_5draw8_std)
+    {
+      ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
+                                             unsharedCards, INNER_LOOP_5DRAW8_STD);
+    }
+    else
+    {
+      ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
+                                             unsharedCards, INNER_LOOP_5DRAWNSQ_STD);
+    }
+  }
   else if (game == game_lowball)
   {
     fprintf(stderr, "DEBUG: Entering game_lowball enumeration\n");
@@ -2482,7 +2615,21 @@ static int enumExhaustive_with_override(
            game == game_drawmaha_zero || game == game_drawmaha_dugi)
   {
     StdDeck_CardMask sharedCards;
-    if (nboard == 0)
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS + 1];
+    int numToDeal[ENUM_MAXPLAYERS + 1];
+    int plan = drawmaha_deal_plan(pockets, npockets, nboard, numToDeal);
+    if (plan < 0)
+    {
+      return 1;
+    }
+    else if (plan > 0)
+    {
+      /* Some pocket is incomplete: deal the pockets and the board together. */
+      ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets + 1, numToDeal,
+                                             effective_dead, unsharedCards,
+                                             INNER_LOOP_DRAWMAHA_DEALT);
+    }
+    else if (nboard == 0)
     {
       ENUM_STDDECK_ENUMERATE_K_FROM_DEAD(5, effective_dead, sharedCards, INNER_LOOP_DRAWMAHA);
     }
@@ -2515,7 +2662,7 @@ static int enumExhaustive_with_override(
     int numToDeal[ENUM_MAXPLAYERS];
     for (idx = 0; idx < npockets; idx++)
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
-    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead, unsharedCards, INNER_LOOP_27_TRIPLE_DRAW);
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead, unsharedCards, INNER_LOOP_27_TRIPLE_DRAW);
   }
   else if (game == game_a5_triple_draw)
   {
@@ -2528,7 +2675,7 @@ static int enumExhaustive_with_override(
     int numToDeal[ENUM_MAXPLAYERS];
     for (idx = 0; idx < npockets; idx++)
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
-    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead, unsharedCards, INNER_LOOP_A5_TRIPLE_DRAW);
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead, unsharedCards, INNER_LOOP_A5_TRIPLE_DRAW);
   }
   else if (game == game_archie)
   {
@@ -2538,7 +2685,7 @@ static int enumExhaustive_with_override(
     int numToDeal[ENUM_MAXPLAYERS];
     for (idx = 0; idx < npockets; idx++)
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
-    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, dead,
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
                                             unsharedCards, INNER_LOOP_ARCHIE);
   }
   else if (game == game_chinese13)
@@ -2656,6 +2803,7 @@ static int enumSample_with_override(
     case game_7stud:
     case game_astud:
     case game_5draw:
+    case game_5draw_std:
     case game_sdholdem:
       mode = enum_ordering_mode_hi;
       break;
@@ -2672,6 +2820,8 @@ static int enumSample_with_override(
     case game_7studnsq:
     case game_5draw8:
     case game_5drawnsq:
+    case game_5draw8_std:
+    case game_5drawnsq_std:
     case game_pineapple8:
     case game_archie:
     case game_badugi_hilo:
@@ -2998,6 +3148,36 @@ static int enumSample_with_override(
                                         npockets, numToDeal,
                                         jdead_5drawnsq, niter, INNER_LOOP_5DRAWNSQ);
   }
+  else if (game == game_5draw_std || game == game_5draw8_std ||
+           game == game_5drawnsq_std)
+  {
+    /* Standard 52-card deck: no joker can be dealt. */
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    if (nboard != 0)
+      return 1;
+    for (idx = 0; idx < npockets; idx++)
+    {
+      numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
+      if (numToDeal[idx] < 0)
+        return 1;
+    }
+    if (game == game_5draw_std)
+    {
+      DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets, numToDeal,
+                                     effective_dead, niter, INNER_LOOP_5DRAW_STD);
+    }
+    else if (game == game_5draw8_std)
+    {
+      DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets, numToDeal,
+                                     effective_dead, niter, INNER_LOOP_5DRAW8_STD);
+    }
+    else
+    {
+      DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets, numToDeal,
+                                     effective_dead, niter, INNER_LOOP_5DRAWNSQ_STD);
+    }
+  }
   else if (game == game_lowball)
   {
     /* we have a type problem: pockets should be JokerDeck_CardMask[] */
@@ -3032,8 +3212,22 @@ static int enumSample_with_override(
            game == game_drawmaha_zero || game == game_drawmaha_dugi)
   {
     StdDeck_CardMask sharedCards;
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS + 1];
+    int numToDeal[ENUM_MAXPLAYERS + 1];
+    int plan = drawmaha_deal_plan(pockets, npockets, nboard, numToDeal);
     numCards = 5 - nboard;
-    if (numCards > 0)
+    if (plan < 0)
+    {
+      return 1;
+    }
+    else if (plan > 0)
+    {
+      /* Some pocket is incomplete: deal the pockets and the board together. */
+      DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets + 1,
+                                     numToDeal, effective_dead, niter,
+                                     INNER_LOOP_DRAWMAHA_DEALT);
+    }
+    else if (numCards > 0)
     {
       DECK_MONTECARLO_N_CARDS_D(StdDeck, sharedCards, effective_dead, numCards,
                                 niter, INNER_LOOP_DRAWMAHA);
@@ -3146,7 +3340,7 @@ static int enumSample_with_override(
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
     DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
                                    npockets, numToDeal,
-                                   dead, niter, INNER_LOOP_27_TRIPLE_DRAW);
+                                   effective_dead, niter, INNER_LOOP_27_TRIPLE_DRAW);
   }
   else if (game == game_a5_triple_draw)
   {
@@ -3160,7 +3354,7 @@ static int enumSample_with_override(
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
     DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
                                    npockets, numToDeal,
-                                   dead, niter, INNER_LOOP_A5_TRIPLE_DRAW);
+                                   effective_dead, niter, INNER_LOOP_A5_TRIPLE_DRAW);
   }
   else if (game == game_archie)
   {
@@ -3172,7 +3366,7 @@ static int enumSample_with_override(
       numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
     DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards,
                                    npockets, numToDeal,
-                                   dead, niter, INNER_LOOP_ARCHIE);
+                                   effective_dead, niter, INNER_LOOP_ARCHIE);
   }
   else if (game == game_badugi)
   {

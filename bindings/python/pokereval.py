@@ -303,8 +303,22 @@ Provided with a description of a poker game, return the outcome (if at showdown)
 the expected value of each hand. The poker game description is provided as a set
 of keyword arguments with the following meaning:
 
-game      : the variant (holdem, holdem8, omaha, omaha8, 7stud, 7stud8, razz,
-            5draw, 5draw8, 5drawnsq, lowball, lowball27). 
+game      : the variant: holdem, holdem8, omaha, omaha8, fusion, 7stud,
+            7stud8, 7studnsq, razz, lowball, lowball27, and the draw games
+            5draw, 5draw8, 5drawnsq, 5draw_std, 5draw8_std, 5drawnsq_std,
+            27_triple_draw, a5_triple_draw, archie, badugi, badugi_hilo,
+            drawmaha, drawmaha49, drawmaha_zero, drawmaha_dugi.
+            5draw, 5draw8 and 5drawnsq are the joker variants: they deal
+            from a 53-card deck, so the joker can come when cards are still
+            to be dealt.  Use 5draw_std, 5draw8_std and 5drawnsq_std for
+            five-card draw on the standard 52-card deck.  With complete
+            hands both rank the same.
+            In draw games, a "__" in a pocket is a card still to come; the
+            pocket is dealt up to its full size (5 cards, 4 for badugi).
+            Badugi and the triple draws are low-only: their result is on the
+            low side.  Drawmaha splits the pot between the Omaha hand (high
+            side) and the five-card hand (low side: best draw hand, lowest
+            49 total, A-5 low or badugi, by variant).
             Mandatory, no default.
                     
 pockets   : list of pocket cards for each player still in game. Each member
