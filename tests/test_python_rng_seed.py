@@ -83,6 +83,24 @@ class TestPokerEvalSeed(unittest.TestCase):
         self.assertEqual(plain, seeded_a)
         self.assertEqual(plain, seeded_b)
 
+    def test_exhaustive_call_leaves_the_stream_alone(self):
+        previous = PokerEval.base_seed()
+        try:
+            pokereval.seed(5)
+            direct = self.sample()
+            pokereval.seed(5)
+            self.pe.poker_eval(game="holdem", pockets=HOLDEM_POCKETS,
+                               board=["Ah", "Kd", "7c", "2s", "__"], seed=999)
+            self.pe.calculate_range_equity(
+                "holdem", [["AsKs"], ["QcQh"]],
+                board_card_strings=["2c", "3d", "4h", "5s", "9c"], seed=999)
+            self.pe.calculate_multiway_equity(
+                "holdem", [["AsKs"], ["QcQh"]], [100.0, 100.0],
+                board_card_strings=["2c", "3d", "4h", "5s", "9c"], seed=999)
+            self.assertEqual(direct, self.sample())
+        finally:
+            pokereval.seed(previous)
+
     def test_threads_seeded_identically_agree(self):
         expected = self.sample(seed=42)
         results = [None] * 4

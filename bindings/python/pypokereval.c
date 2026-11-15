@@ -658,7 +658,8 @@ pyenumSample(enum_game_t game, StdDeck_CardMask pockets[],
  * (pe_rng_current()), not libc rand(), so srand() from Python has no effect.
  * Passing seed=<int> reseeds that stream right before sampling: the same
  * arguments and the same seed give the same result whatever ran before in the
- * process.  None, or no argument, leaves the stream where it is.
+ * process.  None, or no argument, leaves the stream where it is, and so does
+ * an exhaustive call: the reseed happens only on the Monte Carlo path.
  *
  * Any Python int is accepted; it is reduced modulo 2**64, so negative seeds
  * are valid and distinct.  Returns 0 on success, -1 with a TypeError set. */
@@ -1336,11 +1337,12 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
     int err;
     memset(&cresult, '\0', sizeof(enum_result_t));
 
-    if (has_seed)
-      pe_rng_seed_current(seed);
-
     if (iterations > 0)
     {
+      /* Only sampling draws from the stream: an exhaustive call must leave it
+         untouched even when a seed is passed. */
+      if (has_seed)
+        pe_rng_seed_current(seed);
       err = pyenumSample(params->game, pockets, numToDeal, board_cards, dead_cards, pockets_size + 1, iterations, &cresult);
     }
     else
@@ -1902,7 +1904,7 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   }
   agg_results_allocated = true;
 
-  if (has_seed)
+  if (has_seed && use_montecarlo)
     pe_rng_seed_current(seed);
 
   total_matchups = CalculateEquityForRanges(game, c_player_ranges, num_players, board_mask,
@@ -2284,7 +2286,7 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
   MultiwayEquityResult result;
   memset(&result, 0, sizeof(result));
 
-  if (has_seed)
+  if (has_seed && use_montecarlo)
     pe_rng_seed_current(seed);
 
   total_matchups = CalculateMultiwayEquity(game, &state, board_mask, dead_mask_initial,
