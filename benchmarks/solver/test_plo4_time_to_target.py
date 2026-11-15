@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -26,6 +27,36 @@ def run(schedule: str, seed: int, target: float, seconds: float,
         "reached": exploitability <= target,
         "exploitability_mbb_per_game": exploitability,
         "measurement_iteration": iteration,
+    }
+
+
+def fixed_run(schedule: str, seed: int, seconds: float, solve: float,
+              br_seconds: float, exploitability: float,
+              iteration: int = 160) -> dict:
+    return {
+        "schedule": schedule,
+        "seed": seed,
+        "target_mbb": None,
+        "complete": True,
+        "seconds": seconds,
+        "br_mode": "exact",
+        "guarantee": "nash",
+        "exploitability_mbb_per_game": exploitability,
+        "measurement_iteration": iteration,
+        "checkpoints": [
+            {
+                "iteration": iteration,
+                "elapsed_seconds": solve + br_seconds,
+                "solve_seconds": solve,
+                "br_seconds": br_seconds,
+                "exploitability_mbb_per_game": exploitability,
+            }
+        ],
+        "timing": {
+            "elapsed_seconds": solve + br_seconds,
+            "solve_seconds": solve,
+            "br_seconds": br_seconds,
+        },
     }
 
 
@@ -123,6 +154,42 @@ class CommandTests(unittest.TestCase):
         )
         self.assertEqual(command[command.index("--algorithm") + 1], "dcfr")
 
+    def test_fixed_horizon_omits_target(self) -> None:
+        command = probe.build_command(
+            Path("solver"), "fixed", 7, None, 160, 2, 512,
+            Path("out.json"),
+        )
+        self.assertNotIn("--target-mbb", command)
+        self.assertEqual(command[command.index("--iterations") + 1], "160")
+
+
+class FixedHorizonTests(unittest.TestCase):
+    def test_summary_separates_solve_from_br(self) -> None:
+        runs = [
+            fixed_run("fixed", 1, 3.0, 2.0, 1.0, 250.0),
+            fixed_run("fixed", 2, 3.2, 2.2, 1.0, 240.0),
+            fixed_run("fixed", 3, 3.1, 2.1, 1.0, 245.0),
+        ]
+
+        entry = probe.summarize_fixed(runs)["fixed"]
+
+        self.assertEqual(entry["completed"], 3)
+        self.assertTrue(entry["all_completed"])
+        self.assertAlmostEqual(entry["median_exploitability_mbb_per_game"], 245.0)
+        self.assertAlmostEqual(entry["median_solve_seconds"], 2.1)
+        self.assertAlmostEqual(entry["median_solve_ms_per_iteration"],
+                               2.1 / 160.0 * 1000.0)
+        self.assertAlmostEqual(entry["median_br_seconds"], 1.0)
+        self.assertEqual(entry["median_final_iteration"], 160.0)
+
+    def test_markdown_reports_completion_and_horizon(self) -> None:
+        summary = probe.summarize_fixed(
+            [fixed_run("fixed", 1, 3.0, 2.0, 1.0, 250.0)]
+        )
+        table = probe.render_fixed_markdown(summary)
+        self.assertIn("| fixed | 1/1 | 160 |", table)
+        self.assertIn("250.000", table)
+
 
 class TargetBracketTests(unittest.TestCase):
     def test_bracket_reports_last_above_and_first_below(self) -> None:
@@ -191,13 +258,16 @@ class MainTests(unittest.TestCase):
             solver = Path(directory) / "solver"
             solver.write_text("", encoding="utf-8")
             output = Path(directory) / "report.json"
-            with mock.patch.object(probe, "run_once", side_effect=fake_run_once):
-                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                    return probe.main([
-                        "probe", "--solver", str(solver), "--targets", "1000",
-                        "--seeds", "1", "--iterations", "10",
-                        "--output", str(output),
-                    ])
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                return probe.main([
+                    "probe", "--solver", str(solver), "--targets", "1000",
+                    "--seeds", "1", "--iterations", "10",
+                    "--output", str(output),
+                ])
 
     def test_inert_schedules_fail_the_run(self) -> None:
         self.assertEqual(
@@ -208,6 +278,35 @@ class MainTests(unittest.TestCase):
         self.assertEqual(
             self._main({"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}), 0
         )
+
+    def test_fixed_horizon_writes_fixed_mode(self) -> None:
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            return fixed_run(schedule, seed, 0.1, 0.08, 0.02,
+                             {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}[
+                                 schedule
+                             ], iterations)
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "fixed.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--fixed-horizon",
+                    "--iterations", "160", "--seeds", "1",
+                    "--output", str(output),
+                ])
+            self.assertEqual(status, 0)
+            document = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(document["mode"], "fixed-horizon")
+        self.assertEqual(document["game"]["targets_mbb_per_game"], [])
+        self.assertEqual(document["summary"]["fixed"]["median_final_iteration"],
+                         160.0)
 
 
 if __name__ == "__main__":

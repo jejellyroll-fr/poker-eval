@@ -489,6 +489,19 @@ between those two measurements is not interpolated, so the bracket is the
 honest resolution of the configured interval; the summary also reports the
 median checkpoint time and iteration to the first below-target measurement.
 
+For a fixed-horizon comparison that ignores target stopping, run:
+
+```bash
+python3 benchmarks/solver/plo4_time_to_target.py \
+  --fixed-horizon --iterations 160 --interval 2 \
+  --seeds 11,23,37,53,71 --output build/plo4-fixed-horizon.json
+```
+
+This report has `mode=fixed-horizon` and a per-schedule summary of final
+exploitability, solve per iteration excluding best responses, and the separate
+BR cost. Use its brackets for a common-iteration comparison; its wall times are
+not directly comparable with target-stopped runs that stop earlier.
+
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`
 and `guarantee=nash` on every report, and fails unless exploitability or the
