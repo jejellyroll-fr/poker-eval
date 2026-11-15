@@ -44,3 +44,8 @@ BUILD_JAVA_BINDING = false
 BUILD_PYTHON_BINDING = true
 BUILD_SHARED_LIBS = false
 BUILD_TESTS = false
+# zstd only backs the solver's compressed .pe_sol snapshots. Left on, a wheel
+# links whatever libzstd the build machine has: on the macOS runners that is
+# Homebrew's, built for macOS 15, which delocate rightly refuses to ship in a
+# wheel targeting macOS 11 / 10.9. The Linux image never had it either.
+ENABLE_ZSTD = false
