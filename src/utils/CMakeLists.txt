@@ -4,7 +4,6 @@
 set(UTILS_SOURCES
     combinations.c
     icm_calculator.c
-    universal_deck.c
     poker_wrapper.c
     poker_eval_modern.c
     aligned_tables.c
@@ -36,7 +35,6 @@ set(UTILS_SOURCES ${UTILS_SOURCES} ${TABLE_SOURCES})
 # Utils header files
 set(UTILS_HEADERS
     ${CMAKE_SOURCE_DIR}/include/combinations.h
-    ${CMAKE_SOURCE_DIR}/include/universal_deck.h
     ${CMAKE_SOURCE_DIR}/include/micro_optimizations.h
     ${CMAKE_SOURCE_DIR}/include/poker_wrapper.h
     ${CMAKE_SOURCE_DIR}/include/pokereval_export.h
