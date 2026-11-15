@@ -514,6 +514,69 @@ void test_dispatch_results_match_classic(void)
 }
 
 /*
+ * Hi-only Omaha has no low half.
+ *
+ * The optimized Omaha backend shares one evaluator that also returns low
+ * hands; keeping that low for game_omaha split every pot in two and halved
+ * its ev (a 12-in-40 win printed 0.150 instead of 0.300). Compare it with the
+ * classic path on a turn board where an 8-or-better low exists.
+ */
+void test_dispatch_omaha_ev_has_no_low_split(void)
+{
+    StdDeck_CardMask pockets[2], board, dead;
+    enum_result_t dispatch_result, classic_result;
+    int dispatch_err, classic_err, i;
+    double ev_sum = 0.0;
+
+    /* Player 1: AsKsQdJc */
+    StdDeck_CardMask_RESET(pockets[0]);
+    add_card(&pockets[0], StdDeck_Rank_ACE, StdDeck_Suit_SPADES);
+    add_card(&pockets[0], StdDeck_Rank_KING, StdDeck_Suit_SPADES);
+    add_card(&pockets[0], StdDeck_Rank_QUEEN, StdDeck_Suit_DIAMONDS);
+    add_card(&pockets[0], StdDeck_Rank_JACK, StdDeck_Suit_CLUBS);
+
+    /* Player 2: 9h9d8c7c */
+    StdDeck_CardMask_RESET(pockets[1]);
+    add_card(&pockets[1], StdDeck_Rank_9, StdDeck_Suit_HEARTS);
+    add_card(&pockets[1], StdDeck_Rank_9, StdDeck_Suit_DIAMONDS);
+    add_card(&pockets[1], StdDeck_Rank_8, StdDeck_Suit_CLUBS);
+    add_card(&pockets[1], StdDeck_Rank_7, StdDeck_Suit_CLUBS);
+
+    /* Board: 2h3hTs4d */
+    StdDeck_CardMask_RESET(board);
+    add_card(&board, StdDeck_Rank_2, StdDeck_Suit_HEARTS);
+    add_card(&board, StdDeck_Rank_3, StdDeck_Suit_HEARTS);
+    add_card(&board, StdDeck_Rank_TEN, StdDeck_Suit_SPADES);
+    add_card(&board, StdDeck_Rank_4, StdDeck_Suit_DIAMONDS);
+
+    build_dead(&dead, pockets, 2, board);
+
+    dispatch_err = enumExhaustive_dispatch(game_omaha, pockets, board, dead, 2, 4, 0, &dispatch_result);
+    classic_err = enumExhaustive(game_omaha, pockets, board, dead, 2, 4, 0, &classic_result);
+
+    TEST_ASSERT_EQUAL_INT(0, dispatch_err);
+    TEST_ASSERT_EQUAL_INT(0, classic_err);
+    TEST_ASSERT_EQUAL_INT(enum_dispatch_backend_eedc_omaha_opt, enum_dispatch_last_backend());
+
+    TEST_ASSERT_EQUAL_INT(classic_result.nsamples, dispatch_result.nsamples);
+    for (i = 0; i < 2; i++) {
+        TEST_ASSERT_EQUAL_INT(classic_result.nwinhi[i], dispatch_result.nwinhi[i]);
+        TEST_ASSERT_EQUAL_INT(classic_result.nlosehi[i], dispatch_result.nlosehi[i]);
+        TEST_ASSERT_EQUAL_INT(classic_result.nwinlo[i], dispatch_result.nwinlo[i]);
+        TEST_ASSERT_EQUAL_INT(classic_result.nloselo[i], dispatch_result.nloselo[i]);
+        TEST_ASSERT_DOUBLE_WITHIN(1e-9, classic_result.ev[i], dispatch_result.ev[i]);
+        ev_sum += dispatch_result.ev[i] / dispatch_result.nsamples;
+    }
+
+    /* One pot per board: no low counters, and every win is worth a full
+     * sample instead of half of one. */
+    TEST_ASSERT_EQUAL_INT(0, dispatch_result.nwinlo[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, (double)dispatch_result.nwinhi[0],
+                              dispatch_result.ev[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, ev_sum);
+}
+
+/*
  * Test dispatch with 3 players
  */
 void test_dispatch_3player(void)
@@ -682,6 +745,7 @@ int main(void)
 
     /* Result correctness */
     RUN_TEST(test_dispatch_results_match_classic);
+    RUN_TEST(test_dispatch_omaha_ev_has_no_low_split);
     RUN_TEST(test_dispatch_3player);
 
     return UNITY_END();
