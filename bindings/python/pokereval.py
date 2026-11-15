@@ -40,6 +40,11 @@ else:
     ListType, TupleType = list, tuple
     xrange = range
 
+def seed(seed):
+    """Module-level alias of PokerEval.seed: set the Monte Carlo base seed."""
+    _pokereval.set_base_seed(seed)
+
+
 class PokerEval:
     """\
 Evaluate the strengh of a poker hand for a given poker variant.
@@ -275,6 +280,23 @@ o.winners(game = 'holdem', pockets = [ [ 'Ks', 'Kd'] ]).
             del winners["hi"]
         return winners
         
+    @staticmethod
+    def seed(seed):
+        """\
+Set the base seed of the Monte Carlo generator for a whole run.
+
+Sets the base seed the thread-local PCG32 streams start from and reseeds the
+calling thread's stream with it. Threads that already sampled keep their
+stream; pass seed= to poker_eval / calculate_range_equity /
+calculate_multiway_equity to pin a single call instead.
+"""
+        _pokereval.set_base_seed(seed)
+
+    @staticmethod
+    def base_seed():
+        """Return the base seed of the Monte Carlo generator."""
+        return _pokereval.get_base_seed()
+
     def poker_eval(self, *args, **kwargs):
         """\
 Provided with a description of a poker game, return the outcome (if at showdown) or
@@ -314,6 +336,14 @@ iterations: the maximum number of iterations when exploring the
             iterations is not specified and there are place holders,
             the return value cannot be predicted.
             Default: +infinite (i.e. exhaustive exploration)
+
+seed      : an int. When given, the calling thread's Monte Carlo stream
+            (a thread-local PCG32 generator) is reseeded with it before
+            sampling, so the same arguments and the same seed always return
+            the same result, whatever ran before in the process. libc
+            srand() does not reach this generator. Ignored by exhaustive
+            enumeration. Negative and large ints are reduced modulo 2**64.
+            Default: None (the stream continues where it was)
 
 Example: object.poker_eval(game = "holdem",
                            pockets = [ ["tc", "ac"],  ["3h", "ah"],  ["8c", "6h"]],
@@ -486,7 +516,8 @@ Returns:
     def calculate_range_equity(self, game_name, list_of_player_range_definitions, 
                                board_card_strings=None, dead_card_strings=None, 
                                num_board_cards_to_deal=0, 
-                               use_montecarlo=False, iterations=0, orderflag=0):
+                               use_montecarlo=False, iterations=0, orderflag=0,
+                               seed=None):
         """
 Calculates equity for player ranges against each other.
 
@@ -518,6 +549,8 @@ Args:
     iterations (int, optional): Number of iterations if use_montecarlo is True.
         Default 0 (ignored if not Monte Carlo).
     orderflag (int, optional): Order flag for C evaluation (rarely used). Default 0.
+    seed (int, optional): Reseed the calling thread's Monte Carlo stream before
+        sampling, for reproducible results. Default None (no reseed).
 
 Returns:
     dict: A dictionary structured similarly to `poker_eval`'s return:
@@ -558,7 +591,8 @@ Returns:
             1 if use_montecarlo else 0, # C function expects int for bool
             iterations,
             dead_card_strings, 
-            orderflag
+            orderflag,
+            seed
         )
 
         if not raw_results or not isinstance(raw_results, list) or len(raw_results) < 1:
@@ -598,7 +632,13 @@ Returns:
                                   invested_amounts,
                                   board_card_strings=None, dead_card_strings=None,
                                   num_board_cards_to_deal=0,
-                                  use_montecarlo=False, iterations=0, orderflag=0):
+                                  use_montecarlo=False, iterations=0, orderflag=0,
+                                  seed=None):
+        """
+Multiway equity with side pots. Arguments are those of calculate_range_equity,
+plus invested_amounts (one per player). seed (int, optional) reseeds the
+calling thread's Monte Carlo stream before sampling. Default None.
+"""
         if board_card_strings is None:
             board_card_strings = []
         if dead_card_strings is None:
@@ -637,7 +677,8 @@ Returns:
             num_board_cards_to_deal,
             1 if use_montecarlo else 0,
             iterations,
-            orderflag
+            orderflag,
+            seed
         )
 
         if not isinstance(raw_result, dict):

@@ -79,7 +79,9 @@
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_ports.h>
 #include <poker_eval/solver/pe_traversal.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef WIN32
 #define VERSION_NAME(W) W##3_11
@@ -649,6 +651,35 @@ pyenumSample(enum_game_t game, StdDeck_CardMask pockets[],
 }
 
 #define NOCARD 255
+
+/* Read the optional "seed" argument of the sampling entry points.
+ *
+ * Monte Carlo draws through the calling thread's PCG stream
+ * (pe_rng_current()), not libc rand(), so srand() from Python has no effect.
+ * Passing seed=<int> reseeds that stream right before sampling: the same
+ * arguments and the same seed give the same result whatever ran before in the
+ * process.  None, or no argument, leaves the stream where it is.
+ *
+ * Any Python int is accepted; it is reduced modulo 2**64, so negative seeds
+ * are valid and distinct.  Returns 0 on success, -1 with a TypeError set. */
+static int py_parse_seed(PyObject *pyseed, int *has_seed, uint64_t *seed)
+{
+  *has_seed = 0;
+  *seed = 0;
+  if (pyseed == NULL || pyseed == Py_None)
+    return 0;
+  if (!PyLong_Check(pyseed) || PyBool_Check(pyseed))
+  {
+    PyErr_Format(PyExc_TypeError, "seed must be an int or None, not %.200s",
+                 Py_TYPE(pyseed)->tp_name);
+    return -1;
+  }
+  *seed = (uint64_t)PyLong_AsUnsignedLongLongMask(pyseed);
+  if (PyErr_Occurred())
+    return -1;
+  *has_seed = 1;
+  return 0;
+}
 
 static int PyList2CardMask(PyObject *object, CardMask *cardsp)
 {
@@ -1233,11 +1264,16 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
   CardMask board_cards;
 
   PyObject *result = NULL;
+  PyObject *pyseed = NULL;
+  int has_seed = 0;
+  uint64_t seed = 0;
 
-  static const char *kwlist[] = {"game", "pockets", "board", "dead", "fill_pockets", "iterations", NULL};
+  static const char *kwlist[] = {"game", "pockets", "board", "dead", "fill_pockets", "iterations", "seed", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, keywds, "sOO|Oii", (char **)(void *)kwlist,
-                                   &game, &pypockets, &pyboard, &pydead, &fill_pockets, &iterations))
+  if (!PyArg_ParseTupleAndKeywords(args, keywds, "sOO|OiiO", (char **)(void *)kwlist,
+                                   &game, &pypockets, &pyboard, &pydead, &fill_pockets, &iterations, &pyseed))
+    return NULL;
+  if (py_parse_seed(pyseed, &has_seed, &seed) < 0)
     return NULL;
 
   params = py_game_params(game);
@@ -1299,6 +1335,9 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
     enum_result_t cresult;
     int err;
     memset(&cresult, '\0', sizeof(enum_result_t));
+
+    if (has_seed)
+      pe_rng_seed_current(seed);
 
     if (iterations > 0)
     {
@@ -1647,9 +1686,14 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   enum_result_t aggregated_results;
   bool agg_results_allocated = false;
 
+  PyObject *pyseed = NULL;
+  int has_seed = 0;
+  uint64_t seed = 0;
+
   /* One specifier per argument: the dead cards are an optional object, not a
-     bool, and the integer arguments start right after the board. */
-  if (!PyArg_ParseTuple(args, "sOOiii|Oi",
+     bool, and the integer arguments start right after the board.  The seed
+     comes last so older positional callers keep working. */
+  if (!PyArg_ParseTuple(args, "sOOiii|OiO",
                         &game_name_str,
                         &py_list_of_player_ranges,
                         &py_board_list,
@@ -1657,10 +1701,13 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
                         &use_montecarlo_int,
                         &iterations_if_montecarlo,
                         &py_dead_cards_list, // This is optional, Py_None if not passed
-                        &orderflag))
+                        &orderflag,
+                        &pyseed))
   {
     return NULL; // Error already set by PyArg_ParseTuple
   }
+  if (py_parse_seed(pyseed, &has_seed, &seed) < 0)
+    return NULL;
 
   enum_game_t game;
   enum_gameparams_t *params = NULL;
@@ -1855,6 +1902,9 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   }
   agg_results_allocated = true;
 
+  if (has_seed)
+    pe_rng_seed_current(seed);
+
   total_matchups = CalculateEquityForRanges(game, c_player_ranges, num_players, board_mask,
                                                 dead_mask_initial, nboard_cards_to_deal,
                                                 use_montecarlo, iterations_if_montecarlo,
@@ -1941,7 +1991,7 @@ cleanup:
 
 static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObject *kwargs)
 {
-  static const char *kwlist[] = {"game", "player_ranges", "invested", "board", "dead_cards", "num_board_cards_to_deal", "use_montecarlo", "iterations", "orderflag", NULL};
+  static const char *kwlist[] = {"game", "player_ranges", "invested", "board", "dead_cards", "num_board_cards_to_deal", "use_montecarlo", "iterations", "orderflag", "seed", NULL};
 
   const char *game_name_str;
   PyObject *py_list_of_player_ranges;
@@ -1953,11 +2003,14 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
   int iterations_if_montecarlo = 0;
   int orderflag = 0;
   int total_matchups;
+  PyObject *pyseed = NULL;
+  int has_seed = 0;
+  uint64_t seed = 0;
 
   /* One format specifier per kwlist entry: without the trailing "i" for
      orderflag every call fails with "More keyword list entries than format
      specifiers". */
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sOO|OOiiii", (char **)(void *)kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sOO|OOiiiiO", (char **)(void *)kwlist,
                                    &game_name_str,
                                    &py_list_of_player_ranges,
                                    &py_invested_list,
@@ -1966,10 +2019,13 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
                                    &nboard_cards_to_deal,
                                    &use_montecarlo_int,
                                    &iterations_if_montecarlo,
-                                   &orderflag))
+                                   &orderflag,
+                                   &pyseed))
   {
     return NULL;
   }
+  if (py_parse_seed(pyseed, &has_seed, &seed) < 0)
+    return NULL;
 
   if (!PyList_Check(py_list_of_player_ranges))
   {
@@ -2227,6 +2283,9 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
 
   MultiwayEquityResult result;
   memset(&result, 0, sizeof(result));
+
+  if (has_seed)
+    pe_rng_seed_current(seed);
 
   total_matchups = CalculateMultiwayEquity(game, &state, board_mask, dead_mask_initial,
                                                nboard_cards_to_deal, &options, &result);
@@ -3042,7 +3101,42 @@ static PyObject *py_solver_v3_metrics(PyObject *self, PyObject *args)
     return result;
 }
 
+/* set_base_seed(seed): set the base seed that thread-local PCG streams start
+ * from, and reseed the calling thread's stream with it.  Threads whose stream
+ * is already in use keep it; they pick a seed up through the per-call "seed"
+ * argument instead. */
+static PyObject *py_set_base_seed(PyObject *self, PyObject *args)
+{
+  PyObject *pyseed;
+  int has_seed;
+  uint64_t seed;
+  (void)self;
+
+  if (!PyArg_ParseTuple(args, "O", &pyseed))
+    return NULL;
+  if (pyseed == Py_None)
+  {
+    PyErr_SetString(PyExc_TypeError, "seed must be an int, not None");
+    return NULL;
+  }
+  if (py_parse_seed(pyseed, &has_seed, &seed) < 0)
+    return NULL;
+  pe_rng_set_base_seed(seed);
+  Py_RETURN_NONE;
+}
+
+static PyObject *py_get_base_seed(PyObject *self, PyObject *args)
+{
+  (void)self;
+  (void)args;
+  return PyLong_FromUnsignedLongLong((unsigned long long)pe_rng_base_seed());
+}
+
 static PyMethodDef base_methods[] = {
+    {"set_base_seed", (PyCFunction)py_set_base_seed, METH_VARARGS,
+     "set_base_seed(seed): set the base seed of the Monte Carlo PCG streams and reseed the calling thread's stream."},
+    {"get_base_seed", (PyCFunction)py_get_base_seed, METH_NOARGS,
+     "get_base_seed() -> int: the base seed the Monte Carlo PCG streams start from."},
     {"eval_hand", (PyCFunction)eval_hand, METH_VARARGS | METH_KEYWORDS, doc_eval_hand},
     {"poker_eval", (PyCFunction)(void (*)(void))poker_eval, METH_VARARGS | METH_KEYWORDS, doc_poker_eval},
     {"evaln", (PyCFunction)poker_evaln, METH_VARARGS, doc_poker_evaln},
