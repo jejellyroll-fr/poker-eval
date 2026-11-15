@@ -25,10 +25,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Distributed binaries must not be tuned to the runner's CPU
+          # (-march=native); SIMD paths dispatch at runtime.
           - name: Linux x86_64
             os: ubuntu-latest
             asset_suffix: linux-x86_64.tar.gz
-            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=ON"
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=ON -DENABLE_NATIVE_ARCH=OFF"
           - name: macOS ARM64
             os: macos-15
             asset_suffix: macos-arm64.tar.gz
@@ -109,7 +111,8 @@ jobs:
             -DBUILD_TESTS=OFF \
             -DBUILD_C_API=ON \
             -DBUILD_STATIC_LIBS=ON \
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON \
+            -DENABLE_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build build --parallel
@@ -178,7 +181,7 @@ jobs:
           usesh: true
           prepare: pkg install -y cmake gmake
           run: |
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_C_API=ON -DENABLE_NATIVE_ARCH=OFF
             cmake --build build
             mkdir -p release_pkg/bin release_pkg/include release_pkg/lib
             cp -R include/poker_eval release_pkg/include/
@@ -210,6 +213,8 @@ jobs:
         env:
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_*"
+          # Exercise the installed wheel, not the source tree (#301).
+          CIBW_TEST_COMMAND: "python {project}/tests/test_python_rng_seed.py"
 
       - name: Upload Release Wheels
         uses: softprops/action-gh-release@v3

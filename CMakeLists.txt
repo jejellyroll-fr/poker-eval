@@ -13,7 +13,7 @@ endif()
 
 # Project definition
 project(poker-eval
-    VERSION 1.3.1
+    VERSION 1.3.2
     DESCRIPTION "Fast poker hand evaluation library"
     LANGUAGES C CXX)
 

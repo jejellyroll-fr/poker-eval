@@ -288,8 +288,10 @@ jobs:
           -DENABLE_OPENMP=OFF \
           -DENABLE_NATIVE_ARCH=OFF
 
+    # No bare --parallel here: without a number it runs "make -j" unbounded
+    # and overrides CMAKE_BUILD_PARALLEL_LEVEL, so the cap above never applied.
     - name: Build native test build
-      run: cmake --build build-native --parallel
+      run: cmake --build build-native
 
     - name: Run native test suite
       run: ctest --test-dir build-native --output-on-failure --timeout 300

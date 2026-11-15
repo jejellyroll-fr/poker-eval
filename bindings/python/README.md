@@ -33,6 +33,32 @@ cmake .. -DBUILD_BINDINGS=ON
 cmake --build .
 ```
 
+## Reproducible Monte Carlo
+
+Sampling (`iterations=N`) draws from a thread-local PCG32 generator, not libc
+`rand()`, so `srand()` has no effect. Seed it from Python instead:
+
+```python
+from pokereval import PokerEval
+import pokereval
+
+pe = PokerEval()
+pockets = [["6d", "3h"], ["7s", "3s"]]
+
+# Per call: the same arguments and seed give the same result,
+# whatever ran before in the process.
+pe.poker_eval(game="fusion", pockets=pockets, board=["__"] * 5,
+              iterations=20000, seed=2)
+
+# calculate_range_equity and calculate_multiway_equity take seed= too.
+
+# For a whole run: set the base seed (also reseeds the calling thread).
+pokereval.seed(2)          # or PokerEval.seed(2)
+```
+
+The stream is per thread: a call seeded in one thread does not move another
+thread's stream. Exhaustive enumeration (no `iterations`) ignores the seed.
+
 ## Prerequisites
 
 - Python 3.7+
