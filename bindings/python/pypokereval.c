@@ -1233,9 +1233,14 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
   {
     params = enumGameParams(game_lowball27);
   }
+  else if (!strcmp(game, "fusion"))
+  {
+    params = enumGameParams(game_fusion);
+  }
   if (params == 0)
   {
-    PyErr_Format(PyExc_RuntimeError, "game %s is not a valid value (holdem, holdem8, omaha, omaha8, 7stud, 7stud8, 7studnsq, razz, 5draw, 5draw8, 5drawnsq, lowball, lowball27)", game);
+    PyErr_Format(PyExc_RuntimeError, "game %s is not a valid value (holdem, holdem8, omaha, omaha8, 7stud, 7stud8, 7studnsq, razz, 5draw, 5draw8, 5drawnsq, lowball, lowball27, fusion)", game);
+    goto err;
   }
 
   if (!PyList_Check(pypockets))
@@ -1291,7 +1296,22 @@ poker_eval(PyObject *self, PyObject *args, PyObject *keywds)
     int err;
     memset(&cresult, '\0', sizeof(enum_result_t));
 
-    if (iterations > 0)
+    if (params->game == game_fusion)
+    {
+      /* Fusion deals the board and the players' future hole cards, which is a
+         per-board plan the fixed numToDeal cards above cannot express, so it
+         goes through the enumerator that owns those rules. */
+      int nboard_cards = StdDeck_numCards(board_cards);
+      if (iterations > 0)
+      {
+        err = enumSample(game_fusion, pockets, board_cards, dead_cards, pockets_size, nboard_cards, iterations, 0, &cresult);
+      }
+      else
+      {
+        err = enumExhaustive(game_fusion, pockets, board_cards, dead_cards, pockets_size, nboard_cards, 0, &cresult);
+      }
+    }
+    else if (iterations > 0)
     {
       err = pyenumSample(params->game, pockets, numToDeal, board_cards, dead_cards, pockets_size + 1, iterations, &cresult);
     }
@@ -1707,6 +1727,10 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   {
     game = game_lowball27;
   }
+  else if (!strcmp(game_name_str, "fusion"))
+  {
+    game = game_fusion;
+  }
   else
   {
     PyErr_Format(PyExc_ValueError, "Invalid game name: %s", game_name_str);
@@ -2066,6 +2090,8 @@ static PyObject *calculate_multiway_equity(PyObject *self, PyObject *args, PyObj
     game = game_lowball;
   else if (!strcmp(game_name_str, "lowball27"))
     game = game_lowball27;
+  else if (!strcmp(game_name_str, "fusion"))
+    game = game_fusion;
   else
   {
     if (owned_board_list)

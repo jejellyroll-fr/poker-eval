@@ -233,9 +233,10 @@ static void test_fusion_basic(void)
 
     params = enumGameParams(game_fusion);
     if (params != NULL) {
-        /* Fusion starts with 2 cards like Hold'em */
+        /* Fusion starts with 2 cards like Hold'em and ends with 4 on the
+           turn, evaluated Omaha-style. */
         TEST_ASSERT_EQUAL_INT(2, params->minpocket);
-        TEST_ASSERT_EQUAL_INT(2, params->maxpocket);
+        TEST_ASSERT_EQUAL_INT(4, params->maxpocket);
     }
 }
 

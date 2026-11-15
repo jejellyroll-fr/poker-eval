@@ -1725,6 +1725,11 @@ add_unity_test(test_enumerate_edge_cases test_enumerate_edge_cases.c)
 set_tests_properties(test_enumerate_edge_cases PROPERTIES
     LABELS "enumerate;coverage;phase5" TIMEOUT 120)
 
+# Fusion equity deals future hole cards and evaluates Omaha Hi (issue #295).
+add_poker_test(test_fusion_equity)
+set_tests_properties(test_fusion_equity PROPERTIES
+    LABELS "equity;games;fusion" TIMEOUT 120)
+
 add_unity_test(test_range_equity_coverage test_range_equity_coverage.c)
 set_tests_properties(test_range_equity_coverage PROPERTIES
     LABELS "equity;coverage;phase5" TIMEOUT 120)

@@ -59,7 +59,7 @@ static void test_all_game_params(void) {
       {game_badugi, "Badugi", 4, 4},
       {game_badacey, "Badacey", 5, 5},
       {game_badeucy, "Badeucy", 5, 5},
-      {game_fusion, "Fusion", 2, 2},
+      {game_fusion, "Fusion", 2, 4},
       {game_irish, "Irish", 4, 4},
       {game_doubleflop_holdem, "DoubleFlop", 2, 2},
       {game_ofc, "OFC", 13, 13},
