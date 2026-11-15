@@ -11,7 +11,8 @@ regrets, and every convergence measurement is the exact best response of the
 vector lane (`br_mode=exact`, `guarantee=nash`). Nothing is sampled, so a
 target is a measured value and not an estimate.
 
-What it records, per (schedule, target, seed):
+What it records, per (schedule, target, seed), or per (schedule, seed) in
+fixed-horizon mode:
 
 * wall-clock seconds for the whole process, separately from the solve quality
   fields the report carries (`measurement_iteration`, `br_mode`, `guarantee`);
@@ -43,7 +44,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "pe-plo4-time-to-target/v2"
+SCHEMA = "pe-plo4-time-to-target/v3"
 GAME = "plo4"
 BOARD = "Ks9d4c2hTs"
 POT = 63.0
@@ -280,9 +281,8 @@ def summarize_fixed(runs: list[dict[str, Any]]) -> dict[str, Any]:
             solve / iteration * 1000.0
             for solve, iteration in zip(solves, iterations)
         ]
-        br_seconds = [max(0.0, total - solve) for total, solve in zip(elapsed, solves)]
-        br_fractions = [
-            br / total for br, total in zip(br_seconds, elapsed) if total > 0.0
+        br_seconds = [
+            max(0.0, total - solve) for total, solve in zip(elapsed, solves)
         ]
 
         summary[schedule] = {
@@ -297,15 +297,17 @@ def summarize_fixed(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "median_solve_seconds": _median(solves),
             "median_solve_ms_per_iteration": _median(solve_per_iteration),
             "median_br_seconds": _median(br_seconds),
-            "median_br_fraction": _median(br_fractions),
-            "median_elapsed_seconds": _median(elapsed),
         }
     return summary
 
 
 def render_fixed_markdown(summary: dict[str, Any]) -> str:
+    header = (
+        "| schedule | completed | final iter | median exploitability | "
+        "solve ms/iter | solve s | BR s | wall s |"
+    )
     lines = [
-        "| schedule | completed | final iter | median exploitability | solve ms/iter | solve s | BR s | wall s |",
+        header,
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for schedule in SCHEDULES:
@@ -417,11 +419,12 @@ def main(argv: list[str]) -> int:
         "--iterations", type=int, default=DEFAULT_ITERATIONS,
         help="iteration cap; exact horizon with --fixed-horizon",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--fixed-horizon", action="store_true",
         help="run every schedule to --iterations without stopping on a target",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--targets", type=parse_targets, default=DEFAULT_TARGETS,
         help="comma-separated exploitability targets in mbb/game",
     )
@@ -445,7 +448,13 @@ def main(argv: list[str]) -> int:
 
     if options.iterations <= 0:
         parser.error("--iterations must be positive")
+    if options.interval <= 0:
+        parser.error("--interval must be positive")
     fixed_horizon = options.fixed_horizon
+    if fixed_horizon and options.iterations % options.interval != 0:
+        parser.error(
+            "--iterations must be a multiple of --interval in fixed-horizon mode"
+        )
     output = Path(
         options.output
         or (
@@ -480,6 +489,23 @@ def main(argv: list[str]) -> int:
                     print(str(error), file=sys.stderr)
                     return 1
 
+    if fixed_horizon:
+        missing = [
+            run for run in runs
+            if (
+                not run.get("complete")
+                or not run.get("checkpoints")
+                or int(run["checkpoints"][-1].get("iteration", 0))
+                != options.iterations
+            )
+        ]
+        if missing:
+            print(
+                "fixed-horizon run did not produce a final checkpoint at the horizon",
+                file=sys.stderr,
+            )
+            return 1
+
     summary = summarize_fixed(runs) if fixed_horizon else summarize(
         runs, options.targets
     )
@@ -487,7 +513,7 @@ def main(argv: list[str]) -> int:
     document = {
         "schema": SCHEMA,
         "issue": 284,
-        "mode": "fixed-horizon" if fixed_horizon else "time-to-target",
+        "campaign_mode": "fixed-horizon" if fixed_horizon else "time-to-target",
         "game": {
             "game": GAME,
             "board": BOARD,

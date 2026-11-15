@@ -497,10 +497,12 @@ python3 benchmarks/solver/plo4_time_to_target.py \
   --seeds 11,23,37,53,71 --output build/plo4-fixed-horizon.json
 ```
 
-This report has `mode=fixed-horizon` and a per-schedule summary of final
-exploitability, solve per iteration excluding best responses, and the separate
-BR cost. Use its brackets for a common-iteration comparison; its wall times are
-not directly comparable with target-stopped runs that stop earlier.
+This report has `campaign_mode=fixed-horizon` and a per-schedule summary of
+final exploitability, solve per iteration excluding best responses, and the
+separate BR cost. `--iterations` must be a multiple of `--interval` so the final
+checkpoint is exactly at the horizon. Use the per-iteration fields for a
+common-iteration comparison; its wall times are not directly comparable with
+target-stopped runs that stop earlier.
 
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`

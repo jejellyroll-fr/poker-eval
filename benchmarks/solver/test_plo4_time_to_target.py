@@ -137,6 +137,13 @@ class ParsingTests(unittest.TestCase):
         with self.assertRaises(Exception):
             probe.parse_seeds("-1")
 
+    def test_fixed_horizon_requires_divisible_interval(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            probe.main([
+                "probe", "--fixed-horizon", "--iterations", "160",
+                "--interval", "3",
+            ])
+
 
 class CommandTests(unittest.TestCase):
     def test_command_pins_the_game_and_schedule(self) -> None:
@@ -303,7 +310,8 @@ class MainTests(unittest.TestCase):
                 ])
             self.assertEqual(status, 0)
             document = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(document["mode"], "fixed-horizon")
+        self.assertEqual(document["schema"], "pe-plo4-time-to-target/v3")
+        self.assertEqual(document["campaign_mode"], "fixed-horizon")
         self.assertEqual(document["game"]["targets_mbb_per_game"], [])
         self.assertEqual(document["summary"]["fixed"]["median_final_iteration"],
                          160.0)
