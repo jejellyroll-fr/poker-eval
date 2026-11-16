@@ -102,6 +102,85 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("| 100 | hs15 | 0/1 | unreached |", table)
 
 
+class CostReportingTests(unittest.TestCase):
+    """Issue #284: memory and certification overhead belong in the table."""
+
+    @staticmethod
+    def _measured(
+        seed: int, seconds: float, solve: float, br_seconds: float,
+        peak_rss: int, exploitability: float,
+    ) -> dict:
+        outcome = run("hs30", seed, 5000.0, seconds, exploitability)
+        outcome.update({
+            "peak_rss_bytes": peak_rss,
+            "storage_bytes": 4096,
+            "infosets": 4,
+            "stopping_reason": "target_reached",
+            "target_bracket": {
+                "target_mbb": 5000.0,
+                "last_above": None,
+                "first_below": {
+                    "iteration": 40,
+                    "elapsed_seconds": seconds,
+                    "solve_seconds": solve,
+                    "br_seconds": br_seconds,
+                    "exploitability_mbb_per_game": exploitability,
+                },
+                "bracketed": True,
+            },
+        })
+        return outcome
+
+    def test_summary_reports_memory_and_certification_cost(self) -> None:
+        runs = [
+            self._measured(1, 0.30, 0.22, 0.08, 100 * 1024 * 1024, 4200.0),
+            self._measured(2, 0.20, 0.12, 0.08, 200 * 1024 * 1024, 4300.0),
+        ]
+
+        entry = probe.summarize(runs, [5000.0])["hs30"]["5000"]
+
+        self.assertAlmostEqual(
+            entry["median_solve_seconds_to_first_below"], 0.17
+        )
+        self.assertAlmostEqual(entry["median_br_seconds_to_first_below"], 0.08)
+        self.assertEqual(
+            entry["peak_rss_bytes"]["max"], 200 * 1024 * 1024
+        )
+        self.assertAlmostEqual(entry["solver_storage_bytes"]["median"], 4096.0)
+        self.assertEqual(entry["infosets"]["median"], 4.0)
+        self.assertEqual(entry["stopping_reasons"], ["target_reached"])
+
+    def test_unknown_memory_is_not_invented(self) -> None:
+        entry = probe.summarize(
+            [run("hs15", 1, 5000.0, 0.1, 4200.0)], [5000.0]
+        )["hs15"]["5000"]
+
+        self.assertIsNone(entry["peak_rss_bytes"]["median"])
+        self.assertIsNone(entry["solver_storage_bytes"]["median"])
+
+    def test_markdown_includes_certification_and_memory(self) -> None:
+        runs = [
+            self._measured(1, 0.30, 0.22, 0.08, 200 * 1024 * 1024, 4200.0)
+        ]
+
+        table = probe.render_markdown(
+            probe.summarize(runs, [5000.0]), [5000.0]
+        )
+
+        self.assertIn("| solve s | BR s | peak MiB |", table)
+        self.assertIn("| 0.220 | 0.080 | 200.0 |", table)
+
+    def test_stopping_reason_is_derived_from_progress(self) -> None:
+        self.assertEqual(
+            probe.stopping_reason({"target_reached": True}, 1000.0),
+            "target_reached",
+        )
+        self.assertEqual(
+            probe.stopping_reason({"complete": True}, None), "iteration_budget"
+        )
+        self.assertEqual(probe.stopping_reason({}, 1000.0), "incomplete")
+
+
 class InertScheduleTests(unittest.TestCase):
     def test_identical_measurements_flag_the_schedule_dimension(self) -> None:
         runs = [
@@ -310,11 +389,63 @@ class MainTests(unittest.TestCase):
                 ])
             self.assertEqual(status, 0)
             document = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(document["schema"], "pe-plo4-time-to-target/v3")
+        self.assertEqual(document["schema"], probe.SCHEMA)
         self.assertEqual(document["campaign_mode"], "fixed-horizon")
         self.assertEqual(document["game"]["targets_mbb_per_game"], [])
         self.assertEqual(document["summary"]["fixed"]["median_final_iteration"],
                          160.0)
+
+
+class MethodCoverageTests(unittest.TestCase):
+    """Issue #284: unsupported lanes are named, never folded into the table."""
+
+    def test_unsupported_methods_are_recorded(self) -> None:
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            outcome = run(schedule, seed, target, 0.1, values[schedule])
+            outcome.update({
+                "br_mode": "exact",
+                "guarantee": "nash",
+                "stopping_reason": "target_reached",
+            })
+            return outcome
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "report.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--targets", "1000",
+                    "--seeds", "1", "--iterations", "10",
+                    "--output", str(output),
+                ])
+            self.assertEqual(status, 0)
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(document["schema"], probe.SCHEMA)
+        self.assertEqual(
+            [entry["method"] for entry in document["methods"]["compared"]],
+            ["dcfr/fixed", "dcfr/hs15", "dcfr/hs30"],
+        )
+        self.assertEqual(
+            document["methods"]["compared"][0]["role"], "control"
+        )
+        self.assertEqual(
+            {entry["method"] for entry in document["methods"]["unsupported"]},
+            {"hs_pcfr_plus", "deep_predictive_cfr", "monker_import"},
+        )
+        for entry in document["methods"]["unsupported"]:
+            self.assertTrue(entry["reason"].strip())
+        self.assertIn("cpu_model", document["environment"])
+        self.assertIn("logical_cores", document["environment"])
+        self.assertIn("mbb per hand", document["methods"]["quality_definition"])
 
 
 if __name__ == "__main__":
