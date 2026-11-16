@@ -276,6 +276,76 @@ class FixedHorizonTests(unittest.TestCase):
         self.assertIn("| fixed | 1/1 | 160 |", table)
         self.assertIn("250.000", table)
 
+    def test_intermediate_reports_go_to_a_scratch_directory(self) -> None:
+        seen: list[Path] = []
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            seen.append(Path(workdir))
+            return fixed_run(schedule, seed, 0.1, 0.08, 0.02,
+                             values[schedule], iterations)
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "baseline.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                probe.main([
+                    "probe", "--solver", str(solver), "--fixed-horizon",
+                    "--iterations", "160", "--seeds", "1",
+                    "--output", str(output),
+                ])
+            self.assertEqual(
+                [path.name for path in output.parent.glob("report-*.json")], []
+            )
+
+        self.assertTrue(seen)
+        self.assertEqual(len(set(seen)), 1)
+        self.assertFalse(seen[0].exists())
+
+    def test_omit_checkpoints_keeps_summary_and_metrics(self) -> None:
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            return fixed_run(schedule, seed, 0.1, 0.08, 0.02,
+                             values[schedule], iterations)
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "trimmed.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--fixed-horizon",
+                    "--iterations", "160", "--seeds", "1",
+                    "--omit-checkpoints", "--output", str(output),
+                ])
+            self.assertEqual(status, 0)
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertTrue(document["artifact"]["checkpoints_omitted"])
+        for run in document["runs"]:
+            self.assertNotIn("checkpoints", run)
+            self.assertIsNotNone(run["exploitability_mbb_per_game"])
+        self.assertEqual(
+            document["summary"]["fixed"]["median_exploitability_mbb_per_game"],
+            800.0,
+        )
+        self.assertEqual(
+            document["summary"]["fixed"]["median_solve_ms_per_iteration"],
+            0.08 / 160.0 * 1000.0,
+        )
+
 
 class TargetBracketTests(unittest.TestCase):
     def test_bracket_reports_last_above_and_first_below(self) -> None:

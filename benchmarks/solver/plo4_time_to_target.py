@@ -40,6 +40,12 @@ With --fixed-horizon, the same seeded runs stop at --iterations even when a
 target would have stopped them earlier. The report then summarizes final
 exploitability and the separate solve/BR timing per schedule, which makes a
 common-iteration comparison possible without target-detection latency.
+
+With --omit-checkpoints the per-run checkpoint histories are left out of the
+written document; the summary and every per-run metric stay. The summary and the
+inert-schedule/inert-seed diagnostics are still computed from the full history,
+so a checked-in baseline can be review-sized without losing the evidence it is
+quoted for.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -636,6 +643,13 @@ def main(argv: list[str]) -> int:
         help="iterations between exact-BR measurements",
     )
     parser.add_argument(
+        "--omit-checkpoints", action="store_true",
+        help=(
+            "write summaries and per-run metrics without the per-run "
+            "checkpoint histories"
+        ),
+    )
+    parser.add_argument(
         "--output", default=None,
         help="JSON destination",
     )
@@ -662,27 +676,31 @@ def main(argv: list[str]) -> int:
     if not solver.is_file():
         print(f"missing solver: {solver}", file=sys.stderr)
         return 2
-    workdir = output.resolve().parent
-    workdir.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     runs: list[dict[str, Any]] = []
     targets: list[float | None] = (
         [None] if fixed_horizon else list(options.targets)
     )
-    for schedule in SCHEDULES:
-        for target in targets:
-            for seed in options.seeds:
-                try:
-                    runs.append(
-                        run_once(
-                            solver, schedule, seed, target,
-                            options.iterations, options.interval,
-                            options.combos, workdir,
+    # The per-run solver reports are intermediates, not artifacts. Keeping them
+    # in a scratch directory means writing a baseline straight into the
+    # repository does not litter it with one JSON per run.
+    with tempfile.TemporaryDirectory(prefix="pe-plo4-ttt-") as scratch:
+        workdir = Path(scratch)
+        for schedule in SCHEDULES:
+            for target in targets:
+                for seed in options.seeds:
+                    try:
+                        runs.append(
+                            run_once(
+                                solver, schedule, seed, target,
+                                options.iterations, options.interval,
+                                options.combos, workdir,
+                            )
                         )
-                    )
-                except RuntimeError as error:
-                    print(str(error), file=sys.stderr)
-                    return 1
+                    except RuntimeError as error:
+                        print(str(error), file=sys.stderr)
+                        return 1
 
     if fixed_horizon:
         missing = [
@@ -789,6 +807,20 @@ def main(argv: list[str]) -> int:
         "runs": runs,
         "summary": summary,
     }
+    if options.omit_checkpoints:
+        # The summary and the diagnostics above were computed from the full
+        # histories; only the written copy drops them.
+        for run in document["runs"]:
+            run.pop("checkpoints", None)
+        document["artifact"] = {
+            "checkpoints_omitted": True,
+            "note": (
+                "Per-run checkpoint histories are omitted to keep this "
+                "artifact review-sized. The summary block is computed from "
+                "them, and rerunning the same command without this flag "
+                "reproduces the full trace."
+            ),
+        }
     with open(output, "w", encoding="utf-8") as output_file:
         json.dump(document, output_file, indent=2, sort_keys=True)
         output_file.write("\n")

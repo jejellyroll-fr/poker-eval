@@ -502,7 +502,22 @@ parameter-only comparison.
 `--seed` seeds both the solver and the range sample: a partial range is drawn
 from that stream, while a range equal to the legal four-card hands is enumerated
 and therefore seed-independent. The lane A report says which one ran
-(`range_mode`), so the two cases cannot be confused. The probe sets
+(`range_mode`), so the two cases cannot be confused.
+
+**Comparability.** The seed now determines the sampled game itself, not only
+the solver's own stream. A lane A run with a different `--seed` is a different
+spot, so:
+
+- numbers produced before the seed reached the range sample are **not
+  comparable** with runs from this revision (they measured one game five times,
+  with a zero spread that was an artefact);
+- schedules must be compared **paired by seed**: seed 11 of one schedule and
+  seed 11 of another solve the same sampled ranges, while seed 11 against seed
+  23 compares two different games;
+- a per-seed spread is game variance, not solver noise, so it belongs beside the
+  median rather than being averaged away.
+
+The probe sets
 `diagnostics.seeds_are_inert` and exits non-zero when a schedule/target group
 reports one measurement for every seed while its range was sampled: the spread
 would then be a repetition check presented as a distribution. An enumerated
@@ -545,8 +560,19 @@ target-stopped runs that stop earlier.
 
 The checked-in `benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json`
 is one such fixed-horizon campaign (Apple M5, 512 combos, 160 iterations,
-interval 2, seeds 11,23,37,53,71). Its geometry, recorded trajectories and
-exploitability definition are reproducible from the command above; its wall
+interval 2, seeds 11,23,37,53,71) written with `--omit-checkpoints`, so it keeps
+the summary, the per-run metrics and the diagnostics without the 80-entry
+traces per run:
+
+```
+python3 benchmarks/solver/plo4_time_to_target.py \
+  --fixed-horizon --iterations 160 --interval 2 \
+  --seeds 11,23,37,53,71 --omit-checkpoints \
+  --output benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json
+```
+
+Its geometry, trajectories and exploitability definition are reproducible from
+that command (omit the flag to get the full checkpoint trace back); its wall
 clocks and peak RSS are evidence from that machine, not a CI speed gate, which
 is why the campaign stays out of the smoke job's pass criteria.
 
