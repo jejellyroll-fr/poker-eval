@@ -127,6 +127,7 @@ typedef struct
     pe_dcfr_schedule_t schedule;
     uint64_t horizon;
     pe_precision_mode_t precision;
+    int range_enumerated;
     int first_to_act;
 } options_t;
 
@@ -209,13 +210,17 @@ static void enumerate_all_hands(const int *live, size_t live_count,
                 }
 }
 
-static int sample_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+static int sample_hands(mask_t board, size_t count, uint64_t seed,
+                        pe_omaha_combo_t *out)
 {
     int live[MODERN_DECK_SIZE];
     size_t live_count = live_cards(board, live);
     size_t capacity = 16u;
     size_t produced = 0u;
-    uint64_t state = 0x5eed2026u;
+    /* The stream is derived from --seed so repeated-seed campaigns really do
+       draw different ranges. Multiplying by an odd constant is a bijection
+       modulo 2^64, so distinct seeds start from distinct states. */
+    uint64_t state = 0x5eed2026u ^ (seed * 0x9e3779b97f4a7c15ULL);
     mask_t *seen;
 
     while (capacity < count * 2u)
@@ -249,7 +254,8 @@ static int sample_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
     return 0;
 }
 
-static int enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+static int enumerate_hands(mask_t board, size_t count, uint64_t seed,
+                           pe_omaha_combo_t *out)
 {
     int live[MODERN_DECK_SIZE];
     size_t live_count = live_cards(board, live);
@@ -259,7 +265,7 @@ static int enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
         enumerate_all_hands(live, live_count, out);
         return 0;
     }
-    return sample_hands(board, count, out);
+    return sample_hands(board, count, seed, out);
 }
 
 static int parse_double(const char *text, double *out)
@@ -309,7 +315,7 @@ static void usage(const char *program)
             "  --algorithm NAME      v3 preset (default dcfr)\n"
             "  --dcfr-schedule NAME  fixed, hs15 or hs30 (default fixed)\n"
             "  --dcfr-horizon N      n in the schedule equations (default 1000)\n"
-            "  --seed N              solver seed (default 1)\n"
+            "  --seed N              solver and range-sample seed (default 1)\n"
             "  --output PATH         JSON destination (default stdout)\n"
             "  --help\n",
             program);
@@ -430,7 +436,7 @@ static int write_report(const char *path, const options_t *options,
             "\"algorithm\":\"%s\",\"dcfr_schedule\":\"%s\","
             "\"dcfr_horizon\":%llu,\"dcfr_params\":{\"iteration\":%llu,"
             "\"alpha\":%.17g,\"beta\":%.17g,\"gamma\":%.17g},"
-            "\"precision\":\"%s\","
+            "\"precision\":\"%s\",\"range_mode\":\"%s\","
             "\"seed\":%llu,\"target_mbb\":%.17g,"
             "\"progress\":{\"iteration\":%llu,\"complete\":%s,"
             "\"target_reached\":%s},"
@@ -452,6 +458,7 @@ static int write_report(const char *path, const options_t *options,
             (unsigned long long)params_iteration,
             params.alpha, params.beta, params.gamma,
             pe_precision_name(options->precision),
+            options->range_enumerated ? "enumerated" : "sampled",
             (unsigned long long)options->seed,
             options->target_mbb,
             (unsigned long long)result->iterations,
@@ -622,8 +629,11 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    options.range_enumerated =
+        options.combos == pe_omaha_combo_count(board, 4u);
     combos = (pe_omaha_combo_t *)calloc(options.combos, sizeof(*combos));
-    if (!combos || enumerate_hands(board, options.combos, combos) != 0)
+    if (!combos || enumerate_hands(board, options.combos, options.seed,
+                                   combos) != 0)
     {
         fprintf(stderr, "pe-plo4-lane-a: range generation failed\n");
         free(combos);

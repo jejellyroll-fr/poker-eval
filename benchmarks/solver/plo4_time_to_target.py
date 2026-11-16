@@ -31,7 +31,10 @@ schedules are DCFR's fixed exponents (the control) and the training-free
 HS-DCFR(15)/HS-DCFR(30) schedules of Zhang et al. (AAAI 2026). Methods that the
 lane cannot run with matched semantics (HS-PCFR+, deep predictive CFR, imported
 commercial strategies) are listed as unsupported in the report instead of being
-folded into the comparison.
+folded into the comparison. A campaign whose seeds changed nothing while the
+range was sampled is flagged (`diagnostics.seeds_are_inert`): repeated seeds are
+then a repetition check, not a distribution. An enumerated range is
+seed-independent by construction and is never flagged.
 
 With --fixed-horizon, the same seeded runs stop at --iterations even when a
 target would have stopped them earlier. The report then summarizes final
@@ -52,7 +55,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "pe-plo4-time-to-target/v4"
+SCHEMA = "pe-plo4-time-to-target/v5"
 GAME = "plo4"
 BOARD = "Ks9d4c2hTs"
 POT = 63.0
@@ -236,6 +239,7 @@ def run_once(
         "horizon": report.get("dcfr_horizon"),
         "dcfr_params": report.get("dcfr_params"),
         "precision": report.get("precision"),
+        "range_mode": report.get("range_mode"),
         "seconds": elapsed,
         "complete": bool(progress.get("complete")),
         "reached": (
@@ -486,6 +490,34 @@ def schedules_are_inert(runs: list[dict[str, Any]]) -> bool:
     )
 
 
+def seeds_are_inert(runs: list[dict[str, Any]]) -> bool:
+    """True when every seed produced the same measurement on a sampled range.
+
+    A fully enumerated range is seed-independent by construction, so identical
+    rows are expected there and never flagged. A sampled range that reports one
+    measurement for every seed is the failure mode this catches: `--seed` never
+    reached the range sample, so the reported spread would be invented. At
+    least two seeds of the same schedule and target are required before the
+    claim means anything.
+    """
+    grouped: dict[tuple[str, Any], list[dict[str, Any]]] = {}
+    for run in runs:
+        grouped.setdefault((run["schedule"], run["target_mbb"]), []).append(run)
+    for group in grouped.values():
+        if len({run.get("seed") for run in group}) < 2:
+            continue
+        if not any(run.get("range_mode") == "sampled" for run in group):
+            continue
+        measurements = {
+            (run.get("exploitability_mbb_per_game"),
+             run.get("measurement_iteration"))
+            for run in group
+        }
+        if len(measurements) == 1:
+            return True
+    return False
+
+
 def render_markdown(summary: dict[str, Any], targets: list[float]) -> str:
     """Render the time-to-target table with its certification and memory cost.
 
@@ -673,6 +705,7 @@ def main(argv: list[str]) -> int:
         runs, options.targets
     )
     inert = schedules_are_inert(runs)
+    seeds_inert = seeds_are_inert(runs)
     document = {
         "schema": SCHEMA,
         "issue": 284,
@@ -733,13 +766,24 @@ def main(argv: list[str]) -> int:
         },
         "diagnostics": {
             "schedules_are_inert": inert,
-            "note": (
+            "seeds_are_inert": seeds_inert,
+            "schedules_note": (
                 "True means every schedule produced the same exploitability "
                 "at the same iteration: the driver applies one update rule "
                 "and the schedule dimension is not a comparison."
             ) if inert else (
                 "Schedules produced different measurements; the summary is a "
                 "comparison."
+            ),
+            "seeds_note": (
+                "True means every seed produced the same measurement while "
+                "the range was sampled: --seed never reached the range "
+                "sample, so the per-seed spread is a repetition check, not a "
+                "distribution."
+            ) if seeds_inert else (
+                "No seed group reported one measurement across a sampled "
+                "range; an enumerated range is seed-independent and is not "
+                "flagged."
             ),
         },
         "runs": runs,
@@ -761,6 +805,14 @@ def main(argv: list[str]) -> int:
             "an algorithm comparison",
             file=sys.stderr,
         )
+    if seeds_inert:
+        print(
+            "error: every seed produced the same measurement on a sampled "
+            "range; --seed did not reach the range sample, so the per-seed "
+            "spread is not a distribution",
+            file=sys.stderr,
+        )
+    if inert or seeds_inert:
         return 1
     return 0
 

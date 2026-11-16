@@ -499,6 +499,15 @@ are excluded until class mapping, range/board/tree equivalence and quantized
 action probabilities are validated. None of them is folded into the table as a
 parameter-only comparison.
 
+`--seed` seeds both the solver and the range sample: a partial range is drawn
+from that stream, while a range equal to the legal four-card hands is enumerated
+and therefore seed-independent. The lane A report says which one ran
+(`range_mode`), so the two cases cannot be confused. The probe sets
+`diagnostics.seeds_are_inert` and exits non-zero when a schedule/target group
+reports one measurement for every seed while its range was sampled: the spread
+would then be a repetition check presented as a distribution. An enumerated
+range is never flagged.
+
 The probe still writes `diagnostics.schedules_are_inert` and warns if a driver
 ever applies one update rule for every schedule, so identical rows are never
 presented as an algorithm comparison, and the probe then exits non-zero so CI
@@ -533,6 +542,13 @@ separate BR cost. `--iterations` must be a multiple of `--interval` so the final
 checkpoint is exactly at the horizon. Use the per-iteration fields for a
 common-iteration comparison; its wall times are not directly comparable with
 target-stopped runs that stop earlier.
+
+The checked-in `benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json`
+is one such fixed-horizon campaign (Apple M5, 512 combos, 160 iterations,
+interval 2, seeds 11,23,37,53,71). Its geometry, recorded trajectories and
+exploitability definition are reproducible from the command above; its wall
+clocks and peak RSS are evidence from that machine, not a CI speed gate, which
+is why the campaign stays out of the smoke job's pass criteria.
 
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`

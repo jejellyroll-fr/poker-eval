@@ -448,5 +448,76 @@ class MethodCoverageTests(unittest.TestCase):
         self.assertIn("mbb per hand", document["methods"]["quality_definition"])
 
 
+class SeedEffectTests(unittest.TestCase):
+    """Issue #284: repeated seeds must actually change a sampled range."""
+
+    @staticmethod
+    def _run(schedule: str, seed: int, exploitability: float,
+             range_mode: str) -> dict:
+        outcome = run(schedule, seed, 5000.0, 0.1, exploitability)
+        outcome["range_mode"] = range_mode
+        return outcome
+
+    def test_identical_seeds_on_a_sampled_range_are_flagged(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "sampled"),
+            self._run("fixed", 2, 800.0, "sampled"),
+        ]
+        self.assertTrue(probe.seeds_are_inert(runs))
+
+    def test_enumerated_range_is_not_flagged(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "enumerated"),
+            self._run("fixed", 2, 800.0, "enumerated"),
+        ]
+        self.assertFalse(probe.seeds_are_inert(runs))
+
+    def test_single_seed_is_not_a_distribution(self) -> None:
+        self.assertFalse(
+            probe.seeds_are_inert([self._run("fixed", 1, 800.0, "sampled")])
+        )
+
+    def test_different_measurements_are_a_distribution(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "sampled"),
+            self._run("fixed", 2, 790.0, "sampled"),
+        ]
+        self.assertFalse(probe.seeds_are_inert(runs))
+
+    def test_main_fails_when_seeds_are_inert(self) -> None:
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            outcome = run(schedule, seed, target, 0.1, values[schedule])
+            outcome.update({
+                "br_mode": "exact",
+                "guarantee": "nash",
+                "stopping_reason": "target_reached",
+                "range_mode": "sampled",
+            })
+            return outcome
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "report.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--targets", "1000",
+                    "--seeds", "1,2", "--iterations", "10",
+                    "--output", str(output),
+                ])
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        self.assertTrue(document["diagnostics"]["seeds_are_inert"])
+        self.assertFalse(document["diagnostics"]["schedules_are_inert"])
+
+
 if __name__ == "__main__":
     unittest.main()
