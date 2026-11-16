@@ -562,7 +562,7 @@ The checked-in `benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json`
 is one such fixed-horizon campaign (Apple M5, 512 combos, 160 iterations,
 interval 2, seeds 11,23,37,53,71) written with `--omit-checkpoints`, so it keeps
 the summary, the per-run metrics and the diagnostics without the 80-entry
-traces per run:
+traces per run. The document states the omission as `checkpoints_omitted`:
 
 ```
 python3 benchmarks/solver/plo4_time_to_target.py \

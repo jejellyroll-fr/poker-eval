@@ -1,8 +1,4 @@
 {
-  "artifact": {
-    "checkpoints_omitted": true,
-    "note": "Per-run checkpoint histories are omitted to keep this artifact review-sized. The summary block is computed from them, and rerunning the same command without this flag reproduces the full trace."
-  },
   "br_quality": {
     "guarantee": [
       "nash"
@@ -13,6 +9,7 @@
     "note": "Lane A measures exact best responses; the fixed horizon is an iteration count, not a reached target."
   },
   "campaign_mode": "fixed-horizon",
+  "checkpoints_omitted": true,
   "diagnostics": {
     "schedules_are_inert": false,
     "schedules_note": "Schedules produced different measurements; the summary is a comparison.",
@@ -98,23 +95,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3964928,
+      "peak_rss_bytes": 3948544,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "fixed",
       "schedule": "fixed",
-      "seconds": 3.7244297079999997,
+      "seconds": 3.738758,
       "seed": 11,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5351999993436038,
+        "br_seconds": 1.5372409999836236,
         "checkpoints": 80,
-        "elapsed_seconds": 3.713351999875158,
-        "solve_seconds": 2.1781520005315542
+        "elapsed_seconds": 3.7268469999544322,
+        "solve_seconds": 2.1896059999708086
       }
     },
     {
@@ -132,23 +129,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3981312,
+      "peak_rss_bytes": 4014080,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "fixed",
       "schedule": "fixed",
-      "seconds": 3.7538732500000003,
+      "seconds": 3.8108921249999996,
       "seed": 23,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5578070001211017,
+        "br_seconds": 1.5940839995164424,
         "checkpoints": 80,
-        "elapsed_seconds": 3.7473949999548495,
-        "solve_seconds": 2.1895879998337477
+        "elapsed_seconds": 3.8045369999017566,
+        "solve_seconds": 2.2104530003853142
       }
     },
     {
@@ -166,23 +163,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 4030464,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "fixed",
       "schedule": "fixed",
-      "seconds": 3.956021583000001,
+      "seconds": 3.8982290419999996,
       "seed": 37,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5841629996430129,
+        "br_seconds": 1.6304709997493774,
         "checkpoints": 80,
-        "elapsed_seconds": 3.9488060001749545,
-        "solve_seconds": 2.3646430005319417
+        "elapsed_seconds": 3.890873000025749,
+        "solve_seconds": 2.260402000276372
       }
     },
     {
@@ -200,23 +197,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3981312,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "fixed",
       "schedule": "fixed",
-      "seconds": 3.7403312920000005,
+      "seconds": 3.7959734580000006,
       "seed": 53,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.4768340000882745,
+        "br_seconds": 1.5439649990294129,
         "checkpoints": 80,
-        "elapsed_seconds": 3.734074000036344,
-        "solve_seconds": 2.2572399999480695
+        "elapsed_seconds": 3.7884700000286102,
+        "solve_seconds": 2.2445050009991974
       }
     },
     {
@@ -234,23 +231,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3997696,
+      "peak_rss_bytes": 3981312,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "fixed",
       "schedule": "fixed",
-      "seconds": 3.934270333999999,
+      "seconds": 4.027020541999999,
       "seed": 71,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.6327049992978573,
+        "br_seconds": 1.6853669991251081,
         "checkpoints": 80,
-        "elapsed_seconds": 3.927459000144154,
-        "solve_seconds": 2.2947540008462965
+        "elapsed_seconds": 4.019779999973252,
+        "solve_seconds": 2.3344130008481443
       }
     },
     {
@@ -274,17 +271,17 @@
       "reached": null,
       "requested_schedule": "hs15",
       "schedule": "hs15",
-      "seconds": 3.86003075,
+      "seconds": 4.166631041999999,
       "seed": 11,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.567362999310717,
+        "br_seconds": 1.7848709993995726,
         "checkpoints": 80,
-        "elapsed_seconds": 3.8534220000728965,
-        "solve_seconds": 2.2860590007621795
+        "elapsed_seconds": 4.159469000063837,
+        "solve_seconds": 2.374598000664264
       }
     },
     {
@@ -308,17 +305,17 @@
       "reached": null,
       "requested_schedule": "hs15",
       "schedule": "hs15",
-      "seconds": 3.787229707999998,
+      "seconds": 4.147007959,
       "seed": 23,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5710619988385588,
+        "br_seconds": 1.7653840009588748,
         "checkpoints": 80,
-        "elapsed_seconds": 3.7812060001306236,
-        "solve_seconds": 2.210144001292065
+        "elapsed_seconds": 4.138264000182971,
+        "solve_seconds": 2.3728799992240965
       }
     },
     {
@@ -336,23 +333,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3981312,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs15",
       "schedule": "hs15",
-      "seconds": 3.799756125000002,
+      "seconds": 3.9588399589999987,
       "seed": 37,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5774229995440692,
+        "br_seconds": 1.688393998425454,
         "checkpoints": 80,
-        "elapsed_seconds": 3.7931770000141114,
-        "solve_seconds": 2.2157540004700422
+        "elapsed_seconds": 3.952363000018522,
+        "solve_seconds": 2.2639690015930682
       }
     },
     {
@@ -370,23 +367,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 4014080,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs15",
       "schedule": "hs15",
-      "seconds": 3.6435836250000015,
+      "seconds": 3.9372520830000006,
       "seed": 53,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.4526569994632155,
+        "br_seconds": 1.5703950002789497,
         "checkpoints": 80,
-        "elapsed_seconds": 3.6367020001634955,
-        "solve_seconds": 2.18404500070028
+        "elapsed_seconds": 3.9299790000077337,
+        "solve_seconds": 2.359583999728784
       }
     },
     {
@@ -404,23 +401,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3981312,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs15",
       "schedule": "hs15",
-      "seconds": 3.811817167000001,
+      "seconds": 4.003810167000005,
       "seed": 71,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5601360001601279,
+        "br_seconds": 1.6799429999664426,
         "checkpoints": 80,
-        "elapsed_seconds": 3.805930000031367,
-        "solve_seconds": 2.245793999871239
+        "elapsed_seconds": 3.997215999988839,
+        "solve_seconds": 2.3172730000223964
       }
     },
     {
@@ -438,23 +435,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3964928,
+      "peak_rss_bytes": 3948544,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs30",
       "schedule": "hs30",
-      "seconds": 3.9909252089999967,
+      "seconds": 4.142217584000001,
       "seed": 11,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.6936270000878721,
+        "br_seconds": 1.7418250001501292,
         "checkpoints": 80,
-        "elapsed_seconds": 3.9838389998767525,
-        "solve_seconds": 2.2902119997888803
+        "elapsed_seconds": 4.13476000004448,
+        "solve_seconds": 2.3929349998943508
       }
     },
     {
@@ -478,17 +475,17 @@
       "reached": null,
       "requested_schedule": "hs30",
       "schedule": "hs30",
-      "seconds": 3.7925290410000017,
+      "seconds": 4.057604415999997,
       "seed": 23,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5892050010152161,
+        "br_seconds": 1.7261160002090037,
         "checkpoints": 80,
-        "elapsed_seconds": 3.7862439998425543,
-        "solve_seconds": 2.197038998827338
+        "elapsed_seconds": 4.049800999928266,
+        "solve_seconds": 2.323684999719262
       }
     },
     {
@@ -506,23 +503,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3948544,
+      "peak_rss_bytes": 3981312,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs30",
       "schedule": "hs30",
-      "seconds": 3.8897238750000014,
+      "seconds": 4.0670094999999975,
       "seed": 37,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.5989390001632273,
+        "br_seconds": 1.7270700016524643,
         "checkpoints": 80,
-        "elapsed_seconds": 3.8832600000314415,
-        "solve_seconds": 2.284320999868214
+        "elapsed_seconds": 4.059935000026599,
+        "solve_seconds": 2.3328649983741343
       }
     },
     {
@@ -540,23 +537,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3981312,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs30",
       "schedule": "hs30",
-      "seconds": 3.706700208000001,
+      "seconds": 4.0759290419999985,
       "seed": 53,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.490195999853313,
+        "br_seconds": 1.6748800000641495,
         "checkpoints": 80,
-        "elapsed_seconds": 3.699456000002101,
-        "solve_seconds": 2.209260000148788
+        "elapsed_seconds": 4.068952000001445,
+        "solve_seconds": 2.394071999937296
       }
     },
     {
@@ -574,23 +571,23 @@
       "infosets": 4,
       "iterations_run": 160,
       "measurement_iteration": 160,
-      "peak_rss_bytes": 3981312,
+      "peak_rss_bytes": 3997696,
       "precision": "f64",
       "range_mode": "sampled",
       "reached": null,
       "requested_schedule": "hs30",
       "schedule": "hs30",
-      "seconds": 3.895501750000001,
+      "seconds": 4.027543999999999,
       "seed": 71,
       "stopping_reason": "iteration_budget",
       "storage_bytes": 66344,
       "target_bracket": null,
       "target_mbb": null,
       "timing": {
-        "br_seconds": 1.636145000346005,
+        "br_seconds": 1.6845860003959388,
         "checkpoints": 80,
-        "elapsed_seconds": 3.8892319998703897,
-        "solve_seconds": 2.2530869995243847
+        "elapsed_seconds": 4.019012000178918,
+        "solve_seconds": 2.3344259997829795
       }
     }
   ],
@@ -609,18 +606,18 @@
         "median": 4.0,
         "min": 4.0
       },
-      "max_seconds": 3.956021583000001,
-      "median_br_seconds": 1.5578070001211017,
+      "max_seconds": 4.027020541999999,
+      "median_br_seconds": 1.5940839995164424,
       "median_exploitability_mbb_per_game": 241.97430226874872,
       "median_final_iteration": 160.0,
-      "median_seconds": 3.7538732500000003,
-      "median_solve_ms_per_iteration": 14.107749999675434,
-      "median_solve_seconds": 2.2572399999480695,
-      "min_seconds": 3.7244297079999997,
+      "median_seconds": 3.8108921249999996,
+      "median_solve_ms_per_iteration": 14.028156256244984,
+      "median_solve_seconds": 2.2445050009991974,
+      "min_seconds": 3.738758,
       "peak_rss_bytes": {
-        "max": 4030464.0,
-        "median": 3981312.0,
-        "min": 3964928.0
+        "max": 4014080.0,
+        "median": 3997696.0,
+        "min": 3948544.0
       },
       "runs": 5,
       "solver_storage_bytes": {
@@ -645,17 +642,17 @@
         "median": 4.0,
         "min": 4.0
       },
-      "max_seconds": 3.86003075,
-      "median_br_seconds": 1.567362999310717,
+      "max_seconds": 4.166631041999999,
+      "median_br_seconds": 1.688393998425454,
       "median_exploitability_mbb_per_game": 247.33523407724405,
       "median_final_iteration": 160.0,
-      "median_seconds": 3.799756125000002,
-      "median_solve_ms_per_iteration": 13.848462502937764,
-      "median_solve_seconds": 2.2157540004700422,
-      "min_seconds": 3.6435836250000015,
+      "median_seconds": 4.003810167000005,
+      "median_solve_ms_per_iteration": 14.7473999983049,
+      "median_solve_seconds": 2.359583999728784,
+      "min_seconds": 3.9372520830000006,
       "peak_rss_bytes": {
-        "max": 4014080.0,
-        "median": 3981312.0,
+        "max": 3997696.0,
+        "median": 3997696.0,
         "min": 3964928.0
       },
       "runs": 5,
@@ -681,17 +678,17 @@
         "median": 4.0,
         "min": 4.0
       },
-      "max_seconds": 3.9909252089999967,
-      "median_br_seconds": 1.5989390001632273,
+      "max_seconds": 4.142217584000001,
+      "median_br_seconds": 1.7261160002090037,
       "median_exploitability_mbb_per_game": 212.82661096082578,
       "median_final_iteration": 160.0,
-      "median_seconds": 3.8897238750000014,
-      "median_solve_ms_per_iteration": 14.081793747027405,
-      "median_solve_seconds": 2.2530869995243847,
-      "min_seconds": 3.706700208000001,
+      "median_seconds": 4.0670094999999975,
+      "median_solve_ms_per_iteration": 14.590162498643622,
+      "median_solve_seconds": 2.3344259997829795,
+      "min_seconds": 4.027543999999999,
       "peak_rss_bytes": {
         "max": 3997696.0,
-        "median": 3981312.0,
+        "median": 3997696.0,
         "min": 3948544.0
       },
       "runs": 5,

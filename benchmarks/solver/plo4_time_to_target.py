@@ -498,11 +498,11 @@ def schedules_are_inert(runs: list[dict[str, Any]]) -> bool:
 
 
 def seeds_are_inert(runs: list[dict[str, Any]]) -> bool:
-    """True when every seed produced the same measurement on a sampled range.
+    """True when every seed measured the same exploitability on a sampled range.
 
     A fully enumerated range is seed-independent by construction, so identical
     rows are expected there and never flagged. A sampled range that reports one
-    measurement for every seed is the failure mode this catches: `--seed` never
+    number for every seed is the failure mode this catches: `--seed` never
     reached the range sample, so the reported spread would be invented. At
     least two seeds of the same schedule and target are required before the
     claim means anything.
@@ -513,14 +513,9 @@ def seeds_are_inert(runs: list[dict[str, Any]]) -> bool:
     for group in grouped.values():
         if len({run.get("seed") for run in group}) < 2:
             continue
-        if not any(run.get("range_mode") == "sampled" for run in group):
+        if not all(run.get("range_mode") == "sampled" for run in group):
             continue
-        measurements = {
-            (run.get("exploitability_mbb_per_game"),
-             run.get("measurement_iteration"))
-            for run in group
-        }
-        if len(measurements) == 1:
+        if len({run["exploitability_mbb_per_game"] for run in group}) == 1:
             return True
     return False
 
@@ -794,8 +789,8 @@ def main(argv: list[str]) -> int:
                 "comparison."
             ),
             "seeds_note": (
-                "True means every seed produced the same measurement while "
-                "the range was sampled: --seed never reached the range "
+                "True means every seed measured the same exploitability "
+                "while the range was sampled: --seed never reached the range "
                 "sample, so the per-seed spread is a repetition check, not a "
                 "distribution."
             ) if seeds_inert else (
@@ -806,21 +801,13 @@ def main(argv: list[str]) -> int:
         },
         "runs": runs,
         "summary": summary,
+        "checkpoints_omitted": options.omit_checkpoints,
     }
     if options.omit_checkpoints:
         # The summary and the diagnostics above were computed from the full
         # histories; only the written copy drops them.
         for run in document["runs"]:
             run.pop("checkpoints", None)
-        document["artifact"] = {
-            "checkpoints_omitted": True,
-            "note": (
-                "Per-run checkpoint histories are omitted to keep this "
-                "artifact review-sized. The summary block is computed from "
-                "them, and rerunning the same command without this flag "
-                "reproduces the full trace."
-            ),
-        }
     with open(output, "w", encoding="utf-8") as output_file:
         json.dump(document, output_file, indent=2, sort_keys=True)
         output_file.write("\n")
@@ -839,7 +826,7 @@ def main(argv: list[str]) -> int:
         )
     if seeds_inert:
         print(
-            "error: every seed produced the same measurement on a sampled "
+            "error: every seed measured the same exploitability on a sampled "
             "range; --seed did not reach the range sample, so the per-seed "
             "spread is not a distribution",
             file=sys.stderr,

@@ -333,7 +333,7 @@ class FixedHorizonTests(unittest.TestCase):
             self.assertEqual(status, 0)
             document = json.loads(output.read_text(encoding="utf-8"))
 
-        self.assertTrue(document["artifact"]["checkpoints_omitted"])
+        self.assertTrue(document["checkpoints_omitted"])
         for run in document["runs"]:
             self.assertNotIn("checkpoints", run)
             self.assertIsNotNone(run["exploitability_mbb_per_game"])
@@ -551,6 +551,13 @@ class SeedEffectTests(unittest.TestCase):
         runs = [
             self._run("fixed", 1, 800.0, "sampled"),
             self._run("fixed", 2, 790.0, "sampled"),
+        ]
+        self.assertFalse(probe.seeds_are_inert(runs))
+
+    def test_mixed_range_modes_are_not_flagged(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "sampled"),
+            self._run("fixed", 2, 800.0, "enumerated"),
         ]
         self.assertFalse(probe.seeds_are_inert(runs))
 
