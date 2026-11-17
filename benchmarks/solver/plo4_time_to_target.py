@@ -48,6 +48,10 @@ as `diagnostics.methods_are_inert`, because that means the algorithm axis is
 not applied; methods that are identical by construction are listed separately in
 `diagnostics.identical_method_groups`.
 
+A run whose wall clock exceeds the time the solver reports for itself by more
+than `STALL_SECONDS` is listed in `diagnostics.stalled_runs` and fails the
+campaign: the wall clock then measured the machine, not the method.
+
 With --fixed-horizon, the same seeded runs stop at --iterations even when a
 target would have stopped them earlier. The report then summarizes final
 exploitability and the separate solve/BR timing per method, which makes a
@@ -83,6 +87,12 @@ DEFAULT_TARGETS = (1000.0, 500.0, 250.0)
 DEFAULT_ITERATIONS = 300
 DEFAULT_INTERVAL = 10
 PREFLIGHT_ITERATIONS = 2
+
+# Wall-clock seconds a run may spend outside what the solver reports for itself
+# before it is treated as a stall. The published campaigns stayed below 0.02 s;
+# a discarded pass of the target campaign carried a 2-second stall on a 2.4 s
+# run, which is the artefact this rejects.
+STALL_SECONDS = 0.5
 
 # The checkpoint fields a target bracket keeps: the timing split, the resolved
 # exponents and the measurement itself.
@@ -666,6 +676,47 @@ def identical_method_groups(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return groups
 
 
+def process_overhead_seconds(run: dict[str, Any]) -> float | None:
+    """Wall-clock seconds a run spent outside the solver's own accounting.
+
+    `seconds` is measured around the whole subprocess; `timing.elapsed_seconds`
+    is what the solver reports for its own work. The difference is process
+    startup plus anything the machine did to the process, and it stayed below
+    0.02 s across the published campaigns. A larger gap means the ranking was
+    timed against the machine, not against the method.
+    """
+    reported = (run.get("timing") or {}).get("elapsed_seconds")
+    wall = run.get("seconds")
+    if reported is None or wall is None:
+        return None
+    return float(wall) - float(reported)
+
+
+def stalled_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Runs whose wall clock ran away from the solver's own report.
+
+    A run with no reported time cannot be checked and is not flagged; the
+    diagnostics say so rather than assuming it was clean.
+    """
+    stalled: list[dict[str, Any]] = []
+    for run in runs:
+        overhead = process_overhead_seconds(run)
+        if overhead is None or overhead <= STALL_SECONDS:
+            continue
+        stalled.append({
+            "spot": run.get("spot"),
+            "method": run.get("method"),
+            "seed": run.get("seed"),
+            "target_mbb": run.get("target_mbb"),
+            "wall_seconds": run.get("seconds"),
+            "reported_seconds": (run.get("timing") or {}).get(
+                "elapsed_seconds"
+            ),
+            "overhead_seconds": overhead,
+        })
+    return stalled
+
+
 def seeds_are_inert(runs: list[dict[str, Any]]) -> bool:
     """True when every seed measured the same exploitability on a sampled range.
 
@@ -903,6 +954,11 @@ def build_document(
     )
     inert = methods_are_inert(runs)
     seeds_inert = seeds_are_inert(runs)
+    stalled = stalled_runs(runs)
+    overheads = [
+        overhead for overhead in (process_overhead_seconds(run) for run in runs)
+        if overhead is not None
+    ]
     return {
         "schema": SCHEMA,
         "issue": 284,
@@ -969,6 +1025,10 @@ def build_document(
             "methods_are_inert": inert,
             "seeds_are_inert": seeds_inert,
             "identical_method_groups": identical_method_groups(runs),
+            "stalled_runs": stalled,
+            "max_process_overhead_seconds": (
+                max(overheads) if overheads else None
+            ),
             "methods_note": (
                 "True means every available method produced the same "
                 "measurement at the same iteration: the driver applies one "
@@ -988,6 +1048,16 @@ def build_document(
                 "No seed group reported one measurement across a sampled "
                 "range; an enumerated range is seed-independent and is not "
                 "flagged."
+            ),
+            "stall_note": (
+                f"{len(stalled)} run(s) took more than {STALL_SECONDS:g} s of "
+                "wall clock beyond the time the solver reported for itself: "
+                "the machine stalled mid-run, so their times measure the "
+                "machine and not the method."
+            ) if stalled else (
+                f"No run spent more than {STALL_SECONDS:g} s of wall clock "
+                "beyond the solver's own report, so the wall clocks above "
+                "are method measurements."
             ),
         },
         "runs": runs,
@@ -1139,7 +1209,25 @@ def main(argv: list[str]) -> int:
             "spread is not a distribution",
             file=sys.stderr,
         )
-    if diagnostics["methods_are_inert"] or diagnostics["seeds_are_inert"]:
+    if diagnostics["stalled_runs"]:
+        worst = max(
+            diagnostics["stalled_runs"],
+            key=lambda run: run["overhead_seconds"],
+        )
+        print(
+            f"error: {len(diagnostics['stalled_runs'])} run(s) took more wall "
+            f"clock than the solver reported for itself (worst: "
+            f"{worst['spot']}/{worst['method']} seed {worst['seed']} target "
+            f"{worst['target_mbb']}, {worst['overhead_seconds']:.3f} s "
+            "outside the solver); the machine stalled mid-run, so those "
+            "crossing times are not method measurements",
+            file=sys.stderr,
+        )
+    if (
+        diagnostics["methods_are_inert"]
+        or diagnostics["seeds_are_inert"]
+        or diagnostics["stalled_runs"]
+    ):
         return 1
     return 0
 

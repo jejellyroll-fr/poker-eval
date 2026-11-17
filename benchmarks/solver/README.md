@@ -535,7 +535,7 @@ silently measured three.
 
 ### Diagnostics
 
-Three flags keep the tables honest:
+Four flags keep the tables honest:
 
 * `diagnostics.methods_are_inert` — true when every available method produced
   the same measurement at the same iteration. The probe then exits non-zero: a
@@ -548,6 +548,14 @@ Three flags keep the tables honest:
 * `diagnostics.seeds_are_inert` — true when a sampled range reports one
   measurement for every seed, which means `--seed` never reached the range
   sample. The probe then exits non-zero as well.
+* `diagnostics.stalled_runs` — the runs whose wall clock exceeded the time the
+  solver reported for itself (`timing.elapsed_seconds`) by more than 0.5 s,
+  with the spot, method, seed, target and the computed overhead. The probe then
+  exits non-zero: one pass of the target campaign was discarded for exactly
+  this (a 2-second stall on a 2.4-second run), and the guard exists so such a
+  pass can no longer be committed. `diagnostics.max_process_overhead_seconds`
+  reports the worst discrepancy, which stayed below 0.02 s in both published
+  baselines.
 
 ### Comparability
 

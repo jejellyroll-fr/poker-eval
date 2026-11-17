@@ -33,8 +33,9 @@ VALUES = {
 
 def run(method: str, seed: int, target: float | None, seconds: float,
         exploitability: float, iteration: int = 50,
-        range_mode: str = "sampled") -> dict:
-    return {
+        range_mode: str = "sampled",
+        report_seconds: float | None = None) -> dict:
+    outcome = {
         "spot": SPOT,
         "method": method,
         "algorithm": method,
@@ -48,6 +49,9 @@ def run(method: str, seed: int, target: float | None, seconds: float,
         "measurement_iteration": iteration,
         "range_mode": range_mode,
     }
+    if report_seconds is not None:
+        outcome["timing"] = {"elapsed_seconds": report_seconds}
+    return outcome
 
 
 def fixed_run(method: str, seed: int, seconds: float, solve: float,
@@ -496,6 +500,76 @@ class SeedEffectTests(unittest.TestCase):
             run("cfr", 2, 5000.0, 0.1, 800.0, range_mode="enumerated"),
         ]
         self.assertFalse(probe.seeds_are_inert(runs))
+
+
+class StallGuardTests(unittest.TestCase):
+    """Issue #284: a stalled machine must not be published as a method time."""
+
+    def test_overhead_is_the_wall_clock_less_the_report(self) -> None:
+        outcome = run("cfr", 1, 5000.0, 2.40, 800.0, report_seconds=2.38)
+        self.assertAlmostEqual(
+            probe.process_overhead_seconds(outcome), 0.02, places=6
+        )
+
+    def test_missing_report_has_no_overhead(self) -> None:
+        outcome = run("cfr", 1, 5000.0, 2.40, 800.0)
+        self.assertIsNone(probe.process_overhead_seconds(outcome))
+        self.assertEqual(probe.stalled_runs([outcome]), [])
+
+    def test_small_overhead_is_not_a_stall(self) -> None:
+        runs = [run("cfr", 1, 5000.0, 2.40, 800.0, report_seconds=2.385)]
+        self.assertEqual(probe.stalled_runs(runs), [])
+
+    def test_large_overhead_names_the_run(self) -> None:
+        runs = [run("dcfr_hs30", 37, 250.0, 4.46, 210.0, report_seconds=2.44)]
+        stalled = probe.stalled_runs(runs)
+        self.assertEqual(len(stalled), 1)
+        self.assertEqual(stalled[0]["spot"], SPOT)
+        self.assertEqual(stalled[0]["method"], "dcfr_hs30")
+        self.assertEqual(stalled[0]["seed"], 37)
+        self.assertEqual(stalled[0]["target_mbb"], 250.0)
+        self.assertAlmostEqual(
+            stalled[0]["overhead_seconds"], 2.02, places=6
+        )
+
+    def test_stalled_campaign_fails_the_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "report.json"
+
+            def fake_run_once(solver, spot, method, seed, target,
+                              iterations, interval, combos, workdir):
+                outcome = run(method["method"], seed, target, 4.46,
+                              VALUES[method["method"]], report_seconds=2.44)
+                outcome.update({"br_mode": "exact", "guarantee": "nash"})
+                return outcome
+
+            with (
+                mock.patch.object(probe, "preflight", return_value=None),
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--targets", "1000",
+                    "--seeds", "1", "--iterations", "10", "--spot", SPOT,
+                    "--output", str(output),
+                ])
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        stalled = document["diagnostics"]["stalled_runs"]
+        self.assertEqual(len(stalled), len(probe.METHODS))
+        self.assertEqual(
+            {entry["method"] for entry in stalled},
+            {method["method"] for method in probe.METHODS},
+        )
+        self.assertAlmostEqual(
+            document["diagnostics"]["max_process_overhead_seconds"],
+            2.02,
+            places=6,
+        )
 
 
 class MainTests(unittest.TestCase):
