@@ -655,6 +655,44 @@ Solve time stays at 12.8-14.7 ms/iteration and peak RSS at 3.8-4.1 MiB on every
 spot and method, so the differences above are update quality at a comparable
 per-iteration cost, not a cost difference.
 
+
+### Time-to-target artifact
+
+`benchmarks/baseline/pe_plo4_time_to_target_targets.json` is the second
+artifact: the same five spots measured against targets instead of a horizon,
+300-iteration cap, interval 10, seeds 11,23,37, written with
+`--omit-checkpoints`:
+
+```
+python3 benchmarks/solver/plo4_time_to_target.py \
+  --spot all --targets 1000,500,250 --iterations 300 --interval 10 \
+  --seeds 11,23,37 --omit-checkpoints \
+  --output benchmarks/baseline/pe_plo4_time_to_target_targets.json
+```
+
+Median seconds to 250 mbb/game, per spot:
+
+| spot | `cfr` | `cfr+` | `dcfr` | `dcfr_hs15` | `dcfr_hs30` |
+|---|---:|---:|---:|---:|---:|
+| `k9_certified` | 1.85 | 1.15 | 2.61 | 2.77 | 2.41 |
+| `a7_dry` | 1.28 | 1.26 | 2.20 | 2.22 | 1.83 |
+| `qj_wet` | 2.67 | 1.56 | 3.08 | 3.10 | 2.69 |
+| `77_paired` | 2.88 | 2.32 | 3.40 | 2.62 | 2.32 |
+| `t9_coordinated` | 1.48 | 1.01 | 2.39 | 2.50 | 2.11 |
+
+All 75 (spot, method, target) cells were reached on every seed, so nothing is
+marked unreached. At 1000 mbb/game every method finishes inside 0.31-0.75 s, so
+the ordering only becomes meaningful as the target tightens. `cfr+` is fastest
+to 250 on all five spots (1.01-2.32 s, against 2.20-3.40 s for fixed `dcfr`);
+`dcfr_hs30` beats fixed `dcfr` on all five (8-32% faster), while `dcfr_hs15`
+wins only one spot.
+
+The two artifacts answer different questions and neither substitutes for the
+other: the fixed-horizon document compares update quality after the same
+number of iterations, the target document compares wall-clock time to a
+quality bar. Both are machine-specific evidence from the same machine and
+the same seeds, so their rows can be read side by side.
+
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`
 and `guarantee=nash` on every report, requires finite recorded parameters that
