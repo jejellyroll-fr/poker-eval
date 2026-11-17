@@ -438,7 +438,7 @@ performance-identical. Longer performance qualification remains a manual
 benchmark run; the resulting JSON/CSV is suitable for storing machine-specific
 baselines.
 
-## HS-DCFR schedules and time-to-target (issue #284)
+## Algorithms, schedules and time-to-target (issue #284)
 
 Discounted CFR's fixed exponents are the control. The training-free schedules
 of Zhang et al. (AAAI 2026) replace them per iteration:
@@ -453,20 +453,50 @@ these schedules; `alpha` and `gamma` stay non-negative. The product driver
 exposes them as `--dcfr-schedule fixed|hs15|hs30` and records the choice in the
 JSON report as `dcfr_schedule` / `dcfr_horizon`.
 
-`pe-plo4-lane-a` is the lane A driver for the same spot: it builds the
-certification river game (`Ks9d4c2hTs`, pot 63, stack 68.5, one pot-sized bet,
-512 combos per range by default) and hands it to the v3 vector solver under the
-requested preset and DCFR schedule. Every convergence measurement is the exact
-best response of the vector lane, so the report says `br_mode=exact` and
-`guarantee=nash`; the `--target-mbb` value is expressed in chips per hand and
-the driver converts it to the solver's vector-combo scale internally.
+The campaign compares two independent axes on every spot:
+
+* **algorithm** — the v3 presets the lane accepts: `cfr`, `cfr+`,
+  `cfr+-chance`, `dcfr`;
+* **DCFR schedule** — `fixed` (the control), `hs15`, `hs30`.
+
+The probe labels them `cfr`, `cfr_plus`, `cfr_plus_chance`, `dcfr`, `dcfr_hs15`
+and `dcfr_hs30`, and records which algorithm and which schedule produced each
+row, so a row can never be read as a schedule-only comparison when it is not.
+
+`pe-plo4-lane-a` is the lane A driver: it builds a river game from the selected
+spot and hands it to the v3 vector solver under the requested preset and DCFR
+schedule. Every convergence measurement is the exact best response of the
+vector lane, so the report says `br_mode=exact` and `guarantee=nash`; the
+`--target-mbb` value is expressed in chips per hand and the driver converts it
+to the solver's vector-combo scale internally.
+
+### The river spots
+
+The probe carries five river spots and takes them by name:
+
+| id | board | pot | stack | bet | character |
+|---|---|---:|---:|---:|---|
+| `k9_certified` | `Ks9d4c2hTs` | 63 | 68.5 | 63 | the spot certified by the #283 river oracle and BR work |
+| `a7_dry` | `As7c5d3h2s` | 60 | 75 | 45 | rainbow, no straight or flush possible |
+| `qj_wet` | `QhJhTh9c8d` | 72 | 90 | 72 | four to a straight, three hearts on board |
+| `77_paired` | `7d7h2c2sKd` | 55 | 60 | 55 | double-paired board, few nut combinations |
+| `t9_coordinated` | `Ts9s8d7d6h` | 80 | 100 | 60 | five-card straight on board, two flush suits |
+
+`--list-spots` prints them, `--spot a7_dry,qj_wet` selects a subset (the
+default is all of them), and the document keeps the geometry of every selected
+spot in `spots`, so a summary row is never separated from the game it measured.
+Each spot is a fixed heads-up river decision with one bet size, 512 combos per
+range by default, and the same 2-chip big blind everywhere.
+
+### The algorithm axis
 
 `plo4_time_to_target.py` measures time-to-target exploitability with that
-driver, holding game, ranges, bet size and best-response evaluator constant:
+driver, holding the spot, the ranges, the bet size and the best-response
+evaluator constant:
 
     python3 benchmarks/solver/plo4_time_to_target.py \
         --solver build/local/tools/pe-plo4-lane-a \
-        --targets 1000,500,250 --combos 512 --seeds 11,23,37 \
+        --spot all --targets 1000,500,250 --combos 512 --seeds 11,23,37 \
         --output build/plo4-time-to-target.json
 
 Each run records wall-clock seconds, the exploitability and measurement
@@ -476,57 +506,69 @@ resolved precision, the seed, and the stopping reason (`target_reached`,
 flags. It also records the cost side: the solver-managed storage bytes and
 infosets, and the process peak RSS where the platform exposes one.
 
-The JSON keeps every run plus per-schedule/per-target medians and spreads. A
-target counts as reached only when every seed reached it; unreached targets have
-no time and are marked in the Markdown table. An exact measurement is a measured
-value, not an estimate. The table carries the two components of the crossing
-time — `solve s` (regret updates) and `BR s` (the exact best-response
-certification) — plus the peak RSS, so a schedule cannot look faster merely by
-being certified less often. The certification cost is read from the bracket's
-first below-target checkpoint, not from the whole process lifetime.
+The JSON keeps every run plus `summary[spot][method][target]` medians and
+spreads. A target counts as reached only when every seed reached it; unreached
+targets have no time and are marked in the Markdown table, and one section is
+rendered per spot. An exact measurement is a measured value, not an estimate.
+The table carries the two components of the crossing time — `solve s` (regret
+updates) and `BR s` (the exact best-response certification) — plus the peak
+RSS, so a method cannot look faster merely by being certified less often. The
+certification cost is read from the bracket's first below-target checkpoint,
+not from the whole process lifetime.
 
-The report's `environment` block names the platform, the CPU model where the OS
-exposes one, and the logical core count, so a machine is described rather than
-implied. Wall clocks and RSS remain machine-specific evidence, not a CI speed
-gate.
+### Method availability
 
-`methods` states what the campaign actually compares (`dcfr/fixed` as the
-control, `dcfr/hs15`, `dcfr/hs30`), the single quality definition they share,
-and an `unsupported` list with a reason per entry: HS-PCFR+ is not implemented
-in the lane, neural predictive CFR is not implemented and reports a match reward
-that is not an exploitability certificate, and imported commercial strategies
-are excluded until class mapping, range/board/tree equivalence and quantized
-action probabilities are validated. None of them is folded into the table as a
-parameter-only comparison.
+A preset is not always applicable to every spot. `cfr+-chance` resolves to the
+`PE_TRAVERSAL_CHANCE_VECTOR` traversal, and the plan validator requires
+`PE_CAP_DIRECT_CHANCE_SAMPLING` for it, which the full-vector traversal does not
+advertise (`full_vector` declares `PE_CAP_ENUMERATED_CHANCE` only). A river
+game has no chance node left to enumerate or sample, so the driver rejects the
+preset with `solve failed` and exit status 1 on every river spot.
+
+The probe does not abort the campaign and does not silently drop the method. A
+two-iteration preflight runs every (spot, method) pair first; a pair the driver
+refuses is recorded under `methods.unavailable[spot][method]` with the driver's
+own message, printed to stderr, and excluded from that spot's summary. The rest
+of the campaign runs, and the document states which comparisons were possible
+and which were refused, rather than presenting a four-way comparison that
+silently measured three.
+
+### Diagnostics
+
+Three flags keep the tables honest:
+
+* `diagnostics.methods_are_inert` — true when every available method produced
+  the same measurement at the same iteration. The probe then exits non-zero: a
+  driver that applies one update rule regardless of the preset cannot publish
+  identical rows as an algorithm comparison.
+* `diagnostics.identical_method_groups` — the methods that agreed on **every
+  seed**, compared over the whole per-seed vector rather than a rounded median.
+  Two presets that share an update rule on a spot without chance nodes are
+  expected here; identical rows across every method are not.
+* `diagnostics.seeds_are_inert` — true when a sampled range reports one
+  measurement for every seed, which means `--seed` never reached the range
+  sample. The probe then exits non-zero as well.
+
+### Comparability
 
 `--seed` seeds both the solver and the range sample: a partial range is drawn
 from that stream, while a range equal to the legal four-card hands is enumerated
 and therefore seed-independent. The lane A report says which one ran
 (`range_mode`), so the two cases cannot be confused.
 
-**Comparability.** The seed now determines the sampled game itself, not only
-the solver's own stream. A lane A run with a different `--seed` is a different
-spot, so:
+The seed determines the sampled game itself, not only the solver's own stream.
+A lane A run with a different `--seed` is a different spot, so:
 
 - numbers produced before the seed reached the range sample are **not
   comparable** with runs from this revision (they measured one game five times,
   with a zero spread that was an artefact);
-- schedules must be compared **paired by seed**: seed 11 of one schedule and
-  seed 11 of another solve the same sampled ranges, while seed 11 against seed
-  23 compares two different games;
+- methods and schedules must be compared **paired by seed**: seed 11 of one
+  method and seed 11 of another solve the same sampled ranges, while seed 11
+  against seed 23 compares two different games;
 - a per-seed spread is game variance, not solver noise, so it belongs beside the
   median rather than being averaged away.
 
-The probe sets
-`diagnostics.seeds_are_inert` and exits non-zero when a schedule/target group
-reports one measurement for every seed while its range was sampled: the spread
-would then be a repetition check presented as a distribution. An enumerated
-range is never flagged.
-
-The probe still writes `diagnostics.schedules_are_inert` and warns if a driver
-ever applies one update rule for every schedule, so identical rows are never
-presented as an algorithm comparison, and the probe then exits non-zero so CI
-fails instead of publishing identical rows.
+### Checkpoint evidence
 
 The lane A report carries a `checkpoints` array, one entry per exact-BR
 measurement with `elapsed_seconds`, `solve_seconds` (regret updates), and
@@ -543,38 +585,75 @@ not interpolated, so the bracket is the honest resolution of the configured
 interval; the summary also reports the median checkpoint time, its solve/BR
 split, and the iteration to the first below-target measurement.
 
+The probe writes its per-run solver reports into a temporary directory, so
+pointing `--output` at `benchmarks/baseline/` does not litter the repository
+with one JSON per run.
+
+### Fixed horizon
+
 For a fixed-horizon comparison that ignores target stopping, run:
 
 ```bash
 python3 benchmarks/solver/plo4_time_to_target.py \
-  --fixed-horizon --iterations 160 --interval 2 \
-  --seeds 11,23,37,53,71 --output build/plo4-fixed-horizon.json
+  --fixed-horizon --iterations 160 --interval 10 \
+  --seeds 11,23,37 --output build/plo4-fixed-horizon.json
 ```
 
-This report has `campaign_mode=fixed-horizon` and a per-schedule summary of
-final exploitability, solve per iteration excluding best responses, and the
+This report has `campaign_mode=fixed-horizon` and a per-spot, per-method summary
+of final exploitability, solve per iteration excluding best responses, and the
 separate BR cost. `--iterations` must be a multiple of `--interval` so the final
 checkpoint is exactly at the horizon. Use the per-iteration fields for a
-common-iteration comparison; its wall times are not directly comparable with
-target-stopped runs that stop earlier.
+common-iteration comparison across methods; its wall times are not directly
+comparable with target-stopped runs that stop earlier.
 
-The checked-in `benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json`
-is one such fixed-horizon campaign (Apple M5, 512 combos, 160 iterations,
-interval 2, seeds 11,23,37,53,71) written with `--omit-checkpoints`, so it keeps
-the summary, the per-run metrics and the diagnostics without the 80-entry
-traces per run. The document states the omission as `checkpoints_omitted`:
+`benchmarks/baseline/pe_plo4_time_to_target_spots.json` is one such
+fixed-horizon campaign across all five spots (Apple M5, 512 combos, 160
+iterations, interval 10, seeds 11,23,37) written with `--omit-checkpoints`, so
+it keeps the summary, the per-run metrics and the diagnostics without the
+checkpoint traces per run. The document states the omission as
+`checkpoints_omitted`:
 
 ```
 python3 benchmarks/solver/plo4_time_to_target.py \
-  --fixed-horizon --iterations 160 --interval 2 \
-  --seeds 11,23,37,53,71 --omit-checkpoints \
-  --output benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json
+  --spot all --fixed-horizon --iterations 160 --interval 10 \
+  --seeds 11,23,37 --omit-checkpoints \
+  --output benchmarks/baseline/pe_plo4_time_to_target_spots.json
 ```
 
 Its geometry, trajectories and exploitability definition are reproducible from
-that command (omit the flag to get the full checkpoint trace back); its wall
+that command (omit the flag to get the full checkpoint traces back); its wall
 clocks and peak RSS are evidence from that machine, not a CI speed gate, which
-is why the campaign stays out of the smoke job's pass criteria.
+is why the campaign stays out of the smoke job's pass criteria. The previous
+single-spot artifact, `pe_plo4_time_to_target_fixed_horizon.json`, was replaced
+by this one: it described the schema before the spot and algorithm axes existed,
+and the certified spot is now the `k9_certified` row of the new document.
+
+### What the campaign shows
+
+At 160 iterations and interval 10, paired by seed (medians over seeds 11, 23
+and 37), the exact exploitability in mbb/game is:
+
+| spot | `cfr` | `cfr+` | `dcfr` | `dcfr_hs15` | `dcfr_hs30` |
+|---|---:|---:|---:|---:|---:|
+| `k9_certified` | 191.2 | 78.0 | 248.6 | 257.3 | 223.4 |
+| `a7_dry` | 132.1 | 52.6 | 192.9 | 182.1 | 153.7 |
+| `qj_wet` | 237.9 | 79.6 | 274.7 | 278.5 | 236.7 |
+| `77_paired` | 164.0 | 76.0 | 231.7 | 239.7 | 209.7 |
+| `t9_coordinated` | 143.4 | 48.7 | 212.6 | 201.6 | 166.4 |
+
+- `cfr+` is the strongest update on all five spots (49-80 mbb/game), well ahead
+  of `cfr` (132-238) and of every DCFR schedule.
+- `dcfr_hs30` beats fixed-exponent DCFR on all five spots, by 9% to 22% after
+  the same 160 iterations.
+- `dcfr_hs15` beats fixed DCFR on two of five spots (`a7_dry`,
+  `t9_coordinated`) and loses on the other three, so a shorter horizon is not a
+  safer default here.
+- `cfr+-chance` was refused on all five spots, so this table compares three
+  algorithms, not four; the refusal is recorded per spot rather than dropped.
+
+Solve time stays at 12.8-14.7 ms/iteration and peak RSS at 3.8-4.1 MiB on every
+spot and method, so the differences above are update quality at a comparable
+per-iteration cost, not a cost difference.
 
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`
@@ -586,4 +665,5 @@ trajectories, so a driver that labels the schedule without resolving it cannot
 pass.
 
 `pe-plo4-lane-a --help` lists the spot overrides (`--board`, `--pot`,
-`--stack`, `--bet-size`, `--combos`, `--first-to-act`, `--dcfr-horizon`).
+`--stack`, `--bet-size`, `--combos`, `--first-to-act`, `--dcfr-schedule`,
+`--dcfr-horizon`, `--algorithm`).
