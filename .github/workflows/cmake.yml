@@ -14,9 +14,13 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     # GitHub's hosted macOS pool is starved often enough that the queue alone
-    # can exhaust a 25-minute budget; a job cancelled before its first step
-    # still marks the whole run failed. The macOS leg waits longer instead.
-    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 25 }}
+    # can exhaust the budget; a job cancelled before its first step still
+    # marks the run failed. The blocking Intel leg therefore gets an hour.
+    # The arm64 leg is best effort: it is allowed to fail (see jobs.build.
+    # continue-on-error) and is bounded so an unassigned runner cannot hang
+    # the run for long.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 60 || (matrix.os == 'macos-15' && 30 || 25) }}
+    continue-on-error: ${{ matrix.os == 'macos-15' }}
     strategy:
       fail-fast: false
       matrix:
@@ -32,13 +36,21 @@ jobs:
             compiler: clang
             preset: linux-clang
           
-          # macOS builds. Pull-request legs run on the Intel image: GitHub
-          # annotates the ARM64 jobs with "Due to capacity constraints, jobs
-          # targeting macOS arm64 runners may experience longer queue times",
-          # and on some days they are not assigned at all. ARM64 stays covered
-          # by release.yml on tags and by release-check.yml on manual runs.
-          - name: macOS Clang
+          # macOS builds. The Intel leg is the blocking one: GitHub annotates
+          # arm64 jobs with "Due to capacity constraints, jobs targeting macOS
+          # arm64 runners may experience longer queue times", and on some days
+          # they are not assigned at all. The arm64 leg still runs here as
+          # best effort, so the image keeps getting real builds, but its
+          # result cannot fail a pull request.
+          - name: macOS Clang (Intel)
             os: macos-15-intel
+            compiler: clang
+            preset: macos
+
+          - name: macOS Clang (arm64, best effort)
+            os: macos-15
+            compiler: clang
+            preset: macos
             compiler: clang
             preset: macos
           

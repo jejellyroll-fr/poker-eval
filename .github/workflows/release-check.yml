@@ -27,17 +27,17 @@ jobs:
     name: Wheel (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    # The ARM64 macOS image is frequently not assigned: GitHub reports "the job
+    # was not acquired by Runner of type hosted even after multiple attempts",
+    # and the 45-minute budget is spent while the job is still queued. The
+    # ARM64 wheel still gets built on every pull request, but only the Intel
+    # one can fail the check, which is where the Homebrew/delocate failures
+    # this workflow exists for were seen.
+    continue-on-error: ${{ matrix.os == 'macos-15' }}
     strategy:
       fail-fast: false
-      # Every pull request replays the release wheels, but the ARM64 macOS
-      # image is frequently not assigned: GitHub reports "the job was not
-      # acquired by Runner of type hosted even after multiple attempts", and
-      # the 45-minute budget is consumed while the job is still queued. Pull
-      # requests therefore build the Intel wheel, which is the one whose
-      # Homebrew/delocate failures this check exists to catch, and the ARM64
-      # wheel stays in the manual run and in release.yml on every tag.
       matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest", "macos-15-intel"]') || fromJSON('["ubuntu-latest", "macos-15", "macos-15-intel"]') }}
+        os: [ubuntu-latest, macos-15-intel, macos-15]
     steps:
       - uses: actions/checkout@v5
 

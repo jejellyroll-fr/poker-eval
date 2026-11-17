@@ -271,11 +271,13 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     strategy:
       fail-fast: false
+      # The macOS arm64 image is frequently not assigned at all, which would
+      # turn a pull request red without running a step. It keeps a leg here so
+      # the image is still exercised, but that leg cannot fail the run; the
+      # Intel leg is the one that gates a merge. See cmake.yml.
+      continue-on-error: ${{ matrix.os == 'macos-15' }}
       matrix:
-        # The macOS arm64 image is frequently not assigned at all, which turns
-        # a pull request red without running a step. The ARM64 build is still
-        # covered by release.yml; see the note in cmake.yml.
-        os: [ubuntu-24.04-arm, macos-15-intel]
+        os: [ubuntu-24.04-arm, macos-15-intel, macos-15]
 
     steps:
     - uses: actions/checkout@v5
