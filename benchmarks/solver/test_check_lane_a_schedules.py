@@ -16,9 +16,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_lane_a_schedules as guard
 
 
+PARAMETERS = {
+    "fixed": (1.5, 0.0, 2.0),
+    "hs30": (1.06, -1.04, 29.9),
+}
+
+
 def report(schedule: str, exploitability: float) -> dict:
+    alpha, beta, gamma = PARAMETERS[schedule]
     return {
         "dcfr_schedule": schedule,
+        "dcfr_params": {
+            "iteration": 5,
+            "alpha": alpha,
+            "beta": beta,
+            "gamma": gamma,
+        },
+        "precision": "f64",
+        "peak_rss_bytes": 1048576,
         "progress": {"target_reached": False},
         "metrics": {
             "br_mode": "exact",
@@ -39,6 +54,9 @@ def report(schedule: str, exploitability: float) -> dict:
                 "elapsed_seconds": 0.1,
                 "solve_seconds": 0.05,
                 "br_seconds": 0.05,
+                "alpha": alpha,
+                "beta": beta,
+                "gamma": gamma,
                 "exploitability_mbb_per_game": exploitability,
             }
         ],
@@ -89,6 +107,35 @@ class CheckpointValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AssertionError, "wrong count"):
             guard.measurement("fixed", malformed)
+
+    def test_missing_parameters_are_rejected(self) -> None:
+        malformed = report("fixed", 800.0)
+        malformed["checkpoints"][0].pop("alpha")
+
+        with self.assertRaisesRegex(AssertionError, "no finite DCFR parameters"):
+            guard.measurement("fixed", malformed)
+
+    def test_root_parameters_must_describe_the_last_checkpoint(self) -> None:
+        malformed = report("fixed", 800.0)
+        malformed["dcfr_params"]["alpha"] = 2.0
+
+        with self.assertRaisesRegex(AssertionError, "disagree with the last"):
+            guard.measurement("fixed", malformed)
+
+    def test_identical_trajectories_fail_the_guard(self) -> None:
+        def fake_solve(solver, schedule, combos, iterations, workdir):
+            shared = report("fixed", 800.0 if schedule == "fixed" else 700.0)
+            shared["dcfr_schedule"] = schedule
+            return shared
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            with mock.patch.object(guard, "solve", side_effect=fake_solve):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    self.assertEqual(
+                        guard.main(["guard", "--solver", str(solver)]), 1
+                    )
 
 
 if __name__ == "__main__":

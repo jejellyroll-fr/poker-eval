@@ -25,6 +25,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !defined(_WIN32)
+#include <sys/resource.h>
+#endif
+
 #define PE_LANE_A_MAX_COMBOS 178365u
 
 typedef struct
@@ -33,6 +37,11 @@ typedef struct
     double elapsed_seconds;
     double solve_seconds;
     double br_seconds;
+    /* Exponents the requested schedule resolved at this iteration, so the
+       report carries the parameter trajectory and not only its name. */
+    double alpha;
+    double beta;
+    double gamma;
     double exploitability_raw;
     double br_gap[2];
 } lane_checkpoint_t;
@@ -42,6 +51,8 @@ typedef struct
     lane_checkpoint_t *items;
     size_t count;
     size_t capacity;
+    pe_dcfr_schedule_t schedule;
+    uint64_t horizon;
     int failed;
 } lane_history_t;
 
@@ -73,6 +84,24 @@ static void lane_history_add(const pe_plo4_cert_checkpoint_t *checkpoint,
     history->items[history->count].solve_seconds =
         checkpoint->solve_seconds;
     history->items[history->count].br_seconds = checkpoint->br_seconds;
+    {
+        pe_dcfr_params_t fixed = pe_dcfr_params_default();
+        pe_dcfr_params_t params;
+        uint64_t iteration =
+            checkpoint->iteration == 0u ? 1u : checkpoint->iteration;
+
+        if (pe_dcfr_params_resolve(
+                history->schedule == PE_DCFR_SCHEDULE_FIXED ? &fixed : NULL,
+                history->schedule, history->horizon, iteration,
+                &params) != 0)
+        {
+            history->failed = 1;
+            return;
+        }
+        history->items[history->count].alpha = params.alpha;
+        history->items[history->count].beta = params.beta;
+        history->items[history->count].gamma = params.gamma;
+    }
     history->items[history->count].exploitability_raw =
         checkpoint->metrics.exploitability_raw;
     history->items[history->count].br_gap[0] = checkpoint->metrics.br_gap[0];
@@ -97,6 +126,8 @@ typedef struct
     pe_algorithm_preset_t algorithm;
     pe_dcfr_schedule_t schedule;
     uint64_t horizon;
+    pe_precision_mode_t precision;
+    int range_enumerated;
     int first_to_act;
 } options_t;
 
@@ -179,13 +210,17 @@ static void enumerate_all_hands(const int *live, size_t live_count,
                 }
 }
 
-static int sample_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+static int sample_hands(mask_t board, size_t count, uint64_t seed,
+                        pe_omaha_combo_t *out)
 {
     int live[MODERN_DECK_SIZE];
     size_t live_count = live_cards(board, live);
     size_t capacity = 16u;
     size_t produced = 0u;
-    uint64_t state = 0x5eed2026u;
+    /* The stream is derived from --seed so repeated-seed campaigns really do
+       draw different ranges. Multiplying by an odd constant is a bijection
+       modulo 2^64, so distinct seeds start from distinct states. */
+    uint64_t state = 0x5eed2026u ^ (seed * 0x9e3779b97f4a7c15ULL);
     mask_t *seen;
 
     while (capacity < count * 2u)
@@ -219,7 +254,8 @@ static int sample_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
     return 0;
 }
 
-static int enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
+static int enumerate_hands(mask_t board, size_t count, uint64_t seed,
+                           pe_omaha_combo_t *out)
 {
     int live[MODERN_DECK_SIZE];
     size_t live_count = live_cards(board, live);
@@ -229,7 +265,7 @@ static int enumerate_hands(mask_t board, size_t count, pe_omaha_combo_t *out)
         enumerate_all_hands(live, live_count, out);
         return 0;
     }
-    return sample_hands(board, count, out);
+    return sample_hands(board, count, seed, out);
 }
 
 static int parse_double(const char *text, double *out)
@@ -279,7 +315,7 @@ static void usage(const char *program)
             "  --algorithm NAME      v3 preset (default dcfr)\n"
             "  --dcfr-schedule NAME  fixed, hs15 or hs30 (default fixed)\n"
             "  --dcfr-horizon N      n in the schedule equations (default 1000)\n"
-            "  --seed N              solver seed (default 1)\n"
+            "  --seed N              solver and range-sample seed (default 1)\n"
             "  --output PATH         JSON destination (default stdout)\n"
             "  --help\n",
             program);
@@ -302,19 +338,51 @@ static void write_checkpoints(FILE *file, const lane_history_t *history,
         fprintf(file,
                 "{\"iteration\":%llu,\"elapsed_seconds\":%.17g,"
                 "\"solve_seconds\":%.17g,\"br_seconds\":%.17g,"
+                "\"alpha\":%.17g,\"beta\":%.17g,\"gamma\":%.17g,"
                 "\"nash_conv\":%.17g,\"exploitability\":%.17g,"
                 "\"exploitability_mbb_per_game\":%.17g,"
                 "\"exploitability_pct_of_pot\":%.17g,"
                 "\"br_gap\":[%.17g,%.17g]}",
                 (unsigned long long)checkpoint->iteration,
                 checkpoint->elapsed_seconds, checkpoint->solve_seconds,
-                checkpoint->br_seconds, nash_conv, exploitability,
+                checkpoint->br_seconds, checkpoint->alpha, checkpoint->beta,
+                checkpoint->gamma, nash_conv, exploitability,
                 exploitability / big_blind * 1000.0,
                 exploitability / pot * 100.0,
                 checkpoint->br_gap[0] * scale,
                 checkpoint->br_gap[1] * scale);
     }
     fputc(']', file);
+}
+
+static int resolve_params(const options_t *options, uint64_t iteration,
+                          pe_dcfr_params_t *out)
+{
+    pe_dcfr_params_t fixed = pe_dcfr_params_default();
+
+    return pe_dcfr_params_resolve(
+        options->schedule == PE_DCFR_SCHEDULE_FIXED ? &fixed : NULL,
+        options->schedule, options->horizon,
+        iteration == 0u ? 1u : iteration, out);
+}
+
+/* Peak resident set size in bytes, or 0 when the platform does not expose one.
+ * ru_maxrss is bytes on macOS and kilobytes on Linux. */
+static uint64_t peak_rss_bytes(void)
+{
+#if defined(_WIN32)
+    return 0u;
+#else
+    struct rusage usage;
+
+    if (getrusage(RUSAGE_SELF, &usage) != 0)
+        return 0u;
+#if defined(__APPLE__)
+    return (uint64_t)usage.ru_maxrss;
+#else
+    return (uint64_t)usage.ru_maxrss * 1024u;
+#endif
+#endif
 }
 
 static int write_report(const char *path, const options_t *options,
@@ -326,6 +394,10 @@ static int write_report(const char *path, const options_t *options,
     double total_br_seconds = 0.0;
     double last_elapsed_seconds = 0.0;
     double last_solve_seconds = 0.0;
+    pe_dcfr_params_t params;
+    uint64_t params_iteration = 1u;
+    uint64_t peak_rss;
+    char peak_rss_text[32];
     size_t index;
 
     if (!file)
@@ -333,6 +405,23 @@ static int write_report(const char *path, const options_t *options,
         fprintf(stderr, "pe-plo4-lane-a: cannot write %s\n", path);
         return -1;
     }
+    if (history->count > 0u)
+        params_iteration = history->items[history->count - 1u].iteration;
+    else if (result->iterations > 0u)
+        params_iteration = result->iterations;
+    if (resolve_params(options, params_iteration, &params) != 0)
+    {
+        fprintf(stderr, "pe-plo4-lane-a: cannot resolve the DCFR parameters\n");
+        if (path)
+            fclose(file);
+        return -1;
+    }
+    peak_rss = peak_rss_bytes();
+    if (peak_rss != 0u)
+        snprintf(peak_rss_text, sizeof(peak_rss_text), "%llu",
+                 (unsigned long long)peak_rss);
+    else
+        snprintf(peak_rss_text, sizeof(peak_rss_text), "null");
     for (index = 0u; index < history->count; ++index)
     {
         total_br_seconds += history->items[index].br_seconds;
@@ -340,12 +429,15 @@ static int write_report(const char *path, const options_t *options,
         last_solve_seconds = history->items[index].solve_seconds;
     }
     fprintf(file,
-            "{\"schema\":\"pe-plo4-lane-a/v1\",\"game\":\"plo4\","
+            "{\"schema\":\"pe-plo4-lane-a/v2\",\"game\":\"plo4\","
             "\"board\":\"%s\",\"pot\":%.17g,\"stack\":%.17g,"
             "\"bet_size\":%.17g,\"big_blind\":%.17g,\"combos\":%zu,"
             "\"first_to_act\":%d,"
             "\"algorithm\":\"%s\",\"dcfr_schedule\":\"%s\","
-            "\"dcfr_horizon\":%llu,\"seed\":%llu,\"target_mbb\":%.17g,"
+            "\"dcfr_horizon\":%llu,\"dcfr_params\":{\"iteration\":%llu,"
+            "\"alpha\":%.17g,\"beta\":%.17g,\"gamma\":%.17g},"
+            "\"precision\":\"%s\",\"range_mode\":\"%s\","
+            "\"seed\":%llu,\"target_mbb\":%.17g,"
             "\"progress\":{\"iteration\":%llu,\"complete\":%s,"
             "\"target_reached\":%s},"
             "\"metrics\":{\"exploitability_mbb_per_game\":%.17g,"
@@ -356,12 +448,17 @@ static int write_report(const char *path, const options_t *options,
             "\"infosets\":%llu},"
             "\"timing\":{\"elapsed_seconds\":%.17g,"
             "\"solve_seconds\":%.17g,\"br_seconds\":%.17g,"
-            "\"checkpoints\":%zu},\"checkpoints\":",
+            "\"checkpoints\":%zu},\"peak_rss_bytes\":%s,"
+            "\"checkpoints\":",
             board_text, options->pot, options->stacks[0], options->bet_size,
             options->big_blind, options->combos, options->first_to_act,
             pe_preset_name(options->algorithm),
             pe_dcfr_schedule_name(options->schedule),
             (unsigned long long)options->horizon,
+            (unsigned long long)params_iteration,
+            params.alpha, params.beta, params.gamma,
+            pe_precision_name(options->precision),
+            options->range_enumerated ? "enumerated" : "sampled",
             (unsigned long long)options->seed,
             options->target_mbb,
             (unsigned long long)result->iterations,
@@ -376,7 +473,7 @@ static int write_report(const char *path, const options_t *options,
             (unsigned long long)metrics->storage_memory.storage_bytes,
             (unsigned long long)metrics->storage_memory.total_infosets,
             last_elapsed_seconds, last_solve_seconds, total_br_seconds,
-            history->count);
+            history->count, peak_rss_text);
     {
         double scale = (double)result->combo_count / result->joint_mass;
 
@@ -532,8 +629,11 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    options.range_enumerated =
+        options.combos == pe_omaha_combo_count(board, 4u);
     combos = (pe_omaha_combo_t *)calloc(options.combos, sizeof(*combos));
-    if (!combos || enumerate_hands(board, options.combos, combos) != 0)
+    if (!combos || enumerate_hands(board, options.combos, options.seed,
+                                   combos) != 0)
     {
         fprintf(stderr, "pe-plo4-lane-a: range generation failed\n");
         free(combos);
@@ -563,7 +663,10 @@ int main(int argc, char **argv)
     config.exploitability_interval = options.interval;
     config.target_exploitability_mbb = options.target_mbb;
     config.seed = options.seed;
+    options.precision = config.execution.precision;
 
+    history.schedule = options.schedule;
+    history.horizon = options.horizon;
     observer.on_checkpoint = lane_history_add;
     observer.user = &history;
     if (pe_plo4_cert_solve_observed(&spec, &config, &observer, &result) !=

@@ -471,23 +471,77 @@ driver, holding game, ranges, bet size and best-response evaluator constant:
 
 Each run records wall-clock seconds, the exploitability and measurement
 iteration, the best-response mode and guarantee (`br_mode`, `guarantee`), the
-solver-reported storage bytes and infosets, and the seed. The JSON keeps every
-run plus per-schedule/per-target medians and spreads. A target counts as
-reached only when every seed reached it; unreached targets have no time and are
-marked in the Markdown table. An exact measurement is a measured value, not an
-estimate. The probe still writes `diagnostics.schedules_are_inert` and warns if
-a driver ever applies one update rule for every schedule, so identical rows are
-never presented as an algorithm comparison, and the probe then exits non-zero so CI fails instead of
-publishing identical rows.
+resolved precision, the seed, and the stopping reason (`target_reached`,
+`iteration_budget`, or `incomplete`) derived from the driver's own progress
+flags. It also records the cost side: the solver-managed storage bytes and
+infosets, and the process peak RSS where the platform exposes one.
+
+The JSON keeps every run plus per-schedule/per-target medians and spreads. A
+target counts as reached only when every seed reached it; unreached targets have
+no time and are marked in the Markdown table. An exact measurement is a measured
+value, not an estimate. The table carries the two components of the crossing
+time — `solve s` (regret updates) and `BR s` (the exact best-response
+certification) — plus the peak RSS, so a schedule cannot look faster merely by
+being certified less often. The certification cost is read from the bracket's
+first below-target checkpoint, not from the whole process lifetime.
+
+The report's `environment` block names the platform, the CPU model where the OS
+exposes one, and the logical core count, so a machine is described rather than
+implied. Wall clocks and RSS remain machine-specific evidence, not a CI speed
+gate.
+
+`methods` states what the campaign actually compares (`dcfr/fixed` as the
+control, `dcfr/hs15`, `dcfr/hs30`), the single quality definition they share,
+and an `unsupported` list with a reason per entry: HS-PCFR+ is not implemented
+in the lane, neural predictive CFR is not implemented and reports a match reward
+that is not an exploitability certificate, and imported commercial strategies
+are excluded until class mapping, range/board/tree equivalence and quantized
+action probabilities are validated. None of them is folded into the table as a
+parameter-only comparison.
+
+`--seed` seeds both the solver and the range sample: a partial range is drawn
+from that stream, while a range equal to the legal four-card hands is enumerated
+and therefore seed-independent. The lane A report says which one ran
+(`range_mode`), so the two cases cannot be confused.
+
+**Comparability.** The seed now determines the sampled game itself, not only
+the solver's own stream. A lane A run with a different `--seed` is a different
+spot, so:
+
+- numbers produced before the seed reached the range sample are **not
+  comparable** with runs from this revision (they measured one game five times,
+  with a zero spread that was an artefact);
+- schedules must be compared **paired by seed**: seed 11 of one schedule and
+  seed 11 of another solve the same sampled ranges, while seed 11 against seed
+  23 compares two different games;
+- a per-seed spread is game variance, not solver noise, so it belongs beside the
+  median rather than being averaged away.
+
+The probe sets
+`diagnostics.seeds_are_inert` and exits non-zero when a schedule/target group
+reports one measurement for every seed while its range was sampled: the spread
+would then be a repetition check presented as a distribution. An enumerated
+range is never flagged.
+
+The probe still writes `diagnostics.schedules_are_inert` and warns if a driver
+ever applies one update rule for every schedule, so identical rows are never
+presented as an algorithm comparison, and the probe then exits non-zero so CI
+fails instead of publishing identical rows.
 
 The lane A report carries a `checkpoints` array, one entry per exact-BR
 measurement with `elapsed_seconds`, `solve_seconds` (regret updates), and
-`br_seconds` (that measurement), plus a `timing` summary. The probe derives
-`target_bracket` from those checkpoints for every run: the last checkpoint
-above the target and the first one at or below it. The exact crossing time
-between those two measurements is not interpolated, so the bracket is the
-honest resolution of the configured interval; the summary also reports the
-median checkpoint time and iteration to the first below-target measurement.
+`br_seconds` (that measurement), plus a `timing` summary. Every checkpoint also
+records the exponents the requested schedule resolved at that iteration
+(`alpha`, `beta`, `gamma`), so the report holds the parameter trajectory, not
+only the schedule's name; the root repeats the last checkpoint's parameters as
+`dcfr_params` together with the iteration they describe. `precision` and
+`peak_rss_bytes` sit beside them (a null peak RSS means the platform has no such
+counter, never a guess). The probe derives `target_bracket` from those
+checkpoints for every run: the last checkpoint above the target and the first
+one at or below it. The exact crossing time between those two measurements is
+not interpolated, so the bracket is the honest resolution of the configured
+interval; the summary also reports the median checkpoint time, its solve/BR
+split, and the iteration to the first below-target measurement.
 
 For a fixed-horizon comparison that ignores target stopping, run:
 
@@ -504,10 +558,32 @@ checkpoint is exactly at the horizon. Use the per-iteration fields for a
 common-iteration comparison; its wall times are not directly comparable with
 target-stopped runs that stop earlier.
 
+The checked-in `benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json`
+is one such fixed-horizon campaign (Apple M5, 512 combos, 160 iterations,
+interval 2, seeds 11,23,37,53,71) written with `--omit-checkpoints`, so it keeps
+the summary, the per-run metrics and the diagnostics without the 80-entry
+traces per run. The document states the omission as `checkpoints_omitted`:
+
+```
+python3 benchmarks/solver/plo4_time_to_target.py \
+  --fixed-horizon --iterations 160 --interval 2 \
+  --seeds 11,23,37,53,71 --omit-checkpoints \
+  --output benchmarks/baseline/pe_plo4_time_to_target_fixed_horizon.json
+```
+
+Its geometry, trajectories and exploitability definition are reproducible from
+that command (omit the flag to get the full checkpoint trace back); its wall
+clocks and peak RSS are evidence from that machine, not a CI speed gate, which
+is why the campaign stays out of the smoke job's pass criteria.
+
 `check_lane_a_schedules.py` is the direct guard: it runs `pe-plo4-lane-a` with
 `fixed` and `hs30` on the same spot at two checkpoints, requires `br_mode=exact`
-and `guarantee=nash` on every report, and fails unless exploitability or the
-best-response gaps differ at at least one checkpoint.
+and `guarantee=nash` on every report, requires finite recorded parameters that
+agree between the last checkpoint and the report root, and fails unless
+exploitability or the best-response gaps differ at at least one checkpoint. It
+fails separately when the two schedules recorded identical parameter
+trajectories, so a driver that labels the schedule without resolving it cannot
+pass.
 
 `pe-plo4-lane-a --help` lists the spot overrides (`--board`, `--pot`,
 `--stack`, `--bet-size`, `--combos`, `--first-to-act`, `--dcfr-horizon`).

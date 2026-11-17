@@ -19,32 +19,50 @@ fixed-horizon mode:
 * the solver checkpoint history with its timing decomposition, and the
   checkpoint bracket around the target;
 * the exploitability in mbb/game and whether the target was reached;
-* the solver-managed memory (`storage_bytes` and `infosets`);
+* the solver-managed memory (`storage_bytes` and `infosets`), the peak RSS
+  of the process where the platform exposes it, and the resolved precision;
+* the DCFR exponents the schedule resolved at every checkpoint, so the
+  parameter trajectory is recorded rather than only the schedule name;
+* the stopping reason, derived from the solver's own progress booleans;
 * the seed, so repeated runs are reproducible.
 
 Targets that no seed reached are marked, never interpolated. The compared
 schedules are DCFR's fixed exponents (the control) and the training-free
-HS-DCFR(15)/HS-DCFR(30) schedules of Zhang et al. (AAAI 2026).
+HS-DCFR(15)/HS-DCFR(30) schedules of Zhang et al. (AAAI 2026). Methods that the
+lane cannot run with matched semantics (HS-PCFR+, deep predictive CFR, imported
+commercial strategies) are listed as unsupported in the report instead of being
+folded into the comparison. A campaign whose seeds changed nothing while the
+range was sampled is flagged (`diagnostics.seeds_are_inert`): repeated seeds are
+then a repetition check, not a distribution. An enumerated range is
+seed-independent by construction and is never flagged.
 
 With --fixed-horizon, the same seeded runs stop at --iterations even when a
 target would have stopped them earlier. The report then summarizes final
 exploitability and the separate solve/BR timing per schedule, which makes a
 common-iteration comparison possible without target-detection latency.
+
+With --omit-checkpoints the per-run checkpoint histories are left out of the
+written document; the summary and every per-run metric stay. The summary and the
+inert-schedule/inert-seed diagnostics are still computed from the full history,
+so a checked-in baseline can be review-sized without losing the evidence it is
+quoted for.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "pe-plo4-time-to-target/v3"
+SCHEMA = "pe-plo4-time-to-target/v5"
 GAME = "plo4"
 BOARD = "Ks9d4c2hTs"
 POT = 63.0
@@ -58,6 +76,38 @@ DEFAULT_SEEDS = (11, 23, 37)
 DEFAULT_TARGETS = (1000.0, 500.0, 250.0)
 DEFAULT_ITERATIONS = 300
 DEFAULT_INTERVAL = 10
+
+# Methods the lane cannot run under matched game semantics. They are recorded
+# as unsupported so a reader cannot mistake the compared lanes for a survey.
+UNSUPPORTED_METHODS = (
+    {
+        "method": "hs_pcfr_plus",
+        "reason": (
+            "PCFR+ is not implemented in the lane A solver, so its update and "
+            "averaging semantics cannot be matched to the AAAI 2026 "
+            "schedules. It is not a parameter-only change and stays "
+            "unsupported."
+        ),
+    },
+    {
+        "method": "deep_predictive_cfr",
+        "reason": (
+            "Neural predictive CFR is not implemented in this lane. Its "
+            "reported match reward is not a PLO exploitability certificate, "
+            "and its sampling, replay-buffer and training costs are not "
+            "comparable with a tabular DCFR solve."
+        ),
+    },
+    {
+        "method": "monker_import",
+        "reason": (
+            "Imported commercial-solver strategies are excluded: class "
+            "mapping, range/board/tree equivalence and quantized action "
+            "probabilities have not been validated, so they are not a "
+            "reproduced benchmark."
+        ),
+    },
+)
 
 
 def build_command(
@@ -93,19 +143,47 @@ def build_command(
     return command
 
 
+def stopping_reason(progress: dict[str, Any], target_mbb: float | None) -> str:
+    """Classify how the run ended from the solver's own progress booleans."""
+    if target_mbb is not None and progress.get("target_reached"):
+        return "target_reached"
+    if progress.get("complete"):
+        return "iteration_budget"
+    return "incomplete"
+
+
+def _stats(values: list[Any]) -> dict[str, float | None]:
+    """Median/min/max over the present values; all None when nothing is known."""
+    present = [float(value) for value in values if value is not None]
+    if not present:
+        return {"median": None, "min": None, "max": None}
+    return {
+        "median": statistics.median(present),
+        "min": min(present),
+        "max": max(present),
+    }
+
+
 def target_bracket(
     checkpoints: list[dict[str, Any]], target_mbb: float
 ) -> dict[str, Any]:
     """Bracket one target with the last checkpoint above and first below it.
 
     The measurement interval means the exact crossing time is unknown; these
-    two checkpoints are the honest bounds, not an interpolated time.
+    two checkpoints are the honest bounds, not an interpolated time. The solve
+    and certification (best-response) components are kept, so the crossing
+    time can be read with its certification overhead separated out.
     """
     last_above: dict[str, Any] | None = None
     for checkpoint in checkpoints:
         entry = {
             "iteration": checkpoint.get("iteration"),
             "elapsed_seconds": checkpoint.get("elapsed_seconds"),
+            "solve_seconds": checkpoint.get("solve_seconds"),
+            "br_seconds": checkpoint.get("br_seconds"),
+            "alpha": checkpoint.get("alpha"),
+            "beta": checkpoint.get("beta"),
+            "gamma": checkpoint.get("gamma"),
             "exploitability_mbb_per_game": checkpoint.get(
                 "exploitability_mbb_per_game"
             ),
@@ -166,12 +244,16 @@ def run_once(
         "target_mbb": target_mbb,
         "requested_schedule": report.get("dcfr_schedule"),
         "horizon": report.get("dcfr_horizon"),
+        "dcfr_params": report.get("dcfr_params"),
+        "precision": report.get("precision"),
+        "range_mode": report.get("range_mode"),
         "seconds": elapsed,
         "complete": bool(progress.get("complete")),
         "reached": (
             bool(progress.get("target_reached"))
             if target_mbb is not None else None
         ),
+        "stopping_reason": stopping_reason(progress, target_mbb),
         "exploitability_mbb_per_game": float(exploitability),
         "measurement_iteration": metrics.get("measurement_iteration"),
         "iterations_run": progress.get("iteration"),
@@ -179,6 +261,7 @@ def run_once(
         "guarantee": metrics.get("guarantee"),
         "infosets": metrics.get("infosets"),
         "storage_bytes": metrics.get("storage_bytes"),
+        "peak_rss_bytes": report.get("peak_rss_bytes"),
         "timing": report.get("timing", {}),
         "checkpoints": checkpoints,
         "target_bracket": (
@@ -220,6 +303,14 @@ def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any
                 run["target_bracket"]["first_below"] for run in reached
                 if run.get("target_bracket", {}).get("first_below")
             ]
+            first_below_solve = [
+                entry["solve_seconds"] for entry in first_below
+                if entry.get("solve_seconds") is not None
+            ]
+            first_below_br = [
+                entry["br_seconds"] for entry in first_below
+                if entry.get("br_seconds") is not None
+            ]
             by_target[f"{target:.17g}"] = {
                 "runs": len(matching),
                 "reached": len(reached),
@@ -234,6 +325,12 @@ def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any
                     [float(entry["elapsed_seconds"]) for entry in first_below]
                     if first_below else []
                 ),
+                "median_solve_seconds_to_first_below": _median(
+                    [float(value) for value in first_below_solve]
+                ),
+                "median_br_seconds_to_first_below": _median(
+                    [float(value) for value in first_below_br]
+                ),
                 "median_iteration_to_first_below": _median(
                     [float(entry["iteration"]) for entry in first_below]
                     if first_below else []
@@ -241,6 +338,18 @@ def summarize(runs: list[dict[str, Any]], targets: list[float]) -> dict[str, Any
                 "exploitability_mbb_per_game": [
                     run["exploitability_mbb_per_game"] for run in matching
                 ],
+                # Memory is measured for every run of the target, reached or
+                # not: a process peak does not depend on hitting the target.
+                "peak_rss_bytes": _stats(
+                    [run.get("peak_rss_bytes") for run in matching]
+                ),
+                "solver_storage_bytes": _stats(
+                    [run.get("storage_bytes") for run in matching]
+                ),
+                "infosets": _stats([run.get("infosets") for run in matching]),
+                "stopping_reasons": sorted(
+                    {run.get("stopping_reason") for run in matching} - {None}
+                ),
             }
         summary[schedule] = by_target
     return summary
@@ -297,25 +406,45 @@ def summarize_fixed(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "median_solve_seconds": _median(solves),
             "median_solve_ms_per_iteration": _median(solve_per_iteration),
             "median_br_seconds": _median(br_seconds),
+            "final_params": (
+                {
+                    key: measured[0][0].get("dcfr_params", {}).get(key)
+                    for key in ("alpha", "beta", "gamma")
+                } if measured else None
+            ),
+            "peak_rss_bytes": _stats(
+                [run.get("peak_rss_bytes") for run in matching]
+            ),
+            "solver_storage_bytes": _stats(
+                [run.get("storage_bytes") for run in matching]
+            ),
+            "infosets": _stats([run.get("infosets") for run in matching]),
+            "stopping_reasons": sorted(
+                {run.get("stopping_reason") for run in matching} - {None}
+            ),
         }
     return summary
+
+
+def _mib(value: float | None) -> str:
+    return f"{value / (1024.0 * 1024.0):.1f}" if value is not None else "-"
 
 
 def render_fixed_markdown(summary: dict[str, Any]) -> str:
     header = (
         "| schedule | completed | final iter | median exploitability | "
-        "solve ms/iter | solve s | BR s | wall s |"
+        "solve ms/iter | solve s | BR s | wall s | peak MiB | storage MiB |"
     )
     lines = [
         header,
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for schedule in SCHEDULES:
         entry = summary[schedule]
         final_iteration = entry["median_final_iteration"]
         lines.append(
             "| {schedule} | {completed}/{runs} | {iteration} | {expl} | "
-            "{solve_iter} | {solve} | {br} | {wall} |".format(
+            "{solve_iter} | {solve} | {br} | {wall} | {peak} | {storage} |".format(
                 schedule=schedule,
                 completed=entry["completed"],
                 runs=entry["runs"],
@@ -331,6 +460,10 @@ def render_fixed_markdown(summary: dict[str, Any]) -> str:
                 solve=_format_optional(entry["median_solve_seconds"], 3),
                 br=_format_optional(entry["median_br_seconds"], 3),
                 wall=_format_optional(entry["median_seconds"], 3),
+                peak=_mib(entry.get("peak_rss_bytes", {}).get("max")),
+                storage=_mib(
+                    entry.get("solver_storage_bytes", {}).get("median")
+                ),
             )
         )
     return "\n".join(lines)
@@ -364,10 +497,40 @@ def schedules_are_inert(runs: list[dict[str, Any]]) -> bool:
     )
 
 
+def seeds_are_inert(runs: list[dict[str, Any]]) -> bool:
+    """True when every seed measured the same exploitability on a sampled range.
+
+    A fully enumerated range is seed-independent by construction, so identical
+    rows are expected there and never flagged. A sampled range that reports one
+    number for every seed is the failure mode this catches: `--seed` never
+    reached the range sample, so the reported spread would be invented. At
+    least two seeds of the same schedule and target are required before the
+    claim means anything.
+    """
+    grouped: dict[tuple[str, Any], list[dict[str, Any]]] = {}
+    for run in runs:
+        grouped.setdefault((run["schedule"], run["target_mbb"]), []).append(run)
+    for group in grouped.values():
+        if len({run.get("seed") for run in group}) < 2:
+            continue
+        if not all(run.get("range_mode") == "sampled" for run in group):
+            continue
+        if len({run["exploitability_mbb_per_game"] for run in group}) == 1:
+            return True
+    return False
+
+
 def render_markdown(summary: dict[str, Any], targets: list[float]) -> str:
+    """Render the time-to-target table with its certification and memory cost.
+
+    "unreached" marks a target no seed reached; the certification (BR) and
+    solver (solve) seconds are the components of the crossing time, and the
+    peak RSS is the process high-water mark of the same runs.
+    """
     lines = [
-        "| target (mbb/game) | schedule | reached | median s | min s | max s |",
-        "|---:|---|---:|---:|---:|---:|",
+        "| target (mbb/game) | schedule | reached | median s | min s | max s "
+        "| solve s | BR s | peak MiB |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for target in targets:
         key = f"{target:.17g}"
@@ -376,7 +539,7 @@ def render_markdown(summary: dict[str, Any], targets: list[float]) -> str:
             median = entry["median_seconds"]
             lines.append(
                 "| {target:.0f} | {schedule} | {reached}/{runs} | {median} | "
-                "{minimum} | {maximum} |".format(
+                "{minimum} | {maximum} | {solve} | {br} | {peak} |".format(
                     target=target,
                     schedule=schedule,
                     reached=entry["reached"],
@@ -390,9 +553,43 @@ def render_markdown(summary: dict[str, Any], targets: list[float]) -> str:
                         f"{entry['max_seconds']:.3f}"
                         if entry["max_seconds"] is not None else "-"
                     ),
+                    solve=_format_optional(
+                        entry.get("median_solve_seconds_to_first_below"), 3
+                    ),
+                    br=_format_optional(
+                        entry.get("median_br_seconds_to_first_below"), 3
+                    ),
+                    peak=_mib(
+                        entry.get("peak_rss_bytes", {}).get("max")
+                    ),
                 )
             )
     return "\n".join(lines)
+
+
+def cpu_model() -> str | None:
+    """Best-effort CPU model name; None when the platform does not expose it."""
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            completed = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True, text=True, check=False, timeout=5,
+            )
+            return completed.stdout.strip() or None
+        if system == "Linux":
+            text = Path("/proc/cpuinfo").read_text(
+                encoding="utf-8", errors="replace"
+            )
+            for line in text.splitlines():
+                if line.lower().startswith("model name"):
+                    return line.split(":", 1)[-1].strip() or None
+            return None
+        if system == "Windows":
+            return os.environ.get("PROCESSOR_IDENTIFIER", "").strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
 
 
 def parse_targets(text: str) -> list[float]:
@@ -441,6 +638,13 @@ def main(argv: list[str]) -> int:
         help="iterations between exact-BR measurements",
     )
     parser.add_argument(
+        "--omit-checkpoints", action="store_true",
+        help=(
+            "write summaries and per-run metrics without the per-run "
+            "checkpoint histories"
+        ),
+    )
+    parser.add_argument(
         "--output", default=None,
         help="JSON destination",
     )
@@ -467,27 +671,31 @@ def main(argv: list[str]) -> int:
     if not solver.is_file():
         print(f"missing solver: {solver}", file=sys.stderr)
         return 2
-    workdir = output.resolve().parent
-    workdir.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     runs: list[dict[str, Any]] = []
     targets: list[float | None] = (
         [None] if fixed_horizon else list(options.targets)
     )
-    for schedule in SCHEDULES:
-        for target in targets:
-            for seed in options.seeds:
-                try:
-                    runs.append(
-                        run_once(
-                            solver, schedule, seed, target,
-                            options.iterations, options.interval,
-                            options.combos, workdir,
+    # The per-run solver reports are intermediates, not artifacts. Keeping them
+    # in a scratch directory means writing a baseline straight into the
+    # repository does not litter it with one JSON per run.
+    with tempfile.TemporaryDirectory(prefix="pe-plo4-ttt-") as scratch:
+        workdir = Path(scratch)
+        for schedule in SCHEDULES:
+            for target in targets:
+                for seed in options.seeds:
+                    try:
+                        runs.append(
+                            run_once(
+                                solver, schedule, seed, target,
+                                options.iterations, options.interval,
+                                options.combos, workdir,
+                            )
                         )
-                    )
-                except RuntimeError as error:
-                    print(str(error), file=sys.stderr)
-                    return 1
+                    except RuntimeError as error:
+                        print(str(error), file=sys.stderr)
+                        return 1
 
     if fixed_horizon:
         missing = [
@@ -510,6 +718,7 @@ def main(argv: list[str]) -> int:
         runs, options.targets
     )
     inert = schedules_are_inert(runs)
+    seeds_inert = seeds_are_inert(runs)
     document = {
         "schema": SCHEMA,
         "issue": 284,
@@ -533,7 +742,29 @@ def main(argv: list[str]) -> int:
         "environment": {
             "platform": platform.platform(),
             "machine": platform.machine(),
+            "processor": platform.processor() or None,
+            "cpu_model": cpu_model(),
+            "logical_cores": os.cpu_count(),
             "python": platform.python_version(),
+            "note": (
+                "Wall clocks and peak RSS are machine-specific evidence, not "
+                "a CI speed gate."
+            ),
+        },
+        "methods": {
+            "compared": [
+                {
+                    "method": f"dcfr/{schedule}",
+                    "role": "control" if schedule == "fixed" else "scheduled",
+                }
+                for schedule in SCHEDULES
+            ],
+            "quality_definition": (
+                "exploitability_mbb_per_game: exploitability (half the raw "
+                "NashConv) in mbb per hand of the declared big blind, from the "
+                "same exact best-response evaluator for every schedule"
+            ),
+            "unsupported": list(UNSUPPORTED_METHODS),
         },
         "br_quality": {
             "mode": sorted({run["br_mode"] for run in runs}),
@@ -548,7 +779,8 @@ def main(argv: list[str]) -> int:
         },
         "diagnostics": {
             "schedules_are_inert": inert,
-            "note": (
+            "seeds_are_inert": seeds_inert,
+            "schedules_note": (
                 "True means every schedule produced the same exploitability "
                 "at the same iteration: the driver applies one update rule "
                 "and the schedule dimension is not a comparison."
@@ -556,10 +788,26 @@ def main(argv: list[str]) -> int:
                 "Schedules produced different measurements; the summary is a "
                 "comparison."
             ),
+            "seeds_note": (
+                "True means every seed measured the same exploitability "
+                "while the range was sampled: --seed never reached the range "
+                "sample, so the per-seed spread is a repetition check, not a "
+                "distribution."
+            ) if seeds_inert else (
+                "No seed group reported one measurement across a sampled "
+                "range; an enumerated range is seed-independent and is not "
+                "flagged."
+            ),
         },
         "runs": runs,
         "summary": summary,
+        "checkpoints_omitted": options.omit_checkpoints,
     }
+    if options.omit_checkpoints:
+        # The summary and the diagnostics above were computed from the full
+        # histories; only the written copy drops them.
+        for run in document["runs"]:
+            run.pop("checkpoints", None)
     with open(output, "w", encoding="utf-8") as output_file:
         json.dump(document, output_file, indent=2, sort_keys=True)
         output_file.write("\n")
@@ -576,6 +824,14 @@ def main(argv: list[str]) -> int:
             "an algorithm comparison",
             file=sys.stderr,
         )
+    if seeds_inert:
+        print(
+            "error: every seed measured the same exploitability on a sampled "
+            "range; --seed did not reach the range sample, so the per-seed "
+            "spread is not a distribution",
+            file=sys.stderr,
+        )
+    if inert or seeds_inert:
         return 1
     return 0
 

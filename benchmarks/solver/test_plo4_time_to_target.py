@@ -102,6 +102,85 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("| 100 | hs15 | 0/1 | unreached |", table)
 
 
+class CostReportingTests(unittest.TestCase):
+    """Issue #284: memory and certification overhead belong in the table."""
+
+    @staticmethod
+    def _measured(
+        seed: int, seconds: float, solve: float, br_seconds: float,
+        peak_rss: int, exploitability: float,
+    ) -> dict:
+        outcome = run("hs30", seed, 5000.0, seconds, exploitability)
+        outcome.update({
+            "peak_rss_bytes": peak_rss,
+            "storage_bytes": 4096,
+            "infosets": 4,
+            "stopping_reason": "target_reached",
+            "target_bracket": {
+                "target_mbb": 5000.0,
+                "last_above": None,
+                "first_below": {
+                    "iteration": 40,
+                    "elapsed_seconds": seconds,
+                    "solve_seconds": solve,
+                    "br_seconds": br_seconds,
+                    "exploitability_mbb_per_game": exploitability,
+                },
+                "bracketed": True,
+            },
+        })
+        return outcome
+
+    def test_summary_reports_memory_and_certification_cost(self) -> None:
+        runs = [
+            self._measured(1, 0.30, 0.22, 0.08, 100 * 1024 * 1024, 4200.0),
+            self._measured(2, 0.20, 0.12, 0.08, 200 * 1024 * 1024, 4300.0),
+        ]
+
+        entry = probe.summarize(runs, [5000.0])["hs30"]["5000"]
+
+        self.assertAlmostEqual(
+            entry["median_solve_seconds_to_first_below"], 0.17
+        )
+        self.assertAlmostEqual(entry["median_br_seconds_to_first_below"], 0.08)
+        self.assertEqual(
+            entry["peak_rss_bytes"]["max"], 200 * 1024 * 1024
+        )
+        self.assertAlmostEqual(entry["solver_storage_bytes"]["median"], 4096.0)
+        self.assertEqual(entry["infosets"]["median"], 4.0)
+        self.assertEqual(entry["stopping_reasons"], ["target_reached"])
+
+    def test_unknown_memory_is_not_invented(self) -> None:
+        entry = probe.summarize(
+            [run("hs15", 1, 5000.0, 0.1, 4200.0)], [5000.0]
+        )["hs15"]["5000"]
+
+        self.assertIsNone(entry["peak_rss_bytes"]["median"])
+        self.assertIsNone(entry["solver_storage_bytes"]["median"])
+
+    def test_markdown_includes_certification_and_memory(self) -> None:
+        runs = [
+            self._measured(1, 0.30, 0.22, 0.08, 200 * 1024 * 1024, 4200.0)
+        ]
+
+        table = probe.render_markdown(
+            probe.summarize(runs, [5000.0]), [5000.0]
+        )
+
+        self.assertIn("| solve s | BR s | peak MiB |", table)
+        self.assertIn("| 0.220 | 0.080 | 200.0 |", table)
+
+    def test_stopping_reason_is_derived_from_progress(self) -> None:
+        self.assertEqual(
+            probe.stopping_reason({"target_reached": True}, 1000.0),
+            "target_reached",
+        )
+        self.assertEqual(
+            probe.stopping_reason({"complete": True}, None), "iteration_budget"
+        )
+        self.assertEqual(probe.stopping_reason({}, 1000.0), "incomplete")
+
+
 class InertScheduleTests(unittest.TestCase):
     def test_identical_measurements_flag_the_schedule_dimension(self) -> None:
         runs = [
@@ -196,6 +275,76 @@ class FixedHorizonTests(unittest.TestCase):
         table = probe.render_fixed_markdown(summary)
         self.assertIn("| fixed | 1/1 | 160 |", table)
         self.assertIn("250.000", table)
+
+    def test_intermediate_reports_go_to_a_scratch_directory(self) -> None:
+        seen: list[Path] = []
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            seen.append(Path(workdir))
+            return fixed_run(schedule, seed, 0.1, 0.08, 0.02,
+                             values[schedule], iterations)
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "baseline.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                probe.main([
+                    "probe", "--solver", str(solver), "--fixed-horizon",
+                    "--iterations", "160", "--seeds", "1",
+                    "--output", str(output),
+                ])
+            self.assertEqual(
+                [path.name for path in output.parent.glob("report-*.json")], []
+            )
+
+        self.assertTrue(seen)
+        self.assertEqual(len(set(seen)), 1)
+        self.assertFalse(seen[0].exists())
+
+    def test_omit_checkpoints_keeps_summary_and_metrics(self) -> None:
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            return fixed_run(schedule, seed, 0.1, 0.08, 0.02,
+                             values[schedule], iterations)
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "trimmed.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--fixed-horizon",
+                    "--iterations", "160", "--seeds", "1",
+                    "--omit-checkpoints", "--output", str(output),
+                ])
+            self.assertEqual(status, 0)
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertTrue(document["checkpoints_omitted"])
+        for run in document["runs"]:
+            self.assertNotIn("checkpoints", run)
+            self.assertIsNotNone(run["exploitability_mbb_per_game"])
+        self.assertEqual(
+            document["summary"]["fixed"]["median_exploitability_mbb_per_game"],
+            800.0,
+        )
+        self.assertEqual(
+            document["summary"]["fixed"]["median_solve_ms_per_iteration"],
+            0.08 / 160.0 * 1000.0,
+        )
 
 
 class TargetBracketTests(unittest.TestCase):
@@ -310,11 +459,141 @@ class MainTests(unittest.TestCase):
                 ])
             self.assertEqual(status, 0)
             document = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(document["schema"], "pe-plo4-time-to-target/v3")
+        self.assertEqual(document["schema"], probe.SCHEMA)
         self.assertEqual(document["campaign_mode"], "fixed-horizon")
         self.assertEqual(document["game"]["targets_mbb_per_game"], [])
         self.assertEqual(document["summary"]["fixed"]["median_final_iteration"],
                          160.0)
+
+
+class MethodCoverageTests(unittest.TestCase):
+    """Issue #284: unsupported lanes are named, never folded into the table."""
+
+    def test_unsupported_methods_are_recorded(self) -> None:
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            outcome = run(schedule, seed, target, 0.1, values[schedule])
+            outcome.update({
+                "br_mode": "exact",
+                "guarantee": "nash",
+                "stopping_reason": "target_reached",
+            })
+            return outcome
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "report.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--targets", "1000",
+                    "--seeds", "1", "--iterations", "10",
+                    "--output", str(output),
+                ])
+            self.assertEqual(status, 0)
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(document["schema"], probe.SCHEMA)
+        self.assertEqual(
+            [entry["method"] for entry in document["methods"]["compared"]],
+            ["dcfr/fixed", "dcfr/hs15", "dcfr/hs30"],
+        )
+        self.assertEqual(
+            document["methods"]["compared"][0]["role"], "control"
+        )
+        self.assertEqual(
+            {entry["method"] for entry in document["methods"]["unsupported"]},
+            {"hs_pcfr_plus", "deep_predictive_cfr", "monker_import"},
+        )
+        for entry in document["methods"]["unsupported"]:
+            self.assertTrue(entry["reason"].strip())
+        self.assertIn("cpu_model", document["environment"])
+        self.assertIn("logical_cores", document["environment"])
+        self.assertIn("mbb per hand", document["methods"]["quality_definition"])
+
+
+class SeedEffectTests(unittest.TestCase):
+    """Issue #284: repeated seeds must actually change a sampled range."""
+
+    @staticmethod
+    def _run(schedule: str, seed: int, exploitability: float,
+             range_mode: str) -> dict:
+        outcome = run(schedule, seed, 5000.0, 0.1, exploitability)
+        outcome["range_mode"] = range_mode
+        return outcome
+
+    def test_identical_seeds_on_a_sampled_range_are_flagged(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "sampled"),
+            self._run("fixed", 2, 800.0, "sampled"),
+        ]
+        self.assertTrue(probe.seeds_are_inert(runs))
+
+    def test_enumerated_range_is_not_flagged(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "enumerated"),
+            self._run("fixed", 2, 800.0, "enumerated"),
+        ]
+        self.assertFalse(probe.seeds_are_inert(runs))
+
+    def test_single_seed_is_not_a_distribution(self) -> None:
+        self.assertFalse(
+            probe.seeds_are_inert([self._run("fixed", 1, 800.0, "sampled")])
+        )
+
+    def test_different_measurements_are_a_distribution(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "sampled"),
+            self._run("fixed", 2, 790.0, "sampled"),
+        ]
+        self.assertFalse(probe.seeds_are_inert(runs))
+
+    def test_mixed_range_modes_are_not_flagged(self) -> None:
+        runs = [
+            self._run("fixed", 1, 800.0, "sampled"),
+            self._run("fixed", 2, 800.0, "enumerated"),
+        ]
+        self.assertFalse(probe.seeds_are_inert(runs))
+
+    def test_main_fails_when_seeds_are_inert(self) -> None:
+        values = {"fixed": 800.0, "hs15": 750.0, "hs30": 700.0}
+
+        def fake_run_once(solver, schedule, seed, target,
+                          iterations, interval, combos, workdir):
+            outcome = run(schedule, seed, target, 0.1, values[schedule])
+            outcome.update({
+                "br_mode": "exact",
+                "guarantee": "nash",
+                "stopping_reason": "target_reached",
+                "range_mode": "sampled",
+            })
+            return outcome
+
+        with tempfile.TemporaryDirectory() as directory:
+            solver = Path(directory) / "solver"
+            solver.write_text("", encoding="utf-8")
+            output = Path(directory) / "report.json"
+            with (
+                mock.patch.object(probe, "run_once", side_effect=fake_run_once),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = probe.main([
+                    "probe", "--solver", str(solver), "--targets", "1000",
+                    "--seeds", "1,2", "--iterations", "10",
+                    "--output", str(output),
+                ])
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        self.assertTrue(document["diagnostics"]["seeds_are_inert"])
+        self.assertFalse(document["diagnostics"]["schedules_are_inert"])
 
 
 if __name__ == "__main__":

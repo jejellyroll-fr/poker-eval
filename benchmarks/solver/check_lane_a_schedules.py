@@ -46,8 +46,8 @@ def solve(
 
 def measurement(
     schedule: str, report: dict[str, Any]
-) -> tuple[float, tuple[float, ...]]:
-    """Validate the report labels and return exploitability plus gaps."""
+) -> tuple[float, tuple[float, ...], tuple[float, float, float]]:
+    """Validate labels and trajectories; return exploitability, gaps, params."""
     if report.get("dcfr_schedule") != schedule:
         raise AssertionError(
             f"report requested {report.get('dcfr_schedule')!r}, "
@@ -78,6 +78,18 @@ def measurement(
         )
         if not all(math.isfinite(value) for value in values):
             raise AssertionError(f"{schedule}: non-finite checkpoint")
+        raw_exponents = [
+            checkpoint.get(key) for key in ("alpha", "beta", "gamma")
+        ]
+        if any(value is None for value in raw_exponents):
+            raise AssertionError(
+                f"{schedule}: checkpoint records no finite DCFR parameters"
+            )
+        exponents = tuple(float(value) for value in raw_exponents)
+        if not all(math.isfinite(value) for value in exponents):
+            raise AssertionError(
+                f"{schedule}: checkpoint records no finite DCFR parameters"
+            )
         iteration = int(checkpoint["iteration"])
         if iteration <= previous_iteration:
             raise AssertionError(f"{schedule}: checkpoints are not ordered")
@@ -114,7 +126,28 @@ def measurement(
     total_br = sum(float(item["br_seconds"]) for item in checkpoints)
     if abs(timing_values[2] - total_br) > 1e-6:
         raise AssertionError(f"{schedule}: timing BR disagrees with history")
-    return exploitability, gaps
+    # The report's root parameters must describe the same iteration as the last
+    # checkpoint, otherwise the recorded trajectory is not what was solved.
+    recorded = report.get("dcfr_params")
+    if not isinstance(recorded, dict):
+        raise AssertionError(f"{schedule}: no resolved DCFR parameters")
+    if int(recorded.get("iteration", -1)) != iteration:
+        raise AssertionError(
+            f"{schedule}: root parameters describe a different iteration"
+        )
+    raw_root = [recorded.get(key) for key in ("alpha", "beta", "gamma")]
+    if any(value is None for value in raw_root):
+        raise AssertionError(f"{schedule}: root parameters are incomplete")
+    root_exponents = tuple(float(value) for value in raw_root)
+    if root_exponents != exponents:
+        raise AssertionError(
+            f"{schedule}: root parameters disagree with the last checkpoint"
+        )
+    if not isinstance(report.get("precision"), str):
+        raise AssertionError(f"{schedule}: no recorded precision")
+    if "peak_rss_bytes" not in report:
+        raise AssertionError(f"{schedule}: peak RSS is not recorded")
+    return exploitability, gaps, exponents
 
 
 def main(argv: list[str]) -> int:
@@ -150,7 +183,8 @@ def main(argv: list[str]) -> int:
         return 1
 
     differ = any(
-        measured["fixed"] != measured["hs30"] for measured in values.values()
+        measured["fixed"][:2] != measured["hs30"][:2]
+        for measured in values.values()
     )
     if not differ:
         print(
@@ -160,10 +194,26 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
+    # A driver that records the schedule name but resolves one parameter set
+    # for every preset would pass the rows check by accident on another spot,
+    # so the recorded trajectory is checked on its own.
+    trajectories_differ = all(
+        measured["fixed"][2] != measured["hs30"][2]
+        for measured in values.values()
+    )
+    if not trajectories_differ:
+        print(
+            "schedule check failed: fixed and hs30 recorded identical DCFR "
+            "parameter trajectories",
+            file=sys.stderr,
+        )
+        return 1
     for iterations, measured in values.items():
         print(
             f"{iterations} iterations: fixed={measured['fixed'][0]:.6f} "
-            f"hs30={measured['hs30'][0]:.6f} mbb/game"
+            f"hs30={measured['hs30'][0]:.6f} mbb/game "
+            f"(alpha {measured['fixed'][2][0]:.3f} vs "
+            f"{measured['hs30'][2][0]:.3f})"
         )
     return 0
 
