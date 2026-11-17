@@ -263,7 +263,12 @@ jobs:
   test-native-multiarch:
     name: Native Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
+    # The macOS arm64 image is frequently not assigned at all, which would turn
+    # a pull request red without running a step. It keeps a leg here so the
+    # image is still exercised, but that leg cannot fail the run; the Intel leg
+    # is the one that gates a merge. See cmake.yml.
+    continue-on-error: ${{ matrix.os == 'macos-15' }}
     # An unbounded --parallel build exhausts the process limit of the small
     # arm64 runners: clang fails to spawn with "posix_spawn: Resource
     # temporarily unavailable" while linking test binaries.
@@ -271,11 +276,6 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     strategy:
       fail-fast: false
-      # The macOS arm64 image is frequently not assigned at all, which would
-      # turn a pull request red without running a step. It keeps a leg here so
-      # the image is still exercised, but that leg cannot fail the run; the
-      # Intel leg is the one that gates a merge. See cmake.yml.
-      continue-on-error: ${{ matrix.os == 'macos-15' }}
       matrix:
         os: [ubuntu-24.04-arm, macos-15-intel, macos-15]
 
