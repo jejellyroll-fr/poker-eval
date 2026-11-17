@@ -13,7 +13,10 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # GitHub's hosted macOS pool is starved often enough that the queue alone
+    # can exhaust a 25-minute budget; a job cancelled before its first step
+    # still marks the whole run failed. The macOS leg waits longer instead.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 60 || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,9 +32,13 @@ jobs:
             compiler: clang
             preset: linux-clang
           
-          # macOS builds
+          # macOS builds. Pull-request legs run on the Intel image: GitHub
+          # annotates the ARM64 jobs with "Due to capacity constraints, jobs
+          # targeting macOS arm64 runners may experience longer queue times",
+          # and on some days they are not assigned at all. ARM64 stays covered
+          # by release.yml on tags and by release-check.yml on manual runs.
           - name: macOS Clang
-            os: macos-latest
+            os: macos-15-intel
             compiler: clang
             preset: macos
           
