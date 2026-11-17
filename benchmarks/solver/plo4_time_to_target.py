@@ -84,6 +84,19 @@ DEFAULT_ITERATIONS = 300
 DEFAULT_INTERVAL = 10
 PREFLIGHT_ITERATIONS = 2
 
+# The checkpoint fields a target bracket keeps: the timing split, the resolved
+# exponents and the measurement itself.
+BRACKET_KEYS = (
+    "iteration",
+    "elapsed_seconds",
+    "solve_seconds",
+    "br_seconds",
+    "alpha",
+    "beta",
+    "gamma",
+    "exploitability_mbb_per_game",
+)
+
 # Fixed heads-up river spots. Each one declares the whole game: board, pot,
 # stacks, the single bet size and how it was chosen.
 SPOTS: tuple[dict[str, Any], ...] = (
@@ -281,18 +294,7 @@ def target_bracket(
     """
     last_above: dict[str, Any] | None = None
     for checkpoint in checkpoints:
-        entry = {
-            "iteration": checkpoint.get("iteration"),
-            "elapsed_seconds": checkpoint.get("elapsed_seconds"),
-            "solve_seconds": checkpoint.get("solve_seconds"),
-            "br_seconds": checkpoint.get("br_seconds"),
-            "alpha": checkpoint.get("alpha"),
-            "beta": checkpoint.get("beta"),
-            "gamma": checkpoint.get("gamma"),
-            "exploitability_mbb_per_game": checkpoint.get(
-                "exploitability_mbb_per_game"
-            ),
-        }
+        entry = {key: checkpoint.get(key) for key in BRACKET_KEYS}
         if float(entry["exploitability_mbb_per_game"]) <= target_mbb:
             return {
                 "target_mbb": target_mbb,
@@ -379,14 +381,12 @@ def run_once(
     dcfr = method["algorithm"] == "dcfr"
     return {
         "spot": spot["id"],
-        "board": spot["board"],
         "method": method["method"],
         "algorithm": report.get("algorithm") or method["algorithm"],
-        "schedule": method["schedule"],
+        "schedule": report.get("dcfr_schedule") if dcfr else None,
         "role": method["role"],
         "seed": seed,
         "target_mbb": target_mbb,
-        "requested_schedule": report.get("dcfr_schedule") if dcfr else None,
         "horizon": report.get("dcfr_horizon") if dcfr else None,
         "dcfr_params": report.get("dcfr_params") if dcfr else None,
         "precision": report.get("precision"),
@@ -436,16 +436,14 @@ def summarize(
     reached counts and times are kept so a partial result cannot look complete.
     """
     summary: dict[str, Any] = {}
-    for spot in spots:
+    for spot, by_method_runs in _group_runs(runs, spots).items():
         by_method: dict[str, Any] = {}
-        for method in METHOD_LABELS:
+        for method, method_runs in by_method_runs.items():
             by_target: dict[str, Any] = {}
             for target in targets:
                 matching = [
-                    run for run in runs
-                    if run["spot"] == spot
-                    and run["method"] == method
-                    and run["target_mbb"] == target
+                    run for run in method_runs
+                    if run["target_mbb"] == target
                 ]
                 if not matching:
                     continue
@@ -492,18 +490,7 @@ def summarize(
                     ],
                     # Memory is measured for every run of the target, reached
                     # or not: a process peak does not depend on hitting it.
-                    "peak_rss_bytes": _stats(
-                        [run.get("peak_rss_bytes") for run in matching]
-                    ),
-                    "solver_storage_bytes": _stats(
-                        [run.get("storage_bytes") for run in matching]
-                    ),
-                    "infosets": _stats(
-                        [run.get("infosets") for run in matching]
-                    ),
-                    "stopping_reasons": sorted(
-                        {run.get("stopping_reason") for run in matching} - {None}
-                    ),
+                    **_cost_fields(matching),
                 }
             if by_target:
                 by_method[method] = by_target
@@ -521,13 +508,9 @@ def summarize_fixed(
     best-response cost is kept separate from the per-iteration solve cost.
     """
     summary: dict[str, Any] = {}
-    for spot in spots:
+    for spot, by_method_runs in _group_runs(runs, spots).items():
         by_method: dict[str, Any] = {}
-        for method in METHOD_LABELS:
-            matching = [
-                run for run in runs
-                if run["spot"] == spot and run["method"] == method
-            ]
+        for method, matching in by_method_runs.items():
             if not matching:
                 continue
             completed = [run for run in matching if run.get("complete")]
@@ -563,6 +546,7 @@ def summarize_fixed(
                 max(0.0, total - solve) for total, solve in zip(elapsed, solves)
             ]
 
+            params = measured[0][0].get("dcfr_params") if measured else None
             by_method[method] = {
                 "algorithm": matching[0]["algorithm"],
                 "schedule": matching[0]["schedule"],
@@ -584,26 +568,43 @@ def summarize_fixed(
                     _median(solve_per_iteration),
                 "median_br_seconds": _median(br_seconds),
                 "final_params": (
-                    {
-                        key: measured[0][0].get("dcfr_params", {}).get(key)
-                        for key in ("alpha", "beta", "gamma")
-                    } if measured and measured[0][0].get("dcfr_params") else None
+                    {key: params.get(key) for key in ("alpha", "beta", "gamma")}
+                    if params else None
                 ),
-                "peak_rss_bytes": _stats(
-                    [run.get("peak_rss_bytes") for run in matching]
-                ),
-                "solver_storage_bytes": _stats(
-                    [run.get("storage_bytes") for run in matching]
-                ),
-                "infosets": _stats(
-                    [run.get("infosets") for run in matching]
-                ),
-                "stopping_reasons": sorted(
-                    {run.get("stopping_reason") for run in matching} - {None}
-                ),
+                **_cost_fields(matching),
             }
         summary[spot] = by_method
     return summary
+
+
+def _group_runs(
+    runs: list[dict[str, Any]], spots: list[str]
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Index runs by spot and method, in the declared order of both."""
+    return {
+        spot: {
+            method: [
+                run for run in runs
+                if run["spot"] == spot and run["method"] == method
+            ]
+            for method in METHOD_LABELS
+        }
+        for spot in spots
+    }
+
+
+def _cost_fields(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Memory and stopping evidence, shared by both summaries."""
+    return {
+        "peak_rss_bytes": _stats([run.get("peak_rss_bytes") for run in runs]),
+        "solver_storage_bytes": _stats(
+            [run.get("storage_bytes") for run in runs]
+        ),
+        "infosets": _stats([run.get("infosets") for run in runs]),
+        "stopping_reasons": sorted(
+            {run.get("stopping_reason") for run in runs} - {None}
+        ),
+    }
 
 
 def methods_are_inert(runs: list[dict[str, Any]]) -> bool:
@@ -840,6 +841,161 @@ def parse_seeds(text: str) -> list[int]:
     return seeds
 
 
+def campaign(
+    solver: Path,
+    spots: list[str],
+    options: argparse.Namespace,
+    targets: list[float | None],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    """Run every available (spot, method, target, seed) and collect the runs.
+
+    A preset the driver refuses for a spot is recorded once with the driver's
+    message and skipped for that spot, so one inapplicable preset cannot abort
+    the campaign. The per-run solver reports are intermediates, not artifacts:
+    they live in a temporary directory, so pointing --output at a baseline
+    directory does not litter the repository with one JSON per run.
+    """
+    runs: list[dict[str, Any]] = []
+    unavailable: dict[str, dict[str, str]] = {}
+    with tempfile.TemporaryDirectory(prefix="pe-plo4-ttt-") as scratch:
+        workdir = Path(scratch)
+        for identifier in spots:
+            spot = spot_by_id(identifier)
+            for method in METHODS:
+                error = preflight(solver, spot, method, workdir)
+                if error is not None:
+                    unavailable.setdefault(identifier, {})[
+                        method["method"]
+                    ] = error
+                    print(
+                        f"skipping {identifier}/{method['method']}: {error}",
+                        file=sys.stderr,
+                    )
+                    continue
+                for target in targets:
+                    for seed in options.seeds:
+                        runs.append(
+                            run_once(
+                                solver, spot, method, seed, target,
+                                options.iterations, options.interval,
+                                options.combos, workdir,
+                            )
+                        )
+    return runs, unavailable
+
+
+def build_document(
+    options: argparse.Namespace,
+    spots: list[str],
+    runs: list[dict[str, Any]],
+    unavailable: dict[str, dict[str, str]],
+    fixed_horizon: bool,
+) -> dict[str, Any]:
+    """Assemble the artifact: geometry, methods, diagnostics and summary.
+
+    The summary and the diagnostics are computed from the full checkpoint
+    history, so omitting the histories from the written copy cannot change what
+    the document claims.
+    """
+    summary = (
+        summarize_fixed(runs, spots) if fixed_horizon
+        else summarize(runs, spots, options.targets)
+    )
+    inert = methods_are_inert(runs)
+    seeds_inert = seeds_are_inert(runs)
+    return {
+        "schema": SCHEMA,
+        "issue": 284,
+        "campaign_mode": "fixed-horizon" if fixed_horizon else "time-to-target",
+        "spots": [
+            {key: spot[key] for key in (
+                "id", "board", "pot", "stack", "bet_size", "note"
+            )}
+            for spot in (spot_by_id(identifier) for identifier in spots)
+        ],
+        "game": {
+            "game": GAME,
+            "big_blind": BIG_BLIND,
+            "first_to_act": FIRST_TO_ACT,
+            "combos": options.combos,
+            "iterations_cap": options.iterations,
+            "fixed_horizon": fixed_horizon,
+            "exploitability_interval": options.interval,
+            "targets_mbb_per_game": [] if fixed_horizon else options.targets,
+            "seeds": options.seeds,
+        },
+        "environment": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "processor": platform.processor() or None,
+            "cpu_model": cpu_model(),
+            "logical_cores": os.cpu_count(),
+            "python": platform.python_version(),
+            "note": (
+                "Wall clocks and peak RSS are machine-specific evidence, not "
+                "a CI speed gate."
+            ),
+        },
+        "methods": {
+            "compared": [
+                {
+                    "method": entry["method"],
+                    "algorithm": entry["algorithm"],
+                    "schedule": entry["schedule"],
+                    "role": entry["role"],
+                }
+                for entry in METHODS
+            ],
+            "quality_definition": (
+                "exploitability_mbb_per_game: exploitability (half the raw "
+                "NashConv) in mbb per hand of the declared big blind, from the "
+                "same exact best-response evaluator for every method"
+            ),
+            "unavailable": unavailable,
+            "unsupported": list(UNSUPPORTED_METHODS),
+        },
+        "br_quality": {
+            "mode": sorted({run["br_mode"] for run in runs}),
+            "guarantee": sorted({run["guarantee"] for run in runs}),
+            "note": (
+                "Lane A measures exact best responses; the fixed horizon is "
+                "an iteration count, not a reached target."
+                if fixed_horizon else
+                "Lane A measures exact best responses; a reached target is a "
+                "measured value, not a sampled estimate."
+            ),
+        },
+        "diagnostics": {
+            "methods_are_inert": inert,
+            "seeds_are_inert": seeds_inert,
+            "identical_method_groups": identical_method_groups(runs),
+            "methods_note": (
+                "True means every available method produced the same "
+                "measurement at the same iteration: the driver applies one "
+                "update rule and the algorithm axis is not a comparison."
+            ) if inert else (
+                "Methods produced different measurements; the summary is a "
+                "comparison. `identical_method_groups` lists methods that "
+                "agreed on every seed, which is expected when two presets "
+                "share an update rule on a spot without chance nodes."
+            ),
+            "seeds_note": (
+                "True means every seed measured the same exploitability "
+                "while the range was sampled: --seed never reached the range "
+                "sample, so the per-seed spread is a repetition check, not a "
+                "distribution."
+            ) if seeds_inert else (
+                "No seed group reported one measurement across a sampled "
+                "range; an enumerated range is seed-independent and is not "
+                "flagged."
+            ),
+        },
+        "runs": runs,
+        "summary": summary,
+        "checkpoints_omitted": options.omit_checkpoints,
+    }
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -924,183 +1080,37 @@ def main(argv: list[str]) -> int:
     if not solver.is_file():
         print(f"missing solver: {solver}", file=sys.stderr)
         return 2
-    spots = options.spot
-    for identifier in spots:
-        spot = spot_by_id(identifier)
-        board = str(spot["board"])
-        if len(board) != 10 or len(set(board[i:i + 2] for i in range(0, 10, 2))) != 5:
-            print(
-                f"spot {identifier}: board must hold five distinct cards",
-                file=sys.stderr,
-            )
-            return 2
-        if spot["bet_size"] > spot["stack"]:
-            print(
-                f"spot {identifier}: bet size exceeds the remaining stack",
-                file=sys.stderr,
-            )
-            return 2
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    runs: list[dict[str, Any]] = []
-    unavailable: dict[str, dict[str, str]] = {}
+    spots = options.spot
     targets: list[float | None] = (
         [None] if fixed_horizon else list(options.targets)
     )
-    # The per-run solver reports are intermediates, not artifacts. Keeping them
-    # in a scratch directory means writing a baseline straight into the
-    # repository does not litter it with one JSON per run.
-    with tempfile.TemporaryDirectory(prefix="pe-plo4-ttt-") as scratch:
-        workdir = Path(scratch)
-        for identifier in spots:
-            spot = spot_by_id(identifier)
-            for method in METHODS:
-                error = preflight(solver, spot, method, workdir)
-                if error is not None:
-                    unavailable.setdefault(identifier, {})[
-                        method["method"]
-                    ] = error
-                    print(
-                        f"skipping {identifier}/{method['method']}: {error}",
-                        file=sys.stderr,
-                    )
-                    continue
-                for target in targets:
-                    for seed in options.seeds:
-                        try:
-                            runs.append(
-                                run_once(
-                                    solver, spot, method, seed, target,
-                                    options.iterations, options.interval,
-                                    options.combos, workdir,
-                                )
-                            )
-                        except RuntimeError as runtime_error:
-                            print(str(runtime_error), file=sys.stderr)
-                            return 1
-
+    try:
+        runs, unavailable = campaign(solver, spots, options, targets)
+    except RuntimeError as runtime_error:
+        print(str(runtime_error), file=sys.stderr)
+        return 1
     if not runs:
         print("no method could run the selected spots", file=sys.stderr)
         return 1
-
     if fixed_horizon:
-        missing = [
-            run for run in runs
+        for run in runs:
+            last = (run.get("checkpoints") or [{}])[-1]
             if (
                 not run.get("complete")
-                or not run.get("checkpoints")
-                or int(run["checkpoints"][-1].get("iteration", 0))
-                != options.iterations
-            )
-        ]
-        if missing:
-            print(
-                "fixed-horizon run did not produce a final checkpoint at the "
-                "horizon",
-                file=sys.stderr,
-            )
-            return 1
+                or int(last.get("iteration", 0)) != options.iterations
+            ):
+                print(
+                    "fixed-horizon run did not produce a final checkpoint at "
+                    "the horizon",
+                    file=sys.stderr,
+                )
+                return 1
 
-    summary = (
-        summarize_fixed(runs, spots) if fixed_horizon
-        else summarize(runs, spots, options.targets)
-    )
-    inert = methods_are_inert(runs)
-    seeds_inert = seeds_are_inert(runs)
-    identical = identical_method_groups(runs)
-    document = {
-        "schema": SCHEMA,
-        "issue": 284,
-        "campaign_mode": "fixed-horizon" if fixed_horizon else "time-to-target",
-        "spots": [
-            {key: spot[key] for key in (
-                "id", "board", "pot", "stack", "bet_size", "note"
-            )}
-            for spot in (spot_by_id(identifier) for identifier in spots)
-        ],
-        "game": {
-            "game": GAME,
-            "big_blind": BIG_BLIND,
-            "first_to_act": FIRST_TO_ACT,
-            "combos": options.combos,
-            "iterations_cap": options.iterations,
-            "fixed_horizon": fixed_horizon,
-            "exploitability_interval": options.interval,
-            "targets_mbb_per_game": [] if fixed_horizon else options.targets,
-            "seeds": options.seeds,
-        },
-        "environment": {
-            "platform": platform.platform(),
-            "machine": platform.machine(),
-            "processor": platform.processor() or None,
-            "cpu_model": cpu_model(),
-            "logical_cores": os.cpu_count(),
-            "python": platform.python_version(),
-            "note": (
-                "Wall clocks and peak RSS are machine-specific evidence, not "
-                "a CI speed gate."
-            ),
-        },
-        "methods": {
-            "compared": [
-                {
-                    "method": entry["method"],
-                    "algorithm": entry["algorithm"],
-                    "schedule": entry["schedule"],
-                    "role": entry["role"],
-                }
-                for entry in METHODS
-            ],
-            "quality_definition": (
-                "exploitability_mbb_per_game: exploitability (half the raw "
-                "NashConv) in mbb per hand of the declared big blind, from the "
-                "same exact best-response evaluator for every method"
-            ),
-            "unavailable": unavailable,
-            "unsupported": list(UNSUPPORTED_METHODS),
-        },
-        "br_quality": {
-            "mode": sorted({run["br_mode"] for run in runs}),
-            "guarantee": sorted({run["guarantee"] for run in runs}),
-            "note": (
-                "Lane A measures exact best responses; the fixed horizon is "
-                "an iteration count, not a reached target."
-                if fixed_horizon else
-                "Lane A measures exact best responses; a reached target is a "
-                "measured value, not a sampled estimate."
-            ),
-        },
-        "diagnostics": {
-            "methods_are_inert": inert,
-            "seeds_are_inert": seeds_inert,
-            "identical_method_groups": identical,
-            "methods_note": (
-                "True means every available method produced the same "
-                "measurement at the same iteration: the driver applies one "
-                "update rule and the algorithm axis is not a comparison."
-            ) if inert else (
-                "Methods produced different measurements; the summary is a "
-                "comparison. `identical_method_groups` lists methods that "
-                "agreed on every seed, which is expected when two presets "
-                "share an update rule on a spot without chance nodes."
-            ),
-            "seeds_note": (
-                "True means every seed measured the same exploitability "
-                "while the range was sampled: --seed never reached the range "
-                "sample, so the per-seed spread is a repetition check, not a "
-                "distribution."
-            ) if seeds_inert else (
-                "No seed group reported one measurement across a sampled "
-                "range; an enumerated range is seed-independent and is not "
-                "flagged."
-            ),
-        },
-        "runs": runs,
-        "summary": summary,
-        "checkpoints_omitted": options.omit_checkpoints,
-    }
+    document = build_document(options, spots, runs, unavailable, fixed_horizon)
     if options.omit_checkpoints:
-        # The summary and the diagnostics above were computed from the full
+        # The summary and the diagnostics were computed from the full
         # histories; only the written copy drops them.
         for run in document["runs"]:
             run.pop("checkpoints", None)
@@ -1109,25 +1119,27 @@ def main(argv: list[str]) -> int:
         output_file.write("\n")
 
     print(
-        render_fixed_markdown(summary, spots)
-        if fixed_horizon else render_markdown(summary, spots, options.targets)
+        render_fixed_markdown(document["summary"], spots)
+        if fixed_horizon
+        else render_markdown(document["summary"], spots, options.targets)
     )
     print(f"wrote {output}")
-    if inert:
+    diagnostics = document["diagnostics"]
+    if diagnostics["methods_are_inert"]:
         print(
             "error: every method produced the same measurement; this driver "
             "applied a single update rule, so the rows above are not an "
             "algorithm comparison",
             file=sys.stderr,
         )
-    if seeds_inert:
+    if diagnostics["seeds_are_inert"]:
         print(
             "error: every seed measured the same exploitability on a sampled "
             "range; --seed did not reach the range sample, so the per-seed "
             "spread is not a distribution",
             file=sys.stderr,
         )
-    if inert or seeds_inert:
+    if diagnostics["methods_are_inert"] or diagnostics["seeds_are_inert"]:
         return 1
     return 0
 
