@@ -1,0 +1,116 @@
+name: macOS arm64
+
+# The hosted macOS arm64 pool regularly stops serving this repository: a job
+# that never gets a runner is cancelled after about 15 minutes with "The job
+# was not acquired by Runner of type hosted even after multiple attempts", no
+# step runs, and the run is reported as failed. `continue-on-error` cannot help
+# (it downgrades `failure`, not a cancellation) and neither can `timeout-minutes`
+# (the budget only applies once a runner picked the job up), so keeping these
+# legs inside CMake Build, CI Pipeline and Release Build Check made every pull
+# request red without testing anything.
+#
+# They live here instead, on a deterministic rule:
+#
+#   push, schedule, workflow_dispatch  -> always run (master/development and the
+#                                        nightly build keep their arm64 coverage)
+#   pull_request                       -> run only with the `macos-arm64` label
+#
+# Add the label to a pull request when the arm64 legs are worth the wait, and
+# remove it when the pool is starving; nothing here guesses the pool's state.
+# The jobs are not part of the required checks on master, so a pull request
+# without the label stays green.
+
+on:
+  push:
+    branches: [ master, development ]
+  pull_request:
+    branches: [ master, development ]
+    # Adding or removing the label must (re)start the legs; the default types
+    # would leave a labelled pull request without an arm64 run until its next
+    # push.
+    types: [ opened, reopened, synchronize, labeled, unlabeled ]
+  schedule:
+    # Nightly, off the hour to avoid the scheduled-workflow rush.
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: CMake Release (arm64)
+    # Every event except `pull_request` runs the legs; a pull request opts in
+    # with the `macos-arm64` label.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'macos-arm64')
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: brew install ninja
+
+    - name: Configure CMake
+      run: cmake --preset macos
+
+    # Capped like the native-test leg: an unbounded --parallel exhausts the
+    # process limit of the small arm64 runners.
+    - name: Build
+      run: cmake --build --preset macos --parallel 2
+
+    - name: Test
+      run: ctest --preset macos --output-on-failure --timeout 60
+
+  native-tests:
+    name: Native Tests (arm64)
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'macos-arm64')
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure native test build
+      run: |
+        cmake -S . -B build-native \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DENABLE_NATIVE_ARCH=OFF
+
+    - name: Build native test build
+      run: cmake --build build-native
+
+    - name: Run native test suite
+      run: ctest --test-dir build-native --output-on-failure --timeout 300
+
+  wheels:
+    name: Wheel (arm64)
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'macos-arm64')
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Build wheel via cibuildwheel
+      uses: pypa/cibuildwheel@fa04202e88ea28b84d5d4d20696ee8dfc0119436 # v2.23.0
+      env:
+        CIBW_BUILD: "cp311-*"
+        CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_*"
+        # Same exercise as release-check.yml: the installed wheel, not the tree.
+        CIBW_TEST_COMMAND: "python {project}/tests/test_python_rng_seed.py && python {project}/tests/test_python_draw_games.py"
