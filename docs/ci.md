@@ -1,0 +1,34 @@
+# Continuous integration
+
+The workflows live in `.github/workflows/`. Pull requests and pushes to
+`master`/`development` run the blocking set: Linux (GCC and Clang), Windows
+(MSVC and MinGW), the Intel macOS image `macos-15-intel`, the arm64 Linux image
+`ubuntu-24.04-arm`, the wheels and the release build check.
+
+## macOS arm64 legs
+
+`macos-arm64.yml` builds and tests on the hosted Apple Silicon image
+(`macos-15`): `CMake Release (arm64)`, `Native Tests (arm64)` and
+`Wheel (arm64)`.
+
+They are kept out of `cmake.yml`, `ci.yml` and `release-check.yml` because a
+hosted arm64 job that never gets a runner is cancelled before its first step
+("The job was not acquired by Runner of type hosted even after multiple
+attempts") and fails the run whatever `continue-on-error` says. Only the Intel
+macOS legs block a pull request.
+
+| Event | arm64 legs |
+|---|---|
+| `push` to `master`/`development`, nightly `schedule`, `workflow_dispatch` | always run |
+| `pull_request` | run only with the `macos-arm64` label |
+
+### The `macos-arm64` label
+
+Add it when the change is worth verifying on Apple Silicon before merging — the
+build files, the CMake presets, the native test suite or the Python binding —
+and remove it when the arm64 pool is short of runners and the jobs sit queued or
+come back `cancelled`. They are not required checks, so a pull request without
+the label merges on the Intel legs alone.
+
+Adding or removing the label re-runs the workflow (`labeled`/`unlabeled`), so
+neither action needs a push.

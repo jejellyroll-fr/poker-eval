@@ -150,7 +150,7 @@ src/           Core library (evaluation, equity, games, GPU, parsing)
 bindings/      C, Python, and optional language bindings
 tests/         Regression and integration tests (Unity framework)
 examples/      Focused usage examples (solver trees for NLHE and PLO, CFR demos)
-docs/          CFR solver guides and references
+docs/          CFR solver guides, references and CI notes
 scripts/       Build, validation, and benchmark helpers
 ```
 
