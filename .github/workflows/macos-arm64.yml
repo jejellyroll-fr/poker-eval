@@ -1,4 +1,4 @@
-name: macOS arm64 (best effort)
+name: macOS arm64
 
 # The hosted macOS arm64 pool regularly stops serving this repository: a job
 # that never gets a runner is cancelled after about 15 minutes with "The job
@@ -6,19 +6,29 @@ name: macOS arm64 (best effort)
 # step runs, and the run is reported as failed. `continue-on-error` cannot help
 # (it downgrades `failure`, not a cancellation) and neither can `timeout-minutes`
 # (the budget only applies once a runner picked the job up), so keeping these
-# legs inside CMake Build, CI Pipeline and Release Build Check made pull request
-# runs red without testing anything.
+# legs inside CMake Build, CI Pipeline and Release Build Check made every pull
+# request red without testing anything.
 #
-# They live here instead, behind a probe of the pool's recent behaviour: the
-# probe skips the legs while the pool is starving, and lets them run as soon as
-# a runner is assigned again. The jobs are opportunistic by design and are not
-# part of the required checks on master.
+# They live here instead, on a deterministic rule:
+#
+#   push, schedule, workflow_dispatch  -> always run (master/development and the
+#                                        nightly build keep their arm64 coverage)
+#   pull_request                       -> run only with the `macos-arm64` label
+#
+# Add the label to a pull request when the arm64 legs are worth the wait, and
+# remove it when the pool is starving; nothing here guesses the pool's state.
+# The jobs are not part of the required checks on master, so a pull request
+# without the label stays green.
 
 on:
-  pull_request:
-    branches: [ master, development ]
   push:
     branches: [ master, development ]
+  pull_request:
+    branches: [ master, development ]
+    # Adding or removing the label must (re)start the legs; the default types
+    # would leave a labelled pull request without an arm64 run until its next
+    # push.
+    types: [ opened, reopened, synchronize, labeled, unlabeled ]
   schedule:
     # Nightly, off the hour to avoid the scheduled-workflow rush.
     - cron: '41 4 * * *'
@@ -30,30 +40,15 @@ concurrency:
 
 permissions:
   contents: read
-  # The probe reads this repository's own job history.
-  actions: read
 
 jobs:
-  capacity:
-    name: arm64 pool probe
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      available: ${{ steps.probe.outputs.available }}
-      reason: ${{ steps.probe.outputs.reason }}
-    steps:
-    - uses: actions/checkout@v5
-
-    - name: Probe the hosted macOS arm64 pool
-      id: probe
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: bash .github/scripts/macos-arm64-available.sh
-
   build:
     name: CMake Release (arm64)
-    needs: capacity
-    if: needs.capacity.outputs.available == 'true'
+    # Every event except `pull_request` runs the legs; a pull request opts in
+    # with the `macos-arm64` label.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'macos-arm64')
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -75,8 +70,9 @@ jobs:
 
   native-tests:
     name: Native Tests (arm64)
-    needs: capacity
-    if: needs.capacity.outputs.available == 'true'
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'macos-arm64')
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -103,8 +99,9 @@ jobs:
 
   wheels:
     name: Wheel (arm64)
-    needs: capacity
-    if: needs.capacity.outputs.available == 'true'
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'macos-arm64')
     runs-on: macos-15
     timeout-minutes: 45
     steps:

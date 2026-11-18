@@ -30,9 +30,10 @@ jobs:
     # The ARM64 wheel is built in macos-arm64.yml, not here: when the arm64
     # image is not assigned GitHub cancels the job before its first step ("The
     # job was not acquired by Runner of type hosted even after multiple
-    # attempts") and fails the run regardless of `continue-on-error`. The Intel
-    # wheel stays here, which is where the Homebrew/delocate failures this
-    # workflow exists for were seen.
+    # attempts") and fails the run regardless of `continue-on-error`. A pull
+    # request builds it only with the `macos-arm64` label. The Intel wheel stays
+    # here, which is where the Homebrew/delocate failures this workflow exists
+    # for were seen.
     strategy:
       fail-fast: false
       matrix:

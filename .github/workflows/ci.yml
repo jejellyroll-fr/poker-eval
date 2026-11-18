@@ -264,9 +264,10 @@ jobs:
     name: Native Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    # The arm64 image is opportunistic and runs in macos-arm64.yml: a job that
-    # is never assigned is cancelled with no step executed, which fails the run
-    # regardless of `continue-on-error`. Only the Intel leg gates a merge.
+    # The arm64 image runs in macos-arm64.yml instead: a job that is never
+    # assigned is cancelled with no step executed, which fails the run
+    # regardless of `continue-on-error`. A pull request gets the arm64 legs only
+    # with the `macos-arm64` label; only the Intel leg here gates a merge.
     # An unbounded --parallel build exhausts the process limit of the small
     # arm64 runners: clang fails to spawn with "posix_spawn: Resource
     # temporarily unavailable" while linking test binaries.

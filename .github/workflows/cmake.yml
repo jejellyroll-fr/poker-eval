@@ -19,7 +19,8 @@ jobs:
     # The macOS arm64 legs live in macos-arm64.yml. A hosted job that never gets
     # a runner is cancelled before its first step and fails the run whatever
     # `continue-on-error` says, so they cannot stay here without reddening every
-    # pull request when the arm64 pool is out.
+    # pull request when the arm64 pool is out. They are not part of a pull
+    # request run unless it carries the `macos-arm64` label.
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -38,9 +39,10 @@ jobs:
             preset: linux-clang
             timeout: 25
           
-          # macOS builds. Only the Intel image runs here: the arm64 legs are
-          # opportunistic and live in macos-arm64.yml, behind a capacity probe,
-          # so an unassigned arm64 runner cannot fail this workflow.
+          # macOS builds. Only the Intel image runs here: the arm64 legs live in
+          # macos-arm64.yml and join a pull request only when it carries the
+          # `macos-arm64` label, so an unassigned arm64 runner cannot fail this
+          # workflow.
           - name: macOS Clang (Intel)
             os: macos-15-intel
             compiler: clang
