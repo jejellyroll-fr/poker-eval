@@ -1,0 +1,119 @@
+name: macOS arm64 (best effort)
+
+# The hosted macOS arm64 pool regularly stops serving this repository: a job
+# that never gets a runner is cancelled after about 15 minutes with "The job
+# was not acquired by Runner of type hosted even after multiple attempts", no
+# step runs, and the run is reported as failed. `continue-on-error` cannot help
+# (it downgrades `failure`, not a cancellation) and neither can `timeout-minutes`
+# (the budget only applies once a runner picked the job up), so keeping these
+# legs inside CMake Build, CI Pipeline and Release Build Check made pull request
+# runs red without testing anything.
+#
+# They live here instead, behind a probe of the pool's recent behaviour: the
+# probe skips the legs while the pool is starving, and lets them run as soon as
+# a runner is assigned again. The jobs are opportunistic by design and are not
+# part of the required checks on master.
+
+on:
+  pull_request:
+    branches: [ master, development ]
+  push:
+    branches: [ master, development ]
+  schedule:
+    # Nightly, off the hour to avoid the scheduled-workflow rush.
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The probe reads this repository's own job history.
+  actions: read
+
+jobs:
+  capacity:
+    name: arm64 pool probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      available: ${{ steps.probe.outputs.available }}
+      reason: ${{ steps.probe.outputs.reason }}
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Probe the hosted macOS arm64 pool
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bash .github/scripts/macos-arm64-available.sh
+
+  build:
+    name: CMake Release (arm64)
+    needs: capacity
+    if: needs.capacity.outputs.available == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: brew install ninja
+
+    - name: Configure CMake
+      run: cmake --preset macos
+
+    # Capped like the native-test leg: an unbounded --parallel exhausts the
+    # process limit of the small arm64 runners.
+    - name: Build
+      run: cmake --build --preset macos --parallel 2
+
+    - name: Test
+      run: ctest --preset macos --output-on-failure --timeout 60
+
+  native-tests:
+    name: Native Tests (arm64)
+    needs: capacity
+    if: needs.capacity.outputs.available == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Configure native test build
+      run: |
+        cmake -S . -B build-native \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF \
+          -DENABLE_NATIVE_ARCH=OFF
+
+    - name: Build native test build
+      run: cmake --build build-native
+
+    - name: Run native test suite
+      run: ctest --test-dir build-native --output-on-failure --timeout 300
+
+  wheels:
+    name: Wheel (arm64)
+    needs: capacity
+    if: needs.capacity.outputs.available == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Build wheel via cibuildwheel
+      uses: pypa/cibuildwheel@fa04202e88ea28b84d5d4d20696ee8dfc0119436 # v2.23.0
+      env:
+        CIBW_BUILD: "cp311-*"
+        CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_*"
+        # Same exercise as release-check.yml: the installed wheel, not the tree.
+        CIBW_TEST_COMMAND: "python {project}/tests/test_python_rng_seed.py && python {project}/tests/test_python_draw_games.py"

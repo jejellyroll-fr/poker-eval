@@ -264,11 +264,9 @@ jobs:
     name: Native Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    # The macOS arm64 image is frequently not assigned at all, which would turn
-    # a pull request red without running a step. It keeps a leg here so the
-    # image is still exercised, but that leg cannot fail the run; the Intel leg
-    # is the one that gates a merge. See cmake.yml.
-    continue-on-error: ${{ matrix.os == 'macos-15' }}
+    # The arm64 image is opportunistic and runs in macos-arm64.yml: a job that
+    # is never assigned is cancelled with no step executed, which fails the run
+    # regardless of `continue-on-error`. Only the Intel leg gates a merge.
     # An unbounded --parallel build exhausts the process limit of the small
     # arm64 runners: clang fails to spawn with "posix_spawn: Resource
     # temporarily unavailable" while linking test binaries.
@@ -277,7 +275,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04-arm, macos-15-intel, macos-15]
+        os: [ubuntu-24.04-arm, macos-15-intel]
 
     steps:
     - uses: actions/checkout@v5
