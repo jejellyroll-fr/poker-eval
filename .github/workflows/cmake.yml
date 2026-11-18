@@ -13,7 +13,13 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # GitHub's hosted macOS pool is starved often enough that the queue alone
+    # can exhaust the budget; a job cancelled before its first step still
+    # marks the run failed. Each leg carries its own budget below: the blocking
+    # Intel leg gets an hour, the best-effort arm64 leg is bounded so an
+    # unassigned runner cannot hang the run for long.
+    timeout-minutes: ${{ matrix.timeout }}
+    continue-on-error: ${{ matrix.os == 'macos-15' }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,28 +29,44 @@ jobs:
             os: ubuntu-latest
             compiler: gcc
             preset: linux-gcc
+            timeout: 25
           
           - name: Linux Clang
             os: ubuntu-latest
             compiler: clang
             preset: linux-clang
+            timeout: 25
           
-          # macOS builds
-          - name: macOS Clang
-            os: macos-latest
+          # macOS builds. The Intel leg is the blocking one: GitHub annotates
+          # arm64 jobs with "Due to capacity constraints, jobs targeting macOS
+          # arm64 runners may experience longer queue times", and on some days
+          # they are not assigned at all. The arm64 leg still runs here as
+          # best effort, so the image keeps getting real builds, but its
+          # result cannot fail a pull request.
+          - name: macOS Clang (Intel)
+            os: macos-15-intel
             compiler: clang
             preset: macos
+            timeout: 60
+
+          - name: macOS Clang (arm64, best effort)
+            os: macos-15
+            compiler: clang
+            preset: macos
+            timeout: 30
           
           # Windows builds
           - name: Windows MSVC
             os: windows-2022
             compiler: msvc
             preset: windows-msvc
+            timeout: 25
 
           - name: Windows MinGW
             os: windows-latest
             compiler: mingw
             preset: windows-mingw
+            timeout: 25
     steps:
     - uses: actions/checkout@v5
     
