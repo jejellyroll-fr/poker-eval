@@ -97,40 +97,8 @@ jobs:
     timeout-minutes: 45
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
-      # ccache lives inside the workspace so the cache action below can save and
-      # restore it. `CCACHE_BASEDIR` keeps the cached objects valid even if the
-      # runner checks the tree out somewhere else.
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 2G
     steps:
     - uses: actions/checkout@v5
-
-    # The hosted image ships ccache, but pinning the install here keeps the leg
-    # working if a future image drops it.
-    - name: Install ccache
-      run: |
-        if ! command -v ccache >/dev/null 2>&1; then
-          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ccache
-        fi
-        ccache --version | head -1
-
-    # Two layers, both keyed on the sources that can change what a compiler
-    # emits: the ccache object store (content-addressed, so a fresh checkout no
-    # longer forces a rebuild) and the Ninja build tree (so configuration and
-    # the dependency graph are reused instead of regenerated). `restore-keys`
-    # falls back to the newest cache of the same prefix, which is what makes an
-    # incremental change a partial hit rather than a cold build.
-    - name: Restore build caches
-      uses: actions/cache@v4
-      with:
-        path: |
-          ${{ github.workspace }}/.ccache
-          build-native
-        key: build-native-arm64-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**/*', 'src/**/*', 'include/**/*', 'tests/**/*') }}
-        restore-keys: |
-          build-native-arm64-
 
     - name: Configure native test build
       run: |
@@ -141,29 +109,10 @@ jobs:
           -DBUILD_BINDINGS=OFF \
           -DBUILD_GPU=OFF \
           -DENABLE_OPENMP=OFF \
-          -DENABLE_NATIVE_ARCH=OFF \
-          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-        ccache --zero-stats
+          -DENABLE_NATIVE_ARCH=OFF
 
     - name: Build native test build
-      run: |
-        start=$SECONDS
-        cmake --build build-native
-        echo "build_seconds=$((SECONDS - start))" | tee -a "$GITHUB_ENV"
-
-    - name: Report compiler cache use
-      if: always()
-      run: |
-        {
-          echo "### Native Tests (arm64) build"
-          echo ""
-          echo "- build step: ${build_seconds:-unknown} s"
-          echo ""
-          echo '```'
-          ccache --show-stats
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
+      run: cmake --build build-native
 
     - name: Run native test suite
       run: ctest --test-dir build-native --output-on-failure --timeout 300
