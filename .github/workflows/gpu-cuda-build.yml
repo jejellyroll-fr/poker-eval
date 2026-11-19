@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - master
+    # Documentation-only pushes are skipped; see docs/ci.md.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
 
 # BUILD_GPU defaults to ON, yet no job ever had a CUDA toolkit installed, so

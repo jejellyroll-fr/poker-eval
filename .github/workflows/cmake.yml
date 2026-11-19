@@ -3,6 +3,10 @@ name: CMake Build
 on:
   push:
     branches: [ master, development ]
+    # Documentation-only pushes are skipped; see docs/ci.md.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [ master, development ]
 

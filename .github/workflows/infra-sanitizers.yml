@@ -21,6 +21,10 @@ name: Sanitizers, Valgrind & Static Analysis
 on:
   push:
     branches: [ master ]
+    # Documentation-only pushes are skipped; see docs/ci.md.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [ master ]
   workflow_dispatch:
