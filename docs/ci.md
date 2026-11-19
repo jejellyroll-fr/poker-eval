@@ -61,12 +61,18 @@ failed a step.
 
 `macos-arm64-capacity-rerun.yml` does that re-run on its own. It watches every
 completed run of `macOS arm64` and re-runs it when the run concluded `failure`
-and no job executed a single step — the signature of a pool that never assigned
-a runner. Three things are left alone: a run where at least one step ran (a real
-failure), a run that concluded `cancelled` (the concurrency group replaced it
-with a newer one), and a retry that fails the same way, since only the first
-attempt is retried. A starved pool therefore costs a delay, not a red run needing
-attention.
+and at least one job has an empty step list without being `skipped` — the
+signature of a pool that never assigned that job a runner. The partial case is
+the one that matters in practice: the pool often hands out its single runner to
+one job while the others starve, for example `Wheel` succeeding while `CMake
+Release` and `Native Tests` are cancelled after twenty minutes (run
+`44497002211`). Such a run contains steps, so a "did anything run?" test passes
+it off as a real failure even though two thirds of the matrix never executed.
+Three things are left alone: a run where every job that was not skipped executed
+a step (a real failure), a run that concluded `cancelled` (the concurrency group
+replaced it with a newer one), and a retry that fails the same way, since only
+the first attempt is retried. A starved pool therefore costs a delay, not a red
+run needing attention.
 
 ### The `macos-arm64` label
 

@@ -8,12 +8,22 @@ name: macOS arm64 capacity re-run
 # manual `gh run rerun`. See docs/ci.md.
 #
 # This watcher inspects every completed run of `macOS arm64` and re-runs the ones
-# that never started a step:
+# where at least one job never obtained a runner:
 #
-#   no step ran anywhere          -> the pool never served the jobs -> re-run
-#   at least one step ran         -> a real failure                -> leave it alone
-#   run concluded `cancelled`     -> the concurrency group replaced
-#                                    it with a newer run           -> leave it alone
+#   a job has no steps and was not skipped  -> the pool never served that job,
+#                                              so the run tested nothing at all
+#                                              or only part of the matrix -> re-run
+#   every job that ran executed a step      -> a real failure           -> leave it alone
+#   run concluded `cancelled`               -> the concurrency group replaced
+#                                              it with a newer run      -> leave it alone
+#
+# The partial case is the one that used to slip through: if `Wheel` happens to get
+# the single arm64 runner the pool hands out while `CMake Release` and `Native
+# Tests` starve, the run has steps in it and a plain "did anything run?" check
+# sees a real failure where the pool actually failed the run (run 44497002211).
+# Counting jobs with an empty step list catches both the whole-run outage and
+# that mixed case; a job skipped by an `if` also has no steps, which is why the
+# count excludes `skipped` jobs.
 #
 # Only the first attempt is retried, so a starved pool ends red instead of
 # looping; the retry lands in its own concurrency group (see the group note in
@@ -29,7 +39,7 @@ on:
         description: 'macOS arm64 run id to inspect'
         required: true
       rerun:
-        description: 'Re-run it when no step ran (otherwise only report)'
+        description: 'Re-run it when a job never obtained a runner (otherwise only report)'
         type: boolean
         default: false
 
@@ -69,22 +79,30 @@ jobs:
         conclusion=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq .conclusion)
         jobs=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
           --jq '.jobs | length')
-        steps=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
-          --jq '[.jobs[].steps | length] | add // 0')
+        # A job the pool never served has an empty step list. A job skipped by an
+        # `if` has one too, so `skipped` jobs are excluded: they say nothing about
+        # runner capacity.
+        starved=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
+          --jq '[.jobs[] | select((.steps | length) == 0 and .conclusion != "skipped")] | length')
+        starved_names=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
+          --jq '[.jobs[] | select((.steps | length) == 0 and .conclusion != "skipped") | .name] | join(", ")')
 
-        echo "attempt=$attempt conclusion=$conclusion jobs=$jobs steps=$steps"
+        echo "attempt=$attempt conclusion=$conclusion jobs=$jobs starved=$starved"
+        if [ -n "$starved_names" ]; then
+          echo "jobs that never got a runner: $starved_names"
+        fi
 
         idle=false
-        if [ "$conclusion" = "failure" ] && [ "$jobs" -gt 0 ] && [ "$steps" -eq 0 ]; then
+        if [ "$conclusion" = "failure" ] && [ "$jobs" -gt 0 ] && [ "$starved" -gt 0 ]; then
           idle=true
         fi
         echo "idle=$idle" >> "$GITHUB_OUTPUT"
         echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
 
         if [ "$idle" = true ]; then
-          echo "No job executed a step: the pool never served this run."
+          echo "$starved of $jobs job(s) never obtained a runner: the pool starved this run."
         else
-          echo "Nothing to do: this run either executed steps or was cancelled."
+          echo "Nothing to do: every job that was not skipped ran a step, or the run was cancelled."
         fi
 
     # `workflow_run` carries the attempt number of the run that just finished;
