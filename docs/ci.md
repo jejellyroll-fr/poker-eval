@@ -59,6 +59,15 @@ problem, not a code problem. Re-run that run (`gh run rerun <id>`) instead of
 looking for a regression, and only start investigating when a job actually
 failed a step.
 
+`macos-arm64-capacity-rerun.yml` does that re-run on its own. It watches every
+completed run of `macOS arm64` and re-runs it when the run concluded `failure`
+and no job executed a single step — the signature of a pool that never assigned
+a runner. Three things are left alone: a run where at least one step ran (a real
+failure), a run that concluded `cancelled` (the concurrency group replaced it
+with a newer one), and a retry that fails the same way, since only the first
+attempt is retried. A starved pool therefore costs a delay, not a red run needing
+attention.
+
 ### The `macos-arm64` label
 
 Add it when the change is worth verifying on Apple Silicon before merging — the

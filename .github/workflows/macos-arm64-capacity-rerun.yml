@@ -1,0 +1,96 @@
+name: macOS arm64 capacity re-run
+
+# The hosted Apple Silicon pool sometimes refuses to hand out a runner: every
+# job is cancelled roughly twenty minutes after it is queued, not a single step
+# executes, and the run concludes `failure` with the annotation "The job was not
+# acquired by Runner of type hosted even after multiple attempts". Nothing was
+# built or tested, so that run says nothing about its commit and used to cost a
+# manual `gh run rerun`. See docs/ci.md.
+#
+# This watcher inspects every completed run of `macOS arm64` and re-runs the ones
+# that never started a step:
+#
+#   no step ran anywhere          -> the pool never served the jobs -> re-run
+#   at least one step ran         -> a real failure                -> leave it alone
+#   run concluded `cancelled`     -> the concurrency group replaced
+#                                    it with a newer run           -> leave it alone
+#
+# Only the first attempt is retried, so a starved pool ends red instead of
+# looping; the retry lands in its own concurrency group (see the group note in
+# macos-arm64.yml) and cancels nothing.
+
+on:
+  workflow_run:
+    workflows: ["macOS arm64"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'macOS arm64 run id to inspect'
+        required: true
+      rerun:
+        description: 'Re-run it when no step ran (otherwise only report)'
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: macos-arm64-capacity-rerun-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Re-run a run the pool never started
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Inspect the completed run
+      id: inspect
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+        EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+        INPUT_RUN_ID: ${{ inputs.run_id }}
+      run: |
+        set -euo pipefail
+        run_id="${EVENT_RUN_ID:-$INPUT_RUN_ID}"
+        echo "run=$run_id" >> "$GITHUB_OUTPUT"
+
+        attempt=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq .run_attempt)
+        conclusion=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq .conclusion)
+        jobs=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
+          --jq '.jobs | length')
+        steps=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
+          --jq '[.jobs[].steps | length] | add // 0')
+
+        echo "attempt=$attempt conclusion=$conclusion jobs=$jobs steps=$steps"
+
+        idle=false
+        if [ "$conclusion" = "failure" ] && [ "$jobs" -gt 0 ] && [ "$steps" -eq 0 ]; then
+          idle=true
+        fi
+        echo "idle=$idle" >> "$GITHUB_OUTPUT"
+        echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
+
+        if [ "$idle" = true ]; then
+          echo "No job executed a step: the pool never served this run."
+        else
+          echo "Nothing to do: this run either executed steps or was cancelled."
+        fi
+
+    # `workflow_run` carries the attempt number of the run that just finished;
+    # a re-run reports attempt 2 and up, which is what stops the loop.
+    - name: Re-run it once
+      if: >-
+        steps.inspect.outputs.idle == 'true' &&
+        (inputs.rerun == true || github.event.workflow_run.run_attempt == 1)
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        gh api -X POST "repos/$GH_REPO/actions/runs/${{ steps.inspect.outputs.run }}/rerun"
+        echo "Re-run requested for run ${{ steps.inspect.outputs.run }}."
