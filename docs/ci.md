@@ -5,6 +5,12 @@ The workflows live in `.github/workflows/`. Pull requests and pushes to
 (MSVC and MinGW), the Intel macOS image `macos-15-intel`, the arm64 Linux image
 `ubuntu-24.04-arm`, the wheels and the release build check.
 
+A push that changes only Markdown files or `docs/` runs none of them: every
+push-triggered workflow carries `paths-ignore` for `**.md` and `docs/**`, since
+there is nothing to build and a pull request already ran the blocking set on the
+same content. The filter is on `push` only, so a pull request that touches code
+and documentation together still runs everything.
+
 ## macOS arm64 legs
 
 `macos-arm64.yml` builds and tests on the hosted Apple Silicon image
