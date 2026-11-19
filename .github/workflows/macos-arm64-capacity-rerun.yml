@@ -10,10 +10,12 @@ name: macOS arm64 capacity re-run
 # This watcher inspects every completed run of `macOS arm64` and re-runs the ones
 # where at least one job never obtained a runner:
 #
-#   a job has no steps and was not skipped  -> the pool never served that job,
+#   a job is `cancelled` with no steps      -> the pool never served that job,
 #                                              so the run tested nothing at all
 #                                              or only part of the matrix -> re-run
 #   every job that ran executed a step      -> a real failure           -> leave it alone
+#   a job failed before its first step      -> a startup problem, not the pool
+#                                                                       -> leave it alone
 #   run concluded `cancelled`               -> the concurrency group replaced
 #                                              it with a newer run      -> leave it alone
 #
@@ -21,9 +23,10 @@ name: macOS arm64 capacity re-run
 # the single arm64 runner the pool hands out while `CMake Release` and `Native
 # Tests` starve, the run has steps in it and a plain "did anything run?" check
 # sees a real failure where the pool actually failed the run (run 44497002211).
-# Counting jobs with an empty step list catches both the whole-run outage and
-# that mixed case; a job skipped by an `if` also has no steps, which is why the
-# count excludes `skipped` jobs.
+# Counting `cancelled` jobs with an empty step list catches both the whole-run
+# outage and that mixed case. The conclusion is part of the test on purpose: a
+# job that fails during startup also has no steps, and re-running it would only
+# spend another delay on a run that cannot succeed.
 #
 # Only the first attempt is retried, so a starved pool ends red instead of
 # looping; the retry lands in its own concurrency group (see the group note in
@@ -79,13 +82,15 @@ jobs:
         conclusion=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq .conclusion)
         jobs=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
           --jq '.jobs | length')
-        # A job the pool never served has an empty step list. A job skipped by an
-        # `if` has one too, so `skipped` jobs are excluded: they say nothing about
-        # runner capacity.
+        # A job the pool never served is cancelled with an empty step list. The
+        # `cancelled` half matters: a job that dies during startup (a bad runner
+        # label, a rejected `uses:`, a broken workflow) concludes `failure` with
+        # no steps and no runner ever queued for it, so no amount of re-running
+        # would help and the watcher must leave it red and readable.
         starved=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
-          --jq '[.jobs[] | select((.steps | length) == 0 and .conclusion != "skipped")] | length')
+          --jq '[.jobs[] | select(.conclusion == "cancelled" and (.steps | length) == 0)] | length')
         starved_names=$(gh api "repos/$GH_REPO/actions/runs/$run_id/jobs" --paginate \
-          --jq '[.jobs[] | select((.steps | length) == 0 and .conclusion != "skipped") | .name] | join(", ")')
+          --jq '[.jobs[] | select(.conclusion == "cancelled" and (.steps | length) == 0) | .name] | join(", ")')
 
         echo "attempt=$attempt conclusion=$conclusion jobs=$jobs starved=$starved"
         if [ -n "$starved_names" ]; then

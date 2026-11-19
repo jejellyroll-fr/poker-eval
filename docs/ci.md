@@ -61,8 +61,11 @@ failed a step.
 
 `macos-arm64-capacity-rerun.yml` does that re-run on its own. It watches every
 completed run of `macOS arm64` and re-runs it when the run concluded `failure`
-and at least one job has an empty step list without being `skipped` — the
-signature of a pool that never assigned that job a runner. The partial case is
+and at least one job is `cancelled` although its step list is empty — the
+signature of a pool that never assigned that job a runner. The `cancelled`
+conclusion is part of the test on purpose: a job that dies during startup (an
+unknown runner label, a rejected action) also has no steps, but it concludes
+`failure`, and re-running it would add a delay without changing the outcome. The partial case is
 the one that matters in practice: the pool often hands out its single runner to
 one job while the others starve, for example `Wheel` succeeding while `CMake
 Release` and `Native Tests` are cancelled after twenty minutes (run
