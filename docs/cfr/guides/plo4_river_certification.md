@@ -31,7 +31,12 @@ cmake --build build --target pe-plo4-certify --parallel
 
 The tool generates both ranges deterministically from the board (the same
 combo list for each player) and evaluates them with a deterministic strategy,
-so two runs with the same flags produce the same document. Exit status is 0
+so two runs with the same flags produce the same document. The certified
+example further down is that output, not a hand-written illustration:
+`tests/plo4_certify_docs_example.py` re-runs the documented command in ctest and
+fails when the guide and the tool drift apart. A push that touches only this
+guide still runs that single test, through
+`.github/workflows/plo4-certification-docs.yml`. Exit status is 0
 when the measurement ran, 1 on evaluation failure and 2 on bad arguments. A
 `not_certified` result still exits 0: the label, not the exit code, carries
 the claim.
