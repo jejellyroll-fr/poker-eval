@@ -19,8 +19,13 @@ macOS legs block a pull request.
 
 | Event | arm64 legs |
 |---|---|
-| `push` to `master`/`development`, nightly `schedule`, `workflow_dispatch` | always run |
+| `push` to `master`/`development`, nightly `schedule`, `workflow_dispatch` | always run, except a push that changes only Markdown files or `docs/` |
 | `pull_request` | run only with the `macos-arm64` label |
+
+The concurrency group is scoped by event as well as by ref
+(`macos-arm64-${{ github.event_name }}-${{ github.ref }}`), so a re-run and a
+push to the same branch wait for each other instead of cancelling each other;
+two pushes to the same ref still supersede each other.
 
 ### A `failure` conclusion without a single step
 
