@@ -44,12 +44,18 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Scoped by event as well as by ref. One group shared by every event meant a
-  # manual re-run of an older commit was re-queued ahead of a newer push and
-  # cancelled it: the commit that mattered lost, and the re-run's commit was
-  # verified twice. A push and a re-run no longer cancel each other; two pushes
-  # to the same ref still supersede each other.
-  group: macos-arm64-${{ github.event_name }}-${{ github.ref }}
+  # Two pushes to the same ref supersede each other: a stale run must not hold
+  # the scarce arm64 pool while a newer commit waits behind it. A re-run must
+  # never do that, and scoping by `event_name` alone does not separate the two:
+  # a re-run keeps `github.event_name == 'push'`, so `gh run rerun` of an older
+  # commit joined the same group and cancelled the push that was building (run
+  # 44473395372 killed 44474725243 on 2026-11-19).
+  #
+  # `github.run_attempt` is 1 for every fresh run and 2 and up for a re-run, so
+  # a first attempt keeps the ref in the group and still supersedes the
+  # previous push, while a re-run joins a group named after its own run id and
+  # can neither cancel nor be cancelled.
+  group: "macos-arm64-${{ github.event_name }}-${{ github.run_attempt == 1 && github.ref || github.run_id }}"
   cancel-in-progress: true
 
 permissions:

@@ -1,0 +1,59 @@
+name: PLO4 Certificate Docs
+
+# docs/cfr/guides/plo4_river_certification.md embeds the real `pe-plo4-certify`
+# output, and ctest's `plo4_certify_docs_example` fails when the two drift.
+# Every push workflow ignores documentation-only pushes, so this one exists to
+# keep that guide guarded: it runs the single test, not the blocking set, and
+# only when the guide itself is in the push.
+#
+# The filter is on `push` only, like the `paths-ignore` it complements: a pull
+# request already runs the whole suite in ci.yml and cmake.yml, which include
+# this test.
+
+on:
+  push:
+    branches: [ master, development ]
+    paths:
+      - 'docs/cfr/guides/plo4_river_certification.md'
+
+concurrency:
+  group: plo4-certification-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guide-example:
+    name: plo4_certify_docs_example
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update \
+          -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          --no-install-recommends ninja-build
+
+    # BUILD_TESTS=ON is what registers the test (tests/CMakeLists.txt adds it
+    # when the `pe-plo4-certify` target and a Python 3 interpreter exist); the
+    # build itself only needs the certifier.
+    - name: Configure
+      run: |
+        cmake -S . -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTS=ON \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_BINDINGS=OFF \
+          -DBUILD_GPU=OFF \
+          -DENABLE_OPENMP=OFF
+
+    - name: Build the certifier
+      run: cmake --build build --target pe-plo4-certify --parallel 2
+
+    - name: Check the guide's example against the tool
+      run: ctest --test-dir build --output-on-failure -R '^plo4_certify_docs_example$'

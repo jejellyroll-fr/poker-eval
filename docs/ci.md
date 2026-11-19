@@ -11,6 +11,13 @@ there is nothing to build and a pull request already ran the blocking set on the
 same content. The filter is on `push` only, so a pull request that touches code
 and documentation together still runs everything.
 
+One file is exempt because a test reads it:
+`docs/cfr/guides/plo4_river_certification.md` embeds the real
+`pe-plo4-certify` output, and ctest's `plo4_certify_docs_example` fails when
+the guide and the tool drift apart. `plo4-certification-docs.yml` runs that
+single test on a push that touches the guide, so the exemption costs one short
+job rather than waking the blocking set.
+
 ## macOS arm64 legs
 
 `macos-arm64.yml` builds and tests on the hosted Apple Silicon image
@@ -28,10 +35,18 @@ macOS legs block a pull request.
 | `push` to `master`/`development`, nightly `schedule`, `workflow_dispatch` | always run, except a push that changes only Markdown files or `docs/` |
 | `pull_request` | run only with the `macos-arm64` label |
 
-The concurrency group is scoped by event as well as by ref
-(`macos-arm64-${{ github.event_name }}-${{ github.ref }}`), so a re-run and a
-push to the same branch wait for each other instead of cancelling each other;
-two pushes to the same ref still supersede each other.
+Two pushes to the same ref supersede each other, so a stale run does not hold
+the scarce pool while a newer commit waits behind it. A re-run must never do
+that, and scoping the group by event is not enough: a re-run keeps
+`github.event_name == 'push'`, so `gh run rerun` of an older commit joined the
+push group and cancelled the run that was building. The group keys on
+`github.run_attempt` instead — 1 for a fresh run, 2 and up for a re-run — so a
+first attempt keeps the ref in the group and still supersedes the previous
+push, while a re-run joins a group named after its own run id:
+
+```yaml
+group: "macos-arm64-${{ github.event_name }}-${{ github.run_attempt == 1 && github.ref || github.run_id }}"
+```
 
 ### A `failure` conclusion without a single step
 
