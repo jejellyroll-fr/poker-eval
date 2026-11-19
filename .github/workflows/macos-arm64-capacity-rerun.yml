@@ -44,6 +44,12 @@ concurrency:
 jobs:
   inspect:
     name: Re-run a run the pool never started
+    # A successful or cancelled run needs no inspection, so gate the job itself:
+    # no runner is requested at all for those completions. The manual entry
+    # point always runs, so it can report on any run id.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
