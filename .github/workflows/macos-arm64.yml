@@ -114,8 +114,14 @@ jobs:
     - name: Build native test build
       run: cmake --build build-native
 
+    # 376 independent cases, of which one alone
+    # (`pe_preflop_tree_flop_resolves_with_mpf`) accounts for about half of the
+    # wall time: run one at a time they cost the job fifteen to seventeen
+    # minutes, which is nearly all of its duration. ctest schedules them across
+    # the available cores and still honours `DEPENDS`, which the preflop pair
+    # uses for its shared tree file.
     - name: Run native test suite
-      run: ctest --test-dir build-native --output-on-failure --timeout 300
+      run: ctest --test-dir build-native --output-on-failure --timeout 300 --parallel "$(getconf _NPROCESSORS_ONLN)"
 
   wheels:
     name: Wheel (arm64)
