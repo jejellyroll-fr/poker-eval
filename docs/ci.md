@@ -22,6 +22,17 @@ macOS legs block a pull request.
 | `push` to `master`/`development`, nightly `schedule`, `workflow_dispatch` | always run |
 | `pull_request` | run only with the `macos-arm64` label |
 
+### A `failure` conclusion without a single step
+
+When GitHub has no hosted Apple Silicon runner to assign, the three jobs are
+cancelled roughly twenty minutes after they are queued, none of them executes a
+single step, and the run concludes `failure` even though nothing was built or
+tested. Read the jobs rather than the run: a cancellation with an empty step
+list and a "was not acquired by Runner of type hosted" annotation is a capacity
+problem, not a code problem. Re-run that run (`gh run rerun <id>`) instead of
+looking for a regression, and only start investigating when a job actually
+failed a step.
+
 ### The `macos-arm64` label
 
 Add it when the change is worth verifying on Apple Silicon before merging — the
