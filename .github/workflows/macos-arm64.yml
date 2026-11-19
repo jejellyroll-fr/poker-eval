@@ -12,7 +12,9 @@ name: macOS arm64
 # They live here instead, on a deterministic rule:
 #
 #   push, schedule, workflow_dispatch  -> always run (master/development and the
-#                                        nightly build keep their arm64 coverage)
+#                                        nightly build keep their arm64 coverage),
+#                                        except a push that touches only Markdown
+#                                        files or docs/ on master/development
 #   pull_request                       -> run only with the `macos-arm64` label
 #
 # Add the label to a pull request when the arm64 legs are worth the wait, and
@@ -23,6 +25,13 @@ name: macOS arm64
 on:
   push:
     branches: [ master, development ]
+    # A documentation-only push gives the arm64 legs nothing to build and costs
+    # a hosted arm64 slot, so it is skipped. The filter applies to `push` only:
+    # on a pull request the label stays the single opt-in, and a Markdown change
+    # under a pull request that also touches code still runs the legs.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [ master, development ]
     # Adding or removing the label must (re)start the legs; the default types
@@ -35,7 +44,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: macos-arm64-${{ github.ref }}
+  # Scoped by event as well as by ref. One group shared by every event meant a
+  # manual re-run of an older commit was re-queued ahead of a newer push and
+  # cancelled it: the commit that mattered lost, and the re-run's commit was
+  # verified twice. A push and a re-run no longer cancel each other; two pushes
+  # to the same ref still supersede each other.
+  group: macos-arm64-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
