@@ -77,6 +77,26 @@ replaced it with a newer one), and a retry that fails the same way, since only
 the first attempt is retried. A starved pool therefore costs a delay, not a red
 run needing attention.
 
+### Why the native leg keeps `ENABLE_OPENMP=OFF`
+
+`Native Tests (arm64)` could build against Homebrew's `libomp` and get the
+parallel solver backend, but measuring it on run `44828726427` (branch
+`ci/arm64-openmp-native`) showed the trade is negative. The hosted image ships no
+libomp, so the leg first pays `brew install libomp` (14 s); the build then picks
+up `-Xclang -fopenmp` and reports `cpu_par … ready`. With that in place the
+suite's longest case, `pe_preflop_tree_flop_resolves_with_mpf`, took **555 s with
+`--threads 4`** against 526 s without OpenMP. The exact traversal of a complete
+PLO5 range never leaves one core regardless of the backend — a local OpenMP build
+with `--threads 10` measured 528 s against 509 s single-threaded, at 99 % of one
+CPU. OpenMP also enables the gated cases (376 → 390 tests) and four of them
+(`joktest1`, `enumtest5`, `enumtest7`, `test_enum_basic`) time out on the small
+runners, so the leg went red as well.
+
+It stays single-threaded: the backend buys nothing for the cost that dominates,
+adds an install step and breaks tests. The suite is parallelised by `ctest
+--parallel` in the workflow instead, which spreads the 376 cases over the cores
+and leaves the one long case as the floor.
+
 ### The `macos-arm64` label
 
 Add it when the change is worth verifying on Apple Silicon before merging — the
