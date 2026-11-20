@@ -97,6 +97,11 @@ adds an install step and breaks tests. The suite is parallelised by `ctest
 --parallel` in the workflow instead, which spreads the 376 cases over the cores
 and leaves the one long case as the floor.
 
+That case and the other `slow`-tagged ones are dropped on pull requests: the
+workflow passes `-LE slow` when the event is `pull_request`, which brings the
+arm64 suite under three minutes, and pushes and the nightly still run every
+case.
+
 ### The `macos-arm64` label
 
 Add it when the change is worth verifying on Apple Silicon before merging — the

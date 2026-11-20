@@ -2094,7 +2094,7 @@ if(TARGET pe-preflop-tree AND TARGET mpf_run_with_metrics)
             --tree ${CMAKE_BINARY_DIR}/pe-preflop-tree-flop-smoke.json
             --iterations 1)
     set_tests_properties(pe_preflop_tree_flop_resolves_with_mpf PROPERTIES
-        LABELS "product;solver;preflop"
+        LABELS "product;solver;preflop;slow"
         PASS_REGULAR_EXPRESSION "Finished 1 iterations"
         DEPENDS pe_preflop_tree_flop_smoke
         TIMEOUT 900)

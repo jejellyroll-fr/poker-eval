@@ -119,9 +119,23 @@ jobs:
     # wall time: run one at a time they cost the job fifteen to seventeen
     # minutes, which is nearly all of its duration. ctest schedules them across
     # the available cores and still honours `DEPENDS`, which the preflop pair
-    # uses for its shared tree file.
+    # uses for its shared tree file. The `slow`-tagged cases are dropped on pull
+    # requests by the command below.
+    # A pull request does not pay for the cases tagged `slow`: the longest of
+    # them (`pe_preflop_tree_flop_resolves_with_mpf`, about 526 s) alone triples
+    # the suite, and the Linux legs run it on every pull request anyway. Pushes
+    # and the nightly keep the full suite, so the arm64 leg still covers it once
+    # a change lands.
     - name: Run native test suite
-      run: ctest --test-dir build-native --output-on-failure --timeout 300 --parallel "$(getconf _NPROCESSORS_ONLN)"
+      run: |
+        parallel="$(getconf _NPROCESSORS_ONLN)"
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          ctest --test-dir build-native --output-on-failure --timeout 300 \
+            --parallel "$parallel" -LE slow
+        else
+          ctest --test-dir build-native --output-on-failure --timeout 300 \
+            --parallel "$parallel"
+        fi
 
   wheels:
     name: Wheel (arm64)
