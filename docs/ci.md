@@ -98,10 +98,12 @@ adds an install step and breaks tests. The suite is parallelised by `ctest
 and leaves the one long case as the floor.
 
 That case is tagged `slow`, together with `plo4_certify_full_range` (about
-155 s): dropping the big solve alone still left the pull request suite at 216 s,
-because the certifier was then the floor. The workflow passes `-LE slow` when the
-event is `pull_request`, which brings the arm64 suite to about a minute, while
-pushes and the nightly still run every case.
+150 s): dropping the big solve alone still left the pull request suite at 216 s
+(run `44832047898`), because the certifier was then the floor. The workflow
+passes `-LE slow` when the event is `pull_request`, which brings the pull
+request suite to **183.85 s over 374 cases** (run `44833628714`, about 3 minutes
+against 11 before). Pushes and the nightly still run every case: run
+`44834625917` ran all 376, the 510.67 s preflop solve included.
 
 ### The `macos-arm64` label
 
