@@ -748,7 +748,7 @@ set_tests_properties(test_strength_bucketing PROPERTIES LABELS "engine;cfr;bucke
 add_poker_test(test_draw_abstraction)
 set_tests_properties(test_draw_abstraction PROPERTIES LABELS "engine;cfr;draw;abstraction;feat15")
 add_poker_test(test_cfr_chance_nodes)
-set_tests_properties(test_cfr_chance_nodes PROPERTIES LABELS "engine;cfr;chance" TIMEOUT 180)
+set_tests_properties(test_cfr_chance_nodes PROPERTIES LABELS "engine;cfr;chance;slow" TIMEOUT 180)
 add_poker_test(test_cfr_bunching)
 set_tests_properties(test_cfr_bunching PROPERTIES LABELS "engine;cfr;bunching;feat14" TIMEOUT 180)
 add_poker_test(test_cfr_compact_storage)
@@ -1817,6 +1817,12 @@ function(add_game_theory_test test_name source_file)
 endfunction()
 
 add_game_theory_test(test_akq_game          test_akq_game.c)
+# About 65 s on the 3-4 vCPU arm64 runners, which makes it the floor of a pull
+# request suite once the two heaviest cases are gone; the Linux legs still run it
+# on every pull request, and pushes and the nightly keep it on arm64 too.
+if(TEST test_akq_game)
+    set_property(TEST test_akq_game APPEND PROPERTY LABELS "slow")
+endif()
 add_game_theory_test(test_kuhn_openspiel    test_kuhn_openspiel.c)
 add_game_theory_test(test_kuhn_multiway_openspiel
                      test_kuhn_multiway_openspiel.c)
