@@ -1074,7 +1074,7 @@ if(TARGET pe-plo4-certify)
                 ${CMAKE_CURRENT_SOURCE_DIR}/plo4_certify_full_range.py
                 $<TARGET_FILE:pe-plo4-certify>)
         set_tests_properties(plo4_certify_full_range PROPERTIES
-            LABELS "solver;cli;plo4;river;certification;full-range;iss283;sanitizer-skip"
+            LABELS "solver;cli;plo4;river;certification;full-range;iss283;sanitizer-skip;slow"
             TIMEOUT 300)
     else()
         message(STATUS
