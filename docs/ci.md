@@ -90,7 +90,9 @@ PLO5 range never leaves one core regardless of the backend — a local OpenMP bu
 with `--threads 10` measured 528 s against 509 s single-threaded, at 99 % of one
 CPU. OpenMP also enables the gated cases (376 → 390 tests) and four of them
 (`joktest1`, `enumtest5`, `enumtest7`, `test_enum_basic`) time out on the small
-runners, so the leg went red as well.
+runners, so the leg went red as well. Two of those were later found to be the
+enumeration sweeps' output rather than the evaluator, and they now run quiet
+(see below); `joktest1` and `test_enum_basic` were not looked at again.
 
 It stays single-threaded: the backend buys nothing for the cost that dominates,
 adds an install step and breaks tests. The suite is parallelised by `ctest
@@ -114,8 +116,38 @@ against `44838376949`/`44838377012` on the same runners: Native Tests
 ending in a timeout → **401 s, green**, Release Build & Tests 530 s → **356 s**,
 and the CMake legs 423/538/568/554/901 s → 265/230/255/370/611 s, the suite
 itself going from 317.40 s to 139.33 s on Linux GCC. The `enumtest5` and
-`enumtest7` timeouts that still fail those legs are unrelated: they fail the same
-way without the exclusion.
+`enumtest7` timeouts that used to fail those legs had nothing to do with the
+exclusion; see below.
+
+### The enumeration sweeps and ctest's output capture
+
+`enumtest5` and `enumtest7` compare `Hand_EVAL_N` with `Hand_EVAL_X5`/`_X7` over
+every five-card hand — 2,598,960 and 2,118,760 of them. The default run prints
+one line per hand so that `tests/run.in` can checksum the whole sweep, which is
+33 MB and 29 MB of text.
+
+The sweep is not what was timing out. Measured on run `44880538551`, in the same
+job on a 4-vCPU runner, `enumtest5` took 0.42 s with its stdout on `/dev/null`
+and 32.56 s under `ctest`, of which **26.5 s was system time**: the cost is the
+output, not the comparison. Run `44881898213` shows the same split (0.56 s to
+`/dev/null`, 8.28 s through a pty, 11.6 s of it system time) and the checksums
+of the default output still match `run.in` on the runner. Locally, the same
+binary takes 0.35 s writing to a file and 3.0 s through a pty.
+
+So the tests were one I/O syscall per hand away from blowing the 30 s default
+`TIMEOUT`, and only on the legs where CTest's capture leaves stdout unbuffered:
+Linux GCC and Linux Clang (and Windows MinGW — its C runtime behaves the same),
+while Windows MSVC was green. Both tests now accept `--quiet`, which keeps the
+full sweep and the comparison but drops the per-hand line, and
+`tests/CMakeLists.txt` registers `enumtest5 --quiet` and `enumtest7 --quiet`.
+Under ctest on the runner they now take 0.13 s and 0.09 s; run `44881898213` is
+green on all five legs with the whole suite, `slow` group included. A
+disagreement between the two evaluators now returns 1 — it used to print the
+hand and `exit(0)`, so the registered test could not fail at all.
+
+`tests/run.in` still runs the binaries without arguments, so the checksums there
+are untouched: `74c0f134…` for `enumtest5` and `02d54844…` for `enumtest7`,
+verified on the runner and in a local Release build.
 
 ### The `macos-arm64` label
 

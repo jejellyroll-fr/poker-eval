@@ -23,6 +23,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/game_std.h>
@@ -38,11 +39,21 @@
 
 #include <poker_eval/deck/deck.h>
 
-int main(void)
+int main(int argc, char **argv)
 {
   CardMask cards, cards1, peggedCards;
   HandVal handval1, handval2;
   EvxHandVal evxHandVal;
+  int quiet = 0;
+  int argi;
+
+  /* See enumtest5.c: --quiet keeps the sweep but drops the per-hand line that
+   * tests/run.in sums into a checksum. */
+  for (argi = 1; argi < argc; argi++)
+  {
+    if (strcmp(argv[argi], "--quiet") == 0 || strcmp(argv[argi], "-q") == 0)
+      quiet = 1;
+  }
 
   StdDeck_CardMask_RESET(peggedCards);
   StdDeck_CardMask_SET(peggedCards,
@@ -70,15 +81,16 @@ int main(void)
                           printf(", ");
                           HandVal_print(handval2);
                           printf("\n");
-                          exit(0);
+                          return 1;
                         }
-                        printf("%d %d %d %d %d %d\n",
-                               HandVal_HANDTYPE(handval1),
-                               HandVal_TOP_CARD(handval1),
-                               HandVal_SECOND_CARD(handval1),
-                               HandVal_THIRD_CARD(handval1),
-                               HandVal_FOURTH_CARD(handval1),
-                               HandVal_FIFTH_CARD(handval1));
+                        if (!quiet)
+                          printf("%d %d %d %d %d %d\n",
+                                 HandVal_HANDTYPE(handval1),
+                                 HandVal_TOP_CARD(handval1),
+                                 HandVal_SECOND_CARD(handval1),
+                                 HandVal_THIRD_CARD(handval1),
+                                 HandVal_FOURTH_CARD(handval1),
+                                 HandVal_FIFTH_CARD(handval1));
                       });
-  exit(0);
+  return 0;
 }

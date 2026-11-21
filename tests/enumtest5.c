@@ -23,6 +23,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include <poker_eval/core/poker_defs.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/games/game_std.h>
@@ -38,11 +39,22 @@
 
 #include <poker_eval/deck/deck.h>
 
-int main(void)
+int main(int argc, char **argv)
 {
   CardMask cards;
   HandVal handval1, handval2;
   EvxHandVal evxHandVal;
+  int quiet = 0;
+  int argi;
+
+  /* The default run prints one line per hand so that tests/run.in can compare
+   * a checksum of the whole sweep. That is 33 MB of text, so the ctest entry
+   * asks for --quiet and only does the comparison. */
+  for (argi = 1; argi < argc; argi++)
+  {
+    if (strcmp(argv[argi], "--quiet") == 0 || strcmp(argv[argi], "-q") == 0)
+      quiet = 1;
+  }
 
   ENUMERATE_5_CARDS(cards,
                     {
@@ -62,16 +74,17 @@ int main(void)
                         printf(", ");
                         HandVal_print(handval2);
                         printf("\n");
-                        exit(0);
+                        return 1;
                       }
 
-                      printf("%d %d %d %d %d %d\n",
-                             HandVal_HANDTYPE(handval1),
-                             HandVal_TOP_CARD(handval1),
-                             HandVal_SECOND_CARD(handval1),
-                             HandVal_THIRD_CARD(handval1),
-                             HandVal_FOURTH_CARD(handval1),
-                             HandVal_FIFTH_CARD(handval1));
+                      if (!quiet)
+                        printf("%d %d %d %d %d %d\n",
+                               HandVal_HANDTYPE(handval1),
+                               HandVal_TOP_CARD(handval1),
+                               HandVal_SECOND_CARD(handval1),
+                               HandVal_THIRD_CARD(handval1),
+                               HandVal_FOURTH_CARD(handval1),
+                               HandVal_FIFTH_CARD(handval1));
                     });
-  exit(0);
+  return 0;
 }

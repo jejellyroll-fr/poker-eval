@@ -488,8 +488,17 @@ function(add_poker_test name)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         )
 
-        # Add as CTest
-        add_test(NAME ${name} COMMAND ${name})
+        # Add as CTest. The legacy enumeration sweeps print one line per hand
+        # (33 MB for enumtest5, 29 MB for enumtest7) so that tests/run.in can
+        # checksum the whole sweep; through ctest's output capture that costs
+        # far more than the sweep itself and trips the 30 s default timeout.
+        # They take --quiet here and keep printing when run without arguments,
+        # which is what run.in does.
+        set(_test_command ${name})
+        if("${name}" STREQUAL "enumtest5" OR "${name}" STREQUAL "enumtest7")
+            list(APPEND _test_command --quiet)
+        endif()
+        add_test(NAME ${name} COMMAND ${_test_command})
 
         # Set test properties with appropriate timeout based on test type
         # Slow equity tests need longer timeouts
