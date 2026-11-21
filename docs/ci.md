@@ -106,6 +106,17 @@ the event is `pull_request`, which brings the pull request suite to **113.08 s
 over 372 cases** (run `44838377928`). Pushes and the nightly still run every
 case: run `44839069290` ran all 376, the 505 s preflop solve included.
 
+The same rule covers the blocking Linux and Windows legs, where the group costs
+more than it does on arm64: `ci.yml` and `cmake.yml` also pass `-LE slow` when
+the event is `pull_request`. Measured on runs `44842004130` and `44842005156`
+against `44838376949`/`44838377012` on the same runners: Native Tests
+(ubuntu-24.04-arm) 1090 s → **270 s**, Native Tests (macos-15-intel) 2195 s
+ending in a timeout → **401 s, green**, Release Build & Tests 530 s → **356 s**,
+and the CMake legs 423/538/568/554/901 s → 265/230/255/370/611 s, the suite
+itself going from 317.40 s to 139.33 s on Linux GCC. The `enumtest5` and
+`enumtest7` timeouts that still fail those legs are unrelated: they fail the same
+way without the exclusion.
+
 ### The `macos-arm64` label
 
 Add it when the change is worth verifying on Apple Silicon before merging — the
