@@ -99,32 +99,52 @@ same arm64 image, a Debug build, `libomp` 23.1.6 and `-Xclang -fopenmp` — they
 take **1.89 s and 0.02 s** run alone, against 1.61 s and 0.01 s without OpenMP,
 and the same under ctest.
 
-The parallel run they failed in is no longer reproducible either. Run
-`44828726427` timed them out at 66.9 s and 74.2 s, with the suite totalling
-1040 s, `test_montecarlo_convergence_unity` at 79.5 s, and `joktest1` having
-already printed its last line (`joktest1: all tests passed`) when ctest killed
-it. That runner also handed out far more parallel slots than the pool has
-cores: its log starts 13 cases in the suite's first second and 17 in one second
-later on, which is why the 12-way run below is the closest comparison available.
-Replaying the configuration on run `44888589983` — arm64 Debug, OpenMP on,
-`--parallel` at the runner's 3 cores — passed all 390 cases in 764.46 s, with
-`joktest1` at 1.52 s and `test_enum_basic` at 0.01 s. Forcing `--parallel 12` on
-the same 3 cores (run `44891011141`) inflated the CPU-bound cases by about five
-times — `joktest1` 7.70 s, `test_montecarlo_convergence_unity` 74.21 s, and
-`test_cfr_chance_nodes`, `test_mpf_hilo8` and `test_pe_hand_features` timed out
-— while `test_enum_basic` stayed at 0.01 s. Five times is not the 44 times and
-the 7000 times that 66.9 s and 74.2 s would need, so starvation does not account
-for them: those four timeouts are unreproduced and unexplained, and neither test
-was changed.
+The parallel run they failed in has not been reproduced since, and its two
+timeouts fall in two windows in which that runner made no progress at all, not
+in its scheduling. Run `44828726427` timed them out at 66.9 s and 74.2 s, with
+the suite totalling 1040.66 s, `test_montecarlo_convergence_unity` at 79.47 s,
+and `joktest1` having already printed its last line (`joktest1: all tests
+passed`) when ctest killed it. No case completes in that log between 22:26:16
+and 22:27:22 (66 s), nor between 22:27:23 and 22:28:37 (74 s), and every case
+caught in a window is charged the whole of it: `joktest1` 66.90 s, `enumtest5`
+66.26 s and `test_montecarlo_convergence_unity` 79.47 s (it started 12.57 s
+earlier) for the first; `test_enum_basic` 74.24 s, `enumtest7` 74.41 s and
+`razz` 74.25 s for the second. `razz` settles it: a 0.01 s case in runs
+`44888589983` and `44895169230`, it was held for 74.25 s here and passed only
+because its own budget is 120 s. ctest's deadline is otherwise sharp — 30.04 s
+and 180.06 s on run `44891011141` — so the budgets are not what failed. The
+`CMake Release (arm64)` job of the same run, on the same image, kept completing
+cases through the first window
+(#21 to #199 between 22:26:20 and 22:27:07), so the stall belonged to that
+runner rather than to the image or the build. What stalls the VM is not
+established: the log records the gap, not its cause.
+
+The log gives no slot count either: its completion lines arrive in the chunks
+the runner reads, 84 of them stamped inside 4 ms at 22:28:41 with case times of
+0.01 s to 1.65 s, so a burst of lines is output flushed together and not cases
+launched together. The run asked for `--parallel "$(getconf
+_NPROCESSORS_ONLN)"`, the runner's 3 cores, and its batches agree: the three
+cases that start at 22:27:22 are the next three to complete, at 22:28:37, and
+nothing starts after them until they exit. Forcing `--parallel 12` on the same 3
+cores (run `44891011141`) inflated the CPU-bound cases by about five times —
+`joktest1` 7.70 s,
+`test_montecarlo_convergence_unity` 74.21 s, and `test_cfr_chance_nodes`,
+`test_mpf_hilo8` and `test_pe_hand_features` timed out — while
+`test_enum_basic` stayed at 0.01 s. Five times is not the 44 times and the 7000
+times that 66.9 s and 74.2 s would need, so concurrency does not account for
+them. Replaying the configuration on run `44888589983` — arm64 Debug, OpenMP
+on, `--parallel` at the runner's 3 cores — passed all 390 cases in 764.46 s,
+with `joktest1` at 1.52 s and `test_enum_basic` at 0.01 s. Neither test was
+changed.
 
 It stays single-threaded: the backend buys nothing for the cost that dominates,
 adds an install step and breaks tests. The suite is parallelised by `ctest
 --parallel` in the workflow instead, which spreads the 376 cases over the cores
 and leaves the one long case as the floor. That value is the constant 4 rather
-than `getconf _NPROCESSORS_ONLN`: the pool has served runners that report, and
-launch, far more concurrent cases than they can run, and 12 concurrent cases on
-a 3-core runner put three other cases into timeout (see above). Four keeps one
-case per core plus one on the pool's 3-core runners.
+than `getconf _NPROCESSORS_ONLN`: four keeps one case per core plus one queued
+on the pool's 3-core runners, and it holds that bound whatever the VM answers —
+12 concurrent cases on the same 3 cores put three other cases into timeout and
+slowed the rest about five times (see above).
 
 That case is tagged `slow`, together with `plo4_certify_full_range` (about
 150 s), `test_cfr_chance_nodes` (about 55 s) and `test_akq_game` (about 40 s).
