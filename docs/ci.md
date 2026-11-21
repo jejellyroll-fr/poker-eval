@@ -90,9 +90,19 @@ PLO5 range never leaves one core regardless of the backend — a local OpenMP bu
 with `--threads 10` measured 528 s against 509 s single-threaded, at 99 % of one
 CPU. OpenMP also enables the gated cases (376 → 390 tests) and four of them
 (`joktest1`, `enumtest5`, `enumtest7`, `test_enum_basic`) time out on the small
-runners, so the leg went red as well. Two of those were later found to be the
+runners, so the leg went red as well. The two `enumtest` cases were the
 enumeration sweeps' output rather than the evaluator, and they now run quiet
-(see below); `joktest1` and `test_enum_basic` were not looked at again.
+(see below). `joktest1` and `test_enum_basic` are a different matter: they print
+27 and 432 bytes, so the sweeps' explanation does not carry over, and OpenMP
+alone does not reproduce their timeouts. Measured on run `44886497194` — the
+same arm64 image, a Debug build, `libomp` 23.1.6 and `-Xclang -fopenmp` — they
+take **1.89 s and 0.02 s** run alone, against 1.61 s and 0.01 s without OpenMP,
+and the same under ctest. In run `44828726427`, where they timed out at 66.9 s
+and 74.2 s, the suite ran with `--parallel` and totalled 1040 s — no better than
+running it one case at a time — `test_montecarlo_convergence_unity` took 79.5 s
+there, and `joktest1` had already printed its last line (`joktest1: all tests
+passed`) when ctest killed it. Starvation under that parallel run is the likely
+reading; it is not a measurement, and neither test was changed.
 
 It stays single-threaded: the backend buys nothing for the cost that dominates,
 adds an install step and breaks tests. The suite is parallelised by `ctest
@@ -134,10 +144,15 @@ output, not the comparison. Run `44881898213` shows the same split (0.56 s to
 of the default output still match `run.in` on the runner. Locally, the same
 binary takes 0.35 s writing to a file and 3.0 s through a pty.
 
-So the tests were one I/O syscall per hand away from blowing the 30 s default
-`TIMEOUT`, and only on the legs where CTest's capture leaves stdout unbuffered:
-Linux GCC and Linux Clang (and Windows MinGW — its C runtime behaves the same),
-while Windows MSVC was green. Both tests now accept `--quiet`, which keeps the
+So the tests were close to the 30 s default `TIMEOUT` on any leg where that 33 MB
+costs more than a buffered write. The legs that went red were Linux GCC, Linux
+Clang and Windows MinGW; Windows MSVC stayed green, and macOS does not register
+the two tests at all without OpenMP. *Why* ctest's capture costs that much on
+those legs was not established: the measured facts are the 0.42 s → 32.56 s
+split and its 26.5 s of system time, and a pty gives the same signature (one
+write syscall per line, 8.28 s and mostly system time on run `44881898213`).
+The per-line write behind the capture is the likely reading, not something this
+document can show. Both tests now accept `--quiet`, which keeps the
 full sweep and the comparison but drops the per-hand line, and
 `tests/CMakeLists.txt` registers `enumtest5 --quiet` and `enumtest7 --quiet`.
 Under ctest on the runner they now take 0.13 s and 0.09 s; run `44881898213` is
