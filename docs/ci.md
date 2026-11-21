@@ -103,7 +103,10 @@ The parallel run they failed in is no longer reproducible either. Run
 `44828726427` timed them out at 66.9 s and 74.2 s, with the suite totalling
 1040 s, `test_montecarlo_convergence_unity` at 79.5 s, and `joktest1` having
 already printed its last line (`joktest1: all tests passed`) when ctest killed
-it. Replaying that configuration on run `44888589983` — arm64 Debug, OpenMP on,
+it. That runner also handed out far more parallel slots than the pool has
+cores: its log starts 13 cases in the suite's first second and 17 in one second
+later on, which is why the 12-way run below is the closest comparison available.
+Replaying the configuration on run `44888589983` — arm64 Debug, OpenMP on,
 `--parallel` at the runner's 3 cores — passed all 390 cases in 764.46 s, with
 `joktest1` at 1.52 s and `test_enum_basic` at 0.01 s. Forcing `--parallel 12` on
 the same 3 cores (run `44891011141`) inflated the CPU-bound cases by about five
@@ -117,7 +120,11 @@ was changed.
 It stays single-threaded: the backend buys nothing for the cost that dominates,
 adds an install step and breaks tests. The suite is parallelised by `ctest
 --parallel` in the workflow instead, which spreads the 376 cases over the cores
-and leaves the one long case as the floor.
+and leaves the one long case as the floor. That value is the constant 4 rather
+than `getconf _NPROCESSORS_ONLN`: the pool has served runners that report, and
+launch, far more concurrent cases than they can run, and 12 concurrent cases on
+a 3-core runner put three other cases into timeout (see above). Four keeps one
+case per core plus one on the pool's 3-core runners.
 
 That case is tagged `slow`, together with `plo4_certify_full_range` (about
 150 s), `test_cfr_chance_nodes` (about 55 s) and `test_akq_game` (about 40 s).

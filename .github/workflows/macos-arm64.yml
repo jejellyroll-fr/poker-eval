@@ -128,7 +128,14 @@ jobs:
     # a change lands.
     - name: Run native test suite
       run: |
-        parallel="$(getconf _NPROCESSORS_ONLN)"
+        # Constant, not `getconf _NPROCESSORS_ONLN`: the pool has served runners
+        # that report more cores than they can run and then start a dozen cases
+        # at once. Measured on the 3-core runner in Debug with OpenMP on,
+        # --parallel 3 ran all 390 cases in 764.46 s (run 44888589983) while
+        # --parallel 12 pushed test_cfr_chance_nodes, test_mpf_hilo8 and
+        # test_pe_hand_features into timeout (run 44891011141). Four keeps one
+        # case per core plus one; see docs/ci.md.
+        parallel=4
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           ctest --test-dir build-native --output-on-failure --timeout 300 \
             --parallel "$parallel" -LE slow
