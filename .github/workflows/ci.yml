@@ -55,10 +55,18 @@ jobs:
         cd build
         ctest --output-on-failure -R "test_canonical_regression|test_canonical_invariants|test_omaha_invariants"
 
+    # A pull request skips the `slow` group (see tests/CMakeLists.txt): in a
+    # Release build those four cases cost about two and a half minutes of this
+    # suite, 117 s of it the PLO5 solve. Pushes, the nightly and the scheduled
+    # jobs still run them, which is where a regression would land anyway.
     - name: Run Full Test Suite
       run: |
         cd build
-        ctest --output-on-failure
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          ctest --output-on-failure -LE slow
+        else
+          ctest --output-on-failure
+        fi
 
     - name: Run Stable C API Tests
       run: |
@@ -301,8 +309,16 @@ jobs:
     - name: Build native test build
       run: cmake --build build-native
 
+    # Debug builds pay the most for the `slow` group: the PLO5 solve alone took
+    # 614 s of the 1056 s this suite cost on ubuntu-24.04-arm. A pull request
+    # skips the group; pushes and the nightly keep the full suite.
     - name: Run native test suite
-      run: ctest --test-dir build-native --output-on-failure --timeout 300
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          ctest --test-dir build-native --output-on-failure --timeout 300 -LE slow
+        else
+          ctest --test-dir build-native --output-on-failure --timeout 300
+        fi
 
   test-portable-dispatch:
     name: Portable Build & SIMD Dispatch

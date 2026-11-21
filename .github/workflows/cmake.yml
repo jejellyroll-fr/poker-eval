@@ -136,8 +136,17 @@ jobs:
         --repeat until-fail:20
         -R '^(test_mpf_perf_stats|test_enumerate_dispatch)$'
     
+    # Same rule as the other legs: the `slow` group is skipped on a pull request
+    # (117 s of the 317 s this suite cost on Linux GCC) and kept everywhere else.
+    # `shell: bash` because the Windows runners default to pwsh.
     - name: Test
-      run: ctest --preset ${{ matrix.preset }} --output-on-failure --timeout 60
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          ctest --preset ${{ matrix.preset }} --output-on-failure --timeout 60 -LE slow
+        else
+          ctest --preset ${{ matrix.preset }} --output-on-failure --timeout 60
+        fi
     
 
 
