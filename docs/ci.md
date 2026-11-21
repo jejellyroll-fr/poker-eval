@@ -97,12 +97,22 @@ enumeration sweeps' output rather than the evaluator, and they now run quiet
 alone does not reproduce their timeouts. Measured on run `44886497194` — the
 same arm64 image, a Debug build, `libomp` 23.1.6 and `-Xclang -fopenmp` — they
 take **1.89 s and 0.02 s** run alone, against 1.61 s and 0.01 s without OpenMP,
-and the same under ctest. In run `44828726427`, where they timed out at 66.9 s
-and 74.2 s, the suite ran with `--parallel` and totalled 1040 s — no better than
-running it one case at a time — `test_montecarlo_convergence_unity` took 79.5 s
-there, and `joktest1` had already printed its last line (`joktest1: all tests
-passed`) when ctest killed it. Starvation under that parallel run is the likely
-reading; it is not a measurement, and neither test was changed.
+and the same under ctest.
+
+The parallel run they failed in is no longer reproducible either. Run
+`44828726427` timed them out at 66.9 s and 74.2 s, with the suite totalling
+1040 s, `test_montecarlo_convergence_unity` at 79.5 s, and `joktest1` having
+already printed its last line (`joktest1: all tests passed`) when ctest killed
+it. Replaying that configuration on run `44888589983` — arm64 Debug, OpenMP on,
+`--parallel` at the runner's 3 cores — passed all 390 cases in 764.46 s, with
+`joktest1` at 1.52 s and `test_enum_basic` at 0.01 s. Forcing `--parallel 12` on
+the same 3 cores (run `44891011141`) inflated the CPU-bound cases by about five
+times — `joktest1` 7.70 s, `test_montecarlo_convergence_unity` 74.21 s, and
+`test_cfr_chance_nodes`, `test_mpf_hilo8` and `test_pe_hand_features` timed out
+— while `test_enum_basic` stayed at 0.01 s. Five times is not the 44 times and
+the 7000 times that 66.9 s and 74.2 s would need, so starvation does not account
+for them: those four timeouts are unreproduced and unexplained, and neither test
+was changed.
 
 It stays single-threaded: the backend buys nothing for the cost that dominates,
 adds an install step and breaks tests. The suite is parallelised by `ctest
