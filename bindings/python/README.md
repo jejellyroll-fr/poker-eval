@@ -77,6 +77,7 @@ thread's stream. Exhaustive enumeration (no `iterations`) ignores the seed.
 | `archie` | Archie triple draw hi/lo | hi/lo |
 | `badugi`, `badugi_hilo` | Badugi, Badugi hi/lo | low, hi/lo |
 | `drawmaha`, `drawmaha49`, `drawmaha_zero`, `drawmaha_dugi` | Omaha hand on the high side, five-card hand on the low side | hi/lo |
+| `soko` | Sökö / Soko (Canadian Stud): five-card stud, four-card flush above four-card straight | hi |
 
 With complete hands the joker and standard variants rank the same.  When
 cards are still to come (`"__"` in a pocket), `5draw*` can deal the joker:

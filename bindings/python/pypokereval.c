@@ -390,6 +390,8 @@ static const struct
     {"drawmaha49", game_drawmaha49},
     {"drawmaha_zero", game_drawmaha_zero},
     {"drawmaha_dugi", game_drawmaha_dugi},
+    /* Sökö / Soko (Scandinavian / Canadian Stud): five-card stud, high only. */
+    {"soko", game_soko},
 };
 
 /* Games whose dealing plan the binding's own loops cannot express: the core
@@ -402,7 +404,7 @@ static const enum_game_t py_core_enumerated_games[] = {
     game_5drawnsq_std,   game_27_triple_draw, game_a5_triple_draw,
     game_archie,         game_badugi,         game_badugi_hilo,
     game_drawmaha,       game_drawmaha49,     game_drawmaha_zero,
-    game_drawmaha_dugi,
+    game_drawmaha_dugi,  game_soko,
 };
 
 static int py_game_uses_core_enumerator(enum_game_t game)

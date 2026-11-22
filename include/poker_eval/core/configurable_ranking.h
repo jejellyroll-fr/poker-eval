@@ -85,7 +85,15 @@ POKEREVAL_EXPORT int pe_ranking_config_init_default(pe_hand_ranking_config_t *co
 
 /*
  * Populate config from a named preset. Supported names:
- *   "standard", "short_deck", "italian_manila", "canadian_stud", "new_york_stud"
+ *   "standard", "short_deck", "italian_manila", "canadian_stud",
+ *   "soko", "s\xc3\xb6k\xc3\xb6", "new_york_stud"
+ *
+ * "canadian_stud", "soko" and "s\xc3\xb6k\xc3\xb6" select the same official S\xc3\xb6k\xc3\xb6
+ * (Canadian Stud) order: four-card straight below four-card flush, both
+ * above one pair and below two pair.  Four-flush ties compare only the four
+ * suited ranks; four-straight ties compare only the qualifying sequence's
+ * high card, as win2day \xc2\xa77.f.14 requires.
+ *
  * Returns 0 on success, -1 if the preset name is unknown.
  */
 POKEREVAL_EXPORT int pe_ranking_config_set_preset(
@@ -100,9 +108,11 @@ POKEREVAL_EXPORT int pe_ranking_config_set_preset(
  * the category's rank index in config->category_order.
  *
  * For 5-card variants num_cards should be 5; for 4-card category variants
- * (Canadian / New York Stud) num_cards is 4 or 5 (the 4-card categories are
- * detected among the supplied cards). Returns HandVal_NOTHING on invalid
- * input (NULL pointers, empty hand, or a category not present in the config).
+ * (S\xc3\xb6k\xc3\xb6 / Canadian / New York Stud) num_cards is 4 or 5 (the 4-card
+ * categories are detected among the supplied cards).  A five-card flush or
+ * straight is always classified as such and never as a four-card category.
+ * Returns HandVal_NOTHING on invalid input (NULL pointers, empty hand, or a
+ * category not present in the config).
  */
 POKEREVAL_EXPORT HandVal pe_eval_configurable_hand(
     const pe_deck_spec_t *deck_spec,

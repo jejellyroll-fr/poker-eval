@@ -173,6 +173,7 @@ static int is_hilo(enum_game_t game) {
         case game_5drawnsq:
         case game_5draw_std:
         case game_5drawnsq_std:
+        case game_soko:
         case game_lowball:
         case game_lowball27:
         case game_sdholdem:

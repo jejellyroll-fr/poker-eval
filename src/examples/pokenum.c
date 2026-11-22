@@ -57,6 +57,7 @@ $ pokenum [-mc niter] [-t] [-O]
       -badacey or -ba  Badacey (Badugi + A-5 Lowball split pot)
       -badugi  Badugi (4-card lowball, unique suits and ranks)
       -dm    drawmaha (split pot: Omaha hi + draw)
+      -soko  Sökö / Canadian Stud (5-card stud, 4-card flush above 4-card straight)
       -manila or -mn  Manila Hold'em (32-card deck, 8-A only, Flush > Full House)
 
 Streaming usage:
@@ -278,6 +279,8 @@ parseArgs(int argc, char **argv,
           *game = game_courchevel8;
         } else if (strcmp(*argv, "-irish") == 0 || strcmp(*argv, "-ir") == 0) {
           *game = game_irish;
+        } else if (strcmp(*argv, "-soko") == 0) {
+          *game = game_soko;
         } else if (strcmp(*argv, "-manila") == 0 || strcmp(*argv, "-mn") == 0) {
           *game = game_manila;
         } else if (strncmp(*argv, "--backend=", 10) == 0) {
@@ -531,7 +534,7 @@ main(int argc, char **argv) {
         printf("ERROR\n");
       } else {
         printf("single usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
-        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-pa8|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish]\n");
+        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-pa8|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish|-soko]\n");
         printf("\t<pocket1> - <pocket2> - ... [ -- <board> ] [ / <dead> ] ]\n");
         printf("range usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
         printf("\t<range1> - <range2> - ... [ -- <board> ] [ / <dead> ] ]\n");

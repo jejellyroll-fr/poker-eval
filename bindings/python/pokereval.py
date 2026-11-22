@@ -307,7 +307,7 @@ game      : the variant: holdem, holdem8, omaha, omaha8, fusion, 7stud,
             7stud8, 7studnsq, razz, lowball, lowball27, and the draw games
             5draw, 5draw8, 5drawnsq, 5draw_std, 5draw8_std, 5drawnsq_std,
             27_triple_draw, a5_triple_draw, archie, badugi, badugi_hilo,
-            drawmaha, drawmaha49, drawmaha_zero, drawmaha_dugi.
+            drawmaha, drawmaha49, drawmaha_zero, drawmaha_dugi, soko.
             5draw, 5draw8 and 5drawnsq are the joker variants: they deal
             from a 53-card deck, so the joker can come when cards are still
             to be dealt.  Use 5draw_std, 5draw8_std and 5drawnsq_std for
@@ -319,6 +319,14 @@ game      : the variant: holdem, holdem8, omaha, omaha8, fusion, 7stud,
             low side.  Drawmaha splits the pot between the Omaha hand (high
             side) and the five-card hand (low side: best draw hand, lowest
             49 total, A-5 low or badugi, by variant).
+            Soko (Sökö / Canadian Stud) is five-card stud, high only, with no
+            board: each pocket is completed to five cards and ranked with the
+            official Sökö order (four-card flush above four-card straight,
+            both above one pair and below two pair).  Four-card flushes and
+            four-card straights tie on their own ranks; the off-suit fifth
+            card is not a tie-breaker.  "best"/"best_hand" still use the
+            standard 5-card evaluator and are not Sökö-aware; use winners or
+            poker_eval for Sökö comparisons.
             Mandatory, no default.
                     
 pockets   : list of pocket cards for each player still in game. Each member

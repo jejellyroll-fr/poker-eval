@@ -55,6 +55,7 @@ questions and are documented separately:
 | [Equity module](src/equity/README.md) | Enumeration engines, batched Monte Carlo, SIMD/multithreaded range equity, preflop tables, flop texture, Run It Twice, side pots |
 | [Hand evaluation](src/core/README.md) | 5/7-card evaluation, SIMD, low/high, joker and short decks |
 | [Python bindings](bindings/python/README.md) | `pokereval.PokerEval`: `poker_eval`, `calculate_range_equity`, `calculate_multiway_equity`, `winners`, `best` |
+| [Sökö / Canadian Stud](docs/soko.md) | Official Sökö hand order, four-card flush/straight tie-breaks, `game_soko` in C and Python, `pokenum -soko` |
 
 Equity command-line tools (built with `-DBUILD_EXAMPLES=ON`, output under
 `build/src/examples/`):

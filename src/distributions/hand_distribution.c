@@ -217,6 +217,11 @@ int pe_compute_hand_distribution(enum_game_t game,
             ranking_preset = "italian_manila";
             hand_size = 5;
             break;
+        case game_soko:
+            deck_preset = PE_DECK_PRESET_STD;
+            ranking_preset = "soko";
+            hand_size = 5;
+            break;
         default:
             return -1;
     }

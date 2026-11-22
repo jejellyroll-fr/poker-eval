@@ -86,6 +86,10 @@ typedef enum {
   game_5draw_std,
   game_5draw8_std,
   game_5drawnsq_std,
+  /* Sökö / Soko (Scandinavian / Canadian Stud): five-card stud, one downcard
+     and four upcards, high only, ranked with the official Sökö order
+     (four-card straight and four-card flush sit above one pair). */
+  game_soko,
   game_NUMGAMES
 } enum_game_t;
 
