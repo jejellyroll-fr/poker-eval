@@ -86,11 +86,19 @@ jobs:
           exit 0
         fi
 
-        # Logs of old runs expire, and that says nothing about this watcher.
+        # The log carries the escape sequences ctest writes, and gh refuses to
+        # write those to stdout without the flag; the first live run of this
+        # watcher was green because that refusal was read as an expired log.
         logs="repos/$GH_REPO/actions/jobs/$job_id/logs"
-        if ! gh api "$logs" > native.log; then
-          echo "Nothing to inspect: the log of job $job_id is not available."
-          exit 0
+        if ! gh api --allow-escape-sequences "$logs" \
+             > native.log 2> gh.err; then
+          if grep -qiE '404|410|not found|expired' gh.err; then
+            echo "Nothing to inspect: the log of job $job_id has expired."
+            exit 0
+          fi
+          echo "::error::Downloading the log of job $job_id failed:"
+          cat gh.err
+          exit 1
         fi
         echo "lines=$(wc -l < native.log)"
         echo "inspect=yes" >> "$GITHUB_OUTPUT"
