@@ -461,11 +461,13 @@ static pe_status_t pe_equity_legacy_fallback(
     enumResultClear(&agg_res);
 
     int cards_on_board = StdDeck_numCards(board);
-    int total_board_cards = 5;
-
-    if (game_variant >= game_7stud && game_variant <= game_razz) {
-         total_board_cards = 0;
-    }
+    /* The board the game actually deals, not a fixed five.  Stud, draw and
+     * Sökö deal none, and asking for five phantom board cards made complete
+     * hands look incomplete: the work estimate then chose sampling over the
+     * exact single outcome (and Sökö spent its samples dealing cards no
+     * evaluator ever reads). */
+    enum_gameparams_t *params = enumGameParams(game_variant);
+    int total_board_cards = params ? params->maxboard : 5;
 
     int to_deal = (total_board_cards > cards_on_board) ? (total_board_cards - cards_on_board) : 0;
     if (to_deal < 0) to_deal = 0;

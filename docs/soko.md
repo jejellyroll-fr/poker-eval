@@ -97,6 +97,30 @@ pe.poker_eval(game="soko",
               seed=7)
 ```
 
+## Range equity
+
+`calculate_range_equity` and the C `pe_equity_*` functions rank Sökö by the
+Sökö rules. Ranges accept a plain five-card hand or the stud grammar:
+
+```python
+pe.calculate_range_equity(
+    "soko",
+    [["AhAdKsKd2h"], ["9hThJh3h2s"]],   # two pair vs four-card flush
+)   # two pair wins
+```
+
+```c
+pe_range_t *r1 = NULL, *r2 = NULL;
+pe_range_parse(game_soko, "(9hTh)Jh3h2s", dead, NULL, &r1);
+pe_range_parse(game_soko, "(AhAd)Ks8c3c", dead, NULL, &r2);
+/* ... pe_equity_range_vs_range(NULL, game_soko, r1, r2, board, dead, NULL, &res) */
+```
+
+A range string that cannot be expanded for Sökö raises an error naming the
+game and the range instead of silently producing an empty (or standard-rule)
+calculation. Complete Sökö hands are enumerated exactly; there is no phantom
+board to sample.
+
 ## Known limitations
 
 - `PokerEval.best()` / `best_hand()` / `best_hand_value()` and
@@ -106,6 +130,8 @@ pe.poker_eval(game="soko",
 - `pe_compute_hand_distribution(game_soko)` uses the 52-card deck with the
   `soko` preset and five-card hands, so its category probabilities are the
   Sökö ones; the generic `enum` ordering histogram reports Sökö category ranks.
+- Range equity expects five-card Sökö pockets. Shorter patterns are filled by
+  the stud expander, but a range that expands to zero hands is an error.
 - The enumerator deals five-card hands. A Sökö deal is one downcard plus four
   upcards, but the evaluator does not care which of the cards were dealt up.
 

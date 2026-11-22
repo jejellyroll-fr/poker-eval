@@ -18,6 +18,8 @@
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/deck/deck_std.h>
+#include <poker_eval/equity.h>
+#include <poker_eval/range.h>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -205,6 +207,111 @@ static void test_soko_sampled_incomplete_pocket(void) {
     enumResultFree(&result);
 }
 
+/* Build a one-combo range around `hand`, which is what pe_equity takes. */
+static void init_single_range(pe_range_t *range, pe_combo_t *combo,
+                              StdDeck_CardMask hand, enum_game_t game) {
+    combo->hand = hand;
+    combo->weight = 1.0;
+    memset(range, 0, sizeof(*range));
+    range->combos = combo;
+    range->count = 1;
+    range->capacity = 1;
+    range->game_type = game;
+    range->total_weight = 1.0;
+}
+
+/* pe_equity must rank with the Sökö rules, not the standard five-card order.
+ * A four-card flush beats one pair in Sökö; the standard evaluator puts the
+ * pair ahead, so a silent fallback would flip the winner. */
+static void test_pe_equity_uses_soko_ranking(void) {
+    const char *flush_c[] = {"9h", "Th", "Jh", "3h", "2s"};
+    const char *pair_c[] = {"Ah", "Ad", "Ks", "8c", "3c"};
+    StdDeck_CardMask flush_hand = make_hand(flush_c, 5);
+    StdDeck_CardMask pair_hand = make_hand(pair_c, 5);
+    StdDeck_CardMask board, dead;
+    pe_combo_t combos[2];
+    pe_range_t ranges[2];
+    const pe_range_t *range_ptrs[2];
+    pe_equity_result_multi_t result;
+
+    /* Dead means "not dealt", so it must not contain the players' own cards:
+     * the engine adds each selected hand to the dead set itself. */
+    StdDeck_CardMask_RESET(board);
+    StdDeck_CardMask_RESET(dead);
+    init_single_range(&ranges[0], &combos[0], flush_hand, game_soko);
+    init_single_range(&ranges[1], &combos[1], pair_hand, game_soko);
+    range_ptrs[0] = &ranges[0];
+    range_ptrs[1] = &ranges[1];
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_calculate(game_soko, range_ptrs, 2, board,
+                                              dead, NULL, &result));
+    TEST_ASSERT_TRUE(result.results[0].equity > result.results[1].equity);
+    TEST_ASSERT_DOUBLE_WITHIN(0.0001, 1.0, result.results[0].equity);
+    /* Complete Sökö hands have a single outcome, so this is exact: no silent
+     * sampling of five board cards the game never deals. */
+    TEST_ASSERT_EQUAL_INT(1, result.exact);
+    TEST_ASSERT_EQUAL_INT(1, (int)result.samples);
+
+    /* The control: the same hands under five-card draw give the pair the pot. */
+    ranges[0].game_type = game_5draw_std;
+    ranges[1].game_type = game_5draw_std;
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_calculate(game_5draw_std, range_ptrs, 2,
+                                              board, dead, NULL, &result));
+    TEST_ASSERT_TRUE(result.results[1].equity > result.results[0].equity);
+    TEST_ASSERT_EQUAL_INT(1, result.exact);
+}
+
+/* Two pair stays above a four-card flush through the equity API too. */
+static void test_pe_equity_two_pair_over_four_flush(void) {
+    const char *two_pair_c[] = {"Ah", "Ad", "Ks", "Kd", "2h"};
+    const char *flush_c[] = {"9h", "Th", "Jh", "3h", "2s"};
+    StdDeck_CardMask two_pair = make_hand(two_pair_c, 5);
+    StdDeck_CardMask flush_hand = make_hand(flush_c, 5);
+    StdDeck_CardMask board, dead;
+    pe_combo_t combos[2];
+    pe_range_t ranges[2];
+    const pe_range_t *range_ptrs[2];
+    pe_equity_result_multi_t result;
+
+    StdDeck_CardMask_RESET(board);
+    StdDeck_CardMask_RESET(dead);
+    init_single_range(&ranges[0], &combos[0], two_pair, game_soko);
+    init_single_range(&ranges[1], &combos[1], flush_hand, game_soko);
+    range_ptrs[0] = &ranges[0];
+    range_ptrs[1] = &ranges[1];
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_calculate(game_soko, range_ptrs, 2, board,
+                                              dead, NULL, &result));
+    TEST_ASSERT_TRUE(result.results[0].equity > result.results[1].equity);
+    TEST_ASSERT_EQUAL_INT(1, result.exact);
+}
+
+/* Sökö ranges parse with the stud grammar, so pe_equity callers can build
+ * them from strings instead of hand masks. */
+static void test_pe_range_parse_soko(void) {
+    StdDeck_CardMask dead;
+    pe_range_t *range = NULL;
+
+    StdDeck_CardMask_RESET(dead);
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_range_parse(game_soko, "(AhAd)KsKd2h", dead, NULL,
+                                         &range));
+    TEST_ASSERT_NOT_NULL(range);
+    TEST_ASSERT_EQUAL_UINT(1, range->count);
+    TEST_ASSERT_EQUAL_INT(5, StdDeck_numCards(range->combos[0].hand));
+    pe_range_free(range);
+
+    /* Nonsense cannot be mistaken for a legal Sökö range. */
+    range = NULL;
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_PARSE_ERROR,
+                          pe_range_parse(game_soko, "not-a-hand", dead, NULL,
+                                         &range));
+    TEST_ASSERT_NULL(range);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_soko_game_params);
@@ -214,5 +321,8 @@ int main(void) {
     RUN_TEST(test_soko_four_flush_kicker_ties);
     RUN_TEST(test_soko_four_straight_kicker_ties);
     RUN_TEST(test_soko_sampled_incomplete_pocket);
+    RUN_TEST(test_pe_equity_uses_soko_ranking);
+    RUN_TEST(test_pe_equity_two_pair_over_four_flush);
+    RUN_TEST(test_pe_range_parse_soko);
     return UNITY_END();
 }

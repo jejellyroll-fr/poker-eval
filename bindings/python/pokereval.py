@@ -114,11 +114,17 @@ Examples:
     def _expand_player_ranges(self, game_name, list_of_player_range_definitions, board_card_strings, dead_card_strings):
         processed_player_ranges_uint64 = []
 
-        is_omaha_type = "omaha" in game_name.lower()
-        is_stud_type = "stud" in game_name.lower()
+        game_lower = game_name.lower()
+        is_soko = game_lower in ("soko", "sökö")
+        is_omaha_type = "omaha" in game_lower
+        # Sökö is a five-card stud game, so its range strings use the stud
+        # grammar (one downcard pair plus upcards).
+        is_stud_type = "stud" in game_lower or is_soko
 
         game_total_cards_for_stud = 7
-        if is_stud_type and "5" in game_name:
+        if is_soko:
+            game_total_cards_for_stud = 5
+        elif is_stud_type and "5" in game_name:
             game_total_cards_for_stud = 5
 
         for p_idx, player_range_def_strings in enumerate(list_of_player_range_definitions):
@@ -133,6 +139,11 @@ Examples:
                 try:
                     if is_omaha_type:
                         specific_hands_as_str_lists = self.omaha_hands(range_str, dead_cards=temp_dead_for_generation)
+                    elif is_soko and len(range_str) == 10 and "(" not in range_str:
+                        # A plain five-card Sökö hand, e.g. "AhAdKsKd2h".
+                        specific_hands_as_str_lists = [[
+                            range_str[i:i + 2] for i in range(0, 10, 2)
+                        ]]
                     elif is_stud_type:
                         specific_hands_as_str_lists = self.get_stud_hands(
                             range_str,
@@ -178,6 +189,15 @@ Examples:
                         )
 
             if not current_player_expanded:
+                if is_soko:
+                    # Fail here, naming the game and the range: the alternative
+                    # was a misleading "range cannot be empty" error, or a
+                    # silent fallback to whatever hands the caller did supply.
+                    raise RuntimeError(
+                        f"Sökö range '{range_str}' expanded to no hands. Use a "
+                        "five-card hand such as 'AhAdKsKd2h' or a stud pattern "
+                        "such as '(AhAd)KsKd2h'."
+                    )
                 print(
                     f"Warning: Player {p_idx+1} has no valid hands in their expanded range. "
                     "This might lead to 0 matchups or errors if other players have hands.",

@@ -961,9 +961,12 @@ pe_status_t pe_range_parse(
     pe_status_t status = pe_range_create(variant, &range);
     if (status != PE_STATUS_OK) return status;
 
-    /* For Stud games, use Stud parser */
-    if (variant == game_7stud || variant == game_7stud8 || 
-        variant == game_7studnsq || variant == game_razz) {
+    /* For Stud games, use Stud parser.  Sökö is a five-card stud game, and
+     * the stud parser emits hands of the pattern's own width (3..7 cards),
+     * which is exactly what its 0..5-card pockets need. */
+    if (variant == game_7stud || variant == game_7stud8 ||
+        variant == game_7studnsq || variant == game_razz ||
+        variant == game_soko) {
         arp_range_t arp_range;
         memset(&arp_range, 0, sizeof(arp_range_t));
         int ret = ARP_ParseStudPattern(range_str, dead_cards, &arp_range);
