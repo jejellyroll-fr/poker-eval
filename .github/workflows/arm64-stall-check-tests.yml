@@ -1,0 +1,38 @@
+name: arm64 stall check fixtures
+
+# `scripts/check_arm64_vm_stalls.py` decides whether an arm64 run is healthy
+# from its log alone, and every branch of that decision is a failure mode
+# nobody sees until a nightly goes wrong: a window, a sampler that stops
+# early or starts late, a job stopped at its time limit, a log without a
+# sample at all. The fixtures are tiny slices of the job log format, each
+# with the verdict it must produce, so those branches stay locked.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/check_arm64_vm_stalls.py'
+      - 'scripts/tests/test_check_arm64_vm_stalls.py'
+      - 'scripts/tests/fixtures/arm64-stall-check/**'
+      - '.github/workflows/macos-arm64-stall-check.yml'
+      - '.github/workflows/arm64-stall-check-tests.yml'
+  push:
+    branches: [ master, development ]
+    paths:
+      - 'scripts/check_arm64_vm_stalls.py'
+      - 'scripts/tests/**'
+      - '.github/workflows/macos-arm64-stall-check.yml'
+      - '.github/workflows/arm64-stall-check-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    name: Script verdicts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Run the fixture tests
+      run: python3 -m unittest discover -s scripts/tests -p "test_*.py" -v

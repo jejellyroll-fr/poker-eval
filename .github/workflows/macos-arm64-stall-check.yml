@@ -13,9 +13,10 @@ name: macOS arm64 stall check
 #
 # A sampler that dies before the suite ends leaves no window behind, only
 # silence, so the first and last samples are also checked against the suite
-# bounds (its first `Start N:` line and `Total Test time`, or the last line of
-# a log the job never finished): samples that do not bracket the suite are
-# reported the same way.
+# bounds (its first `Start N:` line and `Total Test time`): samples that do
+# not bracket the suite are reported the same way. A log with samples but no
+# `Total Test time` is its own signal: the job was stopped at its time limit
+# or cancelled, and neither bound would look wrong.
 #
 # Pull-request runs carry no sample on purpose (the sampler is gated on
 # `schedule` and `workflow_dispatch` in macos-arm64.yml), so the job is gated
@@ -140,6 +141,7 @@ jobs:
           exit 0
         fi
         if [ "$status" = 1 ]; then
-          echo "::error::The arm64 runner stopped sampling: see the summary."
+          echo "::error::The arm64 run has a VM sampling problem: see the"\
+            "summary."
         fi
         exit "$status"
