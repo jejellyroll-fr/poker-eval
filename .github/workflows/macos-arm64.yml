@@ -128,9 +128,10 @@ jobs:
     # a change lands.
     # The one failure still unexplained is a runner that stops making progress:
     # run 44828726427 lost 66 s and 74 s that way, and its log records the gap
-    # without its cause. On the nightly, the load average, `vm_stat` and the
-    # busiest processes are printed every two seconds while the suite runs, so
-    # the next stall arrives with the system figures it happened under.
+    # without its cause. On the nightly and on a manual dispatch, the load
+    # average, `vm_stat` and the busiest processes are printed every two seconds
+    # while the suite runs, so the next stall arrives with the system figures it
+    # happened under.
     #
     # They go to this step's own output rather than to a file uploaded by a
     # later step: a job that reaches its 45-minute limit runs no further step,
@@ -153,7 +154,8 @@ jobs:
         # fall in windows where that runner made no progress at all, whatever
         # the degree of parallelism. See docs/ci.md.
         parallel=4
-        if [ "${{ github.event_name }}" = "schedule" ]; then
+        if [ "${{ github.event_name }}" = "schedule" ] ||
+           [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           (
             # A failing `vm_stat` or `ps` must not end the loop: the shell runs
             # with `-e`, and a sampler that died early would read as a quiet
