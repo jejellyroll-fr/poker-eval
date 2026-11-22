@@ -117,7 +117,10 @@ and 180.06 s on run `44891011141` — so the budgets are not what failed. The
 cases through the first window
 (#21 to #199 between 22:26:20 and 22:27:07), so the stall belonged to that
 runner rather than to the image or the build. What stalls the VM is not
-established: the log records the gap, not its cause.
+established: the log records the gap, not its cause. The nightly arm64 leg
+now samples `vm_stat`, the load average and the busiest processes every two
+seconds while the suite runs, and keeps the samples as an artifact, so the
+next stall is read from the system state rather than from ctest's timings.
 
 The log gives no slot count either: its completion lines arrive in the chunks
 the runner reads, 84 of them stamped inside 4 ms at 22:28:41 with case times of
