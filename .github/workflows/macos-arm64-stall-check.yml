@@ -11,6 +11,12 @@ name: macOS arm64 stall check
 # finished: it never requests an arm64 runner, never touches the run it
 # inspects, and fails only when a window over the threshold is found.
 #
+# A sampler that dies before the suite ends leaves no window behind, only
+# silence, so the first and last samples are also checked against the suite
+# bounds (its first `Start N:` line and `Total Test time`, or the last line of
+# a log the job never finished): samples that do not bracket the suite are
+# reported the same way.
+#
 # Pull-request runs carry no sample on purpose (the sampler is gated on
 # `schedule` and `workflow_dispatch` in macos-arm64.yml), so the job is gated
 # on those two events as well. A run whose native-test job never started, or
