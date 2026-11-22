@@ -126,15 +126,43 @@ jobs:
     # the suite, and the Linux legs run it on every pull request anyway. Pushes
     # and the nightly keep the full suite, so the arm64 leg still covers it once
     # a change lands.
+    # The one failure still unexplained is a runner that stops making progress:
+    # run 44828726427 lost 66 s and 74 s that way, and its log records the gap
+    # without its cause. `vm_stat`, the load average and the busiest processes
+    # are sampled every two seconds on the nightly only, so the next stall
+    # arrives with the system figures it happened under. The samples are kept
+    # as an artifact even when the suite fails or the job times out.
+    - name: Start VM sampler
+      if: github.event_name == 'schedule'
+      run: |
+        cat > "$RUNNER_TEMP/sampler.sh" <<'EOF'
+        #!/bin/bash
+        while [ ! -f "$RUNNER_TEMP/sampler.stop" ]; do
+          {
+            echo "== $(date -u +%H:%M:%S)"
+            sysctl -n vm.loadavg
+            vm_stat | head -12
+            ps -Ao pid,pcpu,stat,comm -r | head -10
+          } >> "$RUNNER_TEMP/vm-samples.log" 2>&1
+          sleep 2
+        done
+        EOF
+        chmod +x "$RUNNER_TEMP/sampler.sh"
+        nohup "$RUNNER_TEMP/sampler.sh" >/dev/null 2>&1 &
+        echo "SAMPLER_PID=$!" >> "$GITHUB_ENV"
+
     - name: Run native test suite
       run: |
-        # Constant, not `getconf _NPROCESSORS_ONLN`: the pool has served runners
-        # that report more cores than they can run and then start a dozen cases
-        # at once. Measured on the 3-core runner in Debug with OpenMP on,
-        # --parallel 3 ran all 390 cases in 764.46 s (run 44888589983) while
-        # --parallel 12 pushed test_cfr_chance_nodes, test_mpf_hilo8 and
+        # Constant, not `getconf _NPROCESSORS_ONLN`: the cores a runner reports
+        # are not a safe degree of parallelism. Measured on the 3-core runner
+        # in Debug with OpenMP on, --parallel 3 ran all 390 cases in 764.46 s
+        # (run 44888589983) while --parallel 12 inflated the CPU-bound cases
+        # about five times and pushed test_cfr_chance_nodes, test_mpf_hilo8 and
         # test_pe_hand_features into timeout (run 44891011141). Four keeps one
-        # case per core plus one; see docs/ci.md.
+        # case per core plus one.
+        # The two timeouts of run 44828726427 are not a counter-example: they
+        # fall in windows where that runner made no progress at all, whatever
+        # the degree of parallelism. See docs/ci.md.
         parallel=4
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           ctest --test-dir build-native --output-on-failure --timeout 300 \
@@ -143,6 +171,24 @@ jobs:
           ctest --test-dir build-native --output-on-failure --timeout 300 \
             --parallel "$parallel"
         fi
+
+    - name: Stop VM sampler
+      if: always() && github.event_name == 'schedule'
+      run: |
+        touch "$RUNNER_TEMP/sampler.stop"
+        if [ -n "${SAMPLER_PID:-}" ]; then
+          kill "$SAMPLER_PID" 2>/dev/null || true
+        fi
+        wc -l "$RUNNER_TEMP/vm-samples.log" 2>/dev/null || true
+
+    - name: Upload VM samples
+      if: always() && github.event_name == 'schedule'
+      uses: actions/upload-artifact@v6
+      with:
+        name: arm64-vm-samples
+        path: ${{ runner.temp }}/vm-samples.log
+        if-no-files-found: warn
+        retention-days: 14
 
   wheels:
     name: Wheel (arm64)
