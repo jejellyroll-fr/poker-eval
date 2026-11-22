@@ -30,6 +30,10 @@ import sys
 LINE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)Z(?: (.*))?$"
 )
+# The job log carries the colour codes ctest writes; they sit inside the
+# message and, when a step printed them at the start of a line, would hide the
+# timestamp this script anchors on.
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SAMPLE = re.compile(r"^\s*== \d{2}:\d{2}:\d{2}\s*$")
 SUITE_START = re.compile(r"^\s+Start\s+\d+:")
 SUITE_END = re.compile(r"^\s*Total Test time \(real\)")
@@ -226,7 +230,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     with open(args.log, encoding="utf-8", errors="replace") as handle:
-        lines = handle.read().splitlines()
+        lines = [ANSI.sub("", line) for line in handle.read().splitlines()]
 
     marks, start, end = parse(lines)
     found, windows = stalls(lines, marks, args.threshold)
