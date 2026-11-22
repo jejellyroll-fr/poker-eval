@@ -123,6 +123,19 @@ seconds into the suite's own log, which survives a job that reaches its time
 limit, on the nightly and on a manual dispatch alike, so the next stall is
 read from the system state rather than from ctest's timings.
 
+A watcher reads those logs rather than a person: `macos-arm64-stall-check.yml`
+runs on `ubuntu-latest` — no arm64 slot — and downloads the log of every
+completed nightly or manual arm64 run. It fails when two consecutive samples
+are more than ten seconds apart, reporting the load, `vm_stat` and the
+processes sampled just before the window; when the first or last sample does
+not bracket the suite, whose bounds are its first `Start N:` line and its
+`Total Test time`; when samples exist but `Total Test time` does not, which is
+what a job stopped at its time limit leaves behind; and when a nightly or
+manual run has no sample at all. A run of another event, or one whose
+native-test job never started, is reported and left green. Those verdicts are
+locked by the fixtures under `scripts/tests/fixtures/arm64-stall-check/` and
+the job in `arm64-stall-check-tests.yml`.
+
 The log gives no slot count either: its completion lines arrive in the chunks
 the runner reads, 84 of them stamped inside 4 ms at 22:28:41 with case times of
 0.01 s to 1.65 s, so a burst of lines is output flushed together and not cases
