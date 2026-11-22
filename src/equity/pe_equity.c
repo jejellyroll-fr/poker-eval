@@ -115,21 +115,26 @@ static int validate_range_pocket_sizes(enum_game_t game_variant,
  */
 static int auto_selects_exact(const PlayerRange ranges[], int num_players,
                               int to_deal, int cards_remaining) {
+    double boards = 1.0;
+    double matchups = 1.0;
+
+    for (int p = 0; p < num_players; ++p) {
+        matchups *= (ranges[p].count > 0) ? (double)ranges[p].count : 1.0;
+        if (matchups > PE_EQUITY_EXACT_WORK_BUDGET)
+            return 0; /* stop early rather than overflow on wide ranges */
+    }
+
+    /* Nothing left to deal: the work is the range product.  A few matchups
+     * are always exact; a wide complete range (two third-street Sökö ranges,
+     * say) still has to sample, because enumerating the product would run for
+     * minutes. */
     if (to_deal <= 0)
-        return 1; /* board already complete — there is nothing to sample */
+        return matchups <= PE_EQUITY_EXACT_WORK_BUDGET;
     if (to_deal > 2)
         return 0; /* turn and river at most; beyond that it is never cheap */
 
-    double boards = 1.0;
     for (int i = 0; i < to_deal; ++i)
         boards *= (double)(cards_remaining - i) / (double)(i + 1);
-
-    double matchups = 1.0;
-    for (int p = 0; p < num_players; ++p) {
-        matchups *= (ranges[p].count > 0) ? (double)ranges[p].count : 1.0;
-        if (boards * matchups > PE_EQUITY_EXACT_WORK_BUDGET)
-            return 0; /* stop early rather than overflow on wide ranges */
-    }
 
     return (boards * matchups) <= PE_EQUITY_EXACT_WORK_BUDGET;
 }
@@ -472,6 +477,22 @@ static pe_status_t pe_equity_legacy_fallback(
     int to_deal = (total_board_cards > cards_on_board) ? (total_board_cards - cards_on_board) : 0;
     if (to_deal < 0) to_deal = 0;
 
+    /* Cards each player's pocket still has to be dealt.  A short pocket (a
+     * third-street Sökö hand, an incomplete stud hand) is random too, but the
+     * enumerator fills it itself, so it never appears in to_deal.  Ignoring it
+     * made "the board is complete" mean "nothing is random": a third-street
+     * hand was silently enumerated as if the hole cards were known, and a
+     * forced Monte Carlo request was overruled. */
+    int pocket_to_deal = 0;
+    for (int p = 0; p < num_players; ++p) {
+        for (size_t c = 0; c < ranges[p]->count; ++c) {
+            StdDeck_CardMask hand = ranges[p]->combos[c].hand;
+            int missing = params ? params->maxpocket - StdDeck_numCards(hand) : 0;
+            if (missing > pocket_to_deal) pocket_to_deal = missing;
+        }
+    }
+    int random_cards = to_deal + pocket_to_deal;
+
     /* is_monte_carlo == 1 forces sampling; 0 (or no options at all) asks for
      * the automatic heuristic documented in equity.h. The previous form set
      * use_mc = 1 in both branches whenever cards remained, so "automatic"
@@ -482,13 +503,8 @@ static pe_status_t pe_equity_legacy_fallback(
     if (opts && opts->is_monte_carlo) {
         use_mc = 1;
     } else {
-        use_mc = !auto_selects_exact(internal_ranges, num_players, to_deal,
+        use_mc = !auto_selects_exact(internal_ranges, num_players, random_cards,
                                      StdDeck_N_CARDS - cards_on_board);
-    }
-    if (to_deal == 0) {
-        /* Board already complete: there is nothing random left to sample, so
-         * enumerate even when Monte Carlo was forced. */
-        use_mc = 0;
     }
 
     int ret = CalculateEquityForRanges(

@@ -121,11 +121,65 @@ game and the range instead of silently producing an empty (or standard-rule)
 calculation. Complete Sökö hands are enumerated exactly; there is no phantom
 board to sample.
 
+## Describing a hand
+
+The standard evaluators return a standard five-card `HandVal`, which cannot
+encode a four-card flush or a four-card straight. `PokerEval.best()` therefore
+reports those hands as `NoPair`, even though Sökö equity correctly ranks them
+above a pair. `describe_soko_hand()` answers in Sökö terms instead:
+
+```python
+pe.describe_soko_hand(["9h", "Th", "Jh", "3h", "2s"])
+# {'category': 'FourCardFlush', 'category_rank': 3,
+#  'ranks': [11, 10, 9, 3], 'rank_names': ['J', 'T', '9', '3']}
+```
+
+`category_rank` is monotonic: a larger value always beats a smaller one. The
+`ranks` list holds only the ranks that decide ties — four suited ranks for a
+four-card flush, the high card for a four-card straight — expressed as
+2..14. The C entry point is `pe_soko_describe_hand()` in
+`<poker_eval/games/soko.h>`.
+
+## Street-aware equity
+
+`pe_equity_soko_street()` (C) and `PokerEval.soko_street_equity()` (Python)
+model a Sökö table at third, fourth or fifth street:
+
+```python
+pe.soko_street_equity(
+    [
+        {"up": ["Kh", "Qh"], "down": ["Ah"]},  # our hand, third street
+        {"up": ["Kd", "Qd"]},                  # opponent, hole card unknown
+    ],
+    dead=["3c"],
+    iterations=20000,
+)
+```
+
+The street is derived from the number of upcards: two is third street, three
+fourth, four fifth. Upcards are visible, so they are removed from the deck for
+every player; a missing downcard is enumerated together with the cards still
+to come. Fifth street with both hole cards known is a single exact matchup.
+This is a showdown-equity model — what the pot is worth given the information
+now — not a betting model.
+
+The C API is `pe_equity_soko_street()` in
+`<poker_eval/games/soko_street.h>`; `pe_soko_street_range()` exposes the
+underlying range of complete hands.
+
+## Game names
+
+`pe_game_from_name()` (`<poker_eval/core/game_names.h>`) is the single table
+of game spellings used by `pokenum` and the Python binding. `soko`, `sökö`,
+`SÖKÖ`, `canadian_stud` and `canadianstud` all resolve to `game_soko`, and
+the historical `pokenum` flags (`-soko`, `-7s`, `-5d`, ...) keep working.
+
 ## Known limitations
 
 - `PokerEval.best()` / `best_hand()` / `best_hand_value()` and
   `PokerEval.evaln()` always use the standard five-card evaluator, since they
-  take no game name. They are **not** Sökö-aware; use `winners()` or
+  take no game name. They are **not** Sökö-aware; use
+  `describe_soko_hand()` for a Sökö category, or `winners()` /
   `poker_eval(game="soko", ...)` for Sökö comparisons.
 - `pe_compute_hand_distribution(game_soko)` uses the 52-card deck with the
   `soko` preset and five-card hands, so its category probabilities are the
@@ -134,6 +188,11 @@ board to sample.
   the stud expander, but a range that expands to zero hands is an error.
 - The enumerator deals five-card hands. A Sökö deal is one downcard plus four
   upcards, but the evaluator does not care which of the cards were dealt up.
+  Street information is expressed as ranges (`soko_street.h`), not stored in
+  the game enum.
+- `best()` keeps its standard return contract; forcing Sökö categories into it
+  would require a new value encoding, which is why `describe_soko_hand()` is a
+  separate function.
 
 ## References
 

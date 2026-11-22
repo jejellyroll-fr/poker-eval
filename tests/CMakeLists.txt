@@ -185,6 +185,19 @@ add_unity_test(test_configurable_ranking test_configurable_ranking.c)
 add_unity_test(test_soko_game test_soko_game.c)
 set_tests_properties(test_soko_game PROPERTIES
     LABELS "equity;enumerate;soko" TIMEOUT 120)
+# ISSUE #316 follow-ups: shared game names, exhaustive oracle, boardless
+# equity matrix, street-aware equity.
+add_unity_test(test_game_names test_game_names.c)
+set_tests_properties(test_game_names PROPERTIES LABELS "core;soko" TIMEOUT 60)
+add_unity_test(test_soko_oracle test_soko_oracle.c)
+set_tests_properties(test_soko_oracle PROPERTIES
+    LABELS "distributions;soko" TIMEOUT 120)
+add_unity_test(test_equity_no_board_games test_equity_no_board_games.c)
+set_tests_properties(test_equity_no_board_games PROPERTIES
+    LABELS "equity;soko" TIMEOUT 120)
+add_unity_test(test_soko_street test_soko_street.c)
+set_tests_properties(test_soko_street PROPERTIES
+    LABELS "equity;soko" TIMEOUT 120)
 # ISSUE-02 (#158): automated hand distribution & combinatorial probability engine
 add_unity_test(test_hand_distribution test_hand_distribution.c)
 add_unity_test(test_transition_distribution test_transition_distribution.c)

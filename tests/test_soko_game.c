@@ -19,6 +19,7 @@
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/equity.h>
+#include <poker_eval/games/soko.h>
 #include <poker_eval/range.h>
 
 void setUp(void) {}
@@ -289,6 +290,83 @@ static void test_pe_equity_two_pair_over_four_flush(void) {
     TEST_ASSERT_EQUAL_INT(1, result.exact);
 }
 
+/* describe_soko_hand() names the four-card categories the standard HandVal
+ * cannot encode, and orders them by the official Sökö rank. */
+static void test_soko_describe_hand(void) {
+    const char *flush_c[] = {"9h", "Th", "Jh", "3h", "2s"};
+    const char *straight_c[] = {"9h", "Ts", "Jd", "Qc", "2h"};
+    const char *two_pair_c[] = {"Ah", "Ad", "Ks", "Kd", "2h"};
+    const char *pair_c[] = {"Ah", "Ad", "Ks", "8c", "3h"};
+    pe_soko_hand_description_t flush, straight, two_pair, pair;
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_soko_describe_hand(make_hand(flush_c, 5), &flush));
+    TEST_ASSERT_EQUAL_INT(PE_CAT_FOUR_CARD_FLUSH, flush.category);
+    TEST_ASSERT_EQUAL_STRING("FourCardFlush", flush.category_name);
+    TEST_ASSERT_EQUAL_INT(4, flush.num_tiebreak_ranks);
+    /* J, T, 9, 3: the off-suit deuce is not a kicker. */
+    TEST_ASSERT_EQUAL_INT(11, flush.tiebreak_ranks[0]);
+    TEST_ASSERT_EQUAL_INT(10, flush.tiebreak_ranks[1]);
+    TEST_ASSERT_EQUAL_INT(9, flush.tiebreak_ranks[2]);
+    TEST_ASSERT_EQUAL_INT(3, flush.tiebreak_ranks[3]);
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_soko_describe_hand(make_hand(straight_c, 5),
+                                                &straight));
+    TEST_ASSERT_EQUAL_INT(PE_CAT_FOUR_CARD_STRAIGHT, straight.category);
+    TEST_ASSERT_EQUAL_INT(1, straight.num_tiebreak_ranks);
+    TEST_ASSERT_EQUAL_INT(12, straight.tiebreak_ranks[0]); /* queen-high */
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_soko_describe_hand(make_hand(two_pair_c, 5),
+                                                &two_pair));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_soko_describe_hand(make_hand(pair_c, 5), &pair));
+
+    /* The official order: two pair > four-card flush > four-card straight >
+     * one pair. */
+    TEST_ASSERT_TRUE(two_pair.category_rank > flush.category_rank);
+    TEST_ASSERT_TRUE(flush.category_rank > straight.category_rank);
+    TEST_ASSERT_TRUE(straight.category_rank > pair.category_rank);
+
+    /* Exactly five cards, or a clear error. */
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_INVALID_ARG,
+                          pe_soko_describe_hand(make_hand(flush_c, 4), &flush));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_INVALID_ARG,
+                          pe_soko_describe_hand(make_hand(flush_c, 5), NULL));
+}
+
+/* The C range parser accepts the plain five-card spelling too, so pokenum and
+ * native callers can use the same range strings as the Python wrapper. */
+static void test_pe_range_parse_plain_five_card(void) {
+    StdDeck_CardMask dead;
+    pe_range_t *range = NULL;
+    pe_range_t *stud = NULL;
+
+    StdDeck_CardMask_RESET(dead);
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_range_parse(game_soko, "AhAdKsKd2h", dead, NULL,
+                                         &range));
+    TEST_ASSERT_NOT_NULL(range);
+    TEST_ASSERT_EQUAL_UINT(1, range->count);
+    TEST_ASSERT_EQUAL_INT(5, StdDeck_numCards(range->combos[0].hand));
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_range_parse(game_soko, "(AhAd)KsKd2h", dead, NULL,
+                                         &stud));
+    TEST_ASSERT_TRUE(StdDeck_CardMask_EQUAL(range->combos[0].hand,
+                                            stud->combos[0].hand));
+    pe_range_free(range);
+    pe_range_free(stud);
+
+    /* Not five cards: still a parse error, not a 3-card triplet. */
+    range = NULL;
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_PARSE_ERROR,
+                          pe_range_parse(game_soko, "AhAdKs", dead, NULL,
+                                         &range));
+    TEST_ASSERT_NULL(range);
+}
+
 /* Sökö ranges parse with the stud grammar, so pe_equity callers can build
  * them from strings instead of hand masks. */
 static void test_pe_range_parse_soko(void) {
@@ -324,5 +402,7 @@ int main(void) {
     RUN_TEST(test_pe_equity_uses_soko_ranking);
     RUN_TEST(test_pe_equity_two_pair_over_four_flush);
     RUN_TEST(test_pe_range_parse_soko);
+    RUN_TEST(test_soko_describe_hand);
+    RUN_TEST(test_pe_range_parse_plain_five_card);
     return UNITY_END();
 }

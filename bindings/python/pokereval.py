@@ -98,6 +98,10 @@ The last five elements are numbers describing the best hand properly
 sorted (for instance the ace is at the end for no pair if "side" is low or
 at the beginning if "side" high).
 
+This uses the standard five-card ranking.  For Sökö, whose four-card flush
+and four-card straight have no standard HandVal encoding, use
+describe_soko_hand() instead: "best" reports those hands as NoPair.
+
 Examples:
 
 [134414336, ['StFlush', 29, 28, 27, 26, 38]] is the wheel five to ace, clubs
@@ -243,6 +247,61 @@ Return the strength of the "cards" as a number. The higher the
 better.
 """
         return _pokereval.evaln(cards)
+
+    def describe_soko_hand(self, hand):
+        """\
+Describe a complete five-card Sökö hand under the official Sökö ranking.
+
+This is the Sökö-aware counterpart of "best": four-card flushes and
+four-card straights have no representation in the standard HandVal that
+"best" returns, so "best" reports them as NoPair.  The returned dict has:
+
+  category       semantic category, e.g. "FourCardFlush"
+  category_rank  strength index; larger beats smaller
+  ranks          tie-break ranks, 2..14 (11 = jack, 14 = ace)
+  rank_names     the same ranks as characters, e.g. ["J", "T", "9", "3"]
+
+A four-card flush lists only its four suited ranks; a four-card straight
+lists only the high card of the run.
+
+Example:
+{'category': 'FourCardFlush', 'category_rank': 3, 'ranks': [11, 10, 9, 3],
+ 'rank_names': ['J', 'T', '9', '3']}
+"""
+        if len(hand) != 5:
+            raise ValueError("describe_soko_hand expects exactly five cards")
+        description = _pokereval.describe_soko(hand)
+        ranks = description["ranks"]
+        return {
+            "category": description["category"],
+            "category_rank": description["category_rank"],
+            "ranks": ranks,
+            "rank_names": ["23456789TJQKA"[rank - 2] for rank in ranks],
+        }
+
+    def soko_street_equity(self, players, dead=None, iterations=0):
+        """\
+Showdown equity for two or more Sökö players at third, fourth or fifth
+street.
+
+"players" is a list of dicts, one per player:
+
+  {"up": ["Kh", "Qh"], "down": ["Ah"]}   # third street: 2 up + hole card
+  {"up": ["Kh", "Qh", "Jh"]}             # fourth street, hole card unknown
+
+Upcards are visible to everyone, so they are removed from the deck for every
+player.  Omitting "down" means the hole card is unknown and is enumerated
+along with the cards still to come.  "iterations" > 0 forces Monte Carlo
+sampling (useful on third street); the default uses the engine's automatic
+choice.
+
+Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n}, where
+"samples" is the number of evaluated range matchups (one for a single
+third-street matchup), not the iteration budget.
+"""
+        if dead is None:
+            dead = []
+        return _pokereval.soko_street_equity(players, dead, iterations)
     
     def winners(self, *args, **kwargs):
         """\

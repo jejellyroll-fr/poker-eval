@@ -36,6 +36,11 @@ int ARP_ParseStudPattern(const char *pattern, StdDeck_CardMask dead_cards, arp_r
 /* Check if string looks like a Stud pattern */
 int ARP_IsStudPattern(const char *str, size_t len);
 
+/* Check if string is a plain five-card hand with explicit suits, such as
+ * "AhAdKsKd2h".  Sökö and the other five-card stud games accept it alongside
+ * the (hole)upcard pattern. */
+int ARP_IsPlainFiveCardHand(const char *str, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

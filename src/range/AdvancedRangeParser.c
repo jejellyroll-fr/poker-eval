@@ -3982,8 +3982,8 @@ static int arp_tokenize(arp_context_t *ctx)
                 const char *p = &ctx->input[ctx->position];
                 /* A23 has length 3. (AA)K has length 5. */
                 if (p[0] != '(') {
-                    /* Triplet case A23 */
-                    len = 3;
+                    /* Triplet (A23) or a plain five-card hand (AhAdKsKd2h). */
+                    len = ARP_IsPlainFiveCardHand(p, remaining) ? 10 : 3;
                 } else {
                     /* Standard case */
                     while (p[len] && !isspace(p[len]) && p[len] != ',' && p[len] != '+' && p[len] != '-')

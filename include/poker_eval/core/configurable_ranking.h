@@ -121,6 +121,42 @@ POKEREVAL_EXPORT HandVal pe_eval_configurable_hand(
     int num_cards
 );
 
+/*
+ * Structured result of a configurable evaluation: the semantic category, its
+ * rank in the configured order, and the ranks that decide ties, in the exact
+ * order the HandVal packing uses (most significant first).
+ *
+ * Ranks are global deck ranks 0..12 (0 = deuce, 12 = ace), i.e. the rank
+ * index inside the configured deck rather than a display rank.  For the
+ * card-subset categories the list holds only the ranks that compare:
+ *   - straight / straight flush: the high card of the run (1 entry);
+ *   - four-card straight: the high card of the run (1 entry);
+ *   - flush: the five suited ranks, descending;
+ *   - four-card flush: the four suited ranks, descending (the off-suit card
+ *     never takes part in the comparison);
+ *   - pairs/trips/full house/quads/high card: the canonical group order used
+ *     by pe_eval_configurable_hand (groups by multiplicity, then rank).
+ */
+typedef struct {
+    pe_hand_category_t category;
+    int category_rank;          /* index in config->category_order */
+    int num_tiebreak_ranks;
+    int tiebreak_ranks[5];      /* global rank indexes, 0 = deuce */
+} pe_hand_description_t;
+
+/*
+ * Detailed variant of pe_eval_configurable_hand: fills *out and returns 1 on
+ * success, 0 on invalid input.  The returned description encodes exactly the
+ * same comparison as the HandVal that pe_eval_configurable_hand would return.
+ */
+POKEREVAL_EXPORT int pe_eval_configurable_hand_detailed(
+    const pe_deck_spec_t *deck_spec,
+    const pe_hand_ranking_config_t *config,
+    pe_card_mask_t hand_mask,
+    int num_cards,
+    pe_hand_description_t *out
+);
+
 /* Extract the configured category rank (index into category_order) from a HandVal. */
 POKEREVAL_EXPORT int pe_ranking_category_rank(HandVal handval);
 

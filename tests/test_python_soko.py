@@ -81,5 +81,91 @@ class TestSokoRangeEquity(unittest.TestCase):
         self.assertEqual(raw[1][-1], 0.0)
 
 
+class TestSokoDescription(unittest.TestCase):
+    def setUp(self):
+        self.pe = PokerEval()
+
+    def test_four_card_flush_is_named(self):
+        description = self.pe.describe_soko_hand(FOUR_FLUSH)
+        self.assertEqual(description["category"], "FourCardFlush")
+        # J, T, 9, 3: the off-suit deuce does not take part in the comparison.
+        self.assertEqual(description["ranks"], [11, 10, 9, 3])
+        self.assertEqual(description["rank_names"], ["J", "T", "9", "3"])
+
+    def test_four_card_straight_ranks_by_high_card(self):
+        description = self.pe.describe_soko_hand(["9h", "Ts", "Jd", "Qc", "2h"])
+        self.assertEqual(description["category"], "FourCardStraight")
+        self.assertEqual(description["ranks"], [12])
+
+    def test_describe_orders_categories_officially(self):
+        two_pair = self.pe.describe_soko_hand(TWO_PAIR)
+        four_flush = self.pe.describe_soko_hand(FOUR_FLUSH)
+        four_straight = self.pe.describe_soko_hand(["9h", "Ts", "Jd", "Qc", "2h"])
+        pair = self.pe.describe_soko_hand(ONE_PAIR)
+
+        self.assertGreater(two_pair["category_rank"], four_flush["category_rank"])
+        self.assertGreater(four_flush["category_rank"], four_straight["category_rank"])
+        self.assertGreater(four_straight["category_rank"], pair["category_rank"])
+
+    def test_best_still_reports_the_standard_category(self):
+        # The documented limitation, and the reason describe_soko_hand exists.
+        self.assertEqual(self.pe.best("hi", FOUR_FLUSH)[1][0], "NoPair")
+
+    def test_describe_requires_exactly_five_cards(self):
+        with self.assertRaises(ValueError):
+            self.pe.describe_soko_hand(["Ah", "Ad"])
+
+
+class TestSokoStreetEquity(unittest.TestCase):
+    def setUp(self):
+        self.pe = PokerEval()
+
+    def test_fifth_street_is_exact(self):
+        result = self.pe.soko_street_equity(
+            [
+                {"up": ["Kh", "Qh", "Jh", "2s"], "down": ["Ah"]},
+                {"up": ["9d", "8d", "7d", "6d"], "down": ["Kc"]},
+            ]
+        )
+        self.assertEqual(result["exact"], 1)
+        self.assertEqual(result["samples"], 1)
+        self.assertEqual(result["hi"][0], 1.0)
+        self.assertEqual(result["hi"][1], 0.0)
+
+    def test_third_street_with_unknown_hole_card(self):
+        result = self.pe.soko_street_equity(
+            [
+                {"up": ["Kh", "Qh"], "down": ["Ah"]},
+                {"up": ["9d", "8d"]},
+            ],
+            iterations=300,
+        )
+        self.assertEqual(result["exact"], 0)
+        # "samples" is the number of evaluated range matchups.
+        self.assertEqual(result["samples"], 1)
+        self.assertAlmostEqual(sum(result["hi"]), 1.0, places=6)
+        self.assertGreater(result["hi"][0], 0.5)
+
+    def test_duplicate_card_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.pe.soko_street_equity(
+                [
+                    {"up": ["Kh", "Qh"], "down": ["Ah"]},
+                    {"up": ["Kh", "Qd"], "down": ["Ad"]},
+                ]
+            )
+
+    def test_dead_cards_are_respected(self):
+        result = self.pe.soko_street_equity(
+            [
+                {"up": ["Kh", "Qh", "Jh"], "down": ["Ah"]},
+                {"up": ["9d", "8d", "7d"], "down": ["5c"]},
+            ],
+            dead=["Th"],
+            iterations=200,
+        )
+        self.assertAlmostEqual(sum(result["hi"]), 1.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()
