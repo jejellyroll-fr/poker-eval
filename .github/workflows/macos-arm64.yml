@@ -154,6 +154,10 @@ jobs:
         # fall in windows where that runner made no progress at all, whatever
         # the degree of parallelism. See docs/ci.md.
         parallel=4
+        # ctest stamps the suite and gives each case its duration; the case
+        # order plus those durations place a stall window on the cases around
+        # it, which the interleaved progress lines cannot.
+        junit="$RUNNER_TEMP/ctest-junit.xml"
         if [ "${{ github.event_name }}" = "schedule" ] ||
            [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           (
@@ -174,11 +178,23 @@ jobs:
         fi
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           ctest --test-dir build-native --output-on-failure --timeout 300 \
-            --parallel "$parallel" -LE slow
+            --parallel "$parallel" -LE slow --output-junit "$junit"
         else
           ctest --test-dir build-native --output-on-failure --timeout 300 \
-            --parallel "$parallel"
+            --parallel "$parallel" --output-junit "$junit"
         fi
+
+    # Uploaded when the job reaches this step: a job stopped at its 45-minute
+    # limit never does, and its sampler output in the step above is then the
+    # only record of the stall.
+    - name: Upload ctest JUnit
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: arm64-ctest-junit
+        path: ${{ runner.temp }}/ctest-junit.xml
+        if-no-files-found: warn
+        retention-days: 14
 
   wheels:
     name: Wheel (arm64)

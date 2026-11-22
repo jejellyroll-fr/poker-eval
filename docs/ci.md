@@ -120,8 +120,8 @@ runner rather than to the image or the build. What stalls the VM is not
 established: the log records the gap, not its cause. The nightly arm64 leg
 now prints `vm_stat`, the load average and the busiest processes every two
 seconds into the suite's own log, which survives a job that reaches its time
-limit, so the next stall is read from the system state rather than from
-ctest's timings.
+limit, on the nightly and on a manual dispatch alike, so the next stall is
+read from the system state rather than from ctest's timings.
 
 The log gives no slot count either: its completion lines arrive in the chunks
 the runner reads, 84 of them stamped inside 4 ms at 22:28:41 with case times of
