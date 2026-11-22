@@ -153,19 +153,18 @@ def _hms(stamp):
     return stamp.strftime("%H:%M:%S")
 
 
-def _case_line(caught, from_at, prefix, sep="  ", code=False):
+def _case_line(caught, from_at, prefix, code=False):
     """Format one case a window caught, behind `prefix`.
 
-    The log and the summary share the wording; only the layout differs, `code`
-    wrapping the times in backticks so they read as values in Markdown, `sep`
-    setting what follows the launch time.
+    The log and the summary share the wording; only the times differ, which
+    `code` wraps in backticks so the summary reads them as values in Markdown.
     """
 
     def tick(value):
         return "`%s`" % value if code else value
 
     stamp, number, name, finished = caught
-    text = "%s%s%sStart %s: %s" % (prefix, tick(_hms(stamp)), sep, number, name)
+    text = "%s%s Start %s: %s" % (prefix, tick(_hms(stamp)), number, name)
     if stamp < from_at:
         if finished is None:
             text += " (already running, no completion line)"
@@ -302,9 +301,7 @@ def summary(found, windows, gaps, stop, cases, ended, start, end, threshold):
             out.append("")
             out.append("Cases caught by the window:")
             for item in caught[:MAX_CASES]:
-                out.append(
-                    _case_line(item, start_at, "- ", sep=" ", code=True)
-                )
+                out.append(_case_line(item, start_at, "- ", code=True))
             if len(caught) > MAX_CASES:
                 out.append(
                     "- ... %d more case(s)" % (len(caught) - MAX_CASES)

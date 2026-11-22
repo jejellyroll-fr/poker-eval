@@ -61,13 +61,13 @@ class WindowCases(unittest.TestCase):
         done = run("stall-cases.log")
         self.assertEqual(done.returncode, 1, done.stdout)
         self.assertIn("cases caught by this window:", done.stdout)
-        self.assertIn("08:00:10  Start 2: enumtest5", done.stdout)
-        self.assertIn("08:00:20  Start 3: test_enum_basic", done.stdout)
+        self.assertIn("08:00:10 Start 2: enumtest5", done.stdout)
+        self.assertIn("08:00:20 Start 3: test_enum_basic", done.stdout)
 
     def test_lists_the_case_already_running_at_the_window_opening(self):
         done = run("stall-cases.log")
         self.assertIn(
-            "08:00:00  Start 1: razz (already running, done 08:01:30)",
+            "08:00:00 Start 1: razz (already running, done 08:01:30)",
             done.stdout,
         )
 
