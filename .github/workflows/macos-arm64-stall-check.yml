@@ -19,9 +19,12 @@ name: macOS arm64 stall check
 #
 # Pull-request runs carry no sample on purpose (the sampler is gated on
 # `schedule` and `workflow_dispatch` in macos-arm64.yml), so the job is gated
-# on those two events as well. A run whose native-test job never started, or
-# that the pool starved, is reported as having nothing to inspect — that case
-# belongs to macos-arm64-capacity-rerun.yml.
+# on those two events as well. For those two, a log without a single sample is
+# a failure: it means the sampler died before writing, which no window would
+# ever show. A run of another event inspected by hand is reported and stays
+# green, since the sampler never ran there. A run whose native-test job never
+# started, or that the pool starved, is reported as having nothing to
+# inspect — that case belongs to macos-arm64-capacity-rerun.yml.
 
 on:
   workflow_run:
@@ -72,7 +75,11 @@ jobs:
         jobs_api="repos/$GH_REPO/actions/runs/$run_id/jobs"
         job_id=$(gh api "$jobs_api" --paginate --jq "$selector.id")
         conclusion=$(gh api "$jobs_api" --paginate --jq "$selector.conclusion")
-        echo "job=$job_id conclusion=$conclusion"
+        # Which event produced the run decides what a log without samples
+        # means: the sampler only runs on a schedule or a dispatch.
+        event=$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq .event)
+        echo "job=$job_id conclusion=$conclusion event=$event"
+        echo "event=$event" >> "$GITHUB_OUTPUT"
 
         # A job the pool never served has no log, and a skipped one was never
         # meant to run: there is nothing to look at in either case.
@@ -107,6 +114,7 @@ jobs:
       if: steps.log.outputs.inspect == 'yes'
       env:
         EVENT_THRESHOLD: ${{ inputs.threshold }}
+        SAMPLER_EVENT: ${{ steps.log.outputs.event }}
       run: |
         threshold="${EVENT_THRESHOLD:-10}"
         # The step runs under `bash -e`, which would abort on the exit status
@@ -118,8 +126,17 @@ jobs:
         status=$?
         set -e
         if [ "$status" = 2 ]; then
-          echo "::notice::No VM sample in this log: the sampler did not reach"\
-            "the suite, so there is no window to report."
+          # A run that should carry samples and has none is the failure this
+          # watcher exists for: the sampler died before its first write, and
+          # no window would ever show it.
+          if [ "$SAMPLER_EVENT" = "schedule" ] ||
+             [ "$SAMPLER_EVENT" = "workflow_dispatch" ]; then
+            echo "::error::No VM sample although this run is"\
+              "$SAMPLER_EVENT: the sampler did not write a single line."
+            exit 1
+          fi
+          echo "::notice::No VM sample in this log: the sampler does not run"\
+            "for ${SAMPLER_EVENT:-unknown} runs."
           exit 0
         fi
         if [ "$status" = 1 ]; then
