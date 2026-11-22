@@ -127,9 +127,10 @@ A watcher reads those logs rather than a person: `macos-arm64-stall-check.yml`
 runs on `ubuntu-latest` — no arm64 slot — and downloads the log of every
 completed nightly or manual arm64 run. It fails when two consecutive samples
 are more than ten seconds apart, reporting the load, `vm_stat` and the
-processes sampled just before the window and naming the cases ctest launched
-between its two samples, from its timestamped `Start N:` lines; when the first
-or last sample does
+processes sampled just before the window and naming the cases it caught —
+those ctest launched between its two samples, and those still running when it
+opened, from its timestamped `Start N:` and finished `Test #N:` lines; when the
+first or last sample does
 not bracket the suite, whose bounds are its first `Start N:` line and its
 `Total Test time`; when samples exist but `Total Test time` does not, which is
 what a job stopped at its time limit leaves behind; and when a nightly or

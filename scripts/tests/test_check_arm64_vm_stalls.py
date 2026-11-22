@@ -60,11 +60,22 @@ class WindowCases(unittest.TestCase):
     def test_lists_the_cases_launched_inside_the_window(self):
         done = run("stall-cases.log")
         self.assertEqual(done.returncode, 1, done.stdout)
-        self.assertIn("cases started in this window:", done.stdout)
+        self.assertIn("cases caught by this window:", done.stdout)
         self.assertIn("08:00:10  Start 2: enumtest5", done.stdout)
         self.assertIn("08:00:20  Start 3: test_enum_basic", done.stdout)
-        # The case that started before the window is not in the list.
-        self.assertNotIn("Start 1: razz", done.stdout)
+
+    def test_lists_the_case_already_running_at_the_window_opening(self):
+        done = run("stall-cases.log")
+        self.assertIn(
+            "08:00:00  Start 1: razz (already running, done 08:01:30)",
+            done.stdout,
+        )
+
+    def test_a_case_done_before_the_window_stays_out(self):
+        done = run("stall-empty.log")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("no ctest case ran in this window.", done.stdout)
+        self.assertNotIn("warmup", done.stdout)
 
     def test_summary_lists_them_too(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -73,10 +84,7 @@ class WindowCases(unittest.TestCase):
             self.assertEqual(done.returncode, 1)
             text = summary.read_text()
             self.assertIn("- `08:00:10` Start 2: enumtest5", text)
-
-    def test_window_without_a_launch_says_so(self):
-        done = run("stall.log")
-        self.assertIn("no ctest case started in this window.", done.stdout)
+            self.assertIn("- `08:00:00` Start 1: razz", text)
 
 
 class Coverage(unittest.TestCase):

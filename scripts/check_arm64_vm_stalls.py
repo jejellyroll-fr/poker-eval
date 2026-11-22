@@ -38,6 +38,8 @@ ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SAMPLE = re.compile(r"^\s*== \d{2}:\d{2}:\d{2}\s*$")
 SUITE_START = re.compile(r"^\s+Start\s+(\d+):\s*(.*?)\s*$")
 SUITE_END = re.compile(r"^\s*Total Test time \(real\)")
+# ctest reports a finished case as `12/376 Test #42: name ... Passed 1.00 sec`.
+CASE_DONE = re.compile(r"^\s*\d+/\d+\s+Test\s+#(\d+):")
 
 # A window can span a minute of unrelated ctest output; the figures that
 # matter are the ones the sampler printed last, so both reports stop after
@@ -54,7 +56,8 @@ def _timestamp(text):
 
 def parse(lines):
     """Return the samples, the suite bounds and the cases ctest announced."""
-    samples, starts, start, end, last = [], [], None, None, None
+    samples, starts, ended = [], [], {}
+    start, end, last = None, None, None
     for index, line in enumerate(lines):
         found = LINE.match(line)
         if not found:
@@ -68,11 +71,14 @@ def parse(lines):
             starts.append((stamp, announced.group(1), announced.group(2)))
             if start is None:
                 start = stamp
+        done = CASE_DONE.match(message)
+        if done:
+            ended[done.group(1)] = stamp
         if SUITE_END.match(message):
             end = stamp
     # A log the job never finished has no `Total Test time`: the end stays
     # unset so the caller reports a stopped job rather than a clean suite.
-    return samples, start or last, end, last, starts
+    return samples, start or last, end, last, starts, ended
 
 
 def blocks(lines, marks):
@@ -113,9 +119,22 @@ def coverage(found, start, end, threshold):
     return issues
 
 
-def started_in(starts, from_at, to_at):
-    """Return the cases ctest launched inside a window, in launch order."""
-    return [item for item in starts if from_at <= item[0] <= to_at]
+def cases_in_window(starts, ended, from_at, to_at):
+    """Return the cases this window caught, in launch order.
+
+    A case caught by the window either started inside it, or started before it
+    and had not finished when the window opened: the runner held that one for
+    as long as it held everything else, and leaving it out would hide the case
+    most of the lost time belongs to.
+    """
+    caught = []
+    for stamp, number, name in starts:
+        finished = ended.get(number)
+        if from_at <= stamp <= to_at:
+            caught.append((stamp, number, name, None))
+        elif stamp < from_at and (finished is None or finished >= from_at):
+            caught.append((stamp, number, name, finished))
+    return caught
 
 
 def stopped(found, end, last):
@@ -132,6 +151,28 @@ def stopped(found, end, last):
 
 def _hms(stamp):
     return stamp.strftime("%H:%M:%S")
+
+
+def _case_line(caught, from_at, prefix):
+    stamp, number, name, finished = caught
+    text = "%s%s  Start %s: %s" % (prefix, _hms(stamp), number, name)
+    if stamp < from_at:
+        if finished is None:
+            text += " (already running, no completion line)"
+        else:
+            text += " (already running, done %s)" % _hms(finished)
+    return text
+
+
+def _summary_case_line(caught, from_at):
+    stamp, number, name, finished = caught
+    text = "- `%s` Start %s: %s" % (_hms(stamp), number, name)
+    if stamp < from_at:
+        if finished is None:
+            text += " (already running, no completion line)"
+        else:
+            text += " (already running, done `%s`)" % _hms(finished)
+    return text
 
 
 def _coverage_line(found, start, end):
@@ -155,7 +196,7 @@ def _clip(block):
     ]
 
 
-def report(found, windows, gaps, stop, cases, start, end, threshold):
+def report(found, windows, gaps, stop, cases, ended, start, end, threshold):
     if not found:
         return "No VM sample in this log: the sampler did not run."
     out = [
@@ -170,19 +211,17 @@ def report(found, windows, gaps, stop, cases, start, end, threshold):
             % (start_at.isoformat(), end_at.isoformat(), gap)
         )
         out.extend("  " + line for line in _clip(block))
-        inside = started_in(cases, start_at, end_at)
-        if inside:
-            out.append("  cases started in this window:")
-            for stamp, number, name in inside[:MAX_CASES]:
+        caught = cases_in_window(cases, ended, start_at, end_at)
+        if caught:
+            out.append("  cases caught by this window:")
+            for item in caught[:MAX_CASES]:
+                out.append(_case_line(item, start_at, "    "))
+            if len(caught) > MAX_CASES:
                 out.append(
-                    "    %s  Start %s: %s" % (_hms(stamp), number, name)
-                )
-            if len(inside) > MAX_CASES:
-                out.append(
-                    "    ... %d more case(s)" % (len(inside) - MAX_CASES)
+                    "    ... %d more case(s)" % (len(caught) - MAX_CASES)
                 )
         else:
-            out.append("  no ctest case started in this window.")
+            out.append("  no ctest case ran in this window.")
     if not windows:
         out.append("No window over %g s." % threshold)
     elif len(windows) > MAX_WINDOWS:
@@ -217,7 +256,7 @@ def report(found, windows, gaps, stop, cases, start, end, threshold):
     return "\n".join(out)
 
 
-def summary(found, windows, gaps, stop, cases, start, end, threshold):
+def summary(found, windows, gaps, stop, cases, ended, start, end, threshold):
     if not found:
         return "No VM sample in this log.\n"
     out = [_coverage_line(found, start, end), ""]
@@ -259,15 +298,15 @@ def summary(found, windows, gaps, stop, cases, start, end, threshold):
         out.append("```")
         out.extend(_clip(block))
         out.append("```")
-        inside = started_in(cases, start_at, end_at)
-        if inside:
+        caught = cases_in_window(cases, ended, start_at, end_at)
+        if caught:
             out.append("")
-            out.append("Cases started in the window:")
-            for stamp, number, name in inside[:MAX_CASES]:
-                out.append("- `%s` Start %s: %s" % (_hms(stamp), number, name))
-            if len(inside) > MAX_CASES:
+            out.append("Cases caught by the window:")
+            for item in caught[:MAX_CASES]:
+                out.append(_summary_case_line(item, start_at))
+            if len(caught) > MAX_CASES:
                 out.append(
-                    "- ... %d more case(s)" % (len(inside) - MAX_CASES)
+                    "- ... %d more case(s)" % (len(caught) - MAX_CASES)
                 )
     out.append("")
     return "\n".join(out)
@@ -291,15 +330,19 @@ def main(argv=None):
     with open(args.log, encoding="utf-8", errors="replace") as handle:
         lines = [ANSI.sub("", line) for line in handle.read().splitlines()]
 
-    marks, start, end, last, cases = parse(lines)
+    marks, start, end, last, cases, ended = parse(lines)
     found, windows = stalls(lines, marks, args.threshold)
     gaps = coverage(found, start, end, args.threshold) if found and end else []
     stop = stopped(found, end, last) if found else None
 
-    print(report(found, windows, gaps, stop, cases, start, end, args.threshold))
+    print(
+        report(
+            found, windows, gaps, stop, cases, ended, start, end, args.threshold
+        )
+    )
     if args.summary:
         text = summary(
-            found, windows, gaps, stop, cases, start, end, args.threshold
+            found, windows, gaps, stop, cases, ended, start, end, args.threshold
         )
         with open(args.summary, "a", encoding="utf-8") as handle:
             handle.write(text)
