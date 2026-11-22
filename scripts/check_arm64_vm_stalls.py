@@ -17,7 +17,8 @@ the log when the job was killed before printing it.
 Usage:
     check_arm64_vm_stalls.py LOG [--threshold SECONDS] [--summary FILE]
 
-Exit status: 0 nothing to report, 1 a window or a coverage gap, 2 no sample.
+Exit status: 0 nothing to report, 1 a window, a coverage gap or a suite
+end the log never printed, 2 no sample.
 """
 
 import argparse
@@ -65,9 +66,9 @@ def parse(lines):
             start = stamp
         if SUITE_END.match(message):
             end = stamp
-    # A log the job never finished has no `Total Test time`: its last line is
-    # the closest thing to an end it has.
-    return samples, start or last, end or last
+    # A log the job never finished has no `Total Test time`: the end stays
+    # unset so the caller reports a stopped job rather than a clean suite.
+    return samples, start or last, end, last
 
 
 def blocks(lines, marks):
@@ -108,6 +109,31 @@ def coverage(found, start, end, threshold):
     return issues
 
 
+def stopped(found, end, last):
+    """Return the silence left by a log without `Total Test time`.
+
+    A job stopped at its time limit, or cancelled, never prints that line, and
+    its log then ends on its last sample: neither bound looks uncovered, which
+    is why this is reported on its own.
+    """
+    if end is not None or last is None:
+        return None
+    return (found[-1][0], last, (last - found[-1][0]).total_seconds())
+
+
+def _coverage_line(found, start, end):
+    head = "Coverage: first sample %.1f s after the suite started (%s)" % (
+        (found[0][0] - start).total_seconds(),
+        start.isoformat(),
+    )
+    if end is None:
+        return head + "; the suite end is not recorded."
+    return head + ", last one %.1f s before it ended (%s)." % (
+        (end - found[-1][0]).total_seconds(),
+        end.isoformat(),
+    )
+
+
 def _clip(block):
     if len(block) <= MAX_BLOCK:
         return list(block)
@@ -116,20 +142,13 @@ def _clip(block):
     ]
 
 
-def report(found, windows, gaps, start, end, threshold):
+def report(found, windows, gaps, stop, start, end, threshold):
     if not found:
         return "No VM sample in this log: the sampler did not run."
     out = [
         "%d sample(s) every two seconds; reporting windows over %g s."
         % (len(found), threshold),
-        "Coverage: first sample %.1f s after the suite started (%s), last one"
-        " %.1f s before it ended (%s)."
-        % (
-            (found[0][0] - start).total_seconds(),
-            start.isoformat(),
-            (end - found[-1][0]).total_seconds(),
-            end.isoformat(),
-        ),
+        _coverage_line(found, start, end),
     ]
     for start_at, end_at, gap, block in windows[:MAX_WINDOWS]:
         out.append("")
@@ -161,29 +180,33 @@ def report(found, windows, gaps, start, end, threshold):
         )
         block = found[0][1] if gaps[0][0] == "start" else found[-1][1]
         out.extend("  " + line for line in _clip(block))
+    if stop:
+        out.append("")
+        out.append(
+            "suite end: no `Total Test time` line; the log stops at %s,"
+            " %d s after the last sample, which is what a job stopped at its"
+            " time limit leaves."
+            % (stop[1].isoformat(), stop[2])
+        )
     return "\n".join(out)
 
 
-def summary(found, windows, gaps, start, end, threshold):
+def summary(found, windows, gaps, stop, start, end, threshold):
     if not found:
         return "No VM sample in this log.\n"
-    out = [
-        "Coverage: first sample %.1f s after the suite started (%s), last one"
-        " %.1f s before it ended (%s)."
-        % (
-            (found[0][0] - start).total_seconds(),
-            start.isoformat(),
-            (end - found[-1][0]).total_seconds(),
-            end.isoformat(),
-        ),
-        "",
-    ]
+    out = [_coverage_line(found, start, end), ""]
     for bound, from_at, to_at, gap in gaps:
         out.append(
             "- **coverage %s**: no sample from %s to %s (%d s)"
             % (bound, from_at.isoformat(), to_at.isoformat(), gap)
         )
-    if gaps:
+    if stop:
+        out.append(
+            "- **suite end**: no `Total Test time`; the log stops at %s,"
+            " %d s after the last sample."
+            % (stop[1].isoformat(), stop[2])
+        )
+    if gaps or stop:
         out.append("")
     if not windows:
         out.append(
@@ -232,19 +255,20 @@ def main(argv=None):
     with open(args.log, encoding="utf-8", errors="replace") as handle:
         lines = [ANSI.sub("", line) for line in handle.read().splitlines()]
 
-    marks, start, end = parse(lines)
+    marks, start, end, last = parse(lines)
     found, windows = stalls(lines, marks, args.threshold)
-    gaps = coverage(found, start, end, args.threshold) if found else []
+    gaps = coverage(found, start, end, args.threshold) if found and end else []
+    stop = stopped(found, end, last) if found else None
 
-    print(report(found, windows, gaps, start, end, args.threshold))
+    print(report(found, windows, gaps, stop, start, end, args.threshold))
     if args.summary:
-        text = summary(found, windows, gaps, start, end, args.threshold)
+        text = summary(found, windows, gaps, stop, start, end, args.threshold)
         with open(args.summary, "a", encoding="utf-8") as handle:
             handle.write(text)
 
     if not found:
         return 2
-    return 1 if windows or gaps else 0
+    return 1 if windows or gaps or stop else 0
 
 
 if __name__ == "__main__":
