@@ -128,29 +128,17 @@ jobs:
     # a change lands.
     # The one failure still unexplained is a runner that stops making progress:
     # run 44828726427 lost 66 s and 74 s that way, and its log records the gap
-    # without its cause. `vm_stat`, the load average and the busiest processes
-    # are sampled every two seconds on the nightly only, so the next stall
-    # arrives with the system figures it happened under. The samples are kept
-    # as an artifact even when the suite fails or the job times out.
-    - name: Start VM sampler
-      if: github.event_name == 'schedule'
-      run: |
-        cat > "$RUNNER_TEMP/sampler.sh" <<'EOF'
-        #!/bin/bash
-        while [ ! -f "$RUNNER_TEMP/sampler.stop" ]; do
-          {
-            echo "== $(date -u +%H:%M:%S)"
-            sysctl -n vm.loadavg
-            vm_stat | head -12
-            ps -Ao pid,pcpu,stat,comm -r | head -10
-          } >> "$RUNNER_TEMP/vm-samples.log" 2>&1
-          sleep 2
-        done
-        EOF
-        chmod +x "$RUNNER_TEMP/sampler.sh"
-        nohup "$RUNNER_TEMP/sampler.sh" >/dev/null 2>&1 &
-        echo "SAMPLER_PID=$!" >> "$GITHUB_ENV"
-
+    # without its cause. On the nightly, `vm_stat`, the load average and the
+    # busiest processes are sampled every two seconds while the suite runs, so
+    # the next stall arrives with the system figures it happened under.
+    #
+    # The sampler lives inside the ctest step rather than in a step of its own.
+    # The runner only documents a cleanup at the end of the job, where it kills
+    # every process still carrying the job's tracking id, and nothing states
+    # that a process started in one step is alive in the next one: a sampler
+    # launched with `nohup` in a separate step could be gone for all of the
+    # suite without the job saying so. Started here, it is killed by the trap
+    # however ctest exits, and the step below uploads its log even on failure.
     - name: Run native test suite
       run: |
         # Constant, not `getconf _NPROCESSORS_ONLN`: the cores a runner reports
@@ -164,6 +152,21 @@ jobs:
         # fall in windows where that runner made no progress at all, whatever
         # the degree of parallelism. See docs/ci.md.
         parallel=4
+        if [ "${{ github.event_name }}" = "schedule" ]; then
+          {
+            while :; do
+              {
+                echo "== $(date -u +%H:%M:%S)"
+                sysctl -n vm.loadavg
+                vm_stat | head -12
+                ps -Ao pid,pcpu,stat,comm -r | head -10
+              } >> "$RUNNER_TEMP/vm-samples.log" 2>&1
+              sleep 2
+            done
+          } &
+          sampler_pid=$!
+          trap 'kill "$sampler_pid" 2>/dev/null || true' EXIT
+        fi
         if [ "${{ github.event_name }}" = "pull_request" ]; then
           ctest --test-dir build-native --output-on-failure --timeout 300 \
             --parallel "$parallel" -LE slow
@@ -171,15 +174,6 @@ jobs:
           ctest --test-dir build-native --output-on-failure --timeout 300 \
             --parallel "$parallel"
         fi
-
-    - name: Stop VM sampler
-      if: always() && github.event_name == 'schedule'
-      run: |
-        touch "$RUNNER_TEMP/sampler.stop"
-        if [ -n "${SAMPLER_PID:-}" ]; then
-          kill "$SAMPLER_PID" 2>/dev/null || true
-        fi
-        wc -l "$RUNNER_TEMP/vm-samples.log" 2>/dev/null || true
 
     - name: Upload VM samples
       if: always() && github.event_name == 'schedule'
