@@ -299,6 +299,93 @@ static void test_standard_error_needs_a_single_matchup(void) {
     pe_range_free(ranges[1]);
 }
 
+/* Three players at fourth street, all holding A-K-Q-T in mixed suits, with
+ * only the four nines and the eight of clubs left in the deck: the drawn card
+ * is a kicker and nothing else, so ranks alone decide the pot.  All three
+ * drawing a nine is a three-way tie (a 1/3 share), two nines split it, and a
+ * lone nine takes it whole.  That reaches the h = 3 term of the variance,
+ * which a heads-up spot never can: one sample has equity 1/3 with probability
+ * 0.4, 1/2 with 0.4 and 0 with 0.2, a standard deviation of sqrt(1/30).
+ *
+ * A-K-Q-J would already be a four-card straight under the Sökö preset, so the
+ * fourth card is a ten: with it every hand stays high card and the drawn rank
+ * is the last tiebreak.
+ *
+ * The reported standard error is compared with the spread of the equities
+ * over runs with different seeds, so it has to describe the actual sampling,
+ * not merely its own share histogram. */
+static void test_three_way_standard_error_matches_spread(void) {
+    const char *up[3][3] = {
+        {"Ah", "Kd", "Qc"}, {"Ad", "Kc", "Qs"}, {"As", "Kh", "Qd"},
+    };
+    const char *down[3] = {"Ts", "Th", "Tc"};
+    const char *left_in_deck[] = {"9c", "9d", "9h", "9s", "8c"};
+    enum { RUNS = 64, ITERATIONS = 4000 };
+    pe_soko_street_player_t players[3];
+    StdDeck_CardMask dealt, dead;
+    pe_equity_opts_t opts;
+    double sum[3] = {0.0, 0.0, 0.0};
+    double sum_squares[3] = {0.0, 0.0, 0.0};
+    double sum_error[3] = {0.0, 0.0, 0.0};
+    int run, i;
+
+    /* Mark everything not held or waiting to be dealt as dead. */
+    StdDeck_CardMask_RESET(dealt);
+    for (i = 0; i < 3; ++i) {
+        players[i].street = PE_SOKO_STREET_FOURTH;
+        players[i].up_cards = cards_of(up[i], 3);
+        players[i].down_cards = cards_of(&down[i], 1);
+        StdDeck_CardMask_OR(dealt, dealt, players[i].up_cards);
+        StdDeck_CardMask_OR(dealt, dealt, players[i].down_cards);
+    }
+    StdDeck_CardMask_OR(dealt, dealt, cards_of(left_in_deck, 5));
+    StdDeck_CardMask_NOT(dead, dealt);
+
+    memset(&opts, 0, sizeof(opts));
+    opts.is_monte_carlo = 1;
+    opts.iterations = ITERATIONS;
+
+    for (run = 0; run < RUNS; ++run) {
+        pe_equity_result_multi_t result;
+
+        pe_rng_seed_current(1000u + (uint64_t)run);
+        memset(&result, 0, sizeof(result));
+        TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                              pe_equity_soko_street(players, 3, dead, &opts,
+                                                    &result));
+        TEST_ASSERT_EQUAL_INT(0, result.exact);
+        TEST_ASSERT_EQUAL_INT(ITERATIONS, (int)result.iterations);
+        for (i = 0; i < 3; ++i) {
+            double equity = result.results[i].equity;
+
+            TEST_ASSERT_TRUE(result.standard_error[i] > 0.0);
+            sum[i] += equity;
+            sum_squares[i] += equity * equity;
+            sum_error[i] += result.standard_error[i];
+        }
+    }
+
+    for (i = 0; i < 3; ++i) {
+        double mean = sum[i] / (double)RUNS;
+        double reported = sum_error[i] / (double)RUNS;
+        double variance = (sum_squares[i] - (double)RUNS * mean * mean) /
+                          (double)(RUNS - 1);
+        double spread = variance > 0.0 ? sqrt(variance) : 0.0;
+
+        /* The spot is symmetric: every player holds the same ranks, so every
+         * player is worth exactly a third of the pot. */
+        TEST_ASSERT_DOUBLE_WITHIN(0.01, 1.0 / 3.0, mean);
+        /* One run's equities have a standard deviation of about
+         * sqrt(1/30 / ITERATIONS), and a sample standard deviation from RUNS
+         * runs is itself only known to 1/sqrt(2 * (RUNS - 1)) — 9% here — so
+         * a 40% window is more than four standard errors wide.  A variance
+         * that counted a three-way share as 1/2, or left it out, is 2.6 to
+         * 3.7 times too large and cannot pass. */
+        TEST_ASSERT_TRUE(spread > 0.0);
+        TEST_ASSERT_TRUE(fabs(spread - reported) <= 0.40 * reported);
+    }
+}
+
 /* Invalid descriptions are rejected rather than silently mis-enumerated. */
 static void test_invalid_streets_rejected(void) {
     const char *up3[] = {"Kh", "Qh", "Jh"};
@@ -344,6 +431,7 @@ int main(void) {
     RUN_TEST(test_six_way_fifth_street_is_exact);
     RUN_TEST(test_monte_carlo_converges_to_exact);
     RUN_TEST(test_standard_error_needs_a_single_matchup);
+    RUN_TEST(test_three_way_standard_error_matches_spread);
     RUN_TEST(test_invalid_streets_rejected);
     return UNITY_END();
 }
