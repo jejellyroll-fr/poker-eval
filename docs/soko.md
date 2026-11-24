@@ -224,6 +224,13 @@ is available yet (tracked in fpdb-3 #891, whose older samples predate
 win2day), so the rules are verified against the published text, not against
 played hands.
 
+The standard error of a sampled street equity is pinned twice in
+`tests/test_soko_street.c`: heads-up against the exact enumeration, and in a
+three-player fourth-street spot where 40% of the deals are a three-way tie,
+against the spread of the equities over 64 seeded runs. The three-player case
+is the one heads-up cannot cover: a heads-up sample is paid 1 or 1/2, so only
+a three-way share exercises the `1/h` term for `h = 3` in the variance.
+
 ## References
 
 - win2day poker-room rules (§7.f.1–12, §7.f.14, §7.f.16.3):
