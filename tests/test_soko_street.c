@@ -300,27 +300,27 @@ static void test_standard_error_needs_a_single_matchup(void) {
 }
 
 /* Three players at fourth street, all holding A-K-Q-T in mixed suits, with
- * only the four nines and the eight of clubs left in the deck: the drawn card
- * is a kicker and nothing else, so ranks alone decide the pot.  All three
- * drawing a nine is a three-way tie (a 1/3 share), two nines split it, and a
- * lone nine takes it whole.  That reaches the h = 3 term of the variance,
- * which a heads-up spot never can: one sample has equity 1/3 with probability
- * 0.4, 1/2 with 0.4 and 0 with 0.2, a standard deviation of sqrt(1/30).
+ * only the four nines and the eight of clubs left to draw from: the drawn card
+ * is a kicker and nothing else, so ranks alone decide the pot.  Dealing three
+ * nines out of those five cards is a three-way tie in 40% of the deals;
+ * otherwise the two nines split the pot and the eight loses it.  That reaches
+ * the h = 3 term of the variance, which a heads-up spot never can: one sample
+ * is worth 1/3 (p = 0.4), 1/2 (p = 0.4) or 0 (p = 0.2), a standard deviation
+ * of sqrt(1/30).
  *
- * A-K-Q-J would already be a four-card straight under the Sökö preset, so the
- * fourth card is a ten: with it every hand stays high card and the drawn rank
- * is the last tiebreak.
+ * A-K-Q-J would already be a four-card straight under the Sökö preset and tie
+ * every sample, so the fourth card is a ten.
  *
  * The reported standard error is compared with the spread of the equities
- * over runs with different seeds, so it has to describe the actual sampling,
- * not merely its own share histogram. */
+ * over runs with different seeds: it has to describe the sampling, not merely
+ * its own share histogram. */
 static void test_three_way_standard_error_matches_spread(void) {
     const char *up[3][3] = {
         {"Ah", "Kd", "Qc"}, {"Ad", "Kc", "Qs"}, {"As", "Kh", "Qd"},
     };
     const char *down[3] = {"Ts", "Th", "Tc"};
-    const char *left_in_deck[] = {"9c", "9d", "9h", "9s", "8c"};
-    enum { RUNS = 64, ITERATIONS = 4000 };
+    const char *left_to_draw[] = {"9c", "9d", "9h", "9s", "8c"};
+    enum { RUNS = 256, ITERATIONS = 4000 };
     pe_soko_street_player_t players[3];
     StdDeck_CardMask dealt, dead;
     pe_equity_opts_t opts;
@@ -329,7 +329,7 @@ static void test_three_way_standard_error_matches_spread(void) {
     double sum_error[3] = {0.0, 0.0, 0.0};
     int run, i;
 
-    /* Mark everything not held or waiting to be dealt as dead. */
+    /* Everything held or waiting to be drawn stays out of the dead mask. */
     StdDeck_CardMask_RESET(dealt);
     for (i = 0; i < 3; ++i) {
         players[i].street = PE_SOKO_STREET_FOURTH;
@@ -338,7 +338,7 @@ static void test_three_way_standard_error_matches_spread(void) {
         StdDeck_CardMask_OR(dealt, dealt, players[i].up_cards);
         StdDeck_CardMask_OR(dealt, dealt, players[i].down_cards);
     }
-    StdDeck_CardMask_OR(dealt, dealt, cards_of(left_in_deck, 5));
+    StdDeck_CardMask_OR(dealt, dealt, cards_of(left_to_draw, 5));
     StdDeck_CardMask_NOT(dead, dealt);
 
     memset(&opts, 0, sizeof(opts));
@@ -353,7 +353,7 @@ static void test_three_way_standard_error_matches_spread(void) {
         TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
                               pe_equity_soko_street(players, 3, dead, &opts,
                                                     &result));
-        TEST_ASSERT_EQUAL_INT(0, result.exact);
+        /* iterations is only filled for a sampled result. */
         TEST_ASSERT_EQUAL_INT(ITERATIONS, (int)result.iterations);
         for (i = 0; i < 3; ++i) {
             double equity = result.results[i].equity;
@@ -370,19 +370,19 @@ static void test_three_way_standard_error_matches_spread(void) {
         double reported = sum_error[i] / (double)RUNS;
         double variance = (sum_squares[i] - (double)RUNS * mean * mean) /
                           (double)(RUNS - 1);
-        double spread = variance > 0.0 ? sqrt(variance) : 0.0;
 
-        /* The spot is symmetric: every player holds the same ranks, so every
-         * player is worth exactly a third of the pot. */
-        TEST_ASSERT_DOUBLE_WITHIN(0.01, 1.0 / 3.0, mean);
-        /* One run's equities have a standard deviation of about
-         * sqrt(1/30 / ITERATIONS), and a sample standard deviation from RUNS
-         * runs is itself only known to 1/sqrt(2 * (RUNS - 1)) — 9% here — so
-         * a 40% window is more than four standard errors wide.  A variance
-         * that counted a three-way share as 1/2, or left it out, is 2.6 to
-         * 3.7 times too large and cannot pass. */
-        TEST_ASSERT_TRUE(spread > 0.0);
-        TEST_ASSERT_TRUE(fabs(spread - reported) <= 0.40 * reported);
+        /* The spot is symmetric, so every player is worth a third of the pot.
+         * The estimate itself is only off by about 2e-4, so this checks the
+         * spot rather than the sampler. */
+        TEST_ASSERT_DOUBLE_WITHIN(0.005, 1.0 / 3.0, mean);
+        TEST_ASSERT_TRUE(variance > 0.0);
+        /* sqrt(variance) is the one-sample standard deviation measured over
+         * RUNS independent runs, and such an estimate has a relative spread of
+         * 1/sqrt(2 * (RUNS - 1)) - 4% here - so a 20% window is more than four
+         * of those.  Counting a three-way share as 1/2 would report 2.7 times
+         * too much; dropping the h = 3 term altogether would report zero and
+         * fail the check above. */
+        TEST_ASSERT_TRUE(fabs(sqrt(variance) - reported) <= 0.20 * reported);
     }
 }
 
