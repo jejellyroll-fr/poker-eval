@@ -111,6 +111,26 @@ class TestSokoDescription(unittest.TestCase):
         # The documented limitation, and the reason describe_soko_hand exists.
         self.assertEqual(self.pe.best("hi", FOUR_FLUSH)[1][0], "NoPair")
 
+    def test_value_orders_like_the_official_categories(self):
+        def value(cards):
+            return self.pe.describe_soko_hand(cards)["value"]
+
+        two_pair = value(TWO_PAIR)
+        four_flush = value(FOUR_FLUSH)
+        four_straight = value(["9h", "Ts", "Jd", "Qc", "2h"])
+        pair = value(ONE_PAIR)
+
+        self.assertGreater(two_pair, four_flush)
+        self.assertGreater(four_flush, four_straight)
+        self.assertGreater(four_straight, pair)
+
+    def test_value_ignores_the_off_suit_fifth_card(self):
+        hearts = self.pe.describe_soko_hand(FOUR_FLUSH)["value"]
+        diamonds = self.pe.describe_soko_hand(
+            ["Jd", "Td", "9d", "3d", "5c"]
+        )["value"]
+        self.assertEqual(hearts, diamonds)
+
     def test_describe_requires_exactly_five_cards(self):
         with self.assertRaises(ValueError):
             self.pe.describe_soko_hand(["Ah", "Ad"])
@@ -154,6 +174,34 @@ class TestSokoStreetEquity(unittest.TestCase):
                     {"up": ["Kh", "Qd"], "down": ["Ad"]},
                 ]
             )
+
+    def test_four_way_fifth_street_is_exact(self):
+        result = self.pe.soko_street_equity(
+            [
+                {"up": ["Kh", "Qh", "Jh", "2s"], "down": ["Ah"]},
+                {"up": ["9d", "8d", "7d", "6d"], "down": ["Kc"]},
+                {"up": ["As", "Ad", "Ks", "Kd"], "down": ["2h"]},
+                {"up": ["Qs", "Qd", "Js", "Jd"], "down": ["3h"]},
+            ]
+        )
+        self.assertEqual(result["exact"], 1)
+        self.assertEqual(result["samples"], 1)
+        self.assertEqual(result["hi"][2], 1.0)
+        self.assertAlmostEqual(sum(result["hi"]), 1.0, places=9)
+
+    def test_seed_reproduces_sampling(self):
+        players = [
+            {"up": ["Kh", "Qh"], "down": ["Ah"]},
+            {"up": ["9d", "8d"]},
+            {"up": ["7c", "6c"]},
+        ]
+        first = self.pe.soko_street_equity(players, iterations=400, seed=11)
+        second = self.pe.soko_street_equity(players, iterations=400, seed=11)
+        other = self.pe.soko_street_equity(players, iterations=400, seed=12)
+
+        self.assertEqual(first["hi"], second["hi"])
+        self.assertNotEqual(first["hi"], other["hi"])
+        self.assertAlmostEqual(sum(first["hi"]), 1.0, places=6)
 
     def test_dead_cards_are_respected(self):
         result = self.pe.soko_street_equity(

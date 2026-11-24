@@ -45,11 +45,17 @@ extern "C" {
  * four-card flush lists its four suited ranks only; a four-card straight
  * lists the high card of the run only.  Those are the two places where Sökö
  * differs from the standard order.
+ *
+ * `value` is the Sökö HandVal the equity engine compares: a larger value is
+ * always a stronger hand and equal values tie, across every category.  It is
+ * the Sökö-aware counterpart of the value best() returns; a standard HandVal
+ * would put a four-card flush below a pair.
  */
 typedef struct {
     pe_hand_category_t category;
     const char *category_name;
     int category_rank;
+    unsigned int value;
     int num_tiebreak_ranks;
     int tiebreak_ranks[5];
 } pe_soko_hand_description_t;

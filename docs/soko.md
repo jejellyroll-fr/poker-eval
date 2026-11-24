@@ -137,7 +137,10 @@ pe.describe_soko_hand(["9h", "Th", "Jh", "3h", "2s"])
 `category_rank` is monotonic: a larger value always beats a smaller one. The
 `ranks` list holds only the ranks that decide ties — four suited ranks for a
 four-card flush, the high card for a four-card straight — expressed as
-2..14. The C entry point is `pe_soko_describe_hand()` in
+2..14. `value` is the Sökö `HandVal` the equity engine compares: larger
+always wins, equal values tie across every category, so two descriptions can
+be compared directly. It is the Sökö counterpart of the value `best()`
+returns. The C entry point is `pe_soko_describe_hand()` in
 `<poker_eval/games/soko.h>`.
 
 ## Street-aware equity
@@ -153,11 +156,14 @@ pe.soko_street_equity(
     ],
     dead=["3c"],
     iterations=20000,
+    seed=7,
 )
 ```
 
 The street is derived from the number of upcards: two is third street, three
-fourth, four fifth. Upcards are visible, so they are removed from the deck for
+fourth, four fifth. `seed` reseeds the sampling stream, so the same players,
+iterations and seed reproduce the same equities; it has no effect on the
+exact fourth- and fifth-street paths. Upcards are visible, so they are removed from the deck for
 every player; a missing downcard is enumerated together with the cards still
 to come. Fifth street with both hole cards known is a single exact matchup.
 This is a showdown-equity model — what the pot is worth given the information
@@ -180,8 +186,8 @@ the historical `pokenum` flags (`-soko`, `-7s`, `-5d`, ...) keep working.
 - `PokerEval.best()` / `best_hand()` / `best_hand_value()` and
   `PokerEval.evaln()` always use the standard five-card evaluator, since they
   take no game name. They are **not** Sökö-aware; use
-  `describe_soko_hand()` for a Sökö category, or `winners()` /
-  `poker_eval(game="soko", ...)` for Sökö comparisons.
+  `describe_soko_hand()` for a Sökö category and its comparable `value`, or
+  `winners()` / `poker_eval(game="soko", ...)` for Sökö comparisons.
 - `pe_compute_hand_distribution(game_soko)` uses the 52-card deck with the
   `soko` preset and five-card hands, so its category probabilities are the
   Sökö ones; the generic `enum` ordering histogram reports Sökö category ranks.
@@ -194,6 +200,16 @@ the historical `pokenum` flags (`-soko`, `-7s`, `-5d`, ...) keep working.
 - `best()` keeps its standard return contract; forcing Sökö categories into it
   would require a new value encoding, which is why `describe_soko_hand()` is a
   separate function.
+
+## Validation status
+
+The category order and the tie-breaks are pinned by an exhaustive oracle
+(`tests/test_soko_oracle.c` counts all 2,598,960 five-card hands) and by the
+direct comparisons in `tests/test_soko_game.c`. A cross-check against real
+win2day showdowns is still pending: no native, anonymized Sökö hand history
+is available yet (tracked in fpdb-3 #891, whose older samples predate
+win2day), so the rules are verified against the published text, not against
+played hands.
 
 ## References
 

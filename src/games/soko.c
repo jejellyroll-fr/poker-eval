@@ -32,6 +32,7 @@ pe_status_t pe_soko_describe_hand(StdDeck_CardMask hand,
     pe_deck_spec_t spec;
     pe_hand_ranking_config_t config;
     pe_hand_description_t description;
+    HandVal value;
     int i;
 
     if (out == NULL)
@@ -50,10 +51,16 @@ pe_status_t pe_soko_describe_hand(StdDeck_CardMask hand,
             &description))
         return PE_STATUS_INVALID_ARG;
 
+    value = pe_eval_configurable_hand(
+        &spec, &config, (pe_card_mask_t)cardmask_to_mask_t(hand), 5);
+    if (value == HandVal_NOTHING)
+        return PE_STATUS_INVALID_ARG;
+
     memset(out, 0, sizeof(*out));
     out->category = description.category;
     out->category_name = pe_ranking_category_name(description.category);
     out->category_rank = description.category_rank;
+    out->value = (unsigned int)value;
     out->num_tiebreak_ranks = description.num_tiebreak_ranks;
     for (i = 0; i < description.num_tiebreak_ranks && i < 5; ++i)
         out->tiebreak_ranks[i] = description.tiebreak_ranks[i] + 2;

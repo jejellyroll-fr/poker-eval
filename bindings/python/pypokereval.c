@@ -3222,25 +3222,31 @@ static PyObject *py_describe_soko(PyObject *self, PyObject *args)
     PyList_SET_ITEM(ranks, i, rank);
   }
 
-  result = Py_BuildValue("{s:s,s:i,s:O}", "category", desc.category_name,
-                         "category_rank", desc.category_rank, "ranks", ranks);
+  result = Py_BuildValue("{s:s,s:i,s:k,s:O}", "category", desc.category_name,
+                         "category_rank", desc.category_rank, "value",
+                         (unsigned long long)desc.value, "ranks", ranks);
   Py_DECREF(ranks);
   return result;
 }
 
-/* soko_street_equity(players, dead=[], iterations=0) -> dict
+/* soko_street_equity(players, dead=[], iterations=0, seed=None) -> dict
  *
  * players is a list of {"up": [...], "down": [...]} dicts; the street is
  * derived from the number of upcards (2 = third, 3 = fourth, 4 = fifth) and
  * the downcard may be omitted when it is unknown.  iterations > 0 forces
- * sampling, which is what third street needs. */
+ * sampling, which is what third street needs.  seed reseeds the calling
+ * thread's sampling stream, so the same players, iterations and seed give the
+ * same equities; it is ignored on the exact path. */
 static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
                                        PyObject *kwargs)
 {
-  static const char *kwlist[] = {"players", "dead", "iterations", NULL};
+  static const char *kwlist[] = {"players", "dead", "iterations", "seed", NULL};
   PyObject *py_players = NULL;
   PyObject *py_dead = Py_None;
   long iterations = 0;
+  PyObject *pyseed = NULL;
+  int has_seed = 0;
+  uint64_t seed = 0;
   pe_soko_street_player_t players[10];
   CardMask dead;
   pe_equity_opts_t opts;
@@ -3251,9 +3257,11 @@ static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
   int num_players, i;
 
   (void)self;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|Ol:soko_street_equity",
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OlO:soko_street_equity",
                                    (char **)(void *)kwlist, &py_players,
-                                   &py_dead, &iterations))
+                                   &py_dead, &iterations, &pyseed))
+    return NULL;
+  if (py_parse_seed(pyseed, &has_seed, &seed) < 0)
     return NULL;
   if (!PyList_Check(py_players))
   {
@@ -3320,6 +3328,11 @@ static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
     opts.iterations = iterations;
   }
 
+  /* Only sampling draws from the stream: the exact path must stay exactly
+   * reproducible whatever seed was passed. */
+  if (has_seed && iterations > 0)
+    pe_rng_seed_current(seed);
+
   memset(&result, 0, sizeof(result));
   status = pe_equity_soko_street(players, num_players, dead,
                                  iterations > 0 ? &opts : NULL, &result);
@@ -3367,8 +3380,8 @@ static PyMethodDef base_methods[] = {
     {"calculate_equity_for_ranges", (PyCFunction)py_calculate_equity_for_ranges, METH_VARARGS, "Calculates equity for player ranges."},
     {"calculate_multiway_equity", (PyCFunction)(void (*)(void))calculate_multiway_equity, METH_VARARGS | METH_KEYWORDS, "Calculates multiway equity with side pots."},
     {"convert_card_strings_to_mask_value", (PyCFunction)py_convert_card_strings_to_mask_value, METH_VARARGS, "Converts a list of card strings to its uint64_t card mask value."},
-    {"describe_soko", (PyCFunction)py_describe_soko, METH_VARARGS, "describe_soko(hand) -> {'category', 'category_rank', 'ranks'} under the official Sokoe ranking."},
-    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0) -> {'hi', 'exact', 'samples'}: Sokoe showdown equity at third/fourth/fifth street."},
+    {"describe_soko", (PyCFunction)py_describe_soko, METH_VARARGS, "describe_soko(hand) -> {'category', 'category_rank', 'value', 'ranks'} under the official Sokoe ranking."},
+    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0, seed=None) -> {'hi', 'exact', 'samples'}: Sokoe showdown equity at third/fourth/fifth street."},
     {"solver_v3_create", (PyCFunction)(void (*)(void))py_solver_v3_create, METH_VARARGS | METH_KEYWORDS, "Create a Python-callback-backed v3 solver."},
     {"solver_v3_run", (PyCFunction)py_solver_v3_run, METH_VARARGS, "Run a v3 solver capsule."},
     {"solver_v3_progress", (PyCFunction)py_solver_v3_progress, METH_VARARGS, "Read v3 solver progress."},

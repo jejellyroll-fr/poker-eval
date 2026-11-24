@@ -258,8 +258,13 @@ four-card straights have no representation in the standard HandVal that
 
   category       semantic category, e.g. "FourCardFlush"
   category_rank  strength index; larger beats smaller
+  value          Sökö HandVal; larger always wins, equal values tie
   ranks          tie-break ranks, 2..14 (11 = jack, 14 = ace)
   rank_names     the same ranks as characters, e.g. ["J", "T", "9", "3"]
+
+"value" is what to compare when sorting or matching Sökö hands: unlike the
+standard HandVal that "best" returns, it ranks a four-card flush above one
+pair.
 
 A four-card flush lists only its four suited ranks; a four-card straight
 lists only the high card of the run.
@@ -275,11 +280,12 @@ Example:
         return {
             "category": description["category"],
             "category_rank": description["category_rank"],
+            "value": description["value"],
             "ranks": ranks,
             "rank_names": ["23456789TJQKA"[rank - 2] for rank in ranks],
         }
 
-    def soko_street_equity(self, players, dead=None, iterations=0):
+    def soko_street_equity(self, players, dead=None, iterations=0, seed=None):
         """\
 Showdown equity for two or more Sökö players at third, fourth or fifth
 street.
@@ -293,7 +299,9 @@ Upcards are visible to everyone, so they are removed from the deck for every
 player.  Omitting "down" means the hole card is unknown and is enumerated
 along with the cards still to come.  "iterations" > 0 forces Monte Carlo
 sampling (useful on third street); the default uses the engine's automatic
-choice.
+choice.  "seed" reseeds the sampling stream: the same players, iterations
+and seed reproduce the same equities.  It has no effect on an exact
+calculation.
 
 Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n}, where
 "samples" is the number of evaluated range matchups (one for a single
@@ -301,7 +309,7 @@ third-street matchup), not the iteration budget.
 """
         if dead is None:
             dead = []
-        return _pokereval.soko_street_equity(players, dead, iterations)
+        return _pokereval.soko_street_equity(players, dead, iterations, seed)
     
     def winners(self, *args, **kwargs):
         """\

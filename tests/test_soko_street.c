@@ -132,6 +132,43 @@ static void test_third_street_equity_sampled(void) {
     TEST_ASSERT_TRUE(result.results[0].equity > 0.5);
 }
 
+/* Six players at fifth street: every card is known, so the whole table is one
+ * exact matchup and the strongest hand takes the pot. */
+static void test_six_way_fifth_street_is_exact(void) {
+    const char *up[6][4] = {
+        {"Kh", "Qh", "Jh", "2s"}, {"9d", "8d", "7d", "6d"},
+        {"As", "Ad", "Ks", "Kd"}, {"Qs", "Qd", "Js", "Jd"},
+        {"5s", "5d", "4s", "4d"}, {"7s", "7h", "6s", "6h"},
+    };
+    const char *down[6] = {"Ah", "Kc", "2h", "3h", "3s", "5h"};
+    pe_soko_street_player_t players[6];
+    StdDeck_CardMask dead;
+    pe_equity_result_multi_t result;
+    double total = 0.0;
+    int i;
+
+    StdDeck_CardMask_RESET(dead);
+    for (i = 0; i < 6; ++i) {
+        players[i].street = PE_SOKO_STREET_FIFTH;
+        players[i].up_cards = cards_of(up[i], 4);
+        players[i].down_cards = cards_of(&down[i], 1);
+    }
+
+    memset(&result, 0, sizeof(result));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_soko_street(players, 6, dead, NULL,
+                                                &result));
+    TEST_ASSERT_EQUAL_INT(6, result.num_players);
+    TEST_ASSERT_EQUAL_INT(1, result.exact);
+    TEST_ASSERT_EQUAL_INT(1, (int)result.samples);
+    for (i = 0; i < 6; ++i)
+        total += result.results[i].equity;
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, total);
+    /* Aces and kings, two pair, is the best hand at the table. */
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, result.results[2].equity);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, result.results[0].equity);
+}
+
 /* Invalid descriptions are rejected rather than silently mis-enumerated. */
 static void test_invalid_streets_rejected(void) {
     const char *up3[] = {"Kh", "Qh", "Jh"};
@@ -174,6 +211,7 @@ int main(void) {
     RUN_TEST(test_fifth_street_equity_is_exact);
     RUN_TEST(test_fourth_street_equity_is_exact);
     RUN_TEST(test_third_street_equity_sampled);
+    RUN_TEST(test_six_way_fifth_street_is_exact);
     RUN_TEST(test_invalid_streets_rejected);
     return UNITY_END();
 }

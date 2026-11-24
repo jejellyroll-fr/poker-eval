@@ -92,8 +92,13 @@ category and its tie-break ranks:
 ```python
 pe.describe_soko_hand(["9h", "Th", "Jh", "3h", "2s"])
 # {'category': 'FourCardFlush', 'category_rank': 3,
-#  'ranks': [11, 10, 9, 3], 'rank_names': ['J', 'T', '9', '3']}
+#  'ranks': [11, 10, 9, 3], 'rank_names': ['J', 'T', '9', '3'],
+#  'value': ...}
 ```
+
+The dict's `value` is the Sökö `HandVal`: larger always wins and equal values
+tie, so `describe_soko_hand(a)["value"] > describe_soko_hand(b)["value"]`
+compares two hands without inspecting their categories.
 
 `soko_street_equity()` computes showdown equity at third, fourth or fifth
 street; the street follows from the number of upcards, and an omitted
@@ -104,6 +109,7 @@ pe.soko_street_equity(
     [{"up": ["Kh", "Qh"], "down": ["Ah"]},   # third street
      {"up": ["Kd", "Qd"]}],                  # hole card unknown
     iterations=20000,
+    seed=7,                                    # reproducible sampling
 )
 # {'hi': [0.62..., 0.37...], 'exact': 0, 'samples': 20000}
 ```

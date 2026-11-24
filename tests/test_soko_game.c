@@ -297,7 +297,8 @@ static void test_soko_describe_hand(void) {
     const char *straight_c[] = {"9h", "Ts", "Jd", "Qc", "2h"};
     const char *two_pair_c[] = {"Ah", "Ad", "Ks", "Kd", "2h"};
     const char *pair_c[] = {"Ah", "Ad", "Ks", "8c", "3h"};
-    pe_soko_hand_description_t flush, straight, two_pair, pair;
+    const char *flush_tie_c[] = {"Jd", "Td", "9d", "3d", "5c"};
+    pe_soko_hand_description_t flush, straight, two_pair, pair, flush_tie;
 
     TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
                           pe_soko_describe_hand(make_hand(flush_c, 5), &flush));
@@ -328,6 +329,19 @@ static void test_soko_describe_hand(void) {
     TEST_ASSERT_TRUE(two_pair.category_rank > flush.category_rank);
     TEST_ASSERT_TRUE(flush.category_rank > straight.category_rank);
     TEST_ASSERT_TRUE(straight.category_rank > pair.category_rank);
+
+    /* `value` is the comparable Sökö HandVal, so the same order must hold
+     * without looking at the category at all. */
+    TEST_ASSERT_TRUE(two_pair.value > flush.value);
+    TEST_ASSERT_TRUE(flush.value > straight.value);
+    TEST_ASSERT_TRUE(straight.value > pair.value);
+
+    /* Same four suited ranks in another suit: the fifth card never changes
+     * the value. */
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_soko_describe_hand(make_hand(flush_tie_c, 5),
+                                                &flush_tie));
+    TEST_ASSERT_EQUAL_UINT(flush.value, flush_tie.value);
 
     /* Exactly five cards, or a clear error. */
     TEST_ASSERT_EQUAL_INT(PE_STATUS_INVALID_ARG,
