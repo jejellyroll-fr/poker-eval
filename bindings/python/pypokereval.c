@@ -78,6 +78,7 @@
 #include <poker_eval/distributions/omaha_distributions.h> // Added for Omaha hand instantiation
 #include <poker_eval/distributions/stud_distributions.h>  // Added for Stud hand instantiation
 #include <poker_eval/equity/RangeEquity.h>                // Added for Range Equity functionality
+#include <poker_eval/equity/RangeEquity_internal.h>        // RangeEquityStats: batch-means interval
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_ports.h>
@@ -1734,7 +1735,11 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   int num_players = 0;
   PyObject *py_return_list = NULL;
   enum_result_t aggregated_results;
+  RangeEquityStats range_stats;
   bool agg_results_allocated = false;
+  /* Declared here, not where it is set: every initializer before the first
+     goto keeps -Wjump-misses-init quiet. */
+  int standard_error_defined = 0;
 
   PyObject *pyseed = NULL;
   int has_seed = 0;
@@ -1955,16 +1960,23 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   if (has_seed && use_montecarlo)
     pe_rng_seed_current(seed);
 
-  total_matchups = CalculateEquityForRanges(game, c_player_ranges, num_players, board_mask,
+  memset(&range_stats, 0, sizeof(range_stats));
+  total_matchups = CalculateEquityForRangesStats(game, c_player_ranges, num_players, board_mask,
                                                 dead_mask_initial, nboard_cards_to_deal,
                                                 use_montecarlo, iterations_if_montecarlo,
-                                                orderflag, &aggregated_results);
+                                                orderflag, &aggregated_results, &range_stats);
 
   if (total_matchups < 0)
   { // Indicates a critical error from CalculateEquityForRanges
     PyErr_SetString(PyExc_RuntimeError, "CalculateEquityForRanges C function failed.");
     goto cleanup;
   }
+
+  /* The batch-means variance covers the high pot only: a low pot is a second
+     payoff correlated with it, and the per-side share histograms kept for the
+     aggregation cannot separate the two.  pe_equity leaves hi/lo games
+     without an interval for the same reason. */
+  standard_error_defined = use_montecarlo && params != NULL && !params->haslopot;
 
   // Convert aggregated_results to Python list format [info_tuple, player1_results_tuple, ...]
   py_return_list = PyList_New(0);
@@ -1981,7 +1993,11 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
 
   for (int p = 0; p < num_players; ++p)
   {
-    PyObject *player_results_tuple = Py_BuildValue("(iiiiiiid)",
+    double standard_error = 0.0;
+    if (standard_error_defined && range_stats.ev_variance[p] > 0.0)
+      standard_error = sqrt(range_stats.ev_variance[p]);
+
+    PyObject *player_results_tuple = Py_BuildValue("(iiiiiiidd)",
                                                    aggregated_results.nscoop[p],
                                                    aggregated_results.nwinhi[p],
                                                    aggregated_results.nlosehi[p],
@@ -1989,7 +2005,8 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
                                                    aggregated_results.nwinlo[p],
                                                    aggregated_results.nloselo[p],
                                                    aggregated_results.ntielo[p],
-                                                   aggregated_results.ev[p]); // EV is already normalized
+                                                   aggregated_results.ev[p], // EV is already normalized
+                                                   standard_error);
     if (!player_results_tuple || PyList_Append(py_return_list, player_results_tuple) < 0)
     {
       Py_XDECREF(player_results_tuple);
@@ -3253,6 +3270,7 @@ static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
   pe_equity_result_multi_t result;
   pe_status_t status;
   PyObject *py_equity = NULL;
+  PyObject *py_stderr = NULL;
   PyObject *py_result = NULL;
   int num_players, i;
 
@@ -3346,22 +3364,35 @@ static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
   }
 
   py_equity = PyList_New(num_players);
-  if (!py_equity)
+  py_stderr = PyList_New(num_players);
+  if (!py_equity || !py_stderr)
+  {
+    Py_XDECREF(py_equity);
+    Py_XDECREF(py_stderr);
     return NULL;
+  }
   for (i = 0; i < num_players; ++i)
   {
     PyObject *value = PyFloat_FromDouble(result.results[i].equity);
-    if (!value)
+    PyObject *error = PyFloat_FromDouble(result.standard_error[i]);
+    if (!value || !error)
     {
+      Py_XDECREF(value);
+      Py_XDECREF(error);
       Py_DECREF(py_equity);
+      Py_DECREF(py_stderr);
       return NULL;
     }
     PyList_SET_ITEM(py_equity, i, value);
+    PyList_SET_ITEM(py_stderr, i, error);
   }
 
-  py_result = Py_BuildValue("{s:O,s:i,s:l}", "hi", py_equity, "exact",
-                            result.exact, "samples", (long)result.samples);
+  py_result = Py_BuildValue("{s:O,s:i,s:l,s:l,s:O}", "hi", py_equity,
+                            "exact", result.exact, "samples",
+                            (long)result.samples, "iterations",
+                            (long)result.iterations, "stderr", py_stderr);
   Py_DECREF(py_equity);
+  Py_DECREF(py_stderr);
   return py_result;
 }
 
@@ -3381,7 +3412,7 @@ static PyMethodDef base_methods[] = {
     {"calculate_multiway_equity", (PyCFunction)(void (*)(void))calculate_multiway_equity, METH_VARARGS | METH_KEYWORDS, "Calculates multiway equity with side pots."},
     {"convert_card_strings_to_mask_value", (PyCFunction)py_convert_card_strings_to_mask_value, METH_VARARGS, "Converts a list of card strings to its uint64_t card mask value."},
     {"describe_soko", (PyCFunction)py_describe_soko, METH_VARARGS, "describe_soko(hand) -> {'category', 'category_rank', 'value', 'ranks'} under the official Sokoe ranking."},
-    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0, seed=None) -> {'hi', 'exact', 'samples'}: Sokoe showdown equity at third/fourth/fifth street."},
+    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0, seed=None) -> {'hi', 'exact', 'samples', 'iterations', 'stderr'}: Sokoe showdown equity at third/fourth/fifth street."},
     {"solver_v3_create", (PyCFunction)(void (*)(void))py_solver_v3_create, METH_VARARGS | METH_KEYWORDS, "Create a Python-callback-backed v3 solver."},
     {"solver_v3_run", (PyCFunction)py_solver_v3_run, METH_VARARGS, "Run a v3 solver capsule."},
     {"solver_v3_progress", (PyCFunction)py_solver_v3_progress, METH_VARARGS, "Read v3 solver progress."},

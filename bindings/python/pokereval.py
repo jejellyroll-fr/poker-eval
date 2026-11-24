@@ -25,6 +25,7 @@
 #  Loic Dachary <loic@dachary.org>
 #
 # 
+import math
 import sys
 
 # CMake builds the native extension as ``pypokereval``.  Importing that stable
@@ -285,7 +286,8 @@ Example:
             "rank_names": ["23456789TJQKA"[rank - 2] for rank in ranks],
         }
 
-    def soko_street_equity(self, players, dead=None, iterations=0, seed=None):
+    def soko_street_equity(self, players, dead=None, iterations=0, seed=None,
+                           target_ci=None):
         """\
 Showdown equity for two or more Sökö players at third, fourth or fifth
 street.
@@ -303,13 +305,41 @@ choice.  "seed" reseeds the sampling stream: the same players, iterations
 and seed reproduce the same equities.  It has no effect on an exact
 calculation.
 
-Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n}, where
+Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n,
+'iterations': n, 'stderr': [...], 'ci95': [...],
+'required_iterations': [...]}.
+
 "samples" is the number of evaluated range matchups (one for a single
-third-street matchup), not the iteration budget.
+third-street matchup), not the iteration budget; "iterations" is the
+Monte Carlo iterations per matchup and is 0 for an exact result.
+"stderr" is the standard error of each equity, and "ci95" is the 95%
+confidence half-width derived from it (1.96 x stderr): a sampled equity
+lies in "hi[i] ± ci95[i]" with 95% confidence.  Both are 0 when the
+result is exact.
+
+"target_ci" asks what budget such a half-width would take.  The variance
+per sample is known analytically from the pot-share histogram, so the
+half-width shrinks as 1/sqrt(iterations) and the iterations that reach a
+target half-width are ceil(iterations x (ci95 / target_ci)**2), returned as
+"required_iterations" per player: 0 when the interval is already empty (an
+exact, or a sampled but deterministic, result), and None when no target was
+asked for.  The pilot run still uses "iterations", so pass a small budget to
+keep the calculation cheap.
 """
         if dead is None:
             dead = []
-        return _pokereval.soko_street_equity(players, dead, iterations, seed)
+        if target_ci is not None and target_ci <= 0:
+            raise ValueError("target_ci must be positive")
+        result = _pokereval.soko_street_equity(players, dead, iterations, seed)
+        result["ci95"] = [1.96 * error for error in result["stderr"]]
+        if target_ci is None:
+            result["required_iterations"] = None
+        else:
+            result["required_iterations"] = [
+                int(math.ceil(result["iterations"] * (ci / target_ci) ** 2))
+                for ci in result["ci95"]
+            ]
+        return result
     
     def winners(self, *args, **kwargs):
         """\
@@ -672,8 +702,18 @@ Returns:
             ]
         }
         The 'ev' is the average equity for the player's entire range against
-        the other players' entire ranges (float between 0.0 and 1.0). 
+        the other players' entire ranges (float between 0.0 and 1.0).
         Counts (nwinhi etc.) are totals across all matchups.
+
+        Each sampled matchup is a batch of the range estimate, so 'stderr' is
+        its batch-means standard error and 'ci95' the 95% confidence
+        half-width derived from it (1.96 x stderr): a sampled equity lies in
+        'ev' +/- 'ci95' with 95% confidence.  The interval measures the Monte
+        Carlo noise of the range estimate, not the spread of equity between
+        matchups.  Both are 0 when nothing is sampled (an exhaustive call), and
+        for hi/lo games, whose low pot the high-side histogram used for the
+        variance cannot separate.
+
         Returns None or raises RuntimeError on critical error.
         """
         if board_card_strings is None:
@@ -717,8 +757,8 @@ Returns:
 
         for i in range(num_players):
             player_res_tuple = raw_results[i+1]
-            # Ensure tuple has expected number of elements (8: scoop, winhi, losehi, tiehi, winlo, loselo, tielo, ev)
-            if not isinstance(player_res_tuple, tuple) or len(player_res_tuple) != 8:
+            # Ensure tuple has expected number of elements (9: scoop, winhi, losehi, tiehi, winlo, loselo, tielo, ev, stderr)
+            if not isinstance(player_res_tuple, tuple) or len(player_res_tuple) != 9:
                 raise RuntimeError(f"Player result tuple for player {i+1} has incorrect format or length.")
 
             eval_list.append({
@@ -729,7 +769,9 @@ Returns:
                 'nwinlo': player_res_tuple[4],
                 'nloselo': player_res_tuple[5],
                 'ntielo': player_res_tuple[6],
-                'ev': player_res_tuple[7] 
+                'ev': player_res_tuple[7],
+                'stderr': player_res_tuple[8],
+                'ci95': 1.96 * player_res_tuple[8]
             })
         
         return {

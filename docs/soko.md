@@ -163,7 +163,28 @@ pe.soko_street_equity(
 The street is derived from the number of upcards: two is third street, three
 fourth, four fifth. `seed` reseeds the sampling stream, so the same players,
 iterations and seed reproduce the same equities; it has no effect on the
-exact fourth- and fifth-street paths. Upcards are visible, so they are removed from the deck for
+exact fourth- and fifth-street paths.
+
+The result also carries the sampling statistics. `iterations` is the Monte
+Carlo iterations per matchup (0 for an exact result), `stderr` the standard
+error of each equity and `ci95` its 95% confidence half-width, so a sampled
+equity lies in `hi[i] ± ci95[i]`. The standard error comes analytically from
+the sampled pot-share histogram — a player paid `1/h` whenever `h` players
+shared the pot — so it costs nothing extra; Python derives `ci95 = 1.96 ×
+stderr`. Both are zero when the result is exact. Because that variance is
+analytic, the budget needed for a target half-width is one division: passing
+`target_ci` to `soko_street_equity()` reports `required_iterations`,
+`ceil(iterations × (ci95 / target_ci)²)` per player, which is exact given the
+`1/sqrt(iterations)` shrinkage of the half-width; it is 0 when the interval is
+already empty. `samples` stays the number of
+evaluated matchups, which is one for a single street matchup. A general range
+combines several matchups and reports an interval too, but as a batch-means
+estimate: each matchup is a batch whose mean is known to `s²/n`, and the
+weighted mean of the batches adds those contributions with weights
+`(w_m/W)²`, so the pooled histogram is never mistaken for the estimator's
+variance. Hi/lo games still report none, because a low pot is a payoff
+correlated with the high one that the share histograms cannot separate.
+Upcards are visible, so they are removed from the deck for
 every player; a missing downcard is enumerated together with the cards still
 to come. Fifth street with both hole cards known is a single exact matchup.
 This is a showdown-equity model — what the pot is worth given the information
@@ -210,6 +231,13 @@ win2day showdowns is still pending: no native, anonymized Sökö hand history
 is available yet (tracked in fpdb-3 #891, whose older samples predate
 win2day), so the rules are verified against the published text, not against
 played hands.
+
+The standard error of a sampled street equity is pinned twice in
+`tests/test_soko_street.c`: heads-up against the exact enumeration, and in a
+three-player fourth-street spot where 40% of the deals are a three-way tie,
+against the spread of the equities over 64 seeded runs. The three-player case
+is the one heads-up cannot cover: a heads-up sample is paid 1 or 1/2, so only
+a three-way share exercises the `1/h` term for `h = 3` in the variance.
 
 ## References
 
