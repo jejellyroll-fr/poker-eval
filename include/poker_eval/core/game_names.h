@@ -25,24 +25,12 @@
 #ifndef POKER_EVAL_GAME_NAMES_H
 #define POKER_EVAL_GAME_NAMES_H
 
-#include <stddef.h>
 #include <poker_eval/core/enumdefs.h>
 #include <poker_eval/core/pokereval_export.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/*
- * One accepted spelling.  `name` is the display spelling of the canonical
- * entry (the one reported by pe_game_canonical_name); aliases carry the
- * spelling a front end accepts, normalised for lookup.
- */
-typedef struct {
-    const char *name;
-    enum_game_t game;
-    int canonical; /* 1 for the name reported to users */
-} pe_game_name_entry_t;
 
 /*
  * Resolve `name` to a game.  Matching is case-insensitive, ignores '-', '_'
@@ -55,12 +43,6 @@ POKEREVAL_EXPORT int pe_game_from_name(const char *name, enum_game_t *out);
 
 /* Canonical display name for a game, or NULL if the game has no entry. */
 POKEREVAL_EXPORT const char *pe_game_canonical_name(enum_game_t game);
-
-/* Number of accepted spellings (canonical names and aliases). */
-POKEREVAL_EXPORT size_t pe_game_name_count(void);
-
-/* Accepted spelling at index i, or NULL when i is out of range. */
-POKEREVAL_EXPORT const pe_game_name_entry_t *pe_game_name_at(size_t i);
 
 #ifdef __cplusplus
 }

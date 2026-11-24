@@ -28,7 +28,7 @@
 typedef struct {
     const char *name; /* display spelling; matching is normalised */
     enum_game_t game;
-    int canonical;
+    int canonical; /* 1 for the name pe_game_canonical_name reports */
 } game_name_row_t;
 
 static const game_name_row_t game_name_rows[] = {
@@ -204,19 +204,4 @@ const char *pe_game_canonical_name(enum_game_t game) {
             return game_name_rows[i].name;
     }
     return NULL;
-}
-
-size_t pe_game_name_count(void) {
-    return GAME_NAME_ROW_COUNT;
-}
-
-const pe_game_name_entry_t *pe_game_name_at(size_t i) {
-    static pe_game_name_entry_t entry;
-
-    if (i >= GAME_NAME_ROW_COUNT)
-        return NULL;
-    entry.name = game_name_rows[i].name;
-    entry.game = game_name_rows[i].game;
-    entry.canonical = game_name_rows[i].canonical;
-    return &entry;
 }

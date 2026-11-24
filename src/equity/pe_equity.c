@@ -124,12 +124,10 @@ static int auto_selects_exact(const PlayerRange ranges[], int num_players,
             return 0; /* stop early rather than overflow on wide ranges */
     }
 
-    /* Nothing left to deal: the work is the range product.  A few matchups
-     * are always exact; a wide complete range (two third-street Sökö ranges,
-     * say) still has to sample, because enumerating the product would run for
-     * minutes. */
+    /* Nothing left to deal: the work is the range product, which fitted the
+     * budget above. */
     if (to_deal <= 0)
-        return matchups <= PE_EQUITY_EXACT_WORK_BUDGET;
+        return 1;
     if (to_deal > 2)
         return 0; /* turn and river at most; beyond that it is never cheap */
 
@@ -477,33 +475,31 @@ static pe_status_t pe_equity_legacy_fallback(
     int to_deal = (total_board_cards > cards_on_board) ? (total_board_cards - cards_on_board) : 0;
     if (to_deal < 0) to_deal = 0;
 
-    /* Cards each player's pocket still has to be dealt.  A short pocket (a
-     * third-street Sökö hand, an incomplete stud hand) is random too, but the
-     * enumerator fills it itself, so it never appears in to_deal.  Ignoring it
-     * made "the board is complete" mean "nothing is random": a third-street
-     * hand was silently enumerated as if the hole cards were known, and a
-     * forced Monte Carlo request was overruled. */
+    /* A short pocket (a third-street Sökö hand, an incomplete stud hand) is
+     * random too, but the enumerator deals it itself, so it never appears in
+     * to_deal.  Counting only the board made "the board is complete" mean
+     * "nothing is random": a short pocket was enumerated as if it were known
+     * and a forced Monte Carlo request was overruled. */
     int pocket_to_deal = 0;
-    for (int p = 0; p < num_players; ++p) {
-        for (size_t c = 0; c < ranges[p]->count; ++c) {
-            StdDeck_CardMask hand = ranges[p]->combos[c].hand;
-            int missing = params ? params->maxpocket - StdDeck_numCards(hand) : 0;
-            if (missing > pocket_to_deal) pocket_to_deal = missing;
+    if (params != NULL) {
+        for (int p = 0; p < num_players; ++p) {
+            for (size_t c = 0; c < ranges[p]->count; ++c) {
+                StdDeck_CardMask hand = ranges[p]->combos[c].hand;
+                int missing = params->maxpocket - StdDeck_numCards(hand);
+                if (missing > pocket_to_deal) pocket_to_deal = missing;
+            }
         }
     }
-    int random_cards = to_deal + pocket_to_deal;
 
     /* is_monte_carlo == 1 forces sampling; 0 (or no options at all) asks for
-     * the automatic heuristic documented in equity.h. The previous form set
-     * use_mc = 1 in both branches whenever cards remained, so "automatic"
-     * always meant sampling and result->exact was never 1 on an incomplete
-     * board. It now enumerates when that is provably cheap and samples
-     * otherwise. */
+     * the automatic heuristic documented in equity.h, which enumerates when
+     * that is provably cheap and samples otherwise. */
     int use_mc;
     if (opts && opts->is_monte_carlo) {
         use_mc = 1;
     } else {
-        use_mc = !auto_selects_exact(internal_ranges, num_players, random_cards,
+        use_mc = !auto_selects_exact(internal_ranges, num_players,
+                                     to_deal + pocket_to_deal,
                                      StdDeck_N_CARDS - cards_on_board);
     }
 

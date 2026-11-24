@@ -5,21 +5,19 @@
  * first two upcards are out, on fourth street three, on fifth street four.
  * The upcards are visible to the table; the downcard is not.
  *
- * pe_equity_soko_street() turns that description into ordinary ranges of
- * complete five-card hands, so the shared equity engine can enumerate the
- * cards still to come without knowing anything about stud streets:
+ * pe_equity_soko_street() hands the shared equity engine one pocket per player
+ * holding the cards that player is known to hold, so the engine deals the rest
+ * from the deck minus every card held or shown and minus the caller's dead
+ * cards:
  *
- *   - each player's range is a single pocket of the cards they are known to
- *     hold (visible upcards plus a known downcard);
- *   - the shared enumerator deals the missing cards from the deck minus every
- *     card held or shown and minus the caller's dead cards, so the iteration
- *     count means what it says on third and fourth street;
- *   - the resulting ranges are handed to pe_equity_calculate(game_soko, ...).
+ *   - fifth street is a single exact matchup, fourth street one card each,
+ *     and third street deals the two or three cards still to come instead of
+ *     pre-expanding thousands of completions;
+ *   - omitting a player's downcard models "I do not know their hole card":
+ *     it is filled together with the future upcards.
  *
- * Omitting a player's downcard models "I do not know their hole card": the
- * enumeration then fills it together with the future upcards.  This is a
- * showdown-equity model (what the pot is worth given the information now),
- * not a street-by-street betting model.
+ * This is a showdown-equity model (what the pot is worth given the information
+ * now), not a street-by-street betting model.
  *
  * This program gives you software freedom; you can copy, convey,
  * propagate, redistribute and/or modify this program under the terms of
@@ -41,7 +39,6 @@
 
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/equity.h>
-#include <poker_eval/range.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,21 +64,6 @@ typedef struct {
     StdDeck_CardMask up_cards;
     StdDeck_CardMask down_cards;
 } pe_soko_street_player_t;
-
-/*
- * Build every complete five-card Sökö hand consistent with `player` and
- * `dead_cards`.  Combos are unweighted (each completion is one equally likely
- * showdown hand).  The returned range must be released with pe_range_free().
- *
- * Returns PE_STATUS_OK, PE_STATUS_INVALID_ARG for a street/upcard mismatch,
- * overlapping up/down cards or a dead card that is also held, and
- * PE_STATUS_OUT_OF_MEMORY on allocation failure.
- */
-POKEREVAL_EXPORT pe_status_t pe_soko_street_range(
-    const pe_soko_street_player_t *player,
-    StdDeck_CardMask dead_cards,
-    pe_range_t **out_range
-);
 
 /*
  * Showdown equity for 2..10 Sökö players at the same street.

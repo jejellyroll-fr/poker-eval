@@ -428,24 +428,26 @@ static enum_gameparams_t *py_game_params(const char *name)
   return enumGameParams(game);
 }
 
-/* Reports an unknown game name, listing every name that is accepted. */
+/* Reports an unknown game name, listing every game the binding accepts. */
 static void py_set_invalid_game_error(const char *name)
 {
   char accepted[1024];
   size_t used = 0;
-  size_t i;
+  int g;
 
   accepted[0] = '\0';
-  for (i = 0; i < pe_game_name_count(); ++i)
+  for (g = 0; g < game_NUMGAMES; ++g)
   {
-    const pe_game_name_entry_t *entry = pe_game_name_at(i);
+    const char *canonical;
     int written;
 
-    if (entry == NULL || !entry->canonical ||
-        !py_game_is_supported(entry->game))
+    if (!py_game_is_supported((enum_game_t)g))
+      continue;
+    canonical = pe_game_canonical_name((enum_game_t)g);
+    if (canonical == NULL)
       continue;
     written = snprintf(accepted + used, sizeof(accepted) - used, "%s%s",
-                       used == 0 ? "" : ", ", entry->name);
+                       used == 0 ? "" : ", ", canonical);
     if (written < 0 || (size_t)written >= sizeof(accepted) - used)
       break;
     used += (size_t)written;

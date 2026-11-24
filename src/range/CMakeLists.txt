@@ -6,9 +6,10 @@ set(RANGE_SOURCES
     StudRangeParser.c
     pe_range.c
     range_bayesian.c
-    # Street-aware Sökö equity: builds the per-street ranges and forwards to
-    # pe_equity_calculate.  It lives here because range already owns the
-    # hand builders and sits above equity in the link order.
+    # Street-aware Sökö equity: builds one known-card pocket per player and
+    # forwards to pe_equity_calculate.  It lives here because it needs both
+    # pe_range_create and the equity engine, and range sits above equity in
+    # the link order (equity links games, never range).
     soko_street.c
 )
 

@@ -164,8 +164,9 @@ This is a showdown-equity model — what the pot is worth given the information
 now — not a betting model.
 
 The C API is `pe_equity_soko_street()` in
-`<poker_eval/games/soko_street.h>`; `pe_soko_street_range()` exposes the
-underlying range of complete hands.
+`<poker_eval/games/soko_street.h>`. It builds one pocket per player from the
+cards they are known to hold and lets the shared enumerator deal every other
+card, so nothing is pre-expanded.
 
 ## Game names
 
