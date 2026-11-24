@@ -1737,6 +1737,9 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   enum_result_t aggregated_results;
   RangeEquityStats range_stats;
   bool agg_results_allocated = false;
+  /* Declared here, not where it is set: every initializer before the first
+     goto keeps -Wjump-misses-init quiet. */
+  int standard_error_defined = 0;
 
   PyObject *pyseed = NULL;
   int has_seed = 0;
@@ -1973,7 +1976,7 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
      payoff correlated with it, and the per-side share histograms kept for the
      aggregation cannot separate the two.  pe_equity leaves hi/lo games
      without an interval for the same reason. */
-  int standard_error_defined = use_montecarlo && params != NULL && !params->haslopot;
+  standard_error_defined = use_montecarlo && params != NULL && !params->haslopot;
 
   // Convert aggregated_results to Python list format [info_tuple, player1_results_tuple, ...]
   py_return_list = PyList_New(0);
