@@ -15,6 +15,7 @@
  */
 
 #include "unity.h"
+#include <stdlib.h> /* qsort */
 #include <string.h>
 
 #include <poker_eval/deck/deck_std.h>
