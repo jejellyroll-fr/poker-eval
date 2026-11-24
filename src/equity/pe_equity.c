@@ -1,5 +1,6 @@
 #include <poker_eval/equity.h>
 #include <poker_eval/equity/RangeEquity.h>
+#include <poker_eval/equity/RangeEquity_internal.h>
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
 #include <poker_eval/deck/deck_std.h>
@@ -396,7 +397,8 @@ static void fill_result_from_acc(const equity_accumulator_t *acc, int num_player
     }
 }
 
-static void fill_result_legacy(const enum_result_t *agg_res, int num_players, int use_mc, pe_equity_result_multi_t *result) {
+static void fill_result_legacy(const enum_result_t *agg_res, const RangeEquityStats *stats,
+                               int num_players, int use_mc, pe_equity_result_multi_t *result) {
     memset(result, 0, sizeof(pe_equity_result_multi_t));
     result->num_players = num_players;
     result->samples = agg_res->nsamples;
@@ -412,13 +414,13 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
     if (use_mc && agg_res->nsamples > 0)
         result->iterations = lround(total_games / (double)agg_res->nsamples);
 
-    /* The share histogram gives the exact variance of the per-sample payoff,
-     * but only when every sample comes from the same matchup.  For a range the
-     * samples are a weighted mixture, and a low pot adds a second correlated
-     * payoff, so neither case gets a standard error. */
+    /* The aggregation treats every sampled matchup as a batch: a range's
+     * estimator is the weighted mean of the batch means, so its variance is
+     * sum_m (w_m/W)^2 s_m^2/n_m, which collapses to s^2/n for a single
+     * matchup.  A low pot adds a payoff correlated with the high one that the
+     * histograms kept here cannot separate, so hi/lo games still get none. */
     enum_gameparams_t *params = enumGameParams(agg_res->game);
-    int standard_error_defined =
-        use_mc && agg_res->nsamples == 1 && params != NULL && !params->haslopot;
+    int standard_error_defined = use_mc && params != NULL && !params->haslopot;
 
     for (int i = 0; i < num_players; i++) {
         result->results[i].equity = agg_res->ev[i];
@@ -443,20 +445,11 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
         eq_hi /= total_games;
         eq_lo /= total_games;
 
-        /* A sample pays 1/h when the pot is shared by h players and 0
-         * otherwise, so the share histogram gives the second moment of the
-         * per-sample equity exactly.  That makes the standard error of the
-         * mean analytic, with no resampling. */
-        if (standard_error_defined) {
-            double eq_sq_hi = 0.0;
-            for (int h = 1; h <= num_players; h++)
-                eq_sq_hi += (double)agg_res->nsharehi[i][h] /
-                            ((double)h * (double)h);
-            eq_sq_hi /= total_games;
-            double variance = eq_sq_hi - eq_hi * eq_hi;
-            if (variance < 0.0) variance = 0.0;
-            result->standard_error[i] = sqrt(variance / total_games);
-        }
+        /* ev_variance is already the variance of the equity estimate: the
+         * aggregation computed each matchup's s^2/n from its share histogram
+         * and combined them with the estimator's weights. */
+        if (standard_error_defined && stats && stats->ev_variance[i] > 0.0)
+            result->standard_error[i] = sqrt(stats->ev_variance[i]);
 
         result->hilo_results[i].equity_hi = eq_hi;
         result->hilo_results[i].equity_lo = eq_lo;
@@ -488,11 +481,13 @@ static pe_status_t pe_equity_legacy_fallback(
     int iter = opts ? (int)opts->iterations : PE_EQUITY_DEFAULT_ITERATIONS;
     if (iter <= 0) iter = PE_EQUITY_DEFAULT_ITERATIONS;
 
-    /* Cleared, not allocated: CalculateEquityForRanges() below reaches an
+    /* Cleared, not allocated: CalculateEquityForRangesStats() below reaches an
      * enumeration that starts with enumResultClear(), so an ordering allocated
      * here would be dropped without being freed. */
     enum_result_t agg_res;
     enumResultClear(&agg_res);
+    RangeEquityStats stats;
+    memset(&stats, 0, sizeof(stats));
 
     int cards_on_board = StdDeck_numCards(board);
     /* The board the game actually deals, not a fixed five.  Stud, draw and
@@ -534,7 +529,7 @@ static pe_status_t pe_equity_legacy_fallback(
                                      StdDeck_N_CARDS - cards_on_board);
     }
 
-    int ret = CalculateEquityForRanges(
+    int ret = CalculateEquityForRangesStats(
         game_variant,
         internal_ranges,
         num_players,
@@ -544,7 +539,8 @@ static pe_status_t pe_equity_legacy_fallback(
         use_mc,
         iter,
         1, /* orderflag */
-        &agg_res
+        &agg_res,
+        &stats
     );
 
     if (ret <= 0) {
@@ -553,7 +549,7 @@ static pe_status_t pe_equity_legacy_fallback(
         return PE_STATUS_ERROR;
     }
 
-    fill_result_legacy(&agg_res, num_players, use_mc, result);
+    fill_result_legacy(&agg_res, &stats, num_players, use_mc, result);
 
     enumResultFree(&agg_res);
     free_conversion_buffers(&conv_buffers);

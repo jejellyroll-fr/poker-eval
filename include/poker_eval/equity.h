@@ -72,11 +72,16 @@ typedef struct {
  * Contains results for all players in a multiway equity calculation.
  * Supports up to 10 players.
  *
- * `standard_error` is filled only for a single sampled matchup of a game with
- * no low pot: there the samples are independent draws from one distribution,
- * so the standard error of the mean is exact.  A range combines matchups with
- * different distributions, where the pooled variance would not describe the
- * estimator, so the field stays 0 rather than reporting a misleading number.
+ * `standard_error` is filled for a sampled result when the game has no low
+ * pot.  The samples of one matchup are independent draws from one
+ * distribution, and a range's estimator is the weighted mean of the matchup
+ * means, so the standard error is the batch-means estimate
+ * `sqrt(sum_m (w_m/W)^2 s_m^2/n_m)`: the matchups are the batches and each
+ * contributes its own share-histogram variance `s_m^2 / n_m`.  That reduces to
+ * `s^2/n` for a single matchup.  A low pot adds a payoff correlated with the
+ * high one that the histograms cannot separate, so hi/lo games leave the
+ * field at 0 rather than reporting a misleading number, and an exhaustive
+ * calculation is 0 because there is no sampling error to report.
  */
 typedef struct {
     int num_players;                          /**< Number of players in the calculation */

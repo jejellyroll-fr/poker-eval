@@ -177,11 +177,14 @@ analytic, the budget needed for a target half-width is one division: passing
 `ceil(iterations × (ci95 / target_ci)²)` per player, which is exact given the
 `1/sqrt(iterations)` shrinkage of the half-width; it is 0 when the interval is
 already empty. `samples` stays the number of
-evaluated matchups, which is one for a single street matchup, and that single
-matchup is why the interval is valid here: samples are independent draws from
-one distribution. A general range mixes matchups, where the pooled variance
-would not describe the estimator, so the C result leaves its standard error
-at zero rather than report a misleading interval. Upcards are visible, so they are removed from the deck for
+evaluated matchups, which is one for a single street matchup. A general range
+combines several matchups and reports an interval too, but as a batch-means
+estimate: each matchup is a batch whose mean is known to `s²/n`, and the
+weighted mean of the batches adds those contributions with weights
+`(w_m/W)²`, so the pooled histogram is never mistaken for the estimator's
+variance. Hi/lo games still report none, because a low pot is a payoff
+correlated with the high one that the share histograms cannot separate.
+Upcards are visible, so they are removed from the deck for
 every player; a missing downcard is enumerated together with the cards still
 to come. Fifth street with both hole cards known is a single exact matchup.
 This is a showdown-equity model — what the pot is worth given the information

@@ -2,13 +2,48 @@
 #define RANGE_EQUITY_INTERNAL_H
 
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/equity/RangeEquity.h>
 #include <math.h>
 #include <string.h>
+
+/*
+ * Statistics a range-vs-range call derives beyond enum_result_t.  Kept in a
+ * struct of their own rather than added to enum_result_t, so the legacy result
+ * struct keeps its layout for existing callers.
+ */
+typedef struct {
+    /* Variance of ev[i] added by Monte Carlo sampling: batch means over the
+     * matchups (see weightedAggregationVariance).  Zero when every matchup was
+     * enumerated, and for hi/lo games, whose low pot the histograms kept here
+     * cannot separate from the high one. */
+    double ev_variance[ENUM_MAXPLAYERS];
+} RangeEquityStats;
+
+/*
+ * CalculateEquityForRanges() with the extra statistics above.  `stats` may be
+ * NULL; the public entry point is a wrapper that passes NULL.
+ */
+int CalculateEquityForRangesStats(
+    enum_game_t game,
+    const PlayerRange player_ranges[],
+    int num_players,
+    StdDeck_CardMask board,
+    StdDeck_CardMask dead_cards_initial,
+    int nboard_cards_to_deal,
+    bool use_montecarlo,
+    int iterations_if_montecarlo,
+    int orderflag,
+    enum_result_t *aggregated_results,
+    RangeEquityStats *stats
+);
 
 typedef struct {
     double total_weight;
     double total_weighted_samples;
     double ev[ENUM_MAXPLAYERS];
+    /* Sum over matchups of w_m^2 * Var(mean of matchup m): the batch-means
+     * variance of the weighted mean before its final division by W^2. */
+    double ev_variance[ENUM_MAXPLAYERS];
     double nwinhi[ENUM_MAXPLAYERS];
     double ntiehi[ENUM_MAXPLAYERS];
     double nlosehi[ENUM_MAXPLAYERS];
@@ -30,6 +65,7 @@ static inline void weightedAggregationInit(WeightedAggregation* agg, int num_pla
     agg->total_weight = 0.0;
     agg->total_weighted_samples = 0.0;
     memset(agg->ev, 0, sizeof(double) * ENUM_MAXPLAYERS);
+    memset(agg->ev_variance, 0, sizeof(double) * ENUM_MAXPLAYERS);
     memset(agg->nwinhi, 0, sizeof(double) * ENUM_MAXPLAYERS);
     memset(agg->ntiehi, 0, sizeof(double) * ENUM_MAXPLAYERS);
     memset(agg->nlosehi, 0, sizeof(double) * ENUM_MAXPLAYERS);
@@ -39,6 +75,39 @@ static inline void weightedAggregationInit(WeightedAggregation* agg, int num_pla
     memset(agg->nscoop, 0, sizeof(double) * ENUM_MAXPLAYERS);
     memset(agg->nsharehi, 0, sizeof(agg->nsharehi));
     memset(agg->nsharelo, 0, sizeof(agg->nsharelo));
+}
+
+/*
+ * Variance of one sampled matchup's mean high-participation payoff.  A sample
+ * pays 1/h when h players split the high pot and 0 otherwise, so both moments
+ * come from the share histogram and the variance of the mean is s^2/n.  Only
+ * the high pot is covered: a low pot is a second payoff correlated with it,
+ * and these per-side histograms cannot separate the two.
+ */
+static inline double matchup_high_variance_of_mean(
+    const enum_result_t* matchup_result,
+    int player,
+    int num_players
+) {
+    double n = (double)matchup_result->nsamples;
+    double mean = 0.0;
+    double mean_square = 0.0;
+    double variance;
+
+    if (n <= 0.0)
+        return 0.0;
+    for (int h = 1; h <= num_players; ++h) {
+        double share = (double)matchup_result->nsharehi[player][h];
+        double rate = 1.0 / (double)h;
+        mean += share * rate;
+        mean_square += share * rate * rate;
+    }
+    mean /= n;
+    mean_square /= n;
+    /* Exact arithmetic gives a non-negative variance; the clamp only absorbs
+     * the rounding of the two large sums. */
+    variance = mean_square - mean * mean;
+    return variance > 0.0 ? variance / n : 0.0;
 }
 
 static inline void weightedAggregationAccumulate(
@@ -57,6 +126,12 @@ static inline void weightedAggregationAccumulate(
     for (int p = 0; p < num_players; ++p) {
         double avg_ev = matchup_result->ev[p] / matchup_result->nsamples;
         agg->ev[p] += avg_ev * weight;
+        /* A sampled matchup is a batch whose mean is only known to s^2 / n.
+         * The aggregate is the weighted mean of the batch means, so the
+         * batches add with squared weights. */
+        if (matchup_result->sampleType == ENUM_SAMPLE)
+            agg->ev_variance[p] += weight * weight *
+                matchup_high_variance_of_mean(matchup_result, p, num_players);
         agg->nwinhi[p] += weight * matchup_result->nwinhi[p];
         agg->ntiehi[p] += weight * matchup_result->ntiehi[p];
         agg->nlosehi[p] += weight * matchup_result->nlosehi[p];
@@ -84,6 +159,7 @@ static inline void weightedAggregationMerge(
 
     for (int p = 0; p < num_players; ++p) {
         dest->ev[p] += src->ev[p];
+        dest->ev_variance[p] += src->ev_variance[p];
         dest->nwinhi[p] += src->nwinhi[p];
         dest->ntiehi[p] += src->ntiehi[p];
         dest->nlosehi[p] += src->nlosehi[p];
@@ -241,13 +317,12 @@ static inline unsigned int weightedAggregationFinalize(
         return 0;
 
     if (agg->total_weight > 0.0) {
-        for (int p = 0; p < num_players; ++p) {
-            aggregated_results->ev[p] = agg->ev[p] / agg->total_weight;
-        }
+        double inv_weight = 1.0 / agg->total_weight;
+        for (int p = 0; p < num_players; ++p)
+            aggregated_results->ev[p] = agg->ev[p] * inv_weight;
     } else {
-        for (int p = 0; p < num_players; ++p) {
+        for (int p = 0; p < num_players; ++p)
             aggregated_results->ev[p] = 0.0;
-        }
     }
 
     unsigned int target_samples = 0;
@@ -261,6 +336,33 @@ static inline unsigned int weightedAggregationFinalize(
         weightedAggregationFinalizePlayer(agg, aggregated_results, p, num_players, target_samples);
     }
     return target_samples;
+}
+
+/**
+ * @brief Batch-means variance of the aggregated equity estimate.
+ *
+ * A range's estimator is the weighted mean of its matchups' means, each of
+ * which is itself a Monte-Carlo mean.  Accumulating w_m^2 * s_m^2 / n_m per
+ * matchup (see weightedAggregationAccumulate) therefore gives the variance of
+ * W * mu, and only the 1/W^2 of the estimator is left here.  The naive spread
+ * of the matchup means around mu is not a substitute: the matchups differ in
+ * equity by construction, so that spread measures the ranges rather than the
+ * sampling noise.
+ *
+ * @param agg Aggregation to read (may be NULL).
+ * @param ev_variance Receives ENUM_MAXPLAYERS variances (zeros for a call that
+ *                    never sampled a matchup).
+ */
+static inline void weightedAggregationVariance(
+    const WeightedAggregation* agg,
+    double ev_variance[ENUM_MAXPLAYERS]
+) {
+    double scale = 0.0;
+
+    if (agg && agg->total_weight > 0.0)
+        scale = 1.0 / (agg->total_weight * agg->total_weight);
+    for (int p = 0; p < ENUM_MAXPLAYERS; ++p)
+        ev_variance[p] = agg ? agg->ev_variance[p] * scale : 0.0;
 }
 
 /**

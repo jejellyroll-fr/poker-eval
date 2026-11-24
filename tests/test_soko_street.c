@@ -243,15 +243,16 @@ static void test_six_way_fifth_street_is_exact(void) {
     TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, result.results[0].equity);
 }
 
-/* A range mixes matchups with different distributions, so the pooled sample
- * variance would not describe the estimator.  The engine reports the work but
- * leaves the standard error at zero instead of a plausible-looking number. */
-static void test_standard_error_needs_a_single_matchup(void) {
+/* A range mixes matchups, so its interval cannot come from the pooled
+ * histogram: it comes from the matchups themselves, each sampled matchup being
+ * a batch whose mean is known to s^2/n.  A sampled range must report a
+ * positive error, and an exhaustively evaluated one must still report none. */
+static void test_standard_error_for_a_range(void) {
     pe_range_t *ranges[2] = {NULL, NULL};
     const pe_range_t *range_ptrs[2];
     StdDeck_CardMask board, dead;
     pe_equity_opts_t opts;
-    pe_equity_result_multi_t result;
+    pe_equity_result_multi_t result, exact;
 
     StdDeck_CardMask_RESET(board);
     StdDeck_CardMask_RESET(dead);
@@ -290,10 +291,20 @@ static void test_standard_error_needs_a_single_matchup(void) {
                           pe_equity_calculate(game_soko, range_ptrs, 2, board,
                                               dead, &opts, &result));
     TEST_ASSERT_EQUAL_INT(0, result.exact);
-    TEST_ASSERT_TRUE(result.iterations > 0);
     TEST_ASSERT_TRUE(result.samples > 1);
-    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, result.standard_error[0]);
-    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, result.standard_error[1]);
+    /* The budget is split over the four matchups. */
+    TEST_ASSERT_EQUAL_INT(500, (int)result.iterations);
+    TEST_ASSERT_TRUE(result.standard_error[0] > 0.0);
+    TEST_ASSERT_TRUE(result.standard_error[1] > 0.0);
+
+    /* Enumerated instead of sampled, the same spot has no sampling error. */
+    memset(&exact, 0, sizeof(exact));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_calculate(game_soko, range_ptrs, 2, board,
+                                              dead, NULL, &exact));
+    TEST_ASSERT_EQUAL_INT(1, exact.exact);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.standard_error[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.standard_error[1]);
 
     pe_range_free(ranges[0]);
     pe_range_free(ranges[1]);
@@ -430,7 +441,7 @@ int main(void) {
     RUN_TEST(test_third_street_equity_sampled);
     RUN_TEST(test_six_way_fifth_street_is_exact);
     RUN_TEST(test_monte_carlo_converges_to_exact);
-    RUN_TEST(test_standard_error_needs_a_single_matchup);
+    RUN_TEST(test_standard_error_for_a_range);
     RUN_TEST(test_three_way_standard_error_matches_spread);
     RUN_TEST(test_invalid_streets_rejected);
     return UNITY_END();

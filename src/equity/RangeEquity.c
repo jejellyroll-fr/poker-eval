@@ -308,7 +308,7 @@ static void iterate_range_matchups_prefiltered(
     }
 }
 
-int CalculateEquityForRanges(
+int CalculateEquityForRangesStats(
     enum_game_t game,
     const PlayerRange player_ranges[],
     int num_players,
@@ -318,8 +318,11 @@ int CalculateEquityForRanges(
     bool use_montecarlo,
     int iterations_if_montecarlo,
     int orderflag,
-    enum_result_t* aggregated_results
+    enum_result_t* aggregated_results,
+    RangeEquityStats* stats
 ) {
+    if (stats)
+        memset(stats->ev_variance, 0, sizeof(stats->ev_variance));
     RANGE_DEBUG("RangeEquity: CalculateEquityForRanges(game=%d, players=%d, montecarlo=%d, iter=%d, board_to_deal=%d)\n",
                 game, num_players, use_montecarlo ? 1 : 0, iterations_if_montecarlo, nboard_cards_to_deal);
     if (num_players <= 0 || num_players > ENUM_MAXPLAYERS) {
@@ -516,6 +519,8 @@ int CalculateEquityForRanges(
 
     aggregated_results->nsamples = total_valid_matchups; // raw matchup count (for API compatibility)
     unsigned int target_samples = weightedAggregationFinalize(&weighted_results, aggregated_results, num_players);
+    if (stats)
+        weightedAggregationVariance(&weighted_results, stats->ev_variance);
     if (weighted_results.total_weight <= 0.0) {
         TRACE_RE("Warning: No weight accumulated for matchups.\n");
     }
@@ -545,4 +550,22 @@ int CalculateEquityForRanges(
             range_combo_buffer_free(&combo_buffers[i]);
     }
     return total_valid_matchups;
+}
+
+int CalculateEquityForRanges(
+    enum_game_t game,
+    const PlayerRange player_ranges[],
+    int num_players,
+    StdDeck_CardMask board,
+    StdDeck_CardMask dead_cards_initial,
+    int nboard_cards_to_deal,
+    bool use_montecarlo,
+    int iterations_if_montecarlo,
+    int orderflag,
+    enum_result_t* aggregated_results
+) {
+    return CalculateEquityForRangesStats(game, player_ranges, num_players, board,
+                                         dead_cards_initial, nboard_cards_to_deal,
+                                         use_montecarlo, iterations_if_montecarlo,
+                                         orderflag, aggregated_results, NULL);
 }
