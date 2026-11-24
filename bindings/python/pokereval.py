@@ -702,8 +702,18 @@ Returns:
             ]
         }
         The 'ev' is the average equity for the player's entire range against
-        the other players' entire ranges (float between 0.0 and 1.0). 
+        the other players' entire ranges (float between 0.0 and 1.0).
         Counts (nwinhi etc.) are totals across all matchups.
+
+        Each sampled matchup is a batch of the range estimate, so 'stderr' is
+        its batch-means standard error and 'ci95' the 95% confidence
+        half-width derived from it (1.96 x stderr): a sampled equity lies in
+        'ev' +/- 'ci95' with 95% confidence.  The interval measures the Monte
+        Carlo noise of the range estimate, not the spread of equity between
+        matchups.  Both are 0 when nothing is sampled (an exhaustive call), and
+        for hi/lo games, whose low pot the high-side histogram used for the
+        variance cannot separate.
+
         Returns None or raises RuntimeError on critical error.
         """
         if board_card_strings is None:
@@ -747,8 +757,8 @@ Returns:
 
         for i in range(num_players):
             player_res_tuple = raw_results[i+1]
-            # Ensure tuple has expected number of elements (8: scoop, winhi, losehi, tiehi, winlo, loselo, tielo, ev)
-            if not isinstance(player_res_tuple, tuple) or len(player_res_tuple) != 8:
+            # Ensure tuple has expected number of elements (9: scoop, winhi, losehi, tiehi, winlo, loselo, tielo, ev, stderr)
+            if not isinstance(player_res_tuple, tuple) or len(player_res_tuple) != 9:
                 raise RuntimeError(f"Player result tuple for player {i+1} has incorrect format or length.")
 
             eval_list.append({
@@ -759,7 +769,9 @@ Returns:
                 'nwinlo': player_res_tuple[4],
                 'nloselo': player_res_tuple[5],
                 'ntielo': player_res_tuple[6],
-                'ev': player_res_tuple[7] 
+                'ev': player_res_tuple[7],
+                'stderr': player_res_tuple[8],
+                'ci95': 1.96 * player_res_tuple[8]
             })
         
         return {

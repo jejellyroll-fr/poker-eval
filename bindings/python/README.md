@@ -59,6 +59,34 @@ pokereval.seed(2)          # or PokerEval.seed(2)
 The stream is per thread: a call seeded in one thread does not move another
 thread's stream. Exhaustive enumeration (no `iterations`) ignores the seed.
 
+## Range equity intervals
+
+`calculate_range_equity` reports, for each player, the batch-means standard
+error of the range equity (`stderr`) and the 95% confidence half-width
+derived from it (`ci95`, 1.96 x stderr): a sampled equity lies in
+`ev ± ci95` with 95% confidence.  Each matchup with cards still to come is a
+batch, so the interval measures the Monte Carlo noise of the range estimate,
+not the spread of equity between matchups.
+
+```python
+pe.calculate_range_equity(
+    "holdem",
+    [["AsKs"], ["QdQh"]],
+    board_card_strings=["2c", "7d", "9h"],
+    use_montecarlo=True,
+    iterations=6000,
+    seed=5,
+)
+# {'info': (1, 0, 1),
+#  'eval': [{'ev': 0.246...,
+#            'stderr': 0.00556..., 'ci95': 0.01089..., ...}, ...]}
+```
+
+Both are 0 for an exhaustive call, and for hi/lo games: a low pot is a second
+payoff correlated with the high one, which the per-side histograms used for the
+variance cannot separate.  The interval is therefore defined for high-only
+games.
+
 ## Prerequisites
 
 - Python 3.7+

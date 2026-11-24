@@ -78,6 +78,7 @@
 #include <poker_eval/distributions/omaha_distributions.h> // Added for Omaha hand instantiation
 #include <poker_eval/distributions/stud_distributions.h>  // Added for Stud hand instantiation
 #include <poker_eval/equity/RangeEquity.h>                // Added for Range Equity functionality
+#include <poker_eval/equity/RangeEquity_internal.h>        // RangeEquityStats: batch-means interval
 #include <poker_eval/solver/pe_solver.h>
 #include <poker_eval/solver/pe_solver_config.h>
 #include <poker_eval/solver/pe_ports.h>
@@ -1734,6 +1735,7 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   int num_players = 0;
   PyObject *py_return_list = NULL;
   enum_result_t aggregated_results;
+  RangeEquityStats range_stats;
   bool agg_results_allocated = false;
 
   PyObject *pyseed = NULL;
@@ -1955,16 +1957,23 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
   if (has_seed && use_montecarlo)
     pe_rng_seed_current(seed);
 
-  total_matchups = CalculateEquityForRanges(game, c_player_ranges, num_players, board_mask,
+  memset(&range_stats, 0, sizeof(range_stats));
+  total_matchups = CalculateEquityForRangesStats(game, c_player_ranges, num_players, board_mask,
                                                 dead_mask_initial, nboard_cards_to_deal,
                                                 use_montecarlo, iterations_if_montecarlo,
-                                                orderflag, &aggregated_results);
+                                                orderflag, &aggregated_results, &range_stats);
 
   if (total_matchups < 0)
   { // Indicates a critical error from CalculateEquityForRanges
     PyErr_SetString(PyExc_RuntimeError, "CalculateEquityForRanges C function failed.");
     goto cleanup;
   }
+
+  /* The batch-means variance covers the high pot only: a low pot is a second
+     payoff correlated with it, and the per-side share histograms kept for the
+     aggregation cannot separate the two.  pe_equity leaves hi/lo games
+     without an interval for the same reason. */
+  int standard_error_defined = use_montecarlo && params != NULL && !params->haslopot;
 
   // Convert aggregated_results to Python list format [info_tuple, player1_results_tuple, ...]
   py_return_list = PyList_New(0);
@@ -1981,7 +1990,11 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
 
   for (int p = 0; p < num_players; ++p)
   {
-    PyObject *player_results_tuple = Py_BuildValue("(iiiiiiid)",
+    double standard_error = 0.0;
+    if (standard_error_defined && range_stats.ev_variance[p] > 0.0)
+      standard_error = sqrt(range_stats.ev_variance[p]);
+
+    PyObject *player_results_tuple = Py_BuildValue("(iiiiiiidd)",
                                                    aggregated_results.nscoop[p],
                                                    aggregated_results.nwinhi[p],
                                                    aggregated_results.nlosehi[p],
@@ -1989,7 +2002,8 @@ static PyObject *py_calculate_equity_for_ranges(PyObject *self, PyObject *args)
                                                    aggregated_results.nwinlo[p],
                                                    aggregated_results.nloselo[p],
                                                    aggregated_results.ntielo[p],
-                                                   aggregated_results.ev[p]); // EV is already normalized
+                                                   aggregated_results.ev[p], // EV is already normalized
+                                                   standard_error);
     if (!player_results_tuple || PyList_Append(py_return_list, player_results_tuple) < 0)
     {
       Py_XDECREF(player_results_tuple);

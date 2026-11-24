@@ -76,9 +76,10 @@ class TestSokoRangeEquity(unittest.TestCase):
         raw = native.calculate_equity_for_ranges(
             "soko", pockets, [], 0, 0, 0, [], 0, None
         )
-        self.assertGreater(raw[2][-1], raw[1][-1])
-        self.assertEqual(raw[2][-1], 1.0)
-        self.assertEqual(raw[1][-1], 0.0)
+        # Index 7 is the equity; 8 is now the standard error.
+        self.assertGreater(raw[2][7], raw[1][7])
+        self.assertEqual(raw[2][7], 1.0)
+        self.assertEqual(raw[1][7], 0.0)
 
 
 class TestSokoDescription(unittest.TestCase):
