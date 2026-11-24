@@ -171,7 +171,12 @@ error of each equity and `ci95` its 95% confidence half-width, so a sampled
 equity lies in `hi[i] ± ci95[i]`. The standard error comes analytically from
 the sampled pot-share histogram — a player paid `1/h` whenever `h` players
 shared the pot — so it costs nothing extra; Python derives `ci95 = 1.96 ×
-stderr`. Both are zero when the result is exact. `samples` stays the number of
+stderr`. Both are zero when the result is exact. Because that variance is
+analytic, the budget needed for a target half-width is one division: passing
+`target_ci` to `soko_street_equity()` reports `required_iterations`,
+`ceil(iterations × (ci95 / target_ci)²)` per player, which is exact given the
+`1/sqrt(iterations)` shrinkage of the half-width; it is 0 when the interval is
+already empty. `samples` stays the number of
 evaluated matchups, which is one for a single street matchup, and that single
 matchup is why the interval is valid here: samples are independent draws from
 one distribution. A general range mixes matchups, where the pooled variance

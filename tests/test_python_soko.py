@@ -232,6 +232,63 @@ class TestSokoStreetEquity(unittest.TestCase):
             self.assertLessEqual(difference, 4.0 * sampled["ci95"][player])
             self.assertLess(difference, 0.01)
 
+    def test_required_iterations_hit_the_target_half_width(self):
+        # Two pair against a four-card flush: genuinely uncertain, so the
+        # interval is not empty and the derived budget is positive.
+        players = [
+            {"up": ["Ah", "Ad", "Ks"], "down": ["Kd"]},
+            {"up": ["9h", "Th", "Jh"], "down": ["8h"]},
+        ]
+        pilot = self.pe.soko_street_equity(
+            players, iterations=500, seed=3, target_ci=0.01
+        )
+        self.assertEqual(pilot["iterations"], 500)
+        self.assertEqual(len(pilot["required_iterations"]), 2)
+
+        for player, required in enumerate(pilot["required_iterations"]):
+            self.assertGreaterEqual(required, 1)
+            # The half-width shrinks as 1/sqrt(iterations), so spending the
+            # derived budget has to land on the target.  The variance the
+            # interval is built from is itself estimated from the samples, to
+            # a few percent at both budgets, which is the only slack allowed.
+            sized = self.pe.soko_street_equity(
+                players, iterations=required, seed=4, target_ci=0.01
+            )
+            self.assertEqual(sized["iterations"], required)
+            self.assertLessEqual(sized["ci95"][player], 0.01 * 1.10)
+            self.assertGreaterEqual(sized["ci95"][player], 0.01 * 0.90)
+            # A fixed point: the new run asks for about the budget it just spent.
+            self.assertAlmostEqual(
+                sized["required_iterations"][player] / required, 1.0, delta=0.2
+            )
+
+        # A target half as wide costs four times the budget, exactly.
+        tighter = self.pe.soko_street_equity(
+            players, iterations=500, seed=3, target_ci=0.005
+        )
+        for tight, loose in zip(
+            tighter["required_iterations"], pilot["required_iterations"]
+        ):
+            self.assertAlmostEqual(tight / loose, 4.0, delta=0.05)
+
+    def test_required_iterations_absent_or_exact(self):
+        players = [
+            {"up": ["Kh", "Qh", "Jh", "2s"], "down": ["Ah"]},
+            {"up": ["9d", "8d", "7d", "6d"], "down": ["Kc"]},
+        ]
+        self.assertIsNone(
+            self.pe.soko_street_equity(players)["required_iterations"]
+        )
+
+        exact = self.pe.soko_street_equity(players, target_ci=0.01)
+        self.assertEqual(exact["exact"], 1)
+        # Nothing to sample, so no budget is needed.
+        self.assertEqual(exact["required_iterations"], [0, 0])
+
+        for bad in (0.0, -0.01):
+            with self.assertRaises(ValueError):
+                self.pe.soko_street_equity(players, target_ci=bad)
+
     def test_dead_cards_are_respected(self):
         result = self.pe.soko_street_equity(
             [

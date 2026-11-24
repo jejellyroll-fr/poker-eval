@@ -25,6 +25,7 @@
 #  Loic Dachary <loic@dachary.org>
 #
 # 
+import math
 import sys
 
 # CMake builds the native extension as ``pypokereval``.  Importing that stable
@@ -285,7 +286,8 @@ Example:
             "rank_names": ["23456789TJQKA"[rank - 2] for rank in ranks],
         }
 
-    def soko_street_equity(self, players, dead=None, iterations=0, seed=None):
+    def soko_street_equity(self, players, dead=None, iterations=0, seed=None,
+                           target_ci=None):
         """\
 Showdown equity for two or more Sökö players at third, fourth or fifth
 street.
@@ -304,7 +306,8 @@ and seed reproduce the same equities.  It has no effect on an exact
 calculation.
 
 Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n,
-'iterations': n, 'stderr': [...], 'ci95': [...]}.
+'iterations': n, 'stderr': [...], 'ci95': [...],
+'required_iterations': [...]}.
 
 "samples" is the number of evaluated range matchups (one for a single
 third-street matchup), not the iteration budget; "iterations" is the
@@ -313,11 +316,29 @@ Monte Carlo iterations per matchup and is 0 for an exact result.
 confidence half-width derived from it (1.96 x stderr): a sampled equity
 lies in "hi[i] ± ci95[i]" with 95% confidence.  Both are 0 when the
 result is exact.
+
+"target_ci" asks what budget such a half-width would take.  The variance
+per sample is known analytically from the pot-share histogram, so the
+half-width shrinks as 1/sqrt(iterations) and the iterations that reach a
+target half-width are ceil(iterations x (ci95 / target_ci)**2), returned as
+"required_iterations" per player: 0 when the interval is already empty (an
+exact, or a sampled but deterministic, result), and None when no target was
+asked for.  The pilot run still uses "iterations", so pass a small budget to
+keep the calculation cheap.
 """
         if dead is None:
             dead = []
+        if target_ci is not None and target_ci <= 0:
+            raise ValueError("target_ci must be positive")
         result = _pokereval.soko_street_equity(players, dead, iterations, seed)
         result["ci95"] = [1.96 * error for error in result["stderr"]]
+        if target_ci is None:
+            result["required_iterations"] = None
+        else:
+            result["required_iterations"] = [
+                int(math.ceil(result["iterations"] * (ci / target_ci) ** 2))
+                for ci in result["ci95"]
+            ]
         return result
     
     def winners(self, *args, **kwargs):
