@@ -149,6 +149,9 @@ class TestSokoStreetEquity(unittest.TestCase):
         )
         self.assertEqual(result["exact"], 1)
         self.assertEqual(result["samples"], 1)
+        self.assertEqual(result["iterations"], 0)
+        self.assertEqual(result["stderr"], [0.0, 0.0])
+        self.assertEqual(result["ci95"], [0.0, 0.0])
         self.assertEqual(result["hi"][0], 1.0)
         self.assertEqual(result["hi"][1], 0.0)
 
@@ -163,8 +166,16 @@ class TestSokoStreetEquity(unittest.TestCase):
         self.assertEqual(result["exact"], 0)
         # "samples" is the number of evaluated range matchups.
         self.assertEqual(result["samples"], 1)
+        self.assertEqual(result["iterations"], 300)
         self.assertAlmostEqual(sum(result["hi"]), 1.0, places=6)
         self.assertGreater(result["hi"][0], 0.5)
+        for equity, error, ci in zip(
+            result["hi"], result["stderr"], result["ci95"]
+        ):
+            self.assertGreater(error, 0.0)
+            self.assertAlmostEqual(ci, 1.96 * error, places=12)
+            self.assertGreaterEqual(equity, 0.0)
+            self.assertLessEqual(equity, 1.0)
 
     def test_duplicate_card_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -202,6 +213,24 @@ class TestSokoStreetEquity(unittest.TestCase):
         self.assertEqual(first["hi"], second["hi"])
         self.assertNotEqual(first["hi"], other["hi"])
         self.assertAlmostEqual(sum(first["hi"]), 1.0, places=6)
+
+    def test_monte_carlo_converges_to_exact(self):
+        players = [
+            {"up": ["Kh", "Qh", "Jh"], "down": ["Ah"]},
+            {"up": ["9d", "8d", "7d"], "down": ["2c"]},
+        ]
+        exact = self.pe.soko_street_equity(players)
+        sampled = self.pe.soko_street_equity(players, iterations=20000, seed=5)
+
+        self.assertEqual(exact["exact"], 1)
+        self.assertEqual(sampled["exact"], 0)
+        self.assertEqual(sampled["iterations"], 20000)
+        for player in range(2):
+            difference = abs(sampled["hi"][player] - exact["hi"][player])
+            # Four standard errors: robust against a single unlucky seed while
+            # still failing if the sampler is biased.
+            self.assertLessEqual(difference, 4.0 * sampled["ci95"][player])
+            self.assertLess(difference, 0.01)
 
     def test_dead_cards_are_respected(self):
         result = self.pe.soko_street_equity(

@@ -163,7 +163,16 @@ pe.soko_street_equity(
 The street is derived from the number of upcards: two is third street, three
 fourth, four fifth. `seed` reseeds the sampling stream, so the same players,
 iterations and seed reproduce the same equities; it has no effect on the
-exact fourth- and fifth-street paths. Upcards are visible, so they are removed from the deck for
+exact fourth- and fifth-street paths.
+
+The result also carries the sampling statistics. `iterations` is the Monte
+Carlo iterations per matchup (0 for an exact result), `stderr` the standard
+error of each equity and `ci95` its 95% confidence half-width, so a sampled
+equity lies in `hi[i] ± ci95[i]`. Both come analytically from the sampled
+pot-share histogram — a player paid `1/h` whenever `h` players shared the pot
+— so they cost nothing extra and are zero when the result is exact. `samples`
+stays the number of evaluated matchups, which is one for a single street
+matchup. Upcards are visible, so they are removed from the deck for
 every player; a missing downcard is enumerated together with the cards still
 to come. Fifth street with both hole cards known is a single exact matchup.
 This is a showdown-equity model — what the pot is worth given the information

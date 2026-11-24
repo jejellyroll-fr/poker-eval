@@ -303,9 +303,15 @@ choice.  "seed" reseeds the sampling stream: the same players, iterations
 and seed reproduce the same equities.  It has no effect on an exact
 calculation.
 
-Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n}, where
+Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n,
+'iterations': n, 'stderr': [...], 'ci95': [...]}.
+
 "samples" is the number of evaluated range matchups (one for a single
-third-street matchup), not the iteration budget.
+third-street matchup), not the iteration budget; "iterations" is the
+Monte Carlo iterations per matchup and is 0 for an exact result.
+"stderr" is the standard error of each equity and "ci95" its 95%
+confidence half-width: a sampled equity lies in "hi[i] ± ci95[i]" with
+95% confidence.  Both are 0 when the result is exact.
 """
         if dead is None:
             dead = []

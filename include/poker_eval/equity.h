@@ -78,6 +78,9 @@ typedef struct {
     pe_hilo_equity_result_t hilo_results[10]; /**< Hi/Lo results if applicable */
     long samples;                             /**< Number of samples evaluated */
     int exact;                                /**< 1 if exact/exhaustive calculation, 0 if Monte Carlo */
+    long iterations;                          /**< Average Monte Carlo iterations per matchup; 0 if exact */
+    double standard_error[10];                /**< Standard error of each player's equity; 0 if exact */
+    double confidence_95[10];                 /**< 95% confidence half-width of each player's equity; 0 if exact */
 } pe_equity_result_multi_t;
 
 /**

@@ -198,6 +198,9 @@ set_tests_properties(test_equity_no_board_games PROPERTIES
 add_unity_test(test_soko_street test_soko_street.c)
 set_tests_properties(test_soko_street PROPERTIES
     LABELS "equity;soko" TIMEOUT 120)
+add_unity_test(test_soko_order test_soko_order.c)
+set_tests_properties(test_soko_order PROPERTIES
+    LABELS "ranking;soko" TIMEOUT 120)
 # ISSUE-02 (#158): automated hand distribution & combinatorial probability engine
 add_unity_test(test_hand_distribution test_hand_distribution.c)
 add_unity_test(test_transition_distribution test_transition_distribution.c)

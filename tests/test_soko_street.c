@@ -8,9 +8,11 @@
  */
 
 #include "unity.h"
+#include <math.h>
 #include <string.h>
 
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/pcg_rng.h>
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/equity.h>
 #include <poker_eval/games/soko_street.h>
@@ -132,6 +134,96 @@ static void test_third_street_equity_sampled(void) {
     TEST_ASSERT_TRUE(result.results[0].equity > 0.5);
 }
 
+/* Fourth street: the exact answer and 20k samples must agree, and the exact
+ * answer must fall inside the reported confidence interval.  Two pair against
+ * a four-card flush is genuinely uncertain, so the variance is not zero. */
+static void test_monte_carlo_converges_to_exact(void) {
+    const char *up0[] = {"Ah", "Ad", "Ks"};
+    const char *down0[] = {"Kd"}; /* two pair, aces and kings */
+    const char *up1[] = {"9h", "Th", "Jh"};
+    const char *down1[] = {"8h"}; /* four-card flush, jack high */
+    pe_soko_street_player_t players[2];
+    StdDeck_CardMask dead;
+    pe_equity_opts_t opts;
+    pe_equity_result_multi_t exact, sampled;
+    int i;
+
+    StdDeck_CardMask_RESET(dead);
+    players[0].street = PE_SOKO_STREET_FOURTH;
+    players[0].up_cards = cards_of(up0, 3);
+    players[0].down_cards = cards_of(down0, 1);
+    players[1].street = PE_SOKO_STREET_FOURTH;
+    players[1].up_cards = cards_of(up1, 3);
+    players[1].down_cards = cards_of(down1, 1);
+
+    memset(&exact, 0, sizeof(exact));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_soko_street(players, 2, dead, NULL, &exact));
+    TEST_ASSERT_EQUAL_INT(1, exact.exact);
+    TEST_ASSERT_EQUAL_INT(0, (int)exact.iterations);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.standard_error[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.confidence_95[0]);
+
+    memset(&opts, 0, sizeof(opts));
+    opts.is_monte_carlo = 1;
+    opts.iterations = 20000;
+    pe_rng_seed_current(5);
+
+    memset(&sampled, 0, sizeof(sampled));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_soko_street(players, 2, dead, &opts,
+                                                &sampled));
+    TEST_ASSERT_EQUAL_INT(0, sampled.exact);
+    TEST_ASSERT_EQUAL_INT(20000, (int)sampled.iterations);
+    for (i = 0; i < 2; ++i) {
+        TEST_ASSERT_TRUE(sampled.standard_error[i] > 0.0);
+        TEST_ASSERT_TRUE(sampled.confidence_95[i] > 0.0);
+        /* Four standard errors: robust to one unlucky seed, but a biased
+         * sampler or a wrong interval still fails. */
+        TEST_ASSERT_TRUE(fabs(sampled.results[i].equity -
+                              exact.results[i].equity) <=
+                         4.0 * sampled.confidence_95[i]);
+        TEST_ASSERT_TRUE(fabs(sampled.results[i].equity -
+                              exact.results[i].equity) < 0.02);
+    }
+}
+
+/* A larger sample must report a tighter interval. */
+static void test_more_iterations_shrink_the_interval(void) {
+    const char *up0[] = {"Kh", "Qh"};
+    const char *down0[] = {"Ah"};
+    const char *up1[] = {"9d", "8d"};
+    pe_soko_street_player_t players[2];
+    StdDeck_CardMask dead;
+    pe_equity_opts_t opts;
+    pe_equity_result_multi_t small, large;
+
+    StdDeck_CardMask_RESET(dead);
+    players[0].street = PE_SOKO_STREET_THIRD;
+    players[0].up_cards = cards_of(up0, 2);
+    players[0].down_cards = cards_of(down0, 1);
+    players[1].street = PE_SOKO_STREET_THIRD;
+    players[1].up_cards = cards_of(up1, 2);
+    StdDeck_CardMask_RESET(players[1].down_cards);
+
+    memset(&opts, 0, sizeof(opts));
+    opts.is_monte_carlo = 1;
+
+    opts.iterations = 2000;
+    memset(&small, 0, sizeof(small));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_soko_street(players, 2, dead, &opts, &small));
+
+    opts.iterations = 20000;
+    memset(&large, 0, sizeof(large));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_soko_street(players, 2, dead, &opts, &large));
+
+    TEST_ASSERT_EQUAL_INT(2000, (int)small.iterations);
+    TEST_ASSERT_EQUAL_INT(20000, (int)large.iterations);
+    TEST_ASSERT_TRUE(large.confidence_95[0] < small.confidence_95[0]);
+}
+
 /* Six players at fifth street: every card is known, so the whole table is one
  * exact matchup and the strongest hand takes the pot. */
 static void test_six_way_fifth_street_is_exact(void) {
@@ -212,6 +304,8 @@ int main(void) {
     RUN_TEST(test_fourth_street_equity_is_exact);
     RUN_TEST(test_third_street_equity_sampled);
     RUN_TEST(test_six_way_fifth_street_is_exact);
+    RUN_TEST(test_monte_carlo_converges_to_exact);
+    RUN_TEST(test_more_iterations_shrink_the_interval);
     RUN_TEST(test_invalid_streets_rejected);
     return UNITY_END();
 }

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #define PE_EQUITY_DEFAULT_ITERATIONS 200000
 
@@ -404,6 +405,13 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
     double total_games = (double)(agg_res->nwinhi[0] + agg_res->ntiehi[0] + agg_res->nlosehi[0]);
     if (total_games <= 0.000001) total_games = 1.0;
 
+    /* nsamples is the number of matchups, not the work done: with a single
+     * Sökö street matchup the caller asked for N iterations and that is what
+     * the samples count.  Average over matchups so a range still reports a
+     * meaningful per-matchup budget. */
+    if (use_mc && agg_res->nsamples > 0)
+        result->iterations = lround(total_games / (double)agg_res->nsamples);
+
     for (int i = 0; i < num_players; i++) {
         result->results[i].equity = agg_res->ev[i];
         result->results[i].ev = agg_res->ev[i];
@@ -426,6 +434,22 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
         }
         eq_hi /= total_games;
         eq_lo /= total_games;
+
+        /* A sampled sample pays 1/h when the pot is shared by h players and 0
+         * otherwise, so the share histogram gives the second moment of the
+         * per-sample equity exactly.  That makes the standard error of the
+         * mean analytic, with no resampling. */
+        if (use_mc) {
+            double eq_sq_hi = 0.0;
+            for (int h = 1; h <= num_players; h++)
+                eq_sq_hi += (double)agg_res->nsharehi[i][h] /
+                            ((double)h * (double)h);
+            eq_sq_hi /= total_games;
+            double variance = eq_sq_hi - eq_hi * eq_hi;
+            if (variance < 0.0) variance = 0.0;
+            result->standard_error[i] = sqrt(variance / total_games);
+            result->confidence_95[i] = 1.96 * result->standard_error[i];
+        }
 
         result->hilo_results[i].equity_hi = eq_hi;
         result->hilo_results[i].equity_lo = eq_lo;

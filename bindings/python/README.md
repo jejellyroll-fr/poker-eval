@@ -102,7 +102,9 @@ compares two hands without inspecting their categories.
 
 `soko_street_equity()` computes showdown equity at third, fourth or fifth
 street; the street follows from the number of upcards, and an omitted
-`down` means the hole card is unknown:
+`down` means the hole card is unknown.  `iterations` reports the Monte Carlo
+budget per matchup (0 when exact), `stderr` the standard error and `ci95` the
+95% confidence half-width, so a sampled equity lies in `hi[i] ± ci95[i]`:
 
 ```python
 pe.soko_street_equity(
@@ -111,7 +113,8 @@ pe.soko_street_equity(
     iterations=20000,
     seed=7,                                    # reproducible sampling
 )
-# {'hi': [0.62..., 0.37...], 'exact': 0, 'samples': 20000}
+# {'hi': [0.62..., 0.37...], 'exact': 0, 'samples': 1,
+#  'iterations': 20000, 'stderr': [...], 'ci95': [...]}
 ```
 
 ```python
