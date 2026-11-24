@@ -20,8 +20,6 @@
  * with this program in a file in the toplevel directory called "GPLv3".
  * If not, see <http://www.gnu.org/licenses/>.
  */
-#include <stdlib.h>
-
 #include <poker_eval/games/soko_street.h>
 #include <poker_eval/range.h>
 
@@ -73,11 +71,8 @@ static pe_status_t build_known_range(StdDeck_CardMask known,
     status = pe_range_create(game_soko, &range);
     if (status != PE_STATUS_OK)
         return status;
-    range->combos = (pe_combo_t *)calloc(1, sizeof(pe_combo_t));
-    if (range->combos == NULL) {
-        pe_range_free(range);
-        return PE_STATUS_OUT_OF_MEMORY;
-    }
+    /* pe_range_create() already owns a combo array: fill its first slot
+     * rather than replacing it, which would leak the allocation. */
     range->combos[0].hand = known;
     range->combos[0].weight = 1.0;
     range->count = 1;
