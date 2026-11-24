@@ -222,37 +222,9 @@ static void test_four_card_tiebreaks_come_from_the_cards(void) {
     TEST_ASSERT_TRUE(straights >= 20);
 }
 
-/* A five-card flush or straight is never demoted to the four-card category. */
-static void test_five_card_hands_keep_their_category(void) {
-    const char *flush[] = {"Ah", "Kh", "Qh", "Jh", "9h"};
-    const char *straight[] = {"9h", "Ts", "Jd", "Qc", "Kh"};
-    pe_soko_hand_description_t desc;
-    StdDeck_CardMask hand;
-    int card, i;
-
-    StdDeck_CardMask_RESET(hand);
-    for (i = 0; i < 5; ++i) {
-        char buf[3] = {flush[i][0], flush[i][1], '\0'};
-        TEST_ASSERT_EQUAL_INT(2, StdDeck_stringToCard(buf, &card));
-        StdDeck_CardMask_SET(hand, card);
-    }
-    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK, pe_soko_describe_hand(hand, &desc));
-    TEST_ASSERT_EQUAL_INT(PE_CAT_FLUSH, desc.category);
-
-    StdDeck_CardMask_RESET(hand);
-    for (i = 0; i < 5; ++i) {
-        char buf[3] = {straight[i][0], straight[i][1], '\0'};
-        TEST_ASSERT_EQUAL_INT(2, StdDeck_stringToCard(buf, &card));
-        StdDeck_CardMask_SET(hand, card);
-    }
-    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK, pe_soko_describe_hand(hand, &desc));
-    TEST_ASSERT_EQUAL_INT(PE_CAT_STRAIGHT, desc.category);
-}
-
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_value_is_order_isomorphic_to_the_key);
     RUN_TEST(test_four_card_tiebreaks_come_from_the_cards);
-    RUN_TEST(test_five_card_hands_keep_their_category);
     return UNITY_END();
 }

@@ -3254,7 +3254,6 @@ static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
   pe_status_t status;
   PyObject *py_equity = NULL;
   PyObject *py_stderr = NULL;
-  PyObject *py_ci = NULL;
   PyObject *py_result = NULL;
   int num_players, i;
 
@@ -3349,42 +3348,34 @@ static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
 
   py_equity = PyList_New(num_players);
   py_stderr = PyList_New(num_players);
-  py_ci = PyList_New(num_players);
-  if (!py_equity || !py_stderr || !py_ci)
+  if (!py_equity || !py_stderr)
   {
     Py_XDECREF(py_equity);
     Py_XDECREF(py_stderr);
-    Py_XDECREF(py_ci);
     return NULL;
   }
   for (i = 0; i < num_players; ++i)
   {
     PyObject *value = PyFloat_FromDouble(result.results[i].equity);
     PyObject *error = PyFloat_FromDouble(result.standard_error[i]);
-    PyObject *ci = PyFloat_FromDouble(result.confidence_95[i]);
-    if (!value || !error || !ci)
+    if (!value || !error)
     {
       Py_XDECREF(value);
       Py_XDECREF(error);
-      Py_XDECREF(ci);
       Py_DECREF(py_equity);
       Py_DECREF(py_stderr);
-      Py_DECREF(py_ci);
       return NULL;
     }
     PyList_SET_ITEM(py_equity, i, value);
     PyList_SET_ITEM(py_stderr, i, error);
-    PyList_SET_ITEM(py_ci, i, ci);
   }
 
-  py_result = Py_BuildValue("{s:O,s:i,s:l,s:l,s:O,s:O}", "hi", py_equity,
+  py_result = Py_BuildValue("{s:O,s:i,s:l,s:l,s:O}", "hi", py_equity,
                             "exact", result.exact, "samples",
                             (long)result.samples, "iterations",
-                            (long)result.iterations, "stderr", py_stderr,
-                            "ci95", py_ci);
+                            (long)result.iterations, "stderr", py_stderr);
   Py_DECREF(py_equity);
   Py_DECREF(py_stderr);
-  Py_DECREF(py_ci);
   return py_result;
 }
 
@@ -3404,7 +3395,7 @@ static PyMethodDef base_methods[] = {
     {"calculate_multiway_equity", (PyCFunction)(void (*)(void))calculate_multiway_equity, METH_VARARGS | METH_KEYWORDS, "Calculates multiway equity with side pots."},
     {"convert_card_strings_to_mask_value", (PyCFunction)py_convert_card_strings_to_mask_value, METH_VARARGS, "Converts a list of card strings to its uint64_t card mask value."},
     {"describe_soko", (PyCFunction)py_describe_soko, METH_VARARGS, "describe_soko(hand) -> {'category', 'category_rank', 'value', 'ranks'} under the official Sokoe ranking."},
-    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0, seed=None) -> {'hi', 'exact', 'samples', 'iterations', 'stderr', 'ci95'}: Sokoe showdown equity at third/fourth/fifth street."},
+    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0, seed=None) -> {'hi', 'exact', 'samples', 'iterations', 'stderr'}: Sokoe showdown equity at third/fourth/fifth street."},
     {"solver_v3_create", (PyCFunction)(void (*)(void))py_solver_v3_create, METH_VARARGS | METH_KEYWORDS, "Create a Python-callback-backed v3 solver."},
     {"solver_v3_run", (PyCFunction)py_solver_v3_run, METH_VARARGS, "Run a v3 solver capsule."},
     {"solver_v3_progress", (PyCFunction)py_solver_v3_progress, METH_VARARGS, "Read v3 solver progress."},

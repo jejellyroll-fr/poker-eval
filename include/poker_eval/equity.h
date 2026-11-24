@@ -71,6 +71,12 @@ typedef struct {
  *
  * Contains results for all players in a multiway equity calculation.
  * Supports up to 10 players.
+ *
+ * `standard_error` is filled only for a single sampled matchup of a game with
+ * no low pot: there the samples are independent draws from one distribution,
+ * so the standard error of the mean is exact.  A range combines matchups with
+ * different distributions, where the pooled variance would not describe the
+ * estimator, so the field stays 0 rather than reporting a misleading number.
  */
 typedef struct {
     int num_players;                          /**< Number of players in the calculation */
@@ -79,8 +85,7 @@ typedef struct {
     long samples;                             /**< Number of samples evaluated */
     int exact;                                /**< 1 if exact/exhaustive calculation, 0 if Monte Carlo */
     long iterations;                          /**< Average Monte Carlo iterations per matchup; 0 if exact */
-    double standard_error[10];                /**< Standard error of each player's equity; 0 if exact */
-    double confidence_95[10];                 /**< 95% confidence half-width of each player's equity; 0 if exact */
+    double standard_error[10];                /**< Standard error of each equity; 0 if exact or not defined */
 } pe_equity_result_multi_t;
 
 /**

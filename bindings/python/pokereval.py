@@ -309,13 +309,16 @@ Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n,
 "samples" is the number of evaluated range matchups (one for a single
 third-street matchup), not the iteration budget; "iterations" is the
 Monte Carlo iterations per matchup and is 0 for an exact result.
-"stderr" is the standard error of each equity and "ci95" its 95%
-confidence half-width: a sampled equity lies in "hi[i] ± ci95[i]" with
-95% confidence.  Both are 0 when the result is exact.
+"stderr" is the standard error of each equity, and "ci95" is the 95%
+confidence half-width derived from it (1.96 x stderr): a sampled equity
+lies in "hi[i] ± ci95[i]" with 95% confidence.  Both are 0 when the
+result is exact.
 """
         if dead is None:
             dead = []
-        return _pokereval.soko_street_equity(players, dead, iterations, seed)
+        result = _pokereval.soko_street_equity(players, dead, iterations, seed)
+        result["ci95"] = [1.96 * error for error in result["stderr"]]
+        return result
     
     def winners(self, *args, **kwargs):
         """\

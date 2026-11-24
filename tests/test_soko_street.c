@@ -16,6 +16,7 @@
 #include <poker_eval/deck/deck_std.h>
 #include <poker_eval/equity.h>
 #include <poker_eval/games/soko_street.h>
+#include <poker_eval/range.h>
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -145,7 +146,7 @@ static void test_monte_carlo_converges_to_exact(void) {
     pe_soko_street_player_t players[2];
     StdDeck_CardMask dead;
     pe_equity_opts_t opts;
-    pe_equity_result_multi_t exact, sampled;
+    pe_equity_result_multi_t exact, sampled, coarse;
     int i;
 
     StdDeck_CardMask_RESET(dead);
@@ -162,7 +163,7 @@ static void test_monte_carlo_converges_to_exact(void) {
     TEST_ASSERT_EQUAL_INT(1, exact.exact);
     TEST_ASSERT_EQUAL_INT(0, (int)exact.iterations);
     TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.standard_error[0]);
-    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.confidence_95[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, exact.standard_error[1]);
 
     memset(&opts, 0, sizeof(opts));
     opts.is_monte_carlo = 1;
@@ -176,52 +177,33 @@ static void test_monte_carlo_converges_to_exact(void) {
     TEST_ASSERT_EQUAL_INT(0, sampled.exact);
     TEST_ASSERT_EQUAL_INT(20000, (int)sampled.iterations);
     for (i = 0; i < 2; ++i) {
+        double ci = 1.96 * sampled.standard_error[i];
+        double mean = sampled.results[i].equity;
+        /* Heads-up the payoff is 1, 0.5 or 0, so the standard error has an
+         * independent formula in the win/tie probabilities. */
+        double variance = sampled.results[i].win_prob +
+                          0.25 * sampled.results[i].tie_prob - mean * mean;
+
+        if (variance < 0.0) variance = 0.0;
         TEST_ASSERT_TRUE(sampled.standard_error[i] > 0.0);
-        TEST_ASSERT_TRUE(sampled.confidence_95[i] > 0.0);
+        TEST_ASSERT_TRUE(ci > 0.0);
+        TEST_ASSERT_DOUBLE_WITHIN(1e-9,
+                                  sqrt(variance / (double)sampled.iterations),
+                                  sampled.standard_error[i]);
         /* Four standard errors: robust to one unlucky seed, but a biased
          * sampler or a wrong interval still fails. */
-        TEST_ASSERT_TRUE(fabs(sampled.results[i].equity -
-                              exact.results[i].equity) <=
-                         4.0 * sampled.confidence_95[i]);
-        TEST_ASSERT_TRUE(fabs(sampled.results[i].equity -
-                              exact.results[i].equity) < 0.02);
+        TEST_ASSERT_TRUE(fabs(mean - exact.results[i].equity) <= 4.0 * ci);
+        TEST_ASSERT_TRUE(fabs(mean - exact.results[i].equity) < 0.02);
     }
-}
 
-/* A larger sample must report a tighter interval. */
-static void test_more_iterations_shrink_the_interval(void) {
-    const char *up0[] = {"Kh", "Qh"};
-    const char *down0[] = {"Ah"};
-    const char *up1[] = {"9d", "8d"};
-    pe_soko_street_player_t players[2];
-    StdDeck_CardMask dead;
-    pe_equity_opts_t opts;
-    pe_equity_result_multi_t small, large;
-
-    StdDeck_CardMask_RESET(dead);
-    players[0].street = PE_SOKO_STREET_THIRD;
-    players[0].up_cards = cards_of(up0, 2);
-    players[0].down_cards = cards_of(down0, 1);
-    players[1].street = PE_SOKO_STREET_THIRD;
-    players[1].up_cards = cards_of(up1, 2);
-    StdDeck_CardMask_RESET(players[1].down_cards);
-
-    memset(&opts, 0, sizeof(opts));
-    opts.is_monte_carlo = 1;
-
-    opts.iterations = 2000;
-    memset(&small, 0, sizeof(small));
+    /* A quarter of the budget must report a wider interval. */
+    opts.iterations = 5000;
+    memset(&coarse, 0, sizeof(coarse));
     TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
-                          pe_equity_soko_street(players, 2, dead, &opts, &small));
-
-    opts.iterations = 20000;
-    memset(&large, 0, sizeof(large));
-    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
-                          pe_equity_soko_street(players, 2, dead, &opts, &large));
-
-    TEST_ASSERT_EQUAL_INT(2000, (int)small.iterations);
-    TEST_ASSERT_EQUAL_INT(20000, (int)large.iterations);
-    TEST_ASSERT_TRUE(large.confidence_95[0] < small.confidence_95[0]);
+                          pe_equity_soko_street(players, 2, dead, &opts,
+                                                &coarse));
+    TEST_ASSERT_EQUAL_INT(5000, (int)coarse.iterations);
+    TEST_ASSERT_TRUE(coarse.standard_error[0] > sampled.standard_error[0]);
 }
 
 /* Six players at fifth street: every card is known, so the whole table is one
@@ -259,6 +241,62 @@ static void test_six_way_fifth_street_is_exact(void) {
     /* Aces and kings, two pair, is the best hand at the table. */
     TEST_ASSERT_DOUBLE_WITHIN(1e-9, 1.0, result.results[2].equity);
     TEST_ASSERT_DOUBLE_WITHIN(1e-9, 0.0, result.results[0].equity);
+}
+
+/* A range mixes matchups with different distributions, so the pooled sample
+ * variance would not describe the estimator.  The engine reports the work but
+ * leaves the standard error at zero instead of a plausible-looking number. */
+static void test_standard_error_needs_a_single_matchup(void) {
+    pe_range_t *ranges[2] = {NULL, NULL};
+    const pe_range_t *range_ptrs[2];
+    StdDeck_CardMask board, dead;
+    pe_equity_opts_t opts;
+    pe_equity_result_multi_t result;
+
+    StdDeck_CardMask_RESET(board);
+    StdDeck_CardMask_RESET(dead);
+    /* Two short pockets per range: every matchup still draws a card, so the
+     * samples are numerous and genuinely random. */
+    const char *h00[] = {"9h", "Th", "Jh", "3h"};
+    const char *h01[] = {"9h", "Th", "Jh", "4h"};
+    const char *h10[] = {"Ah", "Ad", "Ks", "Kd"};
+    const char *h11[] = {"Ah", "Ad", "Ks", "Qd"};
+
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_range_create(game_soko, &ranges[0]));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_range_create(game_soko, &ranges[1]));
+    ranges[0]->combos[0].hand = cards_of(h00, 4);
+    ranges[0]->combos[0].weight = 1.0;
+    ranges[0]->combos[1].hand = cards_of(h01, 4);
+    ranges[0]->combos[1].weight = 1.0;
+    ranges[0]->count = 2;
+    ranges[0]->total_weight = 2.0;
+    ranges[1]->combos[0].hand = cards_of(h10, 4);
+    ranges[1]->combos[0].weight = 1.0;
+    ranges[1]->combos[1].hand = cards_of(h11, 4);
+    ranges[1]->combos[1].weight = 1.0;
+    ranges[1]->count = 2;
+    ranges[1]->total_weight = 2.0;
+    range_ptrs[0] = ranges[0];
+    range_ptrs[1] = ranges[1];
+
+    memset(&opts, 0, sizeof(opts));
+    opts.is_monte_carlo = 1;
+    opts.iterations = 2000;
+
+    memset(&result, 0, sizeof(result));
+    TEST_ASSERT_EQUAL_INT(PE_STATUS_OK,
+                          pe_equity_calculate(game_soko, range_ptrs, 2, board,
+                                              dead, &opts, &result));
+    TEST_ASSERT_EQUAL_INT(0, result.exact);
+    TEST_ASSERT_TRUE(result.iterations > 0);
+    TEST_ASSERT_TRUE(result.samples > 1);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, result.standard_error[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, result.standard_error[1]);
+
+    pe_range_free(ranges[0]);
+    pe_range_free(ranges[1]);
 }
 
 /* Invalid descriptions are rejected rather than silently mis-enumerated. */
@@ -305,7 +343,7 @@ int main(void) {
     RUN_TEST(test_third_street_equity_sampled);
     RUN_TEST(test_six_way_fifth_street_is_exact);
     RUN_TEST(test_monte_carlo_converges_to_exact);
-    RUN_TEST(test_more_iterations_shrink_the_interval);
+    RUN_TEST(test_standard_error_needs_a_single_matchup);
     RUN_TEST(test_invalid_streets_rejected);
     return UNITY_END();
 }

@@ -412,6 +412,14 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
     if (use_mc && agg_res->nsamples > 0)
         result->iterations = lround(total_games / (double)agg_res->nsamples);
 
+    /* The share histogram gives the exact variance of the per-sample payoff,
+     * but only when every sample comes from the same matchup.  For a range the
+     * samples are a weighted mixture, and a low pot adds a second correlated
+     * payoff, so neither case gets a standard error. */
+    enum_gameparams_t *params = enumGameParams(agg_res->game);
+    int standard_error_defined =
+        use_mc && agg_res->nsamples == 1 && params != NULL && !params->haslopot;
+
     for (int i = 0; i < num_players; i++) {
         result->results[i].equity = agg_res->ev[i];
         result->results[i].ev = agg_res->ev[i];
@@ -435,11 +443,11 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
         eq_hi /= total_games;
         eq_lo /= total_games;
 
-        /* A sampled sample pays 1/h when the pot is shared by h players and 0
+        /* A sample pays 1/h when the pot is shared by h players and 0
          * otherwise, so the share histogram gives the second moment of the
          * per-sample equity exactly.  That makes the standard error of the
          * mean analytic, with no resampling. */
-        if (use_mc) {
+        if (standard_error_defined) {
             double eq_sq_hi = 0.0;
             for (int h = 1; h <= num_players; h++)
                 eq_sq_hi += (double)agg_res->nsharehi[i][h] /
@@ -448,7 +456,6 @@ static void fill_result_legacy(const enum_result_t *agg_res, int num_players, in
             double variance = eq_sq_hi - eq_hi * eq_hi;
             if (variance < 0.0) variance = 0.0;
             result->standard_error[i] = sqrt(variance / total_games);
-            result->confidence_95[i] = 1.96 * result->standard_error[i];
         }
 
         result->hilo_results[i].equity_hi = eq_hi;
