@@ -26,8 +26,10 @@ static void test_soko_spellings(void) {
     expect_game("soko", game_soko);
     expect_game("Soko", game_soko);
     expect_game("SOKO", game_soko);
-    expect_game("s\u00f6k\u00f6", game_soko); /* UTF-8 "sökö" */
-    expect_game("S\u00d6K\u00d6", game_soko);
+    /* Explicit UTF-8 bytes: a narrow \u escape uses the compiler's execution
+     * charset, which is an ANSI code page on MSVC, not UTF-8. */
+    expect_game("s\xc3\xb6k\xc3\xb6", game_soko); /* "sökö" */
+    expect_game("S\xc3\x96K\xc3\x96", game_soko); /* "SÖKÖ" */
     expect_game("canadian_stud", game_soko);
     expect_game("canadianstud", game_soko);
     expect_game("Canadian Stud", game_soko);
