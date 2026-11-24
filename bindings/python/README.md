@@ -77,10 +77,42 @@ thread's stream. Exhaustive enumeration (no `iterations`) ignores the seed.
 | `archie` | Archie triple draw hi/lo | hi/lo |
 | `badugi`, `badugi_hilo` | Badugi, Badugi hi/lo | low, hi/lo |
 | `drawmaha`, `drawmaha49`, `drawmaha_zero`, `drawmaha_dugi` | Omaha hand on the high side, five-card hand on the low side | hi/lo |
+| `soko` | Sökö / Soko (Canadian Stud): five-card stud, four-card flush above four-card straight | hi |
 
 With complete hands the joker and standard variants rank the same.  When
 cards are still to come (`"__"` in a pocket), `5draw*` can deal the joker:
 use the `_std` names for standard five-card draw.
+
+### Sökö descriptions and street equity
+
+`best()` returns a standard five-card value, which cannot express a four-card
+flush or a four-card straight.  Use `describe_soko_hand()` for the Sökö
+category and its tie-break ranks:
+
+```python
+pe.describe_soko_hand(["9h", "Th", "Jh", "3h", "2s"])
+# {'category': 'FourCardFlush', 'category_rank': 3,
+#  'ranks': [11, 10, 9, 3], 'rank_names': ['J', 'T', '9', '3'],
+#  'value': ...}
+```
+
+The dict's `value` is the Sökö `HandVal`: larger always wins and equal values
+tie, so `describe_soko_hand(a)["value"] > describe_soko_hand(b)["value"]`
+compares two hands without inspecting their categories.
+
+`soko_street_equity()` computes showdown equity at third, fourth or fifth
+street; the street follows from the number of upcards, and an omitted
+`down` means the hole card is unknown:
+
+```python
+pe.soko_street_equity(
+    [{"up": ["Kh", "Qh"], "down": ["Ah"]},   # third street
+     {"up": ["Kd", "Qd"]}],                  # hole card unknown
+    iterations=20000,
+    seed=7,                                    # reproducible sampling
+)
+# {'hi': [0.62..., 0.37...], 'exact': 0, 'samples': 20000}
+```
 
 ```python
 pe.winners(game="5draw_std",

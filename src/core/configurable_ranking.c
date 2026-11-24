@@ -130,12 +130,15 @@ int pe_ranking_config_set_preset(const char *preset_name,
         PE_CAT_THREE_OF_A_KIND, PE_CAT_STRAIGHT, PE_CAT_FULL_HOUSE,
         PE_CAT_FLUSH, PE_CAT_FOUR_OF_A_KIND, PE_CAT_STRAIGHT_FLUSH
     };
-    /* Canadian Stud: 4-card categories sit between Two Pair and Straight. */
-    static const pe_hand_category_t canadian[] = {
-        PE_CAT_HIGH_CARD, PE_CAT_ONE_PAIR, PE_CAT_TWO_PAIR,
-        PE_CAT_THREE_OF_A_KIND, PE_CAT_FOUR_CARD_STRAIGHT,
-        PE_CAT_FOUR_CARD_FLUSH, PE_CAT_STRAIGHT, PE_CAT_FLUSH,
-        PE_CAT_FULL_HOUSE, PE_CAT_FOUR_OF_A_KIND, PE_CAT_STRAIGHT_FLUSH
+    /* Sökö (Canadian Stud / Scandinavian Stud) official order (win2day
+     * §7.f.14): the four-card categories sit above One Pair but below Two
+     * Pair, and a four-card flush outranks a four-card straight.  This is
+     * the order used by both the "soko" and "canadian_stud" presets. */
+    static const pe_hand_category_t soko[] = {
+        PE_CAT_HIGH_CARD, PE_CAT_ONE_PAIR, PE_CAT_FOUR_CARD_STRAIGHT,
+        PE_CAT_FOUR_CARD_FLUSH, PE_CAT_TWO_PAIR, PE_CAT_THREE_OF_A_KIND,
+        PE_CAT_STRAIGHT, PE_CAT_FLUSH, PE_CAT_FULL_HOUSE,
+        PE_CAT_FOUR_OF_A_KIND, PE_CAT_STRAIGHT_FLUSH
     };
     /* New York Stud: 4-card flush is a strong intermediate (above Straight). */
     static const pe_hand_category_t new_york[] = {
@@ -164,8 +167,12 @@ int pe_ranking_config_set_preset(const char *preset_name,
         pe_fill_order(config, flush_over_fh, (int)(sizeof(flush_over_fh) / sizeof(flush_over_fh[0])));
         config->flush_beats_fullhouse = 1;
         config->ace_low_straight_allowed = 0;
-    } else if (strcmp(preset_name, "canadian_stud") == 0) {
-        pe_fill_order(config, canadian, (int)(sizeof(canadian) / sizeof(canadian[0])));
+    } else if (strcmp(preset_name, "canadian_stud") == 0 ||
+               strcmp(preset_name, "soko") == 0 ||
+               strcmp(preset_name, "s\xc3\xb6k\xc3\xb6") == 0) {
+        /* "soko" and "sökö" are aliases of the same rules, not a second
+         * configuration, so the presets can never drift apart. */
+        pe_fill_order(config, soko, (int)(sizeof(soko) / sizeof(soko[0])));
         config->allow_4card_straights = 1;
         config->allow_4card_flushes = 1;
         config->flush_beats_fullhouse = 0;
@@ -247,14 +254,16 @@ static inline int pe_pop_lowest_card(pe_card_mask_t *m) {
 }
 
 /*
- * Evaluate the hand described by (spec, hand_mask, num_cards) against cfg.
- * Returns a normalized HandVal with HANDTYPE == configured rank of the best
- * matching category.
+ * Classify the hand described by (spec, hand_mask, num_cards) against cfg.
+ * Fills *out with the category, its configured rank and the tie-break ranks,
+ * and returns 1.  Returns 0 on invalid input.
  */
-HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
-                                  const pe_hand_ranking_config_t *config,
-                                  pe_card_mask_t hand_mask,
-                                  int num_cards) {
+static int pe_classify_configurable_hand(
+    const pe_deck_spec_t *deck_spec,
+    const pe_hand_ranking_config_t *config,
+    pe_card_mask_t hand_mask,
+    int num_cards,
+    pe_hand_description_t *out) {
     int counts[13];
     int present[13];
     int suit_count[4];
@@ -271,11 +280,11 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     int i, c, r, s;
     pe_card_mask_t m;
 
-    if (deck_spec == NULL || config == NULL || num_cards <= 0) {
-        return HandVal_NOTHING;
+    if (deck_spec == NULL || config == NULL || out == NULL || num_cards <= 0) {
+        return 0;
     }
     if (num_cards > deck_spec->num_cards) {
-        return HandVal_NOTHING;
+        return 0;
     }
 
     memset(counts, 0, sizeof(counts));
@@ -286,12 +295,12 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     while (m != 0) {
         c = pe_pop_lowest_card(&m);
         if (c >= deck_spec->num_cards) {
-            return HandVal_NOTHING;
+            return 0;
         }
         r = pe_global_rank(deck_spec, c);
         s = pe_suit_of(deck_spec, c);
         if (r < 0 || r > 12 || s < 0 || s >= deck_spec->num_suits) {
-            return HandVal_NOTHING;
+            return 0;
         }
         counts[r]++;
         present[r] = 1;
@@ -299,7 +308,7 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
         n++;
     }
     if (n == 0) {
-        return HandVal_NOTHING;
+        return 0;
     }
 
     for (s = 0; s < deck_spec->num_suits; s++) {
@@ -333,10 +342,12 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
     /* Canonical tiebreak ordering (groups by count, then rank descending). */
     pe_build_canonical(counts, n, ranks_sorted);
 
-    /* Detect 5-card straight (and wheel). */
+    /* Detect the highest 5-card straight (and wheel).  Scanning from the top
+     * matters for 6- and 7-card hands: 9-8-7-6-5-4-3 also contains a 7-high
+     * run, but the 9-high straight is the one that plays. */
     {
         int ok = 1;
-        for (r = 4; r <= 12; r++) {
+        for (r = 12; r >= 4; r--) {
             int k;
             ok = 1;
             for (k = 0; k < 5; k++) {
@@ -356,10 +367,10 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
         }
     }
 
-    /* Detect 4-card straight (and 4-card wheel) when allowed. */
+    /* Detect the highest 4-card straight (and 4-card wheel) when allowed. */
     if (config->allow_4card_straights && num_cards >= 4 && straight5_high < 0) {
         int ok = 1;
-        for (r = 3; r <= 12; r++) {
+        for (r = 12; r >= 3; r--) {
             int k;
             ok = 1;
             for (k = 0; k < 4; k++) {
@@ -437,46 +448,73 @@ HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
 #undef TRY_CAT
 
     if (best_rank < 0) {
+        return 0;
+    }
+
+    /* Describe the hand with the same ranks the HandVal packing below uses. */
+    out->category = best_cat;
+    out->category_rank = best_rank;
+    switch (best_cat) {
+        case PE_CAT_STRAIGHT:
+        case PE_CAT_STRAIGHT_FLUSH:
+            out->num_tiebreak_ranks = 1;
+            out->tiebreak_ranks[0] = straight5_high;
+            break;
+        case PE_CAT_FOUR_CARD_STRAIGHT:
+            out->num_tiebreak_ranks = 1;
+            out->tiebreak_ranks[0] = straight4_high;
+            break;
+        case PE_CAT_FLUSH: {
+            int k;
+            out->num_tiebreak_ranks = max_suit_count > 5 ? 5 : max_suit_count;
+            for (k = 0; k < out->num_tiebreak_ranks; k++)
+                out->tiebreak_ranks[k] = flush_ranks[k];
+            break;
+        }
+        case PE_CAT_FOUR_CARD_FLUSH: {
+            int k;
+            /* Only the four suited ranks compare, lexicographically
+             * descending: win2day §7.f.14.1 makes equal four-flushes tie
+             * whatever the off-suit card is. */
+            out->num_tiebreak_ranks = max_suit_count;
+            for (k = 0; k < max_suit_count; k++)
+                out->tiebreak_ranks[k] = flush_ranks[k];
+            break;
+        }
+        default: {
+            int k;
+            out->num_tiebreak_ranks = n > 5 ? 5 : n;
+            for (k = 0; k < out->num_tiebreak_ranks; k++)
+                out->tiebreak_ranks[k] = ranks_sorted[k];
+            break;
+        }
+    }
+    return 1;
+}
+
+int pe_eval_configurable_hand_detailed(
+    const pe_deck_spec_t *deck_spec,
+    const pe_hand_ranking_config_t *config,
+    pe_card_mask_t hand_mask,
+    int num_cards,
+    pe_hand_description_t *out) {
+    return pe_classify_configurable_hand(deck_spec, config, hand_mask, num_cards,
+                                         out);
+}
+
+HandVal pe_eval_configurable_hand(const pe_deck_spec_t *deck_spec,
+                                  const pe_hand_ranking_config_t *config,
+                                  pe_card_mask_t hand_mask,
+                                  int num_cards) {
+    pe_hand_description_t desc;
+    HandVal hv;
+
+    if (!pe_classify_configurable_hand(deck_spec, config, hand_mask, num_cards,
+                                       &desc)) {
         return HandVal_NOTHING;
     }
 
-    /* Build the normalized HandVal: HANDTYPE = configured rank, kicker in low bits. */
-    {
-        HandVal hv = HandVal_HANDTYPE_VALUE((HandVal)best_rank);
-        switch (best_cat) {
-            case PE_CAT_STRAIGHT:
-            case PE_CAT_STRAIGHT_FLUSH:
-                hv |= HandVal_TOP_CARD_VALUE((HandVal)(straight5_high & 0xF));
-                break;
-            case PE_CAT_FOUR_CARD_STRAIGHT:
-                hv |= HandVal_TOP_CARD_VALUE((HandVal)(straight4_high & 0xF));
-                break;
-            case PE_CAT_FLUSH:
-                hv |= pe_pack_ranks(flush_ranks,
-                                    max_suit_count > 5 ? 5 : max_suit_count);
-                break;
-            case PE_CAT_FOUR_CARD_FLUSH: {
-                int kicker = -1;
-                /* find the off-suit kicker for a 5-card hand */
-                m = hand_mask;
-                while (m != 0) {
-                    c = pe_pop_lowest_card(&m);
-                    if (pe_suit_of(deck_spec, c) != max_suit) {
-                        kicker = pe_global_rank(deck_spec, c);
-                        break;
-                    }
-                }
-                hv |= pe_pack_ranks(flush_ranks, max_suit_count);
-                if (kicker >= 0 && num_cards == 5) {
-                    hv |= HandVal_FIFTH_CARD_VALUE((HandVal)(kicker & 0xF));
-                }
-                break;
-            }
-            default:
-                /* Group-based ordering (pairs/trips/quads/full house/high card). */
-                hv |= pe_pack_ranks(ranks_sorted, n);
-                break;
-        }
-        return hv;
-    }
+    hv = HandVal_HANDTYPE_VALUE((HandVal)desc.category_rank);
+    hv |= pe_pack_ranks(desc.tiebreak_ranks, desc.num_tiebreak_ranks);
+    return hv;
 }

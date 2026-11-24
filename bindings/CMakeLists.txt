@@ -35,8 +35,8 @@ if(BUILD_CXX_BINDING)
     add_subdirectory(c++)
 endif()
 
-# Cython binding
-option(BUILD_CYTHON_BINDING "Build Cython binding" OFF)
-if(BUILD_CYTHON_BINDING)
-    add_subdirectory(cython)
-endif()
+# The Cython binding is a standalone, deprecated package: it has its own
+# setup.py, its generated C comes from an old game table, and there is no
+# CMakeLists.txt under bindings/cython to add.  BUILD_CYTHON_BINDING used to
+# advertise add_subdirectory(cython), which failed as soon as it was enabled.
+# Use the Python binding (bindings/python) instead; see its Readme.

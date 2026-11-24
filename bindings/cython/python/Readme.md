@@ -1,5 +1,12 @@
 # Wrapper for Poker Evaluation Library (`pokereval.pyx`)
 
+> **Deprecated.** This standalone Cython package predates the current Python
+> binding and its generated C still carries an old game table (it knows
+> neither `5draw_std`, `manila` nor `soko`). It is no longer wired into the
+> CMake build - the historical `BUILD_CYTHON_BINDING` option pointed at a
+> `CMakeLists.txt` that does not exist. Use `bindings/python` (the
+> `pokereval` package in this repository) instead.
+
 This project is a Cython-based wrapper for a poker evaluation library. It provides Python access to evaluate poker hands using a C library, which significantly improves performance for operations such as calculating the best hand or performing Monte Carlo simulations for EV (Expected Value) estimations.
 
 ## Features

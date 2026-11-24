@@ -72,6 +72,9 @@
 
 #include <poker_eval/core/enumerate.h>
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/game_names.h>
+#include <poker_eval/games/soko.h>
+#include <poker_eval/games/soko_street.h>
 #include <poker_eval/distributions/omaha_distributions.h> // Added for Omaha hand instantiation
 #include <poker_eval/distributions/stud_distributions.h>  // Added for Stud hand instantiation
 #include <poker_eval/equity/RangeEquity.h>                // Added for Range Equity functionality
@@ -361,36 +364,32 @@ static inline LowHandVal py_eval_low8_joker_qualified(JokerDeck_CardMask cards)
     err = 0;                                                   \
   })
 
-/* The game names the bindings accept.  This is the only list: the lookup below
- * and the "not a valid value" message both come from it, so adding a game is a
- * one-line change instead of one per entry point. */
-static const struct
-{
-  const char *name;
-  enum_game_t game;
-} py_game_names[] = {
-    {"holdem", game_holdem},       {"holdem8", game_holdem8},
-    {"omaha", game_omaha},         {"omaha8", game_omaha8},
-    {"7stud", game_7stud},         {"7stud8", game_7stud8},
-    {"7studnsq", game_7studnsq},   {"razz", game_razz},
-    {"5draw", game_5draw},         {"5draw8", game_5draw8},
-    {"5drawnsq", game_5drawnsq},   {"lowball", game_lowball},
-    {"lowball27", game_lowball27}, {"fusion", game_fusion},
-    /* Five-card draw on the standard 52-card deck; "5draw*" above are the
-       joker variants, which can deal the joker when cards are still to come. */
-    {"5draw_std", game_5draw_std},
-    {"5draw8_std", game_5draw8_std},
-    {"5drawnsq_std", game_5drawnsq_std},
-    {"27_triple_draw", game_27_triple_draw},
-    {"a5_triple_draw", game_a5_triple_draw},
-    {"archie", game_archie},
-    {"badugi", game_badugi},
-    {"badugi_hilo", game_badugi_hilo},
-    {"drawmaha", game_drawmaha},
-    {"drawmaha49", game_drawmaha49},
-    {"drawmaha_zero", game_drawmaha_zero},
-    {"drawmaha_dugi", game_drawmaha_dugi},
+/* Game names come from the shared core table (core/game_names.h), which also
+ * carries the historical spellings.  A separate list is still needed for the
+ * games this binding can actually route and evaluate; that list is by enum,
+ * not by spelling, so an alias can never be accepted without its game. */
+static const enum_game_t py_supported_games[] = {
+    game_holdem,        game_holdem8,        game_omaha,
+    game_omaha8,        game_7stud,          game_7stud8,
+    game_7studnsq,      game_razz,           game_5draw,
+    game_5draw8,        game_5drawnsq,       game_lowball,
+    game_lowball27,     game_fusion,         game_5draw_std,
+    game_5draw8_std,    game_5drawnsq_std,   game_27_triple_draw,
+    game_a5_triple_draw, game_archie,        game_badugi,
+    game_badugi_hilo,   game_drawmaha,       game_drawmaha49,
+    game_drawmaha_zero, game_drawmaha_dugi,  game_soko,
 };
+
+static int py_game_is_supported(enum_game_t game)
+{
+  size_t i;
+
+  for (i = 0; i < sizeof(py_supported_games) / sizeof(py_supported_games[0]);
+       ++i)
+    if (py_supported_games[i] == game)
+      return 1;
+  return 0;
+}
 
 /* Games whose dealing plan the binding's own loops cannot express: the core
    enumerator deals them from the pockets and board as given.  Fusion deals the
@@ -402,7 +401,7 @@ static const enum_game_t py_core_enumerated_games[] = {
     game_5drawnsq_std,   game_27_triple_draw, game_a5_triple_draw,
     game_archie,         game_badugi,         game_badugi_hilo,
     game_drawmaha,       game_drawmaha49,     game_drawmaha_zero,
-    game_drawmaha_dugi,
+    game_drawmaha_dugi,  game_soko,
 };
 
 static int py_game_uses_core_enumerator(enum_game_t game)
@@ -420,26 +419,35 @@ static int py_game_uses_core_enumerator(enum_game_t game)
 /* Parameters of a named game, or NULL when the name is unknown. */
 static enum_gameparams_t *py_game_params(const char *name)
 {
-  size_t i;
+  enum_game_t game;
 
-  for (i = 0; i < sizeof(py_game_names) / sizeof(py_game_names[0]); ++i)
-    if (strcmp(name, py_game_names[i].name) == 0)
-      return enumGameParams(py_game_names[i].game);
-  return NULL;
+  if (name == NULL || pe_game_from_name(name, &game) != 0)
+    return NULL;
+  if (!py_game_is_supported(game))
+    return NULL;
+  return enumGameParams(game);
 }
 
-/* Reports an unknown game name, listing every name that is accepted. */
+/* Reports an unknown game name, listing every game the binding accepts. */
 static void py_set_invalid_game_error(const char *name)
 {
   char accepted[1024];
   size_t used = 0;
-  size_t i;
+  int g;
 
   accepted[0] = '\0';
-  for (i = 0; i < sizeof(py_game_names) / sizeof(py_game_names[0]); ++i)
+  for (g = 0; g < game_NUMGAMES; ++g)
   {
-    int written = snprintf(accepted + used, sizeof(accepted) - used, "%s%s",
-                           i == 0 ? "" : ", ", py_game_names[i].name);
+    const char *canonical;
+    int written;
+
+    if (!py_game_is_supported((enum_game_t)g))
+      continue;
+    canonical = pe_game_canonical_name((enum_game_t)g);
+    if (canonical == NULL)
+      continue;
+    written = snprintf(accepted + used, sizeof(accepted) - used, "%s%s",
+                       used == 0 ? "" : ", ", canonical);
     if (written < 0 || (size_t)written >= sizeof(accepted) - used)
       break;
     used += (size_t)written;
@@ -3174,6 +3182,189 @@ static PyObject *py_get_base_seed(PyObject *self, PyObject *args)
   return PyLong_FromUnsignedLongLong((unsigned long long)pe_rng_base_seed());
 }
 
+/* describe_soko(hand) -> dict
+ *
+ * Sökö's four-card categories cannot be expressed as a standard HandVal, so
+ * best() would call a four-card flush "NoPair".  This returns the Sökö
+ * category and its tie-break ranks instead. */
+static PyObject *py_describe_soko(PyObject *self, PyObject *args)
+{
+  PyObject *pyhand = NULL;
+  CardMask hand;
+  pe_soko_hand_description_t desc;
+  PyObject *ranks = NULL;
+  PyObject *result = NULL;
+  int i;
+
+  (void)self;
+  if (!PyArg_ParseTuple(args, "O:describe_soko", &pyhand))
+    return NULL;
+  if (PyList2CardMask(pyhand, &hand) < 0)
+    return NULL;
+  if (pe_soko_describe_hand(hand, &desc) != PE_STATUS_OK)
+  {
+    PyErr_SetString(PyExc_ValueError,
+                    "describe_soko expects exactly five distinct cards");
+    return NULL;
+  }
+
+  ranks = PyList_New(desc.num_tiebreak_ranks);
+  if (!ranks)
+    return NULL;
+  for (i = 0; i < desc.num_tiebreak_ranks; ++i)
+  {
+    PyObject *rank = PyLong_FromLong(desc.tiebreak_ranks[i]);
+    if (!rank)
+    {
+      Py_DECREF(ranks);
+      return NULL;
+    }
+    PyList_SET_ITEM(ranks, i, rank);
+  }
+
+  result = Py_BuildValue("{s:s,s:i,s:k,s:O}", "category", desc.category_name,
+                         "category_rank", desc.category_rank, "value",
+                         (unsigned long long)desc.value, "ranks", ranks);
+  Py_DECREF(ranks);
+  return result;
+}
+
+/* soko_street_equity(players, dead=[], iterations=0, seed=None) -> dict
+ *
+ * players is a list of {"up": [...], "down": [...]} dicts; the street is
+ * derived from the number of upcards (2 = third, 3 = fourth, 4 = fifth) and
+ * the downcard may be omitted when it is unknown.  iterations > 0 forces
+ * sampling, which is what third street needs.  seed reseeds the calling
+ * thread's sampling stream, so the same players, iterations and seed give the
+ * same equities; it is ignored on the exact path. */
+static PyObject *py_soko_street_equity(PyObject *self, PyObject *args,
+                                       PyObject *kwargs)
+{
+  static const char *kwlist[] = {"players", "dead", "iterations", "seed", NULL};
+  PyObject *py_players = NULL;
+  PyObject *py_dead = Py_None;
+  long iterations = 0;
+  PyObject *pyseed = NULL;
+  int has_seed = 0;
+  uint64_t seed = 0;
+  pe_soko_street_player_t players[10];
+  CardMask dead;
+  pe_equity_opts_t opts;
+  pe_equity_result_multi_t result;
+  pe_status_t status;
+  PyObject *py_equity = NULL;
+  PyObject *py_result = NULL;
+  int num_players, i;
+
+  (void)self;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OlO:soko_street_equity",
+                                   (char **)(void *)kwlist, &py_players,
+                                   &py_dead, &iterations, &pyseed))
+    return NULL;
+  if (py_parse_seed(pyseed, &has_seed, &seed) < 0)
+    return NULL;
+  if (!PyList_Check(py_players))
+  {
+    PyErr_SetString(PyExc_TypeError, "players must be a list of dicts");
+    return NULL;
+  }
+  num_players = (int)PyList_Size(py_players);
+  if (num_players < 2 || num_players > 10)
+  {
+    PyErr_SetString(PyExc_ValueError,
+                    "soko_street_equity needs between 2 and 10 players");
+    return NULL;
+  }
+
+  StdDeck_CardMask_RESET(dead);
+  if (py_dead != NULL && py_dead != Py_None)
+  {
+    CardMask dead_mask;
+    if (PyList2CardMask(py_dead, &dead_mask) < 0)
+      return NULL;
+    dead = dead_mask;
+  }
+
+  memset(players, 0, sizeof(players));
+  for (i = 0; i < num_players; ++i)
+  {
+    PyObject *entry = PyList_GetItem(py_players, i);
+    PyObject *py_up;
+    PyObject *py_down;
+    CardMask up;
+    CardMask down;
+
+    if (PyErr_Occurred())
+      return NULL;
+    if (!PyDict_Check(entry))
+    {
+      PyErr_SetString(PyExc_TypeError,
+                      "each player must be a dict with 'up' and optional 'down'");
+      return NULL;
+    }
+    py_up = PyDict_GetItemString(entry, "up");
+    py_down = PyDict_GetItemString(entry, "down");
+    if (py_up == NULL || PyList2CardMask(py_up, &up) < 0)
+    {
+      if (!PyErr_Occurred())
+        PyErr_SetString(PyExc_ValueError, "each player needs an 'up' card list");
+      return NULL;
+    }
+    StdDeck_CardMask_RESET(down);
+    if (py_down != NULL && py_down != Py_None)
+    {
+      if (PyList2CardMask(py_down, &down) < 0)
+        return NULL;
+    }
+    players[i].street = (pe_soko_street_t)(StdDeck_numCards(up) + 1);
+    players[i].up_cards = up;
+    players[i].down_cards = down;
+  }
+
+  memset(&opts, 0, sizeof(opts));
+  if (iterations > 0)
+  {
+    opts.is_monte_carlo = 1;
+    opts.iterations = iterations;
+  }
+
+  /* Only sampling draws from the stream: the exact path must stay exactly
+   * reproducible whatever seed was passed. */
+  if (has_seed && iterations > 0)
+    pe_rng_seed_current(seed);
+
+  memset(&result, 0, sizeof(result));
+  status = pe_equity_soko_street(players, num_players, dead,
+                                 iterations > 0 ? &opts : NULL, &result);
+  if (status != PE_STATUS_OK)
+  {
+    PyErr_Format(PyExc_ValueError,
+                 "soko_street_equity failed (status %d): check that each "
+                 "player's upcards match their street and that no card is held twice",
+                 (int)status);
+    return NULL;
+  }
+
+  py_equity = PyList_New(num_players);
+  if (!py_equity)
+    return NULL;
+  for (i = 0; i < num_players; ++i)
+  {
+    PyObject *value = PyFloat_FromDouble(result.results[i].equity);
+    if (!value)
+    {
+      Py_DECREF(py_equity);
+      return NULL;
+    }
+    PyList_SET_ITEM(py_equity, i, value);
+  }
+
+  py_result = Py_BuildValue("{s:O,s:i,s:l}", "hi", py_equity, "exact",
+                            result.exact, "samples", (long)result.samples);
+  Py_DECREF(py_equity);
+  return py_result;
+}
+
 static PyMethodDef base_methods[] = {
     {"set_base_seed", (PyCFunction)py_set_base_seed, METH_VARARGS,
      "set_base_seed(seed): set the base seed of the Monte Carlo PCG streams and reseed the calling thread's stream."},
@@ -3189,6 +3380,8 @@ static PyMethodDef base_methods[] = {
     {"calculate_equity_for_ranges", (PyCFunction)py_calculate_equity_for_ranges, METH_VARARGS, "Calculates equity for player ranges."},
     {"calculate_multiway_equity", (PyCFunction)(void (*)(void))calculate_multiway_equity, METH_VARARGS | METH_KEYWORDS, "Calculates multiway equity with side pots."},
     {"convert_card_strings_to_mask_value", (PyCFunction)py_convert_card_strings_to_mask_value, METH_VARARGS, "Converts a list of card strings to its uint64_t card mask value."},
+    {"describe_soko", (PyCFunction)py_describe_soko, METH_VARARGS, "describe_soko(hand) -> {'category', 'category_rank', 'value', 'ranks'} under the official Sokoe ranking."},
+    {"soko_street_equity", (PyCFunction)(void (*)(void))py_soko_street_equity, METH_VARARGS | METH_KEYWORDS, "soko_street_equity(players, dead=[], iterations=0, seed=None) -> {'hi', 'exact', 'samples'}: Sokoe showdown equity at third/fourth/fifth street."},
     {"solver_v3_create", (PyCFunction)(void (*)(void))py_solver_v3_create, METH_VARARGS | METH_KEYWORDS, "Create a Python-callback-backed v3 solver."},
     {"solver_v3_run", (PyCFunction)py_solver_v3_run, METH_VARARGS, "Run a v3 solver capsule."},
     {"solver_v3_progress", (PyCFunction)py_solver_v3_progress, METH_VARARGS, "Read v3 solver progress."},

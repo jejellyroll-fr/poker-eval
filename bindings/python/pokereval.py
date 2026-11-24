@@ -98,6 +98,10 @@ The last five elements are numbers describing the best hand properly
 sorted (for instance the ace is at the end for no pair if "side" is low or
 at the beginning if "side" high).
 
+This uses the standard five-card ranking.  For Sökö, whose four-card flush
+and four-card straight have no standard HandVal encoding, use
+describe_soko_hand() instead: "best" reports those hands as NoPair.
+
 Examples:
 
 [134414336, ['StFlush', 29, 28, 27, 26, 38]] is the wheel five to ace, clubs
@@ -114,11 +118,17 @@ Examples:
     def _expand_player_ranges(self, game_name, list_of_player_range_definitions, board_card_strings, dead_card_strings):
         processed_player_ranges_uint64 = []
 
-        is_omaha_type = "omaha" in game_name.lower()
-        is_stud_type = "stud" in game_name.lower()
+        game_lower = game_name.lower()
+        is_soko = game_lower in ("soko", "sökö")
+        is_omaha_type = "omaha" in game_lower
+        # Sökö is a five-card stud game, so its range strings use the stud
+        # grammar (one downcard pair plus upcards).
+        is_stud_type = "stud" in game_lower or is_soko
 
         game_total_cards_for_stud = 7
-        if is_stud_type and "5" in game_name:
+        if is_soko:
+            game_total_cards_for_stud = 5
+        elif is_stud_type and "5" in game_name:
             game_total_cards_for_stud = 5
 
         for p_idx, player_range_def_strings in enumerate(list_of_player_range_definitions):
@@ -133,6 +143,11 @@ Examples:
                 try:
                     if is_omaha_type:
                         specific_hands_as_str_lists = self.omaha_hands(range_str, dead_cards=temp_dead_for_generation)
+                    elif is_soko and len(range_str) == 10 and "(" not in range_str:
+                        # A plain five-card Sökö hand, e.g. "AhAdKsKd2h".
+                        specific_hands_as_str_lists = [[
+                            range_str[i:i + 2] for i in range(0, 10, 2)
+                        ]]
                     elif is_stud_type:
                         specific_hands_as_str_lists = self.get_stud_hands(
                             range_str,
@@ -178,6 +193,15 @@ Examples:
                         )
 
             if not current_player_expanded:
+                if is_soko:
+                    # Fail here, naming the game and the range: the alternative
+                    # was a misleading "range cannot be empty" error, or a
+                    # silent fallback to whatever hands the caller did supply.
+                    raise RuntimeError(
+                        f"Sökö range '{range_str}' expanded to no hands. Use a "
+                        "five-card hand such as 'AhAdKsKd2h' or a stud pattern "
+                        "such as '(AhAd)KsKd2h'."
+                    )
                 print(
                     f"Warning: Player {p_idx+1} has no valid hands in their expanded range. "
                     "This might lead to 0 matchups or errors if other players have hands.",
@@ -223,6 +247,69 @@ Return the strength of the "cards" as a number. The higher the
 better.
 """
         return _pokereval.evaln(cards)
+
+    def describe_soko_hand(self, hand):
+        """\
+Describe a complete five-card Sökö hand under the official Sökö ranking.
+
+This is the Sökö-aware counterpart of "best": four-card flushes and
+four-card straights have no representation in the standard HandVal that
+"best" returns, so "best" reports them as NoPair.  The returned dict has:
+
+  category       semantic category, e.g. "FourCardFlush"
+  category_rank  strength index; larger beats smaller
+  value          Sökö HandVal; larger always wins, equal values tie
+  ranks          tie-break ranks, 2..14 (11 = jack, 14 = ace)
+  rank_names     the same ranks as characters, e.g. ["J", "T", "9", "3"]
+
+"value" is what to compare when sorting or matching Sökö hands: unlike the
+standard HandVal that "best" returns, it ranks a four-card flush above one
+pair.
+
+A four-card flush lists only its four suited ranks; a four-card straight
+lists only the high card of the run.
+
+Example:
+{'category': 'FourCardFlush', 'category_rank': 3, 'ranks': [11, 10, 9, 3],
+ 'rank_names': ['J', 'T', '9', '3']}
+"""
+        if len(hand) != 5:
+            raise ValueError("describe_soko_hand expects exactly five cards")
+        description = _pokereval.describe_soko(hand)
+        ranks = description["ranks"]
+        return {
+            "category": description["category"],
+            "category_rank": description["category_rank"],
+            "value": description["value"],
+            "ranks": ranks,
+            "rank_names": ["23456789TJQKA"[rank - 2] for rank in ranks],
+        }
+
+    def soko_street_equity(self, players, dead=None, iterations=0, seed=None):
+        """\
+Showdown equity for two or more Sökö players at third, fourth or fifth
+street.
+
+"players" is a list of dicts, one per player:
+
+  {"up": ["Kh", "Qh"], "down": ["Ah"]}   # third street: 2 up + hole card
+  {"up": ["Kh", "Qh", "Jh"]}             # fourth street, hole card unknown
+
+Upcards are visible to everyone, so they are removed from the deck for every
+player.  Omitting "down" means the hole card is unknown and is enumerated
+along with the cards still to come.  "iterations" > 0 forces Monte Carlo
+sampling (useful on third street); the default uses the engine's automatic
+choice.  "seed" reseeds the sampling stream: the same players, iterations
+and seed reproduce the same equities.  It has no effect on an exact
+calculation.
+
+Returns {'hi': [equity per player], 'exact': 0/1, 'samples': n}, where
+"samples" is the number of evaluated range matchups (one for a single
+third-street matchup), not the iteration budget.
+"""
+        if dead is None:
+            dead = []
+        return _pokereval.soko_street_equity(players, dead, iterations, seed)
     
     def winners(self, *args, **kwargs):
         """\
@@ -307,7 +394,7 @@ game      : the variant: holdem, holdem8, omaha, omaha8, fusion, 7stud,
             7stud8, 7studnsq, razz, lowball, lowball27, and the draw games
             5draw, 5draw8, 5drawnsq, 5draw_std, 5draw8_std, 5drawnsq_std,
             27_triple_draw, a5_triple_draw, archie, badugi, badugi_hilo,
-            drawmaha, drawmaha49, drawmaha_zero, drawmaha_dugi.
+            drawmaha, drawmaha49, drawmaha_zero, drawmaha_dugi, soko.
             5draw, 5draw8 and 5drawnsq are the joker variants: they deal
             from a 53-card deck, so the joker can come when cards are still
             to be dealt.  Use 5draw_std, 5draw8_std and 5drawnsq_std for
@@ -319,6 +406,14 @@ game      : the variant: holdem, holdem8, omaha, omaha8, fusion, 7stud,
             low side.  Drawmaha splits the pot between the Omaha hand (high
             side) and the five-card hand (low side: best draw hand, lowest
             49 total, A-5 low or badugi, by variant).
+            Soko (Sökö / Canadian Stud) is five-card stud, high only, with no
+            board: each pocket is completed to five cards and ranked with the
+            official Sökö order (four-card flush above four-card straight,
+            both above one pair and below two pair).  Four-card flushes and
+            four-card straights tie on their own ranks; the off-suit fifth
+            card is not a tie-breaker.  "best"/"best_hand" still use the
+            standard 5-card evaluator and are not Sökö-aware; use winners or
+            poker_eval for Sökö comparisons.
             Mandatory, no default.
                     
 pockets   : list of pocket cards for each player still in game. Each member

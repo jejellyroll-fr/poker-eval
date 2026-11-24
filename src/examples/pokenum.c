@@ -57,6 +57,7 @@ $ pokenum [-mc niter] [-t] [-O]
       -badacey or -ba  Badacey (Badugi + A-5 Lowball split pot)
       -badugi  Badugi (4-card lowball, unique suits and ranks)
       -dm    drawmaha (split pot: Omaha hi + draw)
+      -soko  Sökö / Canadian Stud (5-card stud, 4-card flush above 4-card straight)
       -manila or -mn  Manila Hold'em (32-card deck, 8-A only, Flush > Full House)
 
 Streaming usage:
@@ -112,6 +113,7 @@ first combo of each range is shown in the output table.
 
 #include <poker_eval/poker_eval.h>
 #include <poker_eval/core/enumdefs.h>
+#include <poker_eval/core/game_names.h>
 #include <poker_eval/core/universal_deck.h>
 #include <poker_eval/range.h>
 #include <poker_eval/equity/RangeEquity.h>
@@ -170,6 +172,7 @@ parseArgs(int argc, char **argv,
           int *show_backend, const char **backend_override,
           char rangeSpecs[ENUM_MAXPLAYERS][MAX_RANGE_SPEC]) {
   enum_gameparams_t *gameParams = enumGameParams(game_holdem);
+  enum_game_t game_option;
   enum { ST_OPTIONS, ST_POCKET, ST_BOARD, ST_BOARD2, ST_DEAD } state; 
   int ncards;
   int card;
@@ -214,72 +217,9 @@ parseArgs(int argc, char **argv,
           *terse = 1;
         } else if (strcmp(*argv, "-O") == 0) {
           *orderflag = 1;
-        } else if (strcmp(*argv, "-h") == 0) {
-          *game = game_holdem;
-        } else if (strcmp(*argv, "-h8") == 0) {
-          *game = game_holdem8;
-        } else if (strcmp(*argv, "-o") == 0) {
-          *game = game_omaha;
-        } else if (strcmp(*argv, "-o5") == 0) {
-          *game = game_omaha5;
-        } else if (strcmp(*argv, "-o6") == 0) {
-          *game = game_omaha6;
-        } else if (strcmp(*argv, "-o8") == 0) {
-          *game = game_omaha8;
-        } else if (strcmp(*argv, "-o85") == 0) {
-          *game = game_omaha85;
-        } else if (strcmp(*argv, "-7s") == 0) {
-          *game = game_7stud;
-        } else if (strcmp(*argv, "-7s8") == 0) {
-          *game = game_7stud8;
-        } else if (strcmp(*argv, "-7snsq") == 0) {
-          *game = game_7studnsq;
-        } else if (strcmp(*argv, "-r") == 0) {
-          *game = game_razz;
-        } else if (strcmp(*argv, "-5d") == 0) {
-          *game = game_5draw;
-        } else if (strcmp(*argv, "-5d8") == 0) {
-          *game = game_5draw8;
-        } else if (strcmp(*argv, "-5dnsq") == 0) {
-          *game = game_5drawnsq;
-        } else if (strcmp(*argv, "-l") == 0) {
-          *game = game_lowball;
-        } else if (strcmp(*argv, "-l27") == 0) {
-          *game = game_lowball27;
-        } else if (strcmp(*argv, "-sd") == 0) {
-          *game = game_sdholdem;
-        } else if (strcmp(*argv, "-dh") == 0) {
-          *game = game_doubleflop_holdem;
-        } else if (strcmp(*argv, "-pa") == 0) {
-          *game = game_pineapple;
-        } else if (strcmp(*argv, "-pa8") == 0) {
-          *game = game_pineapple8;
-        } else if (strcmp(*argv, "-pacrazy") == 0) {
-          *game = game_pineapple_crazy;
-        } else if (strcmp(*argv, "-palazy") == 0) {
-          *game = game_pineapple_lazy;
-        } else if (strcmp(*argv, "-27td") == 0) {
-          *game = game_27_triple_draw;
-        } else if (strcmp(*argv, "-a5td") == 0) {
-          *game = game_a5_triple_draw;
-        } else if (strcmp(*argv, "-badacey") == 0 || strcmp(*argv, "-ba") == 0) {
-          *game = game_badacey;
-        } else if (strcmp(*argv, "-badeucy") == 0 || strcmp(*argv, "-be") == 0) {
-          *game = game_badeucy;
-        } else if (strcmp(*argv, "-badugi") == 0) {
-          *game = game_badugi;
-        } else if (strcmp(*argv, "-dm") == 0) {
-          *game = game_drawmaha;
-        } else if (strcmp(*argv, "-fusion") == 0) {
-          *game = game_fusion;
-        } else if (strcmp(*argv, "-courchevel") == 0 || strcmp(*argv, "-cv") == 0) {
-          *game = game_courchevel;
-        } else if (strcmp(*argv, "-courchevel8") == 0 || strcmp(*argv, "-cv8") == 0) {
-          *game = game_courchevel8;
-        } else if (strcmp(*argv, "-irish") == 0 || strcmp(*argv, "-ir") == 0) {
-          *game = game_irish;
-        } else if (strcmp(*argv, "-manila") == 0 || strcmp(*argv, "-mn") == 0) {
-          *game = game_manila;
+        } else if (pe_game_from_name(*argv, &game_option) == 0) {
+          /* One shared spelling table: see core/game_names.h. */
+          *game = game_option;
         } else if (strncmp(*argv, "--backend=", 10) == 0) {
           if (backend_override)
             *backend_override = *argv + 10;
@@ -531,7 +471,7 @@ main(int argc, char **argv) {
         printf("ERROR\n");
       } else {
         printf("single usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
-        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-pa8|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish]\n");
+        printf("\t[-h|-h8|-o|-o5|-o6|-o8|-o85|-7s|-7s8|-7snsq|-r|-5d|-5d8|-5dnsq|-l|-sd|-l27|-pa|-pa8|-fusion|-27td|-a5td|-badacey|-badeucy|-badugi|-dm|-cv|-cv8|-irish|-soko]\n");
         printf("\t<pocket1> - <pocket2> - ... [ -- <board> ] [ / <dead> ] ]\n");
         printf("range usage: %s [-t] [-O] [-mc niter]\n", argv[0]);
         printf("\t<range1> - <range2> - ... [ -- <board> ] [ / <dead> ] ]\n");

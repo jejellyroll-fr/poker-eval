@@ -61,6 +61,8 @@
 #include <poker_eval/games/eval_short.h>
 #include <poker_eval/core/enumeration_adapters.h>
 #include <poker_eval/core/low_qualifier.h>
+#include <poker_eval/core/configurable_ranking.h>
+#include <poker_eval/deck/generalized_deck.h>
 #include <poker_eval/utils/micro_optimizations.h>
 #include <poker_eval/core/eval_cache.h>
 
@@ -132,6 +134,7 @@ static enum_gameparams_t enum_gameparams[] = {
     {game_5draw_std, 0, 5, 0, 0, 1, LOW_QUALIFIER_NONE, "5-card Draw Hi"},
     {game_5draw8_std, 0, 5, 0, 1, 1, LOW_QUALIFIER_8, "5-card Draw Hi/Low 8-or-better"},
     {game_5drawnsq_std, 0, 5, 0, 1, 1, LOW_QUALIFIER_NONE, "5-card Draw Hi/Low no qualifier"},
+    {game_soko, 0, 5, 0, 0, 1, LOW_QUALIFIER_NONE, "Sökö (Canadian Stud) Hi"},
 };
 
 /* INNER_LOOP is executed in every iteration of the combinatorial enumerator
@@ -1054,6 +1057,22 @@ static LowHandVal drawmaha_variant_low(StdDeck_CardMask hand, enum_game_t varian
     err = 0;                                                  \
   })
 
+/* Sökö (Canadian Stud): five-card stud, high only, ranked with the official
+   Sökö order (four-card flush above four-card straight, both above one pair).
+   The deck spec and ranking config are built once per enumeration call and
+   passed in, so the inner loop stays allocation- and lock-free. */
+#define INNER_LOOP_SOKO(deck, cfg)                                    \
+  INNER_LOOP({                                                        \
+    StdDeck_CardMask _hand;                                           \
+    StdDeck_CardMask_OR(_hand, pockets[i], unsharedCards[i]);         \
+    hival[i] = pe_eval_configurable_hand(                             \
+        &(deck), &(cfg),                                              \
+        (pe_card_mask_t)cardmask_to_mask_t(_hand),                    \
+        StdDeck_numCards(_hand));                                     \
+    loval[i] = LowHandVal_NOTHING;                                    \
+    err = 0;                                                          \
+  })
+
 #define INNER_LOOP_LOWBALL                                    \
   INNER_LOOP({                                                \
     JokerDeck_CardMask _hand;                                 \
@@ -1827,6 +1846,7 @@ static int enumExhaustive_with_override(
     case game_astud:
     case game_5draw:
     case game_5draw_std:
+    case game_soko:
     case game_sdholdem:
       mode = enum_ordering_mode_hi;
       break;
@@ -2576,6 +2596,30 @@ static int enumExhaustive_with_override(
                                              unsharedCards, INNER_LOOP_5DRAWNSQ_STD);
     }
   }
+  else if (game == game_soko)
+  {
+    /* Five-card stud from the standard deck: complete each pocket to five
+       cards and rank the result with the Sökö rules. */
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    pe_deck_spec_t soko_deck;
+    pe_hand_ranking_config_t soko_cfg;
+    if (nboard != 0)
+      return 1; /* Sökö deals no board cards */
+    if (pe_deck_get_predefined(PE_DECK_PRESET_STD, &soko_deck) != 0)
+      return 1;
+    if (pe_ranking_config_set_preset("soko", &soko_cfg) != 0)
+      return 1;
+    for (idx = 0; idx < npockets; idx++)
+    {
+      numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
+      if (numToDeal[idx] < 0)
+        return 1;
+    }
+    ENUM_STDDECK_ENUMERATE_MULTI_FROM_DEAD(npockets, numToDeal, effective_dead,
+                                           unsharedCards,
+                                           INNER_LOOP_SOKO(soko_deck, soko_cfg));
+  }
   else if (game == game_lowball)
   {
     fprintf(stderr, "DEBUG: Entering game_lowball enumeration\n");
@@ -2804,6 +2848,7 @@ static int enumSample_with_override(
     case game_astud:
     case game_5draw:
     case game_5draw_std:
+    case game_soko:
     case game_sdholdem:
       mode = enum_ordering_mode_hi;
       break;
@@ -3177,6 +3222,28 @@ static int enumSample_with_override(
       DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets, numToDeal,
                                      effective_dead, niter, INNER_LOOP_5DRAWNSQ_STD);
     }
+  }
+  else if (game == game_soko)
+  {
+    StdDeck_CardMask unsharedCards[ENUM_MAXPLAYERS];
+    int numToDeal[ENUM_MAXPLAYERS];
+    pe_deck_spec_t soko_deck;
+    pe_hand_ranking_config_t soko_cfg;
+    if (nboard != 0)
+      return 1; /* Sökö deals no board cards */
+    if (pe_deck_get_predefined(PE_DECK_PRESET_STD, &soko_deck) != 0)
+      return 1;
+    if (pe_ranking_config_set_preset("soko", &soko_cfg) != 0)
+      return 1;
+    for (idx = 0; idx < npockets; idx++)
+    {
+      numToDeal[idx] = 5 - StdDeck_numCards(pockets[idx]);
+      if (numToDeal[idx] < 0)
+        return 1;
+    }
+    DECK_MONTECARLO_PERMUTATIONS_D(StdDeck, unsharedCards, npockets, numToDeal,
+                                   effective_dead, niter,
+                                   INNER_LOOP_SOKO(soko_deck, soko_cfg));
   }
   else if (game == game_lowball)
   {

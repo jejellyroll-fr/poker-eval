@@ -85,7 +85,15 @@ POKEREVAL_EXPORT int pe_ranking_config_init_default(pe_hand_ranking_config_t *co
 
 /*
  * Populate config from a named preset. Supported names:
- *   "standard", "short_deck", "italian_manila", "canadian_stud", "new_york_stud"
+ *   "standard", "short_deck", "italian_manila", "canadian_stud",
+ *   "soko", "s\xc3\xb6k\xc3\xb6", "new_york_stud"
+ *
+ * "canadian_stud", "soko" and "s\xc3\xb6k\xc3\xb6" select the same official S\xc3\xb6k\xc3\xb6
+ * (Canadian Stud) order: four-card straight below four-card flush, both
+ * above one pair and below two pair.  Four-flush ties compare only the four
+ * suited ranks; four-straight ties compare only the qualifying sequence's
+ * high card, as win2day \xc2\xa77.f.14 requires.
+ *
  * Returns 0 on success, -1 if the preset name is unknown.
  */
 POKEREVAL_EXPORT int pe_ranking_config_set_preset(
@@ -100,15 +108,53 @@ POKEREVAL_EXPORT int pe_ranking_config_set_preset(
  * the category's rank index in config->category_order.
  *
  * For 5-card variants num_cards should be 5; for 4-card category variants
- * (Canadian / New York Stud) num_cards is 4 or 5 (the 4-card categories are
- * detected among the supplied cards). Returns HandVal_NOTHING on invalid
- * input (NULL pointers, empty hand, or a category not present in the config).
+ * (S\xc3\xb6k\xc3\xb6 / Canadian / New York Stud) num_cards is 4 or 5 (the 4-card
+ * categories are detected among the supplied cards).  A five-card flush or
+ * straight is always classified as such and never as a four-card category.
+ * Returns HandVal_NOTHING on invalid input (NULL pointers, empty hand, or a
+ * category not present in the config).
  */
 POKEREVAL_EXPORT HandVal pe_eval_configurable_hand(
     const pe_deck_spec_t *deck_spec,
     const pe_hand_ranking_config_t *config,
     pe_card_mask_t hand_mask,
     int num_cards
+);
+
+/*
+ * Structured result of a configurable evaluation: the semantic category, its
+ * rank in the configured order, and the ranks that decide ties, in the exact
+ * order the HandVal packing uses (most significant first).
+ *
+ * Ranks are global deck ranks 0..12 (0 = deuce, 12 = ace), i.e. the rank
+ * index inside the configured deck rather than a display rank.  For the
+ * card-subset categories the list holds only the ranks that compare:
+ *   - straight / straight flush: the high card of the run (1 entry);
+ *   - four-card straight: the high card of the run (1 entry);
+ *   - flush: the five suited ranks, descending;
+ *   - four-card flush: the four suited ranks, descending (the off-suit card
+ *     never takes part in the comparison);
+ *   - pairs/trips/full house/quads/high card: the canonical group order used
+ *     by pe_eval_configurable_hand (groups by multiplicity, then rank).
+ */
+typedef struct {
+    pe_hand_category_t category;
+    int category_rank;          /* index in config->category_order */
+    int num_tiebreak_ranks;
+    int tiebreak_ranks[5];      /* global rank indexes, 0 = deuce */
+} pe_hand_description_t;
+
+/*
+ * Detailed variant of pe_eval_configurable_hand: fills *out and returns 1 on
+ * success, 0 on invalid input.  The returned description encodes exactly the
+ * same comparison as the HandVal that pe_eval_configurable_hand would return.
+ */
+POKEREVAL_EXPORT int pe_eval_configurable_hand_detailed(
+    const pe_deck_spec_t *deck_spec,
+    const pe_hand_ranking_config_t *config,
+    pe_card_mask_t hand_mask,
+    int num_cards,
+    pe_hand_description_t *out
 );
 
 /* Extract the configured category rank (index into category_order) from a HandVal. */

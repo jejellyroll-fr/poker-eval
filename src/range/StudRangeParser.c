@@ -651,6 +651,31 @@ static int generate_hands_multi(const hole_info_t *hole,
  * ============================================================================
  */
 
+int ARP_IsPlainFiveCardHand(const char *str, size_t len) {
+  size_t i;
+
+  if (!str || len < 10)
+    return 0;
+  for (i = 0; i < 5; i++) {
+    if (stud_char_to_rank(str[2 * i]) < 0)
+      return 0;
+    if (stud_char_to_suit(str[2 * i + 1]) < 0)
+      return 0;
+  }
+  /* The bare hand must end there; a weight (':0.5') or operator may follow. */
+  switch (str[10]) {
+    case '\0':
+    case ',':
+    case '+':
+    case '-':
+    case '!':
+    case ':':
+      return 1;
+    default:
+      return isspace((unsigned char)str[10]) ? 1 : 0;
+  }
+}
+
 int ARP_IsStudPattern(const char *str, size_t len) {
   if (!str || len < 3)
     return 0;
@@ -699,7 +724,13 @@ int ARP_IsStudPattern(const char *str, size_t len) {
     return 1;
   }
 
-  /* Case 2: Triplet format RRR (e.g. AKQ) — 3rd street only */
+  /* Case 2: A plain five-card hand with explicit suits, e.g. "AhAdKsKd2h".
+   * Sökö ranges are usually written this way (the Python binding already
+   * accepts it); the stud grammar only knew (hole)upcards and triplets. */
+  if (ARP_IsPlainFiveCardHand(str, len))
+    return 1;
+
+  /* Case 3: Triplet format RRR (e.g. AKQ) — 3rd street only */
   if (len >= 3) {
     int r1 = stud_char_to_rank(str[0]);
     int r2 = stud_char_to_rank(str[1]);
@@ -754,6 +785,29 @@ static int stud_parse_pattern(const char *pattern, StdDeck_CardMask dead_cards,
   int num_upcards = 0;
   int consumed = 0;
   const char *rest;
+
+  /* --- Plain five-card hand: AhAdKsKd2h --- */
+  if (pattern[0] != '(' && ARP_IsPlainFiveCardHand(pattern, strlen(pattern))) {
+    StdDeck_CardMask hand;
+    int i;
+
+    StdDeck_CardMask_RESET(hand);
+    for (i = 0; i < 5; i++) {
+      StdDeck_CardMask one;
+      int card = StdDeck_MAKE_CARD(stud_char_to_rank(pattern[2 * i]),
+                                   stud_char_to_suit(pattern[2 * i + 1]));
+
+      StdDeck_CardMask_RESET(one);
+      StdDeck_CardMask_SET(one, card);
+      /* The same card twice is not a hand, not a range. */
+      if (StdDeck_CardMask_ANY_SET(hand, one))
+        return 0;
+      StdDeck_CardMask_OR(hand, hand, one);
+    }
+    if (StdDeck_CardMask_ANY_SET(dead_cards, hand))
+      return 1; /* Entirely dead: empty range, not an error. */
+    return stud_add_hand_to_range(range, ix, hand, 1.0);
+  }
 
   /* --- Triplet format: AKQ = (AK)Q (3rd street only) --- */
   if (pattern[0] != '(') {

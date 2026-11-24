@@ -20,6 +20,7 @@ set(GAMES_SOURCES
     rules_omaha5.c
     rules_omaha6.c
     draw_optimizer.c
+    soko.c
 )
 
 # Games header files

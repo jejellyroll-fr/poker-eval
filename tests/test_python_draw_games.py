@@ -210,6 +210,7 @@ COMPLETE_DEALS = {
                   ["Qd", "Qc", "2c", "3c", "5h", "6h", "8h"]], []),
     "razz": ([["As", "Ks", "Qs", "Js", "2d", "3d", "4d"],
               ["Qd", "Qc", "2c", "3c", "5h", "6h", "8h"]], []),
+    "soko": ([HI_LOSER, HI_WINNER], []),
     "lowball": ([HI_LOSER, HI_WINNER], []),
     "lowball27": ([HI_LOSER, HI_WINNER], []),
     "fusion": ([["As", "Ks", "Qs", "Js"], ["Qd", "Qc", "2c", "3d"]], ["2h", "7d", "9c", "Ts", "3h"]),

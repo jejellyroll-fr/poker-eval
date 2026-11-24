@@ -115,21 +115,24 @@ static int validate_range_pocket_sizes(enum_game_t game_variant,
  */
 static int auto_selects_exact(const PlayerRange ranges[], int num_players,
                               int to_deal, int cards_remaining) {
+    double boards = 1.0;
+    double matchups = 1.0;
+
+    for (int p = 0; p < num_players; ++p) {
+        matchups *= (ranges[p].count > 0) ? (double)ranges[p].count : 1.0;
+        if (matchups > PE_EQUITY_EXACT_WORK_BUDGET)
+            return 0; /* stop early rather than overflow on wide ranges */
+    }
+
+    /* Nothing left to deal: the work is the range product, which fitted the
+     * budget above. */
     if (to_deal <= 0)
-        return 1; /* board already complete — there is nothing to sample */
+        return 1;
     if (to_deal > 2)
         return 0; /* turn and river at most; beyond that it is never cheap */
 
-    double boards = 1.0;
     for (int i = 0; i < to_deal; ++i)
         boards *= (double)(cards_remaining - i) / (double)(i + 1);
-
-    double matchups = 1.0;
-    for (int p = 0; p < num_players; ++p) {
-        matchups *= (ranges[p].count > 0) ? (double)ranges[p].count : 1.0;
-        if (boards * matchups > PE_EQUITY_EXACT_WORK_BUDGET)
-            return 0; /* stop early rather than overflow on wide ranges */
-    }
 
     return (boards * matchups) <= PE_EQUITY_EXACT_WORK_BUDGET;
 }
@@ -173,6 +176,7 @@ static int is_hilo(enum_game_t game) {
         case game_5drawnsq:
         case game_5draw_std:
         case game_5drawnsq_std:
+        case game_soko:
         case game_lowball:
         case game_lowball27:
         case game_sdholdem:
@@ -460,32 +464,43 @@ static pe_status_t pe_equity_legacy_fallback(
     enumResultClear(&agg_res);
 
     int cards_on_board = StdDeck_numCards(board);
-    int total_board_cards = 5;
-
-    if (game_variant >= game_7stud && game_variant <= game_razz) {
-         total_board_cards = 0;
-    }
+    /* The board the game actually deals, not a fixed five.  Stud, draw and
+     * Sökö deal none, and asking for five phantom board cards made complete
+     * hands look incomplete: the work estimate then chose sampling over the
+     * exact single outcome (and Sökö spent its samples dealing cards no
+     * evaluator ever reads). */
+    enum_gameparams_t *params = enumGameParams(game_variant);
+    int total_board_cards = params ? params->maxboard : 5;
 
     int to_deal = (total_board_cards > cards_on_board) ? (total_board_cards - cards_on_board) : 0;
     if (to_deal < 0) to_deal = 0;
 
+    /* A short pocket (a third-street Sökö hand, an incomplete stud hand) is
+     * random too, but the enumerator deals it itself, so it never appears in
+     * to_deal.  Counting only the board made "the board is complete" mean
+     * "nothing is random": a short pocket was enumerated as if it were known
+     * and a forced Monte Carlo request was overruled. */
+    int pocket_to_deal = 0;
+    if (params != NULL) {
+        for (int p = 0; p < num_players; ++p) {
+            for (size_t c = 0; c < ranges[p]->count; ++c) {
+                StdDeck_CardMask hand = ranges[p]->combos[c].hand;
+                int missing = params->maxpocket - StdDeck_numCards(hand);
+                if (missing > pocket_to_deal) pocket_to_deal = missing;
+            }
+        }
+    }
+
     /* is_monte_carlo == 1 forces sampling; 0 (or no options at all) asks for
-     * the automatic heuristic documented in equity.h. The previous form set
-     * use_mc = 1 in both branches whenever cards remained, so "automatic"
-     * always meant sampling and result->exact was never 1 on an incomplete
-     * board. It now enumerates when that is provably cheap and samples
-     * otherwise. */
+     * the automatic heuristic documented in equity.h, which enumerates when
+     * that is provably cheap and samples otherwise. */
     int use_mc;
     if (opts && opts->is_monte_carlo) {
         use_mc = 1;
     } else {
-        use_mc = !auto_selects_exact(internal_ranges, num_players, to_deal,
+        use_mc = !auto_selects_exact(internal_ranges, num_players,
+                                     to_deal + pocket_to_deal,
                                      StdDeck_N_CARDS - cards_on_board);
-    }
-    if (to_deal == 0) {
-        /* Board already complete: there is nothing random left to sample, so
-         * enumerate even when Monte Carlo was forced. */
-        use_mc = 0;
     }
 
     int ret = CalculateEquityForRanges(

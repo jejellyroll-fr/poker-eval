@@ -6,6 +6,11 @@ set(RANGE_SOURCES
     StudRangeParser.c
     pe_range.c
     range_bayesian.c
+    # Street-aware Sökö equity: builds one known-card pocket per player and
+    # forwards to pe_equity_calculate.  It lives here because it needs both
+    # pe_range_create and the equity engine, and range sits above equity in
+    # the link order (equity links games, never range).
+    soko_street.c
 )
 
 # Headers (for installation)
@@ -25,7 +30,7 @@ target_include_directories(poker-eval-range PUBLIC
 # Link dependencies (core, etc.)
 target_link_libraries(poker-eval-range PUBLIC poker_core)
 # Distributions logic is needed for PLO integration (used by AdvancedRangeParser)
-target_link_libraries(poker-eval-range PRIVATE poker_distributions)
+target_link_libraries(poker-eval-range PRIVATE poker_distributions poker_equity)
 
 # Position independent code for shared library linkage
 set_target_properties(poker-eval-range PROPERTIES POSITION_INDEPENDENT_CODE ON)

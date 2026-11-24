@@ -241,6 +241,7 @@ deck_type_t Universal_DetermineRequiredDeckType(enum_game_t game) {
   case game_5draw_std:
   case game_5draw8_std:
   case game_5drawnsq_std:
+  case game_soko:
   case game_NUMGAMES:
   default:
     return UNIVERSAL_DECK_STANDARD;
