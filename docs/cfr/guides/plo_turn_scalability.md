@@ -20,6 +20,10 @@ is one terminal call at a turn node, and every configuration is exact.
   configuration and not to a larger one that ran before it.
 - The reported seconds are the median of 3 repetitions (1–2 for the largest
   configurations, where a single call already runs for seconds).
+- A single-call timing is not repeatable on a busy machine: the same
+  configuration measured twice here differed by up to 2× (PLO5, 814 combos:
+  8.8 s and then 17.8 s). The frontier check reports every run and reads the
+  fastest, which is the least contended sample.
 - The deal count is exact, not estimated: the terminal visits every legal
   tuple and every river such a tuple leaves in the deck, so
   `deals = tuples × (48 − holes × players)`. The benchmark reads the tuple
@@ -85,9 +89,13 @@ combos of range size per second.
 | 400 | 56,513 | 2,034,468 | 2.3225 | 1,142 | 6.6 MiB |
 | 800 | 225,689 | 8,124,804 | 9.1805 | 1,130 | 6.6 MiB |
 
-The per-deal cost is flat in the range size: PLO5 ≈ 0.86 µs, PLO6 ≈ 1.11 µs.
-Their ratio (1.3) is the ratio of hand evaluations per deal (150/100), which
-says the terminal's time is the showdown evaluation and not bookkeeping.
+PLO5 stays between 750 and 967 ns per deal across the grid. PLO6 is 1.05–1.15
+µs up to 1,200 combos and 1.20–1.36 µs at 1,600 and 2,091, so its per-deal
+cost is flat only while the two ranges still sit comfortably in cache. That
+rise is why the fit from these four configurations under-predicts at the 60 s
+frontier (see Frontier check). At the small sizes the PLO5/PLO6 ratio is 1.3,
+the ratio of hand evaluations per deal (150/100), which says the terminal's
+time is the showdown evaluation and not bookkeeping.
 
 ### Multiway multiplies tuples
 
@@ -125,17 +133,24 @@ memory, PLO4 is memory-bound only at full range**.
 Fitted from the tables, one exact turn node, single-threaded:
 
 - PLO4: `T ≈ 5.9e-5 · n` seconds — linear.
-- PLO5: `T ≈ 1.51e-5 · n²` seconds — measured 1.38e-5 to 1.71e-5 per point.
-- PLO6: `T ≈ 1.37e-5 · n²` seconds — measured 1.30e-5 to 1.45e-5 per point.
+- PLO5: `T ≈ 1.39e-5 · n²` seconds — measured 1.32e-5 to 1.71e-5 per point.
+- PLO6: `T ≈ 1.37e-5 · n²` seconds — measured 1.30e-5 to 1.45e-5 per point, up
+  to 1,200 combos. Above that the effective coefficient rises to 1.5–1.7e-5
+  (Frontier check), so the PLO6 budget column is not read off this fit.
 
 Maximum range size per player for a time budget:
 
 | Budget | PLO4 | PLO5 | PLO6 |
 |---|---|---|---|
 | 10 s | 169,000 | 814 | 854 |
-| 60 s | 1,008,000 | 1,994 | 2,091 |
-| 10 min | 10,089,000 | 6,307 | 6,612 |
-| 1 h | 60,535,000 | 15,448 | 16,196 |
+| 60 s | 1,008,000 | 1,994 | 1,900 |
+| 10 min | 10,089,000 | 6,307 | 6,000 |
+| 1 h | 60,535,000 | 15,448 | 14,700 |
+
+The PLO5 column is the fit rounded down, and both of its frontier points came
+in under budget. The PLO6 column is the fit only for 10 s; the three larger
+entries are read off the measured overrun at 2,091 combos instead, which is why
+they are lower than the fit would give.
 
 A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 `C(48,5) = 1,712,304` for PLO5 and `C(48,6) = 12,271,512` for PLO6
@@ -144,13 +159,45 @@ A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 | Variant | Full-range combos | Range memory (two ranges) | One turn node |
 |---|---|---|---|
 | PLO4 | 194,580 | 5.9 MiB | **11.6 s (measured)** |
-| PLO5 | 1,712,304 | 52.3 MiB | ≈ 1.4 years (extrapolated) |
-| PLO6 | 12,271,512 | 374.5 MiB | ≈ 67 years (extrapolated) |
+| PLO5 | 1,712,304 | 52.3 MiB | ≈ 1.3 years (extrapolated) |
+| PLO6 | 12,271,512 | 374.5 MiB | ≈ 80 years (extrapolated, 65–90 across the coefficient band) |
 
 **Exact full-combo turn evaluation is feasible for PLO4 and not for PLO5 or
 PLO6.** The blocker is time, not memory: a full PLO6 turn fits in 375 MiB and
 would still not finish. Any claim that wider hands are "just more memory" is
 wrong by the numbers above.
+
+## Frontier check
+
+The budgets were fitted from 50–1,600 combos, so each one was then measured at
+the combos it claims instead of being trusted as a fit. Board, ranges and state
+as in Method, one call per process, `--repetitions 1`. Other work was running
+on the machine during these runs (load average 16–21 over 10 cores), so every
+sample is listed.
+
+| Variant | Combos | Fit predicts | Samples (s) | Fastest | Verdict |
+|---|---|---|---|---|---|
+| PLO5 | 814 (10 s) | 10.0 | 8.8, 17.8 | 8.8 | inside |
+| PLO5 | 1,994 (60 s) | 60.0 | 55.2, 90.7 | 55.2 | inside |
+| PLO6 | 854 (10 s) | 10.0 | 9.8, 10.6 | 9.8 | inside |
+| PLO6 | 1,600 | 35.1 | 44.3, 61.5 | 44.3 | 26% over |
+| PLO6 | 2,091 (60 s) | 60.0 | 66.6, 77.2, 82.7 | 66.6 | 11% over |
+
+Three things follow:
+
+- **PLO5 needs no correction.** Both frontier points land inside their budget,
+  and the fastest samples agree with the fit to within 12%.
+- **PLO6 does.** At 1,600 and 2,091 combos the fastest samples are 26% and 11%
+  above the fit, with an effective coefficient of 1.5–1.7e-5 instead of 1.37e-5.
+  Solving `T = 60 s` at 1.66e-5 gives 1,900 combos, which is what the budget
+  table says instead of 2,091. The 10 s entry, measured at 9.8–10.6 s, stands.
+- **The spread is the machine, not the terminal.** The same PLO5
+  configuration ran 8.8 s and then 17.8 s with nothing in the code changed,
+  while every memory figure stayed put. The verdicts are therefore given as
+  ranges and the budgets are rounded down; none of these is a threshold.
+
+Peak RSS was 6.9–7.1 MiB for all five configurations, so nothing about the
+wider ranges changes the memory story above.
 
 ## Execution policies
 
@@ -161,8 +208,8 @@ Stated as rules, with the guarantee each one carries:
    the river certificate of issue #283 describe; a value computed here is
    exact over the enumerated chance space.
 2. **Exact, sparse combos — PLO5/PLO6 turn.** Exact for the combos given, with
-   ranges up to ~2,000 per player inside a minute and ~6,300 inside ten
-   minutes, at ~7 MiB. This is the only exact regime for wider hands and it
+   ranges up to ~2,000 (PLO5) or ~1,900 (PLO6) per player inside a minute and
+   ~6,300 or ~6,000 inside ten minutes, at ~7 MiB. This is the only exact regime for wider hands and it
    is the one to use when a spot is naturally sparse (a nut range, a single
    suit shape, a solved subgame's reach support).
 3. **Sampled — everything above that.** Beyond `O(10³)` combos per range the
@@ -191,6 +238,10 @@ Stated as rules, with the guarantee each one carries:
   showdown terminals, not two-street solves.
 - **Hi/Lo** and dead-card variants are not measured; `dead` only shortens the
   river list.
+- **Single-threaded and machine-dependent.** The frontier points were measured
+  with 16–21 of load average on 10 cores and vary by up to 2× between runs; a
+  quiet machine is faster, never slower, so the rounded-down budgets are the
+  safe direction to be wrong in.
 - Ranges above 4,096 combos are not checked for duplicate combos (the check is
   quadratic and a repeated point only shifts one combo's weight); heads-up at
   small sizes is deduplicated.
@@ -202,6 +253,8 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 800 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 800 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --repetitions 1
 ```
 
 Each run prints one JSON document (`pe-omaha-turn-bench/v1`) with the wall
