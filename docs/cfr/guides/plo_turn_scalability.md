@@ -181,8 +181,8 @@ session, so every sample is listed with the load average it ran under.
 | PLO5 | 814 (10 s) | 10.0 | 8.8 and 17.8, 16–21 | inside |
 | PLO5 | 1,994 (60 s) | 60.0 | 55.2 and 90.7, 16–21 | inside |
 | PLO6 | 854 (10 s) | 10.0 | 9.5 and 9.96, 3.7–4.9; 9.8 and 10.6, 16–21 | inside |
-| PLO6 | 1,200 | 19.7 | 21.1, 16–21 | +7 % |
-| PLO6 | 1,600 | 35.1 | 44.3 and 61.5, 16–21 | +26 % |
+| PLO6 | 1,200 | 19.7 | 21.1, 16–21 | loaded, +7 % |
+| PLO6 | 1,600 | 35.1 | 44.3 and 61.5, 16–21 | loaded, +26 % |
 | PLO6 | 2,091 (60 s) | 60.0 | 58.0, 3.7–4.9; 66.6, 77.2 and 82.7, 16–21 | inside |
 
 Two things follow:
@@ -195,7 +195,9 @@ Two things follow:
   window, so the machine was no slower than the one the small table comes from.
   At 2,091 combos that is 1.04 µs per deal, inside the 1.02–1.15 µs band of the
   fitted configurations, so there is no rise in per-deal cost to correct the
-  fit for and the PLO6 column stands as fitted.
+  fit for and the PLO6 column stands as fitted. The 1,200 and 1,600 combos
+  rows have only loaded samples, so their margin is what contention added
+  there, not a verdict on the fit.
 - **Contention, not range size, moves these numbers.** The same PLO5
   configuration ran 8.8 s and then 17.8 s with nothing in the code changed,
   while every memory figure stayed put (6.9–7.1 MiB). Verdicts therefore rest
