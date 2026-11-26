@@ -169,17 +169,18 @@ wrong by the numbers above.
 
 ## Frontier check
 
-The budgets were fitted from 50–1,600 combos, so each one was then measured at
-the combos it claims instead of being trusted as a fit. Board, ranges and state
-as in Method, one call per process, `--repetitions 1`. Other work was running
-on the machine during these runs (load average 16–21 over 10 cores), so every
-sample is listed.
+The budgets were fitted from 50–1,600 combos for PLO5 and 25–800 for PLO6, so
+each one was then measured at the combos it claims instead of being trusted as
+a fit. Board, ranges and state as in Method, one call per process,
+`--repetitions 1`. Other work was running on the machine during these runs
+(load average 16–21 over 10 cores), so every sample is listed.
 
 | Variant | Combos | Fit predicts | Samples (s) | Fastest | Verdict |
 |---|---|---|---|---|---|
 | PLO5 | 814 (10 s) | 10.0 | 8.8, 17.8 | 8.8 | inside |
 | PLO5 | 1,994 (60 s) | 60.0 | 55.2, 90.7 | 55.2 | inside |
 | PLO6 | 854 (10 s) | 10.0 | 9.8, 10.6 | 9.8 | inside |
+| PLO6 | 1,200 | 19.7 | 21.1 | 21.1 | 7% over |
 | PLO6 | 1,600 | 35.1 | 44.3, 61.5 | 44.3 | 26% over |
 | PLO6 | 2,091 (60 s) | 60.0 | 66.6, 77.2, 82.7 | 66.6 | 11% over |
 
