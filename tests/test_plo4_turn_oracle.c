@@ -373,6 +373,92 @@ static void test_turn_is_not_one_river(EvalContext *context)
     }
 }
 
+/* A river that holds every combo of some range leaves that range empty, so
+ * there is no deal on that river.  That is not an input error: the river is
+ * skipped and the call still returns 0 with the remaining rivers priced.  One
+ * combo per range, disjoint, so the eight cards the two hands hold are exactly
+ * the eight rivers that empty a range and nothing else is skipped. */
+static void test_river_that_empties_a_range_is_skipped(EvalContext *context)
+{
+    static const int P0_ONLY[4] = {
+        CARD(Q, SPADES), CARD(J, SPADES), CARD(T, SPADES), CARD(9, SPADES)
+    };
+    static const int P1_ONLY[4] = {
+        CARD(6, SPADES), CARD(6, HEARTS), CARD(8, SPADES), CARD(5, DIAMONDS)
+    };
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[1];
+    pe_omaha_combo_t p1[1];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    oracle_result_t oracle;
+    double values[2] = {0.0, 0.0};
+    size_t rivers = 0u;
+    double mass = 0.0;
+    int status;
+
+    p0[0].cards = mask_of(P0_ONLY, 4u);
+    p0[0].weight = 1.0;
+    p1[0].cards = mask_of(P1_ONLY, 4u);
+    p1[0].weight = 1.0;
+    ranges[0].combos = p0;
+    ranges[0].count = 1u;
+    ranges[1].combos = p1;
+    ranges[1].count = 1u;
+    init_state(&state, 2u, 63.0, 31.5);
+
+    status = pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges,
+                                        &state, 4u, values, 2u, &rivers, &mass);
+    CHECK(status == 0, "an empty range on some river is not an input error, got %d",
+          status);
+    CHECK(rivers == 40u, "expected the 40 playable of 48 rivers, got %zu",
+          rivers);
+
+    oracle = oracle_brute(board, MASK_EMPTY, ranges, &state, 2u, 0u);
+    CHECK(oracle.ok && oracle.pair_mass == 1.0,
+          "the fixture needs exactly one legal pair");
+    CHECK(fabs(mass - oracle.deal_mass) <= TOL * oracle.deal_mass,
+          "deal mass %.17g differs from the oracle %.17g", mass,
+          oracle.deal_mass);
+    CHECK(fabs(values[0] - oracle.value) <= TOL,
+          "turn value %.17g differs from the oracle %.17g", values[0],
+          oracle.value);
+}
+
+/* Every pair blocked: the two ranges hold the same single combo, so no tuple
+ * is legal on any river.  That is "no deal" - code 1 with nothing priced and
+ * zeroed outputs - and not an invalid input. */
+static void test_no_legal_deal_returns_one(EvalContext *context)
+{
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[1];
+    pe_omaha_combo_t p1[1];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    double values[2] = {42.0, -42.0};
+    size_t rivers = 99u;
+    double mass = 99.0;
+    int status;
+
+    p0[0].cards = mask_of(P0_HANDS[0], 4u);
+    p0[0].weight = 1.0;
+    p1[0].cards = p0[0].cards;
+    p1[0].weight = 1.0;
+    ranges[0].combos = p0;
+    ranges[0].count = 1u;
+    ranges[1].combos = p1;
+    ranges[1].count = 1u;
+    init_state(&state, 2u, 63.0, 31.5);
+
+    status = pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges,
+                                        &state, 4u, values, 2u, &rivers, &mass);
+    CHECK(status == 1, "no legal pair must report 1, got %d", status);
+    CHECK(rivers == 0u, "no river was priced, but the count says %zu", rivers);
+    CHECK(mass == 0.0, "no deal was priced, but the mass is %.17g", mass);
+    CHECK(values[0] == 0.0 && values[1] == 0.0,
+          "the values must be zeroed, got %.17g %.17g", values[0], values[1]);
+}
+
 /* Three-way turn, which takes the river terminal's deal-enumeration path. */
 static void test_three_way_turn_matches_oracle(EvalContext *context)
 {
@@ -565,6 +651,8 @@ int main(void)
     test_full_turn_matches_oracle(context);
     test_chance_mass_normalization(context);
     test_turn_is_not_one_river(context);
+    test_river_that_empties_a_range_is_skipped(context);
+    test_no_legal_deal_returns_one(context);
     test_three_way_turn_matches_oracle(context);
     test_wider_holes(context, 5u);
     test_wider_holes(context, 6u);
