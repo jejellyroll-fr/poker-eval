@@ -206,15 +206,6 @@ Two things follow:
   on a sample taken in a checked window, and none of these numbers is a
   threshold.
 
-An earlier revision of this section read the loaded PLO6 samples as a real rise
-in per-deal cost, lowered the PLO6 budgets to 1,900 / 6,000 / 14,700, and called
-the PLO5 rows inside on loaded samples alone. Both readings were contamination:
-for PLO5 the loaded sample is the one that overran, and the calibrated run puts
-it 13% under. The 1,200 and 1,600 combos rows were then marked loaded because
-they had no checked window; both have since been measured in one, at 18.36 s
-and 34.29 s, so the fitted column is restored throughout and every row stands
-on a window whose speed was measured.
-
 Peak RSS was 6.9–7.1 MiB for every frontier configuration, so nothing about the
 wider ranges changes the memory story above.
 
@@ -252,7 +243,7 @@ Stated as rules, with the guarantee each one carries:
   phase C needs as its baseline.
 - **Sparse blocker-aggregation designs** (the other half of the phase B
   bullet) are not implemented or measured. The cost model says what they would
-  have to beat: `density · n²` tuple visits per river at ~0.9–1.1 µs each.
+  have to beat: `density · n²` tuple visits per river at 0.72–1.05 µs each.
 - **No turn betting tree and no turn certificate**, as in phase A: these are
   showdown terminals, not two-street solves.
 - **Hi/Lo** and dead-card variants are not measured; `dead` only shortens the
@@ -274,6 +265,10 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 800 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 1200 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 1600 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
