@@ -94,10 +94,11 @@ evaluator. The terminal appears nowhere in the oracle.
   rivers' values, so it is not one arbitrary river priced as the turn;
 - three-way turn (the river terminal's deal-enumeration path) against a
   three-way oracle, values summing to zero;
-- the two no-deal paths, which are not input errors: a river that holds every
-  combo of some range is skipped and the call still returns 0 (40 of the 48
-  rivers on a one-combo-per-range fixture), while ranges that share no legal
-  pair anywhere return 1 with no river priced and zeroed outputs;
+- the three no-deal paths, which are not input errors: a river that holds
+  every combo of some range is skipped and the call still returns 0 (40 of the
+  48 rivers on a one-combo-per-range fixture), while ranges that share no legal
+  pair anywhere, and non-empty ranges whose weights are all zero, both return 1
+  with no river priced and zeroed outputs;
 - PLO5 and PLO6 turn deals at the same rules;
 - rejected inputs: a five-card board, a dead card a combo holds, a folded-out
   state, an inactive player, seven-card holes, and outputs left zeroed.

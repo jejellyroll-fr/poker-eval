@@ -459,6 +459,47 @@ static void test_no_legal_deal_returns_one(EvalContext *context)
           "the values must be zeroed, got %.17g %.17g", values[0], values[1]);
 }
 
+/* The third way to have no deal: the ranges are not empty and every combo is a
+ * legal private hand, but no combo carries weight, so no tuple has a positive
+ * weight.  That is "no deal" as well - code 1, nothing priced, zeroed outputs -
+ * and not an invalid input, which is why zero weights are accepted by the
+ * validity check. */
+static void test_zero_weight_ranges_report_no_deal(EvalContext *context)
+{
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[2];
+    pe_omaha_combo_t p1[2];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    oracle_result_t oracle;
+    double values[2] = {42.0, -42.0};
+    size_t rivers = 99u;
+    double mass = 99.0;
+    int status;
+
+    build_ranges(p0, &ranges[0], 2u, p1, &ranges[1], 2u);
+    /* The two combos per player are alternatives, so they may overlap each
+     * other; what matters is that each is legal against the board. */
+    p1[1].cards = mask_of(P1_HANDS[2], 4u);
+    p0[0].weight = 0.0;
+    p0[1].weight = 0.0;
+    p1[0].weight = 0.0;
+    p1[1].weight = 0.0;
+    init_state(&state, 2u, 63.0, 31.5);
+
+    oracle = oracle_brute(board, MASK_EMPTY, ranges, &state, 2u, 0u);
+    CHECK(!oracle.ok && oracle.deal_mass == 0.0,
+          "the oracle must agree that weightless ranges have no deal");
+
+    status = pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges,
+                                        &state, 4u, values, 2u, &rivers, &mass);
+    CHECK(status == 1, "a weightless range must report 1, got %d", status);
+    CHECK(rivers == 0u, "no river was priced, but the count says %zu", rivers);
+    CHECK(mass == 0.0, "no deal was priced, but the mass is %.17g", mass);
+    CHECK(values[0] == 0.0 && values[1] == 0.0,
+          "the values must be zeroed, got %.17g %.17g", values[0], values[1]);
+}
+
 /* Three-way turn, which takes the river terminal's deal-enumeration path. */
 static void test_three_way_turn_matches_oracle(EvalContext *context)
 {
@@ -653,6 +694,7 @@ int main(void)
     test_turn_is_not_one_river(context);
     test_river_that_empties_a_range_is_skipped(context);
     test_no_legal_deal_returns_one(context);
+    test_zero_weight_ranges_report_no_deal(context);
     test_three_way_turn_matches_oracle(context);
     test_wider_holes(context, 5u);
     test_wider_holes(context, 6u);
