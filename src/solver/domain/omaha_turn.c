@@ -5,11 +5,11 @@
  * what the figures mean.  The implementation adds no new payoff model: it
  * filters each range for one river card and hands the five-card board to the
  * river terminal, then combines the conditional values by their deal mass.
- * That keeps one definition of a showdown value in the tree, and it means a
- * change to the river terminal's blockering or pot policy is picked up here
- * instead of being reimplemented.
+ * That keeps one definition of a showdown value in the tree, and a change to
+ * the river terminal's blockering or pot policy is picked up here instead of
+ * being reimplemented.
  *
- * Cost is linear in the number of candidate rivers (40 for a full PLO4 turn
+ * Cost is linear in the number of candidate rivers (48 for a full PLO4 turn
  * with no dead cards), each of which costs one river terminal.
  */
 
@@ -19,7 +19,6 @@
 
 #include <float.h>
 #include <stdlib.h>
-#include <string.h>
 
 static int finite_double(double value)
 {
@@ -61,14 +60,11 @@ static int ranges_are_valid(mask_t board, mask_t dead,
 static int turn_input_is_valid(const EvalContext *context, mask_t board,
                                mask_t dead, const pe_omaha_range_t *ranges,
                                const pe_betting_state_t *state,
-                               uint8_t hole_cards, uint8_t player_count,
-                               const size_t *out_river_count,
-                               const double *out_weight_sum)
+                               uint8_t hole_cards, uint8_t player_count)
 {
     uint8_t player;
 
-    if (!context || !ranges || !state || !out_river_count ||
-        !out_weight_sum)
+    if (!context || !ranges || !state)
         return 0;
     if (!mask_is_valid(board) || !mask_is_valid(dead) ||
         mask_popcount(board) != PE_OMAHA_TURN_BOARD_CARDS ||
@@ -91,13 +87,21 @@ static int turn_input_is_valid(const EvalContext *context, mask_t board,
     return ranges_are_valid(board, dead, ranges, hole_cards, player_count);
 }
 
-int pe_omaha_turn_river_count(mask_t board, mask_t dead)
+/* Copy the combos that do not hold a card of `blocked` into `out` and return
+ * how many survived.  A combo holding the river card is not a private hand on
+ * that river, so it leaves the range rather than keeping a zero weight: the
+ * river terminal rejects a combo that touches its board, and a zero weight
+ * would leave the card in a leg the deal walk cannot use. */
+static size_t compact_for_river(const pe_omaha_range_t *range, mask_t blocked,
+                                pe_omaha_combo_t *out)
 {
-    if (!mask_is_valid(board) || !mask_is_valid(dead) ||
-        mask_popcount(board) != PE_OMAHA_TURN_BOARD_CARDS ||
-        (board & dead) != 0u)
-        return -1;
-    return MODERN_DECK_SIZE - mask_popcount(board) - mask_popcount(dead);
+    size_t kept = 0u;
+    size_t index;
+
+    for (index = 0u; index < range->count; ++index)
+        if ((range->combos[index].cards & blocked) == 0u)
+            out[kept++] = range->combos[index];
+    return kept;
 }
 
 int pe_omaha_turn_range_values(
@@ -112,34 +116,32 @@ int pe_omaha_turn_range_values(
     size_t *out_river_count,
     double *out_weight_sum)
 {
-    pe_omaha_combo_t *storage[PE_OMAHA_TURN_PLAYERS_MAX];
+    pe_omaha_combo_t *storage[PE_OMAHA_TURN_PLAYERS_MAX] = {0};
     pe_omaha_range_t filtered[PE_OMAHA_TURN_PLAYERS_MAX];
-    double accumulated[PE_OMAHA_TURN_PLAYERS_MAX];
+    double accumulated[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
     double river_values[PE_OMAHA_TURN_PLAYERS_MAX];
-    pe_betting_state_t river_state;
     double total_mass = 0.0;
     size_t rivers = 0u;
     int status = 0;
     uint8_t player;
     int card;
 
-    memset(storage, 0, sizeof(storage));
-    memset(filtered, 0, sizeof(filtered));
-    memset(accumulated, 0, sizeof(accumulated));
-    memset(river_values, 0, sizeof(river_values));
-    memset(&river_state, 0, sizeof(river_state));
+    if (!out_values || !out_river_count || !out_weight_sum)
+        return -1;
 
-    /* Zero the outputs before anything can fail, so a caller that ignores the
-     * status reads zeros rather than the previous call's figures. */
-    for (player = 0u; player < player_count; ++player)
+    /* The outputs are cleared before anything can fail, so a caller that
+     * ignores the status reads zeros rather than the previous call's figures.
+     * The loop is bounded by the accepted player maximum, so a bogus count
+     * cannot run past the caller's array. */
+    for (player = 0u;
+         player < player_count && player < PE_OMAHA_TURN_PLAYERS_MAX;
+         ++player)
         out_values[player] = 0.0;
-    if (out_river_count)
-        *out_river_count = 0u;
-    if (out_weight_sum)
-        *out_weight_sum = 0.0;
+    *out_river_count = 0u;
+    *out_weight_sum = 0.0;
 
     if (!turn_input_is_valid(context, board, dead, ranges, state, hole_cards,
-                             player_count, out_river_count, out_weight_sum))
+                             player_count))
         return -1;
 
     for (player = 0u; player < player_count; ++player)
@@ -160,60 +162,41 @@ int pe_omaha_turn_range_values(
     for (card = 0; card < MODERN_DECK_SIZE; ++card)
     {
         mask_t board_five;
-        mask_t blocked;
-        size_t deal_count = 0u;
+        size_t deal_count;
         double river_mass = 0.0;
-        int rivers_with_deals = 1;
+        int priced = 1;
 
         if (mask_is_set(board, card) || mask_is_set(dead, card))
             continue;
-        board_five = mask_set(board, card);
-        blocked = (mask_t)1u << card;
-
-        /* A combo holding the river card is not a private hand on this river,
-         * so it leaves the range instead of keeping a zero weight: the river
-         * terminal rejects a combo that touches its board, and a zero weight
-         * would only hide the card from the deal while the leg stayed there.
-         * The pairs the hands block are still the river terminal's business.
-         * When no combo of some player survives, the river has no legal deal
-         * at all and is skipped instead of pricing an empty range. */
         for (player = 0u; player < player_count; ++player)
         {
-            const pe_omaha_range_t *range = &ranges[player];
-            size_t kept = 0u;
-            int live = 0;
-            size_t index;
-
-            for (index = 0u; index < range->count; ++index)
-            {
-                pe_omaha_combo_t combo = range->combos[index];
-
-                if ((combo.cards & blocked) != 0u)
-                    continue;
-                if (combo.weight > 0.0)
-                    live = 1;
-                storage[player][kept++] = combo;
-            }
             filtered[player].combos = storage[player];
-            filtered[player].count = kept;
-            if (!live)
+            filtered[player].count = compact_for_river(
+                &ranges[player], (mask_t)1u << card, storage[player]);
+            /* A player left without a combo has no legal deal on this river;
+             * pricing it would divide by a reach mass of zero. */
+            if (filtered[player].count == 0u)
             {
-                rivers_with_deals = 0;
+                priced = 0;
                 break;
             }
         }
-        if (!rivers_with_deals)
+        if (!priced)
             continue;
 
-        river_state = *state;
-        status = pe_omaha_river_range_values(
-            context, board_five, filtered, &river_state, hole_cards,
-            river_values, player_count, &deal_count, &river_mass);
+        board_five = mask_set(board, card);
+        status = pe_omaha_river_range_values(context, board_five, filtered,
+                                             state, hole_cards, river_values,
+                                             player_count, &deal_count,
+                                             &river_mass);
+        /* The river terminal reports -1 when no pair is compatible on that
+         * board: the turn simply has no deal on that river, which is not an
+         * input error.  Its success path reports a positive, finite mass. */
+        if (status == -1)
+            continue;
         if (status != 0)
             goto done;
         rivers++;
-        if (!(river_mass > 0.0) || !finite_double(river_mass))
-            continue;
         for (player = 0u; player < player_count; ++player)
             accumulated[player] += river_values[player] * river_mass;
         total_mass += river_mass;

@@ -22,7 +22,7 @@ int pe_omaha_turn_range_values(
     uint8_t hole_cards,         /* 4, 5 or 6 */
     double *out_values,         /* chips per deal, one per player */
     uint8_t player_count,
-    size_t *out_river_count,    /* candidate rivers with at least one deal */
+    size_t *out_river_count,    /* rivers priced, i.e. with at least one deal */
     double *out_weight_sum);    /* total chance-expanded deal mass */
 ```
 
@@ -51,7 +51,8 @@ A combo that holds the river card is not a private hand on that river, so it
 leaves the range before the river terminal runs. It has to leave rather than
 keep a zero weight: the river terminal rejects a combo that touches its board,
 and a zero weight would leave the card in a leg the deal walk cannot use. The
-pairs the two hands block are still the river terminal's business.
+pairs the two hands block are still the river terminal's business. A river that
+would empty a range has no legal deal and is skipped, not priced.
 
 The consequence is the identity the fixture checks: the candidate river list is
 the deck minus the board and the dead mask (48 for a full PLO4 turn) and does
@@ -78,10 +79,10 @@ and are not a threshold any test asserts.
 
 ## What the test pins
 
-`tests/test_plo4_turn_oracle.c` computes every expectation itself: it
-enumerates the legal pairs, the rivers each pair can still see, and the
-showdown of every `(hands, river)` deal through the product Omaha evaluator.
-The terminal appears nowhere in the oracle.
+`tests/test_plo4_turn_oracle.c` computes every expectation itself: one brute
+force enumerates the legal combo tuples, the rivers each tuple can still see,
+and the showdown of every `(hands, river)` deal through the product Omaha
+evaluator. The terminal appears nowhere in the oracle.
 
 - a full-turn fixture on a turn board with a hand collision and a combo that
   holds one of the watched rivers: both player values and the pooled deal mass
@@ -89,8 +90,8 @@ The terminal appears nowhere in the oracle.
 - the chance normalisation: 48 candidate rivers and 40 rivers of deal mass per
   legal pair, 46 and 38 with two dead cards, with the same values only where
   the oracle says they are the same;
-- the chance node itself: the turn value equals the mass-weighted mean of the
-  per-river values, and two different rivers give different values;
+- the chance node itself: the turn value is neither of the two watched
+  rivers' values, so it is not one arbitrary river priced as the turn;
 - three-way turn (the river terminal's deal-enumeration path) against a
   three-way oracle, values summing to zero;
 - PLO5 and PLO6 turn deals at the same rules;

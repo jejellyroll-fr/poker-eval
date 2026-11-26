@@ -26,18 +26,18 @@
  * Board-dependent legality
  * ------------------------
  * A combo that holds the river card cannot be a private hand on that river,
- * so it is given zero weight before the river terminal runs; the terminal then
- * removes the pairs its board and hand blockers remove.  This is the turn
+ * so it is removed from the range before the river terminal runs; the terminal
+ * then removes the pairs its board and hand blockers remove.  This is the turn
  * counterpart of the river's dead-card handling and is what the phase A
  * oracle tests pin.
  *
  * Reporting
  * ---------
- * `*out_river_count` counts the candidate river cards that had at least one
- * legal deal: every card of the deck that the board and the dead mask leave,
- * so 48 for a full PLO4 turn and 48 - popcount(dead) when cards are dead.  A
- * river a private hand holds is removed per pair inside the enumeration, which
- * is why the candidate list does not shrink with the ranges.
+ * `*out_river_count` counts the river cards the terminal actually priced: the
+ * cards the board and the dead mask leave, so 48 for a full PLO4 turn and
+ * 48 - popcount(dead) when cards are dead, minus any river on which no pair is
+ * compatible.  A river a private hand holds is removed per pair inside the
+ * enumeration, which is why the count does not shrink with the ranges.
  * `*out_weight_sum` is the total chance-expanded deal mass (the denominator
  * above): the rivers each legal pair can see, times the pooled range mass.  A
  * caller that wants the plain hand distribution must divide by it, exactly as
@@ -74,10 +74,6 @@ extern "C" {
 /* Cards the board must already hold: the turn. */
 #define PE_OMAHA_TURN_BOARD_CARDS 4
 
-/* Number of candidate river cards for `board` and `dead`.  Returns -1 when the
- * arguments are not a four-card board and a dead mask disjoint from it. */
-int pe_omaha_turn_river_count(mask_t board, mask_t dead);
-
 /*
  * Exact turn-to-river values for `player_count` ranges.
  *
@@ -88,9 +84,9 @@ int pe_omaha_turn_river_count(mask_t board, mask_t dead);
  * per-player investment and the active players of the terminal being priced,
  * with `winner < 0` (a fold is not a showdown).
  *
- * Returns 0 with `out_values` in chips per deal, -1 on invalid input, -2 when
- * an allocation fails, and 1 when the enumeration found no legal deal.
- * `out_values` is zeroed on every path.
+ * Returns 0 with `out_values` in chips per deal, -1 on invalid input (which
+ * includes a NULL output pointer), -2 when an allocation fails, and 1 when the
+ * enumeration found no legal deal.  The outputs are zeroed on every path.
  */
 int pe_omaha_turn_range_values(
     const EvalContext *context,
