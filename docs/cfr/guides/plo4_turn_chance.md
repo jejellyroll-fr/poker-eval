@@ -115,8 +115,9 @@ accumulation (`values[p] += river_values[p]` instead of
 - **Hi/Lo** is not covered in this tranche; the terminal is high-only, like the
   heads-up river vector path it builds on.
 - **PLO5/PLO6 scalability and the GPU decision gate** (phases B and C) are
-  untouched: this tranche measures the turn terminal's own cost and nothing
-  wider.
+  outside this tranche: the measured cost of the wider hands is in
+  [plo_turn_scalability.md](plo_turn_scalability.md), and the GPU gate is
+  untouched.
 
 ## Running it
 
