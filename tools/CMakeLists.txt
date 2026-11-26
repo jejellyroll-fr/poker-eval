@@ -43,7 +43,9 @@ target_link_libraries(pe-plo4-river-bench PRIVATE poker_eval_modular m)
 
 add_executable(pe-omaha-turn-bench pe_omaha_turn_bench.c)
 target_include_directories(pe-omaha-turn-bench PRIVATE ${TOOLS_COMMON_INCLUDES})
-target_link_libraries(pe-omaha-turn-bench PRIVATE poker_eval_modular m)
+# --threads fans the candidate rivers out over pthreads. glibc and macOS keep
+# pthread_create in libc, but FreeBSD's is in libthr, so it needs this to link.
+target_link_libraries(pe-omaha-turn-bench PRIVATE poker_eval_modular Threads::Threads m)
 
 add_executable(pe-plo4-certify pe_plo4_certify.c)
 target_include_directories(pe-plo4-certify PRIVATE ${TOOLS_COMMON_INCLUDES})
