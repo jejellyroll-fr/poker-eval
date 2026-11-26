@@ -22,8 +22,9 @@ is one terminal call at a turn node, and every configuration is exact.
   configurations, where a single call already runs for seconds).
 - A single-call timing is not repeatable on a busy machine: the same
   configuration measured twice here differed by up to 2× (PLO5, 814 combos:
-  8.8 s and then 17.8 s). The frontier check reports every run and reads the
-  fastest, which is the least contended sample.
+  8.8 s and then 17.8 s). The frontier check reports every run with the load
+  average it ran under and reads the fastest, which is the least contended
+  sample.
 - The deal count is exact, not estimated: the terminal visits every legal
   tuple and every river such a tuple leaves in the deck, so
   `deals = tuples × (48 − holes × players)`. The benchmark reads the tuple
@@ -89,13 +90,14 @@ combos of range size per second.
 | 400 | 56,513 | 2,034,468 | 2.3225 | 1,142 | 6.6 MiB |
 | 800 | 225,689 | 8,124,804 | 9.1805 | 1,130 | 6.6 MiB |
 
-PLO5 stays between 750 and 967 ns per deal across the grid. PLO6 is 1.05–1.15
-µs up to 1,200 combos and 1.20–1.36 µs at 1,600 and 2,091, so its per-deal
-cost is flat only while the two ranges still sit comfortably in cache. That
-rise is why the fit from these four configurations under-predicts at the 60 s
-frontier (see Frontier check). At the small sizes the PLO5/PLO6 ratio is 1.3,
-the ratio of hand evaluations per deal (150/100), which says the terminal's
-time is the showdown evaluation and not bookkeeping.
+PLO5 stays between 750 and 967 ns per deal across the grid, and PLO6 between
+1.02 and 1.15 µs from 25 combos to 2,091: both leave the per-deal cost flat in
+the range size. At the small sizes the PLO5/PLO6 ratio is 1.3, the ratio of
+hand evaluations per deal (150/100), which says the terminal's time is the
+showdown evaluation and not bookkeeping. The same configurations report up to
+twice that per-deal cost while the machine is busy — 2,091 PLO6 combos cost
+1.04 µs each at load 4 and 1.20–1.49 µs each at load 16–21 — so a per-deal
+figure is only worth reading next to the load average it was taken under.
 
 ### Multiway multiplies tuples
 
@@ -108,8 +110,8 @@ three players, which is the conservation check of the fixture.
 
 ## Measured memory
 
-Peak RSS is **6.5–6.7 MiB for every PLO5 and PLO6 configuration**, from 7
-thousand deals up to 45 million. The terminal does not build a deal table: the
+Peak RSS is **6.5–7.1 MiB for every PLO5 and PLO6 configuration**, from 7
+thousand deals up to 70 million. The terminal does not build a deal table: the
 walk streams tuples to a callback, so memory is `O(ranges)`, not
 `O(tuples)`. What it allocates for itself is one compaction buffer per player,
 `combos × 16 B`, freed on return:
@@ -134,23 +136,22 @@ Fitted from the tables, one exact turn node, single-threaded:
 
 - PLO4: `T ≈ 5.9e-5 · n` seconds — linear.
 - PLO5: `T ≈ 1.39e-5 · n²` seconds — measured 1.32e-5 to 1.71e-5 per point.
-- PLO6: `T ≈ 1.37e-5 · n²` seconds — measured 1.30e-5 to 1.45e-5 per point, up
-  to 1,200 combos. Above that the effective coefficient rises to 1.5–1.7e-5
-  (Frontier check), so the PLO6 budget column is not read off this fit.
+- PLO6: `T ≈ 1.34e-5 · n²` seconds — measured 1.30e-5 to 1.45e-5 per point
+  across the whole grid, 2,091 combos included (1.33e-5 there; Frontier
+  check).
 
 Maximum range size per player for a time budget:
 
 | Budget | PLO4 | PLO5 | PLO6 |
 |---|---|---|---|
 | 10 s | 169,000 | 814 | 854 |
-| 60 s | 1,008,000 | 1,994 | 1,900 |
-| 10 min | 10,089,000 | 6,307 | 6,000 |
-| 1 h | 60,535,000 | 15,448 | 14,700 |
+| 60 s | 1,008,000 | 1,994 | 2,091 |
+| 10 min | 10,089,000 | 6,307 | 6,612 |
+| 1 h | 60,535,000 | 15,448 | 16,196 |
 
-The PLO5 column is the fit rounded down, and both of its frontier points came
-in under budget. The PLO6 column is the fit only for 10 s; the three larger
-entries are read off the measured overrun at 2,091 combos instead, which is why
-they are lower than the fit would give.
+Both quadratic columns are the fit rounded down, and every frontier point
+measured below landed at or under its budget, so neither column needed a
+correction.
 
 A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 `C(48,5) = 1,712,304` for PLO5 and `C(48,6) = 12,271,512` for PLO6
@@ -160,7 +161,7 @@ A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 |---|---|---|---|
 | PLO4 | 194,580 | 5.9 MiB | **11.6 s (measured)** |
 | PLO5 | 1,712,304 | 52.3 MiB | ≈ 1.3 years (extrapolated) |
-| PLO6 | 12,271,512 | 374.5 MiB | ≈ 80 years (extrapolated, 65–90 across the coefficient band) |
+| PLO6 | 12,271,512 | 374.5 MiB | ≈ 65 years (extrapolated, 62–69 across the coefficient band) |
 
 **Exact full-combo turn evaluation is feasible for PLO4 and not for PLO5 or
 PLO6.** The blocker is time, not memory: a full PLO6 turn fits in 375 MiB and
@@ -172,32 +173,39 @@ wrong by the numbers above.
 The budgets were fitted from 50–1,600 combos for PLO5 and 25–800 for PLO6, so
 each one was then measured at the combos it claims instead of being trusted as
 a fit. Board, ranges and state as in Method, one call per process,
-`--repetitions 1`. Other work was running on the machine during these runs
-(load average 16–21 over 10 cores), so every sample is listed.
+`--repetitions 1`. The machine was carrying other work for most of this
+session, so every sample is listed with the load average it ran under.
 
-| Variant | Combos | Fit predicts | Samples (s) | Fastest | Verdict |
-|---|---|---|---|---|---|
-| PLO5 | 814 (10 s) | 10.0 | 8.8, 17.8 | 8.8 | inside |
-| PLO5 | 1,994 (60 s) | 60.0 | 55.2, 90.7 | 55.2 | inside |
-| PLO6 | 854 (10 s) | 10.0 | 9.8, 10.6 | 9.8 | inside |
-| PLO6 | 1,200 | 19.7 | 21.1 | 21.1 | 7% over |
-| PLO6 | 1,600 | 35.1 | 44.3, 61.5 | 44.3 | 26% over |
-| PLO6 | 2,091 (60 s) | 60.0 | 66.6, 77.2, 82.7 | 66.6 | 11% over |
+| Variant | Combos | Fit predicts | Samples (s) and their load average | Verdict |
+|---|---|---|---|---|
+| PLO5 | 814 (10 s) | 10.0 | 8.8 and 17.8, 16–21 | inside |
+| PLO5 | 1,994 (60 s) | 60.0 | 55.2 and 90.7, 16–21 | inside |
+| PLO6 | 854 (10 s) | 10.0 | 9.5 and 9.96, 3.7–4.9; 9.8 and 10.6, 16–21 | inside |
+| PLO6 | 1,200 | 19.7 | 21.1, 16–21 | +7 % |
+| PLO6 | 1,600 | 35.1 | 44.3 and 61.5, 16–21 | +26 % |
+| PLO6 | 2,091 (60 s) | 60.0 | 58.0, 3.7–4.9; 66.6, 77.2 and 82.7, 16–21 | inside |
 
-Three things follow:
+Two things follow:
 
-- **PLO5 needs no correction.** Both frontier points land inside their budget,
-  and the fastest samples agree with the fit to within 12%.
-- **PLO6 does.** At 1,600 and 2,091 combos the fastest samples are 26% and 11%
-  above the fit, with an effective coefficient of 1.5–1.7e-5 instead of 1.37e-5.
-  Solving `T = 60 s` at 1.66e-5 gives 1,900 combos, which is what the budget
-  table says instead of 2,091. The 10 s entry, measured at 9.8–10.6 s, stands.
-- **The spread is the machine, not the terminal.** The same PLO5
+- **Every budget holds.** The 60 s PLO6 entry is the one that looked wrong on
+  the loaded samples: 2,091 combos took 66.6–82.7 s at load 16–21 and 58.0 s at
+  load 3.7–4.9. What makes the second reading the reliable one is the
+  calibration on either side of it: the 854-combo configuration, which the grid
+  above already covers at 800 combos and 9.18 s, took 9.96 s and 9.5 s in that
+  window, so the machine was no slower than the one the small table comes from.
+  At 2,091 combos that is 1.04 µs per deal, inside the 1.02–1.15 µs band of the
+  fitted configurations, so there is no rise in per-deal cost to correct the
+  fit for and the PLO6 column stands as fitted.
+- **Contention, not range size, moves these numbers.** The same PLO5
   configuration ran 8.8 s and then 17.8 s with nothing in the code changed,
-  while every memory figure stayed put. The verdicts are therefore given as
-  ranges and the budgets are rounded down; none of these is a threshold.
+  while every memory figure stayed put (6.9–7.1 MiB). Verdicts therefore rest
+  on the least contended sample, and none of these numbers is a threshold.
 
-Peak RSS was 6.9–7.1 MiB for all five configurations, so nothing about the
+An earlier revision of this section read the loaded PLO6 samples as a real rise
+in per-deal cost and lowered the PLO6 budgets to 1,900 / 6,000 / 14,700. The
+calibrated run shows that was contention, so the fitted column is restored.
+
+Peak RSS was 6.9–7.1 MiB for every frontier configuration, so nothing about the
 wider ranges changes the memory story above.
 
 ## Execution policies
@@ -209,10 +217,10 @@ Stated as rules, with the guarantee each one carries:
    the river certificate of issue #283 describe; a value computed here is
    exact over the enumerated chance space.
 2. **Exact, sparse combos — PLO5/PLO6 turn.** Exact for the combos given, with
-   ranges up to ~2,000 (PLO5) or ~1,900 (PLO6) per player inside a minute and
-   ~6,300 or ~6,000 inside ten minutes, at ~7 MiB. This is the only exact regime for wider hands and it
-   is the one to use when a spot is naturally sparse (a nut range, a single
-   suit shape, a solved subgame's reach support).
+   ranges up to ~2,000 (PLO5) or ~2,100 (PLO6) per player inside a minute and
+   ~6,300 or ~6,600 inside ten minutes, at ~7 MiB. This is the only exact
+   regime for wider hands and it is the one to use when a spot is naturally
+   sparse (a nut range, a single suit shape, a solved subgame's reach support).
 3. **Sampled — everything above that.** Beyond `O(10³)` combos per range the
    exact terminal is out of budget, so the options are sampling private tuples
    (an empirical, not exact, payoff) or bucketing combos with
@@ -239,10 +247,10 @@ Stated as rules, with the guarantee each one carries:
   showdown terminals, not two-street solves.
 - **Hi/Lo** and dead-card variants are not measured; `dead` only shortens the
   river list.
-- **Single-threaded and machine-dependent.** The frontier points were measured
-  with 16–21 of load average on 10 cores and vary by up to 2× between runs; a
-  quiet machine is faster, never slower, so the rounded-down budgets are the
-  safe direction to be wrong in.
+- **Single-threaded and machine-dependent.** The same configuration varies by
+  up to 2× between runs depending on what else the machine is doing (PLO5 at
+  814 combos: 8.8 s and 17.8 s). Every figure above comes from the least
+  contended sample, so a loaded machine is slower, never faster.
 - Ranges above 4,096 combos are not checked for duplicate combos (the check is
   quadratic and a repeated point only shifts one combo's weight); heads-up at
   small sizes is deduplicated.
@@ -255,7 +263,9 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 800 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
 ```
 
 Each run prints one JSON document (`pe-omaha-turn-bench/v1`) with the wall
