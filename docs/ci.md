@@ -146,6 +146,51 @@ checks, proving the comparison is live rather than vacuous. The exact checks are
 tested the same way: edit a copy of the report's `values_fingerprint` or
 `deals` and confirm `--report` refuses it.
 
+## Stacked pull requests and their base branches
+
+A stacked pull request lives on a base that is another pull request's head
+branch. GitHub does not keep that child open when its base disappears:
+`gh pr merge <parent> --squash --delete-branch` deletes the branch the child
+was based on, and GitHub then **closes the child** and reports it
+`CONFLICTING` against a `baseRefName` that no longer exists. It looks like a
+merge conflict and is not one — the child's own commits are untouched.
+
+Neither recovery command works on its own in that state: `gh pr reopen` fails
+with `Could not open the pull request`, because there is no base to open it
+against, and `gh pr edit --base master` refuses with `Cannot change the base
+branch of a closed pull request`. Restore the base first, from the tip it had
+before the merge — it is still reachable from the child's history:
+
+```sh
+git push origin <old base tip>:refs/heads/<base>
+gh pr reopen <child>
+gh pr edit <child> --base master
+```
+
+The child is now open against `master` but still conflicts, because the squash
+rewrote its parent's commits into one commit that `master` has and the branch
+does not, even though both trees hold the same text: git compares edits against
+a merge base that predates the squash, sees the same lines changed on both
+sides, and cannot tell that they already agree. No rebase is needed, and none
+should be used on a pushed branch, since it would need a force-push. Merge
+`master` into the branch and keep the branch's side of every conflict — the
+parent's content is by definition already in the child:
+
+```sh
+git merge origin/master
+git checkout --ours -- <conflicted files>
+git add <conflicted files> && git commit
+```
+
+Verify the result before pushing: `git diff --cached <child head before the
+merge>` must be empty. An empty diff proves the merge commit carries exactly the
+tree the checks already ran on, so the new CI run is a formality rather than a
+first test of merged content. Then push normally, let the checks pass on the
+merge commit and squash the child as usual.
+
+When a stack is still open, merge the parent without `--delete-branch` and
+delete its branch once the child is merged too; that avoids the whole sequence.
+
 ## macOS arm64 legs
 
 `macos-arm64.yml` builds and tests on the hosted Apple Silicon image
