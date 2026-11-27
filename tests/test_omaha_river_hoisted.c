@@ -28,7 +28,7 @@
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
 
-#include "support/pe_omaha_hilo_winners.h"
+#include "support/pe_omaha_showdown_reference.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -109,14 +109,8 @@ static int same_bits(double a, double b)
     return memcmp(&a, &b, sizeof(a)) == 0;
 }
 
-typedef struct
-{
-    double amount;
-    uint8_t eligible;
-} slice_spec_t;
-
 /* The pot every heads-up case plays for: 20 in the middle, ten each. */
-static const slice_spec_t heads_up_slices[] = {{20.0, 0x03u}};
+static const pe_pot_slice_t heads_up_slices[] = {{20.0, 0x03u}};
 
 typedef struct
 {
@@ -124,7 +118,7 @@ typedef struct
     int hilo8;
     uint8_t player_count;
     uint8_t slice_count;
-    const slice_spec_t *slices;
+    const pe_pot_slice_t *slices;
     const pe_betting_state_t *state;
     double mass;
     double values[MAX_PLAYERS];
@@ -144,7 +138,6 @@ static int reference_deal(const mask_t *holes, uint8_t player_count,
     LowHandVal low[MAX_PLAYERS];
     double awards[MAX_PLAYERS];
     uint8_t player;
-    uint8_t index;
 
     ref->mass += weight;
     if (player_count != ref->player_count || ref->failed)
@@ -153,7 +146,8 @@ static int reference_deal(const mask_t *holes, uint8_t player_count,
     {
         StdDeck_CardMask hole = to_std_mask(holes[player]);
 
-        awards[player] = 0.0;
+        strength[player] = HandVal_NOTHING;
+        low[player] = LowHandVal_NOTHING;
         if (ref->hilo8)
         {
             if (StdDeck_OmahaHiLow8_EVAL(hole, board, &strength[player],
@@ -170,46 +164,10 @@ static int reference_deal(const mask_t *holes, uint8_t player_count,
         }
     }
 
-    for (index = 0u; index < ref->slice_count; ++index)
-    {
-        const slice_spec_t *slice = &ref->slices[index];
-        uint8_t high =
-            pe_test_best_high(strength, slice->eligible, player_count);
-        uint8_t high_count = pe_test_count_bits(high);
-
-        /* A slice nobody eligible can win pays nobody, exactly as the
-         * distribution routine leaves it. */
-        if (high_count == 0u)
-            continue;
-        if (!ref->hilo8)
-        {
-            for (player = 0u; player < player_count; ++player)
-                if (high & (uint8_t)(1u << player))
-                    awards[player] += slice->amount / (double)high_count;
-            continue;
-        }
-        {
-            double high_half = slice->amount * 0.5;
-            double low_half = slice->amount * 0.5;
-            uint8_t low_masks =
-                pe_test_best_low(low, slice->eligible, player_count);
-            uint8_t low_count = pe_test_count_bits(low_masks);
-
-            for (player = 0u; player < player_count; ++player)
-                if (high & (uint8_t)(1u << player))
-                    awards[player] += high_half / (double)high_count;
-            /* No qualifying low sends its half back to the high winners,
-             * which is the terminal's "no low, 100 % high" rule. */
-            if (low_count == 0u)
-            {
-                low_masks = high;
-                low_count = high_count;
-            }
-            for (player = 0u; player < player_count; ++player)
-                if (low_masks & (uint8_t)(1u << player))
-                    awards[player] += low_half / (double)low_count;
-        }
-    }
+    /* The payment the turn oracle uses too, so the two references cannot
+     * disagree about ties, eligibility or the low half. */
+    pe_test_pay_slices(ref->slices, ref->slice_count, strength, low,
+                       ref->hilo8, player_count, awards);
     for (player = 0u; player < player_count; ++player)
         ref->values[player] +=
             weight * (awards[player] - ref->state->invested[player]);
@@ -233,7 +191,7 @@ typedef struct
     size_t hand_counts[MAX_PLAYERS];
     double pot;
     double invested[MAX_PLAYERS];
-    const slice_spec_t *slices;
+    const pe_pot_slice_t *slices;
     uint8_t slice_count;
     /* Hand-computed values, so a case can pin its own distribution instead of
      * only agreeing with the terminal.  NULL leaves it unchecked. */
@@ -441,7 +399,7 @@ static void test_three_way_side_pot_matches_per_deal(void)
     };
     /* Main pot 3 x 10, side pot the 2 x 10 the two covering players put in
      * above the short stack. */
-    static const slice_spec_t slices[] = {{30.0, 0x07u}, {20.0, 0x06u}};
+    static const pe_pot_slice_t slices[] = {{30.0, 0x07u}, {20.0, 0x06u}};
     static const double expected[] = {20.0, -5.0, -15.0};
     static const river_case_t test = {
         "three-way side pot", 4u, 0, "2c7dThJsQc", 3u,

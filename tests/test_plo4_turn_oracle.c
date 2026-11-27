@@ -20,7 +20,7 @@
 #include <poker_eval/solver/pe_omaha_turn.h>
 #include <poker_eval/solver/pe_pots.h>
 
-#include "support/pe_omaha_hilo_winners.h"
+#include "support/pe_omaha_showdown_reference.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -103,8 +103,7 @@ static int oracle_deals(mask_t board, mask_t dead,
                     std_mask(mask_set(board, card));
                 HandVal high[PE_OMAHA_TURN_PLAYERS_MAX];
                 LowHandVal low[PE_OMAHA_TURN_PLAYERS_MAX];
-                double awards[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
-                uint8_t slice;
+                double awards[PE_OMAHA_TURN_PLAYERS_MAX];
 
                 for (player = 0u; player < player_count; ++player)
                 {
@@ -122,43 +121,8 @@ static int oracle_deals(mask_t board, mask_t dead,
                                                   &high[player]) != 0)
                         return 1;
                 }
-                for (slice = 0u; slice < slice_count; ++slice)
-                {
-                    double amount = slices[slice].amount;
-                    uint8_t eligible = slices[slice].eligible_mask;
-                    uint8_t high_mask =
-                        pe_test_best_high(high, eligible, player_count);
-
-                    if (high_mask == 0u)
-                        continue;
-                    if (!hilo8)
-                    {
-                        uint8_t high_count = pe_test_count_bits(high_mask);
-
-                        for (player = 0u; player < player_count; ++player)
-                            if (high_mask & (uint8_t)(1u << player))
-                                awards[player] += amount / (double)high_count;
-                        continue;
-                    }
-                    {
-                        double half = amount * 0.5;
-                        uint8_t low_mask =
-                            pe_test_best_low(low, eligible, player_count);
-                        uint8_t high_count = pe_test_count_bits(high_mask);
-                        uint8_t low_count;
-
-                        if (low_mask == 0u)
-                            low_mask = high_mask;
-                        low_count = pe_test_count_bits(low_mask);
-                        for (player = 0u; player < player_count; ++player)
-                        {
-                            if (high_mask & (uint8_t)(1u << player))
-                                awards[player] += half / (double)high_count;
-                            if (low_mask & (uint8_t)(1u << player))
-                                awards[player] += half / (double)low_count;
-                        }
-                    }
-                }
+                pe_test_pay_slices(slices, slice_count, high, low, hilo8,
+                                   player_count, awards);
                 for (player = 0u; player < player_count; ++player)
                     values[player] +=
                         weight * (awards[player] - invested[player]);
@@ -684,6 +648,7 @@ static void test_hilo_three_way_side_pot(EvalContext *context)
                        oracle_values, &pair_mass, &oracle_mass) == 0,
           "the side-pot oracle rejected a deal");
     CHECK(pair_mass > 0.0, "the side-pot fixture has no legal tuple");
+    CHECK(oracle_mass > 0.0, "the side-pot oracle found no deal");
 
     status = pe_omaha_hilo8_turn_range_values(
         context, board, MASK_EMPTY, ranges, &state, 4u, values, 3u, &rivers,
