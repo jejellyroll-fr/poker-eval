@@ -1,0 +1,64 @@
+name: Omaha turn terminal regression
+
+# The guard for design A of issue #332: the PLO6 turn terminal has to keep both
+# its values and its speed, or the 47x gain measured in
+# docs/cfr/guides/plo_turn_pair_walk.md can be given back without any test
+# noticing.  The check itself lives in benchmarks/solver/omaha_turn_probe.py.
+#
+# There is deliberately no base-branch filter: the work lands through stacked
+# pull requests, so a guard that only ran against master would not see the
+# branch that introduces the regression until it was merged.
+on:
+  pull_request:
+    paths:
+      - 'src/solver/**'
+      - 'include/poker_eval/solver/**'
+      - 'src/core/**'
+      - 'include/poker_eval/core/**'
+      - 'src/games/**'
+      - 'include/poker_eval/games/**'
+      - 'src/deck/**'
+      - 'include/poker_eval/deck/**'
+      - 'tools/pe_omaha_turn_bench.c'
+      - 'benchmarks/solver/omaha_turn_probe.py'
+      - 'CMakeLists.txt'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - '.github/workflows/omaha-turn-regression.yml'
+  workflow_dispatch:
+
+jobs:
+  reference-turn:
+    name: PLO6 n=2000 fingerprint and time envelope
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure the terminal build
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BINDINGS=OFF \
+            -DBUILD_GPU=OFF \
+            -DENABLE_OPENMP=OFF
+
+      - name: Build the turn benchmark
+        run: cmake --build build --target pe-omaha-turn-bench --parallel
+
+      - name: Price the reference turn
+        run: |
+          python3 benchmarks/solver/omaha_turn_probe.py \
+            --bench build/tools/pe-omaha-turn-bench \
+            --output build/omaha-turn-bench.json
+
+      - name: Upload the measurement
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: omaha-turn-bench
+          path: build/omaha-turn-bench.json
+          if-no-files-found: warn
