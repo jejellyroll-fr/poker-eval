@@ -1,9 +1,11 @@
 # The turn's pair walk: two designs for the terminal's tuple cost
 
-Issue #285 phase B, follow-up #332. This is a **specification**: neither design
-is implemented, and none of the projections below is a measurement. The unit
-costs they build on are measured, in the phase profile of #331; every figure
-under "expected cost" is arithmetic on those units and is labelled as such.
+Issue #285 phase B, follow-up #332. Neither design is implemented. What *is*
+measured is the quantity they turn on: the cost of a deal walk with its
+evaluation taken out, by the frozen-strength probe that this issue produced as
+its first increment. The unit costs the designs build on come from the phase
+profile of #331; every figure below is either measured here or labelled as
+arithmetic on a measurement.
 
 ## What the profile settled
 
@@ -92,7 +94,7 @@ read the showdown value off the strength-ordered prefix sums.
   compatible mass, and its own header says results "otherwise agree with the
   pairwise oracle to floating-point rounding".
 
-## Expected cost
+## What a visit costs, and what B would cost
 
 The one quantity the profile cannot supply is the cost of a **visit with the
 evaluation taken out**: the walk masks, compares, distributes and accumulates
@@ -120,34 +122,55 @@ The walk, with its strength read from an array instead of from
    constant.
 
 One run gives both sides of the split, so a loaded machine slows both and the
-ratio survives where absolute seconds would not. A `--frozen-strength` flag on
-`pe-omaha-turn-bench` reporting those three fields is the whole first increment,
-and it doubles as the correctness harness for Design A, of which it is the code
-path minus the precompute.
+ratio survives where absolute seconds would not.
 
-### The arithmetic, with the unknown left as a symbol
+This is implemented: `pe_omaha_deals_enumerate_indexed()` reports the combo each
+player contributed, `pe_omaha_river_range_values_frozen()` and its turn
+counterpart hoist the evaluation, and `--frozen-strength` prints the three
+figures with `matches_live` beside them. The frozen path is Design A minus its
+precompute, so it is also the correctness harness for that design.
 
-At PLO6 n = 2,000 heads-up, 48 rivers, 1.06 million visits per river and 3.6 ns
-per five-card lookup:
+### Measured: the probe, run
 
-- precompute: `48 × 600,000` lookups × 3.6 ns ≈ **0.10 s**
-- visits: `48 × 1.06 million × c`, with `c` the probe's per-visit cost
-- today: **60.4 s** measured, from 48 × 347.4 million lookups
+`--frozen-strength --repetitions 3` on the gate configuration, plus two
+neighbours for the constant, board `AsKd7c2h`, load 3.3–3.9:
 
-So A costs `0.10 s + 50.9 million × c`, and the 2× gate of 30.2 s holds for
-every `c` below **592 ns**. That is the only bound the note needs: a visit today
-costs 1,087 ns end to end, and the constant above was fitted on the assumption
-that the evaluation is the whole deal, so it can neither confirm nor refute a
-residual — that circularity is precisely what the probe breaks. The gate is
-insensitive to the answer: it holds for any visit costing less than 54 % of
-today's 1,087 ns deal, and the walk it measures has dropped 300 five-card
-lookups from that deal.
+| Run | Live turn | Precompute | Walk | Frozen call | Per visit | Bit-identical |
+|---|---|---|---|---|---|---|
+| PLO6, n = 2,000 | 53.94 s | 0.11 s | 1.12 s | 1.23 s | 22 ns | yes |
+| PLO6, n = 2,091 | 59.83 s | 0.11 s | 1.15 s | 1.26 s | 21 ns | yes |
+| PLO5, n = 1,994 | 53.98 s | 0.08 s | 1.39 s | 1.47 s | 20 ns | yes |
 
-| Path | Pair visits per river | Five-card lookups per river | Cost per turn |
-|---|---|---|---|
-| Today, enumerated | 1,158,104 | 347,400,000 | 60.4 s (measured) |
-| A, hoisted | 1,060,000 | 600,000 | `0.10 s + 50.9M × c`, probe pending |
-| B, aggregated | 0 | 0, 252,000 subset touches instead | bounded, see below |
+`matches_live` is true in all three, and the PLO6 2,091 fingerprint is
+`35f87d20638e3909`, the value master prints: the frozen walk is the walk, not a
+lookalike. The per-visit cost comes out between **20 and 22 ns over the three
+runs — a spread of 11 % about a mean of 20.9 ns** — and that band is what the
+figure carries, not a fourth digit: each walk is the median of its three
+repetitions in one process, so what the band shows is the run-to-run scatter of
+the host as much as anything else. PLO5 and PLO6 agreeing to 11 % on the
+per-visit cost, although they differ by 50 five-card lookups per evaluation, is
+the consistency the model predicted.
+
+So A costs **1.23 s per turn at n = 2,000 against 53.94 s, a factor of 44**, and
+its two parts are the ones the model named: 0.11 s of precompute (168,000
+evaluations, 25.2 million lookups at about 4 ns) and 1.12 s of visits. The
+visit costs **22 ns**, the top of that band. Subtracting the fitted constant
+would have put it near 7 ns, which is why the probe was worth building: the
+15 ns the fit hid are the mask conversion to the deck representation and the
+per-deal bookkeeping the live callback pays, per deal and per player, and that
+a hoisted design would not.
+
+| Path | Pair visits per turn | Five-card lookups per turn | Cost per turn | Against 53.9 s |
+|---|---|---|---|---|
+| Today, enumerated | 50,849,064 | 15.3 billion | 53.94 s (measured) | 1× |
+| A, hoisted | 50,849,064 | 25.2 million | 1.23 s (measured) | 44× |
+| B, aggregated | 0 | 0, 252,000 subset touches per river | bounded below | not quoted |
+
+Against the gate, 22 ns sits 27 times under the 592 ns break-even, which is the
+figure that number was for: `0.11 s + 50.9 million × c ≤ 30.2 s` holds for every
+`c` below 592 ns, and the measurement lands far inside it. What remains in A is
+the `n²` term itself — 50.8 million visits, now merely cheap — which is the
+structural difference to B.
 
 ### Bounded, not projected, for B
 
@@ -155,14 +178,19 @@ B has no pair visits and no five-card lookups, so this model does not price it,
 and inventing a cost for a subset touch would be the same mistake in a different
 place. The only measured instance of the machinery is the four-card sweep the
 PLO4 row already uses: 194,580 combos heads-up cost 10.13 s over 48 rivers, 211
-ms per river, and that figure contains its own precompute as well as the subset
-accumulation over 15 nonempty subsets. Scaling the sweep part to 63 subsets and
-2,000 combos puts B in the region of 5 ms per river, so **about 0.3–0.4 s per
-turn, an order of magnitude under even the 2× gate of 30.2 s** — an
-extrapolation across two axes and a different variant, not a projection. That
-is a bound on the time and deliberately not a speedup factor: no multiple is
-quoted for B until the same probe, with its subset table frozen and its
-accumulator untouched, has measured it.
+ms per river — and that 211 ms is the whole path, its own precompute (2 ×
+194,580 evaluations) and the subset accumulation over 15 nonempty subsets
+together. Splitting the two would need the fitted per-lookup constant again, so
+this bound does not split them. It takes the whole per-combo cost, 1.08 µs at
+194,580 combos, applies it to 2,000 combos, and multiplies by 63/15 for the
+wider subset table: about 9 ms per river, **roughly 0.45 s per turn, an order of
+magnitude under even the 2× gate of 30.2 s**. That charges the precompute 4.2
+times over, on purpose.
+
+So it is a bound and not a projection: it does not rest on a split it cannot
+measure, it over-counts one of its parts deliberately, and it is not a speedup
+factor. No multiple is quoted for B until the same probe, with its subset table
+frozen and its accumulator untouched, has measured it.
 
 What holds without any timing is structural: B removes the `n²` term, A only
 divides it.
@@ -187,14 +215,16 @@ keeps the visits and divides their cost; Design B removes the visits at the
 price of a different summation. So:
 
 0. **Probe first.** `--holes 6 --combos 2000 --frozen-strength
-   --repetitions 3` must report the frozen walk, the precompute and the live
+   --repetitions 3` reports the frozen walk, the precompute and the live
    terminal in one process, with the fingerprint of the frozen run bit-identical
-   to the live one. Until that number exists, no design is judged on speed and
-   no multiple is quoted for either.
-1. **Speed.** At `--holes 6 --combos 2000 --profile --repetitions 3`, the
-   terminal phase must be at most **half** of its value before the change, on
-   the same host and in the same load band. For A that means a measured `c`
-   below the 592 ns break-even; 2× is a floor, not an aspiration.
+   to the live one. It is implemented and its output is in the table above; a
+   design is not judged on speed before that run.
+1. **Speed.** At `--holes 6 --combos 2000 --repetitions 3`, the terminal phase
+   must be at most **half** of its value before the change, on the same host and
+   in the same load band. Measured, A's visit is 20–22 ns against the 592 ns
+   break-even — 27 times under it at the top of the band — and its turn is 44×
+   faster, so the floor is cleared by more than an order of magnitude; B still
+   has to show its own.
 2. **Exactness, A.** Bit-identical: the `values_fingerprint`, the deal mass and
    the river count must match the pre-change run exactly, and
    `test_plo4_turn_oracle` must stay green. A change that moves any fingerprint

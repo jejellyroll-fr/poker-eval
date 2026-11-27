@@ -355,6 +355,78 @@ static void test_profile_counters(EvalContext *context)
           stats.filter_seconds, stats.terminal_seconds);
 }
 
+/* The frozen-strength probe is the same walk with the evaluation hoisted out of
+ * it, so it has to reproduce the terminal bit for bit: same values, same deal
+ * mass, same river count.  It is kept behind a check rather than trusted,
+ * because a probe that drifted would still produce plausible per-visit numbers
+ * for a walk nobody runs. */
+static void test_frozen_strength_matches_live(EvalContext *context)
+{
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[3];
+    pe_omaha_combo_t p1[3];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    pe_omaha_turn_probe_t probe;
+    double live[2] = {0.0, 0.0};
+    double frozen[2] = {0.0, 0.0};
+    size_t live_rivers = 0u;
+    size_t frozen_rivers = 0u;
+    double live_mass = 0.0;
+    double frozen_mass = 0.0;
+    size_t expected_combos = 0u;
+    size_t index;
+    int card;
+
+    build_ranges(p0, &ranges[0], 3u, p1, &ranges[1], 3u);
+    init_state(&state, 2u, 63.0, 31.5);
+    CHECK(pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges, &state,
+                                     4u, live, 2u, &live_rivers,
+                                     &live_mass) == 0,
+          "the live turn terminal rejected the fixture");
+    CHECK(live_rivers == 48u,
+          "the fixture must reach all 48 rivers, got %zu", live_rivers);
+
+    /* Poison the struct: a probe that forgets a field would leave the poison
+     * visible instead of a plausible zero. */
+    memset(&probe, 0xff, sizeof(probe));
+    CHECK(pe_omaha_turn_range_values_frozen(
+              context, board, MASK_EMPTY, ranges, &state, 4u, frozen, 2u,
+              &frozen_rivers, &frozen_mass, &probe) == 0,
+          "the frozen turn terminal rejected the fixture");
+    CHECK(memcmp(live, frozen, sizeof(live)) == 0,
+          "the frozen walk changed the values");
+    CHECK(live_rivers == frozen_rivers,
+          "the frozen walk changed the river count");
+    CHECK(memcmp(&live_mass, &frozen_mass, sizeof(live_mass)) == 0,
+          "the frozen walk changed the deal mass");
+    CHECK(probe.precompute_seconds >= 0.0 && probe.walk_seconds >= 0.0,
+          "the probe clocks must not run backwards: %.17g %.17g",
+          probe.precompute_seconds, probe.walk_seconds);
+
+    /* One evaluation per combo of every range that survives the per-river
+     * filter, so the count is the filter's kept combos over the 48 rivers. */
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+    {
+        if (mask_is_set(board, card))
+            continue;
+        for (index = 0u; index < 3u; ++index)
+        {
+            if ((p0[index].cards & ((mask_t)1u << card)) == 0u)
+                ++expected_combos;
+            if ((p1[index].cards & ((mask_t)1u << card)) == 0u)
+                ++expected_combos;
+        }
+    }
+    CHECK(probe.combos == expected_combos,
+          "the precompute evaluated %zu combos, expected %zu", probe.combos,
+          expected_combos);
+    /* Unit weights, so the live deal mass is the deal count. */
+    CHECK(fabs((double)probe.deals - live_mass) <= TOL * live_mass,
+          "the frozen walk counted %.17g deals against a mass of %.17g",
+          (double)probe.deals, live_mass);
+}
+
 /* A four-card board leaves 40 rivers per legal pair, one fewer per declared
  * dead card, so the pooled deal mass is that count times the pooled range mass.
  * Dead cards the ranges do not use change the count and nothing else. */
@@ -769,6 +841,7 @@ int main(void)
     }
     test_full_turn_matches_oracle(context);
     test_profile_counters(context);
+    test_frozen_strength_matches_live(context);
     test_chance_mass_normalization(context);
     test_turn_is_not_one_river(context);
     test_river_that_empties_a_range_is_skipped(context);

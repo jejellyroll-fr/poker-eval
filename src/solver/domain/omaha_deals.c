@@ -97,9 +97,11 @@ static int valid_inputs(mask_t board, const pe_omaha_range_t *ranges,
 typedef struct
 {
     mask_t holes[PE_OMAHA_MAX_PLAYERS];
+    size_t indices[PE_OMAHA_MAX_PLAYERS];
     size_t deal_count;
     double weight_sum;
     pe_omaha_deal_callback callback;
+    pe_omaha_deal_indexed_callback indexed;
     void *user;
     int stopped;
 } deal_walk_t;
@@ -118,6 +120,10 @@ static void walk_player(const pe_omaha_range_t *ranges, uint8_t player,
         if (walk->callback && walk->callback(walk->holes, player_count, weight,
                                              walk->user) != 0)
             walk->stopped = 1;
+        if (!walk->stopped && walk->indexed &&
+            walk->indexed(walk->holes, walk->indices, player_count, weight,
+                          walk->user) != 0)
+            walk->stopped = 1;
         return;
     }
     for (combo = 0u; combo < ranges[player].count; ++combo)
@@ -126,6 +132,7 @@ static void walk_player(const pe_omaha_range_t *ranges, uint8_t player,
         if (entry->weight <= 0.0 || (entry->cards & used) != 0)
             continue;
         walk->holes[player] = entry->cards;
+        walk->indices[player] = combo;
         walk_player(ranges, (uint8_t)(player + 1u), player_count,
                     used | entry->cards, weight * entry->weight, walk);
         if (walk->stopped)
@@ -135,16 +142,18 @@ static void walk_player(const pe_omaha_range_t *ranges, uint8_t player,
 
 static int walk_deals(mask_t board, const pe_omaha_range_t *ranges,
                       uint8_t player_count, pe_omaha_deal_callback callback,
-                      void *user, size_t *deal_count, double *weight_sum)
+                      pe_omaha_deal_indexed_callback indexed, void *user,
+                      size_t *deal_count, double *weight_sum)
 {
     deal_walk_t walk;
     memset(&walk, 0, sizeof(walk));
     walk.callback = callback;
+    walk.indexed = indexed;
     walk.user = user;
     walk_player(ranges, 0u, player_count, board, 1.0, &walk);
     *deal_count = walk.deal_count;
     *weight_sum = walk.weight_sum;
-    return walk.stopped && callback ? 1 : 0;
+    return walk.stopped && (callback || indexed) ? 1 : 0;
 }
 
 int pe_omaha_deals_measure(mask_t board, const pe_omaha_range_t *ranges,
@@ -154,8 +163,8 @@ int pe_omaha_deals_measure(mask_t board, const pe_omaha_range_t *ranges,
     if (!deal_count || !weight_sum ||
         !valid_inputs(board, ranges, player_count, hole_cards))
         return -1;
-    return walk_deals(board, ranges, player_count, NULL, NULL, deal_count,
-                      weight_sum);
+    return walk_deals(board, ranges, player_count, NULL, NULL, NULL,
+                      deal_count, weight_sum);
 }
 
 int pe_omaha_deals_enumerate(mask_t board, const pe_omaha_range_t *ranges,
@@ -166,6 +175,18 @@ int pe_omaha_deals_enumerate(mask_t board, const pe_omaha_range_t *ranges,
     if (!callback || !deal_count || !weight_sum ||
         !valid_inputs(board, ranges, player_count, hole_cards))
         return -1;
-    return walk_deals(board, ranges, player_count, callback, user, deal_count,
-                      weight_sum);
+    return walk_deals(board, ranges, player_count, callback, NULL, user,
+                      deal_count, weight_sum);
+}
+
+int pe_omaha_deals_enumerate_indexed(
+    mask_t board, const pe_omaha_range_t *ranges, uint8_t player_count,
+    uint8_t hole_cards, pe_omaha_deal_indexed_callback callback, void *user,
+    size_t *deal_count, double *weight_sum)
+{
+    if (!callback || !deal_count || !weight_sum ||
+        !valid_inputs(board, ranges, player_count, hole_cards))
+        return -1;
+    return walk_deals(board, ranges, player_count, NULL, callback, user,
+                      deal_count, weight_sum);
 }

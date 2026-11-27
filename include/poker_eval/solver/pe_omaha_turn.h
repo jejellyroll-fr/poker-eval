@@ -148,6 +148,44 @@ int pe_omaha_turn_range_values_profiled(
     double *out_weight_sum,
     pe_omaha_turn_stats_t *stats);
 
+/*
+ * Cost split of the same turn with the per-river evaluation hoisted out of the
+ * deal walk, for the frozen-strength probe of issue #332: what the terminal
+ * pays once per combo per river, and what its deal walks pay per visit when the
+ * strengths are already there.  Summed over the rivers a turn prices.
+ *
+ * The values are those of pe_omaha_turn_range_values(), which the caller has to
+ * check: a probe that does not reproduce the fingerprint is measuring a
+ * different walk and its number is void.
+ *
+ * The two instrumentations are not read together.  A caller that asks for both
+ * gets `terminal_seconds` around the frozen river call, its precompute
+ * included, rather than around the live terminal, so that figure is not the
+ * profile's terminal share and the two blocks cannot be subtracted from each
+ * other.  Price the walk against the precompute here, and take the filter and
+ * the live terminal from pe_omaha_turn_range_values_profiled().
+ */
+typedef struct
+{
+    double precompute_seconds;
+    double walk_seconds;
+    size_t deals;
+    size_t combos;
+} pe_omaha_turn_probe_t;
+
+int pe_omaha_turn_range_values_frozen(
+    const EvalContext *context,
+    mask_t board,
+    mask_t dead,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_river_count,
+    double *out_weight_sum,
+    pe_omaha_turn_probe_t *probe);
+
 #ifdef __cplusplus
 }
 #endif

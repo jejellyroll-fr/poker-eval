@@ -73,6 +73,7 @@ typedef struct
     size_t repetitions;
     uint64_t seed;
     int profile;
+    int frozen_strength;
 } bench_config_t;
 
 static int g_failures;
@@ -478,7 +479,8 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "Usage: %s --holes 4|5|6 --combos N [--players N] "
-            "[--threads N] [--repetitions N] [--seed N] [--profile]\n"
+            "[--threads N] [--repetitions N] [--seed N]\n"
+            "       [--profile] [--frozen-strength]\n"
             "\n"
             "Emits a pe-omaha-turn-bench/v1 JSON document on stdout.\n"
             "N is the combo count of every range; one configuration per run, so\n"
@@ -487,7 +489,15 @@ static void usage(const char *program)
             "own eval context, and reports that time next to the serial terminal.\n"
             "--profile splits the serial call into the per-river filter and\n"
             "the river terminal, with the counters each phase visited, and the\n"
-            "range size at which the terminal overtakes the filter.\n",
+            "range size at which the terminal overtakes the filter.\n"
+            "--frozen-strength runs the same turn with every combo evaluated\n"
+            "once per river and reports the precompute and the walk apart, so\n"
+            "a visit can be priced with the evaluation taken out of it.\n"
+            "--profile and --frozen-strength are two runs, not one split: with\n"
+            "the probe, the terminal clock times the frozen river call, its\n"
+            "precompute included, so the profile's terminal and the probe's\n"
+            "walk are not subtracted from each other.  Price the walk against\n"
+            "the precompute, and read the live terminal from a profile run.\n",
             program);
 }
 
@@ -557,6 +567,19 @@ int main(int argc, char **argv)
     double nanoseconds_per_visit = 0.0;
     double nanoseconds_per_deal = 0.0;
     int counts_stable = 1;
+    double frozen_values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    size_t frozen_rivers = 0u;
+    double frozen_mass = 0.0;
+    double *frozen_durations = NULL;
+    double *frozen_sorted = NULL;
+    double *walk_sorted = NULL;
+    double *precompute_sorted = NULL;
+    pe_omaha_turn_probe_t *probe_runs = NULL;
+    double frozen_median = 0.0;
+    double probe_walk = 0.0;
+    double probe_precompute = 0.0;
+    uint64_t probe_fingerprint = 0u;
+    int probe_matches = 0;
 
     memset(&config, 0, sizeof(config));
     config.holes = 4u;
@@ -634,6 +657,11 @@ int main(int argc, char **argv)
             config.profile = 1;
             continue;
         }
+        if (strcmp(argv[arg], "--frozen-strength") == 0)
+        {
+            config.frozen_strength = 1;
+            continue;
+        }
         if (strcmp(argv[arg], "--seed") == 0 && arg + 1 < argc)
         {
             if (parse_size(argv[++arg], 1u, 0x7fffffffu, &parsed) != 0)
@@ -677,6 +705,25 @@ int main(int argc, char **argv)
             !filter_sorted || !terminal_sorted)
         {
             bench_fail("profile allocation failed");
+            goto cleanup;
+        }
+    }
+    if (config.frozen_strength)
+    {
+        frozen_durations =
+            (double *)calloc(config.repetitions, sizeof(*frozen_durations));
+        frozen_sorted =
+            (double *)calloc(config.repetitions, sizeof(*frozen_sorted));
+        walk_sorted =
+            (double *)calloc(config.repetitions, sizeof(*walk_sorted));
+        precompute_sorted =
+            (double *)calloc(config.repetitions, sizeof(*precompute_sorted));
+        probe_runs = (pe_omaha_turn_probe_t *)calloc(
+            config.repetitions, sizeof(*probe_runs));
+        if (!frozen_durations || !frozen_sorted || !walk_sorted ||
+            !precompute_sorted || !probe_runs)
+        {
+            bench_fail("probe allocation failed");
             goto cleanup;
         }
     }
@@ -904,6 +951,41 @@ int main(int argc, char **argv)
             bench_fail("the parallel lanes disagree with the serial terminal");
     }
 
+    /* The frozen-strength probe: the same turn with every combo evaluated once
+     * per river, then the walks reading those strengths.  It has to reproduce
+     * the live values bit for bit, or the split it reports belongs to a walk
+     * nobody runs. */
+    if (config.frozen_strength)
+    {
+        for (repeat = 0u; repeat < config.repetitions; ++repeat)
+        {
+            double probe_start = monotonic_seconds();
+
+            status = pe_omaha_turn_range_values_frozen(
+                context, board, MASK_EMPTY, ranges, &state, config.holes,
+                frozen_values, config.players, &frozen_rivers, &frozen_mass,
+                &probe_runs[repeat]);
+            frozen_durations[repeat] = monotonic_seconds() - probe_start;
+            if (status != 0)
+            {
+                bench_fail("the frozen-strength turn terminal failed");
+                goto cleanup;
+            }
+            frozen_sorted[repeat] = frozen_durations[repeat];
+            walk_sorted[repeat] = probe_runs[repeat].walk_seconds;
+            precompute_sorted[repeat] = probe_runs[repeat].precompute_seconds;
+        }
+        frozen_median = median_of(frozen_sorted, config.repetitions);
+        probe_walk = median_of(walk_sorted, config.repetitions);
+        probe_precompute = median_of(precompute_sorted, config.repetitions);
+        probe_fingerprint = fingerprint_values(frozen_values, config.players);
+        probe_matches = probe_fingerprint == fingerprint &&
+                        frozen_rivers == rivers &&
+                        same_double(frozen_mass, mass) ? 1 : 0;
+        if (!probe_matches)
+            bench_fail("the frozen-strength walk disagrees with the live one");
+    }
+
     for (repeat = 0u; repeat < config.repetitions; ++repeat)
         sorted[repeat] = durations[repeat];
     turn_median = median_of(sorted, config.repetitions);
@@ -1082,6 +1164,22 @@ int main(int argc, char **argv)
         printf("  \"river_reference\": null,\n");
     printf("  \"turn_over_river\": %.3f,\n",
            river_seconds > 0.0 ? turn_median / river_seconds : 0.0);
+    if (config.frozen_strength)
+    {
+        printf("  \"probe\": {\"precompute_seconds\": %.9f, "
+               "\"walk_seconds\": %.9f, \"deals\": %zu, \"combos\": %zu, "
+               "\"nanoseconds_per_visit\": ",
+               probe_precompute, probe_walk, probe_runs[0].deals,
+               probe_runs[0].combos);
+        if (probe_runs[0].deals > 0u && probe_walk > 0.0)
+            printf("%.6f,\n", probe_walk * 1e9 / (double)probe_runs[0].deals);
+        else
+            printf("null,\n");
+        printf("    \"frozen_call_seconds\": %.9f, \"matches_live\": %s},\n",
+               frozen_median, probe_matches ? "true" : "false");
+    }
+    else
+        printf("  \"probe\": null,\n");
     printf("  \"combo_bytes\": %zu,\n", sizeof(pe_omaha_combo_t));
     printf("  \"range_bytes\": %zu,\n",
            (size_t)config.players * config.combos * sizeof(pe_omaha_combo_t));
@@ -1141,6 +1239,11 @@ cleanup:
     free(terminal_durations);
     free(filter_durations);
     free(profile_runs);
+    free(precompute_sorted);
+    free(walk_sorted);
+    free(frozen_sorted);
+    free(frozen_durations);
+    free(probe_runs);
     if (context)
         eval_context_destroy(context);
     return g_failures == 0 ? 0 : 1;
