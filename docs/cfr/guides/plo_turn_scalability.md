@@ -102,6 +102,67 @@ twice that per-deal cost while the machine is busy — PLO5 at 814 combos costs
 load 4 and 1.20–1.49 µs at load 16–21 — so a per-deal figure is only worth
 reading next to the load average it was taken under.
 
+### Filter or terminal: where a call goes
+
+`--profile` splits the serial call instead of timing it whole. The terminal has
+two phases per candidate river: a filter that copies the combos not holding the
+river card into a compact range, and one river terminal call on the five-card
+board that filter makes. Both are timed with a monotonic clock inside the same
+call, and the counters are exact, so the shares below are read against that
+call's own wall clock:
+
+| Variant | Combos | Call | Filter | Terminal | Unaccounted | Filter visit | Deal |
+|---|---|---|---|---|---|---|---|
+| PLO4 | 194,580 | 10.13 s | 16.0 ms | 10.11 s | 0.6 ms | 0.86 ns | — |
+| PLO5 | 1,994 | 52.68 s | 0.22 ms | 52.68 s | −0.1 ms | 1.15 ns | 750 ns |
+| PLO6 | 854 | 9.77 s | 0.12 ms | 9.77 s | 0.04 ms | 1.43 ns | 1,052 ns |
+| PLO6 | 1,600 | 35.45 s | 0.21 ms | 35.45 s | −0.07 ms | 1.35 ns | 1,088 ns |
+| PLO6 | 2,091 | 60.44 s | 0.26 ms | 60.44 s | −0.13 ms | 1.29 ns | 1,087 ns |
+| PLO5, 3 players | 150 | 14.78 s | 0.05 ms | 14.78 s | −0.02 ms | 2.27 ns | 1,086 ns |
+| PLO6, 3 players | 150 | 7.56 s | 0.05 ms | 7.56 s | 0.01 ms | 2.22 ns | 1,514 ns |
+
+The counters check the shape of each phase rather than assuming it: the filter
+looked at `48 × players × combos` combos in every row (18,679,680 at PLO4
+194,580, 200,736 at PLO6 2,091) and kept the ones that do not hold the river
+card, so the filter is linear in the range. The terminal then walks the legal
+tuples, which is why its cost is the quadratic one measured above.
+
+**The filter is not a target.** It is 0.0004 % of a PLO5 or PLO6 call and 0.16 %
+of a PLO4 one, against a terminal that is the rest. At 0.86–2.27 ns per combo
+visit and 750–1,514 ns per deal, the terminal overtakes the filter after
+**0.0076 combos at PLO5 1,994 and 0.0082 at PLO6 2,091** — from the first legal
+pair, in other words, and the reported `crossover_combos` is that figure rather
+than a practical threshold. It comes from equating the two measured costs,
+
+```
+n* = rivers × players × a / (density × deals_per_pair × b)
+```
+
+with a the cost of a combo visit, b the cost of a deal, `rivers` the 44
+candidate rivers and `deals_per_pair` the 32 or 34 rivers a heads-up PLO6 or
+PLO5 pair can see. A third player makes the terminal cubic, so no single
+crossing is reported for those rows.
+
+What that leaves is a single lever: the tuple walk. Any work on the terminal's
+cost — the sparse blocker aggregation of issue #332 included — has to remove
+deals or make them cheaper, because removing filter work would buy a thousandth
+of the call.
+
+The cost per deal is also stable across the window: PLO6 heads-up is
+1,052–1,088 ns from 854 to 2,091 combos, a 1.03× spread over a 2.4× size range,
+which is why the `1.34e-5 · n²` model holds there. PLO5 heads-up is 750 ns,
+and three players lift the per-deal figure to 1,086 ns (PLO5) and 1,514 ns
+(PLO6) because the multiway showdown path runs. PLO4 heads-up at 194,580 takes
+the vector sweep, which counts no deals at all, so `deals` is 0 and there is no
+per-deal figure for it; its filter still copies 17.1 million combos (274 MB) in
+16 ms, about 17 GB/s, which is memory bandwidth and still 0.16 % of the call.
+
+The residual is a clock difference, not work: the benchmark times the whole
+call with `mach_absolute_time` on macOS while the terminal times its phases with
+`clock_gettime`, so `unaccounted` can go slightly negative (at most −0.13 ms
+here). Filter plus terminal account for 99.99 % of the call in every row, which
+is the check the issue asked for. Loads were 4.2–5.9 during the sweep.
+
 ### Multiway multiplies tuples
 
 Three players, PLO5, 25 combos each: 2,067 legal triples, 68,211 deals,
@@ -323,9 +384,16 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 4 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 8 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --profile --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --profile --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --profile --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 150 --players 3 --profile --repetitions 1
 ```
 
 Each run prints one JSON document (`pe-omaha-turn-bench/v1`) with the wall
 clock, the river count, the exact tuple and deal counts, the per-deal cost,
 the single-river reference (including which showdown path it took) and the
-process peak RSS.
+process peak RSS. With `--profile` the document also carries a `profile` object
+with the two phase times, their shares, the combos the filter examined and kept,
+the bytes it copied, the terminal's deal count and the crossing above; without
+it that field is null and the call runs with no counters at all.

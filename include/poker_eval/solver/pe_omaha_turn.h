@@ -75,6 +75,35 @@ extern "C" {
 #define PE_OMAHA_TURN_BOARD_CARDS 4
 
 /*
+ * Where a turn call spends its time, and what it touched to get there.
+ *
+ * The terminal has two phases per candidate river: a filter that copies the
+ * combos not holding the river card into a compact range, and one river
+ * terminal call on the five-card board that filter makes.  `filter_seconds`
+ * and `terminal_seconds` are monotonic-clock totals taken inside the call, and
+ * the counters are exact, so the two shares can be compared with the caller's
+ * own wall clock for the same call.  The remainder is validation, allocation
+ * and the final reduction, which is why a small range still shows a visible
+ * unaccounted share.
+ *
+ * `deals` sums the river terminal's own deal count.  That count is 0 on the
+ * heads-up four-card vector sweep, which evaluates combos rather than tuples;
+ * `deals` is then 0 and no cost per deal can be formed for that configuration.
+ *
+ * The struct is zeroed on entry on every path, failures included, so a caller
+ * that ignores the status reads zeros rather than a previous call's figures.
+ */
+typedef struct
+{
+    size_t combos_examined;    /* combos the per-river filter looked at */
+    size_t combos_kept;        /* combos that survived the filter */
+    size_t rivers_to_terminal; /* rivers that reached the river terminal */
+    size_t deals;              /* tuples the river terminal counted */
+    double filter_seconds;     /* time in the per-river filter */
+    double terminal_seconds;   /* time in the river terminal */
+} pe_omaha_turn_stats_t;
+
+/*
  * Exact turn-to-river values for `player_count` ranges.
  *
  * `board` is the four-card turn board, `dead` the cards known to be out of
@@ -99,6 +128,25 @@ int pe_omaha_turn_range_values(
     uint8_t player_count,
     size_t *out_river_count,
     double *out_weight_sum);
+
+/*
+ * The same terminal, also filling `stats`.  The values, the river count and the
+ * deal mass are bit-identical to the call above: this entry point adds counters
+ * and two clocks, not a second arithmetic.  `stats` is required here; the plain
+ * entry point is the one with no instrumentation at all.
+ */
+int pe_omaha_turn_range_values_profiled(
+    const EvalContext *context,
+    mask_t board,
+    mask_t dead,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_river_count,
+    double *out_weight_sum,
+    pe_omaha_turn_stats_t *stats);
 
 #ifdef __cplusplus
 }

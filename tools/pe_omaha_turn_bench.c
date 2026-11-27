@@ -15,6 +15,12 @@
  * and turned into a range-size budget in
  * docs/cfr/guides/plo_turn_scalability.md.
  *
+ * `--profile` decomposes the serial call instead of timing it as a whole: the
+ * terminal reports the per-river filter and the river terminal separately, with
+ * the counters each phase visited, so the two shares can be read against the
+ * same call's wall clock and the range size at which the terminal overtakes
+ * the filter can be solved from the two measured costs.
+ *
  * `--threads N` adds a second measurement: the candidate rivers are independent
  * calls, so they can be fanned out over N lanes, each with its own eval context
  * and compaction buffers.  The per-river results are collected by card and
@@ -66,6 +72,7 @@ typedef struct
     size_t combos;
     size_t repetitions;
     uint64_t seed;
+    int profile;
 } bench_config_t;
 
 static int g_failures;
@@ -471,13 +478,16 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "Usage: %s --holes 4|5|6 --combos N [--players N] "
-            "[--threads N] [--repetitions N] [--seed N]\n"
+            "[--threads N] [--repetitions N] [--seed N] [--profile]\n"
             "\n"
             "Emits a pe-omaha-turn-bench/v1 JSON document on stdout.\n"
             "N is the combo count of every range; one configuration per run, so\n"
             "the reported peak RSS belongs to this configuration alone.\n"
             "--threads fans the candidate rivers out over N lanes, each with its\n"
-            "own eval context, and reports that time next to the serial terminal.\n",
+            "own eval context, and reports that time next to the serial terminal.\n"
+            "--profile splits the serial call into the per-river filter and\n"
+            "the river terminal, with the counters each phase visited, and the\n"
+            "range size at which the terminal overtakes the filter.\n",
             program);
 }
 
@@ -536,6 +546,17 @@ int main(int argc, char **argv)
     int arg;
     int have_holes = 0;
     int have_combos = 0;
+    pe_omaha_turn_stats_t *profile_runs = NULL;
+    double *filter_durations = NULL;
+    double *terminal_durations = NULL;
+    double *filter_sorted = NULL;
+    double *terminal_sorted = NULL;
+    double filter_median = 0.0;
+    double terminal_median = 0.0;
+    double unaccounted_seconds = 0.0;
+    double nanoseconds_per_visit = 0.0;
+    double nanoseconds_per_deal = 0.0;
+    int counts_stable = 1;
 
     memset(&config, 0, sizeof(config));
     config.holes = 4u;
@@ -608,6 +629,11 @@ int main(int argc, char **argv)
             config.repetitions = parsed;
             continue;
         }
+        if (strcmp(argv[arg], "--profile") == 0)
+        {
+            config.profile = 1;
+            continue;
+        }
         if (strcmp(argv[arg], "--seed") == 0 && arg + 1 < argc)
         {
             if (parse_size(argv[++arg], 1u, 0x7fffffffu, &parsed) != 0)
@@ -634,6 +660,25 @@ int main(int argc, char **argv)
     {
         bench_fail("allocation failed");
         goto cleanup;
+    }
+    if (config.profile)
+    {
+        profile_runs = (pe_omaha_turn_stats_t *)calloc(
+            config.repetitions, sizeof(*profile_runs));
+        filter_durations =
+            (double *)calloc(config.repetitions, sizeof(*filter_durations));
+        terminal_durations =
+            (double *)calloc(config.repetitions, sizeof(*terminal_durations));
+        filter_sorted =
+            (double *)calloc(config.repetitions, sizeof(*filter_sorted));
+        terminal_sorted =
+            (double *)calloc(config.repetitions, sizeof(*terminal_sorted));
+        if (!profile_runs || !filter_durations || !terminal_durations ||
+            !filter_sorted || !terminal_sorted)
+        {
+            bench_fail("profile allocation failed");
+            goto cleanup;
+        }
     }
     context = eval_context_create(&eval_config);
     if (!context)
@@ -752,9 +797,15 @@ int main(int argc, char **argv)
         uint64_t run_fingerprint;
         double start = monotonic_seconds();
 
-        status = pe_omaha_turn_range_values(
-            context, board, MASK_EMPTY, ranges, &state, config.holes, values,
-            config.players, &rivers, &mass);
+        status = config.profile
+                     ? pe_omaha_turn_range_values_profiled(
+                           context, board, MASK_EMPTY, ranges, &state,
+                           config.holes, values, config.players, &rivers,
+                           &mass, &profile_runs[repeat])
+                     : pe_omaha_turn_range_values(
+                           context, board, MASK_EMPTY, ranges, &state,
+                           config.holes, values, config.players, &rivers,
+                           &mass);
         durations[repeat] = monotonic_seconds() - start;
         if (status != 0)
         {
@@ -859,6 +910,43 @@ int main(int argc, char **argv)
     turn_min = sorted[0];
     turn_max = sorted[config.repetitions - 1u];
 
+    /* The two phases are measured inside each call, so their medians come from
+     * the same repetitions as the wall clock above.  What the sum leaves is
+     * validation, allocation and the final reduction. */
+    if (config.profile)
+    {
+        size_t profile_index;
+
+        for (profile_index = 0u; profile_index < config.repetitions;
+             ++profile_index)
+        {
+            const pe_omaha_turn_stats_t *run = &profile_runs[profile_index];
+
+            filter_durations[profile_index] = run->filter_seconds;
+            terminal_durations[profile_index] = run->terminal_seconds;
+            if (run->combos_examined != profile_runs[0].combos_examined ||
+                run->combos_kept != profile_runs[0].combos_kept ||
+                run->rivers_to_terminal != profile_runs[0].rivers_to_terminal ||
+                run->deals != profile_runs[0].deals)
+                counts_stable = 0;
+        }
+        for (profile_index = 0u; profile_index < config.repetitions;
+             ++profile_index)
+        {
+            filter_sorted[profile_index] = filter_durations[profile_index];
+            terminal_sorted[profile_index] = terminal_durations[profile_index];
+        }
+        filter_median = median_of(filter_sorted, config.repetitions);
+        terminal_median = median_of(terminal_sorted, config.repetitions);
+        unaccounted_seconds = turn_median - filter_median - terminal_median;
+        if (profile_runs[0].combos_examined > 0u)
+            nanoseconds_per_visit = filter_median * 1e9 /
+                                    (double)profile_runs[0].combos_examined;
+        if (profile_runs[0].deals > 0u)
+            nanoseconds_per_deal =
+                terminal_median * 1e9 / (double)profile_runs[0].deals;
+    }
+
     /* Every legal tuple sees the same number of candidate rivers, so the turn's
      * exact deal count is the tuple count times the cards left by the board
      * and the hands. */
@@ -911,6 +999,71 @@ int main(int argc, char **argv)
                ? turn_median /
                      ((double)config.combos * (double)config.players)
                : 0.0);
+    if (config.profile)
+    {
+        double filter_share =
+            turn_median > 0.0 ? filter_median / turn_median : 0.0;
+        double terminal_share =
+            turn_median > 0.0 ? terminal_median / turn_median : 0.0;
+        double unaccounted_share =
+            turn_median > 0.0 ? unaccounted_seconds / turn_median : 0.0;
+        double density = config.combos > 0u
+                             ? (double)legal_pairs /
+                                   ((double)config.combos *
+                                    (double)config.combos)
+                             : 0.0;
+        double crossover = 0.0;
+        int have_crossover = 0;
+
+        /* Heads-up only: there the filter is linear in the combos while the
+         * terminal walks a quadratic tuple space, so the two costs cross once.
+         * Filter work is one visit per combo of each range on each of the
+         * 48 - 4 candidate rivers, terminal work is `density * n^2` tuples per
+         * candidate river, so the crossing is
+         *   n* = rivers * players * a / (density * rivers_per_pair * b)
+         * with a the cost of a combo visit and b the cost of a deal.  With a
+         * third player the terminal is cubic and there is no single crossing
+         * worth naming. */
+        if (config.players == 2u && enumerates && density > 0.0 &&
+            deals_per_pair > 0u && nanoseconds_per_visit > 0.0 &&
+            nanoseconds_per_deal > 0.0)
+        {
+            crossover = (double)(MODERN_DECK_SIZE - PE_OMAHA_TURN_BOARD_CARDS) *
+                        (double)config.players * nanoseconds_per_visit /
+                        (density * (double)deals_per_pair *
+                         nanoseconds_per_deal);
+            have_crossover = 1;
+        }
+
+        printf("  \"profile\": {\"combos_examined\": %zu, "
+               "\"combos_kept\": %zu, \"rivers_to_terminal\": %zu, "
+               "\"deals\": %zu, \"counts_stable_across_repetitions\": %s,\n",
+               profile_runs[0].combos_examined, profile_runs[0].combos_kept,
+               profile_runs[0].rivers_to_terminal, profile_runs[0].deals,
+               counts_stable ? "true" : "false");
+        printf("    \"seconds\": {\"filter\": %.9f, \"terminal\": %.9f, "
+               "\"unaccounted\": %.9f},\n",
+               filter_median, terminal_median, unaccounted_seconds);
+        printf("    \"shares\": {\"filter\": %.6f, \"terminal\": %.6f, "
+               "\"unaccounted\": %.6f},\n",
+               filter_share, terminal_share, unaccounted_share);
+        printf("    \"filter_bytes_copied\": %zu, "
+               "\"nanoseconds_per_combo_visit\": %.6f,\n",
+               profile_runs[0].combos_kept * sizeof(pe_omaha_combo_t),
+               nanoseconds_per_visit);
+        printf("    \"nanoseconds_per_deal\": ");
+        if (profile_runs[0].deals > 0u)
+            printf("%.6f,\n", nanoseconds_per_deal);
+        else
+            printf("null,\n");
+        printf("    \"crossover_combos\": ");
+        if (have_crossover)
+            printf("%.4f},\n", crossover);
+        else
+            printf("null},\n");
+    }
+    else
+        printf("  \"profile\": null,\n");
     if (river_seconds > 0.0)
     {
         printf("  \"river_reference\": {\"card\": %d, \"seconds\": %.9f, "
@@ -983,6 +1136,11 @@ cleanup:
     }
     free(sorted);
     free(durations);
+    free(terminal_sorted);
+    free(filter_sorted);
+    free(terminal_durations);
+    free(filter_durations);
+    free(profile_runs);
     if (context)
         eval_context_destroy(context);
     return g_failures == 0 ? 0 : 1;
