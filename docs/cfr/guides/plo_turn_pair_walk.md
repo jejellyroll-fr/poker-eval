@@ -138,7 +138,10 @@ player contributed, and `pe_omaha_river_range_values_frozen()` and its turn
 counterpart call the same walk with the precompute and the visits timed apart,
 printing them with `matches_live` beside them. Design A is that walk in the
 terminal itself, so the probe now decomposes the terminal rather than standing
-in for it, and `matches_live` is what keeps the split honest.
+in for it; `matches_live` therefore compares the terminal with a clocked copy of
+itself, and the independent check is `test_omaha_river_hoisted`, which prices
+the same river deal by deal with its own payoff and compares the values, the
+deal count and the mass, the last two bit for bit.
 
 ### Measured: design A, before and after
 
@@ -158,6 +161,12 @@ The three fingerprints (`ac3016522c620075`, `35f87d20638e3909` and
 are all exactly those of the pre-change runs: the walk visits the same deals,
 with the same weights, in the same order, and only the evaluations moved.
 `matches_live` is true in all three.
+
+Hi/Lo is the case the bench never runs, so it was checked against the binary of
+the commit before A instead: a 400-combo PLO6 Hi/Lo river on board `2c4d7hJsQc`,
+weights in quarters, prints `0.58949573829817625` and `-0.58949573829817625` for
+the two players, a deal mass of `26251.25`, `67134` deals and the fingerprint
+`cd22f660d31fbdd3` from both binaries, byte for byte.
 
 The per-visit cost lands between **18.5 and 20.2 ns across the three runs —
 9 % about a mean of 19.6 ns** — and that band is what the figure carries, not
@@ -242,9 +251,9 @@ price of a different summation. So:
 2. **Exactness, A.** Bit-identical: the `values_fingerprint`, the deal mass and
    the river count must match the pre-change run exactly, and
    `test_plo4_turn_oracle` must stay green. Met on all three runs above, with
-   the PLO4 river, Hi/Lo river and deal-enumeration tests green. A change that
-   moves any fingerprint is rejected, and that includes a change of summation
-   order.
+   the PLO4 river, Hi/Lo river, deal-enumeration and hoisted-walk tests green.
+   A change that moves any fingerprint is rejected, and that includes a change
+   of summation order.
 3. **Exactness, B.** Agreement with A to 1e-9 of the accumulated reach on every
    measured configuration, plus an explicit label in the report. B cannot
    replace the certified path without an accepted fingerprint change, so it
