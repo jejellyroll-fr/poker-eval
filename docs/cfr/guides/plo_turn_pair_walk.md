@@ -1,11 +1,11 @@
 # The turn's pair walk: two designs for the terminal's tuple cost
 
-Issue #285 phase B, follow-up #332. Neither design is implemented. What *is*
-measured is the quantity they turn on: the cost of a deal walk with its
-evaluation taken out, by the frozen-strength probe that this issue produced as
-its first increment. The unit costs the designs build on come from the phase
-profile of #331; every figure below is either measured here or labelled as
-arithmetic on a measurement.
+Issue #285 phase B, follow-up #332. Design A is implemented and measured below;
+design B is not. The frozen-strength probe the issue produced as its first
+increment stays: it splits the terminal's walk into its precompute and its
+visits, which is the unit the gate is stated in. The unit costs the designs
+build on come from the phase profile of #331; every figure below is either
+measured here or labelled as arithmetic on a measurement.
 
 ## What the profile settled
 
@@ -14,7 +14,8 @@ filter is 0.0004 % of a PLO5 or PLO6 call and 0.16 % of a PLO4 one. So the
 target is the terminal's tuple walk, and any work on the filter would buy a
 thousandth of the call.
 
-Measured per-deal cost, board `AsKd7c2h`, heads-up unless stated:
+Measured per-deal cost **before design A**, board `AsKd7c2h`, heads-up unless
+stated:
 
 | Variant | Combos | Turn | Per deal | Deals per river |
 |---|---|---|---|---|
@@ -24,11 +25,11 @@ Measured per-deal cost, board `AsKd7c2h`, heads-up unless stated:
 | PLO6 | 2,091 | 60.44 s | 1,087 ns | 1,158,104 |
 | PLO6, 3 players | 150 | 7.56 s | 1,514 ns | 104,079 |
 
-## What the walk does today
+## What the walk did before design A
 
-`src/solver/domain/omaha_river.c` enumerates the legal deals and calls
-`omaha_callback` once per deal; the callback runs `StdDeck_OmahaHi_EVAL` for
-**every player on every deal**. One Omaha evaluation over a private hand and a
+`src/solver/domain/omaha_river.c` enumerated the legal deals and called its deal
+callback once per deal; the callback ran `StdDeck_OmahaHi_EVAL` for **every
+player on every deal**. One Omaha evaluation over a private hand and a
 five-card board is `C(holes, 2) × C(5, 3)` five-card lookups: 150 for six holes,
 100 for five, 60 for four. Dividing the measured per-deal cost by
 `players × lookups` gives the same constant in every row:
@@ -42,7 +43,8 @@ is the repeated evaluation and little else; it does not prove it, because the
 constant was fitted on that assumption, and the probe below is what decides. The
 walk also tests `weight > 0` and disjointness per pair, distributes the pot
 through `pe_pot_distribute`, and accumulates; whatever those cost is the
-residual the model carries.
+residual the model carries. Design A below replaces the repeated evaluation and
+leaves the rest of that description as it stands.
 
 ### The audit this issue asked for
 
@@ -70,12 +72,19 @@ point result is identical by construction — the same terms are added in the
 same order, and each `HandVal` comes from the same function on the same inputs.
 
 - Cheap units per river: `players × n` evaluations, i.e. `players × n ×
-  C(holes,2) × 10` lookups — 600,000 at PLO6 n = 2,000 against 348 million for
-  the same river today.
+  C(holes,2) × 10` lookups — 600,000 at PLO6 n = 2,000 against the 348
+  million the same river cost before A.
 - Visits per river: unchanged, `density × n²` (1.06 million at n = 2,000), each
   now a mask test, a strength comparison and a share, with no evaluation.
-- Memory: one `int64_t` and one `mask_t` per combo per player, 16 B per combo,
+- Memory: one `int64_t` per combo per player, 16 B for Hi/Lo's second table,
   against a 16 B combo table already there.
+
+Implemented in `src/solver/domain/omaha_river.c` as `omaha_hoisted_walk()`: each
+range is evaluated once into an `int64_t` table, Hi/Lo's low into a second, and
+the indexed enumeration reads them back. Every enumeration path takes it, Hi/Lo
+included; the heads-up four-card vector sweep already hoisted its evaluation
+and keeps its own kernel. The frozen entry point stayed as the timed twin of
+the same walk.
 
 ## Design B — aggregate the blockers, drop the walk
 
@@ -125,52 +134,58 @@ One run gives both sides of the split, so a loaded machine slows both and the
 ratio survives where absolute seconds would not.
 
 This is implemented: `pe_omaha_deals_enumerate_indexed()` reports the combo each
-player contributed, `pe_omaha_river_range_values_frozen()` and its turn
-counterpart hoist the evaluation, and `--frozen-strength` prints the three
-figures with `matches_live` beside them. The frozen path is Design A minus its
-precompute, so it is also the correctness harness for that design.
+player contributed, and `pe_omaha_river_range_values_frozen()` and its turn
+counterpart call the same walk with the precompute and the visits timed apart,
+printing them with `matches_live` beside them. Design A is that walk in the
+terminal itself, so the probe now decomposes the terminal rather than standing
+in for it, and `matches_live` is what keeps the split honest.
 
-### Measured: the probe, run
+### Measured: design A, before and after
 
-`--frozen-strength --repetitions 3` on the gate configuration, plus two
-neighbours for the constant, board `AsKd7c2h`, load 3.3–3.9:
+`--frozen-strength --profile --repetitions 3` on the gate configuration, plus
+two neighbours for the constant, board `AsKd7c2h`, load 2.9–4.1:
 
-| Run | Live turn | Precompute | Walk | Frozen call | Per visit | Bit-identical |
+| Run | Before A | After A | Precompute | Walk | Per visit | Bit-identical |
 |---|---|---|---|---|---|---|
-| PLO6, n = 2,000 | 53.94 s | 0.11 s | 1.12 s | 1.23 s | 22 ns | yes |
-| PLO6, n = 2,091 | 59.83 s | 0.11 s | 1.15 s | 1.26 s | 21 ns | yes |
-| PLO5, n = 1,994 | 53.98 s | 0.08 s | 1.39 s | 1.47 s | 20 ns | yes |
+| PLO6, n = 2,000 | 53.94 s | 1.13 s | 0.10 s | 1.03 s | 20.2 ns | yes |
+| PLO6, n = 2,091 | 59.83 s | 1.22 s | 0.11 s | 1.11 s | 20.0 ns | yes |
+| PLO5, n = 1,994 | 53.98 s | 1.37 s | 0.07 s | 1.30 s | 18.5 ns | yes |
 
-`matches_live` is true in all three, and the PLO6 2,091 fingerprint is
-`35f87d20638e3909`, the value master prints: the frozen walk is the walk, not a
-lookalike. The per-visit cost comes out between **20 and 22 ns over the three
-runs — a spread of 11 % about a mean of 20.9 ns** — and that band is what the
-figure carries, not a fourth digit: each walk is the median of its three
-repetitions in one process, so what the band shows is the run-to-run scatter of
-the host as much as anything else. PLO5 and PLO6 agreeing to 11 % on the
-per-visit cost, although they differ by 50 five-card lookups per evaluation, is
-the consistency the model predicted.
+The three fingerprints (`ac3016522c620075`, `35f87d20638e3909` and
+`89808ba1d1d56085`, the middle one the value master prints), the deal masses
+(19,821,384.246093750, 21,703,585.209960938 and 27,371,295.908203125), the
+48 priced rivers and the deal counts (50,849,064, 55,589,004 and 70,218,300)
+are all exactly those of the pre-change runs: the walk visits the same deals,
+with the same weights, in the same order, and only the evaluations moved.
+`matches_live` is true in all three.
 
-So A costs **1.23 s per turn at n = 2,000 against 53.94 s, a factor of 44**, and
-its two parts are the ones the model named: 0.11 s of precompute (168,000
-evaluations, 25.2 million lookups at about 4 ns) and 1.12 s of visits. The
-visit costs **22 ns**, the top of that band. Subtracting the fitted constant
-would have put it near 7 ns, which is why the probe was worth building: the
-15 ns the fit hid are the mask conversion to the deck representation and the
-per-deal bookkeeping the live callback pays, per deal and per player, and that
-a hoisted design would not.
+The per-visit cost lands between **18.5 and 20.2 ns across the three runs —
+9 % about a mean of 19.6 ns** — and that band is what the figure carries, not
+a fourth digit: each walk is the median of its three repetitions in one
+process, so what the band shows is the run-to-run scatter of the host as much
+as anything else. PLO5 and PLO6 agreeing to 9 % on the per-visit cost,
+although they differ by 50 five-card lookups per evaluation, is the
+consistency the model predicted.
+
+So A turns **53.94 s into 1.13 s at n = 2,000, a factor of 47.6**, and its two
+parts are the ones the model named: 0.10 s of precompute (168,000 evaluations,
+25.2 million lookups at about 3.9 ns) and 1.03 s of visits. Subtracting the
+fitted constant would have put the visit near 7 ns, which is why the probe was
+worth building: the 13 ns the fit hid are the mask conversion to the deck
+representation and the per-deal bookkeeping the per-deal callback paid, per deal
+and per player, and that the hoisted walk does not.
 
 | Path | Pair visits per turn | Five-card lookups per turn | Cost per turn | Against 53.9 s |
 |---|---|---|---|---|
-| Today, enumerated | 50,849,064 | 15.3 billion | 53.94 s (measured) | 1× |
-| A, hoisted | 50,849,064 | 25.2 million | 1.23 s (measured) | 44× |
+| Before A, evaluating per deal | 50,849,064 | 15.3 billion | 53.94 s (measured) | 1× |
+| A, hoisted (shipped) | 50,849,064 | 25.2 million | 1.13 s (measured) | 47.6× |
 | B, aggregated | 0 | 0, 252,000 subset touches per river | bounded below | not quoted |
 
-Against the gate, 22 ns sits 27 times under the 592 ns break-even, which is the
-figure that number was for: `0.11 s + 50.9 million × c ≤ 30.2 s` holds for every
-`c` below 592 ns, and the measurement lands far inside it. What remains in A is
-the `n²` term itself — 50.8 million visits, now merely cheap — which is the
-structural difference to B.
+Against the gate, the measured visit sits 29 times under the 592 ns break-even:
+0.10 s of precompute plus 50.9 million visits at 20 ns is 1.13 s, against the
+30.2 s a 2× cut of the 60.44 s run allows, and the same sum would still fit at
+592 ns per visit. What remains in A is the `n²` term itself — 50.8 million
+visits, now merely cheap — which is the structural difference to B.
 
 ### Bounded, not projected, for B
 
@@ -201,8 +216,9 @@ divides it.
   more players stay on the enumeration path until `pe_showdown_multiway_vector`
   gains the same aggregation; the measured 1,514 ns per deal at three-way PLO6
   is what such a design would have to beat, and it is out of this tranche.
-- No Hi/Lo in either design: `StdDeck_OmahaHiLow8_EVAL` returns a high and a low
-  value, so an aggregation over strengths would need a second dimension.
+- No Hi/Lo in B: `StdDeck_OmahaHiLow8_EVAL` returns a high and a low value, so
+  an aggregation over strengths would need a second dimension. A hoists both,
+  because one call returns both.
 - No change to chance weights, to the filter or to the turn's reduction.
 
 ## The gate
@@ -215,20 +231,20 @@ keeps the visits and divides their cost; Design B removes the visits at the
 price of a different summation. So:
 
 0. **Probe first.** `--holes 6 --combos 2000 --frozen-strength
-   --repetitions 3` reports the frozen walk, the precompute and the live
-   terminal in one process, with the fingerprint of the frozen run bit-identical
-   to the live one. It is implemented and its output is in the table above; a
-   design is not judged on speed before that run.
+   --repetitions 3` reports the precompute, the walk and the live terminal in
+   one process, with `matches_live` true. It ran before A was written, and every
+   pre-change second in the table above is its output.
 1. **Speed.** At `--holes 6 --combos 2000 --repetitions 3`, the terminal phase
    must be at most **half** of its value before the change, on the same host and
-   in the same load band. Measured, A's visit is 20–22 ns against the 592 ns
-   break-even — 27 times under it at the top of the band — and its turn is 44×
-   faster, so the floor is cleared by more than an order of magnitude; B still
-   has to show its own.
+   in the same load band. Measured after A: 1.13 s against 53.94 s, 24 times
+   under the 26.97 s half-way line, with the visit at 18.5–20.2 ns against the
+   592 ns break-even; B still has to show its own.
 2. **Exactness, A.** Bit-identical: the `values_fingerprint`, the deal mass and
    the river count must match the pre-change run exactly, and
-   `test_plo4_turn_oracle` must stay green. A change that moves any fingerprint
-   is rejected, and that includes a change of summation order.
+   `test_plo4_turn_oracle` must stay green. Met on all three runs above, with
+   the PLO4 river, Hi/Lo river and deal-enumeration tests green. A change that
+   moves any fingerprint is rejected, and that includes a change of summation
+   order.
 3. **Exactness, B.** Agreement with A to 1e-9 of the accumulated reach on every
    measured configuration, plus an explicit label in the report. B cannot
    replace the certified path without an accepted fingerprint change, so it
@@ -244,7 +260,8 @@ price of a different summation. So:
 
 - If the probe puts A's per-visit cost above 592 ns, the gate fails: the `n²`
   term is then in the distribution and the accumulation rather than in the
-  evaluation, and B becomes the only path worth pursuing.
+  evaluation, and B becomes the only path worth pursuing. The measurement put
+  it at 18.5–20.2 ns, so this did not fire.
 - If B's residue exceeds 1e-9 of the accumulated reach on any configuration, B
   does not ship as a default.
 - If either design cannot keep PLO4 on `plo4_sweep`, stop and bring the numbers

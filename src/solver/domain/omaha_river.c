@@ -31,10 +31,11 @@ typedef struct
     uint8_t hole_cards;
     int hilo8;              /* split each slice high/low 8-or-better */
     double *values;
-    /* Frozen-strength probe (issue #332): per-player strengths indexed by
-     * combo, or NULL on the live path.  Only the probe writes it; the callback
-     * that reads it takes a read-only view. */
+    /* Per-player strengths indexed by combo, filled by the hoisted precompute
+     * of the walk and NULL until it runs: `frozen` for the high value, and
+     * `frozen_low` for the Hi/Lo low, which is NULL on the high-only path. */
     int64_t **frozen;
+    int64_t **frozen_low;
 } omaha_showdown_ctx_t;
 
 /* The winning players of one half.  `strength` is ranked so that a larger
@@ -183,55 +184,31 @@ static int omaha_award(omaha_showdown_ctx_t *ctx, const HandVal *strength,
     return 0;
 }
 
-static int omaha_callback(const mask_t *holes, uint8_t player_count,
-                          double weight, void *user)
+/* The walk of a hoisted terminal: the same payoff the enumeration's callback
+ * paid, with both strengths read from the tables the precompute filled, keyed
+ * by the combo each player contributed.  It is indexed by combo, which is why
+ * the enumeration reports indices. */
+static int omaha_hoisted_callback(const mask_t *holes, const size_t *indices,
+                                  uint8_t player_count, double weight,
+                                  void *user)
 {
     omaha_showdown_ctx_t *ctx = (omaha_showdown_ctx_t *)user;
     HandVal strength[PE_OMAHA_RIVER_MAX_PLAYERS];
     LowHandVal low_strength[PE_OMAHA_RIVER_MAX_PLAYERS];
-    StdDeck_CardMask board = to_std_mask(ctx->board);
     uint8_t player;
 
+    (void)holes;
     if (player_count != ctx->player_count)
         return 1;
     for (player = 0u; player < player_count; ++player)
     {
-        StdDeck_CardMask hole = to_std_mask(holes[player]);
+        strength[player] = (HandVal)ctx->frozen[player][indices[player]];
         if (ctx->hilo8)
-        {
-            if (StdDeck_OmahaHiLow8_EVAL(hole, board, &strength[player],
-                                         &low_strength[player]) != 0)
-                return 1;
-        }
-        else if (StdDeck_OmahaHi_EVAL(hole, board, &strength[player]) != 0)
-            return 1;
+            low_strength[player] =
+                (LowHandVal)ctx->frozen_low[player][indices[player]];
     }
-    return omaha_award(ctx, strength, low_strength, weight);
-}
-
-/* The probe's walk: the same payoff, with the strengths read from the table the
- * precompute filled.  It is indexed by combo, which is why the enumeration
- * reports indices. */
-static int omaha_frozen_callback(const mask_t *holes, const size_t *indices,
-                                 uint8_t player_count, double weight,
-                                 void *user)
-{
-    omaha_showdown_ctx_t *ctx = (omaha_showdown_ctx_t *)user;
-    HandVal strength[PE_OMAHA_RIVER_MAX_PLAYERS];
-    uint8_t player;
-
-    (void)holes;
-    /* Hi/Lo is not part of the probe, which is also why the low half is NULL
-     * below: nothing reads it while `hilo8` is clear. */
-    if (player_count != ctx->player_count || ctx->hilo8)
-        return 1;
-    for (player = 0u; player < player_count; ++player)
-    {
-        const int64_t *table = ctx->frozen[player];
-
-        strength[player] = (HandVal)table[indices[player]];
-    }
-    return omaha_award(ctx, strength, NULL, weight);
+    return omaha_award(ctx, strength, ctx->hilo8 ? low_strength : NULL,
+                       weight);
 }
 
 /* Heads-up, high-only river through the vector showdown kernel.
@@ -360,10 +337,113 @@ done:
     return status;
 }
 
+/* Design A of issue #332: evaluate every declared combo once against this
+ * board, then walk the deals reading those strengths, exactly as the
+ * enumeration read the evaluator's.  The visit order, the weights, the pot
+ * distribution and the accumulation are the enumeration's, so the values, the
+ * deal count and the deal mass are bit-identical to the per-deal version;
+ * only the number of evaluations changes, from one per player per deal to one
+ * per combo.  Hi/Lo hoists its low strength beside the high one.
+ *
+ * `probe` may be NULL.  When it is not, the precompute and the walk are timed
+ * apart, which is the split issue #332 asked for; the walk itself is the one
+ * the terminal always runs. */
+static int omaha_hoisted_walk(mask_t board, const pe_omaha_range_t *ranges,
+                              uint8_t player_count, uint8_t hole_cards,
+                              omaha_showdown_ctx_t *ctx,
+                              pe_omaha_river_probe_t *probe,
+                              size_t *out_deal_count, double *out_weight_sum)
+{
+    int64_t *high[PE_OMAHA_RIVER_MAX_PLAYERS] = {0};
+    int64_t *low[PE_OMAHA_RIVER_MAX_PLAYERS] = {0};
+    StdDeck_CardMask std_board = to_std_mask(board);
+    uint8_t player;
+    double started = 0.0;
+    int status = 0;
+
+    if (probe)
+        started = river_now();
+    for (player = 0u; player < player_count; ++player)
+    {
+        size_t count = ranges[player].count;
+        size_t combo;
+
+        if (count > 0u)
+        {
+            high[player] = (int64_t *)malloc(count * sizeof(*high[player]));
+            if (!high[player])
+            {
+                status = -1;
+                goto done;
+            }
+            if (ctx->hilo8)
+            {
+                low[player] = (int64_t *)malloc(count * sizeof(*low[player]));
+                if (!low[player])
+                {
+                    status = -1;
+                    goto done;
+                }
+            }
+        }
+        for (combo = 0u; combo < count; ++combo)
+        {
+            StdDeck_CardMask hole =
+                to_std_mask(ranges[player].combos[combo].cards);
+            HandVal value = HandVal_NOTHING;
+            LowHandVal low_value = LowHandVal_NOTHING;
+
+            if (ctx->hilo8)
+            {
+                if (StdDeck_OmahaHiLow8_EVAL(hole, std_board, &value,
+                                             &low_value) != 0)
+                {
+                    status = 1;
+                    goto done;
+                }
+                low[player][combo] = (int64_t)low_value;
+            }
+            else if (StdDeck_OmahaHi_EVAL(hole, std_board, &value) != 0)
+            {
+                status = 1;
+                goto done;
+            }
+            high[player][combo] = (int64_t)value;
+        }
+        if (probe)
+            probe->combos += count;
+    }
+    if (probe)
+        probe->precompute_seconds = river_now() - started;
+    ctx->frozen = high;
+    ctx->frozen_low = low;
+
+    if (probe)
+        started = river_now();
+    status = pe_omaha_deals_enumerate_indexed(
+        board, ranges, player_count, hole_cards, omaha_hoisted_callback, ctx,
+        out_deal_count, out_weight_sum);
+    if (probe)
+    {
+        probe->walk_seconds = river_now() - started;
+        probe->deals = *out_deal_count;
+    }
+
+done:
+    ctx->frozen = NULL;
+    ctx->frozen_low = NULL;
+    for (player = 0u; player < PE_OMAHA_RIVER_MAX_PLAYERS; ++player)
+    {
+        free(low[player]);
+        free(high[player]);
+    }
+    return status;
+}
+
 /* The preamble every river terminal call shares: the argument check, the value
- * outputs zeroed, the pot slices and the callback context.  Returns 0 when the
- * caller can walk, -1 for a rejected call, and the pot's own status when the
- * slices cannot be built. */
+ * and reporting outputs zeroed, the pot slices and the callback context.
+ * Returns 0 when the caller can walk, -1 for a rejected call, and the pot's own
+ * status when the slices cannot be built. */
 static int river_terminal_open(const EvalContext *context, mask_t board,
                                const pe_omaha_range_t *ranges,
                                const pe_betting_state_t *state,
@@ -385,6 +465,8 @@ static int river_terminal_open(const EvalContext *context, mask_t board,
         return -1;
     for (player = 0u; player < player_count; ++player)
         out_values[player] = 0.0;
+    *out_deal_count = 0u;
+    *out_weight_sum = 0.0;
     status = pe_pot_slices_build(state, slices, PE_OMAHA_RIVER_MAX_PLAYERS,
                                  slice_count);
     if (status != 0)
@@ -427,23 +509,33 @@ static int omaha_river_range_values(
     uint8_t player_count,
     size_t *out_deal_count,
     double *out_weight_sum,
-    pe_showdown_path_t *out_path)
+    pe_showdown_path_t *out_path,
+    pe_omaha_river_probe_t *probe)
 {
     pe_pot_slice_t slices[PE_OMAHA_RIVER_MAX_PLAYERS];
     omaha_showdown_ctx_t callback_context;
     uint8_t slice_count = 0u;
-    int status = river_terminal_open(context, board, ranges, state, hole_cards,
-                                     hilo8, out_values, player_count,
-                                     out_deal_count, out_weight_sum, slices,
-                                     &slice_count, &callback_context);
+    int status;
 
+    if (probe)
+    {
+        probe->precompute_seconds = 0.0;
+        probe->walk_seconds = 0.0;
+        probe->deals = 0u;
+        probe->combos = 0u;
+    }
+    status = river_terminal_open(context, board, ranges, state, hole_cards,
+                                 hilo8, out_values, player_count,
+                                 out_deal_count, out_weight_sum, slices,
+                                 &slice_count, &callback_context);
     if (status != 0)
         return status;
     /* Four-card heads-up high-only ranges go through the vector showdown, with
        strengths evaluated once per combo against this board.  Smaller ranges
        keep the enumeration path, which is where the exact deal count and the
-       independent oracle live. */
-    if (!hilo8 && player_count == 2u && hole_cards == 4u &&
+       independent oracle live.  The probe never takes this branch: it prices
+       the enumerated walk, whose precompute and deal visits it can split. */
+    if (!hilo8 && !probe && player_count == 2u && hole_cards == 4u &&
         ranges[0].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS &&
         ranges[1].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS)
     {
@@ -460,9 +552,9 @@ static int omaha_river_range_values(
         if (fast < 0)
             return -1;
     }
-    status = pe_omaha_deals_enumerate(board, ranges, player_count, hole_cards,
-                                     omaha_callback, &callback_context,
-                                     out_deal_count, out_weight_sum);
+    status = omaha_hoisted_walk(board, ranges, player_count, hole_cards,
+                               &callback_context, probe, out_deal_count,
+                               out_weight_sum);
     status = river_terminal_close(status, *out_weight_sum, out_values,
                                   player_count);
     if (status == 0 && out_path)
@@ -484,7 +576,7 @@ int pe_omaha_river_range_values_with_path(
 {
     return omaha_river_range_values(context, board, ranges, state, hole_cards,
                                     0, out_values, player_count, out_deal_count,
-                                    out_weight_sum, out_path);
+                                    out_weight_sum, out_path, NULL);
 }
 
 int pe_omaha_river_range_values(
@@ -500,7 +592,7 @@ int pe_omaha_river_range_values(
 {
     return omaha_river_range_values(context, board, ranges, state, hole_cards,
                                     0, out_values, player_count, out_deal_count,
-                                    out_weight_sum, NULL);
+                                    out_weight_sum, NULL, NULL);
 }
 
 int pe_omaha_hilo8_river_range_values(
@@ -516,7 +608,7 @@ int pe_omaha_hilo8_river_range_values(
 {
     return omaha_river_range_values(context, board, ranges, state, hole_cards,
                                     1, out_values, player_count, out_deal_count,
-                                    out_weight_sum, NULL);
+                                    out_weight_sum, NULL, NULL);
 }
 
 int pe_omaha_river_range_values_frozen(
@@ -531,73 +623,9 @@ int pe_omaha_river_range_values_frozen(
     double *out_weight_sum,
     pe_omaha_river_probe_t *probe)
 {
-    pe_pot_slice_t slices[PE_OMAHA_RIVER_MAX_PLAYERS];
-    omaha_showdown_ctx_t callback_context;
-    int64_t *strength[PE_OMAHA_RIVER_MAX_PLAYERS] = {0};
-    StdDeck_CardMask std_board;
-    uint8_t slice_count = 0u;
-    uint8_t player;
-    double started;
-    int status;
-
     if (!probe)
         return -1;
-    probe->precompute_seconds = 0.0;
-    probe->walk_seconds = 0.0;
-    probe->deals = 0u;
-    probe->combos = 0u;
-    status = river_terminal_open(context, board, ranges, state, hole_cards, 0,
-                                 out_values, player_count, out_deal_count,
-                                 out_weight_sum, slices, &slice_count,
-                                 &callback_context);
-    if (status != 0)
-        return status;
-
-    /* The precompute is the single evaluation a hoisted design would do once
-     * per combo on this board.  It is timed apart from the walk, because the
-     * walk is what that design would pay per visit. */
-    std_board = to_std_mask(board);
-    started = river_now();
-    for (player = 0u; player < player_count; ++player)
-    {
-        size_t combo;
-
-        strength[player] = (int64_t *)malloc(ranges[player].count *
-                                             sizeof(*strength[player]));
-        if (!strength[player])
-        {
-            status = -1;
-            goto done;
-        }
-        for (combo = 0u; combo < ranges[player].count; ++combo)
-        {
-            HandVal value = HandVal_NOTHING;
-
-            if (StdDeck_OmahaHi_EVAL(
-                    to_std_mask(ranges[player].combos[combo].cards), std_board,
-                    &value) != 0)
-            {
-                status = -1;
-                goto done;
-            }
-            strength[player][combo] = (int64_t)value;
-        }
-        probe->combos += ranges[player].count;
-    }
-    probe->precompute_seconds = river_now() - started;
-    callback_context.frozen = strength;
-
-    started = river_now();
-    status = pe_omaha_deals_enumerate_indexed(
-        board, ranges, player_count, hole_cards, omaha_frozen_callback,
-        &callback_context, out_deal_count, out_weight_sum);
-    probe->walk_seconds = river_now() - started;
-    probe->deals = *out_deal_count;
-    status = river_terminal_close(status, *out_weight_sum, out_values,
-                                  player_count);
-
-done:
-    for (player = 0u; player < PE_OMAHA_RIVER_MAX_PLAYERS; ++player)
-        free(strength[player]);
-    return status;
+    return omaha_river_range_values(context, board, ranges, state, hole_cards,
+                                    0, out_values, player_count, out_deal_count,
+                                    out_weight_sum, NULL, probe);
 }

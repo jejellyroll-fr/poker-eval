@@ -124,7 +124,8 @@ static size_t compact_for_river(const pe_omaha_range_t *range, mask_t blocked,
  * neither is the work it was before the instrumentation existed.  They measure
  * different things -- `stats` splits the per-river filter from the river
  * terminal, `probe` splits that terminal's precompute from its walk -- and
- * `probe` swaps the live river terminal for the frozen one. */
+ * `probe` takes the river terminal's timed entry point, which is the same
+ * hoisted walk with each part clocked. */
 static int turn_range_values(
     const EvalContext *context,
     mask_t board,

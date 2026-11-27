@@ -29,11 +29,13 @@ extern "C" {
  * work the payoff does not need.  `*out_weight_sum` is exact on both paths. */
 /*
  * Cost split of one river terminal call, for the frozen-strength probe of
- * issue #332.  `precompute_seconds` is one `StdDeck_OmahaHi_EVAL` per combo of
- * every range against this board; `walk_seconds` is the deal walk reading those
- * strengths from an array instead of evaluating, with the same payoff and the
- * same accumulation order.  High-only: Hi/Lo carries a second strength per
- * combo and the probe does not cover it.
+ * issue #332.  The terminal evaluates every combo once against the board before
+ * it visits a single deal (design A of that issue), so a call is two parts:
+ * `precompute_seconds` is that one `StdDeck_OmahaHi_EVAL` per combo of every
+ * range, and `walk_seconds` is the deal walk reading those strengths from an
+ * array, with the same payoff and the same accumulation order.  High-only:
+ * Hi/Lo carries a second strength per combo and the probe does not cover it,
+ * although the terminal itself hoists both halves.
  *
  * The probe is valid only if it reproduces the terminal bit for bit; the caller
  * checks the fingerprint, and a mismatch means the probe is measuring a
@@ -48,14 +50,15 @@ typedef struct
 } pe_omaha_river_probe_t;
 
 /*
- * The same terminal with its evaluation hoisted out of the deal walk: every
- * combo is evaluated once against the board, then the walk reads those values.
- * The values, the deal count and the deal mass are those of
- * pe_omaha_river_range_values(), which is the point of the exercise.
+ * The same terminal, timed in the two parts the hoisted walk has: the precompute
+ * and the deal visits.  The values, the deal count and the deal mass are those
+ * of pe_omaha_river_range_values(), which runs the same two parts without the
+ * clocks; a caller still checks them, because a probe that does not reproduce
+ * the terminal is measuring a different walk.
  *
- * `probe` is required and is zeroed on entry.  Multiway, Hi/Lo and the heads-up
- * four-card vector sweep are not part of this path: it exists to price a visit,
- * not to be fast.
+ * `probe` is required and is zeroed on entry.  Hi/Lo and the heads-up four-card
+ * vector sweep are not priced here: the probe always enumerates, so it times
+ * the walk this terminal runs rather than the vector kernel.
  */
 int pe_omaha_river_range_values_frozen(
     const EvalContext *context,

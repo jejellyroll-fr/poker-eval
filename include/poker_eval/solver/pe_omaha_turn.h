@@ -149,10 +149,11 @@ int pe_omaha_turn_range_values_profiled(
     pe_omaha_turn_stats_t *stats);
 
 /*
- * Cost split of the same turn with the per-river evaluation hoisted out of the
- * deal walk, for the frozen-strength probe of issue #332: what the terminal
- * pays once per combo per river, and what its deal walks pay per visit when the
- * strengths are already there.  Summed over the rivers a turn prices.
+ * Cost split of the same turn, for the frozen-strength probe of issue #332:
+ * what the terminal pays once per combo per river, and what its deal walks pay
+ * per visit with the strengths already there.  The river terminal hoists that
+ * precompute by design A of the issue, so these are the two parts of the walk
+ * it always runs, summed over the rivers a turn prices.
  *
  * The values are those of pe_omaha_turn_range_values(), which the caller has to
  * check: a probe that does not reproduce the fingerprint is measuring a
