@@ -113,14 +113,17 @@ by −13 %, from 11.572 s to 10.102 s, which is the machine (load 4.2–5.9 then
 signature of design A.** Before the hoist a deal paid one showdown evaluation
 (750–1,514 ns) and the figure moved only with load. Now a deal pays a table
 lookup plus, amortized over the `density · n²` deals of a river, the `n`
-evaluations that river precomputed: `t(n) ≈ c + k / n`. PLO5 falls from 60.3 ns
-at 50 combos to 19.7 ns at 1,600 and levels off around 20–22 ns, the ceiling
-being 22.1 ns at 1,994; PLO6 falls from 184 ns to 25.6 at 800 and levels off
-around 22–26 ns, 21.7 at 2,091. The two terms are equal at about 96 combos for
-PLO5 and 182 for PLO6, so below that the precompute dominates and above it the
-walk does. The two frontier points sit slightly above the smallest per-deal
-figure of their variant, which is the 5 % fit overshoot the frontier check
-reports rather than a second regime.
+evaluations that river precomputed: `t(n) ≈ c + k / n`. The measured series
+are PLO5 60.3, 28.5, 21.1, 20.9, 19.7 and 22.1 ns at 50, 200, 800, 814, 1,600
+and 1,994 combos, and PLO6 184, 57.9, 30.0, 25.6, 24.6, 23.4, 23.2 and 21.7 ns
+at 25, 100, 400, 800, 854, 1,200, 1,600 and 2,091. So PLO5 is flat by
+800–1,600 (19.7–21.1 ns) and its 22.1 ns at the 1,994 frontier is the sample
+that came in 5 % over its fit, not an edge of a plateau; PLO6 is still drifting
+down at the largest size, from 30.0 ns at 400 to 21.7 at 2,091 with no plateau
+visible yet — its band over 400–2,091 is 22–30 ns, and only the last three
+points (23.4, 23.2, 21.7) look settled. The two terms are equal at about 96
+combos for PLO5 and 182 for PLO6, so below that the precompute dominates and
+above it the walk does.
 
 The consequence for the ratio between variants changed too: at these sizes
 PLO6 costs 3.0× PLO5 per deal at 25 versus 50 combos, not the 1.3× of the
@@ -373,7 +376,7 @@ Stated as rules, with the guarantee each one carries:
   estimate made from the pre-design-A figures.
 - **Sparse blocker-aggregation designs** (issue #332) are not implemented or
   measured. The cost model says what they would have to beat:
-  `density · n²` tuple visits per river at ~20–25 ns each, plus the `n`
+  `density · n²` tuple visits per river at ~20–26 ns each, plus the `n`
   evaluations per river that design A already removed from the walk.
 - **No turn betting tree and no turn certificate**, as in phase A: these are
   showdown terminals, not two-street solves.
