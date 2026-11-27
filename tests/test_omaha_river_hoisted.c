@@ -28,6 +28,8 @@
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
 
+#include "support/pe_omaha_hilo_winners.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -107,18 +109,6 @@ static int same_bits(double a, double b)
     return memcmp(&a, &b, sizeof(a)) == 0;
 }
 
-static uint8_t count_bits(uint8_t bits)
-{
-    uint8_t count = 0u;
-
-    while (bits != 0u)
-    {
-        count = (uint8_t)(count + (bits & 1u));
-        bits = (uint8_t)(bits >> 1);
-    }
-    return count;
-}
-
 typedef struct
 {
     double amount;
@@ -140,56 +130,6 @@ typedef struct
     double values[MAX_PLAYERS];
     int failed;
 } reference_t;
-
-/* Winners of the high half of a slice: the strongest eligible hand, ties
- * included. */
-static uint8_t high_winners(const HandVal *strength, uint8_t player_count,
-                            uint8_t eligible)
-{
-    uint8_t winners = 0u;
-    HandVal best = HandVal_NOTHING;
-    uint8_t player;
-
-    for (player = 0u; player < player_count; ++player)
-    {
-        if (!(eligible & (uint8_t)(1u << player)))
-            continue;
-        if (winners == 0u || strength[player] > best)
-        {
-            best = strength[player];
-            winners = (uint8_t)(1u << player);
-        }
-        else if (strength[player] == best)
-            winners |= (uint8_t)(1u << player);
-    }
-    return winners;
-}
-
-/* Winners of the low half of a slice: the lowest qualifying eight-or-better
- * eligible hand, ties included, and 0 when nobody qualifies. */
-static uint8_t low_winners(const LowHandVal *strength, uint8_t player_count,
-                           uint8_t eligible)
-{
-    uint8_t winners = 0u;
-    LowHandVal best = LowHandVal_NOTHING;
-    uint8_t player;
-
-    for (player = 0u; player < player_count; ++player)
-    {
-        if (!(eligible & (uint8_t)(1u << player)))
-            continue;
-        if (strength[player] == LowHandVal_NOTHING)
-            continue;
-        if (winners == 0u || strength[player] < best)
-        {
-            best = strength[player];
-            winners = (uint8_t)(1u << player);
-        }
-        else if (strength[player] == best)
-            winners |= (uint8_t)(1u << player);
-    }
-    return winners;
-}
 
 /* One deal of the reference: sum its weight, evaluate every hole on this board,
  * pay the declared slices, accumulate net of the investment.  The mass is
@@ -233,8 +173,9 @@ static int reference_deal(const mask_t *holes, uint8_t player_count,
     for (index = 0u; index < ref->slice_count; ++index)
     {
         const slice_spec_t *slice = &ref->slices[index];
-        uint8_t high = high_winners(strength, player_count, slice->eligible);
-        uint8_t high_count = count_bits(high);
+        uint8_t high =
+            pe_test_best_high(strength, slice->eligible, player_count);
+        uint8_t high_count = pe_test_count_bits(high);
 
         /* A slice nobody eligible can win pays nobody, exactly as the
          * distribution routine leaves it. */
@@ -251,8 +192,8 @@ static int reference_deal(const mask_t *holes, uint8_t player_count,
             double high_half = slice->amount * 0.5;
             double low_half = slice->amount * 0.5;
             uint8_t low_masks =
-                low_winners(low, player_count, slice->eligible);
-            uint8_t low_count = count_bits(low_masks);
+                pe_test_best_low(low, slice->eligible, player_count);
+            uint8_t low_count = pe_test_count_bits(low_masks);
 
             for (player = 0u; player < player_count; ++player)
                 if (high & (uint8_t)(1u << player))
