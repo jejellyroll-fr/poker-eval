@@ -10,6 +10,15 @@ and how large may the ranges be before the answer is "not feasible"? Nothing
 here is a solver run, a sample or an estimate of strategy quality; every figure
 is one terminal call at a turn node, and every configuration is exact.
 
+Every figure below was measured again after the design A share-evaluation
+hoist of issue #332 landed in `src/solver/domain/omaha_river.c` (the design is
+specified in [plo_turn_pair_walk.md](plo_turn_pair_walk.md), and
+`test_omaha_river_hoisted` is the oracle that pins it): the river terminal now
+evaluates each combo once per river and the deal walk reuses that table, so a
+visit costs tens of nanoseconds instead of a full showdown evaluation. The
+PLO4 rows did not move in kind: heads-up PLO4 with 32 combos or more takes the
+blocker-aware vector sweep, which design A did not touch.
+
 ## Method
 
 - Board `As Kd 7c 2h`, no dead cards, so the terminal prices 48 rivers.
@@ -18,18 +27,20 @@ is one terminal call at a turn node, and every configuration is exact.
   `[0.25, 1.0]`. Both ranges have the same size; heads-up unless stated.
 - One configuration per process, so the reported peak RSS belongs to that
   configuration and not to a larger one that ran before it.
-- The reported seconds are the median of 3 repetitions (1–2 for the largest
-  configurations, where a single call already runs for seconds).
+- The reported seconds are the median of 3 repetitions (1 for the largest
+  configurations, where a single call already runs for hundreds of
+  milliseconds).
 - A single-call timing is not repeatable on a busy machine: the same
-  configuration measured twice here differed by up to 2× (PLO5, 814 combos:
-  8.67 s at load 3 and 17.8 s at load 21). The frontier check reports every run
-  with the load average it ran under and reads the one taken in a window whose
-  speed was checked against the grid.
+  configuration measured twice before design A differed by up to 2× (PLO5,
+  814 combos: 8.67 s at load 3 and 17.8 s at load 21). Every sample below was
+  taken at load 3.5–4.5, and the frontier check reports each one with its load.
+  The terminal is now cheap enough that this noise is a larger share of a
+  figure than it was: read the milliseconds, not the fourth digit.
 - The deal count is exact, not estimated: the terminal visits every legal
   tuple and every river such a tuple leaves in the deck, so
   `deals = tuples × (48 − holes × players)`. The benchmark reads the tuple
   count from `pe_omaha_deals_measure()` and reports the product.
--   Machine: Apple M5 (10 cores), macOS 27.0.1, Apple clang 17, `-O3 -DNDEBUG`,
+- Machine: Apple M5 (10 cores), macOS 27.0.1, Apple clang 17, `-O3 -DNDEBUG`,
   single-threaded except in the lane section. Figures are machine-specific and
   are not thresholds any test asserts.
 - `--threads N` fans the candidate rivers over N lanes and reports that time
@@ -43,21 +54,24 @@ A turn prices one river terminal per candidate river, so its cost is
 | Private hands | River path | Cost per river |
 |---|---|---|
 | PLO4, heads-up, ≥ 32 combos | blocker-aware sweep (`pe_showdown_vector_mass`) | `O(n log n + 15n)` |
-| PLO4, heads-up, < 32 combos | deal walk | `O(density × n²)` |
-| PLO4 multiway, all PLO5/PLO6 | deal walk | `O(density × n²)` |
+| PLO4, heads-up, < 32 combos | deal walk | `O(n) + O(density × n²)` |
+| PLO4 multiway, all PLO5/PLO6 | deal walk | `O(n) + O(density × n²)` |
 
 The sweep is gated on `hole_cards == 4` in `omaha_river.c`, so **PLO5 and PLO6
-always take the deal walk**: `density × n²` legal tuples, each paying one
-product Omaha evaluation (`C(5,2)·C(5,3) = 100` hands for PLO5, `150` for
-PLO6). That is the whole scalability story — PLO4 is linear in the range size,
-PLO5/PLO6 are quadratic.
+always take the deal walk**: `density × n²` legal tuples, and after design A
+each of them is a table lookup rather than an evaluation, on top of the `n`
+evaluations a river now performs once for its whole range. That is why the
+walk is quadratic in visits but only linear in evaluations — and why the
+per-deal cost below falls with the range size before it flattens.
 
 Measured tuple density (legal tuples / n², i.e. the chance that two private
 hands do not share a card): **0.465** for PLO5, **0.353** for PLO6. It is a
 property of the hand size, not of the range size or the board.
 
-The measured `turn / river` ratio is 33–58 across the grid, i.e. one turn is
-about 48 single-river terminals, as the design says it must be.
+The measured `turn / river` ratio is 44–53 for every configuration of a tenth
+of a second or more, i.e. one turn is about 48 single-river terminals, as the
+design says it must be. Below that the fixed per-call cost shows up and the
+ratio drops (23.1 at PLO4 1,000 combos, 11.5 at PLO5 50).
 
 ## Measured time
 
@@ -65,47 +79,59 @@ about 48 single-river terminals, as the design says it must be.
 
 | Combos per range | Turn (s) | µs per combo | Peak RSS |
 |---|---|---|---|
-| 1,000 | 0.061 | 30.6 | 8.0 MiB |
-| 10,000 | 0.589 | 29.5 | 18.0 MiB |
-| 50,000 | 2.921 | 29.2 | 35.7 MiB |
-| 194,580 (full) | 11.572 | 29.7 | 77.5 MiB |
+| 1,000 | 0.054 | 27.2 | 8.1 MiB |
+| 10,000 | 0.533 | 26.6 | 17.9 MiB |
+| 50,000 | 2.559 | 25.6 | 35.4 MiB |
+| 194,580 (full) | 10.102 | 26.0 | 74.9 MiB |
 
 µs per combo is `turn / (combos × players)` and stays flat, which is the
-linear behaviour the sweep predicts: `T(n) ≈ 5.9e-5 · n` seconds, about 17,000
-combos of range size per second.
+linear behaviour the sweep predicts: `T(n) ≈ 5.2e-5 · n` seconds, about 19,300
+combos of range size per second. These rows are unchanged by design A, which
+is the point of measuring them again: they differ from the pre-design-A table
+by −13 %, from 11.572 s to 10.102 s, which is the machine (load 4.2–5.9 then,
+3.5–3.8 now) and not the terminal.
 
-### PLO5: quadratic
-
-| Combos per range | Legal tuples | Multiway deals | Turn (s) | ns per deal | Peak RSS |
-|---|---|---|---|---|---|
-| 50 | 1,159 | 44,042 | 0.0345 | 784 | 6.5 MiB |
-| 200 | 18,490 | 702,620 | 0.6013 | 856 | 6.6 MiB |
-| 800 | 297,090 | 11,289,420 | 9.2345 | 818 | 6.6 MiB |
-| 1,600 | 1,190,001 | 45,220,038 | 43.7172 | 967 | 6.7 MiB |
-
-### PLO6: quadratic, on 50% more hand evaluations per deal
+### PLO5: quadratic in visits, linear in evaluations
 
 | Combos per range | Legal tuples | Deals | Turn (s) | ns per deal | Peak RSS |
 |---|---|---|---|---|---|
-| 25 | 206 | 7,416 | 0.0081 | 1,098 | 6.5 MiB |
-| 100 | 3,471 | 124,956 | 0.1308 | 1,047 | 6.5 MiB |
-| 400 | 56,513 | 2,034,468 | 2.3225 | 1,142 | 6.6 MiB |
-| 800 | 225,689 | 8,124,804 | 9.1805 | 1,130 | 6.6 MiB |
+| 50 | 1,159 | 44,042 | 0.00266 | 60.3 | 6.5 MiB |
+| 200 | 18,490 | 702,620 | 0.02001 | 28.5 | 6.6 MiB |
+| 800 | 297,090 | 11,289,420 | 0.23826 | 21.1 | 6.6 MiB |
+| 1,600 | 1,190,001 | 45,220,038 | 0.89083 | 19.7 | 6.7 MiB |
 
-PLO5 stays between 0.72 and 0.97 µs per deal from 50 combos to 1,994, and PLO6
-between 1.00 and 1.15 µs from 25 to 2,091: both leave the per-deal cost flat in
-the range size. At the small sizes the PLO5/PLO6 ratio is 1.3, the ratio of
-hand evaluations per deal (150/100), which says the terminal's time is the
-showdown evaluation and not bookkeeping. The same configurations report up to
-twice that per-deal cost while the machine is busy — PLO5 at 814 combos costs
-0.74 µs each at load 3 and 1.52 µs at load 18; PLO6 at 2,091 costs 1.04 µs at
-load 4 and 1.20–1.49 µs at load 16–21 — so a per-deal figure is only worth
-reading next to the load average it was taken under.
+### PLO6: the same, on 50 % more hand evaluations per combo
 
-### Filter or terminal: where a call goes
+| Combos per range | Legal tuples | Deals | Turn (s) | ns per deal | Peak RSS |
+|---|---|---|---|---|---|
+| 25 | 206 | 7,416 | 0.00136 | 184.0 | 6.5 MiB |
+| 100 | 3,471 | 124,956 | 0.00723 | 57.9 | 6.5 MiB |
+| 400 | 56,513 | 2,034,468 | 0.06101 | 30.0 | 6.6 MiB |
+| 800 | 225,689 | 8,124,804 | 0.20801 | 25.6 | 6.6 MiB |
 
-`--profile` splits the serial call instead of timing it whole. The terminal has
-two phases per candidate river: a filter that copies the combos not holding the
+**The per-deal cost is no longer flat in the range size, and that is the
+signature of design A.** Before the hoist a deal paid one showdown evaluation
+(750–1,514 ns) and the figure moved only with load. Now a deal pays a table
+lookup plus, amortized over the `density · n²` deals of a river, the `n`
+evaluations that river precomputed: `t(n) ≈ c + k / n`. PLO5 falls from 60.3 ns
+at 50 combos to 19.7 ns at 1,600 and levels off around 20–22 ns, the ceiling
+being 22.1 ns at 1,994; PLO6 falls from 184 ns to 25.6 at 800 and levels off
+around 22–26 ns, 21.7 at 2,091. The two terms are equal at about 96 combos for
+PLO5 and 182 for PLO6, so below that the precompute dominates and above it the
+walk does. The two frontier points sit slightly above the smallest per-deal
+figure of their variant, which is the 5 % fit overshoot the frontier check
+reports rather than a second regime.
+
+The consequence for the ratio between variants changed too: at these sizes
+PLO6 costs 3.0× PLO5 per deal at 25 versus 50 combos, not the 1.3× of the
+pre-design-A table, because what is being compared at that size is the number
+of evaluations per combo (150 against 100) and not the walk. At 800 combos the
+ratio is 1.21, which is the walk.
+
+## Filter or terminal: where a call goes
+
+`--profile` splits the serial call instead of timing it whole. The turn has two
+phases per candidate river: a filter that copies the combos not holding the
 river card into a compact range, and one river terminal call on the five-card
 board that filter makes. Both are timed with a monotonic clock inside the same
 call, and the counters are exact, so the shares below are read against that
@@ -113,13 +139,13 @@ call's own wall clock:
 
 | Variant | Combos | Call | Filter | Terminal | Unaccounted | Filter visit | Deal |
 |---|---|---|---|---|---|---|---|
-| PLO4 | 194,580 | 10.13 s | 16.0 ms | 10.11 s | 0.6 ms | 0.86 ns | — |
-| PLO5 | 1,994 | 52.68 s | 0.22 ms | 52.68 s | −0.1 ms | 1.15 ns | 750 ns |
-| PLO6 | 854 | 9.77 s | 0.12 ms | 9.77 s | 0.04 ms | 1.43 ns | 1,052 ns |
-| PLO6 | 1,600 | 35.45 s | 0.21 ms | 35.45 s | −0.07 ms | 1.35 ns | 1,088 ns |
-| PLO6 | 2,091 | 60.44 s | 0.26 ms | 60.44 s | −0.13 ms | 1.29 ns | 1,087 ns |
-| PLO5, 3 players | 150 | 14.78 s | 0.05 ms | 14.78 s | −0.02 ms | 2.27 ns | 1,086 ns |
-| PLO6, 3 players | 150 | 7.56 s | 0.05 ms | 7.56 s | 0.01 ms | 2.22 ns | 1,514 ns |
+| PLO4 | 194,580 | 10.790 s | 17.8 ms | 10.772 s | 0.8 ms | 0.95 ns | — |
+| PLO5 | 1,994 | 1.3454 s | 0.205 ms | 1.3452 s | 0.012 ms | 1.07 ns | 19.2 ns |
+| PLO6 | 854 | 0.2297 s | 0.099 ms | 0.2296 s | 0.019 ms | 1.21 ns | 24.7 ns |
+| PLO6 | 1,600 | 0.7402 s | 0.193 ms | 0.7400 s | 0.016 ms | 1.26 ns | 22.7 ns |
+| PLO6 | 2,091 | 1.2445 s | 0.257 ms | 1.2443 s | 0.014 ms | 1.28 ns | 22.4 ns |
+| PLO5, 3 players | 150 | 0.3154 s | 0.039 ms | 0.3154 s | 0.006 ms | 1.81 ns | 23.2 ns |
+| PLO6, 3 players | 150 | 0.1436 s | 0.037 ms | 0.1435 s | 0.014 ms | 1.71 ns | 28.7 ns |
 
 The counters check the shape of each phase rather than assuming it: the filter
 looked at `48 × players × combos` combos in every row (18,679,680 at PLO4
@@ -127,52 +153,51 @@ looked at `48 × players × combos` combos in every row (18,679,680 at PLO4
 card, so the filter is linear in the range. The terminal then walks the legal
 tuples, which is why its cost is the quadratic one measured above.
 
-**The filter is not a target.** It is 0.0004 % of a PLO5 or PLO6 call and 0.16 %
-of a PLO4 one, against a terminal that is the rest. At 0.86–2.27 ns per combo
-visit and 750–1,514 ns per deal, the terminal overtakes the filter after
-**0.0076 combos at PLO5 1,994 and 0.0082 at PLO6 2,091** — from the first legal
-pair, in other words, and the reported `crossover_combos` is that figure rather
-than a practical threshold. It comes from equating the two measured costs,
+**The filter is still not a target.** It is 0.015–0.026 % of a PLO5 or PLO6
+call and 0.16 % of a PLO4 one, against a terminal that is the rest. Design A
+made the terminal 40× cheaper and the filter's share grew by exactly that
+much, from thousandths of a percent to hundredths: at 0.95–1.81 ns per combo
+visit and 19.2–28.7 ns per deal, the terminal overtakes the filter after
+**0.30 combos at PLO5 1,994 and 0.43 at PLO6 2,091** — the reported
+`crossover_combos`, up from 0.0076 and 0.0082 before the hoist, and still a
+figure from the first legal pair rather than a practical threshold. It comes
+from equating the two measured costs,
 
 ```
 n* = rivers × players × a / (density × deals_per_pair × b)
 ```
 
 with a the cost of a combo visit, b the cost of a deal, `rivers` the 44
-candidate rivers and `deals_per_pair` the 32 or 34 rivers a heads-up PLO6 or
-PLO5 pair can see. A third player makes the terminal cubic, so no single
-crossing is reported for those rows.
+candidate rivers (48 minus the board's four) and `deals_per_pair` the 38 or 36
+rivers a heads-up PLO5 or PLO6 pair can see. A third player makes the terminal
+cubic, so no single crossing is reported for those rows.
 
-What that leaves is a single lever: the tuple walk. Any work on the terminal's
-cost — the sparse blocker aggregation of issue #332 included — has to remove
-deals or make them cheaper, because removing filter work would buy a thousandth
-of the call.
+What that leaves is still a single lever, and the lever is now cheaper to
+move: the tuple walk. Any work on the terminal's cost — the sparse blocker
+aggregation of issue #332 included — has to remove deals or make them cheaper,
+because removing filter work would buy two thousandths of the call.
 
-The cost per deal is also stable across the window: PLO6 heads-up is
-1,052–1,088 ns from 854 to 2,091 combos, a 1.03× spread over a 2.4× size range,
-which is why the `1.34e-5 · n²` model holds there. PLO5 heads-up is 750 ns,
-and three players lift the per-deal figure to 1,086 ns (PLO5) and 1,514 ns
-(PLO6) because the multiway showdown path runs. PLO4 heads-up at 194,580 takes
-the vector sweep, which counts no deals at all, so `deals` is 0 and there is no
+At three players the per-deal cost rises again — 23.2 ns for PLO5 and 28.7 ns
+for PLO6, against 19.2 and 24.7 heads-up — because the multiway showdown path
+runs. The residual in the table is a clock difference, not work: the benchmark
+times the whole call with `mach_absolute_time` on macOS while the terminal
+times its phases with `clock_gettime`, so `unaccounted` can go slightly
+negative. Filter plus terminal account for 99.98 % of the call in every row,
+which is the check the issue asked for. PLO4 heads-up at 194,580 takes the
+vector sweep, which counts no deals at all, so `deals` is 0 and there is no
 per-deal figure for it; its filter still copies 17.1 million combos (274 MB) in
-16 ms, about 17 GB/s, which is memory bandwidth and still 0.16 % of the call.
+17.8 ms, about 15 GB/s, which is memory bandwidth and still 0.16 % of the call.
 
-The residual is a clock difference, not work: the benchmark times the whole
-call with `mach_absolute_time` on macOS while the terminal times its phases with
-`clock_gettime`, so `unaccounted` can go slightly negative (at most −0.13 ms
-here). Filter plus terminal account for 99.99 % of the call in every row, which
-is the check the issue asked for. Loads were 4.2–5.9 during the sweep.
-
-### Multiway multiplies tuples
+## Multiway multiplies tuples
 
 Three players, PLO5, 25 combos each: 2,067 legal triples, 68,211 deals,
-0.0849 s (1,244 ns per deal). The tuple count grows with `n³` instead of `n²`
+0.00339 s (49.7 ns per deal). The tuple count grows with `n³` instead of `n²`
 (here `0.13 · n³`, against `0.465 · n²` heads-up), so a third player is worth
 far more than a wider range: this 25-combo three-way spot costs about what
-heads-up PLO5 costs at 75 combos. Values summed to zero to 1e-13 across the
+heads-up PLO5 costs at 120 combos. Values summed to zero to 1e-13 across the
 three players, which is the conservation check of the fixture.
 
-### Parallel rivers: 2, 4 and 8 lanes
+## Parallel rivers: 2, 4 and 8 lanes
 
 The candidate rivers are independent, so the benchmark can price them in
 parallel: `--threads N` runs N lanes, each with its own eval context and its own
@@ -184,78 +209,89 @@ mass bit for bit and reports `matches_serial`. It held in all twelve runs below.
 
 | Variant | Combos | Serial | 2 lanes | 4 lanes | 8 lanes | Speedup at 8 |
 |---|---|---|---|---|---|---|
-| PLO5 | 1,994 | 52.9 s | 28.1 s | 14.9 s | 12.0 s | 4.42× |
-| PLO6 | 854 | 10.0 s | 4.95 s | 3.04 s | 1.93 s | 5.19× |
-| PLO6 | 1,600 | 34.8 s | 17.7 s | 10.1 s | 7.02 s | 4.95× |
-| PLO6 | 2,091 | 60.5 s | 30.3 s | 17.6 s | 12.2 s | 4.96× |
+| PLO5 | 1,994 | 1.429 s | 0.687 s | 0.371 s | 0.282 s | 4.80× |
+| PLO6 | 854 | 0.227 s | 0.115 s | 0.062 s | 0.043 s | 5.72× |
+| PLO6 | 1,600 | 0.778 s | 0.418 s | 0.195 s | 0.140 s | 5.45× |
+| PLO6 | 2,091 | 1.262 s | 0.618 s | 0.354 s | 0.227 s | 5.36× |
 
-Two lanes are the only point that scales cleanly (1.94–1.98×); four give
-3.41–3.52×, and eight add only about another 1.4× on top, so the last lanes of
-this 10-core machine do not carry a proportional share. The figures are
-reported as measured, not modelled.
+Two lanes give 1.86–2.08×, four 3.41–3.79×, and eight 4.80–5.72×, so the last
+lanes of this 10-core machine still do not carry a proportional share but lose
+less than they did before design A (4.42–5.19× then). The figures are reported
+as measured, not modelled; each run's serial column is the call timed inside
+that same process, so the speedups do not mix sessions.
 
 The terminal still exposes one serial entry point, so the fan-out is the
 caller's: one eval context and one compaction buffer per lane, both of which a
 caller pools anyway. Eight contexts do not move the memory figure — peak RSS
-stays at 6.6–6.7 MiB against 6.5–6.7 MiB serial.
+stays at 6.6–7.2 MiB against 6.5–6.8 MiB serial.
 
 ## Measured memory
 
-Peak RSS is **6.5–7.1 MiB for every PLO5 and PLO6 configuration**, from 7
-thousand deals up to 70 million, and it stays there with eight river lanes
-running, each carrying its own eval context and compaction buffers. The terminal does not build a deal table: the
-walk streams tuples to a callback, so memory is `O(ranges)`, not
-`O(tuples)`. What it allocates for itself is one compaction buffer per player,
-`combos × 16 B`, freed on return:
+Peak RSS is **6.5–6.8 MiB for every PLO5 and PLO6 configuration above**, from 7
+thousand deals up to 70 million, and it stays under 7.2 MiB with eight river
+lanes running, each carrying its own eval context and compaction buffers. The
+terminal does not build a deal table: the walk streams tuples to a callback, so
+memory is `O(ranges)`, not `O(tuples)`. What it allocates for itself is one
+compaction buffer per player, `combos × 16 B`, freed on return:
 
 | Config | Range bytes | Terminal buffers | Peak RSS |
 |---|---|---|---|
 | PLO6, 800 combos | 25.6 kB | 25.6 kB | 6.6 MiB |
 | PLO5, 1,600 combos | 51.2 kB | 51.2 kB | 6.7 MiB |
 
+Design A did not change that budget: the evaluation table a river reuses is
+sized by the combos of one filtered range, which is already inside the
+compaction buffer it writes, and it lives for one river call.
+
 PLO4 is the exception: its vector sweep allocates per-combo tables for each
 river, so peak RSS grows with the range (`~190 B` per combo by the two extremes
 of the table, against `~48 B` of live per-combo tables). The terminal
 frees every one of them on return; the gap is allocator retention across the
 48 rivers, not a leak. It is reported here as measured, not explained further.
+At the full turn it is 74.9 MiB, against 77.5 MiB before design A, which is the
+same sweep and the same allocator.
 
 So the two variants fail differently: **PLO5/PLO6 are time-bound with flat
 memory, PLO4 is memory-bound only at full range**.
 
 ## Feasible range sizes
 
-Fitted from the tables, one exact turn node, single-threaded:
+Fitted from the tables above and the frontier runs, one exact turn node,
+single-threaded. The walk now has two terms, `a · n + b · n²`, the first being
+the per-combo evaluation each river performs once and the second the visits:
 
-- PLO4: `T ≈ 5.9e-5 · n` seconds — linear.
-- PLO5: `T ≈ 1.39e-5 · n²` seconds — measured 1.31e-5 to 1.71e-5 per point.
-- PLO6: `T ≈ 1.34e-5 · n²` seconds — measured 1.27e-5 to 1.45e-5 per point,
-  2,091 combos included (1.33e-5 there; Frontier check).
+- PLO4: `T ≈ 5.2e-5 · n` seconds — linear.
+- PLO5: `T ≈ 3.4e-5 · n + 3.55e-7 · n²` seconds — within 8 % of every measured
+  point from 50 to 1,994 combos.
+- PLO6: `T ≈ 4.7e-5 · n + 2.58e-7 · n²` seconds — within 2 % of every measured
+  point from 25 to 2,091 combos.
 
-Maximum range size per player for a time budget:
+The quadratic coefficient is 39× smaller than the pre-design-A PLO5 figure
+(1.39e-5) and 52× smaller for PLO6 (1.34e-5), and a linear term that did not
+exist before now governs the small sizes.
+
+Maximum range size per player for a time budget, rounded down:
 
 | Budget | PLO4 | PLO5 | PLO6 |
 |---|---|---|---|
-| 10 s | 169,000 | 814 | 854 |
-| 60 s | 1,008,000 | 1,994 | 2,091 |
-| 10 min | 10,089,000 | 6,307 | 6,612 |
-| 1 h | 60,535,000 | 15,448 | 16,196 |
-
-Both quadratic columns are the fit rounded down, and every frontier point
-measured below landed at or under its budget, so neither column needed a
-correction.
+| 10 s | 192,000 | 5,200 | 6,100 |
+| 60 s | 1,155,000 | 12,900 | 15,100 |
+| 10 min | 11,557,000 | 41,000 | 48,100 |
+| 1 h | 69,342,000 | 100,000 | 118,000 |
 
 Splitting the rivers over eight lanes multiplies those budgets by the measured
-speedup, which is `sqrt` of the figures above because the cost is quadratic in
-the range size:
+speedup, which is not `sqrt` of the serial figures any more because of the
+linear term; the columns below solve the two-term fit with the budget scaled:
 
 | Budget | PLO5 serial | PLO5, 8 lanes | PLO6 serial | PLO6, 8 lanes |
 |---|---|---|---|---|
-| 60 s | 1,994 | 4,460 | 2,091 | 4,650 |
-| 10 min | 6,307 | 14,100 | 6,612 | 14,700 |
+| 60 s | 12,900 | 28,400 | 15,100 | 33,300 |
+| 10 min | 41,000 | 90,000 | 48,100 | 105,500 |
 
-The full-range verdict does not change, but its size does: with eight lanes the
-PLO5 full range falls from ~1.3 years to ~107 days, and the PLO6 one from ~65
-years to ~13.
+The full-range verdict does not change, but its size does: with the design A
+walk the PLO5 full range falls from ~1.3 years to ~11 days, and the PLO6 one
+from ~65 years to ~1.3 years. With eight lanes those become ~2.3 days and ~87
+days — still out of reach, and still not a memory problem.
 
 A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 `C(48,5) = 1,712,304` for PLO5 and `C(48,6) = 12,271,512` for PLO6
@@ -263,9 +299,9 @@ A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 
 | Variant | Full-range combos | Range memory (two ranges) | One turn node |
 |---|---|---|---|
-| PLO4 | 194,580 | 5.9 MiB | **11.6 s (measured)** |
-| PLO5 | 1,712,304 | 52.3 MiB | ≈ 1.3 years (extrapolated) |
-| PLO6 | 12,271,512 | 374.5 MiB | ≈ 65 years (extrapolated, 61–69 across the coefficient band) |
+| PLO4 | 194,580 | 5.9 MiB | **10.1 s (measured)** |
+| PLO5 | 1,712,304 | 52.3 MiB | ≈ 11 days (extrapolated) |
+| PLO6 | 12,271,512 | 374.5 MiB | ≈ 1.3 years (extrapolated, 1.2–1.4 across the coefficient band) |
 
 **Exact full-combo turn evaluation is feasible for PLO4 and not for PLO5 or
 PLO6.** The blocker is time, not memory: a full PLO6 turn fits in 375 MiB and
@@ -275,42 +311,27 @@ wrong by the numbers above.
 ## Frontier check
 
 The budgets were fitted from 50–1,600 combos for PLO5 and 25–800 for PLO6, so
-each one was then measured at the combos it claims instead of being trusted as
-a fit. Board, ranges and state as in Method, one call per process,
-`--repetitions 1`. The machine was carrying other work for most of this
-session, so every sample is listed with the load average it ran under.
+each one was then measured at the sizes it claims instead of being trusted as a
+fit. Board, ranges and state as in Method, one call per process,
+`--repetitions 1`, every sample with the load average it ran under.
 
-| Variant | Combos | Fit predicts | Samples (s) and their load average | Verdict |
+| Variant | Combos | Fit predicts | Measured (s) at load | Verdict |
 |---|---|---|---|---|
-| PLO5 | 814 (10 s) | 10.0 | 8.67, 3.1–3.5; 8.8 and 17.8, 16–21 | inside |
-| PLO5 | 1,994 (60 s) | 60.0 | 52.5, 3.1–3.5; 55.2 and 90.7, 16–21 | inside |
-| PLO6 | 854 (10 s) | 10.0 | 9.31–10.04, 2.5–4.9; 9.8 and 10.6, 16–21 | inside |
-| PLO6 | 1,200 | 19.7 | 18.4, 2.5–4.6; 21.1, 16–21 | inside |
-| PLO6 | 1,600 | 35.1 | 34.3, 2.5–4.6; 44.3 and 61.5, 16–21 | inside |
-| PLO6 | 2,091 (60 s) | 60.0 | 58.0, 3.7–4.9; 66.6, 77.2 and 82.7, 16–21 | inside |
+| PLO5 | 814 | 0.246 | 0.2449, 3.90 | inside |
+| PLO5 | 1,994 | 1.480 | 1.5512, 4.22 | 5 % over |
+| PLO6 | 854 | 0.234 | 0.2280, 4.22 | inside |
+| PLO6 | 1,200 | 0.440 | 0.4289, 4.24 | inside |
+| PLO6 | 1,600 | 0.760 | 0.7570, 4.26 | inside |
+| PLO6 | 2,091 | 1.270 | 1.2077, 4.27 | inside |
 
-Two things follow:
+One point, PLO5 at 1,994, came in 5 % over its fit; every other frontier
+configuration landed at or under it, at 6.6–6.8 MiB. That single overshoot is
+the reason the budget columns above are rounded down rather than rounded to the
+fit, and it is the honest bound on them: a budget computed from the two-term
+model should be read as ±10 % at these sizes. Contention still moves these
+numbers more than range size does, and none of them is a threshold.
 
-- **Every budget holds, and every point was read in a window that was checked,
-  not assumed.** Each frontier configuration was re-run with a configuration
-  the grid already covers on either side of it: 800 combos for PLO5 (9.23 s in
-  the grid) and 854 for PLO6 (10.5 s when the grid's 800-combo point is scaled
-  to the same size). In those windows the calibrations came back at 8.10–8.59 s
-  and 9.31–10.04 s, both faster than the grid, so the machine was no slower
-  than the one it came from. There, PLO5 took 8.67 s at 814 combos and 52.5 s
-  at 1,994; PLO6 took 9.31 s at 854, 18.36 s at 1,200, 34.29 s at 1,600 and
-  58.0 s at 2,091. Every one lands at or under its budget or its fit, at 0.74
-  µs and 1.00–1.05 µs per deal, inside the per-deal band of the fitted
-  configurations. Neither fit needed correcting: the loaded samples, up to
-  2.5× slower, are contention.
-- **Contention, not range size, moves these numbers.** The same PLO5
-  configuration at 814 combos ran 8.67 s at load 3 and 17.8 s at load 21 with
-  nothing in the code changed — 78% over its budget on the loaded sample —
-  while every memory figure stayed put (6.9–7.1 MiB). Verdicts therefore rest
-  on a sample taken in a checked window, and none of these numbers is a
-  threshold.
-
-Peak RSS was 6.9–7.1 MiB for every frontier configuration, so nothing about the
+Peak RSS was 6.6–6.8 MiB for every frontier configuration, so nothing about the
 wider ranges changes the memory story above.
 
 ## Execution policies
@@ -318,49 +339,52 @@ wider ranges changes the memory story above.
 Stated as rules, with the guarantee each one carries:
 
 1. **Exact, full combos — PLO4 turn.** Up to and including the full 194,580
-   combos in ~12 s and ~78 MiB. This is the regime the phase A fixtures and
+   combos in ~10 s and ~75 MiB. This is the regime the phase A fixtures and
    the river certificate of issue #283 describe; a value computed here is
    exact over the enumerated chance space.
 2. **Exact, sparse combos — PLO5/PLO6 turn.** Exact for the combos given, with
-   ranges up to ~2,000 (PLO5) or ~2,100 (PLO6) per player inside a minute and
-   ~6,300 or ~6,600 inside ten minutes, at ~7 MiB. This is the only exact
+   ranges up to ~13,000 (PLO5) or ~15,000 (PLO6) per player inside a minute and
+   ~41,000 or ~48,000 inside ten minutes, at ~7 MiB. This is the only exact
    regime for wider hands and it is the one to use when a spot is naturally
    sparse (a nut range, a single suit shape, a solved subgame's reach support).
-3. **Sampled — everything above that.** Beyond `O(10³)` combos per range the
+   Design A moved this line by an order of magnitude; it did not remove it.
+3. **Sampled — everything above that.** Beyond `O(10⁴)` combos per range the
    exact terminal is out of budget, so the options are sampling private tuples
    (an empirical, not exact, payoff) or bucketing combos with
    `pe_hand_features` and pricing the bucket representatives. Neither is
    implemented in this terminal; whichever is chosen must be labelled
    empirical in the solver output, exactly as the turn has no certificate
    today.
-4. **Parallel rivers — measured, 4.4–5.2×.** The 48 rivers are independent
+4. **Parallel rivers — measured, 4.8–5.7×.** The 48 rivers are independent
    calls with no shared state, and the benchmark fans them over 2, 4 and 8
-   lanes with one eval context each: 1.94–1.98×, 3.41–3.52× and 4.42–5.19× on
+   lanes with one eval context each: 1.86–2.08×, 3.41–3.79× and 4.80–5.72× on
    the four frontier configurations, every result bit-identical to the serial
-   call. A minute then fits ~4,500 combos per range instead of ~2,100, at
-   ~6.7 MiB. The terminal still exposes one serial entry point, so a caller
+   call. A minute then fits ~28,000 combos per range instead of ~13,000, at
+   ~7 MiB. The terminal still exposes one serial entry point, so a caller
    owns the fan-out; that is the cheapest exact lever there is, and on this
-   machine it stops at about 5×, so the next step before any GPU work is the
-   profile rather than more lanes.
+   machine it stops at about 5.7×.
 
 ## What is not covered
 
 - **The GPU decision gate (phase C) is untouched.** No kernel, profile or
   proposal is made here; the numbers above are CPU-only, which is exactly what
-  phase C needs as its baseline.
-- **Sparse blocker-aggregation designs** (the other half of the phase B
-  bullet) are not implemented or measured. The cost model says what they would
-  have to beat: `density · n²` tuple visits per river at 0.72–1.05 µs each.
+  phase C needs as its baseline — and design A lowered that baseline by ~40×,
+  so the speedup a kernel would have to reach is ~40× higher than the same
+  estimate made from the pre-design-A figures.
+- **Sparse blocker-aggregation designs** (issue #332) are not implemented or
+  measured. The cost model says what they would have to beat:
+  `density · n²` tuple visits per river at ~20–25 ns each, plus the `n`
+  evaluations per river that design A already removed from the walk.
 - **No turn betting tree and no turn certificate**, as in phase A: these are
   showdown terminals, not two-street solves.
 - **Hi/Lo** and dead-card variants are not measured; `dead` only shortens the
-  river list.
-- **Machine-dependent.** The serial figures are single-threaded and vary by up
-  to 2.5× between runs depending on what else the machine is doing (PLO5 at 814
-  combos: 8.67 s at load 3, 17.8 s at load 21). The lane table was taken at load
-  3.8–6.2, and its speedups are ratios from the same run, so they are steadier
-  than its absolute seconds. Every figure comes from a sample whose window was
-  checked against the grid, so a loaded machine is slower, never faster.
+  river list. The benchmark has `--hilo`, and the Hi/Lo expansion, the filter
+  and the reduction are unchanged by design A, but no figure here is Hi/Lo.
+- **Machine-dependent.** The serial figures are single-threaded and vary with
+  what else the machine is doing, which matters more now that a call is
+  hundreds of milliseconds: PLO5 at 800 combos moved 8 % between two runs at
+  load 3.5–4.5. Every figure comes from a sample whose load is reported, so a
+  loaded machine is slower, never faster.
 - Ranges above 4,096 combos are not checked for duplicate combos (the check is
   quadratic and a repeated point only shifts one combo's weight); heads-up at
   small sizes is deduplicated.
@@ -369,24 +393,41 @@ Stated as rules, with the guarantee each one carries:
 
 ```bash
 cmake --build build --target pe-omaha-turn-bench --parallel
-./build/tools/pe-omaha-turn-bench --holes 5 --combos 800 --repetitions 3
-./build/tools/pe-omaha-turn-bench --holes 6 --combos 800 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 4 --combos 1000 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 4 --combos 10000 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 4 --combos 50000 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 50 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 200 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 800 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 1600 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 25 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 100 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 400 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 800 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 814 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --repetitions 1
-./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 1200 --repetitions 1
-./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 1600 --repetitions 1
-./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --repetitions 1
-./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 25 --players 3 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 2 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 4 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854 --threads 2 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854 --threads 4 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 854 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 1600 --threads 2 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 1600 --threads 4 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 1600 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 2 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 4 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --profile --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --profile --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --profile --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 150 --players 3 --profile --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 150 --players 3 --profile --repetitions 1
 ```
 
