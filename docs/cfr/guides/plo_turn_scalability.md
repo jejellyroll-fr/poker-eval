@@ -200,7 +200,7 @@ far more than a wider range: this 25-combo three-way spot costs about what
 heads-up PLO5 costs at 120 combos. Values summed to zero to 1e-13 across the
 three players, which is the conservation check of the fixture.
 
-## Parallel rivers: 2, 4 and 8 lanes
+## Parallel rivers: 2 to 16 lanes
 
 The candidate rivers are independent, so the benchmark can price them in
 parallel: `--threads N` runs N lanes, each with its own eval context and its own
@@ -208,7 +208,7 @@ compaction buffers, and each lane takes the cards `card % N == lane`. Per-river
 results are collected by card and reduced in card order with the serial
 terminal's own arithmetic, so a parallel run is not merely close to the serial
 one: the benchmark compares the value fingerprint, the river count and the deal
-mass bit for bit and reports `matches_serial`. It held in all twelve runs below.
+mass bit for bit and reports `matches_serial`. It held in every run below.
 
 | Variant | Combos | Serial | 2 lanes | 4 lanes | 8 lanes | Speedup at 8 |
 |---|---|---|---|---|---|---|
@@ -223,10 +223,50 @@ less than they did before design A (4.42–5.19× then). The figures are reporte
 as measured, not modelled; each run's serial column is the call timed inside
 that same process, so the speedups do not mix sessions.
 
+### 12 and 16 lanes
+
+The PLO6 2,091-combo configuration was measured at 12 and 16 lanes as well,
+with three repetitions per lane count, one process after another in the same
+session (load 4.0–6.2, above the 3.5–4.5 of the table above, which is why
+this sweep reads 0.314 s at 8 lanes against 0.227 s there):
+
+| Lanes | Lane median | Serial, same process | Speedup | Karp-Flatt `e` |
+|---|---|---|---|---|
+| 2 | 0.7915 s | 1.5212 s | 1.92× | 0.041 |
+| 4 | 0.4531 s | 1.5072 s | 3.33× | 0.068 |
+| 8 | 0.3145 s | 1.5385 s | 4.89× | 0.091 |
+| 12 | 0.3064 s | 1.5887 s | 5.19× | 0.119 |
+| 16 | 0.2787 s | 1.5144 s | 5.43× | 0.130 |
+
+Every lane count reproduced the serial value fingerprint bit for bit
+(`35f87d20638e3909`) and reports `matches_serial` true, and the five samples
+of the serial call span 1.507–1.589 s, so the denominators are comparable
+within 5 per cent.
+
+`e = (1/S - 1/p) / (1 - 1/p)` rises monotonically with the lane count, from
+0.041 at 2 lanes to 0.130 at 16. A constant serial fraction would hold `e`
+flat, so Amdahl does not describe this machine: something the lanes share
+degrades as their number grows. Four performance plus six efficiency cores
+predict exactly that, and it is not allocation pressure — peak RSS moves only
+from 6.77 MiB at 8 lanes to 7.61 MiB at 16.
+
+Two consequences, both measured rather than projected. The marginal gain per
+doubling falls from 1.75× (2 to 4) and 1.44× (4 to 8) to 1.11× (8 to 16): the
+eight lanes beyond 8 buy 11 per cent in total, and 12 lanes alone buy 2.6 per
+cent over 8, against a within-configuration spread of 0.284–0.312 s at 12.
+And the Amdahl extrapolation from the 8-lane point, which this report carried
+as a hypothesis, overshoots: `f = 0.091` predicts 6.3× at 12 lanes and 6.9× at
+16, against 5.19× and 5.43× here. The projection is retired, not adjusted.
+
+So this machine tops out near 5.4× and 8 lanes is the operating point: two more
+doublings cost eight extra lanes, 0.8 MiB of peak RSS and scheduling pressure
+for 11 per cent. What remains is the serial fraction inside a lane.
+
 The terminal still exposes one serial entry point, so the fan-out is the
 caller's: one eval context and one compaction buffer per lane, both of which a
 caller pools anyway. Eight contexts do not move the memory figure — peak RSS
-stays at 6.6–7.2 MiB against 6.5–6.8 MiB serial.
+stays at 6.6–7.2 MiB against 6.5–6.8 MiB serial — and sixteen contexts reach
+7.61 MiB at PLO6 2,091 combos, still under 8 MiB.
 
 ## Measured memory
 
@@ -358,14 +398,16 @@ Stated as rules, with the guarantee each one carries:
    implemented in this terminal; whichever is chosen must be labelled
    empirical in the solver output, exactly as the turn has no certificate
    today.
-4. **Parallel rivers — measured, 4.8–5.7×.** The 48 rivers are independent
-   calls with no shared state, and the benchmark fans them over 2, 4 and 8
-   lanes with one eval context each: 1.86–2.08×, 3.41–3.79× and 4.80–5.72× on
-   the four frontier configurations, every result bit-identical to the serial
-   call. A minute then fits ~28,000 combos per range instead of ~13,000, at
-   ~7 MiB. The terminal still exposes one serial entry point, so a caller
-   owns the fan-out; that is the cheapest exact lever there is, and on this
-   machine it stops at about 5.7×.
+4. **Parallel rivers — measured, 4.8–5.7× at eight lanes.** The 48 rivers
+   are independent calls with no shared state, and the benchmark fans them
+   over 2, 4 and 8 lanes with one eval context each: 1.86–2.08×, 3.41–3.79×
+   and 4.80–5.72× on the four frontier configurations, every result
+   bit-identical to the serial call. A minute then fits ~28,000 combos per
+   range instead of ~13,000, at ~7 MiB. Sixteen lanes were measured too: 5.43×
+   at PLO6 2,091 combos, so 12 lanes buy 2.6 per cent over 8 and 16 buy 11,
+   and the machine tops out near 5.4×. The terminal still exposes one serial
+   entry point, so a caller owns the fan-out; that is the cheapest exact
+   lever there is, and it saturates at eight lanes.
 
 ## What is not covered
 
@@ -427,6 +469,8 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 2 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 4 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 12 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 16 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --profile --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --profile --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --profile --repetitions 1
