@@ -29,9 +29,11 @@ is one terminal call at a turn node, and every configuration is exact.
   tuple and every river such a tuple leaves in the deck, so
   `deals = tuples × (48 − holes × players)`. The benchmark reads the tuple
   count from `pe_omaha_deals_measure()` and reports the product.
-- Machine: Apple M5 (10 cores), macOS 27.0.1, Apple clang 17, `-O3 -DNDEBUG`,
-  single-threaded. Figures are machine-specific and are not thresholds any
-  test asserts.
+-   Machine: Apple M5 (10 cores), macOS 27.0.1, Apple clang 17, `-O3 -DNDEBUG`,
+  single-threaded except in the lane section. Figures are machine-specific and
+  are not thresholds any test asserts.
+- `--threads N` fans the candidate rivers over N lanes and reports that time
+  next to the serial call; the two are compared bit for bit, not approximately.
 
 ## Why the shapes differ
 
@@ -109,10 +111,38 @@ far more than a wider range: this 25-combo three-way spot costs about what
 heads-up PLO5 costs at 75 combos. Values summed to zero to 1e-13 across the
 three players, which is the conservation check of the fixture.
 
+### Parallel rivers: 2, 4 and 8 lanes
+
+The candidate rivers are independent, so the benchmark can price them in
+parallel: `--threads N` runs N lanes, each with its own eval context and its own
+compaction buffers, and each lane takes the cards `card % N == lane`. Per-river
+results are collected by card and reduced in card order with the serial
+terminal's own arithmetic, so a parallel run is not merely close to the serial
+one: the benchmark compares the value fingerprint, the river count and the deal
+mass bit for bit and reports `matches_serial`. It held in all twelve runs below.
+
+| Variant | Combos | Serial | 2 lanes | 4 lanes | 8 lanes | Speedup at 8 |
+|---|---|---|---|---|---|---|
+| PLO5 | 1,994 | 52.9 s | 28.1 s | 14.9 s | 12.0 s | 4.42× |
+| PLO6 | 854 | 10.0 s | 4.95 s | 3.04 s | 1.93 s | 5.19× |
+| PLO6 | 1,600 | 34.8 s | 17.7 s | 10.1 s | 7.02 s | 4.95× |
+| PLO6 | 2,091 | 60.5 s | 30.3 s | 17.6 s | 12.2 s | 4.96× |
+
+Two lanes are the only point that scales cleanly (1.94–1.98×); four give
+3.41–3.52×, and eight add only about another 1.4× on top, so the last lanes of
+this 10-core machine do not carry a proportional share. The figures are
+reported as measured, not modelled.
+
+The terminal still exposes one serial entry point, so the fan-out is the
+caller's: one eval context and one compaction buffer per lane, both of which a
+caller pools anyway. Eight contexts do not move the memory figure — peak RSS
+stays at 6.6–6.7 MiB against 6.5–6.7 MiB serial.
+
 ## Measured memory
 
 Peak RSS is **6.5–7.1 MiB for every PLO5 and PLO6 configuration**, from 7
-thousand deals up to 70 million. The terminal does not build a deal table: the
+thousand deals up to 70 million, and it stays there with eight river lanes
+running, each carrying its own eval context and compaction buffers. The terminal does not build a deal table: the
 walk streams tuples to a callback, so memory is `O(ranges)`, not
 `O(tuples)`. What it allocates for itself is one compaction buffer per player,
 `combos × 16 B`, freed on return:
@@ -152,6 +182,19 @@ Maximum range size per player for a time budget:
 Both quadratic columns are the fit rounded down, and every frontier point
 measured below landed at or under its budget, so neither column needed a
 correction.
+
+Splitting the rivers over eight lanes multiplies those budgets by the measured
+speedup, which is `sqrt` of the figures above because the cost is quadratic in
+the range size:
+
+| Budget | PLO5 serial | PLO5, 8 lanes | PLO6 serial | PLO6, 8 lanes |
+|---|---|---|---|---|
+| 60 s | 1,994 | 4,460 | 2,091 | 4,650 |
+| 10 min | 6,307 | 14,100 | 6,612 | 14,700 |
+
+The full-range verdict does not change, but its size does: with eight lanes the
+PLO5 full range falls from ~1.3 years to ~107 days, and the PLO6 one from ~65
+years to ~13.
 
 A full range at a fixed five-card board is `C(48,4) = 194,580` for PLO4,
 `C(48,5) = 1,712,304` for PLO5 and `C(48,6) = 12,271,512` for PLO6
@@ -229,12 +272,15 @@ Stated as rules, with the guarantee each one carries:
    implemented in this terminal; whichever is chosen must be labelled
    empirical in the solver output, exactly as the turn has no certificate
    today.
-4. **Parallel rivers — available, unmeasured.** The 48 rivers are independent
-   calls with no shared state, so the cheapest scaling lever is to split them
-   across threads: near-linear for PLO5/PLO6 up to memory bandwidth, with
-   memory per worker of `O(ranges)`. This was not measured here and is not
-   claimed as a speedup; it is the step to try before any GPU work, because it
-   needs no new kernel and keeps the exact guarantee.
+4. **Parallel rivers — measured, 4.4–5.2×.** The 48 rivers are independent
+   calls with no shared state, and the benchmark fans them over 2, 4 and 8
+   lanes with one eval context each: 1.94–1.98×, 3.41–3.52× and 4.42–5.19× on
+   the four frontier configurations, every result bit-identical to the serial
+   call. A minute then fits ~4,500 combos per range instead of ~2,100, at
+   ~6.7 MiB. The terminal still exposes one serial entry point, so a caller
+   owns the fan-out; that is the cheapest exact lever there is, and on this
+   machine it stops at about 5×, so the next step before any GPU work is the
+   profile rather than more lanes.
 
 ## What is not covered
 
@@ -248,11 +294,12 @@ Stated as rules, with the guarantee each one carries:
   showdown terminals, not two-street solves.
 - **Hi/Lo** and dead-card variants are not measured; `dead` only shortens the
   river list.
-- **Single-threaded and machine-dependent.** The same configuration varies by
-  up to 2.5× between runs depending on what else the machine is doing (PLO5 at
-  814 combos: 8.67 s at load 3, 17.8 s at load 21). Every figure above comes
-  from a sample whose window was checked against the grid, so a loaded machine
-  is slower, never faster.
+- **Machine-dependent.** The serial figures are single-threaded and vary by up
+  to 2.5× between runs depending on what else the machine is doing (PLO5 at 814
+  combos: 8.67 s at load 3, 17.8 s at load 21). The lane table was taken at load
+  3.8–6.2, and its speedups are ratios from the same run, so they are steadier
+  than its absolute seconds. Every figure comes from a sample whose window was
+  checked against the grid, so a loaded machine is slower, never faster.
 - Ranges above 4,096 combos are not checked for duplicate combos (the check is
   quadratic and a repeated point only shifts one combo's weight); heads-up at
   small sizes is deduplicated.
@@ -272,6 +319,10 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 854  --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 2 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 4 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 5 --combos 1994 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 1
 ```
 
 Each run prints one JSON document (`pe-omaha-turn-bench/v1`) with the wall

@@ -14,10 +14,18 @@
  * leaves in the deck - so a measured cost per deal can be read off directly
  * and turned into a range-size budget in
  * docs/cfr/guides/plo_turn_scalability.md.
+ *
+ * `--threads N` adds a second measurement: the candidate rivers are independent
+ * calls, so they can be fanned out over N lanes, each with its own eval context
+ * and compaction buffers.  The per-river results are collected by card and
+ * reduced in card order with the serial terminal's arithmetic, which lets the
+ * benchmark assert the two agree bit for bit instead of approximately; the lane
+ * figure is therefore the same work, not an estimate of it.
  */
 
 #include <poker_eval/core/eval_context.h>
 #include <poker_eval/core/modern_cardmask.h>
+#include <poker_eval/core/pthread_compat.h>
 #include <poker_eval/solver/pe_betting_state.h>
 #include <poker_eval/solver/pe_omaha_deals.h>
 #include <poker_eval/solver/pe_omaha_river.h>
@@ -48,11 +56,13 @@
  * private hand only shifts one point of the range. */
 #define BENCH_DEDUPE_LIMIT 4096u
 #define BENCH_MAX_COMBOS 262144u
+#define BENCH_MAX_THREADS 64u
 
 typedef struct
 {
     uint8_t holes;
     uint8_t players;
+    uint8_t threads;
     size_t combos;
     size_t repetitions;
     uint64_t seed;
@@ -237,14 +247,30 @@ static double median_of(double *values, size_t count)
     return values[count / 2u];
 }
 
-/* The combos that do not hold `blocked`, copied out.  Returns the count kept,
- * 0 when the card empties the range, or -1 when the copy cannot be made. */
-static long compact_range(const pe_omaha_range_t *range, mask_t blocked,
-                          pe_omaha_combo_t **out)
+/* Copy the combos that do not hold a card of `blocked` into `out` and return
+ * how many survived: the terminal's own rule, which drops a combo holding the
+ * river card instead of leaving it in the range with a zero weight. */
+static size_t compact_for_river(const pe_omaha_range_t *range, mask_t blocked,
+                                pe_omaha_combo_t *out)
 {
     size_t kept = 0u;
     size_t index;
+
+    for (index = 0u; index < range->count; ++index)
+        if ((range->combos[index].cards & blocked) == 0u)
+            out[kept++] = range->combos[index];
+    return kept;
+}
+
+/* The single-river reference keeps its compaction in a buffer of its own.
+ * Returns the count kept, 0 when the card empties the range, or -1 when the
+ * copy cannot be made. */
+static long compact_range(const pe_omaha_range_t *range, mask_t blocked,
+                          pe_omaha_combo_t **out)
+{
     pe_omaha_combo_t *copy;
+    size_t kept = 0u;
+    size_t index;
 
     for (index = 0u; index < range->count; ++index)
         if ((range->combos[index].cards & blocked) == 0u)
@@ -254,12 +280,8 @@ static long compact_range(const pe_omaha_range_t *range, mask_t blocked,
     copy = (pe_omaha_combo_t *)malloc(kept * sizeof(*copy));
     if (!copy)
         return -1l;
-    kept = 0u;
-    for (index = 0u; index < range->count; ++index)
-        if ((range->combos[index].cards & blocked) == 0u)
-            copy[kept++] = range->combos[index];
     *out = copy;
-    return (long)kept;
+    return (long)compact_for_river(range, blocked, copy);
 }
 
 static const char *path_name(pe_showdown_path_t path)
@@ -278,6 +300,155 @@ static const char *path_name(pe_showdown_path_t path)
     default:
         return "none";
     }
+}
+
+/* One lane of the river fan-out.  A lane owns its eval context and its
+ * compaction buffers, and it writes only the cards it prices; the results are
+ * collected by card so the reduction can run in card order, which is the order
+ * the serial terminal uses.  That is what lets a parallel run be compared with
+ * the serial one bit for bit instead of approximately. */
+typedef struct
+{
+    const pe_omaha_range_t *ranges;
+    const pe_betting_state_t *state;
+    EvalContext *context;
+    pe_omaha_combo_t *filtered[PE_OMAHA_TURN_PLAYERS_MAX];
+    double (*values)[PE_OMAHA_TURN_PLAYERS_MAX];
+    double *mass;
+    signed char *priced;
+    mask_t board;
+    uint8_t hole_cards;
+    uint8_t players;
+    uint8_t lane;
+    uint8_t lanes;
+} turn_lane_t;
+
+/* The turn's own loop, restricted to the cards `card % lanes == lane`: compact
+ * every range for the river, skip the river when any range empties, and let a
+ * -1 from the river terminal mean "no deal on this river" exactly as it does
+ * in pe_omaha_turn_range_values(). */
+static void *turn_lane_run(void *argument)
+{
+    turn_lane_t *lane = (turn_lane_t *)argument;
+    int card;
+
+    for (card = (int)lane->lane; card < MODERN_DECK_SIZE;
+         card += (int)lane->lanes)
+    {
+        pe_omaha_range_t compacted[PE_OMAHA_TURN_PLAYERS_MAX];
+        double river_values[PE_OMAHA_TURN_PLAYERS_MAX];
+        size_t deal_count = 0u;
+        double river_mass = 0.0;
+        int usable = 1;
+        uint8_t player;
+        int status;
+
+        lane->priced[card] = 0;
+        if (mask_is_set(lane->board, card))
+            continue;
+        for (player = 0u; player < lane->players; ++player)
+        {
+            compacted[player].combos = lane->filtered[player];
+            compacted[player].count = compact_for_river(
+                &lane->ranges[player], (mask_t)1u << card,
+                lane->filtered[player]);
+            if (compacted[player].count == 0u)
+            {
+                usable = 0;
+                break;
+            }
+        }
+        if (!usable)
+            continue;
+        status = pe_omaha_river_range_values(
+            lane->context, mask_set(lane->board, card), compacted, lane->state,
+            lane->hole_cards, river_values, lane->players, &deal_count,
+            &river_mass);
+        if (status == -1)
+            continue;
+        if (status != 0)
+        {
+            lane->priced[card] = -1;
+            continue;
+        }
+        lane->priced[card] = 1;
+        lane->mass[card] = river_mass;
+        for (player = 0u; player < lane->players; ++player)
+            lane->values[card][player] = river_values[player];
+    }
+    return NULL;
+}
+
+/* Clear the card table, start every lane, wait for all of them and report the
+ * elapsed seconds.  Setup happens once, outside the repetitions, so the figure
+ * is the sweep and not the pools a caller would keep. */
+static int run_lanes(turn_lane_t *lanes, pthread_t *handles, size_t lane_count,
+                     double *seconds)
+{
+    size_t index;
+    size_t started = 0u;
+    double start;
+
+    for (index = 0u; index < MODERN_DECK_SIZE; ++index)
+        lanes[0].priced[index] = 0;
+    start = monotonic_seconds();
+    for (index = 0u; index < lane_count; ++index)
+    {
+        if (pthread_create(&handles[index], NULL, turn_lane_run,
+                           &lanes[index]) != 0)
+            break;
+        ++started;
+    }
+    for (index = 0u; index < started; ++index)
+        pthread_join(handles[index], NULL);
+    *seconds = monotonic_seconds() - start;
+    if (started < lane_count)
+    {
+        bench_fail("could not start a river lane");
+        return -1;
+    }
+    return 0;
+}
+
+/* Combine the lanes in card order, with the serial terminal's own arithmetic
+ * and its own status codes: 0 with values in chips per deal, 1 when no river
+ * carried mass, -1 when a lane reported a failure. */
+static int reduce_rivers(const signed char *priced, const double *mass,
+                         const double (*values)[PE_OMAHA_TURN_PLAYERS_MAX],
+                         uint8_t players, double *out_values,
+                         size_t *out_rivers, double *out_mass)
+{
+    double accumulated[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    double total = 0.0;
+    size_t rivers = 0u;
+    uint8_t player;
+    int card;
+
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+    {
+        if (priced[card] < 0)
+            return -1;
+        if (priced[card] == 0)
+            continue;
+        ++rivers;
+        for (player = 0u; player < players; ++player)
+            accumulated[player] += values[card][player] * mass[card];
+        total += mass[card];
+    }
+    if (!(total > 0.0))
+        return 1;
+    for (player = 0u; player < players; ++player)
+        out_values[player] = accumulated[player] / total;
+    *out_rivers = rivers;
+    *out_mass = total;
+    return 0;
+}
+
+/* Bitwise equality: -Wfloat-equal forbids the == a comparison here would use,
+ * and "the same answer" is meant literally. */
+static int same_double(double left, double right)
+{
+    return memcmp(&left, &right, sizeof(left)) == 0;
 }
 
 static int parse_size(const char *text, size_t minimum, size_t maximum,
@@ -300,11 +471,13 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "Usage: %s --holes 4|5|6 --combos N [--players N] "
-            "[--repetitions N] [--seed N]\n"
+            "[--threads N] [--repetitions N] [--seed N]\n"
             "\n"
             "Emits a pe-omaha-turn-bench/v1 JSON document on stdout.\n"
             "N is the combo count of every range; one configuration per run, so\n"
-            "the reported peak RSS belongs to this configuration alone.\n",
+            "the reported peak RSS belongs to this configuration alone.\n"
+            "--threads fans the candidate rivers out over N lanes, each with its\n"
+            "own eval context, and reports that time next to the serial terminal.\n",
             program);
 }
 
@@ -320,6 +493,8 @@ int main(int argc, char **argv)
     pe_betting_state_t state;
     double *durations = NULL;
     double *sorted = NULL;
+    double *parallel_durations = NULL;
+    double *parallel_sorted = NULL;
     double values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
     double river_values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
     mask_t board = turn_board_mask();
@@ -340,6 +515,21 @@ int main(int argc, char **argv)
     int deterministic = 1;
     size_t repeat;
     uint8_t player;
+    turn_lane_t *lanes = NULL;
+    pthread_t *handles = NULL;
+    pe_omaha_combo_t *lane_combos = NULL;
+    double(*lane_values)[PE_OMAHA_TURN_PLAYERS_MAX] = NULL;
+    double *lane_mass = NULL;
+    signed char *lane_priced = NULL;
+    double parallel_values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    size_t parallel_rivers = 0u;
+    double parallel_mass = 0.0;
+    double parallel_min = 0.0;
+    double parallel_max = 0.0;
+    double parallel_median = 0.0;
+    uint64_t parallel_fingerprint = 0u;
+    int parallel_matches = 0;
+    int parallel_status = 0;
     int river_card = -1;
     int enumerates;
     int status;
@@ -350,6 +540,7 @@ int main(int argc, char **argv)
     memset(&config, 0, sizeof(config));
     config.holes = 4u;
     config.players = 2u;
+    config.threads = 1u;
     config.combos = 1000u;
     config.repetitions = BENCH_DEFAULT_REPETITIONS;
     config.seed = BENCH_SEED;
@@ -395,6 +586,16 @@ int main(int argc, char **argv)
                 return 2;
             }
             config.players = (uint8_t)parsed;
+            continue;
+        }
+        if (strcmp(argv[arg], "--threads") == 0 && arg + 1 < argc)
+        {
+            if (parse_size(argv[++arg], 1u, BENCH_MAX_THREADS, &parsed) != 0)
+            {
+                usage(argv[0]);
+                return 2;
+            }
+            config.threads = (uint8_t)parsed;
             continue;
         }
         if (strcmp(argv[arg], "--repetitions") == 0 && arg + 1 < argc)
@@ -567,6 +768,91 @@ int main(int argc, char **argv)
             deterministic = 0;
     }
 
+    /* The candidate rivers are independent calls with no shared state, so the
+     * same work can be fanned out over N lanes.  The contexts are built before
+     * the clock starts, because a caller would pool them too. */
+    if (config.threads > 1u)
+    {
+        size_t lane_count = (size_t)config.threads;
+        size_t buffer_count =
+            lane_count * (size_t)config.players * config.combos;
+        size_t lane_index;
+
+        lanes = (turn_lane_t *)calloc(lane_count, sizeof(*lanes));
+        handles = (pthread_t *)calloc(lane_count, sizeof(*handles));
+        parallel_durations =
+            (double *)calloc(config.repetitions, sizeof(*parallel_durations));
+        parallel_sorted =
+            (double *)calloc(config.repetitions, sizeof(*parallel_sorted));
+        lane_combos =
+            (pe_omaha_combo_t *)calloc(buffer_count, sizeof(*lane_combos));
+        lane_values = (double(*)[PE_OMAHA_TURN_PLAYERS_MAX])calloc(
+            MODERN_DECK_SIZE, sizeof(*lane_values));
+        lane_mass = (double *)calloc(MODERN_DECK_SIZE, sizeof(*lane_mass));
+        lane_priced =
+            (signed char *)calloc(MODERN_DECK_SIZE, sizeof(*lane_priced));
+        if (!lanes || !handles || !parallel_durations || !parallel_sorted ||
+            !lane_combos || !lane_values || !lane_mass || !lane_priced)
+        {
+            bench_fail("parallel allocation failed");
+            goto cleanup;
+        }
+
+        for (lane_index = 0u; lane_index < lane_count; ++lane_index)
+        {
+            turn_lane_t *lane = &lanes[lane_index];
+            uint8_t lead;
+
+            lane->ranges = ranges;
+            lane->state = &state;
+            lane->board = board;
+            lane->hole_cards = config.holes;
+            lane->players = config.players;
+            lane->lane = (uint8_t)lane_index;
+            lane->lanes = config.threads;
+            lane->values = lane_values;
+            lane->mass = lane_mass;
+            lane->priced = lane_priced;
+            for (lead = 0u; lead < config.players; ++lead)
+                lane->filtered[lead] =
+                    lane_combos +
+                    (lane_index * (size_t)config.players + (size_t)lead) *
+                        config.combos;
+            lane->context = eval_context_create(&eval_config);
+            if (!lane->context)
+            {
+                bench_fail("could not create an eval context per lane");
+                goto cleanup;
+            }
+        }
+
+        for (repeat = 0u; repeat < config.repetitions; ++repeat)
+        {
+            if (run_lanes(lanes, handles, lane_count,
+                          &parallel_durations[repeat]) != 0)
+                goto cleanup;
+            parallel_status = reduce_rivers(
+                (const signed char *)lane_priced, (const double *)lane_mass,
+                (const double(*)[PE_OMAHA_TURN_PLAYERS_MAX])lane_values,
+                config.players, parallel_values, &parallel_rivers,
+                &parallel_mass);
+            parallel_fingerprint =
+                fingerprint_values(parallel_values, config.players);
+        }
+
+        for (repeat = 0u; repeat < config.repetitions; ++repeat)
+            parallel_sorted[repeat] = parallel_durations[repeat];
+        parallel_median = median_of(parallel_sorted, config.repetitions);
+        parallel_min = parallel_sorted[0];
+        parallel_max = parallel_sorted[config.repetitions - 1u];
+        parallel_matches = parallel_status == status &&
+                           parallel_rivers == rivers &&
+                           same_double(parallel_mass, mass) &&
+                           parallel_fingerprint == fingerprint ? 1 : 0;
+        if (!parallel_matches)
+            bench_fail("the parallel lanes disagree with the serial terminal");
+    }
+
     for (repeat = 0u; repeat < config.repetitions; ++repeat)
         sorted[repeat] = durations[repeat];
     turn_median = median_of(sorted, config.repetitions);
@@ -589,6 +875,7 @@ int main(int argc, char **argv)
     printf("  \"dead_cards\": 0,\n");
     printf("  \"holes\": %u,\n", (unsigned)config.holes);
     printf("  \"players\": %u,\n", (unsigned)config.players);
+    printf("  \"threads\": %u,\n", (unsigned)config.threads);
     printf("  \"combos_per_player\": %zu,\n", config.combos);
     printf("  \"repetitions\": %zu,\n", config.repetitions);
     printf("  \"seed\": %llu,\n", (unsigned long long)config.seed);
@@ -653,11 +940,42 @@ int main(int argc, char **argv)
     printf("],\n");
     printf("  \"values_fingerprint\": \"%016llx\",\n",
            (unsigned long long)fingerprint);
-    printf("  \"deterministic_across_repetitions\": %s\n",
+    printf("  \"deterministic_across_repetitions\": %s,\n",
            deterministic ? "true" : "false");
+    if (config.threads > 1u)
+        printf("  \"parallel_rivers\": {\"threads\": %u, \"seconds\": "
+               "{\"min\": %.9f, \"median\": %.9f, \"max\": %.9f}, "
+               "\"speedup\": %.3f, \"matches_serial\": %s, "
+               "\"values_fingerprint\": \"%016llx\", \"rivers_priced\": %zu, "
+               "\"weight_sum\": %.9f}\n",
+               (unsigned)config.threads, parallel_min, parallel_median,
+               parallel_max,
+               parallel_median > 0.0 ? turn_median / parallel_median : 0.0,
+               parallel_matches ? "true" : "false",
+               (unsigned long long)parallel_fingerprint, parallel_rivers,
+               parallel_mass);
+    else
+        printf("  \"parallel_rivers\": null\n");
     printf("}\n");
 
 cleanup:
+    if (lanes)
+    {
+        size_t lane_index;
+
+        for (lane_index = 0u; lane_index < (size_t)config.threads;
+             ++lane_index)
+            if (lanes[lane_index].context)
+                eval_context_destroy(lanes[lane_index].context);
+    }
+    free(lane_combos);
+    free(lane_priced);
+    free(lane_mass);
+    free(lane_values);
+    free(parallel_sorted);
+    free(parallel_durations);
+    free(handles);
+    free(lanes);
     for (player = 0u; player < PE_OMAHA_TURN_PLAYERS_MAX; ++player)
     {
         free(filtered_storage[player]);
