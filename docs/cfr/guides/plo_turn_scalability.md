@@ -242,48 +242,58 @@ Every lane count reproduced the serial value fingerprint bit for bit
 (`35f87d20638e3909`) and reports `matches_serial` true, and the five samples
 of the serial call span 1.507–1.589 s, so the denominators are comparable
 within 5 per cent. The load was not held across that sweep, though: it read
-3.95 before the first run and 6.22 after the last, so the 8 and 16 lane points
-were measured again interleaved, 8, 16, 8, 16, at a steady load of 4.3–4.9:
+3.95 before the first run and 6.22 after the last, so its later points are
+cheaper for a reason that has nothing to do with lanes. Two interleaved
+sessions were run to separate the two effects, 8, 16, 8, 16 and then
+8, 12, 16, 8, 12, 16, with the load held to 4.3–4.9 and 3.87–4.12:
 
-| Order | Lanes | Lane median | Serial | Speedup | Karp-Flatt `e` |
+| Session | Lanes | Lane median | Serial | Speedup | Karp-Flatt `e` |
 |---|---|---|---|---|---|
-| 1 | 8 | 0.2737 s | 1.4351 s | 5.24× | 0.075 |
-| 2 | 16 | 0.2904 s | 1.4455 s | 4.98× | 0.148 |
-| 3 | 8 | 0.2838 s | 1.4393 s | 5.07× | 0.083 |
-| 4 | 16 | 0.2783 s | 1.4475 s | 5.20× | 0.138 |
+| A | 8 | 0.2737 s | 1.4351 s | 5.24× | 0.075 |
+| A | 16 | 0.2904 s | 1.4455 s | 4.98× | 0.148 |
+| A | 8 | 0.2838 s | 1.4393 s | 5.07× | 0.083 |
+| A | 16 | 0.2783 s | 1.4475 s | 5.20× | 0.138 |
+| B | 8 | 0.2863 s | 1.4268 s | 4.98× | 0.086 |
+| B | 12 | 0.2721 s | 1.4417 s | 5.30× | 0.115 |
+| B | 16 | 0.2630 s | 1.4645 s | 5.57× | 0.125 |
+| B | 8 | 0.2819 s | 1.4408 s | 5.11× | 0.081 |
+| B | 12 | 0.2895 s | 1.4477 s | 5.00× | 0.127 |
+| B | 16 | 0.2662 s | 1.4825 s | 5.57× | 0.125 |
 
-Sixteen lanes are a wash against eight at steady load, 4.98× and 5.20×
-against 5.07× and 5.24×, so the 11 per cent the sweep showed at 16 lanes
-was mostly the load falling as the session went on rather than the lanes. What
-the interleaved runs do reproduce is the rise of `e`: 0.075 and 0.083 at 8
-lanes against 0.148 and 0.138 at 16, same session, same load, so `e` depends
-on the lane count and not on the order of the runs.
+Sixteen lanes are not worth the eight they cost, but not because they do
+nothing: pooled over four samples each, 8 lanes average 0.2814 s and 16 lanes
+0.2745 s, a 2.5 per cent difference inside a 5 per cent spread, and the two
+sessions disagree in sign — session A has 16 lanes 2 per cent slower, session
+B has them 7 per cent faster, twice. Twelve lanes land between them at
+5.00–5.30× with a 6 per cent spread of their own. What survives every sample
+is the level, 5.0–5.6×; the sweep's 11 per cent at 16 lanes does not, because
+that was the drifting load.
 
-`e = (1/S - 1/p) / (1 - 1/p)` runs from 0.041 at 2 lanes to 0.13–0.15 at 16. A
-constant serial fraction would hold it flat, so Amdahl does not describe this
-machine: the lanes share something that degrades as their number grows. The
-most plausible reading is the core layout — four performance cores and six
-efficiency cores, so eight lanes already fill the fast ones, four more land on
-the slow ones and two oversubscribe them — but these runs do not isolate it,
-and cache or scheduler contention would look the same. Peak RSS is not the
-cause: it moves only from 6.77 MiB at 8 lanes to 7.61 MiB at 16.
+`e` is the other thing that survives. It sits at 0.075–0.086 for eight lanes in
+both sessions and at 0.125–0.148 for sixteen, so it tracks the lane count and
+not the order of the runs or the load. `e = (1/S - 1/p) / (1 - 1/p)` then runs
+from 0.041 at 2 lanes to 0.125–0.148 at 16, and a constant serial fraction
+would hold it flat: Amdahl does not describe this machine, and the lanes share
+something that degrades as their number grows. The most plausible reading is
+the core layout — four performance cores and six efficiency cores, so eight
+lanes already fill the fast ones, four more land on the slow ones and two
+oversubscribe them — but no run here isolates it, and an L2 or last-level
+cache effect or scheduler contention would produce the same curve. Peak RSS is
+not the cause: 6.77–6.86 MiB at 8 lanes, 7.45–7.61 MiB at 16.
 
-The marginal gain per doubling falls from 1.75× (2 to 4) and 1.44× (4 to 8) to
-1.11× for 8 to 16 on the sweep, and to nothing once the load is held, and the
-Amdahl extrapolation this report carried as a hypothesis overshoots as well:
-`f = 0.091` from the 8-lane point predicts 6.3× at 12 lanes and 6.9× at 16,
-against 5.19× and 5.43× in the sweep. The projection is retired, not adjusted.
+The Amdahl extrapolation this report carried as a hypothesis is retired too:
+`f = 0.091` taken from the sweep's 8-lane point predicts 6.3× at 12 lanes and
+6.9× at 16, against 5.00–5.30× and 5.57× measured.
 
-So the measured ceiling is 5.1–5.2×, reached at 8 lanes: the two further
-doublings cost eight extra lanes, 0.8 MiB of peak RSS and scheduling pressure
-for nothing that survives a repeated measurement. What remains is the serial
-fraction inside a lane.
+So the ceiling is 5.0–5.6×, reached around eight lanes: four more lane groups
+cost 0.7 MiB of peak RSS and buy 2.5 per cent pooled, which no repeat has
+confirmed. What remains is the serial fraction inside a lane.
 
 The terminal still exposes one serial entry point, so the fan-out is the
 caller's: one eval context and one compaction buffer per lane, both of which a
 caller pools anyway. Eight contexts do not move the memory figure — peak RSS
 stays at 6.6–7.2 MiB against 6.5–6.8 MiB serial — and sixteen contexts reach
-7.61 MiB at PLO6 2,091 combos, still under 8 MiB.
+7.47–7.61 MiB at PLO6 2,091 combos, still under 8 MiB.
 
 ## Measured memory
 
@@ -420,11 +430,12 @@ Stated as rules, with the guarantee each one carries:
    over 2, 4 and 8 lanes with one eval context each: 1.86–2.08×, 3.41–3.79×
    and 4.80–5.72× on the four frontier configurations, every result
    bit-identical to the serial call. A minute then fits ~28,000 combos per
-   range instead of ~13,000, at ~7 MiB. Sixteen lanes were measured too, and
-   are a wash against eight once the load is held (4.98× and 5.20× against
-   5.07× and 5.24×), so the ceiling is 5.1–5.2×. The terminal still exposes
-   one serial entry point, so a caller owns the fan-out; that is the cheapest
-   exact lever there is, and it saturates at eight lanes.
+   range instead of ~13,000, at ~7 MiB. Sixteen lanes were measured too, in
+   two interleaved sessions at held load: they buy 2.5 per cent pooled, inside
+   a 5 per cent spread and with the two sessions disagreeing in sign, so the
+   ceiling is 5.0–5.6×. The terminal still exposes one serial entry point, so
+   a caller owns the fan-out; that is the cheapest exact lever there is, and it
+   saturates at eight lanes.
 
 ## What is not covered
 
@@ -486,6 +497,17 @@ cmake --build build --target pe-omaha-turn-bench --parallel
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 2 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 4 --repetitions 1
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 1
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 12 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 16 --repetitions 3
+# interleaved, twice over, for the load to affect every lane count equally
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 16 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 16 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 12 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 16 --repetitions 3
+./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 8 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 12 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 6 --combos 2091 --threads 16 --repetitions 3
 ./build/tools/pe-omaha-turn-bench --holes 4 --combos 194580 --profile --repetitions 1
