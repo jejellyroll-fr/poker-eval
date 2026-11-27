@@ -202,6 +202,15 @@ visits. `matches_live` is true on both, the values are `0.072183988416` and
 `c6be68645969f6d3`), and they have to differ from the high-only ones, which is
 what `test_plo4_turn_oracle` checks on a fixture whose hero always has a low.
 
+A Hi/Lo turn walks the tuples at every range size -- the four-card sweep is a
+high-only path -- so `--hilo` reports the tuple fields wherever the walk itself
+is affordable: `legal_pairs`, `pair_density` and `deals_total` are measured
+while the square of the range stays under 4e7, `legal_pairs_measured` says
+whether the document carries them, and `rivers_per_pair` is reported whenever
+the walk runs.  The count is a cross-check of the walk as well as a density: at
+PLO4 heads-up n = 40 `deals_total` is 38,080, which is exactly the profile's
+`deals`, and at PLO6 n = 2,000 both read 50,849,064.
+
 The low pass costs what the high pass costs, 0.11 s against 0.10 s, because
 `StdDeck_OmahaHiLow8_EVAL` computes both halves whether or not the caller keeps
 the low. That is also why the terminal can afford both tables from one call,

@@ -32,7 +32,11 @@
  * the high-only one.  The chance expansion, the per-river filter and the
  * reduction are unchanged, so the two runs differ only in the payoff and in the
  * probe's extra low-table pass; `--frozen-strength --hilo` reports that pass
- * apart and still has to reproduce the live Hi/Lo walk bit for bit.
+ * apart and still has to reproduce the live Hi/Lo walk bit for bit.  A Hi/Lo
+ * turn reaches the deal walk at every range size, so `--hilo` enumerates where
+ * a high-only run of the same shape would take the four-card sweep; the tuple
+ * count is still only measured while its square stays affordable, and
+ * `legal_pairs_measured` says which of the two the document carries.
  */
 
 #include <poker_eval/core/eval_context.h>
@@ -69,6 +73,10 @@
 #define BENCH_DEDUPE_LIMIT 4096u
 #define BENCH_MAX_COMBOS 262144u
 #define BENCH_MAX_THREADS 64u
+/* Counting the legal private-hand tuples is quadratic in the range size.  It is
+ * worth paying next to a turn that costs tens of seconds, and not next to a
+ * range whose own square is larger than this. */
+#define BENCH_PAIR_COUNT_LIMIT 4.0e7
 
 typedef struct
 {
@@ -571,6 +579,7 @@ int main(int argc, char **argv)
     int parallel_status = 0;
     int river_card = -1;
     int enumerates;
+    int counts_pairs;
     int status;
     int arg;
     int have_holes = 0;
@@ -796,11 +805,18 @@ int main(int argc, char **argv)
     /* The turn reaches PLO5 and PLO6 through the river terminal's deal walk,
      * which visits every legal tuple; four-card heads-up ranges of at least
      * PE_SHOWDOWN_PLO4_MIN_OPPONENTS combos take the vector sweep instead and
-     * visit no tuple at all.  Counting tuples is quadratic, so it is only done
-     * for the configurations whose cost is per tuple. */
-    enumerates = !(config.holes == 4u && config.players == 2u &&
-                   config.combos >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS);
-    if (enumerates &&
+     * visit no tuple at all.  A Hi/Lo turn has no sweep -- every Hi/Lo river is
+     * priced by the deal walk -- so a Hi/Lo run enumerates at every range
+     * size. */
+    enumerates = config.hilo8 || !(config.holes == 4u && config.players == 2u &&
+                                   config.combos >=
+                                       PE_SHOWDOWN_PLO4_MIN_OPPONENTS);
+    /* The count itself is quadratic, so it is measured only while the square is
+     * affordable; past that the JSON reports that it was not measured rather
+     * than implying the walk visits no tuple. */
+    counts_pairs = enumerates && (double)config.combos * (double)config.combos <=
+                                      BENCH_PAIR_COUNT_LIMIT;
+    if (counts_pairs &&
         pe_omaha_deals_measure(board, ranges, config.players, config.holes,
                               &legal_pairs, &pair_mass) != 0)
     {
@@ -1111,7 +1127,9 @@ int main(int argc, char **argv)
            turn_min, turn_median, turn_max);
     printf("  \"rivers_priced\": %zu,\n", rivers);
     printf("  \"weight_sum\": %.9f,\n", mass);
-    if (enumerates)
+    printf("  \"legal_pairs_measured\": %s,\n",
+           counts_pairs ? "true" : "false");
+    if (counts_pairs)
     {
         printf("  \"legal_pairs\": %zu,\n", legal_pairs);
         printf("  \"pair_density\": %.9f,\n",
@@ -1127,10 +1145,17 @@ int main(int argc, char **argv)
                deals_total > 0.0 ? turn_median / deals_total : 0.0);
     }
     else
-        printf("  \"legal_pairs\": null,\n  \"pair_density\": null,\n"
-               "  \"rivers_per_pair\": null,\n  \"deals_total\": null,\n"
-               "  \"deals_per_second\": null,\n"
+    {
+        printf("  \"legal_pairs\": null,\n  \"pair_density\": null,\n");
+        /* The rivers per tuple follow from the deck and the hands, so they are
+         * known whenever the walk runs, counted or not. */
+        if (enumerates)
+            printf("  \"rivers_per_pair\": %zu,\n", deals_per_pair);
+        else
+            printf("  \"rivers_per_pair\": null,\n");
+        printf("  \"deals_total\": null,\n  \"deals_per_second\": null,\n"
                "  \"seconds_per_deal\": null,\n");
+    }
     printf("  \"seconds_per_combo\": %.12f,\n",
            config.combos > 0u
                ? turn_median /

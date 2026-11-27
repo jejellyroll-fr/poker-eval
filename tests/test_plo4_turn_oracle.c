@@ -18,6 +18,7 @@
 #include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/solver/pe_omaha_river.h>
 #include <poker_eval/solver/pe_omaha_turn.h>
+#include <poker_eval/solver/pe_pots.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -151,6 +152,182 @@ static oracle_result_t oracle_brute(mask_t board, mask_t dead,
     }
     if (result.deal_mass > 0.0)
         result.value /= result.deal_mass;
+    else
+        result.ok = 0;
+    return result;
+}
+
+typedef struct
+{
+    double value[PE_OMAHA_TURN_PLAYERS_MAX];
+    double deal_mass;
+    int ok;
+} hilo_oracle_t;
+
+/* Best high hand among the eligible players of a slice, ties included. */
+static uint8_t hilo_best_high(const HandVal *strength, uint8_t eligible)
+{
+    uint8_t winners = 0u;
+    HandVal best = HandVal_NOTHING;
+    uint8_t player;
+
+    for (player = 0u; player < PE_OMAHA_TURN_PLAYERS_MAX; ++player)
+    {
+        if (!(eligible & (uint8_t)(1u << player)))
+            continue;
+        if (winners == 0u || strength[player] > best)
+        {
+            best = strength[player];
+            winners = (uint8_t)(1u << player);
+        }
+        else if (strength[player] == best)
+            winners |= (uint8_t)(1u << player);
+    }
+    return winners;
+}
+
+/* Lowest qualifying low among the eligible players, ties included, or 0 when
+ * nobody in the slice has one. */
+static uint8_t hilo_best_low(const LowHandVal *strength, uint8_t eligible)
+{
+    uint8_t winners = 0u;
+    LowHandVal best = LowHandVal_NOTHING;
+    uint8_t player;
+
+    for (player = 0u; player < PE_OMAHA_TURN_PLAYERS_MAX; ++player)
+    {
+        if (!(eligible & (uint8_t)(1u << player)))
+            continue;
+        if (strength[player] == LowHandVal_NOTHING)
+            continue;
+        if (winners == 0u || strength[player] < best)
+        {
+            best = strength[player];
+            winners = (uint8_t)(1u << player);
+        }
+        else if (strength[player] == best)
+            winners |= (uint8_t)(1u << player);
+    }
+    return winners;
+}
+
+static uint8_t hilo_bits(uint8_t bits)
+{
+    uint8_t count = 0u;
+
+    while (bits != 0u)
+    {
+        count = (uint8_t)(count + (bits & 1u));
+        bits = (uint8_t)(bits >> 1u);
+    }
+    return count;
+}
+
+/* Independent brute force of the Hi/Lo turn with side pots.  The slices are
+ * written out by the caller -- a main pot every player pays into, a side pot
+ * only the players that matched it -- and every slice is split half to its best
+ * high hand and half to its best qualifying low, with no low sending that half
+ * to the high winners.  The terminal builds the slices from the investments and
+ * pays them by the same rule; the two agree only if the chance weights, the
+ * per-river filter and the pot policy are all right. */
+static hilo_oracle_t oracle_hilo_slices(
+    mask_t board, const pe_omaha_range_t *ranges, uint8_t player_count,
+    const pe_pot_slice_t *slices, uint8_t slice_count, const double *invested)
+{
+    hilo_oracle_t result;
+    size_t index[PE_OMAHA_TURN_PLAYERS_MAX] = {0u};
+    uint8_t player;
+
+    memset(&result, 0, sizeof(result));
+    result.ok = 1;
+    for (;;)
+    {
+        mask_t holes[PE_OMAHA_TURN_PLAYERS_MAX];
+        mask_t used = board;
+        double weight = 1.0;
+        double total[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+        int legal = 1;
+
+        for (player = 0u; player < player_count; ++player)
+        {
+            const pe_omaha_combo_t *combo =
+                &ranges[player].combos[index[player]];
+
+            holes[player] = combo->cards;
+            if (!(combo->weight > 0.0) || (combo->cards & used) != 0u)
+                legal = 0;
+            weight *= combo->weight;
+            used |= combo->cards;
+        }
+        if (legal)
+        {
+            mask_t free_cards = DECK_MASK & ~used;
+            int rivers = mask_popcount(free_cards);
+
+            MASK_FOR_EACH_SET_BIT(free_cards, card)
+            {
+                StdDeck_CardMask board_five =
+                    std_mask(mask_set(board, card));
+                HandVal high[PE_OMAHA_TURN_PLAYERS_MAX];
+                LowHandVal low[PE_OMAHA_TURN_PLAYERS_MAX];
+                double awards[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+                uint8_t slice;
+
+                for (player = 0u; player < player_count; ++player)
+                {
+                    high[player] = HandVal_NOTHING;
+                    low[player] = LowHandVal_NOTHING;
+                    if (StdDeck_OmahaHiLow8_EVAL(std_mask(holes[player]),
+                                                 board_five, &high[player],
+                                                 &low[player]) != 0)
+                    {
+                        result.ok = 0;
+                        return result;
+                    }
+                }
+                for (slice = 0u; slice < slice_count; ++slice)
+                {
+                    double half = slices[slice].amount * 0.5;
+                    uint8_t eligible = slices[slice].eligible_mask;
+                    uint8_t high_mask = hilo_best_high(high, eligible);
+                    uint8_t low_mask = hilo_best_low(low, eligible);
+                    uint8_t high_count;
+                    uint8_t low_count;
+
+                    if (high_mask == 0u)
+                        continue;
+                    if (low_mask == 0u)
+                        low_mask = high_mask;
+                    high_count = hilo_bits(high_mask);
+                    low_count = hilo_bits(low_mask);
+                    for (player = 0u; player < player_count; ++player)
+                    {
+                        if (high_mask & (uint8_t)(1u << player))
+                            awards[player] += half / (double)high_count;
+                        if (low_mask & (uint8_t)(1u << player))
+                            awards[player] += half / (double)low_count;
+                    }
+                }
+                for (player = 0u; player < player_count; ++player)
+                    total[player] += awards[player] - invested[player];
+            }
+            for (player = 0u; player < player_count; ++player)
+                result.value[player] += weight * total[player];
+            result.deal_mass += weight * (double)rivers;
+        }
+        for (player = 0u; player < player_count; ++player)
+        {
+            ++index[player];
+            if (index[player] < ranges[player].count)
+                break;
+            index[player] = 0u;
+        }
+        if (player == player_count)
+            break;
+    }
+    if (result.deal_mass > 0.0)
+        for (player = 0u; player < player_count; ++player)
+            result.value[player] /= result.deal_mass;
     else
         result.ok = 0;
     return result;
@@ -569,6 +746,106 @@ static void test_hilo_turn_matches_composition(EvalContext *context)
           "the Hi/Lo turn returned the high-only values");
 }
 
+/* Three-way Hi/Lo with a side pot: the short stack has paid 10 into a pot of 50
+ * and the two deep stacks 20 each, so the main 30 is open to all three and the
+ * 20 side pot to the two that matched it.  The short stack holds the only low
+ * draw, so it can never win more than the main pot while the two deep stacks
+ * own the whole side pot; a terminal that paid one pot to everybody, or let a
+ * player who never paid into the side pot win a share of it, would not match
+ * the oracle.  The oracle writes those slices out itself and pays them with its
+ * own high/low winners, so it does not share the terminal's slice builder. */
+static void test_hilo_three_way_side_pot(EvalContext *context)
+{
+    static const int SHORT_HAND[4] = {
+        CARD(A, CLUBS), CARD(3, DIAMONDS), CARD(4, HEARTS), CARD(5, SPADES)
+    };
+    static const int KINGS_HAND[4] = {
+        CARD(K, CLUBS), CARD(K, HEARTS), CARD(8, DIAMONDS), CARD(8, CLUBS)
+    };
+    static const int ACES_HAND[4] = {
+        CARD(A, DIAMONDS), CARD(A, HEARTS), CARD(6, CLUBS), CARD(6, DIAMONDS)
+    };
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[1];
+    pe_omaha_combo_t p1[1];
+    pe_omaha_combo_t p2[1];
+    pe_omaha_range_t ranges[3];
+    pe_betting_state_t state;
+    pe_pot_slice_t slices[2];
+    double invested[3] = {10.0, 20.0, 20.0};
+    double values[3] = {0.0, 0.0, 0.0};
+    double high_only[3] = {0.0, 0.0, 0.0};
+    double high_mass = 0.0;
+    size_t rivers = 0u;
+    size_t high_rivers = 0u;
+    double mass = 0.0;
+    hilo_oracle_t oracle;
+    double sum = 0.0;
+    uint8_t player;
+    int status;
+
+    /* The main pot is the 10 each of the three paid, the side pot the second 10
+     * of the two deep stacks. */
+    slices[0].amount = 30.0;
+    slices[0].eligible_mask = 0x07u;
+    slices[1].amount = 20.0;
+    slices[1].eligible_mask = 0x06u;
+
+    p0[0].cards = mask_of(SHORT_HAND, 4u);
+    p0[0].weight = 1.0;
+    p1[0].cards = mask_of(KINGS_HAND, 4u);
+    p1[0].weight = 1.0;
+    p2[0].cards = mask_of(ACES_HAND, 4u);
+    p2[0].weight = 1.0;
+    ranges[0].combos = p0;
+    ranges[0].count = 1u;
+    ranges[1].combos = p1;
+    ranges[1].count = 1u;
+    ranges[2].combos = p2;
+    ranges[2].count = 1u;
+    init_state(&state, 3u, 50.0, 10.0);
+    state.invested[1] = 20.0;
+    state.invested[2] = 20.0;
+
+    oracle = oracle_hilo_slices(board, ranges, 3u, slices, 2u, invested);
+    CHECK(oracle.ok, "the side-pot oracle rejected a deal");
+    CHECK(oracle.deal_mass > 0.0, "the side-pot fixture has no deal");
+
+    status = pe_omaha_hilo8_turn_range_values(
+        context, board, MASK_EMPTY, ranges, &state, 4u, values, 3u, &rivers,
+        &mass, NULL, NULL);
+    CHECK(status == 0, "the three-way Hi/Lo turn returned %d", status);
+    CHECK(rivers == 36u,
+          "the fixture leaves 36 rivers, got %zu", rivers);
+    for (player = 0u; player < 3u; ++player)
+    {
+        CHECK(fabs(values[player] - oracle.value[player]) <=
+                  TOL * (fabs(oracle.value[player]) + 1.0),
+              "player %u %.17g against the oracle %.17g", (unsigned)player,
+              values[player], oracle.value[player]);
+        sum += values[player];
+        /* Nobody loses more than it put in, and the short stack cannot win
+         * more than the main pot it paid into. */
+        CHECK(values[player] >= -invested[player] - TOL,
+              "player %u lost more than its investment: %.17g",
+              (unsigned)player, values[player]);
+    }
+    CHECK(fabs(sum) <= TOL, "the Hi/Lo values sum to %.17g", sum);
+    CHECK(values[0] <= 20.0 + TOL,
+          "the short stack won %.17g out of a 30 main pot", values[0]);
+    CHECK(values[1] <= 30.0 + TOL && values[2] <= 30.0 + TOL,
+          "a deep stack won more than the 50 it could take");
+
+    /* The split has to be paid: the high-only terminal on the same slices
+     * returns different numbers. */
+    status = pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges,
+                                        &state, 4u, high_only, 3u, &high_rivers,
+                                        &high_mass);
+    CHECK(status == 0, "the high-only three-way turn returned %d", status);
+    CHECK(memcmp(values, high_only, sizeof(values)) != 0,
+          "the three-way Hi/Lo turn returned the high-only values");
+}
+
 /* A four-card board leaves 40 rivers per legal pair, one fewer per declared
  * dead card, so the pooled deal mass is that count times the pooled range mass.
  * Dead cards the ranges do not use change the count and nothing else. */
@@ -985,6 +1262,7 @@ int main(void)
     test_profile_counters(context);
     test_frozen_strength_matches_live(context);
     test_hilo_turn_matches_composition(context);
+    test_hilo_three_way_side_pot(context);
     test_chance_mass_normalization(context);
     test_turn_is_not_one_river(context);
     test_river_that_empties_a_range_is_skipped(context);
