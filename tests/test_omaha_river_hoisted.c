@@ -7,14 +7,17 @@
  * code, so its `matches_live` flag can only show that the clocks change
  * nothing.  This test is the check that does not trust the terminal: it prices
  * the same river by enumerating the deals with pe_omaha_deals_enumerate() and
- * evaluating every hole of every deal with the product evaluator, distributing
- * the pot with arithmetic written here.
+ * evaluating every hole of every deal with the product evaluator, summing the
+ * deal mass and the payouts in its own callback, with the pot slices written
+ * out per case instead of being built by the solver.
  *
- * It covers what the PLO4 oracle cannot: five and six holes, and Hi/Lo, whose
- * low strength lives in the second hoisted table.  The deal count and the deal
- * mass are compared bit for bit, because the reference walks in the terminal's
- * order and sums the same products; the values are compared at 1e-12, since the
- * reference's payoff is its own.
+ * It covers what the PLO4 oracle cannot: five and six holes, Hi/Lo, whose low
+ * strength lives in the second hoisted table, and a three-way pot whose second
+ * slice pays only two of the three players.  The deal count, the deal mass and
+ * the values are compared bit for bit, because the reference walks in the
+ * terminal's order, sums the same products, and splits a slice by the same
+ * rule; a comparison that only agrees approximately would not tell the two
+ * apart from a re-associated sum.
  */
 
 #include <poker_eval/core/eval_context.h>
@@ -31,8 +34,8 @@
 
 #define HOLE_CARDS_MAX 6u
 #define RANGE_MAX 8u
-#define PLAYERS 2u
-#define TOL 1e-12
+#define MAX_PLAYERS 3u
+#define MAX_SLICES 3u
 
 static int g_failures;
 
@@ -118,22 +121,36 @@ static uint8_t count_bits(uint8_t bits)
 
 typedef struct
 {
+    double amount;
+    uint8_t eligible;
+} slice_spec_t;
+
+typedef struct
+{
     mask_t board;
     int hilo8;
+    uint8_t player_count;
+    uint8_t slice_count;
+    const slice_spec_t *slices;
     const pe_betting_state_t *state;
-    double values[PLAYERS];
+    double mass;
+    double values[MAX_PLAYERS];
     int failed;
 } reference_t;
 
-/* Winners of the high half: the strongest hand, ties included. */
-static uint8_t high_winners(const HandVal *strength)
+/* Winners of the high half of a slice: the strongest eligible hand, ties
+ * included. */
+static uint8_t high_winners(const HandVal *strength, uint8_t player_count,
+                            uint8_t eligible)
 {
     uint8_t winners = 0u;
     HandVal best = HandVal_NOTHING;
     uint8_t player;
 
-    for (player = 0u; player < PLAYERS; ++player)
+    for (player = 0u; player < player_count; ++player)
     {
+        if (!(eligible & (uint8_t)(1u << player)))
+            continue;
         if (winners == 0u || strength[player] > best)
         {
             best = strength[player];
@@ -145,16 +162,19 @@ static uint8_t high_winners(const HandVal *strength)
     return winners;
 }
 
-/* Winners of the low half: the lowest qualifying eight-or-better hand, ties
- * included, and 0 when nobody qualifies. */
-static uint8_t low_winners(const LowHandVal *strength)
+/* Winners of the low half of a slice: the lowest qualifying eight-or-better
+ * eligible hand, ties included, and 0 when nobody qualifies. */
+static uint8_t low_winners(const LowHandVal *strength, uint8_t player_count,
+                           uint8_t eligible)
 {
     uint8_t winners = 0u;
     LowHandVal best = LowHandVal_NOTHING;
     uint8_t player;
 
-    for (player = 0u; player < PLAYERS; ++player)
+    for (player = 0u; player < player_count; ++player)
     {
+        if (!(eligible & (uint8_t)(1u << player)))
+            continue;
         if (strength[player] == LowHandVal_NOTHING)
             continue;
         if (winners == 0u || strength[player] < best)
@@ -168,22 +188,25 @@ static uint8_t low_winners(const LowHandVal *strength)
     return winners;
 }
 
-/* One deal of the reference: evaluate every hole on this board, pay the pot the
- * way the terminal's convention does for a single slice, accumulate net of the
- * investment. */
+/* One deal of the reference: sum its weight, evaluate every hole on this board,
+ * pay the declared slices, accumulate net of the investment.  The mass is
+ * summed here, in the walk's order, rather than taken from the enumeration's
+ * own total. */
 static int reference_deal(const mask_t *holes, uint8_t player_count,
                           double weight, void *user)
 {
     reference_t *ref = (reference_t *)user;
     StdDeck_CardMask board = to_std_mask(ref->board);
-    HandVal strength[PLAYERS];
-    LowHandVal low[PLAYERS];
-    double awards[PLAYERS];
+    HandVal strength[MAX_PLAYERS];
+    LowHandVal low[MAX_PLAYERS];
+    double awards[MAX_PLAYERS];
     uint8_t player;
+    uint8_t index;
 
-    if (player_count != PLAYERS || ref->failed)
+    ref->mass += weight;
+    if (player_count != ref->player_count || ref->failed)
         return 1;
-    for (player = 0u; player < PLAYERS; ++player)
+    for (player = 0u; player < player_count; ++player)
     {
         StdDeck_CardMask hole = to_std_mask(holes[player]);
 
@@ -204,49 +227,46 @@ static int reference_deal(const mask_t *holes, uint8_t player_count,
         }
     }
 
-    if (ref->hilo8)
+    for (index = 0u; index < ref->slice_count; ++index)
     {
-        double high_half = ref->state->pot * 0.5;
-        double low_half = ref->state->pot - high_half;
-        uint8_t high = high_winners(strength);
-        uint8_t low_masks = low_winners(low);
-        uint8_t high_count = count_bits(high);
-        uint8_t low_count = count_bits(low_masks);
-
-        if (high_count == 0u)
-        {
-            ref->failed = 1;
-            return 1;
-        }
-        for (player = 0u; player < PLAYERS; ++player)
-            if (high & (uint8_t)(1u << player))
-                awards[player] += high_half / (double)high_count;
-        /* No qualifying low sends its half back to the high winners, which is
-         * the terminal's "no low, 100 % high" rule. */
-        if (low_count == 0u)
-        {
-            low_masks = high;
-            low_count = high_count;
-        }
-        for (player = 0u; player < PLAYERS; ++player)
-            if (low_masks & (uint8_t)(1u << player))
-                awards[player] += low_half / (double)low_count;
-    }
-    else
-    {
-        uint8_t high = high_winners(strength);
+        const slice_spec_t *slice = &ref->slices[index];
+        uint8_t high = high_winners(strength, player_count, slice->eligible);
         uint8_t high_count = count_bits(high);
 
+        /* A slice nobody eligible can win pays nobody, exactly as the
+         * distribution routine leaves it. */
         if (high_count == 0u)
+            continue;
+        if (!ref->hilo8)
         {
-            ref->failed = 1;
-            return 1;
+            for (player = 0u; player < player_count; ++player)
+                if (high & (uint8_t)(1u << player))
+                    awards[player] += slice->amount / (double)high_count;
+            continue;
         }
-        for (player = 0u; player < PLAYERS; ++player)
-            if (high & (uint8_t)(1u << player))
-                awards[player] = ref->state->pot / (double)high_count;
+        {
+            double high_half = slice->amount * 0.5;
+            double low_half = slice->amount * 0.5;
+            uint8_t low_masks =
+                low_winners(low, player_count, slice->eligible);
+            uint8_t low_count = count_bits(low_masks);
+
+            for (player = 0u; player < player_count; ++player)
+                if (high & (uint8_t)(1u << player))
+                    awards[player] += high_half / (double)high_count;
+            /* No qualifying low sends its half back to the high winners,
+             * which is the terminal's "no low, 100 % high" rule. */
+            if (low_count == 0u)
+            {
+                low_masks = high;
+                low_count = high_count;
+            }
+            for (player = 0u; player < player_count; ++player)
+                if (low_masks & (uint8_t)(1u << player))
+                    awards[player] += low_half / (double)low_count;
+        }
     }
-    for (player = 0u; player < PLAYERS; ++player)
+    for (player = 0u; player < player_count; ++player)
         ref->values[player] +=
             weight * (awards[player] - ref->state->invested[player]);
     return 0;
@@ -264,82 +284,93 @@ typedef struct
     uint8_t hole_cards;
     int hilo8;
     const char *board;
-    const entry_t *hero;
-    size_t hero_count;
-    const entry_t *opp;
-    size_t opp_count;
+    uint8_t player_count;
+    const entry_t *hands[MAX_PLAYERS];
+    size_t hand_counts[MAX_PLAYERS];
+    double pot;
+    double invested[MAX_PLAYERS];
+    const slice_spec_t *slices;
+    uint8_t slice_count;
 } river_case_t;
 
 static void run_case(const river_case_t *test)
 {
-    pe_omaha_combo_t hero[RANGE_MAX];
-    pe_omaha_combo_t opp[RANGE_MAX];
-    pe_omaha_range_t ranges[PLAYERS];
+    pe_omaha_combo_t combos[MAX_PLAYERS][RANGE_MAX];
+    pe_omaha_range_t ranges[MAX_PLAYERS];
     pe_betting_state_t state;
     reference_t reference;
     EvalConfig config = eval_config_holdem();
     EvalContext *context;
-    double values[PLAYERS] = {0.0, 0.0};
+    double values[MAX_PLAYERS] = {0.0, 0.0, 0.0};
     double reference_mass = 0.0;
+    double walk_mass = 0.0;
     double terminal_mass = 0.0;
+    double sum = 0.0;
     size_t reference_deals = 0u;
     size_t terminal_deals = 0u;
     int status;
+    uint8_t player;
     size_t i;
 
     memset(&reference, 0, sizeof(reference));
-    CHECK(test->hero_count <= RANGE_MAX && test->opp_count <= RANGE_MAX,
-          "%s: range is larger than this test supports", test->label);
-    if (test->hero_count > RANGE_MAX || test->opp_count > RANGE_MAX)
-        return;
+    memset(&state, 0, sizeof(state));
     reference.board = mask_of(test->board);
     CHECK(mask_popcount(reference.board) == 5,
           "%s: board %s is not five cards", test->label, test->board);
-    for (i = 0u; i < test->hero_count; ++i)
+    CHECK(test->player_count >= 2u && test->player_count <= MAX_PLAYERS,
+          "%s: unsupported player count", test->label);
+    CHECK(test->slice_count <= MAX_SLICES,
+          "%s: too many slices", test->label);
+    if (mask_popcount(reference.board) != 5 ||
+        test->player_count < 2u || test->player_count > MAX_PLAYERS ||
+        test->slice_count > MAX_SLICES)
+        return;
+    for (player = 0u; player < test->player_count; ++player)
     {
-        hero[i].cards = mask_of(test->hero[i].cards);
-        hero[i].weight = test->hero[i].weight;
-        CHECK(mask_popcount(hero[i].cards) == test->hole_cards,
-              "%s: hero %zu is not %u cards", test->label, i,
-              (unsigned)test->hole_cards);
+        CHECK(test->hand_counts[player] <= RANGE_MAX,
+              "%s: range %u is larger than this test supports", test->label,
+              (unsigned)player);
+        if (test->hand_counts[player] > RANGE_MAX)
+            return;
+        for (i = 0u; i < test->hand_counts[player]; ++i)
+        {
+            combos[player][i].cards = mask_of(test->hands[player][i].cards);
+            combos[player][i].weight = test->hands[player][i].weight;
+            CHECK(mask_popcount(combos[player][i].cards) == test->hole_cards,
+                  "%s: player %u combo %zu is not %u cards", test->label,
+                  (unsigned)player, i, (unsigned)test->hole_cards);
+        }
+        ranges[player].combos = combos[player];
+        ranges[player].count = test->hand_counts[player];
+        state.invested[player] = test->invested[player];
+        state.active[player] = 1;
     }
-    for (i = 0u; i < test->opp_count; ++i)
-    {
-        opp[i].cards = mask_of(test->opp[i].cards);
-        opp[i].weight = test->opp[i].weight;
-        CHECK(mask_popcount(opp[i].cards) == test->hole_cards,
-              "%s: opponent %zu is not %u cards", test->label, i,
-              (unsigned)test->hole_cards);
-    }
-    ranges[0].combos = hero;
-    ranges[0].count = test->hero_count;
-    ranges[1].combos = opp;
-    ranges[1].count = test->opp_count;
-
-    memset(&state, 0, sizeof(state));
-    state.player_count = PLAYERS;
+    state.player_count = test->player_count;
     state.winner = -1;
-    state.active[0] = 1;
-    state.active[1] = 1;
-    state.invested[0] = 10.0;
-    state.invested[1] = 10.0;
-    state.pot = 20.0;
+    state.pot = test->pot;
     reference.hilo8 = test->hilo8;
+    reference.player_count = test->player_count;
+    reference.slice_count = test->slice_count;
+    reference.slices = test->slices;
     reference.state = &state;
 
-    status = pe_omaha_deals_enumerate(reference.board, ranges, PLAYERS,
-                                      test->hole_cards, reference_deal,
-                                      &reference, &reference_deals,
-                                      &reference_mass);
+    status = pe_omaha_deals_enumerate(reference.board, ranges,
+                                      test->player_count, test->hole_cards,
+                                      reference_deal, &reference,
+                                      &reference_deals, &walk_mass);
     CHECK(status == 0 && !reference.failed,
           "%s: the per-deal reference failed", test->label);
-    CHECK(reference_deals > 0u && reference_mass > 0.0,
+    CHECK(reference_deals > 0u && reference.mass > 0.0,
           "%s: the reference found no legal deal", test->label);
+    CHECK(same_bits(walk_mass, reference.mass),
+          "%s: the walk summed %.17g, the reference callback %.17g",
+          test->label, walk_mass, reference.mass);
     if (status != 0 || reference.failed || reference_deals == 0u ||
-        !(reference_mass > 0.0))
+        !(reference.mass > 0.0) || !same_bits(walk_mass, reference.mass))
         return;
-    for (i = 0u; i < PLAYERS; ++i)
-        reference.values[i] /= reference_mass;
+    reference_mass = reference.mass;
+    for (player = 0u; player < test->player_count; ++player)
+        reference.values[player] /= reference_mass;
 
     context = eval_context_create(&config);
     CHECK(context != NULL, "%s: context creation failed", test->label);
@@ -348,12 +379,12 @@ static void run_case(const river_case_t *test)
     status = test->hilo8
                  ? pe_omaha_hilo8_river_range_values(
                        context, reference.board, ranges, &state,
-                       test->hole_cards, values, PLAYERS, &terminal_deals,
-                       &terminal_mass)
+                       test->hole_cards, values, test->player_count,
+                       &terminal_deals, &terminal_mass)
                  : pe_omaha_river_range_values(
                        context, reference.board, ranges, &state,
-                       test->hole_cards, values, PLAYERS, &terminal_deals,
-                       &terminal_mass);
+                       test->hole_cards, values, test->player_count,
+                       &terminal_deals, &terminal_mass);
     CHECK(status == 0, "%s: the terminal failed", test->label);
     CHECK(terminal_deals == reference_deals,
           "%s: terminal counted %zu deals, the reference %zu", test->label,
@@ -361,35 +392,38 @@ static void run_case(const river_case_t *test)
     CHECK(same_bits(terminal_mass, reference_mass),
           "%s: terminal mass %.17g, the reference %.17g (not bit-identical)",
           test->label, terminal_mass, reference_mass);
-    CHECK(same_bits(values[0], reference.values[0]),
-          "%s: player 0 %.17g, the reference %.17g (not bit-identical)",
-          test->label, values[0], reference.values[0]);
-    CHECK(same_bits(values[1], reference.values[1]),
-          "%s: player 1 %.17g, the reference %.17g (not bit-identical)",
-          test->label, values[1], reference.values[1]);
-    CHECK(fabs(values[0] + values[1]) <= TOL,
-          "%s: the terminal is not zero-sum (%.17g)", test->label,
-          values[0] + values[1]);
+    for (player = 0u; player < test->player_count; ++player)
+    {
+        CHECK(same_bits(values[player], reference.values[player]),
+              "%s: player %u %.17g, the reference %.17g (not bit-identical)",
+              test->label, (unsigned)player, values[player],
+              reference.values[player]);
+        sum += values[player];
+    }
+    CHECK(fabs(sum) <= 1e-12,
+          "%s: the terminal is not zero-sum (%.17g)", test->label, sum);
     eval_context_destroy(context);
 }
 
 /* Five holes, high only: the width the PLO4 oracle cannot reach. */
 static void test_plo5_matches_per_deal(void)
 {
-    static const entry_t hero[] = {
+    static const entry_t p0[] = {
         {"AsKs3d4d5h", 0.500},
         {"9c8c6d6hAc", 0.250},
         {"KdQd9s8s7h", 0.125},
         {"AhKh5c4c3c", 0.125},
     };
-    static const entry_t opp[] = {
+    static const entry_t p1[] = {
         {"AdKc3s4s6c", 0.500},
         {"9d8d5d5s6s", 0.250},
         {"QhJh9h8h7s", 0.125},
         {"AcKd2d3h4h", 0.125},
     };
+    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
-        "PLO5 high-only", 5u, 0, "2c7dThJsQc", hero, 4u, opp, 4u,
+        "PLO5 high-only", 5u, 0, "2c7dThJsQc", 2u,
+        {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, slices, 1u,
     };
 
     run_case(&test);
@@ -398,20 +432,53 @@ static void test_plo5_matches_per_deal(void)
 /* Six holes, high only. */
 static void test_plo6_matches_per_deal(void)
 {
-    static const entry_t hero[] = {
+    static const entry_t p0[] = {
         {"AsKs3d4d5h6h", 0.500},
         {"9c8c6d6hAc7c", 0.250},
         {"KdQd9s8s7h5s", 0.125},
         {"AhKh5c4c3c2d", 0.125},
     };
-    static const entry_t opp[] = {
+    static const entry_t p1[] = {
         {"AdKc3s4s6c8d", 0.500},
         {"9d8d5d5s6s7s", 0.250},
         {"QhJh9h8h7s6c", 0.125},
         {"AcKd2d3h4h5d", 0.125},
     };
+    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
-        "PLO6 high-only", 6u, 0, "2c7dThJsQc", hero, 4u, opp, 4u,
+        "PLO6 high-only", 6u, 0, "2c7dThJsQc", 2u,
+        {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, slices, 1u,
+    };
+
+    run_case(&test);
+}
+
+/* Three players with unequal investments: the short stack can win the main pot
+ * and nothing from the side pot, which only the two covering players contest.
+ * A payoff that ignored the eligible mask would pay it out three ways. */
+static void test_three_way_side_pot_matches_per_deal(void)
+{
+    static const entry_t p0[] = {
+        {"AsKs3d4d", 0.500},
+        {"9d8d6c6h", 0.250},
+        {"QdQh9s9h", 0.250},
+    };
+    static const entry_t p1[] = {
+        {"AcKc5d5h", 0.500},
+        {"9c8c4d4h", 0.250},
+        {"JdJh8s8h", 0.250},
+    };
+    static const entry_t p2[] = {
+        {"AdKd6s6c", 0.500},
+        {"Td9s7c7h", 0.250},
+        {"TsTc5s5c", 0.250},
+    };
+    /* Main pot 3 x 10, side pot the 2 x 10 the two covering players put in
+     * above the short stack. */
+    static const slice_spec_t slices[] = {{30.0, 0x07u}, {20.0, 0x06u}};
+    static const river_case_t test = {
+        "three-way side pot", 4u, 0, "2c7dThJsQc", 3u,
+        {p0, p1, p2}, {3u, 3u, 3u}, 50.0, {10.0, 20.0, 20.0}, slices, 2u,
     };
 
     run_case(&test);
@@ -421,16 +488,18 @@ static void test_plo6_matches_per_deal(void)
  * hoisted tables have to come into play on the same deal. */
 static void test_hilo_split_matches_per_deal(void)
 {
-    static const entry_t hero[] = {
+    static const entry_t p0[] = {
         {"As3cKdKh", 0.750},
         {"Ah5cQdQs", 0.250},
     };
-    static const entry_t opp[] = {
+    static const entry_t p1[] = {
         {"Ad7cJdJh", 0.600},
         {"KcKs5d5h", 0.400},
     };
+    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
-        "PLO4 Hi/Lo split", 4u, 1, "2c4d8hJsQc", hero, 2u, opp, 2u,
+        "PLO4 Hi/Lo split", 4u, 1, "2c4d8hJsQc", 2u,
+        {p0, p1}, {2u, 2u}, 20.0, {10.0, 10.0}, slices, 1u,
     };
 
     run_case(&test);
@@ -440,18 +509,20 @@ static void test_hilo_split_matches_per_deal(void)
  * high winners instead of paying nobody. */
 static void test_hilo_no_low_matches_per_deal(void)
 {
-    static const entry_t hero[] = {
+    static const entry_t p0[] = {
         {"AsKs3d4d5h6h", 0.500},
         {"9c8c6d6hAc7c", 0.250},
         {"KdQd9s8s7h5s", 0.250},
     };
-    static const entry_t opp[] = {
+    static const entry_t p1[] = {
         {"AdKc3s4s6c8d", 0.500},
         {"9d8d5d5s6s7s", 0.250},
         {"QhJh9h8h7s6c", 0.250},
     };
+    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
-        "PLO6 Hi/Lo without a low", 6u, 1, "2c7dThJsQc", hero, 3u, opp, 3u,
+        "PLO6 Hi/Lo without a low", 6u, 1, "2c7dThJsQc", 2u,
+        {p0, p1}, {3u, 3u}, 20.0, {10.0, 10.0}, slices, 1u,
     };
 
     run_case(&test);
@@ -461,6 +532,7 @@ int main(void)
 {
     test_plo5_matches_per_deal();
     test_plo6_matches_per_deal();
+    test_three_way_side_pot_matches_per_deal();
     test_hilo_split_matches_per_deal();
     test_hilo_no_low_matches_per_deal();
     if (g_failures != 0)

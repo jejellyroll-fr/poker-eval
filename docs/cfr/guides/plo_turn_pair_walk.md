@@ -140,8 +140,9 @@ printing them with `matches_live` beside them. Design A is that walk in the
 terminal itself, so the probe now decomposes the terminal rather than standing
 in for it; `matches_live` therefore compares the terminal with a clocked copy of
 itself, and the independent check is `test_omaha_river_hoisted`, which prices
-the same river deal by deal with its own payoff and compares the values, the
-deal count and the mass, the last two bit for bit.
+the same river deal by deal with its own payoff, its own mass sum and
+hand-declared side pots -- a three-way case included -- and compares the values,
+the deal count and the mass bit for bit.
 
 ### Measured: design A, before and after
 
