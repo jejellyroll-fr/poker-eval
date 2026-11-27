@@ -119,9 +119,13 @@ static size_t compact_for_river(const pe_omaha_range_t *range, mask_t blocked,
     return kept;
 }
 
-/* The terminal itself.  `stats` is optional and NULL is the published path:
- * when it is NULL neither the clock nor the counters run, so a call without a
- * profile is the same work it was before the counters existed. */
+/* The terminal itself.  `stats` and `probe` are both optional and NULL is the
+ * published path: neither the clocks nor the counters run, so a call asking for
+ * neither is the work it was before the instrumentation existed.  They measure
+ * different things -- `stats` splits the per-river filter from the river
+ * terminal, `probe` splits that terminal's precompute from its walk -- and
+ * `probe` takes the river terminal's timed entry point, which is the same
+ * hoisted walk with each part clocked. */
 static int turn_range_values(
     const EvalContext *context,
     mask_t board,
@@ -133,21 +137,24 @@ static int turn_range_values(
     uint8_t player_count,
     size_t *out_river_count,
     double *out_weight_sum,
-    pe_omaha_turn_stats_t *stats)
+    pe_omaha_turn_stats_t *stats,
+    pe_omaha_turn_probe_t *probe,
+    int hilo8)
 {
     pe_omaha_combo_t *storage[PE_OMAHA_TURN_PLAYERS_MAX] = {0};
     pe_omaha_range_t filtered[PE_OMAHA_TURN_PLAYERS_MAX];
     double accumulated[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
     double river_values[PE_OMAHA_TURN_PLAYERS_MAX];
+    pe_omaha_river_probe_t river_probe = {0.0, 0.0, 0.0, 0u, 0u};
     double total_mass = 0.0;
     size_t rivers = 0u;
     int status = 0;
     uint8_t player;
     int card;
 
-    /* The counters are cleared before anything can fail, so a caller that
-     * ignores the status reads zeros rather than the previous call's figures,
-     * exactly as the value outputs do. */
+    /* Both are cleared before anything can fail, so a caller that ignores the
+     * status reads zeros rather than the previous call's figures, exactly as
+     * the value outputs do. */
     if (stats)
     {
         stats->combos_examined = 0u;
@@ -156,6 +163,14 @@ static int turn_range_values(
         stats->deals = 0u;
         stats->filter_seconds = 0.0;
         stats->terminal_seconds = 0.0;
+    }
+    if (probe)
+    {
+        probe->precompute_seconds = 0.0;
+        probe->low_precompute_seconds = 0.0;
+        probe->walk_seconds = 0.0;
+        probe->deals = 0u;
+        probe->combos = 0u;
     }
 
     if (!out_values || !out_river_count || !out_weight_sum)
@@ -235,10 +250,34 @@ static int turn_range_values(
         board_five = mask_set(board, card);
         if (stats)
             started = turn_now();
-        status = pe_omaha_river_range_values(context, board_five, filtered,
-                                             state, hole_cards, river_values,
-                                             player_count, &deal_count,
-                                             &river_mass);
+        if (probe)
+        {
+            status = hilo8
+                         ? pe_omaha_hilo8_river_range_values_frozen(
+                               context, board_five, filtered, state,
+                               hole_cards, river_values, player_count,
+                               &deal_count, &river_mass, &river_probe)
+                         : pe_omaha_river_range_values_frozen(
+                               context, board_five, filtered, state,
+                               hole_cards, river_values, player_count,
+                               &deal_count, &river_mass, &river_probe);
+            probe->precompute_seconds += river_probe.precompute_seconds;
+            probe->low_precompute_seconds +=
+                river_probe.low_precompute_seconds;
+            probe->walk_seconds += river_probe.walk_seconds;
+            probe->deals += river_probe.deals;
+            probe->combos += river_probe.combos;
+        }
+        else
+            status = hilo8
+                         ? pe_omaha_hilo8_river_range_values(
+                               context, board_five, filtered, state,
+                               hole_cards, river_values, player_count,
+                               &deal_count, &river_mass)
+                         : pe_omaha_river_range_values(
+                               context, board_five, filtered, state,
+                               hole_cards, river_values, player_count,
+                               &deal_count, &river_mass);
         if (stats)
         {
             stats->terminal_seconds += turn_now() - started;
@@ -291,7 +330,7 @@ int pe_omaha_turn_range_values(
 {
     return turn_range_values(context, board, dead, ranges, state, hole_cards,
                              out_values, player_count, out_river_count,
-                             out_weight_sum, NULL);
+                             out_weight_sum, NULL, NULL, 0);
 }
 
 int pe_omaha_turn_range_values_profiled(
@@ -309,5 +348,42 @@ int pe_omaha_turn_range_values_profiled(
 {
     return turn_range_values(context, board, dead, ranges, state, hole_cards,
                              out_values, player_count, out_river_count,
-                             out_weight_sum, stats);
+                             out_weight_sum, stats, NULL, 0);
+}
+
+int pe_omaha_turn_range_values_frozen(
+    const EvalContext *context,
+    mask_t board,
+    mask_t dead,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_river_count,
+    double *out_weight_sum,
+    pe_omaha_turn_probe_t *probe)
+{
+    return turn_range_values(context, board, dead, ranges, state, hole_cards,
+                             out_values, player_count, out_river_count,
+                             out_weight_sum, NULL, probe, 0);
+}
+
+int pe_omaha_hilo8_turn_range_values(
+    const EvalContext *context,
+    mask_t board,
+    mask_t dead,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_river_count,
+    double *out_weight_sum,
+    pe_omaha_turn_stats_t *stats,
+    pe_omaha_turn_probe_t *probe)
+{
+    return turn_range_values(context, board, dead, ranges, state, hole_cards,
+                             out_values, player_count, out_river_count,
+                             out_weight_sum, stats, probe, 1);
 }

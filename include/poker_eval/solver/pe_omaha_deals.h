@@ -29,6 +29,20 @@ typedef int (*pe_omaha_deal_callback)(const mask_t *holes,
                                       double weight,
                                       void *user);
 
+/*
+ * The same walk, also reporting the combo index each player contributed.
+ *
+ * A caller that already holds a per-combo value indexed by combo can read it
+ * instead of recomputing anything from the mask, which is what the frozen
+ * strength probe needs.  The legality rules, the weight product and the deal
+ * count are those of the mask callback above.
+ */
+typedef int (*pe_omaha_deal_indexed_callback)(const mask_t *holes,
+                                              const size_t *indices,
+                                              uint8_t player_count,
+                                              double weight,
+                                              void *user);
+
 size_t pe_omaha_combo_count(mask_t dead_cards, uint8_t hole_cards);
 
 int pe_omaha_enumerate_combos(mask_t dead_cards, uint8_t hole_cards,
@@ -43,6 +57,12 @@ int pe_omaha_deals_enumerate(mask_t board, const pe_omaha_range_t *ranges,
                              uint8_t player_count, uint8_t hole_cards,
                              pe_omaha_deal_callback callback, void *user,
                              size_t *deal_count, double *weight_sum);
+
+/* Same walk, with the combo indices reported to `callback`. */
+int pe_omaha_deals_enumerate_indexed(
+    mask_t board, const pe_omaha_range_t *ranges, uint8_t player_count,
+    uint8_t hole_cards, pe_omaha_deal_indexed_callback callback, void *user,
+    size_t *deal_count, double *weight_sum);
 
 #ifdef __cplusplus
 }

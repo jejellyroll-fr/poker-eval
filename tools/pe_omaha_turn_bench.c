@@ -27,6 +27,16 @@
  * reduced in card order with the serial terminal's arithmetic, which lets the
  * benchmark assert the two agree bit for bit instead of approximately; the lane
  * figure is therefore the same work, not an estimate of it.
+ *
+ * `--hilo` prices every river with the river terminal's Hi/Lo payoff instead of
+ * the high-only one.  The chance expansion, the per-river filter and the
+ * reduction are unchanged, so the two runs differ only in the payoff and in the
+ * probe's extra low-table pass; `--frozen-strength --hilo` reports that pass
+ * apart and still has to reproduce the live Hi/Lo walk bit for bit.  A Hi/Lo
+ * turn reaches the deal walk at every range size, so `--hilo` enumerates where
+ * a high-only run of the same shape would take the four-card sweep; the tuple
+ * count is still only measured while its square stays affordable, and
+ * `legal_pairs_measured` says which of the two the document carries.
  */
 
 #include <poker_eval/core/eval_context.h>
@@ -63,6 +73,10 @@
 #define BENCH_DEDUPE_LIMIT 4096u
 #define BENCH_MAX_COMBOS 262144u
 #define BENCH_MAX_THREADS 64u
+/* Counting the legal private-hand tuples is quadratic in the range size.  It is
+ * worth paying next to a turn that costs tens of seconds, and not next to a
+ * range whose own square is larger than this. */
+#define BENCH_PAIR_COUNT_LIMIT 4.0e7
 
 typedef struct
 {
@@ -73,6 +87,8 @@ typedef struct
     size_t repetitions;
     uint64_t seed;
     int profile;
+    int frozen_strength;
+    int hilo8;
 } bench_config_t;
 
 static int g_failures;
@@ -328,6 +344,7 @@ typedef struct
     uint8_t players;
     uint8_t lane;
     uint8_t lanes;
+    int hilo8;
 } turn_lane_t;
 
 /* The turn's own loop, restricted to the cards `card % lanes == lane`: compact
@@ -367,10 +384,17 @@ static void *turn_lane_run(void *argument)
         }
         if (!usable)
             continue;
-        status = pe_omaha_river_range_values(
-            lane->context, mask_set(lane->board, card), compacted, lane->state,
-            lane->hole_cards, river_values, lane->players, &deal_count,
-            &river_mass);
+        status = lane->hilo8
+                     ? pe_omaha_hilo8_river_range_values(
+                           lane->context, mask_set(lane->board, card),
+                           compacted, lane->state, lane->hole_cards,
+                           river_values, lane->players, &deal_count,
+                           &river_mass)
+                     : pe_omaha_river_range_values(
+                           lane->context, mask_set(lane->board, card),
+                           compacted, lane->state, lane->hole_cards,
+                           river_values, lane->players, &deal_count,
+                           &river_mass);
         if (status == -1)
             continue;
         if (status != 0)
@@ -478,7 +502,8 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "Usage: %s --holes 4|5|6 --combos N [--players N] "
-            "[--threads N] [--repetitions N] [--seed N] [--profile]\n"
+            "[--threads N] [--repetitions N] [--seed N]\n"
+            "       [--profile] [--frozen-strength] [--hilo]\n"
             "\n"
             "Emits a pe-omaha-turn-bench/v1 JSON document on stdout.\n"
             "N is the combo count of every range; one configuration per run, so\n"
@@ -487,7 +512,19 @@ static void usage(const char *program)
             "own eval context, and reports that time next to the serial terminal.\n"
             "--profile splits the serial call into the per-river filter and\n"
             "the river terminal, with the counters each phase visited, and the\n"
-            "range size at which the terminal overtakes the filter.\n",
+            "range size at which the terminal overtakes the filter.\n"
+            "--frozen-strength runs the same turn with every combo evaluated\n"
+            "once per river and reports the precompute and the walk apart, so\n"
+            "a visit can be priced with the evaluation taken out of it.\n"
+            "--profile and --frozen-strength are two runs, not one split: with\n"
+            "the probe, the terminal clock times the frozen river call, its\n"
+            "precompute included, so the profile's terminal and the probe's\n"
+            "walk are not subtracted from each other.  Price the walk against\n"
+            "the precompute, and read the live terminal from a profile run.\n"
+            "--hilo prices every river with the Hi/Lo payoff; the expansion,\n"
+            "the filter and the reduction are the high-only ones.  With\n"
+            "--frozen-strength the probe fills the low table in a pass of its\n"
+            "own and reports it as low_precompute_seconds.\n",
             program);
 }
 
@@ -542,6 +579,7 @@ int main(int argc, char **argv)
     int parallel_status = 0;
     int river_card = -1;
     int enumerates;
+    int counts_pairs;
     int status;
     int arg;
     int have_holes = 0;
@@ -557,6 +595,21 @@ int main(int argc, char **argv)
     double nanoseconds_per_visit = 0.0;
     double nanoseconds_per_deal = 0.0;
     int counts_stable = 1;
+    double frozen_values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    size_t frozen_rivers = 0u;
+    double frozen_mass = 0.0;
+    double *frozen_durations = NULL;
+    double *frozen_sorted = NULL;
+    double *walk_sorted = NULL;
+    double *precompute_sorted = NULL;
+    double *low_precompute_sorted = NULL;
+    double probe_low_precompute = 0.0;
+    pe_omaha_turn_probe_t *probe_runs = NULL;
+    double frozen_median = 0.0;
+    double probe_walk = 0.0;
+    double probe_precompute = 0.0;
+    uint64_t probe_fingerprint = 0u;
+    int probe_matches = 0;
 
     memset(&config, 0, sizeof(config));
     config.holes = 4u;
@@ -634,6 +687,16 @@ int main(int argc, char **argv)
             config.profile = 1;
             continue;
         }
+        if (strcmp(argv[arg], "--frozen-strength") == 0)
+        {
+            config.frozen_strength = 1;
+            continue;
+        }
+        if (strcmp(argv[arg], "--hilo") == 0)
+        {
+            config.hilo8 = 1;
+            continue;
+        }
         if (strcmp(argv[arg], "--seed") == 0 && arg + 1 < argc)
         {
             if (parse_size(argv[++arg], 1u, 0x7fffffffu, &parsed) != 0)
@@ -680,6 +743,27 @@ int main(int argc, char **argv)
             goto cleanup;
         }
     }
+    if (config.frozen_strength)
+    {
+        frozen_durations =
+            (double *)calloc(config.repetitions, sizeof(*frozen_durations));
+        frozen_sorted =
+            (double *)calloc(config.repetitions, sizeof(*frozen_sorted));
+        walk_sorted =
+            (double *)calloc(config.repetitions, sizeof(*walk_sorted));
+        precompute_sorted =
+            (double *)calloc(config.repetitions, sizeof(*precompute_sorted));
+        low_precompute_sorted = (double *)calloc(
+            config.repetitions, sizeof(*low_precompute_sorted));
+        probe_runs = (pe_omaha_turn_probe_t *)calloc(
+            config.repetitions, sizeof(*probe_runs));
+        if (!frozen_durations || !frozen_sorted || !walk_sorted ||
+            !precompute_sorted || !low_precompute_sorted || !probe_runs)
+        {
+            bench_fail("probe allocation failed");
+            goto cleanup;
+        }
+    }
     context = eval_context_create(&eval_config);
     if (!context)
     {
@@ -721,11 +805,18 @@ int main(int argc, char **argv)
     /* The turn reaches PLO5 and PLO6 through the river terminal's deal walk,
      * which visits every legal tuple; four-card heads-up ranges of at least
      * PE_SHOWDOWN_PLO4_MIN_OPPONENTS combos take the vector sweep instead and
-     * visit no tuple at all.  Counting tuples is quadratic, so it is only done
-     * for the configurations whose cost is per tuple. */
-    enumerates = !(config.holes == 4u && config.players == 2u &&
-                   config.combos >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS);
-    if (enumerates &&
+     * visit no tuple at all.  A Hi/Lo turn has no sweep -- every Hi/Lo river is
+     * priced by the deal walk -- so a Hi/Lo run enumerates at every range
+     * size. */
+    enumerates = config.hilo8 || !(config.holes == 4u && config.players == 2u &&
+                                   config.combos >=
+                                       PE_SHOWDOWN_PLO4_MIN_OPPONENTS);
+    /* The count itself is quadratic, so it is measured only while the square is
+     * affordable; past that the JSON reports that it was not measured rather
+     * than implying the walk visits no tuple. */
+    counts_pairs = enumerates && (double)config.combos * (double)config.combos <=
+                                      BENCH_PAIR_COUNT_LIMIT;
+    if (counts_pairs &&
         pe_omaha_deals_measure(board, ranges, config.players, config.holes,
                               &legal_pairs, &pair_mass) != 0)
     {
@@ -774,10 +865,18 @@ int main(int argc, char **argv)
             continue;
         }
         start = monotonic_seconds();
-        status = pe_omaha_river_range_values_with_path(
-            context, mask_set(board, river_card), filtered, &state, config.holes,
-            river_values, config.players, &river_deals, &river_mass,
-            &river_path);
+        /* The Hi/Lo entry reports no showdown path: it prices the deal walk
+         * only, which is what a wider board takes. */
+        if (config.hilo8)
+            status = pe_omaha_hilo8_river_range_values(
+                context, mask_set(board, river_card), filtered, &state,
+                config.holes, river_values, config.players, &river_deals,
+                &river_mass);
+        else
+            status = pe_omaha_river_range_values_with_path(
+                context, mask_set(board, river_card), filtered, &state,
+                config.holes, river_values, config.players, &river_deals,
+                &river_mass, &river_path);
         river_seconds = monotonic_seconds() - start;
         for (player_loop = 0u; player_loop < config.players; ++player_loop)
         {
@@ -797,15 +896,21 @@ int main(int argc, char **argv)
         uint64_t run_fingerprint;
         double start = monotonic_seconds();
 
-        status = config.profile
-                     ? pe_omaha_turn_range_values_profiled(
-                           context, board, MASK_EMPTY, ranges, &state,
-                           config.holes, values, config.players, &rivers,
-                           &mass, &profile_runs[repeat])
-                     : pe_omaha_turn_range_values(
-                           context, board, MASK_EMPTY, ranges, &state,
-                           config.holes, values, config.players, &rivers,
-                           &mass);
+        if (config.hilo8)
+            status = pe_omaha_hilo8_turn_range_values(
+                context, board, MASK_EMPTY, ranges, &state, config.holes,
+                values, config.players, &rivers, &mass,
+                config.profile ? &profile_runs[repeat] : NULL, NULL);
+        else
+            status = config.profile
+                         ? pe_omaha_turn_range_values_profiled(
+                               context, board, MASK_EMPTY, ranges, &state,
+                               config.holes, values, config.players, &rivers,
+                               &mass, &profile_runs[repeat])
+                         : pe_omaha_turn_range_values(
+                               context, board, MASK_EMPTY, ranges, &state,
+                               config.holes, values, config.players, &rivers,
+                               &mass);
         durations[repeat] = monotonic_seconds() - start;
         if (status != 0)
         {
@@ -861,6 +966,7 @@ int main(int argc, char **argv)
             lane->players = config.players;
             lane->lane = (uint8_t)lane_index;
             lane->lanes = config.threads;
+            lane->hilo8 = config.hilo8;
             lane->values = lane_values;
             lane->mass = lane_mass;
             lane->priced = lane_priced;
@@ -902,6 +1008,52 @@ int main(int argc, char **argv)
                            parallel_fingerprint == fingerprint ? 1 : 0;
         if (!parallel_matches)
             bench_fail("the parallel lanes disagree with the serial terminal");
+    }
+
+    /* The frozen-strength probe: the same turn with every combo evaluated once
+     * per river, then the walks reading those strengths.  It has to reproduce
+     * the live values bit for bit, or the split it reports belongs to a walk
+     * nobody runs. */
+    if (config.frozen_strength)
+    {
+        for (repeat = 0u; repeat < config.repetitions; ++repeat)
+        {
+            double probe_start = monotonic_seconds();
+
+            status = config.hilo8
+                         ? pe_omaha_hilo8_turn_range_values(
+                               context, board, MASK_EMPTY, ranges, &state,
+                               config.holes, frozen_values, config.players,
+                               &frozen_rivers, &frozen_mass, NULL,
+                               &probe_runs[repeat])
+                         : pe_omaha_turn_range_values_frozen(
+                               context, board, MASK_EMPTY, ranges, &state,
+                               config.holes, frozen_values, config.players,
+                               &frozen_rivers, &frozen_mass,
+                               &probe_runs[repeat]);
+            frozen_durations[repeat] = monotonic_seconds() - probe_start;
+            if (status != 0)
+            {
+                bench_fail("the frozen-strength turn terminal failed");
+                goto cleanup;
+            }
+            frozen_sorted[repeat] = frozen_durations[repeat];
+            walk_sorted[repeat] = probe_runs[repeat].walk_seconds;
+            precompute_sorted[repeat] = probe_runs[repeat].precompute_seconds;
+            low_precompute_sorted[repeat] =
+                probe_runs[repeat].low_precompute_seconds;
+        }
+        frozen_median = median_of(frozen_sorted, config.repetitions);
+        probe_walk = median_of(walk_sorted, config.repetitions);
+        probe_precompute = median_of(precompute_sorted, config.repetitions);
+        probe_low_precompute =
+            median_of(low_precompute_sorted, config.repetitions);
+        probe_fingerprint = fingerprint_values(frozen_values, config.players);
+        probe_matches = probe_fingerprint == fingerprint &&
+                        frozen_rivers == rivers &&
+                        same_double(frozen_mass, mass) ? 1 : 0;
+        if (!probe_matches)
+            bench_fail("the frozen-strength walk disagrees with the live one");
     }
 
     for (repeat = 0u; repeat < config.repetitions; ++repeat)
@@ -962,6 +1114,7 @@ int main(int argc, char **argv)
     printf("  \"board\": \"AsKd7c2h\",\n");
     printf("  \"dead_cards\": 0,\n");
     printf("  \"holes\": %u,\n", (unsigned)config.holes);
+    printf("  \"hilo8\": %s,\n", config.hilo8 ? "true" : "false");
     printf("  \"players\": %u,\n", (unsigned)config.players);
     printf("  \"threads\": %u,\n", (unsigned)config.threads);
     printf("  \"combos_per_player\": %zu,\n", config.combos);
@@ -974,7 +1127,9 @@ int main(int argc, char **argv)
            turn_min, turn_median, turn_max);
     printf("  \"rivers_priced\": %zu,\n", rivers);
     printf("  \"weight_sum\": %.9f,\n", mass);
-    if (enumerates)
+    printf("  \"legal_pairs_measured\": %s,\n",
+           counts_pairs ? "true" : "false");
+    if (counts_pairs)
     {
         printf("  \"legal_pairs\": %zu,\n", legal_pairs);
         printf("  \"pair_density\": %.9f,\n",
@@ -990,10 +1145,17 @@ int main(int argc, char **argv)
                deals_total > 0.0 ? turn_median / deals_total : 0.0);
     }
     else
-        printf("  \"legal_pairs\": null,\n  \"pair_density\": null,\n"
-               "  \"rivers_per_pair\": null,\n  \"deals_total\": null,\n"
-               "  \"deals_per_second\": null,\n"
+    {
+        printf("  \"legal_pairs\": null,\n  \"pair_density\": null,\n");
+        /* The rivers per tuple follow from the deck and the hands, so they are
+         * known whenever the walk runs, counted or not. */
+        if (enumerates)
+            printf("  \"rivers_per_pair\": %zu,\n", deals_per_pair);
+        else
+            printf("  \"rivers_per_pair\": null,\n");
+        printf("  \"deals_total\": null,\n  \"deals_per_second\": null,\n"
                "  \"seconds_per_deal\": null,\n");
+    }
     printf("  \"seconds_per_combo\": %.12f,\n",
            config.combos > 0u
                ? turn_median /
@@ -1082,6 +1244,23 @@ int main(int argc, char **argv)
         printf("  \"river_reference\": null,\n");
     printf("  \"turn_over_river\": %.3f,\n",
            river_seconds > 0.0 ? turn_median / river_seconds : 0.0);
+    if (config.frozen_strength)
+    {
+        printf("  \"probe\": {\"precompute_seconds\": %.9f, "
+               "\"low_precompute_seconds\": %.9f, "
+               "\"walk_seconds\": %.9f, \"deals\": %zu, \"combos\": %zu, "
+               "\"nanoseconds_per_visit\": ",
+               probe_precompute, probe_low_precompute, probe_walk,
+               probe_runs[0].deals, probe_runs[0].combos);
+        if (probe_runs[0].deals > 0u && probe_walk > 0.0)
+            printf("%.6f,\n", probe_walk * 1e9 / (double)probe_runs[0].deals);
+        else
+            printf("null,\n");
+        printf("    \"frozen_call_seconds\": %.9f, \"matches_live\": %s},\n",
+               frozen_median, probe_matches ? "true" : "false");
+    }
+    else
+        printf("  \"probe\": null,\n");
     printf("  \"combo_bytes\": %zu,\n", sizeof(pe_omaha_combo_t));
     printf("  \"range_bytes\": %zu,\n",
            (size_t)config.players * config.combos * sizeof(pe_omaha_combo_t));
@@ -1141,6 +1320,12 @@ cleanup:
     free(terminal_durations);
     free(filter_durations);
     free(profile_runs);
+    free(precompute_sorted);
+    free(walk_sorted);
+    free(low_precompute_sorted);
+    free(frozen_sorted);
+    free(frozen_durations);
+    free(probe_runs);
     if (context)
         eval_context_destroy(context);
     return g_failures == 0 ? 0 : 1;

@@ -27,6 +27,69 @@ extern "C" {
  * The heads-up four-card high-only vector path does not count deals: it reports
  * 0 there, because the field is telemetry and counting the compatible pairs is
  * work the payoff does not need.  `*out_weight_sum` is exact on both paths. */
+/*
+ * Cost split of one river terminal call, for the frozen-strength probe of
+ * issue #332.  The terminal evaluates every combo once against the board before
+ * it visits a single deal (design A of that issue), so a call is two parts:
+ * `precompute_seconds` is that one `StdDeck_OmahaHi_EVAL` per combo of every
+ * range, and `walk_seconds` is the deal walk reading those strengths from an
+ * array, with the same payoff and the same accumulation order.
+ *
+ * Hi/Lo adds `low_precompute_seconds`: the probe fills the low table in a pass
+ * of its own, so that pass is the figure it reports -- what asking for the low
+ * half costs on top of the high table.  The terminal itself fills both tables
+ * from one `StdDeck_OmahaHiLow8_EVAL` per combo, so its precompute is the
+ * combined call rather than the sum of the two probe passes.  The field is
+ * zero on the high-only path.
+ *
+ * The probe is valid only if it reproduces the terminal bit for bit; the caller
+ * checks the fingerprint, and a mismatch means the probe is measuring a
+ * different walk and its number is void.
+ */
+typedef struct
+{
+    double precompute_seconds;
+    double low_precompute_seconds;
+    double walk_seconds;
+    size_t deals;
+    size_t combos;
+} pe_omaha_river_probe_t;
+
+/*
+ * The same terminal, timed in the two parts the hoisted walk has: the precompute
+ * and the deal visits.  The values, the deal count and the deal mass are those
+ * of pe_omaha_river_range_values(), which runs the same two parts without the
+ * clocks; a caller still checks them, because a probe that does not reproduce
+ * the terminal is measuring a different walk.
+ *
+ * `probe` is required and is zeroed on entry.  Hi/Lo and the heads-up four-card
+ * vector sweep are not priced here: the probe always enumerates, so it times
+ * the walk this terminal runs rather than the vector kernel.
+ */
+int pe_omaha_river_range_values_frozen(
+    const EvalContext *context,
+    mask_t board,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum,
+    pe_omaha_river_probe_t *probe);
+
+int pe_omaha_hilo8_river_range_values_frozen(
+    const EvalContext *context,
+    mask_t board,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum,
+    pe_omaha_river_probe_t *probe);
+
 int pe_omaha_river_range_values(
     const EvalContext *context,
     mask_t board,

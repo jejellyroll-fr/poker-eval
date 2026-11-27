@@ -18,6 +18,9 @@
 #include <poker_eval/games/eval_omaha.h>
 #include <poker_eval/solver/pe_omaha_river.h>
 #include <poker_eval/solver/pe_omaha_turn.h>
+#include <poker_eval/solver/pe_pots.h>
+
+#include "support/pe_omaha_showdown_reference.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -41,41 +44,6 @@ static StdDeck_CardMask std_mask(mask_t cards)
     return result;
 }
 
-/* Awards of one showdown: the pot split evenly between the best hands. */
-static int deal_awards(const mask_t *holes, uint8_t player_count, mask_t board,
-                       double pot, double *awards)
-{
-    HandVal strength[PE_OMAHA_TURN_PLAYERS_MAX];
-    StdDeck_CardMask board_std = std_mask(board);
-    HandVal best = HandVal_NOTHING;
-    uint8_t winners = 0u;
-    uint8_t best_count = 0u;
-    uint8_t player;
-
-    for (player = 0u; player < player_count; ++player)
-    {
-        awards[player] = 0.0;
-        if (StdDeck_OmahaHi_EVAL(std_mask(holes[player]), board_std,
-                                 &strength[player]) != 0)
-            return 1;
-        if (best_count == 0u || strength[player] > best)
-        {
-            best = strength[player];
-            winners = (uint8_t)(1u << player);
-            best_count = 1u;
-        }
-        else if (strength[player] == best)
-        {
-            winners |= (uint8_t)(1u << player);
-            ++best_count;
-        }
-    }
-    for (player = 0u; player < player_count; ++player)
-        if (winners & (uint8_t)(1u << player))
-            awards[player] = pot / (double)best_count;
-    return 0;
-}
-
 typedef struct
 {
     double value;      /* hero's chance-expanded mean net award */
@@ -84,18 +52,25 @@ typedef struct
     int ok;            /* 0 when the showdown evaluator rejected a deal */
 } oracle_result_t;
 
-/* Independent brute force.  A tuple is legal when no combo reuses a card the
- * board, the dead mask or an earlier hand already holds and every weight is
- * positive; it then contributes once per river card still in the deck.  The
- * pooled value divides by the deal mass, which is exactly the probability
- * normaliser the terminal has to report.
+/* Independent brute force over the deals of a turn.  A tuple is legal when no
+ * combo reuses a card the board, the dead mask or an earlier hand already holds
+ * and every weight is positive; it then contributes once per river card still
+ * in the deck.  Every river is paid with the slices the caller wrote: a slice
+ * goes to its best eligible high hand, and on a Hi/Lo board its other half to
+ * the best qualifying low, with no low sending that half back to the high
+ * winners.  Values are per deal, net of each player's investment, normalised by
+ * the deal mass.  Returns 0, or 1 when the evaluator rejected a deal or nothing
+ * was dealt.
  */
-static oracle_result_t oracle_brute(mask_t board, mask_t dead,
-                                    const pe_omaha_range_t *ranges,
-                                    const pe_betting_state_t *state,
-                                    uint8_t player_count, uint8_t hero)
+static int oracle_deals(mask_t board, mask_t dead,
+                        const pe_omaha_range_t *ranges, uint8_t player_count,
+                        const pe_pot_slice_t *slices, uint8_t slice_count,
+                        int hilo8, const double *invested, double *out_values,
+                        double *out_pair_mass, double *out_deal_mass)
 {
-    oracle_result_t result = {0.0, 0.0, 0.0, 1};
+    double values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    double pair_mass = 0.0;
+    double deal_mass = 0.0;
     size_t index[PE_OMAHA_TURN_PLAYERS_MAX] = {0u};
     uint8_t player;
 
@@ -104,7 +79,6 @@ static oracle_result_t oracle_brute(mask_t board, mask_t dead,
         mask_t holes[PE_OMAHA_TURN_PLAYERS_MAX];
         mask_t used = board | dead;
         double weight = 1.0;
-        double total = 0.0;
         int legal = 1;
 
         for (player = 0u; player < player_count; ++player)
@@ -125,19 +99,36 @@ static oracle_result_t oracle_brute(mask_t board, mask_t dead,
 
             MASK_FOR_EACH_SET_BIT(free_cards, card)
             {
+                StdDeck_CardMask board_five =
+                    std_mask(mask_set(board, card));
+                HandVal high[PE_OMAHA_TURN_PLAYERS_MAX];
+                LowHandVal low[PE_OMAHA_TURN_PLAYERS_MAX];
                 double awards[PE_OMAHA_TURN_PLAYERS_MAX];
 
-                if (deal_awards(holes, player_count, mask_set(board, card),
-                                state->pot, awards) != 0)
+                for (player = 0u; player < player_count; ++player)
                 {
-                    result.ok = 0;
-                    return result;
+                    high[player] = HandVal_NOTHING;
+                    low[player] = LowHandVal_NOTHING;
+                    if (hilo8)
+                    {
+                        if (StdDeck_OmahaHiLow8_EVAL(std_mask(holes[player]),
+                                                     board_five, &high[player],
+                                                     &low[player]) != 0)
+                            return 1;
+                    }
+                    else if (StdDeck_OmahaHi_EVAL(std_mask(holes[player]),
+                                                  board_five,
+                                                  &high[player]) != 0)
+                        return 1;
                 }
-                total += awards[hero] - state->invested[hero];
+                pe_test_pay_slices(slices, slice_count, high, low, hilo8,
+                                   player_count, awards);
+                for (player = 0u; player < player_count; ++player)
+                    values[player] +=
+                        weight * (awards[player] - invested[player]);
             }
-            result.value += weight * total;
-            result.pair_mass += weight;
-            result.deal_mass += weight * (double)rivers;
+            pair_mass += weight;
+            deal_mass += weight * (double)rivers;
         }
         for (player = 0u; player < player_count; ++player)
         {
@@ -149,10 +140,39 @@ static oracle_result_t oracle_brute(mask_t board, mask_t dead,
         if (player == player_count)
             break;
     }
-    if (result.deal_mass > 0.0)
-        result.value /= result.deal_mass;
-    else
+    if (!(deal_mass > 0.0))
+        return 1;
+    for (player = 0u; player < player_count; ++player)
+        out_values[player] = values[player] / deal_mass;
+    *out_pair_mass = pair_mass;
+    *out_deal_mass = deal_mass;
+    return 0;
+}
+
+/* The high-only view of the same reference: one pot, every player eligible, and
+ * the hero's value, which is what the PLO4 fixtures below compare against. */
+static oracle_result_t oracle_brute(mask_t board, mask_t dead,
+                                    const pe_omaha_range_t *ranges,
+                                    const pe_betting_state_t *state,
+                                    uint8_t player_count, uint8_t hero)
+{
+    pe_pot_slice_t slice;
+    double invested[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    double values[PE_OMAHA_TURN_PLAYERS_MAX] = {0.0};
+    oracle_result_t result = {0.0, 0.0, 0.0, 1};
+    uint8_t player;
+
+    slice.amount = state->pot;
+    slice.eligible_mask = (uint8_t)((1u << player_count) - 1u);
+    for (player = 0u; player < player_count; ++player)
+        invested[player] = state->invested[player];
+    if (oracle_deals(board, dead, ranges, player_count, &slice, 1u, 0, invested,
+                     values, &result.pair_mass, &result.deal_mass) != 0)
+    {
         result.ok = 0;
+        return result;
+    }
+    result.value = values[hero];
     return result;
 }
 
@@ -353,6 +373,307 @@ static void test_profile_counters(EvalContext *context)
     CHECK(stats.filter_seconds >= 0.0 && stats.terminal_seconds >= 0.0,
           "the phase clocks must not run backwards: %.17g %.17g",
           stats.filter_seconds, stats.terminal_seconds);
+}
+
+/* The frozen-strength probe is the same walk with the evaluation hoisted out of
+ * it, so it has to reproduce the terminal bit for bit: same values, same deal
+ * mass, same river count.  It is kept behind a check rather than trusted,
+ * because a probe that drifted would still produce plausible per-visit numbers
+ * for a walk nobody runs. */
+static void test_frozen_strength_matches_live(EvalContext *context)
+{
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[3];
+    pe_omaha_combo_t p1[3];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    pe_omaha_turn_probe_t probe;
+    double live[2] = {0.0, 0.0};
+    double frozen[2] = {0.0, 0.0};
+    size_t live_rivers = 0u;
+    size_t frozen_rivers = 0u;
+    double live_mass = 0.0;
+    double frozen_mass = 0.0;
+    size_t expected_combos = 0u;
+    size_t index;
+    int card;
+
+    build_ranges(p0, &ranges[0], 3u, p1, &ranges[1], 3u);
+    init_state(&state, 2u, 63.0, 31.5);
+    CHECK(pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges, &state,
+                                     4u, live, 2u, &live_rivers,
+                                     &live_mass) == 0,
+          "the live turn terminal rejected the fixture");
+    CHECK(live_rivers == 48u,
+          "the fixture must reach all 48 rivers, got %zu", live_rivers);
+
+    /* Poison the struct: a probe that forgets a field would leave the poison
+     * visible instead of a plausible zero. */
+    memset(&probe, 0xff, sizeof(probe));
+    CHECK(pe_omaha_turn_range_values_frozen(
+              context, board, MASK_EMPTY, ranges, &state, 4u, frozen, 2u,
+              &frozen_rivers, &frozen_mass, &probe) == 0,
+          "the frozen turn terminal rejected the fixture");
+    CHECK(memcmp(live, frozen, sizeof(live)) == 0,
+          "the frozen walk changed the values");
+    CHECK(live_rivers == frozen_rivers,
+          "the frozen walk changed the river count");
+    CHECK(memcmp(&live_mass, &frozen_mass, sizeof(live_mass)) == 0,
+          "the frozen walk changed the deal mass");
+    CHECK(probe.precompute_seconds >= 0.0 && probe.walk_seconds >= 0.0,
+          "the probe clocks must not run backwards: %.17g %.17g",
+          probe.precompute_seconds, probe.walk_seconds);
+
+    /* One evaluation per combo of every range that survives the per-river
+     * filter, so the count is the filter's kept combos over the 48 rivers. */
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+    {
+        if (mask_is_set(board, card))
+            continue;
+        for (index = 0u; index < 3u; ++index)
+        {
+            if ((p0[index].cards & ((mask_t)1u << card)) == 0u)
+                ++expected_combos;
+            if ((p1[index].cards & ((mask_t)1u << card)) == 0u)
+                ++expected_combos;
+        }
+    }
+    CHECK(probe.combos == expected_combos,
+          "the precompute evaluated %zu combos, expected %zu", probe.combos,
+          expected_combos);
+    /* Unit weights, so the live deal mass is the deal count. */
+    CHECK(fabs((double)probe.deals - live_mass) <= TOL * live_mass,
+          "the frozen walk counted %.17g deals against a mass of %.17g",
+          (double)probe.deals, live_mass);
+}
+
+/* The Hi/Lo turn prices every candidate river with the river terminal's Hi/Lo
+ * payoff and combines them with the high-only chance expansion.  The oracle
+ * here composes exactly that from the river terminal called directly: it
+ * filters each range for the river card, prices the five-card board and
+ * weights the result by the deal mass the river terminal reports.  The turn
+ * agrees only if its filter, its chance weights and its reduction are the
+ * high-only ones it claims, and the probe has to reproduce it bit for bit.
+ *
+ * The hero holds three cards below eight, so it has a low on almost every
+ * river; the villain holds none, so the split moves the values away from the
+ * high-only ones and a Hi/Lo run cannot pass by ignoring the low half. */
+static void test_hilo_turn_matches_composition(EvalContext *context)
+{
+    static const int hero_cards[4] = {
+        CARD(A, CLUBS), CARD(3, DIAMONDS), CARD(4, HEARTS), CARD(5, SPADES)
+    };
+    static const int villain_cards[4] = {
+        CARD(K, CLUBS), CARD(Q, DIAMONDS), CARD(J, HEARTS), CARD(T, SPADES)
+    };
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[1];
+    pe_omaha_combo_t p1[1];
+    pe_omaha_combo_t kept[2][1];
+    pe_omaha_range_t ranges[2];
+    pe_omaha_range_t filtered[2];
+    pe_betting_state_t state;
+    pe_omaha_turn_stats_t stats;
+    pe_omaha_turn_probe_t probe;
+    double values[2] = {0.0, 0.0};
+    double instrumented[2] = {0.0, 0.0};
+    double high_only[2] = {0.0, 0.0};
+    double expected[2] = {0.0, 0.0};
+    double total = 0.0;
+    size_t rivers = 0u;
+    size_t instrumented_rivers = 0u;
+    size_t high_rivers = 0u;
+    double mass = 0.0;
+    double instrumented_mass = 0.0;
+    double high_mass = 0.0;
+    int card;
+    uint8_t player;
+    int status;
+
+    p0[0].cards = mask_of(hero_cards, 4u);
+    p0[0].weight = 1.0;
+    p1[0].cards = mask_of(villain_cards, 4u);
+    p1[0].weight = 1.0;
+    ranges[0].combos = p0;
+    ranges[0].count = 1u;
+    ranges[1].combos = p1;
+    ranges[1].count = 1u;
+    init_state(&state, 2u, 63.0, 31.5);
+
+    status = pe_omaha_hilo8_turn_range_values(
+        context, board, MASK_EMPTY, ranges, &state, 4u, values, 2u, &rivers,
+        &mass, NULL, NULL);
+    CHECK(status == 0, "the Hi/Lo turn returned %d", status);
+    CHECK(rivers == 40u, "expected 40 rivers, got %zu", rivers);
+
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+    {
+        double river_values[2] = {0.0, 0.0};
+        double river_mass = 0.0;
+        size_t deals = 0u;
+        int usable = 1;
+
+        if (mask_is_set(board, card))
+            continue;
+        for (player = 0u; player < 2u; ++player)
+        {
+            size_t kept_count = 0u;
+            size_t index;
+
+            for (index = 0u; index < ranges[player].count; ++index)
+                if ((ranges[player].combos[index].cards &
+                     ((mask_t)1u << card)) == 0u)
+                    kept[player][kept_count++] = ranges[player].combos[index];
+            filtered[player].combos = kept[player];
+            filtered[player].count = kept_count;
+            if (kept_count == 0u)
+                usable = 0;
+        }
+        if (!usable)
+            continue;
+        status = pe_omaha_hilo8_river_range_values(
+            context, mask_set(board, card), filtered, &state, 4u, river_values,
+            2u, &deals, &river_mass);
+        CHECK(status == 0, "the Hi/Lo river terminal returned %d on card %d",
+              status, card);
+        if (status != 0)
+            continue;
+        expected[0] += river_values[0] * river_mass;
+        expected[1] += river_values[1] * river_mass;
+        total += river_mass;
+    }
+    CHECK(total > 0.0, "the composition found no deal mass");
+    expected[0] /= total;
+    expected[1] /= total;
+    CHECK(fabs(values[0] - expected[0]) <= TOL * (fabs(expected[0]) + 1.0),
+          "hero %.17g against the composition %.17g", values[0],
+          expected[0]);
+    CHECK(fabs(values[1] - expected[1]) <= TOL * (fabs(expected[1]) + 1.0),
+          "villain %.17g against the composition %.17g", values[1],
+          expected[1]);
+    CHECK(fabs(values[0] + values[1]) <= TOL,
+          "the Hi/Lo values do not sum to zero");
+
+    /* The instrumented entry is the same walk: the counters and the low pass
+     * must not move the values, and the low pass has to be timed. */
+    memset(&stats, 0xff, sizeof(stats));
+    memset(&probe, 0xff, sizeof(probe));
+    status = pe_omaha_hilo8_turn_range_values(
+        context, board, MASK_EMPTY, ranges, &state, 4u, instrumented, 2u,
+        &instrumented_rivers, &instrumented_mass, &stats, &probe);
+    CHECK(status == 0, "the instrumented Hi/Lo turn returned %d", status);
+    CHECK(memcmp(values, instrumented, sizeof(values)) == 0,
+          "the instrumented Hi/Lo turn changed the values");
+    CHECK(rivers == instrumented_rivers,
+          "the instrumented Hi/Lo turn changed the river count");
+    CHECK(memcmp(&mass, &instrumented_mass, sizeof(mass)) == 0,
+          "the instrumented Hi/Lo turn changed the deal mass");
+    CHECK(stats.rivers_to_terminal == 40u,
+          "the Hi/Lo filter reached %zu rivers, want 40",
+          stats.rivers_to_terminal);
+    CHECK(probe.combos == 80u,
+          "the Hi/Lo precompute visited %zu combos, want 80", probe.combos);
+    CHECK(probe.precompute_seconds > 0.0,
+          "the Hi/Lo probe did not time the high pass");
+    CHECK(probe.low_precompute_seconds > 0.0,
+          "the Hi/Lo probe did not time the low pass");
+
+    /* The low half has to move the values: the hero takes half the pot on the
+     * rivers that give it a low, so a Hi/Lo run cannot return the high-only
+     * numbers. */
+    status = pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges,
+                                        &state, 4u, high_only, 2u, &high_rivers,
+                                        &high_mass);
+    CHECK(status == 0, "the high-only turn returned %d", status);
+    CHECK(memcmp(values, high_only, sizeof(values)) != 0,
+          "the Hi/Lo turn returned the high-only values");
+}
+
+/* Three-way Hi/Lo with a side pot: the short stack has paid 10 into a pot of 50
+ * and the two deep stacks 20 each, so the main 30 is open to all three and the
+ * 20 side pot to the two that matched it.  The short stack holds the only low
+ * draw, so it can never win more than the main pot while the two deep stacks
+ * own the whole side pot; a terminal that paid one pot to everybody, or let a
+ * player who never paid into the side pot win a share of it, would not match
+ * the oracle.  The oracle writes those slices out itself and pays them with its
+ * own high/low winners, so it does not share the terminal's slice builder. */
+static void test_hilo_three_way_side_pot(EvalContext *context)
+{
+    static const int SHORT_HAND[4] = {
+        CARD(A, CLUBS), CARD(3, DIAMONDS), CARD(4, HEARTS), CARD(5, SPADES)
+    };
+    static const int KINGS_HAND[4] = {
+        CARD(K, CLUBS), CARD(K, HEARTS), CARD(8, DIAMONDS), CARD(8, CLUBS)
+    };
+    static const int ACES_HAND[4] = {
+        CARD(A, DIAMONDS), CARD(A, HEARTS), CARD(6, CLUBS), CARD(6, DIAMONDS)
+    };
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[1];
+    pe_omaha_combo_t p1[1];
+    pe_omaha_combo_t p2[1];
+    pe_omaha_range_t ranges[3];
+    pe_betting_state_t state;
+    /* The main pot is the 10 each of the three paid, the side pot the second 10
+     * of the two deep stacks. */
+    pe_pot_slice_t slices[2] = {{30.0, 0x07u}, {20.0, 0x06u}};
+    double invested[3] = {10.0, 20.0, 20.0};
+    double oracle_values[3] = {0.0, 0.0, 0.0};
+    double values[3] = {0.0, 0.0, 0.0};
+    double oracle_mass = 0.0;
+    double pair_mass = 0.0;
+    size_t rivers = 0u;
+    double mass = 0.0;
+    double sum = 0.0;
+    uint8_t player;
+    int status;
+
+    p0[0].cards = mask_of(SHORT_HAND, 4u);
+    p0[0].weight = 1.0;
+    p1[0].cards = mask_of(KINGS_HAND, 4u);
+    p1[0].weight = 1.0;
+    p2[0].cards = mask_of(ACES_HAND, 4u);
+    p2[0].weight = 1.0;
+    ranges[0].combos = p0;
+    ranges[0].count = 1u;
+    ranges[1].combos = p1;
+    ranges[1].count = 1u;
+    ranges[2].combos = p2;
+    ranges[2].count = 1u;
+    init_state(&state, 3u, 50.0, 10.0);
+    state.invested[1] = 20.0;
+    state.invested[2] = 20.0;
+
+    CHECK(oracle_deals(board, MASK_EMPTY, ranges, 3u, slices, 2u, 1, invested,
+                       oracle_values, &pair_mass, &oracle_mass) == 0,
+          "the side-pot oracle rejected a deal");
+    CHECK(pair_mass > 0.0, "the side-pot fixture has no legal tuple");
+    CHECK(oracle_mass > 0.0, "the side-pot oracle found no deal");
+
+    status = pe_omaha_hilo8_turn_range_values(
+        context, board, MASK_EMPTY, ranges, &state, 4u, values, 3u, &rivers,
+        &mass, NULL, NULL);
+    CHECK(status == 0, "the three-way Hi/Lo turn returned %d", status);
+    CHECK(rivers == 36u,
+          "the fixture leaves 36 rivers, got %zu", rivers);
+    for (player = 0u; player < 3u; ++player)
+    {
+        CHECK(fabs(values[player] - oracle_values[player]) <=
+                  TOL * (fabs(oracle_values[player]) + 1.0),
+              "player %u %.17g against the oracle %.17g", (unsigned)player,
+              values[player], oracle_values[player]);
+        sum += values[player];
+        /* Nobody loses more than it put in, and the short stack cannot win
+         * more than the main pot it paid into. */
+        CHECK(values[player] >= -invested[player] - TOL,
+              "player %u lost more than its investment: %.17g",
+              (unsigned)player, values[player]);
+    }
+    CHECK(fabs(sum) <= TOL, "the Hi/Lo values sum to %.17g", sum);
+    CHECK(values[0] <= 20.0 + TOL,
+          "the short stack won %.17g out of a 30 main pot", values[0]);
+    CHECK(values[1] <= 30.0 + TOL && values[2] <= 30.0 + TOL,
+          "a deep stack won more than the 50 it could take");
 }
 
 /* A four-card board leaves 40 rivers per legal pair, one fewer per declared
@@ -769,6 +1090,9 @@ int main(void)
     }
     test_full_turn_matches_oracle(context);
     test_profile_counters(context);
+    test_frozen_strength_matches_live(context);
+    test_hilo_turn_matches_composition(context);
+    test_hilo_three_way_side_pot(context);
     test_chance_mass_normalization(context);
     test_turn_is_not_one_river(context);
     test_river_that_empties_a_range_is_skipped(context);
