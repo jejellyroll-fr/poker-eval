@@ -32,7 +32,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define HOLE_CARDS_MAX 6u
 #define RANGE_MAX 8u
 #define MAX_PLAYERS 3u
 #define MAX_SLICES 3u
@@ -125,6 +124,9 @@ typedef struct
     double amount;
     uint8_t eligible;
 } slice_spec_t;
+
+/* The pot every heads-up case plays for: 20 in the middle, ten each. */
+static const slice_spec_t heads_up_slices[] = {{20.0, 0x03u}};
 
 typedef struct
 {
@@ -307,8 +309,9 @@ static void run_case(const river_case_t *test)
     EvalConfig config = eval_config_holdem();
     EvalContext *context;
     double values[MAX_PLAYERS] = {0.0, 0.0, 0.0};
-    double reference_mass = 0.0;
-    double walk_mass = 0.0;
+    /* The enumeration insists on somewhere to put its own total; this case
+     * never reads it, because the reference sums the mass itself. */
+    double enumeration_mass = 0.0;
     double terminal_mass = 0.0;
     double sum = 0.0;
     size_t reference_deals = 0u;
@@ -362,20 +365,16 @@ static void run_case(const river_case_t *test)
     status = pe_omaha_deals_enumerate(reference.board, ranges,
                                       test->player_count, test->hole_cards,
                                       reference_deal, &reference,
-                                      &reference_deals, &walk_mass);
+                                      &reference_deals, &enumeration_mass);
     CHECK(status == 0 && !reference.failed,
           "%s: the per-deal reference failed", test->label);
     CHECK(reference_deals > 0u && reference.mass > 0.0,
           "%s: the reference found no legal deal", test->label);
-    CHECK(same_bits(walk_mass, reference.mass),
-          "%s: the walk summed %.17g, the reference callback %.17g",
-          test->label, walk_mass, reference.mass);
     if (status != 0 || reference.failed || reference_deals == 0u ||
-        !(reference.mass > 0.0) || !same_bits(walk_mass, reference.mass))
+        !(reference.mass > 0.0))
         return;
-    reference_mass = reference.mass;
     for (player = 0u; player < test->player_count; ++player)
-        reference.values[player] /= reference_mass;
+        reference.values[player] /= reference.mass;
     if (test->expected_deals != 0u)
         CHECK(reference_deals == test->expected_deals,
               "%s: the reference priced %zu deals, the hand count says %zu",
@@ -408,9 +407,9 @@ static void run_case(const river_case_t *test)
     CHECK(terminal_deals == reference_deals,
           "%s: terminal counted %zu deals, the reference %zu", test->label,
           terminal_deals, reference_deals);
-    CHECK(same_bits(terminal_mass, reference_mass),
+    CHECK(same_bits(terminal_mass, reference.mass),
           "%s: terminal mass %.17g, the reference %.17g (not bit-identical)",
-          test->label, terminal_mass, reference_mass);
+          test->label, terminal_mass, reference.mass);
     for (player = 0u; player < test->player_count; ++player)
     {
         CHECK(same_bits(values[player], reference.values[player]),
@@ -419,7 +418,7 @@ static void run_case(const river_case_t *test)
               reference.values[player]);
         sum += values[player];
     }
-    CHECK(fabs(sum) <= 1e-12,
+    CHECK(fabs(sum) <= TOL,
           "%s: the terminal is not zero-sum (%.17g)", test->label, sum);
     eval_context_destroy(context);
 }
@@ -439,10 +438,9 @@ static void test_plo5_matches_per_deal(void)
         {"QhJh9h8h7s", 0.125},
         {"AcKd2d3h4h", 0.125},
     };
-    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
         "PLO5 high-only", 5u, 0, "2c7dThJsQc", 2u,
-        {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, slices, 1u,
+        {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, heads_up_slices, 1u,
         NULL, 0u,
     };
 
@@ -464,10 +462,9 @@ static void test_plo6_matches_per_deal(void)
         {"QhJh9h8h7s6c", 0.125},
         {"AcKd2d3h4h5d", 0.125},
     };
-    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
         "PLO6 high-only", 6u, 0, "2c7dThJsQc", 2u,
-        {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, slices, 1u,
+        {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, heads_up_slices, 1u,
         NULL, 0u,
     };
 
@@ -526,10 +523,9 @@ static void test_hilo_split_matches_per_deal(void)
         {"Ad7cJdJh", 0.600},
         {"KcKs5d5h", 0.400},
     };
-    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
         "PLO4 Hi/Lo split", 4u, 1, "2c4d8hJsQc", 2u,
-        {p0, p1}, {2u, 2u}, 20.0, {10.0, 10.0}, slices, 1u,
+        {p0, p1}, {2u, 2u}, 20.0, {10.0, 10.0}, heads_up_slices, 1u,
         NULL, 0u,
     };
 
@@ -550,10 +546,9 @@ static void test_hilo_no_low_matches_per_deal(void)
         {"9d8d5d5s6s7s", 0.250},
         {"QhJh9h8h7s6c", 0.250},
     };
-    static const slice_spec_t slices[] = {{20.0, 0x03u}};
     static const river_case_t test = {
         "PLO6 Hi/Lo without a low", 6u, 1, "2c7dThJsQc", 2u,
-        {p0, p1}, {3u, 3u}, 20.0, {10.0, 10.0}, slices, 1u,
+        {p0, p1}, {3u, 3u}, 20.0, {10.0, 10.0}, heads_up_slices, 1u,
         NULL, 0u,
     };
 

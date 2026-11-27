@@ -198,6 +198,7 @@ static void test_matches_pre_hoist_values(void)
     EvalContext *context;
     double values[2] = {0.0, 0.0};
     double mass = 0.0;
+    uint64_t fingerprint;
     size_t deals = 0u;
     int live[MODERN_DECK_SIZE];
     int live_count = 0;
@@ -255,9 +256,10 @@ static void test_matches_pre_hoist_values(void)
     CHECK(fixture_same_bits(values[1], -0.58949573829817625),
           "pre-hoist fixture: player 1 %.17g, want -0.58949573829817625",
           values[1]);
-    CHECK(fixture_fingerprint(values, 2u) == 0xcd22f660d31fbdd3ull,
+    fingerprint = fixture_fingerprint(values, 2u);
+    CHECK(fingerprint == 0xcd22f660d31fbdd3ull,
           "pre-hoist fixture: fingerprint %016llx, want cd22f660d31fbdd3",
-          (unsigned long long)fixture_fingerprint(values, 2u));
+          (unsigned long long)fingerprint);
 }
 
 int main(void)
