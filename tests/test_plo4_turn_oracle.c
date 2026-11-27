@@ -427,6 +427,148 @@ static void test_frozen_strength_matches_live(EvalContext *context)
           (double)probe.deals, live_mass);
 }
 
+/* The Hi/Lo turn prices every candidate river with the river terminal's Hi/Lo
+ * payoff and combines them with the high-only chance expansion.  The oracle
+ * here composes exactly that from the river terminal called directly: it
+ * filters each range for the river card, prices the five-card board and
+ * weights the result by the deal mass the river terminal reports.  The turn
+ * agrees only if its filter, its chance weights and its reduction are the
+ * high-only ones it claims, and the probe has to reproduce it bit for bit.
+ *
+ * The hero holds three cards below eight, so it has a low on almost every
+ * river; the villain holds none, so the split moves the values away from the
+ * high-only ones and a Hi/Lo run cannot pass by ignoring the low half. */
+static void test_hilo_turn_matches_composition(EvalContext *context)
+{
+    static const int hero_cards[4] = {
+        CARD(A, CLUBS), CARD(3, DIAMONDS), CARD(4, HEARTS), CARD(5, SPADES)
+    };
+    static const int villain_cards[4] = {
+        CARD(K, CLUBS), CARD(Q, DIAMONDS), CARD(J, HEARTS), CARD(T, SPADES)
+    };
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[1];
+    pe_omaha_combo_t p1[1];
+    pe_omaha_combo_t kept[2][1];
+    pe_omaha_range_t ranges[2];
+    pe_omaha_range_t filtered[2];
+    pe_betting_state_t state;
+    pe_omaha_turn_stats_t stats;
+    pe_omaha_turn_probe_t probe;
+    double values[2] = {0.0, 0.0};
+    double instrumented[2] = {0.0, 0.0};
+    double high_only[2] = {0.0, 0.0};
+    double expected[2] = {0.0, 0.0};
+    double total = 0.0;
+    size_t rivers = 0u;
+    size_t instrumented_rivers = 0u;
+    size_t high_rivers = 0u;
+    double mass = 0.0;
+    double instrumented_mass = 0.0;
+    double high_mass = 0.0;
+    int card;
+    uint8_t player;
+    int status;
+
+    p0[0].cards = mask_of(hero_cards, 4u);
+    p0[0].weight = 1.0;
+    p1[0].cards = mask_of(villain_cards, 4u);
+    p1[0].weight = 1.0;
+    ranges[0].combos = p0;
+    ranges[0].count = 1u;
+    ranges[1].combos = p1;
+    ranges[1].count = 1u;
+    init_state(&state, 2u, 63.0, 31.5);
+
+    status = pe_omaha_hilo8_turn_range_values(
+        context, board, MASK_EMPTY, ranges, &state, 4u, values, 2u, &rivers,
+        &mass, NULL, NULL);
+    CHECK(status == 0, "the Hi/Lo turn returned %d", status);
+    CHECK(rivers == 40u, "expected 40 rivers, got %zu", rivers);
+
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+    {
+        double river_values[2] = {0.0, 0.0};
+        double river_mass = 0.0;
+        size_t deals = 0u;
+        int usable = 1;
+
+        if (mask_is_set(board, card))
+            continue;
+        for (player = 0u; player < 2u; ++player)
+        {
+            size_t kept_count = 0u;
+            size_t index;
+
+            for (index = 0u; index < ranges[player].count; ++index)
+                if ((ranges[player].combos[index].cards &
+                     ((mask_t)1u << card)) == 0u)
+                    kept[player][kept_count++] = ranges[player].combos[index];
+            filtered[player].combos = kept[player];
+            filtered[player].count = kept_count;
+            if (kept_count == 0u)
+                usable = 0;
+        }
+        if (!usable)
+            continue;
+        status = pe_omaha_hilo8_river_range_values(
+            context, mask_set(board, card), filtered, &state, 4u, river_values,
+            2u, &deals, &river_mass);
+        CHECK(status == 0, "the Hi/Lo river terminal returned %d on card %d",
+              status, card);
+        if (status != 0)
+            continue;
+        expected[0] += river_values[0] * river_mass;
+        expected[1] += river_values[1] * river_mass;
+        total += river_mass;
+    }
+    CHECK(total > 0.0, "the composition found no deal mass");
+    expected[0] /= total;
+    expected[1] /= total;
+    CHECK(fabs(values[0] - expected[0]) <= TOL * (fabs(expected[0]) + 1.0),
+          "hero %.17g against the composition %.17g", values[0],
+          expected[0]);
+    CHECK(fabs(values[1] - expected[1]) <= TOL * (fabs(expected[1]) + 1.0),
+          "villain %.17g against the composition %.17g", values[1],
+          expected[1]);
+    CHECK(fabs(values[0] + values[1]) <= TOL,
+          "the Hi/Lo values do not sum to zero");
+
+    /* The instrumented entry is the same walk: the counters and the low pass
+     * must not move the values, and the low pass has to be timed. */
+    memset(&stats, 0xff, sizeof(stats));
+    memset(&probe, 0xff, sizeof(probe));
+    status = pe_omaha_hilo8_turn_range_values(
+        context, board, MASK_EMPTY, ranges, &state, 4u, instrumented, 2u,
+        &instrumented_rivers, &instrumented_mass, &stats, &probe);
+    CHECK(status == 0, "the instrumented Hi/Lo turn returned %d", status);
+    CHECK(memcmp(values, instrumented, sizeof(values)) == 0,
+          "the instrumented Hi/Lo turn changed the values");
+    CHECK(rivers == instrumented_rivers,
+          "the instrumented Hi/Lo turn changed the river count");
+    CHECK(memcmp(&mass, &instrumented_mass, sizeof(mass)) == 0,
+          "the instrumented Hi/Lo turn changed the deal mass");
+    CHECK(stats.rivers_to_terminal == 40u,
+          "the Hi/Lo filter reached %zu rivers, want 40",
+          stats.rivers_to_terminal);
+    CHECK(probe.combos == 80u,
+          "the Hi/Lo precompute visited %zu combos, want 80", probe.combos);
+    CHECK(probe.precompute_seconds > 0.0,
+          "the Hi/Lo probe did not time the high pass");
+    CHECK(probe.low_precompute_seconds > 0.0,
+          "the Hi/Lo probe did not time the low pass");
+
+    /* The low half has to move the values: the hero takes half the pot on the
+     * rivers that give it a low, so a Hi/Lo run cannot return the high-only
+     * numbers. */
+    status = pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges,
+                                        &state, 4u, high_only, 2u, &high_rivers,
+                                        &high_mass);
+    CHECK(status == 0, "the high-only turn returned %d", status);
+    CHECK(memcmp(values, high_only, sizeof(values)) != 0,
+          "the Hi/Lo turn returned the high-only values");
+}
+
 /* A four-card board leaves 40 rivers per legal pair, one fewer per declared
  * dead card, so the pooled deal mass is that count times the pooled range mass.
  * Dead cards the ranges do not use change the count and nothing else. */
@@ -842,6 +984,7 @@ int main(void)
     test_full_turn_matches_oracle(context);
     test_profile_counters(context);
     test_frozen_strength_matches_live(context);
+    test_hilo_turn_matches_composition(context);
     test_chance_mass_normalization(context);
     test_turn_is_not_one_river(context);
     test_river_that_empties_a_range_is_skipped(context);

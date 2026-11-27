@@ -133,10 +133,23 @@ The walk, with its strength read from an array instead of from
 One run gives both sides of the split, so a loaded machine slows both and the
 ratio survives where absolute seconds would not.
 
+On Hi/Lo the evaluator returns both halves from one call, so the terminal fills
+both tables from that call. The probe fills them in two passes instead -- one
+`StdDeck_OmahaHi_EVAL` for the high table, one `StdDeck_OmahaHiLow8_EVAL` for
+the low -- and times the second apart: `low_precompute_seconds` is what asking
+for the low table costs on top of the high one, while the terminal's own
+precompute is the combined call, which in practice is the high pass because the
+evaluator computes the low half anyway. `--hilo` selects the Hi/Lo payoff; the
+chance expansion, the per-river filter and the reduction stay the high-only
+ones, so the two runs differ only in the payoff and in that extra pass.
+
 This is implemented: `pe_omaha_deals_enumerate_indexed()` reports the combo each
 player contributed, and `pe_omaha_river_range_values_frozen()` and its turn
 counterpart call the same walk with the precompute and the visits timed apart,
-printing them with `matches_live` beside them. Design A is that walk in the
+printing them with `matches_live` beside them. Hi/Lo has its own pair of
+entries, `pe_omaha_hilo8_river_range_values_frozen()` and
+`pe_omaha_hilo8_turn_range_values()`, which share the walk and the turn and add
+the low table's pass. Design A is that walk in the
 terminal itself, so the probe now decomposes the terminal rather than standing
 in for it; `matches_live` therefore compares the terminal with a clocked copy of
 itself, and the independent check is `test_omaha_river_hoisted`, which prices
@@ -165,12 +178,37 @@ are all exactly those of the pre-change runs: the walk visits the same deals,
 with the same weights, in the same order, and only the evaluations moved.
 `matches_live` is true in all three.
 
-Hi/Lo is the case the bench never runs, so it was checked against the binary of
-the commit before A first, and that run is now a fixture in
-`test_omaha_hilo_river`: a 400-combo PLO6 Hi/Lo river on board `2c4d7hJsQc`,
-weights in quarters, prints `0.58949573829817625` and `-0.58949573829817625` for
-the two players, a deal mass of `26251.25`, `67134` deals and the fingerprint
-`cd22f660d31fbdd3` from both binaries, byte for byte.
+Hi/Lo was first checked against the binary of the commit before A, and that run
+is now a fixture in `test_omaha_hilo_river`: a 400-combo PLO6 Hi/Lo river on
+board `2c4d7hJsQc`, weights in quarters, prints `0.58949573829817625` and
+`-0.58949573829817625` for the two players, a deal mass of `26251.25`, `67134`
+deals and the fingerprint `cd22f660d31fbdd3` from both binaries, byte for byte.
+
+### Measured: Hi/Lo, with `--hilo`
+
+The same probe on the Hi/Lo payoff, same board, load 2.9–4.1, `--hilo
+--profile --frozen-strength --repetitions 3`:
+
+| Run | Terminal | High pass | Low pass | Walk | Per visit |
+|---|---|---|---|---|---|
+| PLO6, n = 2,000 | 1.38 s | 0.10 s | 0.11 s | 1.27 s | 24.9 ns |
+| PLO5, n = 1,994 | 1.75 s | 0.08 s | 0.08 s | 1.67 s | 23.8 ns |
+
+The deal count, the deal mass and the 48 rivers are those of the high-only runs
+above (50,849,064 and 19,821,384.246093750 at PLO6, 70,218,300 and
+27,371,295.908203125 at PLO5): the split moves the values, not what the walk
+visits. `matches_live` is true on both, the values are `0.072183988416` and
+`0.044791908311` for player 0 (fingerprints `3f735577efef69fb` and
+`c6be68645969f6d3`), and they have to differ from the high-only ones, which is
+what `test_plo4_turn_oracle` checks on a fixture whose hero always has a low.
+
+The low pass costs what the high pass costs, 0.11 s against 0.10 s, because
+`StdDeck_OmahaHiLow8_EVAL` computes both halves whether or not the caller keeps
+the low. That is also why the terminal can afford both tables from one call,
+and why the probe's two passes bracket the terminal's precompute rather than
+adding to it. The visit is 4.7 ns more expensive than high-only (24.9 against
+20.2 ns): the low comparison and the split are in the walk, and A did not move
+them.
 
 The per-visit cost lands between **18.5 and 20.2 ns across the three runs —
 9 % about a mean of 19.6 ns** — and that band is what the figure carries, not
@@ -245,8 +283,9 @@ price of a different summation. So:
 
 0. **Probe first.** `--holes 6 --combos 2000 --frozen-strength
    --repetitions 3` reports the precompute, the walk and the live terminal in
-   one process, with `matches_live` true. It ran before A was written, and every
-   pre-change second in the table above is its output.
+   one process, with `matches_live` true; `--hilo` adds the low table's pass and
+   runs the same check on the Hi/Lo payoff. It ran before A was written, and
+   every pre-change second in the table above is its output.
 1. **Speed.** At `--holes 6 --combos 2000 --repetitions 3`, the terminal phase
    must be at most **half** of its value before the change, on the same host and
    in the same load band. Measured after A: 1.13 s against 53.94 s, 24 times

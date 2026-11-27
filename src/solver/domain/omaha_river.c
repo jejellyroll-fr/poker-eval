@@ -393,7 +393,10 @@ static int omaha_hoisted_walk(mask_t board, const pe_omaha_range_t *ranges,
             HandVal value = HandVal_NOTHING;
             LowHandVal low_value = LowHandVal_NOTHING;
 
-            if (ctx->hilo8)
+            /* A probe on a Hi/Lo board fills the low table in a pass of its
+             * own, because that pass is the figure it reports; the terminal
+             * fills both tables from one combined call. */
+            if (ctx->hilo8 && !probe)
             {
                 if (StdDeck_OmahaHiLow8_EVAL(hole, std_board, &value,
                                              &low_value) != 0)
@@ -415,6 +418,31 @@ static int omaha_hoisted_walk(mask_t board, const pe_omaha_range_t *ranges,
     }
     if (probe)
         probe->precompute_seconds = river_now() - started;
+    if (probe && ctx->hilo8)
+    {
+        started = river_now();
+        for (player = 0u; player < player_count; ++player)
+        {
+            size_t count = ranges[player].count;
+            size_t combo;
+
+            for (combo = 0u; combo < count; ++combo)
+            {
+                HandVal discarded = HandVal_NOTHING;
+                LowHandVal low_value = LowHandVal_NOTHING;
+
+                if (StdDeck_OmahaHiLow8_EVAL(
+                        to_std_mask(ranges[player].combos[combo].cards),
+                        std_board, &discarded, &low_value) != 0)
+                {
+                    status = 1;
+                    goto done;
+                }
+                low[player][combo] = (int64_t)low_value;
+            }
+        }
+        probe->low_precompute_seconds = river_now() - started;
+    }
     ctx->frozen = high;
     ctx->frozen_low = low;
 
@@ -520,6 +548,7 @@ static int omaha_river_range_values(
     if (probe)
     {
         probe->precompute_seconds = 0.0;
+        probe->low_precompute_seconds = 0.0;
         probe->walk_seconds = 0.0;
         probe->deals = 0u;
         probe->combos = 0u;
@@ -627,5 +656,24 @@ int pe_omaha_river_range_values_frozen(
         return -1;
     return omaha_river_range_values(context, board, ranges, state, hole_cards,
                                     0, out_values, player_count, out_deal_count,
+                                    out_weight_sum, NULL, probe);
+}
+
+int pe_omaha_hilo8_river_range_values_frozen(
+    const EvalContext *context,
+    mask_t board,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum,
+    pe_omaha_river_probe_t *probe)
+{
+    if (!probe)
+        return -1;
+    return omaha_river_range_values(context, board, ranges, state, hole_cards,
+                                    1, out_values, player_count, out_deal_count,
                                     out_weight_sum, NULL, probe);
 }

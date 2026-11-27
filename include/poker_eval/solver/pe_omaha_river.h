@@ -33,9 +33,14 @@ extern "C" {
  * it visits a single deal (design A of that issue), so a call is two parts:
  * `precompute_seconds` is that one `StdDeck_OmahaHi_EVAL` per combo of every
  * range, and `walk_seconds` is the deal walk reading those strengths from an
- * array, with the same payoff and the same accumulation order.  High-only:
- * Hi/Lo carries a second strength per combo and the probe does not cover it,
- * although the terminal itself hoists both halves.
+ * array, with the same payoff and the same accumulation order.
+ *
+ * Hi/Lo adds `low_precompute_seconds`: the probe fills the low table in a pass
+ * of its own, so that pass is the figure it reports -- what asking for the low
+ * half costs on top of the high table.  The terminal itself fills both tables
+ * from one `StdDeck_OmahaHiLow8_EVAL` per combo, so its precompute is the
+ * combined call rather than the sum of the two probe passes.  The field is
+ * zero on the high-only path.
  *
  * The probe is valid only if it reproduces the terminal bit for bit; the caller
  * checks the fingerprint, and a mismatch means the probe is measuring a
@@ -44,6 +49,7 @@ extern "C" {
 typedef struct
 {
     double precompute_seconds;
+    double low_precompute_seconds;
     double walk_seconds;
     size_t deals;
     size_t combos;
@@ -61,6 +67,18 @@ typedef struct
  * the walk this terminal runs rather than the vector kernel.
  */
 int pe_omaha_river_range_values_frozen(
+    const EvalContext *context,
+    mask_t board,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_deal_count,
+    double *out_weight_sum,
+    pe_omaha_river_probe_t *probe);
+
+int pe_omaha_hilo8_river_range_values_frozen(
     const EvalContext *context,
     mask_t board,
     const pe_omaha_range_t *ranges,

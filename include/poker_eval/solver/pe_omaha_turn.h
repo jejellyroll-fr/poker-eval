@@ -50,7 +50,11 @@
  * claim over two streets would have to enumerate the river decisions after
  * each chance outcome rather than only the showdown.  This terminal is the
  * exact showdown layer such a tree would need, and the fixture it is tested
- * against.  Hi/Lo is not covered in this tranche.
+ * against.
+ *
+ * Hi/Lo has its own entry point, pe_omaha_hilo8_turn_range_values(): every
+ * river is priced by the river terminal's Hi/Lo payoff, and the chance
+ * expansion, the per-river filter and the reduction are the high-only ones.
  */
 
 #ifndef POKER_EVAL_PE_OMAHA_TURN_H
@@ -153,7 +157,10 @@ int pe_omaha_turn_range_values_profiled(
  * what the terminal pays once per combo per river, and what its deal walks pay
  * per visit with the strengths already there.  The river terminal hoists that
  * precompute by design A of the issue, so these are the two parts of the walk
- * it always runs, summed over the rivers a turn prices.
+ * it always runs, summed over the rivers a turn prices.  On a Hi/Lo turn the
+ * probe fills the low table in a pass of its own and reports it in
+ * `low_precompute_seconds`, summed over the rivers; that field stays zero on
+ * the high-only path.
  *
  * The values are those of pe_omaha_turn_range_values(), which the caller has to
  * check: a probe that does not reproduce the fingerprint is measuring a
@@ -169,10 +176,32 @@ int pe_omaha_turn_range_values_profiled(
 typedef struct
 {
     double precompute_seconds;
+    double low_precompute_seconds;
     double walk_seconds;
     size_t deals;
     size_t combos;
 } pe_omaha_turn_probe_t;
+
+/*
+ * The same terminal on Hi/Lo boards.  `stats` and `probe` are optional and mean
+ * what they mean above: the same counters, and the same split of the hoisted
+ * walk, with the low table's precompute reported apart.  The values, the river
+ * count and the deal mass of this entry are those of a Hi/Lo river terminal run
+ * on every candidate river, combined by the high-only chance expansion.
+ */
+int pe_omaha_hilo8_turn_range_values(
+    const EvalContext *context,
+    mask_t board,
+    mask_t dead,
+    const pe_omaha_range_t *ranges,
+    const pe_betting_state_t *state,
+    uint8_t hole_cards,
+    double *out_values,
+    uint8_t player_count,
+    size_t *out_river_count,
+    double *out_weight_sum,
+    pe_omaha_turn_stats_t *stats,
+    pe_omaha_turn_probe_t *probe);
 
 int pe_omaha_turn_range_values_frozen(
     const EvalContext *context,

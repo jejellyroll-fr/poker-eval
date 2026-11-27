@@ -200,6 +200,10 @@ static void test_matches_pre_hoist_values(void)
     double mass = 0.0;
     uint64_t fingerprint;
     size_t deals = 0u;
+    pe_omaha_river_probe_t probe;
+    double probe_values[2] = {0.0, 0.0};
+    double probe_mass = 0.0;
+    size_t probe_deals = 0u;
     int live[MODERN_DECK_SIZE];
     int live_count = 0;
     uint32_t seed = 0x9E3779B9u;
@@ -245,7 +249,6 @@ static void test_matches_pre_hoist_values(void)
         return;
     status = pe_omaha_hilo8_river_range_values(context, board, ranges, &state,
                                                6u, values, 2u, &deals, &mass);
-    eval_context_destroy(context);
     CHECK(status == 0, "pre-hoist fixture: terminal failed with %d", status);
     CHECK(deals == 67134u, "pre-hoist fixture: %zu deals, want 67134", deals);
     CHECK(fixture_same_bits(mass, 26251.25),
@@ -260,6 +263,30 @@ static void test_matches_pre_hoist_values(void)
     CHECK(fingerprint == 0xcd22f660d31fbdd3ull,
           "pre-hoist fixture: fingerprint %016llx, want cd22f660d31fbdd3",
           (unsigned long long)fingerprint);
+
+    /* The frozen probe on the same ranges: the high table in one pass, the low
+     * table in a second one, then the same walk.  It has to reproduce the live
+     * terminal bit for bit and report the low pass apart -- that figure is the
+     * one no high-only run carries, and a walk that read the wrong table would
+     * still return plausible numbers. */
+    memset(&probe, 0xff, sizeof(probe));
+    status = pe_omaha_hilo8_river_range_values_frozen(
+        context, board, ranges, &state, 6u, probe_values, 2u, &probe_deals,
+        &probe_mass, &probe);
+    eval_context_destroy(context);
+    CHECK(status == 0, "frozen probe: terminal failed with %d", status);
+    CHECK(memcmp(values, probe_values, sizeof(values)) == 0,
+          "frozen probe changed the Hi/Lo values");
+    CHECK(probe_deals == deals, "frozen probe: %zu deals against %zu",
+          probe_deals, deals);
+    CHECK(fixture_same_bits(probe_mass, mass),
+          "frozen probe changed the deal mass");
+    CHECK(probe.combos == 800u, "frozen probe visited %zu combos, want 800",
+          probe.combos);
+    CHECK(probe.precompute_seconds > 0.0,
+          "frozen probe: the high pass was not timed");
+    CHECK(probe.low_precompute_seconds > 0.0,
+          "frozen probe: the low pass was not timed");
 }
 
 int main(void)
