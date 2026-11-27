@@ -103,6 +103,22 @@ read the showdown value off the strength-ordered prefix sums.
   compatible mass, and its own header says results "otherwise agree with the
   pairwise oracle to floating-point rounding".
 
+### Measured: design B
+
+B was implemented as the wide inclusion-exclusion sweep of
+`showdown_vector.c` (`pe_showdown_wide_mass`), reachable from the river
+terminal only through `pe_omaha_river_set_sparse_blockers()` and from the
+benchmark through `--sparse-blockers`; the deal walk stays the default. On the
+gate board, heads-up high-only, `--repetitions 3`: PLO6 n = 2,000 goes from
+1.112-1.121 s to 0.350-0.368 s (3.11x), PLO6 n = 2,091 from 1.213-1.227 s to
+0.384-0.391 s (3.15x), PLO5 n = 1,994 from 1.346-1.363 s to 0.191-0.192 s
+(7.08x), with no pair visits in any of them. The `values_fingerprint` is
+identical on those runs because the benchmark's weights are dyadic and every
+sum is exact; with weights in thirds the residue is 5.4e-13 on the compatible
+mass and about 5e-13 on the values. The full table, the subset-touch count and
+the tail bug the first version had are in
+[plo_turn_scalability.md](plo_turn_scalability.md#sparse-blocker-aggregation-the-sweep-at-plo5-and-plo6).
+
 ## What a visit costs, and what B would cost
 
 The one quantity the profile cannot supply is the cost of a **visit with the

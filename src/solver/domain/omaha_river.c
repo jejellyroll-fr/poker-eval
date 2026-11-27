@@ -3,6 +3,7 @@
 #include <poker_eval/core/time_compat.h>
 
 #include <float.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -19,6 +20,23 @@ static int finite_double(double value)
 #include <poker_eval/solver/pe_vector.h>
 
 #define PE_OMAHA_RIVER_MAX_PLAYERS 8u
+
+/* Diagnostic opt-in for the wide inclusion-exclusion sweep of issue #332.
+ * Off by default: the sweep is exact in real arithmetic but not bit-identical
+ * to the deal walk, so it must not displace the certified path by surprise.
+ * The benchmark sets it for one process to price the design; a solver never
+ * turns it on. */
+static int omaha_sparse_blockers_enabled = 0;
+
+void pe_omaha_river_set_sparse_blockers(int enabled)
+{
+    omaha_sparse_blockers_enabled = enabled != 0;
+}
+
+int pe_omaha_river_sparse_blockers_enabled(void)
+{
+    return omaha_sparse_blockers_enabled;
+}
 
 typedef struct
 {
@@ -230,7 +248,8 @@ static int omaha_heads_up_values(const mask_t board,
                                  const pe_omaha_range_t *ranges,
                                  const pe_betting_state_t *state,
                                  const pe_pot_slice_t *slices,
-                                 uint8_t slice_count, double *out_values,
+                                 uint8_t slice_count, uint8_t hole_cards,
+                                 double *out_values,
                                  size_t *out_deal_count,
                                  double *out_weight_sum)
 {
@@ -275,7 +294,7 @@ static int omaha_heads_up_values(const mask_t board,
     {
         mask_t hole = hero_range->combos[i].cards;
         HandVal value = HandVal_NOTHING;
-        int valid = mask_popcount(hole) == 4 && (hole & board) == 0u &&
+        int valid = mask_popcount(hole) == hole_cards && (hole & board) == 0u &&
                     StdDeck_OmahaHi_EVAL(to_std_mask(hole), std_board,
                                          &value) == 0;
 
@@ -287,7 +306,7 @@ static int omaha_heads_up_values(const mask_t board,
     {
         mask_t hole = opp_range->combos[i].cards;
         HandVal value = HandVal_NOTHING;
-        int valid = mask_popcount(hole) == 4 && (hole & board) == 0u &&
+        int valid = mask_popcount(hole) == hole_cards && (hole & board) == 0u &&
                     StdDeck_OmahaHi_EVAL(to_std_mask(hole), std_board,
                                          &value) == 0;
         double weight = opp_range->combos[i].weight;
@@ -302,10 +321,18 @@ static int omaha_heads_up_values(const mask_t board,
         status = -1;
         goto done;
     }
-    if (pe_showdown_vector_mass(hero_masks, hero_strength, hero_n, opp_masks,
-                                opp_strength, opp_reach, opp_n, board,
-                                slices[0].amount, &shares, mass, &path) !=
-        PE_SOLVER_OK)
+    if (hole_cards == 4u)
+    {
+        if (pe_showdown_vector_mass(hero_masks, hero_strength, hero_n,
+                                    opp_masks, opp_strength, opp_reach, opp_n,
+                                    board, slices[0].amount, &shares, mass,
+                                    &path) != PE_SOLVER_OK)
+            goto done;
+    }
+    else if (pe_showdown_wide_mass(hero_masks, hero_strength, hero_n,
+                                   opp_masks, opp_strength, opp_reach, opp_n,
+                                   board, slices[0].amount, hole_cards,
+                                   &shares, mass, &path) != PE_SOLVER_OK)
         goto done;
 
     for (i = 0u; i < hero_n; ++i)
@@ -564,18 +591,21 @@ static int omaha_river_range_values(
        keep the enumeration path, which is where the exact deal count and the
        independent oracle live.  The probe never takes this branch: it prices
        the enumerated walk, whose precompute and deal visits it can split. */
-    if (!hilo8 && !probe && player_count == 2u && hole_cards == 4u &&
+    if (!hilo8 && !probe && player_count == 2u &&
         ranges[0].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS &&
-        ranges[1].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS)
+        ranges[1].count >= PE_SHOWDOWN_PLO4_MIN_OPPONENTS &&
+        (hole_cards == 4u ||
+         (hole_cards <= 6u && omaha_sparse_blockers_enabled)))
     {
         int fast = omaha_heads_up_values(board, ranges, state, slices,
-                                         slice_count, out_values,
+                                         slice_count, hole_cards, out_values,
                                          out_deal_count, out_weight_sum);
 
         if (fast == 0)
         {
             if (out_path)
-                *out_path = PE_SHOWDOWN_PATH_PLO4;
+                *out_path = hole_cards == 4u ? PE_SHOWDOWN_PATH_PLO4
+                                             : PE_SHOWDOWN_PATH_PLO_WIDE;
             return 0;
         }
         if (fast < 0)

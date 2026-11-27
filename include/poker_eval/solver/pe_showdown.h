@@ -23,7 +23,10 @@ typedef enum {
     PE_SHOWDOWN_PATH_MULTIWAY,
     /* Four-card ranges through the blocker-aware sweep: opponent reach is
        accumulated per card subset and removed by inclusion-exclusion. */
-    PE_SHOWDOWN_PATH_PLO4
+    PE_SHOWDOWN_PATH_PLO4,
+    /* Five- and six-card ranges through the same sweep, over 31 and 63
+       nonempty subsets instead of 15. */
+    PE_SHOWDOWN_PATH_PLO_WIDE
 } pe_showdown_path_t;
 
 typedef struct
@@ -99,6 +102,38 @@ pe_solver_status_t pe_showdown_vector_mass(
     size_t opp_n,
     mask_t dead,
     double pot,
+    pe_value_vec_t *out_values,
+    double *out_mass,
+    pe_showdown_path_t *out_path);
+
+/**
+ * The same inclusion-exclusion sweep as the four-card path, for ranges whose
+ * hands all have `hole_cards` cards: four, five or six.
+ *
+ * Not reached from pe_showdown_vector_mass(), which will not silently move a
+ * five- or six-card caller off its exact pairwise reference. A caller opts in
+ * by name, and a caller that needs the certified walk stays where it is.
+ *
+ * Exact in real arithmetic, not bit-identical to the pairwise sum: the
+ * inclusion-exclusion subtracts positive terms from a larger one and the
+ * summation order differs. The compatible mass carries the same 1e-9 residue
+ * clamp as the four-card path.
+ *
+ * Returns PE_SOLVER_ERR_INVALID_CONFIG when the widths disagree, when
+ * `hole_cards` is outside 4..6, or when the subset tables for this many combos
+ * would not fit.
+ */
+pe_solver_status_t pe_showdown_wide_mass(
+    const mask_t *hero_masks,
+    const int64_t *hero_strength,
+    size_t hero_n,
+    const mask_t *opp_masks,
+    const int64_t *opp_strength,
+    const double *opp_reach,
+    size_t opp_n,
+    mask_t dead,
+    double pot,
+    unsigned hole_cards,
     pe_value_vec_t *out_values,
     double *out_mass,
     pe_showdown_path_t *out_path);

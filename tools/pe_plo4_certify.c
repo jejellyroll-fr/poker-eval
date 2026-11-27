@@ -277,6 +277,7 @@ static const char *path_name(pe_showdown_path_t path)
     case PE_SHOWDOWN_PATH_PAIRWISE: return "pairwise";
     case PE_SHOWDOWN_PATH_MULTIWAY: return "multiway";
     case PE_SHOWDOWN_PATH_PLO4: return "plo4";
+    case PE_SHOWDOWN_PATH_PLO_WIDE: return "plo_wide";
     case PE_SHOWDOWN_PATH_NONE:
     default: return "enumeration";
     }

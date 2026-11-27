@@ -295,6 +295,98 @@ caller pools anyway. Eight contexts do not move the memory figure — peak RSS
 stays at 6.6–7.2 MiB against 6.5–6.8 MiB serial — and sixteen contexts reach
 7.47–7.61 MiB at PLO6 2,091 combos, still under 8 MiB.
 
+## Sparse blocker aggregation: the sweep at PLO5 and PLO6
+
+Issue #332, design B. The deal walk stays the certified path; this is the
+measured alternative, reachable only through `--sparse-blockers` in the
+benchmark (`pe_omaha_river_set_sparse_blockers(1)`, off by default, never set
+by a solver).
+
+The walk costs `density * n^2` visits per river whatever the implementation,
+because every legal pair carries its own weight. The sweep does not visit
+pairs at all: it sorts each range by strength, accumulates opponent reach per
+card subset, and takes each combo's compatible mass and win mass by
+inclusion-exclusion over its `2^holes - 1` nonempty subsets -- 31 at PLO5, 63
+at PLO6, against the 15 the four-card path already used. The work per river
+becomes `(2^holes - 1) * (opp_n + 2 * hero_n)` subset touches instead of
+`hero_n * opp_n` visits.
+
+Measured heads-up high-only on the gate board, `--repetitions 3`, one session,
+each pair of runs in the same load condition:
+
+| Variant | Combos | Deal walk | Sweep | Speedup | Pair visits | Subset touches | Fingerprint |
+|---|---|---|---|---|---|---|---|
+| PLO6 | 2,000 | 1.112-1.121 s | 0.350-0.368 s | 3.11x | 50,849,064 | 12.1 M | identical |
+| PLO6 | 2,091 | 1.213-1.227 s | 0.384-0.391 s | 3.15x | 55,589,004 | 12.6 M | identical |
+| PLO5 | 1,994 | 1.346-1.363 s | 0.191-0.192 s | 7.08x | 70,218,300 | 5.95 M | identical |
+
+Subset touches are counted the way the implementation spends them: `2^holes -
+1` per combo per side per river, so 48 rivers x 2 ranges x 2,000 x 63 at PLO6.
+PLO5 is seven times faster rather than three because its hands carry 31
+subsets instead of 63 while the walk it replaces is just as long.
+
+Both of the criteria the issue fixed in advance are met at PLO6 n = 2,000: the
+turn visits **no** pair, against 50.8 million, and it lands at **0.350-0.368 s**
+against the 0.6 s line and the 1.112-1.121 s walk.
+
+The equality in the last column is exactness, not a property of the method.
+The benchmark draws weights that are dyadic, so every product and every sum in
+both paths is exactly representable and the re-associated total lands on the
+same double. With weights that are not exactly representable the last bits
+move: on the same river with weights in thirds and sevenths, the compatible
+mass differs by 5.4e-13 relative and the per-player values by about 5e-13.
+That is the residue the four-card sweep documents as 1e-9, and it is why the
+sweep stays a diagnostic path and does not replace the walk by default.
+
+Two things this section owes the reader, both measured:
+
+- The first version of the sweep forgot the opponents stronger than every
+  hero, because its subset table was only filled as far as the hero cursor
+  walked. The compatible mass came back short -- 4 per cent on one river at 40
+  combos -- and the error vanished as the ranges grew, so it was invisible in
+  the gate configuration. `test_wide_sweep` pins it with unequal range sizes
+  and unequal strength ladders, and fails 163 checks when the tail is dropped.
+- The same tail was missing from the four-card sweep's `out_mass`, which the
+  PLO4 terminal multiplies into its net, so this fixes a latent error there as
+  well. See the next paragraph for what it moved.
+
+### What the PLO4 tail fix moves
+
+Replaying every reference PLO4 configuration twice, once with the tail folded
+in and once with it cut out again, shows the fix is silent everywhere the
+sweep is used as documented:
+
+| Configuration | Fields | Diffs |
+|---|---|---|
+| `pe-plo4-certify` defaults (64 combos, uniform) | 57 | none |
+| `--combos 32 --strategy mixed --weighted` (guide example) | 57 | none |
+| `--combos 128 --weighted --max-iterations 32` | 57 | none |
+| `--combos 512 --weighted --max-iterations 16 --pot 100` | 57 | none |
+| `pe-plo4-river-bench` (small, medium, larger) | 60 | none |
+| turn, 4 holes, 2,000 combos | 37 | only the timing |
+| turn, 4 holes, 2,091 combos | 37 | only the timing |
+
+One configuration does move: the turn at four holes and 512 combos. There the
+compatible mass grows by 7.5e-5 relative, the values by 4.2e-3, and the
+fingerprint goes from `ee44ea62b89b0509` to `aaff858c1a112dfb`. The direction
+is the one the bug predicts -- the mass can only grow when the strongest
+opponents are folded in -- and the size is consistent with how few of the 512
+combos sit above every hero on that board. At 2,000 and 2,091 combos no
+opponent sits above every hero, so the tail is empty and the turn is
+bit-identical to the pre-fix run. That is why the gate configuration, the
+certifier and the river bench never saw the error.
+
+`test_wide_sweep` is the check that pins it: its four-card case compares the
+sweep against a direct pair enumeration, and with the tail cut it fails 163
+checks. The 26 tests matching `wide_sweep`, `plo4`, `omaha` and `showdown` are
+green with the tail in place, and PLO4 still reports `plo4_sweep`.
+
+What this does not buy: Hi/Lo (the low half would need a second strength
+dimension), three or more players (the multiway vector path is separate), or a
+default. The sweep has to pass a fingerprint decision before it can displace
+the walk, and with weights that are not dyadic it does not reproduce the
+fingerprint.
+
 ## Measured memory
 
 Peak RSS is **6.5–6.8 MiB for every PLO5 and PLO6 configuration above**, from 7

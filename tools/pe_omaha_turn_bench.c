@@ -313,6 +313,8 @@ static const char *path_name(pe_showdown_path_t path)
     {
     case PE_SHOWDOWN_PATH_PLO4:
         return "plo4_sweep";
+    case PE_SHOWDOWN_PATH_PLO_WIDE:
+        return "plo_wide_sweep";
     case PE_SHOWDOWN_PATH_SORTED:
         return "sorted";
     case PE_SHOWDOWN_PATH_PAIRWISE:
@@ -521,6 +523,9 @@ static void usage(const char *program)
             "precompute included, so the profile's terminal and the probe's\n"
             "walk are not subtracted from each other.  Price the walk against\n"
             "the precompute, and read the live terminal from a profile run.\n"
+            "--sparse-blockers prices a heads-up high-only river through the\n"
+            "wide inclusion-exclusion sweep instead of the deal walk, for 5 and 6\n"
+            "hole cards; exact in real arithmetic, not bit-identical.\n"
             "--hilo prices every river with the Hi/Lo payoff; the expansion,\n"
             "the filter and the reduction are the high-only ones.  With\n"
             "--frozen-strength the probe fills the low table in a pass of its\n"
@@ -584,6 +589,7 @@ int main(int argc, char **argv)
     int arg;
     int have_holes = 0;
     int have_combos = 0;
+    int sparse_blockers = 0;
     pe_omaha_turn_stats_t *profile_runs = NULL;
     double *filter_durations = NULL;
     double *terminal_durations = NULL;
@@ -697,6 +703,13 @@ int main(int argc, char **argv)
             config.hilo8 = 1;
             continue;
         }
+        /* Diagnostic path of issue #332: the wide inclusion-exclusion sweep
+         * replaces the deal walk for heads-up PLO5/PLO6. Off unless asked. */
+        if (strcmp(argv[arg], "--sparse-blockers") == 0)
+        {
+            sparse_blockers = 1;
+            continue;
+        }
         if (strcmp(argv[arg], "--seed") == 0 && arg + 1 < argc)
         {
             if (parse_size(argv[++arg], 1u, 0x7fffffffu, &parsed) != 0)
@@ -716,6 +729,7 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+    pe_omaha_river_set_sparse_blockers(sparse_blockers);
 
     durations = (double *)calloc(config.repetitions, sizeof(*durations));
     sorted = (double *)calloc(config.repetitions, sizeof(*sorted));

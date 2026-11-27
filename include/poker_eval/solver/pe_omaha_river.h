@@ -66,6 +66,24 @@ typedef struct
  * vector sweep are not priced here: the probe always enumerates, so it times
  * the walk this terminal runs rather than the vector kernel.
  */
+/*
+ * Diagnostic switch for the wide blocker sweep of issue #332: with it on, a
+ * heads-up high-only river whose ranges are at least
+ * PE_SHOWDOWN_PLO4_MIN_OPPONENTS combos wide prices the turn through the
+ * inclusion-exclusion sweep over card subsets instead of the deal walk, for
+ * four, five and six hole cards.
+ *
+ * It is off by default and stays off in a solver. The sweep is exact in real
+ * arithmetic but not bit-identical to the walk: the values differ in the last
+ * bits because the summation is re-associated, so a caller that compares
+ * `values_fingerprint` must expect a difference, and the certified deal path
+ * remains the default.  Process-wide state, for measurement only.
+ */
+void pe_omaha_river_set_sparse_blockers(int enabled);
+
+/* Whether the switch above is on. */
+int pe_omaha_river_sparse_blockers_enabled(void);
+
 int pe_omaha_river_range_values_frozen(
     const EvalContext *context,
     mask_t board,

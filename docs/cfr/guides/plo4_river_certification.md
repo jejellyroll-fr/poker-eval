@@ -190,6 +190,17 @@ once per terminal rather than once per (hero, opponent) pair. Without that
 callback the same run enumerates 3.2 × 10^10 pairs and does not finish in a
 useful time.
 
+The sweep's compatible mass has to be read only after every opponent has been
+folded into its subset table. It used to stop at the strongest hero, so the
+opponents above every hero were missing from the total and from the subset
+sums; the mass then came back short. The certifier never showed it, because at
+the widths it uses no opponent sits above every hero, and neither do the river
+bench scenarios -- every reference configuration here is bit-identical with and
+without the correction. A turn at four holes and 512 combos is where it
+surfaced: the mass grows by 7.5e-5 relative and the fingerprint moves. The
+measurements are in
+[plo_turn_scalability.md](plo_turn_scalability.md#what-the-plo4-tail-fix-moves).
+
 The full-range test is quarantined under sanitizers (`sanitizer-skip`), like
 the other 178,365-combo case: it is exact but slow under instrumentation.
 
