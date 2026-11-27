@@ -42,10 +42,13 @@ DEALS = 50_849_064
 RIVERS = 48
 MASS = 19_821_384.246093750
 # Anchors measured on the ubuntu-latest runner that executes this probe, in
-# seconds and in nanoseconds per visit (run 45987938776: 1.785 s and 32.14 ns).
-# They are the runner's numbers rather than a workstation's, because the gate
-# has to leave room for the host it runs on and not for the one it was written
-# on: twice these is still fifteen times below the pre-design-A figures.
+# seconds and in nanoseconds per visit.  Two runs of the same commit gave
+# 1.785 s / 32.14 ns and 2.262 s / 40.91 ns, a spread of 27 % between two hosts
+# of the same pool, so the envelope is set against the faster of the two and the
+# slower one still had a third of it left.  These are the numbers of the host
+# that runs the gate rather than of a workstation, because the gate has to leave
+# room for the machine it lands on: twice the anchor is still fifteen times
+# below the pre-design-A figures.
 TURN_SECONDS_ANCHOR = 1.78
 VISIT_NS_ANCHOR = 32.1
 ENVELOPE = 2.0
