@@ -18,6 +18,134 @@ the guide and the tool drift apart. `plo4-certification-docs.yml` runs that
 single test on a push that touches the guide, so the exemption costs one short
 job rather than waking the blocking set.
 
+## Omaha turn terminal regression
+
+`omaha-turn-regression.yml` guards design A of issue #332: hoisting the
+showdown out of the inner loop made the PLO6 turn terminal 47 times faster
+while leaving its values bit-identical
+(`docs/cfr/guides/plo_turn_pair_walk.md`), and nothing in the test suite would
+notice a later change that gave that speed back. The job runs the check itself
+on `ubuntu-latest`, in a Release build with the tests, the examples, the
+bindings, the GPU backend and OpenMP off. A run takes a few minutes, most of it
+in the configure and the build.
+
+It runs on `pull_request` only, filtered to the solver, evaluator, deck, game,
+the benchmark source, the probe, the build files and the workflow itself. There
+is deliberately no base-branch filter: the work lands through stacked pull
+requests, so a guard that only watched `master` would not see the branch that
+introduces the regression until after it was merged. `workflow_dispatch` runs
+it on demand.
+
+### What it prices
+
+One reference configuration, the one the guide quotes: PLO6, two thousand combos
+per range, no dead cards, the board `AsKd7c2h`, every legal deal visited, three
+repetitions, taken with `--profile` and `--frozen-strength`.
+`benchmarks/solver/omaha_turn_probe.py` runs
+`tools/pe_omaha_turn_bench` and validates its JSON report; the report is
+uploaded as the `omaha-turn-bench` artifact whether the gate passes or fails,
+so a red run can be read after the fact.
+
+### What makes it fail
+
+Two groups of checks, and the first one runs before any clock is trusted.
+
+Exact, because a change of order, weight or payoff is a correctness bug rather
+than a slow run:
+
+| Field | Required |
+|---|---|
+| `values_fingerprint` | `ac3016522c620075` |
+| `profile.deals` | `50 849 064` |
+| `rivers_priced` | `48` |
+| `weight_sum` | `19 821 384.246093750` within `1e-9` relative |
+| `deterministic_across_repetitions` | `true` |
+| `profile.counts_stable_across_repetitions` | `true` |
+| `probe.matches_live` | `true` |
+| `probe.deals` | `50 849 064` |
+| `holes`, `combos_per_player`, `hilo8` | `6`, `2000`, `false` |
+
+The fingerprint covers the values the terminal writes for every deal; the deal
+count, the river count and the mass cover the work it does to write them; the
+probe's `matches_live` covers the frozen-strength path against the live one. A
+report taken without `--profile` or without `--frozen-strength` is rejected
+outright, since the fields it needs would be missing.
+
+Timed, with a 2x envelope on both figures:
+
+| Field | Anchor | Budget at 2x |
+|---|---|---|
+| `turn_seconds.min` | 1.78 s | 3.56 s |
+| `probe.nanoseconds_per_visit` | 32.1 ns | 64.2 ns |
+
+Both figures are printed whether the gate passes or fails, with their anchor and
+the envelope in force, so a runner that drifts says so in the log instead of
+turning into a mystery.
+
+The envelope is loose on purpose, and it has to be. Before design A the same
+reference turn took **53.94 s and 1087 ns per deal**, so even 2x the anchor sits
+fifteen to seventeen times below the regression being caught: the gate
+watches for the gain being thrown away, not for a few percent of host noise. In
+the other direction the two figures move together but not identically — a
+slower host inflates both — so a raised visit cost with an unchanged terminal
+phase is the signature worth reading closely.
+
+### Where the anchors come from
+
+They are the numbers of the runner pool, not of a workstation. The same commit
+measured **1.12 s** on a developer machine and **1.785 s / 32.14 ns** and
+**2.262 s / 40.91 ns** on two hosts of the `ubuntu-latest` pool — a spread of
+27 % between two machines that both ran the reference configuration correctly.
+Anchoring on the workstation would have failed every CI run; anchoring on the
+faster host left the slower one with a third of the envelope still free. A
+factor of 1.27 between two hosts of one pool is ordinary, and the envelope has
+to cover it without covering a real regression.
+
+### Recalibrating when the pool changes
+
+GitHub replaces its `ubuntu-latest` images regularly, and a faster or slower
+family of hosts moves both figures at once. Recalibrate when the gate fails on
+timing alone — the fingerprint and the counters green, one or both of the two
+printed figures past its budget — and when the drift is a step rather than a
+spike.
+
+1. Read the run's log for the two `terminal phase:` and `per visit:` lines, or
+   run the job by hand with
+   `gh workflow run omaha-turn-regression.yml --ref <branch>` then
+   `gh run view --log`. Re-run it once on a second host before believing a
+   single sample: the pool is not homogeneous, and the 27 % spread above is the
+   range to expect between two hosts of the same family.
+2. Set `TURN_SECONDS_ANCHOR` and `VISIT_NS_ANCHOR` in
+   `benchmarks/solver/omaha_turn_probe.py` to the **faster** of the samples
+   seen, rounded down a little, so the slower host of the pool still fits under
+   the envelope. Keep the two consistent: their ratio is the number of visits
+   one run makes, about 55 million, so a ratio far from that means one of the
+   two was transcribed from a different run.
+3. Leave `ENVELOPE` at `2.0` unless the pool itself became twice as noisy: the
+   envelope exists to absorb a heterogeneous pool, and raising it to cover a
+   real regression would defeat the gate.
+4. Note the change in the probe's comment block, which records each measured
+   pair and the run it came from, and quote the figures in the commit message.
+   A recalibration with no measurement behind it is indistinguishable from
+   quietly widening the gate.
+
+Check a change to the probe on a developer machine before pushing it, with a
+report the bench already produced:
+
+```sh
+python3 benchmarks/solver/omaha_turn_probe.py \
+  --bench build/soko/tools/pe-omaha-turn-bench \
+  --output build/soko/turn-gate.json
+python3 benchmarks/solver/omaha_turn_probe.py \
+  --report build/soko/turn-gate.json --envelope 0.5   # must fail
+```
+
+The first command must pass — a workstation is faster than the pool, so its
+figures are inside the envelope — and the second must fail on the timing
+checks, proving the comparison is live rather than vacuous. The exact checks are
+tested the same way: edit a copy of the report's `values_fingerprint` or
+`deals` and confirm `--report` refuses it.
+
 ## macOS arm64 legs
 
 `macos-arm64.yml` builds and tests on the hosted Apple Silicon image
