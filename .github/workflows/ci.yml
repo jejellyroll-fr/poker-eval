@@ -7,8 +7,9 @@ on:
     paths-ignore:
       - '**.md'
       - 'docs/**'
+  # No branch filter: a stacked pull request targets another feature branch, so
+  # a filter would leave its whole suite unrun; see docs/ci.md.
   pull_request:
-    branches: [ master ]
   schedule:
     - cron: '0 2 * * 1'
   workflow_dispatch:

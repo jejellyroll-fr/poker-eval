@@ -191,6 +191,16 @@ merge commit and squash the child as usual.
 When a stack is still open, merge the parent without `--delete-branch` and
 delete its branch once the child is merged too; that avoids the whole sequence.
 
+The same reasoning that keeps a base-branch filter off the turn gate applies to
+every blocking workflow: `ci.yml`, `cmake.yml`,
+`infra-sanitizers.yml`, `release-check.yml` and `solver-benchmark-smoke.yml`
+used to list `master` (or `master, development`) under `pull_request`, so a pull
+request targeting another feature branch ran none of them. A stacked pull
+request could merge a suite that had never executed — one stack merged with 14
+checks instead of 32. None of those five carries a branch filter now; their
+triggers stay narrowed by `paths`, by the changed files, or by the `macos-arm64`
+label, and `macos-arm64.yml` keeps its filter because its legs run on demand.
+
 ## macOS arm64 legs
 
 `macos-arm64.yml` builds and tests on the hosted Apple Silicon image

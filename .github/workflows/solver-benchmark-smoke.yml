@@ -1,8 +1,9 @@
 name: Solver benchmark smoke
 
 on:
+  # No branch filter: a stacked pull request targets another feature branch, so
+  # a filter would leave its whole suite unrun; see docs/ci.md.
   pull_request:
-    branches: [ master ]
     paths:
       - 'benchmarks/solver/**'
       - 'scripts/benchmarks/**'
