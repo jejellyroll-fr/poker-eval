@@ -131,9 +131,7 @@ mass bit for bit and reports `matches_serial`. It held in all twelve runs below.
 Two lanes are the only point that scales cleanly (1.94–1.98×); four give
 3.41–3.52×, and eight add only about another 1.4× on top, so the last lanes of
 this 10-core machine do not carry a proportional share. The figures are
-reported as measured, not modelled. The short PLO6 run scales best because it
-spends the least time queueing for the memory bus, which is also why the two
-larger PLO6 configurations land within 4% of each other.
+reported as measured, not modelled.
 
 The terminal still exposes one serial entry point, so the fan-out is the
 caller's: one eval context and one compaction buffer per lane, both of which a
