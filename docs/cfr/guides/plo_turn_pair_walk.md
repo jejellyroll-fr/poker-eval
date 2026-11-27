@@ -141,8 +141,10 @@ terminal itself, so the probe now decomposes the terminal rather than standing
 in for it; `matches_live` therefore compares the terminal with a clocked copy of
 itself, and the independent check is `test_omaha_river_hoisted`, which prices
 the same river deal by deal with its own payoff, its own mass sum and
-hand-declared side pots -- a three-way case included -- and compares the values,
-the deal count and the mass bit for bit.
+hand-declared side pots, one of them three-way, and compares the values, the
+deal count and the mass bit for bit.  The side-pot case also carries values
+counted by hand -- the short stack wins only the main pot -- so that case is
+pinned rather than merely agreed with the terminal.
 
 ### Measured: design A, before and after
 
@@ -164,7 +166,8 @@ with the same weights, in the same order, and only the evaluations moved.
 `matches_live` is true in all three.
 
 Hi/Lo is the case the bench never runs, so it was checked against the binary of
-the commit before A instead: a 400-combo PLO6 Hi/Lo river on board `2c4d7hJsQc`,
+the commit before A first, and that run is now a fixture in
+`test_omaha_hilo_river`: a 400-combo PLO6 Hi/Lo river on board `2c4d7hJsQc`,
 weights in quarters, prints `0.58949573829817625` and `-0.58949573829817625` for
 the two players, a deal mass of `26251.25`, `67134` deals and the fingerprint
 `cd22f660d31fbdd3` from both binaries, byte for byte.

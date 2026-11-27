@@ -16,6 +16,7 @@
 #include <poker_eval/solver/pe_omaha_river.h>
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -138,6 +139,127 @@ static int run_case(const case_t *c)
     return 0;
 }
 
+/* ------------------------------------------------------------------ *
+ * The values of the commit before the evaluation was hoisted, pinned
+ * ------------------------------------------------------------------ */
+
+/* FNV-1a over the bit patterns of the values: that is how the recording run
+ * printed them, so the fixture checks the same object it was taken from. */
+static uint64_t fixture_fingerprint(const double *values, size_t count)
+{
+    uint64_t hash = 1469598103934665603ull;
+    size_t i;
+
+    for (i = 0u; i < count; ++i)
+    {
+        uint64_t bits;
+
+        memcpy(&bits, &values[i], sizeof(bits));
+        hash ^= bits;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static int fixture_same_bits(double a, double b)
+{
+    return memcmp(&a, &b, sizeof(a)) == 0;
+}
+
+/* One deterministic six-card hand over the live cards. */
+static void fixture_hand(uint32_t *state, const int *live, int live_count,
+                         mask_t *out)
+{
+    mask_t hand = MASK_EMPTY;
+
+    while (mask_popcount(hand) < 6u)
+    {
+        *state = (*state) * 1664525u + 1013904223u;
+        hand = mask_set(hand, live[*state % (uint32_t)live_count]);
+    }
+    *out = hand;
+}
+
+/* A 400-combo PLO6 Hi/Lo river on board `2c4d7hJsQc`, with weights in quarters.
+ * The values, the deal mass, the deal count and the fingerprint are the ones
+ * the binary of the commit before design A prints, byte for byte: Hi/Lo is the
+ * case no benchmark covers, so it is pinned by its numbers rather than by a
+ * second implementation.  Anything that changes what the terminal pays, sums
+ * or visits on a wide Hi/Lo range moves one of them. */
+static void test_matches_pre_hoist_values(void)
+{
+    enum { COMBOS = 400 };
+    mask_t board = MASK_EMPTY;
+    pe_omaha_combo_t hero[COMBOS];
+    pe_omaha_combo_t opp[COMBOS];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    EvalConfig config = eval_config_holdem();
+    EvalContext *context;
+    double values[2] = {0.0, 0.0};
+    double mass = 0.0;
+    size_t deals = 0u;
+    int live[MODERN_DECK_SIZE];
+    int live_count = 0;
+    uint32_t seed = 0x9E3779B9u;
+    int card;
+    size_t i;
+    int status;
+
+    board = mask_set(board, MODERN_MAKE_CARD(0, MODERN_SUIT_CLUBS));
+    board = mask_set(board, MODERN_MAKE_CARD(2, MODERN_SUIT_DIAMONDS));
+    board = mask_set(board, MODERN_MAKE_CARD(5, MODERN_SUIT_HEARTS));
+    board = mask_set(board, MODERN_MAKE_CARD(9, MODERN_SUIT_SPADES));
+    board = mask_set(board, MODERN_MAKE_CARD(10, MODERN_SUIT_CLUBS));
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+        if (!mask_is_set(board, card))
+            live[live_count++] = card;
+    for (i = 0u; i < (size_t)COMBOS; ++i)
+    {
+        fixture_hand(&seed, live, live_count, &hero[i].cards);
+        hero[i].weight = 0.25 + 0.25 * (double)(i % 4u);
+    }
+    for (i = 0u; i < (size_t)COMBOS; ++i)
+    {
+        fixture_hand(&seed, live, live_count, &opp[i].cards);
+        opp[i].weight = 0.25 + 0.25 * (double)((i + 1u) % 4u);
+    }
+    ranges[0].combos = hero;
+    ranges[0].count = (size_t)COMBOS;
+    ranges[1].combos = opp;
+    ranges[1].count = (size_t)COMBOS;
+
+    memset(&state, 0, sizeof(state));
+    state.player_count = 2u;
+    state.winner = -1;
+    state.active[0] = 1;
+    state.active[1] = 1;
+    state.invested[0] = 20.0;
+    state.invested[1] = 20.0;
+    state.pot = 40.0;
+
+    context = eval_context_create(&config);
+    CHECK(context != NULL, "pre-hoist fixture: context creation failed");
+    if (!context)
+        return;
+    status = pe_omaha_hilo8_river_range_values(context, board, ranges, &state,
+                                               6u, values, 2u, &deals, &mass);
+    eval_context_destroy(context);
+    CHECK(status == 0, "pre-hoist fixture: terminal failed with %d", status);
+    CHECK(deals == 67134u, "pre-hoist fixture: %zu deals, want 67134", deals);
+    CHECK(fixture_same_bits(mass, 26251.25),
+          "pre-hoist fixture: mass %.17g, want 26251.25", mass);
+    CHECK(fixture_same_bits(values[0], 0.58949573829817625),
+          "pre-hoist fixture: player 0 %.17g, want 0.58949573829817625",
+          values[0]);
+    CHECK(fixture_same_bits(values[1], -0.58949573829817625),
+          "pre-hoist fixture: player 1 %.17g, want -0.58949573829817625",
+          values[1]);
+    CHECK(fixture_fingerprint(values, 2u) == 0xcd22f660d31fbdd3ull,
+          "pre-hoist fixture: fingerprint %016llx, want cd22f660d31fbdd3",
+          (unsigned long long)fixture_fingerprint(values, 2u));
+}
+
 int main(void)
 {
     /* The board has three nines: no 8-or-better low can exist, whatever the
@@ -241,6 +363,9 @@ int main(void)
         printf("  %-28s %s\n", cases[i]->name, cases[i]->hilo8 ? "hi/lo" : "high");
         run_case(cases[i]);
     }
+
+    printf("  %-28s %s\n", "pre-hoist wide range", "hi/lo");
+    test_matches_pre_hoist_values();
 
     if (g_failures)
     {

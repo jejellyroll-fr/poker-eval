@@ -36,6 +36,7 @@
 #define RANGE_MAX 8u
 #define MAX_PLAYERS 3u
 #define MAX_SLICES 3u
+#define TOL 1e-12
 
 static int g_failures;
 
@@ -291,6 +292,10 @@ typedef struct
     double invested[MAX_PLAYERS];
     const slice_spec_t *slices;
     uint8_t slice_count;
+    /* Hand-computed values, so a case can pin its own distribution instead of
+     * only agreeing with the terminal.  NULL leaves it unchecked. */
+    const double *expected;
+    size_t expected_deals;
 } river_case_t;
 
 static void run_case(const river_case_t *test)
@@ -371,6 +376,20 @@ static void run_case(const river_case_t *test)
     reference_mass = reference.mass;
     for (player = 0u; player < test->player_count; ++player)
         reference.values[player] /= reference_mass;
+    if (test->expected_deals != 0u)
+        CHECK(reference_deals == test->expected_deals,
+              "%s: the reference priced %zu deals, the hand count says %zu",
+              test->label, reference_deals, test->expected_deals);
+    if (test->expected)
+    {
+        for (player = 0u; player < test->player_count; ++player)
+            CHECK(fabs(reference.values[player] - test->expected[player]) <=
+                      TOL,
+                  "%s: the reference pays player %u %.17g, the hand count "
+                  "%.17g",
+                  test->label, (unsigned)player, reference.values[player],
+                  test->expected[player]);
+    }
 
     context = eval_context_create(&config);
     CHECK(context != NULL, "%s: context creation failed", test->label);
@@ -424,6 +443,7 @@ static void test_plo5_matches_per_deal(void)
     static const river_case_t test = {
         "PLO5 high-only", 5u, 0, "2c7dThJsQc", 2u,
         {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, slices, 1u,
+        NULL, 0u,
     };
 
     run_case(&test);
@@ -448,6 +468,7 @@ static void test_plo6_matches_per_deal(void)
     static const river_case_t test = {
         "PLO6 high-only", 6u, 0, "2c7dThJsQc", 2u,
         {p0, p1}, {4u, 4u}, 20.0, {10.0, 10.0}, slices, 1u,
+        NULL, 0u,
     };
 
     run_case(&test);
@@ -455,30 +476,39 @@ static void test_plo6_matches_per_deal(void)
 
 /* Three players with unequal investments: the short stack can win the main pot
  * and nothing from the side pot, which only the two covering players contest.
- * A payoff that ignored the eligible mask would pay it out three ways. */
+ * A payoff that ignored the eligible mask would pay it out three ways.
+ *
+ * The values are counted by hand, so this case does not share the terminal's
+ * distribution rule.  Board `2c7dThJsQc`, unit weights: P0 holds A-K and a
+ * Q-J-T-9-8 straight, P1 trips jacks and a pair of nines, P2 trips tens and a
+ * pair of sixes.  The short stack's two hands are the two best in the game, so
+ * P0 takes the 30 main pot on all 8 deals; the 20 side pot goes to P1 on the 6
+ * deals where P1's hand beats P2's and to P2 on the 2 deals where P2 plays
+ * trips against the pair of nines.  Net of the 10 / 20 / 20 invested, that is
+ * 8 x 20 = 160 for P0, 2 x -20 = -40 for P1 and 6 x -20 = -120 for P2, over a
+ * mass of 8: 20, -5 and -15. */
 static void test_three_way_side_pot_matches_per_deal(void)
 {
     static const entry_t p0[] = {
-        {"AsKs3d4d", 0.500},
-        {"9d8d6c6h", 0.250},
-        {"QdQh9s9h", 0.250},
+        {"AsKs3d4d", 1.0},
+        {"9d8d6c6h", 1.0},
     };
     static const entry_t p1[] = {
-        {"AcKc5d5h", 0.500},
-        {"9c8c4d4h", 0.250},
-        {"JdJh8s8h", 0.250},
+        {"JdJh4s4h", 1.0},
+        {"9s9h3s3h", 1.0},
     };
     static const entry_t p2[] = {
-        {"AdKd6s6c", 0.500},
-        {"Td9s7c7h", 0.250},
-        {"TsTc5s5c", 0.250},
+        {"TsTc5s5c", 1.0},
+        {"6d6s5c5d", 1.0},
     };
     /* Main pot 3 x 10, side pot the 2 x 10 the two covering players put in
      * above the short stack. */
     static const slice_spec_t slices[] = {{30.0, 0x07u}, {20.0, 0x06u}};
+    static const double expected[] = {20.0, -5.0, -15.0};
     static const river_case_t test = {
         "three-way side pot", 4u, 0, "2c7dThJsQc", 3u,
-        {p0, p1, p2}, {3u, 3u, 3u}, 50.0, {10.0, 20.0, 20.0}, slices, 2u,
+        {p0, p1, p2}, {2u, 2u, 2u}, 50.0, {10.0, 20.0, 20.0}, slices, 2u,
+        expected, 8u,
     };
 
     run_case(&test);
@@ -500,6 +530,7 @@ static void test_hilo_split_matches_per_deal(void)
     static const river_case_t test = {
         "PLO4 Hi/Lo split", 4u, 1, "2c4d8hJsQc", 2u,
         {p0, p1}, {2u, 2u}, 20.0, {10.0, 10.0}, slices, 1u,
+        NULL, 0u,
     };
 
     run_case(&test);
@@ -523,6 +554,7 @@ static void test_hilo_no_low_matches_per_deal(void)
     static const river_case_t test = {
         "PLO6 Hi/Lo without a low", 6u, 1, "2c7dThJsQc", 2u,
         {p0, p1}, {3u, 3u}, 20.0, {10.0, 10.0}, slices, 1u,
+        NULL, 0u,
     };
 
     run_case(&test);
