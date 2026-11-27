@@ -41,9 +41,13 @@ FINGERPRINT = "ac3016522c620075"
 DEALS = 50_849_064
 RIVERS = 48
 MASS = 19_821_384.246093750
-# Anchors from the CI runner, in seconds and in nanoseconds per visit.
-TURN_SECONDS_ANCHOR = 1.13
-VISIT_NS_ANCHOR = 20.2
+# Anchors measured on the ubuntu-latest runner that executes this probe, in
+# seconds and in nanoseconds per visit (run 45987938776: 1.785 s and 32.14 ns).
+# They are the runner's numbers rather than a workstation's, because the gate
+# has to leave room for the host it runs on and not for the one it was written
+# on: twice these is still fifteen times below the pre-design-A figures.
+TURN_SECONDS_ANCHOR = 1.78
+VISIT_NS_ANCHOR = 32.1
 ENVELOPE = 2.0
 
 
