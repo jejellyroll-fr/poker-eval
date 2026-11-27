@@ -241,26 +241,43 @@ this sweep reads 0.314 s at 8 lanes against 0.227 s there):
 Every lane count reproduced the serial value fingerprint bit for bit
 (`35f87d20638e3909`) and reports `matches_serial` true, and the five samples
 of the serial call span 1.507–1.589 s, so the denominators are comparable
-within 5 per cent.
+within 5 per cent. The load was not held across that sweep, though: it read
+3.95 before the first run and 6.22 after the last, so the 8 and 16 lane points
+were measured again interleaved, 8, 16, 8, 16, at a steady load of 4.3–4.9:
 
-`e = (1/S - 1/p) / (1 - 1/p)` rises monotonically with the lane count, from
-0.041 at 2 lanes to 0.130 at 16. A constant serial fraction would hold `e`
-flat, so Amdahl does not describe this machine: something the lanes share
-degrades as their number grows. Four performance plus six efficiency cores
-predict exactly that, and it is not allocation pressure — peak RSS moves only
-from 6.77 MiB at 8 lanes to 7.61 MiB at 16.
+| Order | Lanes | Lane median | Serial | Speedup | Karp-Flatt `e` |
+|---|---|---|---|---|---|
+| 1 | 8 | 0.2737 s | 1.4351 s | 5.24× | 0.075 |
+| 2 | 16 | 0.2904 s | 1.4455 s | 4.98× | 0.148 |
+| 3 | 8 | 0.2838 s | 1.4393 s | 5.07× | 0.083 |
+| 4 | 16 | 0.2783 s | 1.4475 s | 5.20× | 0.138 |
 
-Two consequences, both measured rather than projected. The marginal gain per
-doubling falls from 1.75× (2 to 4) and 1.44× (4 to 8) to 1.11× (8 to 16): the
-eight lanes beyond 8 buy 11 per cent in total, and 12 lanes alone buy 2.6 per
-cent over 8, against a within-configuration spread of 0.284–0.312 s at 12.
-And the Amdahl extrapolation from the 8-lane point, which this report carried
-as a hypothesis, overshoots: `f = 0.091` predicts 6.3× at 12 lanes and 6.9× at
-16, against 5.19× and 5.43× here. The projection is retired, not adjusted.
+Sixteen lanes are a wash against eight at steady load, 4.98× and 5.20×
+against 5.07× and 5.24×, so the 11 per cent the sweep showed at 16 lanes
+was mostly the load falling as the session went on rather than the lanes. What
+the interleaved runs do reproduce is the rise of `e`: 0.075 and 0.083 at 8
+lanes against 0.148 and 0.138 at 16, same session, same load, so `e` depends
+on the lane count and not on the order of the runs.
 
-So this machine tops out near 5.4× and 8 lanes is the operating point: two more
+`e = (1/S - 1/p) / (1 - 1/p)` runs from 0.041 at 2 lanes to 0.13–0.15 at 16. A
+constant serial fraction would hold it flat, so Amdahl does not describe this
+machine: the lanes share something that degrades as their number grows. The
+most plausible reading is the core layout — four performance cores and six
+efficiency cores, so eight lanes already fill the fast ones, four more land on
+the slow ones and two oversubscribe them — but these runs do not isolate it,
+and cache or scheduler contention would look the same. Peak RSS is not the
+cause: it moves only from 6.77 MiB at 8 lanes to 7.61 MiB at 16.
+
+The marginal gain per doubling falls from 1.75× (2 to 4) and 1.44× (4 to 8) to
+1.11× for 8 to 16 on the sweep, and to nothing once the load is held, and the
+Amdahl extrapolation this report carried as a hypothesis overshoots as well:
+`f = 0.091` from the 8-lane point predicts 6.3× at 12 lanes and 6.9× at 16,
+against 5.19× and 5.43× in the sweep. The projection is retired, not adjusted.
+
+So the measured ceiling is 5.1–5.2×, reached at 8 lanes: the two further
 doublings cost eight extra lanes, 0.8 MiB of peak RSS and scheduling pressure
-for 11 per cent. What remains is the serial fraction inside a lane.
+for nothing that survives a repeated measurement. What remains is the serial
+fraction inside a lane.
 
 The terminal still exposes one serial entry point, so the fan-out is the
 caller's: one eval context and one compaction buffer per lane, both of which a
@@ -403,11 +420,11 @@ Stated as rules, with the guarantee each one carries:
    over 2, 4 and 8 lanes with one eval context each: 1.86–2.08×, 3.41–3.79×
    and 4.80–5.72× on the four frontier configurations, every result
    bit-identical to the serial call. A minute then fits ~28,000 combos per
-   range instead of ~13,000, at ~7 MiB. Sixteen lanes were measured too: 5.43×
-   at PLO6 2,091 combos, so 12 lanes buy 2.6 per cent over 8 and 16 buy 11,
-   and the machine tops out near 5.4×. The terminal still exposes one serial
-   entry point, so a caller owns the fan-out; that is the cheapest exact
-   lever there is, and it saturates at eight lanes.
+   range instead of ~13,000, at ~7 MiB. Sixteen lanes were measured too, and
+   are a wash against eight once the load is held (4.98× and 5.20× against
+   5.07× and 5.24×), so the ceiling is 5.1–5.2×. The terminal still exposes
+   one serial entry point, so a caller owns the fan-out; that is the cheapest
+   exact lever there is, and it saturates at eight lanes.
 
 ## What is not covered
 
