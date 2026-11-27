@@ -277,6 +277,84 @@ static void test_full_turn_matches_oracle(EvalContext *context)
           oracle.value);
 }
 
+/* The profiled entry point is the same terminal, so it must return the same
+ * bits, and the counters must be exact: the filter looks at every combo of
+ * every range on each of the 48 candidate rivers, keeps the combos that do not
+ * hold the river card, and the river terminal then counts the legal deals,
+ * which with unit weights is the oracle's own deal mass. */
+static void test_profile_counters(EvalContext *context)
+{
+    const mask_t board = board_mask();
+    pe_omaha_combo_t p0[3];
+    pe_omaha_combo_t p1[3];
+    pe_omaha_range_t ranges[2];
+    pe_betting_state_t state;
+    pe_omaha_turn_stats_t stats;
+    oracle_result_t oracle;
+    double plain[2] = {0.0, 0.0};
+    double profiled[2] = {0.0, 0.0};
+    size_t plain_rivers = 0u;
+    size_t profiled_rivers = 0u;
+    double plain_mass = 0.0;
+    double profiled_mass = 0.0;
+    size_t expected_kept = 0u;
+    size_t index;
+    int card;
+
+    build_ranges(p0, &ranges[0], 3u, p1, &ranges[1], 3u);
+    init_state(&state, 2u, 63.0, 31.5);
+    CHECK(pe_omaha_turn_range_values(context, board, MASK_EMPTY, ranges, &state,
+                                     4u, plain, 2u, &plain_rivers,
+                                     &plain_mass) == 0,
+          "the plain turn terminal rejected the fixture");
+
+    /* Poison the struct: a profiled call that forgets a counter would leave the
+     * poison visible instead of a plausible zero. */
+    memset(&stats, 0xff, sizeof(stats));
+    CHECK(pe_omaha_turn_range_values_profiled(
+              context, board, MASK_EMPTY, ranges, &state, 4u, profiled, 2u,
+              &profiled_rivers, &profiled_mass, &stats) == 0,
+          "the profiled turn terminal rejected the fixture");
+    CHECK(memcmp(plain, profiled, sizeof(plain)) == 0,
+          "the profiled path changed the values");
+    CHECK(plain_rivers == profiled_rivers,
+          "the profiled path changed the river count");
+    CHECK(memcmp(&plain_mass, &profiled_mass, sizeof(plain_mass)) == 0,
+          "the profiled path changed the deal mass");
+
+    CHECK(stats.combos_examined == 48u * 2u * 3u,
+          "the filter examined %zu combos, expected %u", stats.combos_examined,
+          48u * 2u * 3u);
+    for (card = 0; card < MODERN_DECK_SIZE; ++card)
+    {
+        if (mask_is_set(board, card))
+            continue;
+        for (index = 0u; index < 3u; ++index)
+        {
+            if ((p0[index].cards & ((mask_t)1u << card)) == 0u)
+                ++expected_kept;
+            if ((p1[index].cards & ((mask_t)1u << card)) == 0u)
+                ++expected_kept;
+        }
+    }
+    CHECK(stats.combos_kept == expected_kept,
+          "the filter kept %zu combos, expected %zu", stats.combos_kept,
+          expected_kept);
+    CHECK(stats.rivers_to_terminal == 48u,
+          "expected 48 rivers to reach the terminal, got %zu",
+          stats.rivers_to_terminal);
+
+    oracle = oracle_brute(board, MASK_EMPTY, ranges, &state, 2u, 0u);
+    CHECK(oracle.ok, "the oracle failed on the fixture");
+    CHECK(fabs((double)stats.deals - oracle.deal_mass) <=
+              TOL * oracle.deal_mass,
+          "the terminal counted %.17g deals, the oracle %.17g",
+          (double)stats.deals, oracle.deal_mass);
+    CHECK(stats.filter_seconds >= 0.0 && stats.terminal_seconds >= 0.0,
+          "the phase clocks must not run backwards: %.17g %.17g",
+          stats.filter_seconds, stats.terminal_seconds);
+}
+
 /* A four-card board leaves 40 rivers per legal pair, one fewer per declared
  * dead card, so the pooled deal mass is that count times the pooled range mass.
  * Dead cards the ranges do not use change the count and nothing else. */
@@ -690,6 +768,7 @@ int main(void)
         return 1;
     }
     test_full_turn_matches_oracle(context);
+    test_profile_counters(context);
     test_chance_mass_normalization(context);
     test_turn_is_not_one_river(context);
     test_river_that_empties_a_range_is_skipped(context);
