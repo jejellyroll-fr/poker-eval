@@ -340,6 +340,17 @@ values (3.2e-16 of the mass scale times 63). An earlier reading of the same
 experiment called `5.4e-13` *relative*; it is the absolute figure, and the
 scale-relative one is six orders smaller.
 
+The residues above are not a property of one toolchain. The instrumented copy
+of the same ladders, run under Linux amd64 with gcc 13.3, returns the same two
+maxima to the printed precision -- 1.6e-14 on the compatible mass and 5.7e-13
+on the values, 5.41e-16 and 3.16e-16 of the respective scales -- while the
+worst per-combo relative error moves from 1.13e-15 (at a mass of 14.10) to
+1.33e-15 (at 6.67). The third-digit difference means the individual combos'
+last bits are not platform-identical even where the aggregate maxima are.
+Neither build comes near the 1e-9 bound, and on these ladders the smallest
+compatible mass any combo carries is 3.57, so they never reach the tiny-mass
+case the bound is loose enough to tolerate.
+
 ### Decision: the walk keeps the fingerprint, the sweep is certified by tolerance
 
 What a sparse path has to prove was left open. It is settled here.
@@ -355,7 +366,9 @@ What a sparse path has to prove was left open. It is settled here.
    comparison `test_wide_sweep` performs. The bound is relative to the opponent
    mass scale, not to each combo's own mass, because inclusion-exclusion can
    return a small difference of large sums; and it sits six orders above the
-   residues measured in the paragraph before.
+   residues measured in the paragraph before. A combo whose compatible mass
+   is tiny next to that scale can therefore carry a large *relative* error and
+   still pass, since the bound covers the opponent mass, not each combo.
 3. Demanding bit-identity of the sweep would test the inputs rather than the
    code: the fingerprint matches exactly when the weights are dyadic and stops
    matching when they are thirds, with the same algorithm on both sides. A
