@@ -9,10 +9,13 @@
  * far as the hero cursor reached. That bug left the compatible mass short and
  * only showed when the two ranges had different maximum strengths.
  *
- * The cases run three strength ladders, because the bug only showed when the
+ * The cases run four strength ladders, because the bug only showed when the
  * opponents above every hero were a large part of the range: one where the
- * heroes are on top, one where heroes straddle the opponent range, and one
- * where every opponent is stronger than every hero.
+ * heroes are on top, one where heroes straddle the opponent range, one where
+ * every opponent is stronger than every hero, and one where a single hero is
+ * blocked by all but one opponent, so its compatible mass is one opponent's
+ * reach against a whole range of scale. That last ladder exists to measure the
+ * error the scale-relative tolerance permits on a thin combo.
  *
  * The weights are thirds and sevenths on purpose: unlike the benchmark's
  * dyadic weights, these are not exactly representable, so the test compares
@@ -29,6 +32,17 @@
 #include <stdlib.h>
 
 static int g_failures;
+
+/* Worst residues seen, printed on success: CSR is exact in real arithmetic but
+ * re-associates the sum, so the report has to carry what the last bits did. */
+static double g_worst_mass;
+static double g_worst_mass_scale;
+static double g_worst_value;
+static double g_worst_value_scale;
+static double g_worst_rel;
+static double g_worst_rel_mass;
+static double g_min_mass;
+static double g_min_mass_scale;
 
 #define CHECK(cond, ...)                                                    \
     do                                                                      \
@@ -67,6 +81,17 @@ static mask_t random_hand(mask_t used, unsigned hole_cards)
     return mask;
 }
 
+/* The first card of a hand, or -1 when it is empty. */
+static int first_card(mask_t hand)
+{
+    int card;
+
+    for (card = 0; card < 52; ++card)
+        if (mask_is_set(hand, card))
+            return card;
+    return -1;
+}
+
 static double thirds(unsigned index)
 {
     switch (index % 7u)
@@ -96,6 +121,7 @@ static double thirds(unsigned index)
 #define LADDER_MIXED 0
 #define LADDER_HEROES_ABOVE 1
 #define LADDER_OPPONENTS_ABOVE 2
+#define LADDER_THIN_MASS 3
 
 /* One case: `hero_n` heroes against `opp_n` opponents of the same width. */
 static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
@@ -123,6 +149,24 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
     {
         opp_masks[i] = random_hand(0, hole_cards);
         opp_reach[i] = thirds((unsigned)i + 3u);
+    }
+    if (ladder == LADDER_THIN_MASS)
+    {
+        /* Give hero 0 a compatible mass of one opponent's reach: every other
+         * opponent carries one of its cards, so only opponent 0 can be
+         * disjoint from it. The tolerance is measured against the whole
+         * range, which is two orders of magnitude larger than that mass. */
+        int blocker = first_card(hero_masks[0]);
+        mask_t blocker_mask = mask_set(0, blocker);
+
+        for (i = 0; i < opp_n; ++i)
+        {
+            if (i == 0)
+                opp_masks[i] = random_hand(hero_masks[0], hole_cards);
+            else
+                opp_masks[i] = mask_set(
+                    random_hand(blocker_mask, hole_cards - 1u), blocker);
+        }
     }
     for (i = 0; i < opp_n; ++i)
         opp_strength[i] = ladder == LADDER_OPPONENTS_ABOVE
@@ -155,6 +199,34 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
                 expected += opp_reach[j];
         for (j = 0; j < opp_n; ++j)
             scale += opp_reach[j];
+        {
+            double dm = fabs(mass[i] - expected);
+            double dv = fabs(sweep.v[i] - pairwise.v[i]);
+
+            if (dm > g_worst_mass)
+            {
+                g_worst_mass = dm;
+                g_worst_mass_scale = dm / (1.0 + scale);
+            }
+            if (dv > g_worst_value)
+            {
+                g_worst_value = dv;
+                g_worst_value_scale = dv / (1.0 + scale * 63.0);
+            }
+            if (expected > 0.0)
+            {
+                if (dm / expected > g_worst_rel)
+                {
+                    g_worst_rel = dm / expected;
+                    g_worst_rel_mass = expected;
+                }
+                if (g_min_mass == 0.0 || expected < g_min_mass)
+                {
+                    g_min_mass = expected;
+                    g_min_mass_scale = 1.0 + scale;
+                }
+            }
+        }
         CHECK(fabs(mass[i] - expected) <= 1e-9 * (1.0 + scale),
               "%u holes, hero %zu: sweep mass %.17g, pairwise %.17g",
               hole_cards, i, mass[i], expected);
@@ -183,6 +255,8 @@ int main(void)
     run_case(6u, 38, 33, LADDER_HEROES_ABOVE);
     run_case(6u, 60, 60, LADDER_MIXED);
     run_case(6u, 33, 38, LADDER_OPPONENTS_ABOVE);
+    run_case(6u, 33, 38, LADDER_THIN_MASS);
+    run_case(5u, 34, 41, LADDER_THIN_MASS);
     run_case(5u, 34, 41, LADDER_MIXED);
     run_case(5u, 41, 34, LADDER_HEROES_ABOVE);
     run_case(5u, 34, 41, LADDER_OPPONENTS_ABOVE);
@@ -198,6 +272,11 @@ int main(void)
         fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;
     }
-    printf("test_wide_sweep: ok\n");
+    printf("test_wide_sweep: ok (mass %.3g abs / %.3g of scale, value %.3g abs"
+           " / %.3g of scale, per-combo relative %.3g at mass %.6g, thinnest"
+           " mass %.6g whose allowed relative error is %.3g)\n",
+           g_worst_mass, g_worst_mass_scale, g_worst_value, g_worst_value_scale,
+           g_worst_rel, g_worst_rel_mass, g_min_mass,
+           1e-9 * g_min_mass_scale / g_min_mass);
     return 0;
 }

@@ -340,16 +340,26 @@ values (3.2e-16 of the mass scale times 63). An earlier reading of the same
 experiment called `5.4e-13` *relative*; it is the absolute figure, and the
 scale-relative one is six orders smaller.
 
-The residues above are not a property of one toolchain. The instrumented copy
-of the same ladders, run under Linux amd64 with gcc 13.3, returns the same two
-maxima to the printed precision -- 1.6e-14 on the compatible mass and 5.7e-13
-on the values, 5.41e-16 and 3.16e-16 of the respective scales -- while the
-worst per-combo relative error moves from 1.13e-15 (at a mass of 14.10) to
-1.33e-15 (at 6.67). The third-digit difference means the individual combos'
-last bits are not platform-identical even where the aggregate maxima are.
-Neither build comes near the 1e-9 bound, and on these ladders the smallest
-compatible mass any combo carries is 3.57, so they never reach the tiny-mass
-case the bound is loose enough to tolerate.
+`test_wide_sweep` prints those residues every time it passes, so they are read
+from a log instead of from a patched copy:
+
+```text
+test_wide_sweep: ok (mass 1.6e-14 abs / 5.41e-16 of scale, value 5.68e-13 abs
+/ 3.16e-16 of scale, per-combo relative 9.71e-15 at mass 0.142857, thinnest
+mass 0.142857 whose allowed relative error is 1.31e-07)
+```
+
+Apple silicon with clang and Linux amd64 with gcc 13.3 print the five figures
+identically, printed precision included, so none of them is a property of one
+toolchain.
+
+The last two belong to the thin-mass ladder (`LADDER_THIN_MASS`, two cases):
+every opponent but one carries a card of hero 0, which leaves that combo a
+compatible mass of `1/7` against a range whose scale is about 18.7. Its
+measured relative error is 9.71e-15 and the tolerance allows it 1.31e-07, seven
+orders more. That is what the sentence above means in numbers: stated against
+the scale, the bound accepts on a thin combo a relative error it never actually
+sees.
 
 ### Decision: the walk keeps the fingerprint, the sweep is certified by tolerance
 
@@ -386,7 +396,7 @@ Two things this section owes the reader, both measured:
   walked. The compatible mass came back short -- 4 per cent on one river at 40
   combos -- and the error vanished as the ranges grew, so it was invisible in
   the gate configuration. `test_wide_sweep` pins it with unequal range sizes
-  and unequal strength ladders, and fails 163 checks when the tail is dropped.
+  and unequal strength ladders, and fails 345 checks when the tail is dropped.
 - The same tail was missing from the four-card sweep's `out_mass`, which the
   PLO4 terminal multiplies into its net, so this fixes a latent error there as
   well. See the next paragraph for what it moved.
@@ -444,7 +454,7 @@ is expected to wobble.
 Two tests pin it. `test_wide_sweep` compares the sweep against a direct pair
 enumeration under three strength ladders -- heroes on top, heroes straddling
 the opponent range, and every opponent above every hero -- and with the tail
-cut it fails 295 checks, the strongest of them reporting a mass of 0 against a
+cut it fails 345 checks, the strongest of them reporting a mass of 0 against a
 pairwise total of 14.81. `plo4_turn_tail_fingerprint` runs the turn at four
 holes and 512 combos through the CLI and pins the fingerprint
 `aaff858c1a112dfb`; without the tail it reports the short mass by name
