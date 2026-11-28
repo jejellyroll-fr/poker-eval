@@ -1179,6 +1179,18 @@ set_tests_properties(test_plo4_certification PROPERTIES LABELS "solver;solver-v3
 set_tests_properties(test_plo4_turn_oracle PROPERTIES LABELS "solver;solver-v3;plo4;turn;chance;oracle;iss285" TIMEOUT 120)
 set_tests_properties(test_omaha_river_hoisted PROPERTIES LABELS "solver;solver-v3;omaha;river;hoisted;hilo;iss332" TIMEOUT 120)
 set_tests_properties(test_wide_sweep PROPERTIES LABELS "solver;solver-v3;omaha;blockers;sweep;iss332" TIMEOUT 120)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND TARGET pe-omaha-turn-bench)
+    # Issue #332: the four-card turn at 512 combos is the one reference
+    # configuration the sweep's missing tail moved, so it is locked end to end
+    # through the turn terminal rather than only at the sweep's API.
+    add_test(NAME plo4_turn_tail_fingerprint
+        COMMAND Python3::Interpreter
+            ${CMAKE_CURRENT_SOURCE_DIR}/plo4_turn_tail_fingerprint.py
+            $<TARGET_FILE:pe-omaha-turn-bench>)
+    set_tests_properties(plo4_turn_tail_fingerprint PROPERTIES
+        LABELS "solver;cli;plo4;turn;sweep;iss332" TIMEOUT 120)
+endif()
 set_tests_properties(test_pe_traversal_vector PROPERTIES LABELS "solver;solver-v3;vec02")
 set_tests_properties(test_vector_combo_wide PROPERTIES LABELS "solver;solver-v3;vec02;combo-width" TIMEOUT 120)
 set_tests_properties(test_pe_vector_cfr PROPERTIES LABELS "solver;solver-v3;vec03;vec08")

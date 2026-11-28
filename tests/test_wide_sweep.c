@@ -9,6 +9,11 @@
  * far as the hero cursor reached. That bug left the compatible mass short and
  * only showed when the two ranges had different maximum strengths.
  *
+ * The cases run three strength ladders, because the bug only showed when the
+ * opponents above every hero were a large part of the range: one where the
+ * heroes are on top, one where heroes straddle the opponent range, and one
+ * where every opponent is stronger than every hero.
+ *
  * The weights are thirds and sevenths on purpose: unlike the benchmark's
  * dyadic weights, these are not exactly representable, so the test compares
  * with a tolerance instead of expecting the re-associated sum to be identical
@@ -83,9 +88,18 @@ static double thirds(unsigned index)
     }
 }
 
+/* Strength ladders.  The tail the sweep used to drop is the set of opponents
+ * above every hero, so the interesting cases are the ones where that set is
+ * large: LADDER_HEROES_ABOVE fills the table as the walk reaches it,
+ * LADDER_OPPONENTS_ABOVE makes the whole opponent range a tail, and
+ * LADDER_MIXED has heroes both above and below the opponent range. */
+#define LADDER_MIXED 0
+#define LADDER_HEROES_ABOVE 1
+#define LADDER_OPPONENTS_ABOVE 2
+
 /* One case: `hero_n` heroes against `opp_n` opponents of the same width. */
 static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
-                     int wide_hero_strengths)
+                     int ladder)
 {
     mask_t *hero_masks = (mask_t *)calloc(hero_n, sizeof(*hero_masks));
     mask_t *opp_masks = (mask_t *)calloc(opp_n, sizeof(*opp_masks));
@@ -110,15 +124,13 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
         opp_masks[i] = random_hand(0, hole_cards);
         opp_reach[i] = thirds((unsigned)i + 3u);
     }
-    /* Two deterministic strength ladders.  With `wide_hero_strengths` set the
-     * heroes reach above every opponent, so the sweep's table is filled as it
-     * walks; without it the opponents do, which is the tail that used to be
-     * dropped. */
     for (i = 0; i < opp_n; ++i)
-        opp_strength[i] = (int64_t)(i % 17u) * 1000 + (int64_t)(i % 5u);
+        opp_strength[i] = ladder == LADDER_OPPONENTS_ABOVE
+                              ? (int64_t)(i % 17u) * 1000 + 50000
+                              : (int64_t)(i % 17u) * 1000 + (int64_t)(i % 5u);
     for (i = 0; i < hero_n; ++i)
-        hero_strength[i] = wide_hero_strengths
-                               ? (int64_t)(i % 13u) * 1100 + 40000
+        hero_strength[i] = ladder == LADDER_HEROES_ABOVE
+                               ? (int64_t)(i % 13u) * 1100 + 90000
                                : (int64_t)(i % 13u) * 1100;
 
     CHECK(pe_vec_alloc(&sweep, hero_n) == PE_SOLVER_OK, "sweep alloc");
@@ -167,12 +179,19 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
 
 int main(void)
 {
-    run_case(6u, 33, 38, 0);
-    run_case(6u, 38, 33, 1);
-    run_case(6u, 60, 60, 0);
-    run_case(5u, 34, 41, 0);
-    run_case(5u, 41, 34, 1);
-    run_case(4u, 40, 40, 0);
+    run_case(6u, 33, 38, LADDER_MIXED);
+    run_case(6u, 38, 33, LADDER_HEROES_ABOVE);
+    run_case(6u, 60, 60, LADDER_MIXED);
+    run_case(6u, 33, 38, LADDER_OPPONENTS_ABOVE);
+    run_case(5u, 34, 41, LADDER_MIXED);
+    run_case(5u, 41, 34, LADDER_HEROES_ABOVE);
+    run_case(5u, 34, 41, LADDER_OPPONENTS_ABOVE);
+    run_case(4u, 40, 40, LADDER_MIXED);
+    /* The four-card turn at 512 combos is the configuration the tail moved
+       outside these unit cases; test_wide_sweep is what pins it here, as a
+       whole opponent range above every hero. */
+    run_case(4u, 40, 40, LADDER_OPPONENTS_ABOVE);
+    run_case(4u, 24, 40, LADDER_OPPONENTS_ABOVE);
 
     if (g_failures != 0)
     {
