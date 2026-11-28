@@ -69,6 +69,15 @@ jobs:
           ctest --output-on-failure
         fi
 
+    # Issue #332: the four-card turn at 512 combos is where the sweep's missing
+    # tail showed, and it is the only case whose fingerprint `test_wide_sweep`
+    # cannot pin. Running it by name on this leg keeps the Linux/gcc data point
+    # of that fingerprint in the loop on every push, not only when the whole
+    # suite happens to run it.
+    - name: Run PLO4 Turn Fingerprint
+      run: |
+        ctest --test-dir build --output-on-failure -R "^plo4_turn_tail_fingerprint$"
+
     - name: Run Stable C API Tests
       run: |
         cmake -S . -B build-c-api \

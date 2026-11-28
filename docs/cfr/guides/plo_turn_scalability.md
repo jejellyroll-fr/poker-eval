@@ -388,13 +388,17 @@ replayed under three builds, and all three returned that fingerprint, the same
 | x86_64, under Rosetta | Apple clang 17, `-DCMAKE_OSX_ARCHITECTURES=x86_64`, `-DENABLE_NATIVE_ARCH=OFF` | `aaff858c1a112dfb` |
 | Linux amd64, container | gcc 13.3, Ubuntu 24.04 | `aaff858c1a112dfb` |
 
-The sweep accumulates in an order the source fixes, not one that depends on
-the width of a vector register, and neither compiler contracts that
-accumulation into FMAs, so the bits survive the change of instruction set,
-compiler and libc. That is why `plo4_turn_tail_fingerprint` compares the
-fingerprint exactly while keeping the tolerance for the floating-point fields:
-the tolerance is there for the re-associated sums elsewhere in the report, not
-because this one is expected to wobble.
+What these three runs do not establish is the mechanism. The sweep accumulates
+in an order the source fixes rather than one that follows the width of a vector
+register, and the likeliest reading of the identical results is that neither
+compiler contracts that accumulation into FMAs -- but nobody has looked at the
+disassembly, so that is a plausible explanation, not a checked fact. The
+evidence is the measurement itself: three builds, the same bits.
+
+That is what lets `plo4_turn_tail_fingerprint` compare the fingerprint exactly
+while keeping the tolerance for the floating-point fields: the tolerance is
+there for the re-associated sums elsewhere in the report, not because this one
+is expected to wobble.
 
 Two tests pin it. `test_wide_sweep` compares the sweep against a direct pair
 enumeration under three strength ladders -- heroes on top, heroes straddling
