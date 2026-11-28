@@ -316,9 +316,9 @@ each pair of runs in the same load condition:
 
 | Variant | Combos | Deal walk | Sweep | Speedup | Pair visits | Subset touches | Fingerprint |
 |---|---|---|---|---|---|---|---|
-| PLO6 | 2,000 | 1.112-1.121 s | 0.350-0.368 s | 3.11x | 50,849,064 | 12.1 M | identical |
-| PLO6 | 2,091 | 1.213-1.227 s | 0.384-0.391 s | 3.15x | 55,589,004 | 12.6 M | identical |
-| PLO5 | 1,994 | 1.346-1.363 s | 0.191-0.192 s | 7.08x | 70,218,300 | 5.95 M | identical |
+| PLO6 | 2,000 | 1.112-1.121 s | 0.350-0.368 s | 3.11x | 50,849,064 | 12.1 M | identical (dyadic) |
+| PLO6 | 2,091 | 1.213-1.227 s | 0.384-0.391 s | 3.15x | 55,589,004 | 12.6 M | identical (dyadic) |
+| PLO5 | 1,994 | 1.346-1.363 s | 0.191-0.192 s | 7.08x | 70,218,300 | 5.95 M | identical (dyadic) |
 
 Subset touches are counted the way the implementation spends them: `2^holes -
 1` per combo per side per river, so 48 rivers x 2 ranges x 2,000 x 63 at PLO6.
@@ -329,14 +329,42 @@ Both of the criteria the issue fixed in advance are met at PLO6 n = 2,000: the
 turn visits **no** pair, against 50.8 million, and it lands at **0.350-0.368 s**
 against the 0.6 s line and the 1.112-1.121 s walk.
 
-The equality in the last column is exactness, not a property of the method.
-The benchmark draws weights that are dyadic, so every product and every sum in
+The `identical` in the last column is a property of the weights, not of the
+method. The benchmark draws dyadic weights, so every product and every sum in
 both paths is exactly representable and the re-associated total lands on the
-same double. With weights that are not exactly representable the last bits
-move: on the same river with weights in thirds and sevenths, the compatible
-mass differs by 5.4e-13 relative and the per-player values by about 5e-13.
-That is the residue the four-card sweep documents as 1e-9, and it is why the
-sweep stays a diagnostic path and does not replace the walk by default.
+same double. Where the weights are not representable the last bits move: on
+the unit ladders of `test_wide_sweep`, whose weights are thirds and sevenths,
+the worst sweep residue measured is **1.6e-14 absolute** on the compatible mass
+(5.4e-16 of the opponent mass on that case) and **5.7e-13 absolute** on the
+values (3.2e-16 of the mass scale times 63). An earlier reading of the same
+experiment called `5.4e-13` *relative*; it is the absolute figure, and the
+scale-relative one is six orders smaller.
+
+### Decision: the walk keeps the fingerprint, the sweep is certified by tolerance
+
+What a sparse path has to prove was left open. It is settled here.
+
+1. The deal walk remains the default and keeps a bit-identical
+   `values_fingerprint` as its regression contract. That is what
+   `plo4_turn_tail_fingerprint`, the portability table below and the PLO4
+   certification runs protect. No default switch is proposed, so nothing
+   certified moves.
+2. The sweep is certified by an explicit tolerance rather than by a
+   fingerprint: `|d mass| <= 1e-9 * (1 + sum of opponent reach)` and
+   `|d value| <= 1e-9 * (1 + 63 * sum of opponent reach)`, which is exactly the
+   comparison `test_wide_sweep` performs. The bound is relative to the opponent
+   mass scale, not to each combo's own mass, because inclusion-exclusion can
+   return a small difference of large sums; and it sits six orders above the
+   residues measured in the paragraph before.
+3. Demanding bit-identity of the sweep would test the inputs rather than the
+   code: the fingerprint matches exactly when the weights are dyadic and stops
+   matching when they are thirds, with the same algorithm on both sides. A
+   criterion that holds only for exactly representable weights certifies
+   nothing about the walk it is compared with.
+4. The sweep therefore stays opt-in, reachable only through
+   `pe_omaha_river_set_sparse_blockers()` and `--sparse-blockers`. Displacing
+   the walk would require publishing that tolerance in the API and naming the
+   caller that accepts it, which nothing does today.
 
 Two things this section owes the reader, both measured:
 
@@ -415,9 +443,10 @@ green with the tail in place, and PLO4 still reports `plo4_sweep`.
 
 What this does not buy: Hi/Lo (the low half would need a second strength
 dimension), three or more players (the multiway vector path is separate), or a
-default. The sweep has to pass a fingerprint decision before it can displace
-the walk, and with weights that are not dyadic it does not reproduce the
-fingerprint.
+default. The decision above closes the fingerprint question: the walk keeps the
+fingerprint and the sweep is certified by a 1e-9 tolerance on the opponent mass
+scale, so it cannot displace the walk by reproducing bits it only reproduces on
+dyadic weights.
 
 ## Measured memory
 

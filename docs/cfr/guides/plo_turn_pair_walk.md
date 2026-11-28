@@ -115,8 +115,9 @@ gate board, heads-up high-only, `--repetitions 3`: PLO6 n = 2,000 goes from
 (7.08x), with no pair visits in any of them. The `values_fingerprint` is
 identical on those runs because the benchmark's weights are dyadic and every
 sum is exact; with weights in thirds the residue is 5.4e-13 on the compatible
-mass and about 5e-13 on the values. The full table, the subset-touch count and
-the tail bug the first version had are in
+mass and about 5e-13 on the values. The full table, the subset-touch count, the tail bug
+the first version had and the decision that certifies the sweep by a 1e-9
+tolerance instead of a fingerprint are in
 [plo_turn_scalability.md](plo_turn_scalability.md#sparse-blocker-aggregation-the-sweep-at-plo5-and-plo6).
 
 ## What a visit costs, and what B would cost
