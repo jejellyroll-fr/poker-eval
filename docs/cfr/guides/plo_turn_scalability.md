@@ -376,6 +376,26 @@ opponent sits above every hero, so the tail is empty and the turn is
 bit-identical to the pre-fix run. That is why the gate configuration, the
 certifier and the river bench never saw the error.
 
+### The fingerprint travels
+
+`aaff858c1a112dfb` is not an artifact of this machine's build. The same run was
+replayed under three builds, and all three returned that fingerprint, the same
+`values` to the last bit and the same `weight_sum` (2355983.720703125):
+
+| Build | Toolchain | Fingerprint |
+|---|---|---|
+| Apple silicon, native | Apple clang 17, native arch, NEON | `aaff858c1a112dfb` |
+| x86_64, under Rosetta | Apple clang 17, `-DCMAKE_OSX_ARCHITECTURES=x86_64`, `-DENABLE_NATIVE_ARCH=OFF` | `aaff858c1a112dfb` |
+| Linux amd64, container | gcc 13.3, Ubuntu 24.04 | `aaff858c1a112dfb` |
+
+The sweep accumulates in an order the source fixes, not one that depends on
+the width of a vector register, and neither compiler contracts that
+accumulation into FMAs, so the bits survive the change of instruction set,
+compiler and libc. That is why `plo4_turn_tail_fingerprint` compares the
+fingerprint exactly while keeping the tolerance for the floating-point fields:
+the tolerance is there for the re-associated sums elsewhere in the report, not
+because this one is expected to wobble.
+
 Two tests pin it. `test_wide_sweep` compares the sweep against a direct pair
 enumeration under three strength ladders -- heroes on top, heroes straddling
 the opponent range, and every opponent above every hero -- and with the tail

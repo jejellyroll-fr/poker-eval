@@ -10,8 +10,10 @@ with and without the correction. This configuration is not. Locking it keeps
 the tail of `out_mass` covered end to end, through the turn terminal and the
 sweep that feeds it.
 
-The fingerprint is checked exactly; the floating-point fields are checked with
-a tolerance because the sweep sums in a platform-dependent order. The short
+The fingerprint is checked exactly because it is stable across builds: the
+same run returns `aaff858c1a112dfb` on Apple silicon with clang, on x86_64
+under Rosetta and on Linux amd64 with gcc 13. The floating-point fields keep a
+tolerance for the re-associated sums elsewhere in the report. The short
 mass the bug produced (`2355807.320556641`, 7.5e-5 below) is reported in the
 failure message so a regression is recognisable on sight.
 
