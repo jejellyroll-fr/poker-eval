@@ -361,6 +361,17 @@ orders more. That is what the sentence above means in numbers: stated against
 the scale, the bound accepts on a thin combo a relative error it never actually
 sees.
 
+The ladder asserts both halves instead of trusting the print: hero 0's mass
+must be exactly one opponent's reach, and the case's worst per-combo relative
+error must stay at or below **1e-12** -- two orders above the 9.71e-15
+measured here and five below the 1.31e-07 the scale bound would allow. The
+worst figure comes from the five-hole case, where two other heroes happen to
+hold hero 0's blocker card and are thinned the same way, which is also a check
+that the construction is doing what it says.
+
+A `Run Wide Sweep Residues` step runs this case with `-V` in
+`Release Build & Tests`, so the line above reaches the log on every push.
+
 ### Decision: the walk keeps the fingerprint, the sweep is certified by tolerance
 
 What a sparse path has to prove was left open. It is settled here.

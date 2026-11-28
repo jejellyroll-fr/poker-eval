@@ -139,6 +139,8 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
     pe_showdown_path_t path = PE_SHOWDOWN_PATH_NONE;
     size_t i;
     size_t j;
+    double case_worst_rel = 0.0;
+    double case_worst_rel_mass = 0.0;
 
     for (i = 0; i < hero_n; ++i)
     {
@@ -214,21 +216,16 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
                 g_worst_value_scale = dv / (1.0 + scale * 63.0);
             }
             if (ladder == LADDER_THIN_MASS && i == 0u)
-            {
-                /* The ladder exists to price a thin combo, so it is asserted
-                 * both ways: the mass really is one opponent's reach, and the
-                 * sweep's relative error on it stays at the level measured on
-                 * the two builds (9.7e-15), not merely inside the scale-relative
-                 * 1e-9 that would allow 1.3e-7 here. */
                 CHECK(fabs(expected - 1.0 / 7.0) <= 1e-12,
                       "thin ladder: hero 0 mass %.17g is not one opponent's "
                       "reach", expected);
-                CHECK(dm <= 1e-12 * expected,
-                      "thin ladder: hero 0 relative error %.3g on a mass of "
-                      "%.17g", dm / expected, expected);
-            }
             if (expected > 0.0)
             {
+                if (dm / expected > case_worst_rel)
+                {
+                    case_worst_rel = dm / expected;
+                    case_worst_rel_mass = expected;
+                }
                 if (dm / expected > g_worst_rel)
                 {
                     g_worst_rel = dm / expected;
@@ -251,6 +248,16 @@ static void run_case(unsigned hole_cards, size_t hero_n, size_t opp_n,
     CHECK(path == (hole_cards == 4u ? PE_SHOWDOWN_PATH_PLO4
                                     : PE_SHOWDOWN_PATH_PLO_WIDE),
           "%u holes reported path %d", hole_cards, (int)path);
+
+    /* A thin combo is where the scale-relative tolerance is at its loosest:
+     * 1e-9 of the range allows 1.3e-7 on a mass of 1/7. Measured, the worst
+     * thin combo sits at 9.7e-15 on both builds, so the ladder locks that
+     * rather than leaving it a printed number. */
+    if (ladder == LADDER_THIN_MASS)
+        CHECK(case_worst_rel <= 1e-12,
+              "%u holes thin ladder: per-combo relative error %.3g at mass "
+              "%.17g exceeds 1e-12", hole_cards, case_worst_rel,
+              case_worst_rel_mass);
 
     pe_vec_free(&sweep);
     pe_vec_free(&pairwise);
