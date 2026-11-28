@@ -407,7 +407,9 @@ cut it fails 295 checks, the strongest of them reporting a mass of 0 against a
 pairwise total of 14.81. `plo4_turn_tail_fingerprint` runs the turn at four
 holes and 512 combos through the CLI and pins the fingerprint
 `aaff858c1a112dfb`; without the tail it reports the short mass by name
-(`2355807.320556641`) instead of just a mismatch. The 27 tests matching
+(`2355807.320556641`) instead of just a mismatch, and when it passes it prints
+the fingerprint, the mass and the values it compared, so a CI log carries the
+numbers rather than only the verdict. The 27 tests matching
 `plo4_turn_tail_fingerprint`, `wide_sweep`, `plo4`, `omaha` and `showdown` are
 green with the tail in place, and PLO4 still reports `plo4_sweep`.
 

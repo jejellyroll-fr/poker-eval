@@ -108,7 +108,13 @@ def main(argv):
 
     if failures:
         return fail("%d check(s) failed" % failures)
-    print("plo4_turn_tail_fingerprint: ok")
+    # Print the values that were compared, not the constants, so a CI log shows
+    # what this build produced rather than asking the reader to trust the pass.
+    print(
+        "plo4_turn_tail_fingerprint: ok (fingerprint %s, weight_sum %r, "
+        "values %r)"
+        % (report["values_fingerprint"], weight_sum, values)
+    )
     return 0
 
 
