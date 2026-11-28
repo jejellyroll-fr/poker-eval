@@ -74,6 +74,12 @@ jobs:
     # cannot pin. Running it by name on this leg keeps the Linux/gcc data point
     # of that fingerprint in the loop on every push, not only when the whole
     # suite happens to run it.
+    - name: Run Wide Sweep Residues
+      run: |
+        # -V for the same reason as the step above: the residues this case
+        # prints when it passes are the point of the step.
+        ctest --test-dir build -V -R "^test_wide_sweep$"
+
     - name: Run PLO4 Turn Fingerprint
       run: |
         # -V, not --output-on-failure: the point of this step is the numbers the
