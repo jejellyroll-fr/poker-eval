@@ -76,7 +76,9 @@ jobs:
     # suite happens to run it.
     - name: Run PLO4 Turn Fingerprint
       run: |
-        ctest --test-dir build --output-on-failure -R "^plo4_turn_tail_fingerprint$"
+        # -V, not --output-on-failure: the point of this step is the numbers the
+        # case prints when it passes, and ctest swallows them otherwise.
+        ctest --test-dir build -V -R "^plo4_turn_tail_fingerprint$"
 
     - name: Run Stable C API Tests
       run: |
